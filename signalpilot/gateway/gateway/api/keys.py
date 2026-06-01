@@ -7,6 +7,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from ..auth import OrgAdmin, OrgID, UserID
+from ..common.ip import request_meta
 from ..models import ApiKeyCreate, ApiKeyCreatedResponse, ApiKeyResponse, AuditEntry
 from ..security.scope_guard import RequireScope
 from .deps import StoreD
@@ -14,15 +15,6 @@ from .deps import StoreD
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
-
-
-def _extract_request_meta(request: Request) -> tuple[str | None, str | None]:
-    """Extract client_ip and user_agent from the incoming HTTP request."""
-    client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (
-        request.client.host if request.client else None
-    )
-    user_agent = request.headers.get("user-agent")
-    return client_ip, user_agent
 
 
 @router.get("/keys", dependencies=[RequireScope("admin")])
@@ -42,7 +34,7 @@ async def create_key(body: ApiKeyCreate, store: StoreD, _role: OrgAdmin, request
 
     record, raw_key = await store.create_api_key(body.name, body.scopes, expires_at=body.expires_at)
 
-    client_ip, user_agent = _extract_request_meta(request)
+    client_ip, user_agent = request_meta(request)
     # Audit-DB failure must not block the successful key creation; best-effort observability.
     try:
         await store.append_audit(
@@ -69,7 +61,7 @@ async def delete_key(key_id: str, store: StoreD, _role: OrgAdmin, request: Reque
     if not await store.delete_api_key(key_id):
         raise HTTPException(status_code=404, detail="API key not found")
 
-    client_ip, user_agent = _extract_request_meta(request)
+    client_ip, user_agent = request_meta(request)
     # Audit-DB failure must not block the successful key deletion; best-effort observability.
     try:
         await store.append_audit(

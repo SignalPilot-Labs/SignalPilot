@@ -24,6 +24,7 @@ from ..byok import (
     revert_to_managed,
     rotate_byok_key,
 )
+from ..common.ip import request_meta
 from ..db.models import GatewayBYOKKey, GatewayConnection, GatewayCredential, GatewayOrg
 from ..models import (
     AuditEntry,
@@ -45,15 +46,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
 BYOK_HEALTH_CHECK_PLAINTEXT = "byok-health-check"
-
-
-def _extract_request_meta(request: Request) -> tuple[str | None, str | None]:
-    """Extract client_ip and user_agent from the incoming HTTP request."""
-    client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (
-        request.client.host if request.client else None
-    )
-    user_agent = request.headers.get("user-agent")
-    return client_ip, user_agent
 
 
 def _key_to_response(key: GatewayBYOKKey) -> BYOKKeyResponse:
@@ -135,7 +127,7 @@ async def create_byok_key(
         provider.register_key(org_id, body.key_alias)
         logger.info("Local BYOK key registered in-memory for org=%s alias=%s", org_id, body.key_alias)
 
-    client_ip, user_agent = _extract_request_meta(request)
+    client_ip, user_agent = request_meta(request)
     # Audit-DB failure must not block the successful key creation; best-effort observability.
     try:
         await store.append_audit(
@@ -297,7 +289,7 @@ async def validate_byok_key(
     """Round-trip encrypt/decrypt test for a BYOK key, scoped to the org from JWT."""
     from ..store.byok_state import _byok_provider as provider
 
-    client_ip, user_agent = _extract_request_meta(request)
+    client_ip, user_agent = request_meta(request)
 
     if provider is None:
         metadata = {
@@ -444,7 +436,7 @@ async def migrate_credentials_to_byok(
         managed_decrypt=_decrypt_with_migration,
     )
 
-    client_ip, user_agent = _extract_request_meta(request)
+    client_ip, user_agent = request_meta(request)
     # Audit-DB failure must not block the completed migration; best-effort observability.
     try:
         await store.append_audit(
@@ -497,7 +489,7 @@ async def revert_credentials_to_managed(
         cache=cache,
     )
 
-    client_ip, user_agent = _extract_request_meta(request)
+    client_ip, user_agent = request_meta(request)
     # Audit-DB failure must not block the completed revert; best-effort observability.
     try:
         await store.append_audit(
@@ -581,7 +573,7 @@ async def rotate_byok_key_endpoint(
         await store.session.commit()
         raise
 
-    client_ip, user_agent = _extract_request_meta(request)
+    client_ip, user_agent = request_meta(request)
     # Audit-DB failure must not block the completed rotation; best-effort observability.
     try:
         await store.append_audit(

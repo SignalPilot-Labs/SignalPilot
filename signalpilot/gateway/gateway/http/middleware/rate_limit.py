@@ -12,6 +12,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp
 
+from ...common.ip import client_ip as _common_client_ip
 from ...config import get_network_settings
 
 
@@ -75,12 +76,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 del store_dict[ip]
 
     def _client_ip(self, request: Request) -> str:
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            # Use rightmost IP (added by the closest trusted proxy) to prevent
-            # spoofing via attacker-controlled leftmost values.
-            return forwarded.split(",")[-1].strip()
-        return request.client.host if request.client else "unknown"
+        # Delegate to the shared helper so audit metadata and rate-limit bucket
+        # keys always use the same IP derivation (rightmost trusted XFF hop,
+        # then request.client.host).  Empty XFF entries are now skipped — this
+        # aligns the middleware with the helper's filtering and preserves parity.
+        # The "unknown" sentinel is rate-limit-internal and stays here only.
+        return _common_client_ip(request) or "unknown"
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if request.method == "OPTIONS":

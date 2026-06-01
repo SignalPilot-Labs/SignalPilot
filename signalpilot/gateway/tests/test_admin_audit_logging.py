@@ -112,6 +112,55 @@ class TestBYOKAudit:
         _assert_no_credential_material(entry.metadata)
 
     @pytest.mark.asyncio
+    async def test_byok_key_create_uses_trusted_hop_ip(self):
+        """Regression: audit entry must use the rightmost XFF hop (trusted proxy),
+        not the leftmost (client-spoofable) value."""
+        from gateway.api.byok import create_byok_key
+        from gateway.models import BYOKKeyCreate
+
+        store = _make_store()
+        # Simulate a spoofed leftmost entry; trusted proxy appended "2.2.2.2".
+        request = _make_request(forwarded_for="evil-spoof, 2.2.2.2")
+
+        db = AsyncMock()
+        existing_result = MagicMock()
+        existing_result.scalar_one_or_none.return_value = None
+        key_mock = MagicMock()
+        key_mock.id = str(uuid.uuid4())
+        key_mock.org_id = "test-org"
+        key_mock.key_alias = "my-key"
+        key_mock.provider_type = "local"
+        key_mock.provider_config = None
+        key_mock.status = "active"
+        key_mock.created_at = time.time()
+        key_mock.revoked_at = None
+        db.execute = AsyncMock(return_value=existing_result)
+        db.add = MagicMock()
+        db.commit = AsyncMock()
+        db.refresh = AsyncMock()
+
+        body = BYOKKeyCreate(key_alias="my-key", provider_type="local", provider_config={})
+
+        with patch("gateway.api.byok._upsert_org", new_callable=AsyncMock):
+            await create_byok_key(
+                body=body,
+                db=db,
+                _user_id="test-user",
+                org_id="test-org",
+                _role=None,
+                store=store,
+                request=request,
+            )
+
+        store.append_audit.assert_called_once()
+        entry: AuditEntry = store.append_audit.call_args[0][0]
+        assert entry.client_ip == "2.2.2.2", (
+            f"Expected trusted rightmost XFF '2.2.2.2' but got {entry.client_ip!r}. "
+            "Audit IP must not be spoofable via leftmost XFF."
+        )
+        assert entry.client_ip != "evil-spoof"
+
+    @pytest.mark.asyncio
     async def test_byok_migrate_appends_audit(self):
         import gateway.store.byok_state as byok_state
         from gateway.api.byok import migrate_credentials_to_byok

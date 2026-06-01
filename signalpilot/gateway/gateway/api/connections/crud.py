@@ -13,6 +13,7 @@ from gateway.api.connections._router import router
 from gateway.api.connections._validation import _validate_connection_params
 from gateway.api.deps import StoreD
 from gateway.auth import OrgAdmin
+from gateway.common.ip import request_meta
 from gateway.connectors.pool_manager import pool_manager
 from gateway.connectors.schema_cache import schema_cache
 from gateway.models import AuditEntry, ConnectionCreate, ConnectionUpdate
@@ -35,15 +36,6 @@ _SECRET_FIELDS: frozenset[str] = frozenset({
     "private_key_passphrase",
     "ssh_tunnel",
 })
-
-
-def _extract_request_meta(request: Request) -> tuple[str | None, str | None]:
-    """Extract client_ip and user_agent from the incoming HTTP request."""
-    client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (
-        request.client.host if request.client else None
-    )
-    user_agent = request.headers.get("user-agent")
-    return client_ip, user_agent
 
 
 @router.get("/connections", dependencies=[RequireScope("read")])
@@ -86,7 +78,7 @@ async def remove_connection(name: str, store: StoreD, _role: OrgAdmin, request: 
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
     schema_cache.invalidate(name)
 
-    client_ip, user_agent = _extract_request_meta(request)
+    client_ip, user_agent = request_meta(request)
     # Audit-DB failure must not block the completed deletion; best-effort observability.
     try:
         await store.append_audit(
@@ -143,7 +135,7 @@ async def edit_connection(name: str, update: ConnectionUpdate, store: StoreD, _r
     if old_conn_str:
         await pool_manager.close_pool(old_conn_str)
 
-    client_ip, user_agent = _extract_request_meta(request)
+    client_ip, user_agent = request_meta(request)
     # Audit-DB failure must not block the completed update; best-effort observability.
     try:
         await store.append_audit(

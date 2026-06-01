@@ -18,16 +18,29 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from ..auth import OrgID, UserID
+from ..auth import DBSession, OrgID, UserID
+from ..models import DBType
 from ..runtime.mode import is_cloud_mode
 from ..security.scope_guard import RequireScope
+from ..store import Store
 from .config import DbtProxyConfig
 from .errors import ProxyDisabled, RunTokenAlreadyExists
 from .tokens import RunTokenClaims, RunTokenStore
+
+# ─── Store dependency (local to avoid circular import with gateway.api) ───────
+
+
+async def get_store(org_id: OrgID, user_id: UserID, db: DBSession) -> Store:
+    """FastAPI dependency: yields a Store scoped to the current org."""
+    return Store(db, org_id=org_id, user_id=user_id)
+
+
+_StoreD = Annotated[Store, Depends(get_store)]
 
 logger = logging.getLogger(__name__)
 
@@ -98,15 +111,26 @@ async def mint_run_token(
     request: Request,
     org_id: OrgID,
     user_id: UserID,
+    store: _StoreD,
 ) -> MintResponse:
     """Mint a short-lived run-token for a dbt-proxy session.
 
     org_id and user_id come from the auth context (not the request body).
     Duplicate run_id → 409. Missing secret or disabled proxy → 503.
+    Connector must belong to the caller's org and be postgres → 404 otherwise.
     """
     config = _get_config(request)
     _check_proxy_enabled(config)
     _check_secret_configured(config)
+
+    info = await store.get_connection(body.connector_name)
+    if info is None or info.db_type != DBType.postgres:
+        # 404 (not 403): do not leak whether the connector exists in another org
+        # or exists at all with the wrong db_type.
+        raise HTTPException(
+            status_code=404,
+            detail={"error_code": "connector_not_found", "message": f"Connector {body.connector_name!r} not found"},
+        )
 
     # Cloud-only: cap TTL to 1h regardless of request value.
     # Localhost keeps the documented 24h max.
@@ -139,20 +163,34 @@ async def mint_run_token(
 
 
 @router.delete("/{run_id}", status_code=204, response_model=None, dependencies=[RequireScope("dbt_proxy")])
-async def revoke_run_token(run_id: uuid.UUID, request: Request) -> None:
-    """Revoke a run-token. No-op if the token does not exist."""
+async def revoke_run_token(run_id: uuid.UUID, request: Request, org_id: OrgID) -> None:
+    """Revoke a run-token. No-op if the token does not exist or belongs to another org."""
     token_store = _get_token_store(request)
+    claims = await token_store.get(run_id)
+    if claims is None or claims.org_id != org_id:
+        # Foreign-org token treated as 404 to avoid an existence oracle.
+        # Spec: DELETE is otherwise idempotent (no-op on missing),
+        # so emitting 204 for "no such token" preserves that contract.
+        # But we MUST NOT actually revoke a foreign-org token, so the
+        # branch returns early without touching the store.
+        return  # 204 — same response as the legitimate no-op revoke
     await token_store.revoke(run_id)
     logger.info("dbt_proxy revoke run_id=%s", run_id)
 
 
 @router.get("/{run_id}", response_model=TokenInfoResponse, dependencies=[RequireScope("dbt_proxy")])
-async def get_run_token(run_id: uuid.UUID, request: Request) -> TokenInfoResponse:
-    """Inspect a run-token by run_id. Returns 404 if not found."""
+async def get_run_token(run_id: uuid.UUID, request: Request, org_id: OrgID) -> TokenInfoResponse:
+    """Inspect a run-token by run_id. Returns 404 if not found or belongs to another org."""
     config = _get_config(request)
     token_store = _get_token_store(request)
     claims: RunTokenClaims | None = await token_store.get(run_id)
     if claims is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error_code": "run_token_not_found", "message": f"No token for run_id={run_id}"},
+        )
+    if claims.org_id != org_id:
+        # Treat foreign-org as not found (no existence oracle).
         raise HTTPException(
             status_code=404,
             detail={"error_code": "run_token_not_found", "message": f"No token for run_id={run_id}"},

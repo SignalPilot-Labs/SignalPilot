@@ -8,6 +8,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from ..common.ip import request_meta
 from ..connectors.health_monitor import health_monitor
 from ..connectors.pool_manager import pool_manager
 from ..engine import inject_limit, validate_sql
@@ -31,10 +32,7 @@ class DirectQueryRequest(BaseModel):
 
 @router.post("/query", dependencies=[RequireScope("query")])
 async def query_database(req: DirectQueryRequest, store: StoreD, request: Request):
-    _client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (
-        request.client.host if request.client else None
-    )
-    _user_agent = request.headers.get("user-agent")
+    _client_ip, _user_agent = request_meta(request)
 
     # Enforce daily query limit based on org's plan tier
     plan = await get_org_limits(store.org_id)

@@ -47,5 +47,24 @@ class DbtProxyConfig(BaseSettings):
                 self.sp_dbt_proxy_host,
             )
 
+    def enforce_bind_safety(self, cloud: bool) -> None:
+        """Hard-fail in cloud mode when bound to a non-loopback host.
+
+        In cloud mode, a non-loopback bind with the current cleartext pg-wire
+        handshake would expose run-tokens on the container-internal network.
+        In local (dev) mode, delegate to warn_if_non_loopback() so existing
+        behaviour is unchanged.
+        """
+        if self.sp_dbt_proxy_host in _LOOPBACK_HOSTS:
+            return
+        if cloud:
+            raise RuntimeError(
+                f"SECURITY: dbt-proxy bound to non-loopback host {self.sp_dbt_proxy_host!r}"
+                f" (SP_DBT_PROXY_HOST) in cloud mode; pg-wire handshake is cleartext"
+                f" (TLS deferred to R8) and run-tokens would be exposed on the"
+                f" container-internal network. Refusing to boot."
+            )
+        self.warn_if_non_loopback()
+
 
 __all__ = ["DbtProxyConfig"]

@@ -682,13 +682,16 @@ class Store:
 
     # ─── Key Rotation ────────────────────────────────────────────────────
 
-    async def get_credentials_needing_rotation(self) -> int:
+    async def get_credentials_needing_rotation(self, org_scoped: bool = True) -> int:
         """Return count of credentials encrypted with a key version below CURRENT_KEY_VERSION.
 
-        This is a global (non-user-scoped) query, intentionally, because it is
-        called from the admin-only security_status endpoint which needs a system-wide count.
+        ORG-SCOPED by default (org_scoped=True): filters to the current org via
+        _require_org_id(). Cross-org count is opt-in (org_scoped=False) and
+        intended only for future operator-only callers — no production caller
+        currently passes org_scoped=False.
         """
-        return await settings_mod.get_credentials_needing_rotation(self.session)
+        org_id = self._require_org_id() if org_scoped else None
+        return await settings_mod.get_credentials_needing_rotation(self.session, org_id=org_id)
 
     # ─── Knowledge Base ──────────────────────────────────────────────────
 

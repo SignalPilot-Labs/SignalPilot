@@ -12,10 +12,25 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from gateway.dbt_proxy.api import get_store
 from gateway.dbt_proxy.api import router as dbt_proxy_router
 from gateway.dbt_proxy.config import DbtProxyConfig
 from gateway.dbt_proxy.tokens import RunTokenStore
+from gateway.models import DBType
 from gateway.security.scope_guard import require_scopes
+
+
+class _FakeStubConn:
+    """Minimal connection stub with a postgres db_type for test apps."""
+
+    db_type: DBType = DBType.postgres
+
+
+class _FakeStoreWithPostgres:
+    """Fake store stub that always returns a postgres connection."""
+
+    async def get_connection(self, name: str) -> _FakeStubConn:
+        return _FakeStubConn()
 
 
 def _make_test_app(secret: str = "test-secret", enabled: bool = True) -> FastAPI:
@@ -44,6 +59,11 @@ def _make_test_app(secret: str = "test-secret", enabled: bool = True) -> FastAPI
             return await call_next(request)
 
     app.add_middleware(_LocalAuthMiddleware)
+
+    # Override get_store to avoid needing a real DB connection
+    fake_store = _FakeStoreWithPostgres()
+    app.dependency_overrides[get_store] = lambda: fake_store
+
     return app
 
 

@@ -777,3 +777,178 @@ class TestSseResourceLimits:
 
         metrics_mod.SSE_MAX_DURATION_SECONDS = original_duration
         self._reset_semaphore(20)
+
+
+# ---------------------------------------------------------------------------
+# TestCloudAllowedOriginsHardening
+# ---------------------------------------------------------------------------
+
+
+class TestCloudAllowedOriginsHardening:
+    """Tests for SP_ALLOWED_ORIGINS cloud-mode hard-fail in assert_cloud_hardening_intact."""
+
+    _REQUIRED_ENVS = {
+        "SP_DEPLOYMENT_MODE": "cloud",
+        "CLERK_JWT_AUDIENCE": "test-aud",
+        "SP_NOTEBOOK_RUNTIME_CLASS": "gvisor",
+    }
+
+    def _set_required(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for key, value in self._REQUIRED_ENVS.items():
+            monkeypatch.setenv(key, value)
+        # Remove vars that would trigger other violations
+        monkeypatch.delenv("SP_NOTEBOOK_DIRECT_URL", raising=False)
+        monkeypatch.delenv("SP_DISABLE_SANDBOX", raising=False)
+        monkeypatch.delenv("SP_NOTEBOOK_NETWORK_POLICY", raising=False)
+
+    def test_cloud_missing_sp_allowed_origins_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Unset SP_ALLOWED_ORIGINS must raise RuntimeError in cloud mode."""
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        self._set_required(monkeypatch)
+        monkeypatch.delenv("SP_ALLOWED_ORIGINS", raising=False)
+
+        with pytest.raises(RuntimeError, match="SP_ALLOWED_ORIGINS"):
+            assert_cloud_hardening_intact()
+
+    def test_cloud_empty_sp_allowed_origins_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Empty SP_ALLOWED_ORIGINS must raise RuntimeError in cloud mode."""
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        self._set_required(monkeypatch)
+        monkeypatch.setenv("SP_ALLOWED_ORIGINS", "")
+
+        with pytest.raises(RuntimeError, match="SP_ALLOWED_ORIGINS"):
+            assert_cloud_hardening_intact()
+
+    def test_cloud_bare_wildcard_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """SP_ALLOWED_ORIGINS='*' must raise RuntimeError mentioning wildcard."""
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        self._set_required(monkeypatch)
+        monkeypatch.setenv("SP_ALLOWED_ORIGINS", "*")
+
+        with pytest.raises(RuntimeError) as exc_info:
+            assert_cloud_hardening_intact()
+        msg = str(exc_info.value)
+        assert "SP_ALLOWED_ORIGINS" in msg
+        assert "wildcard" in msg
+
+    def test_cloud_wildcard_among_valid_origins_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """'*' mixed with valid origins still triggers a RuntimeError."""
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        self._set_required(monkeypatch)
+        monkeypatch.setenv("SP_ALLOWED_ORIGINS", "https://app.example.com,*")
+
+        with pytest.raises(RuntimeError, match="SP_ALLOWED_ORIGINS"):
+            assert_cloud_hardening_intact()
+
+    def test_cloud_subdomain_wildcard_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Subdomain wildcard https://*.example.com must raise (contains '*')."""
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        self._set_required(monkeypatch)
+        monkeypatch.setenv("SP_ALLOWED_ORIGINS", "https://*.example.com")
+
+        with pytest.raises(RuntimeError, match="SP_ALLOWED_ORIGINS"):
+            assert_cloud_hardening_intact()
+
+    def test_cloud_empty_entry_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Empty entry in comma-separated list must raise with empty_entry descriptor."""
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        self._set_required(monkeypatch)
+        monkeypatch.setenv("SP_ALLOWED_ORIGINS", "https://app.example.com,,https://www.example.com")
+
+        with pytest.raises(RuntimeError) as exc_info:
+            assert_cloud_hardening_intact()
+        assert "empty_entry" in str(exc_info.value)
+
+    def test_cloud_non_https_scheme_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """ftp:// origin must raise with non_https descriptor."""
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        self._set_required(monkeypatch)
+        monkeypatch.setenv("SP_ALLOWED_ORIGINS", "ftp://evil.example.com")
+
+        with pytest.raises(RuntimeError) as exc_info:
+            assert_cloud_hardening_intact()
+        assert "non_https" in str(exc_info.value)
+
+    def test_cloud_http_non_loopback_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """http:// with non-loopback host must raise (only localhost/127.0.0.1 allowed)."""
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        self._set_required(monkeypatch)
+        monkeypatch.setenv("SP_ALLOWED_ORIGINS", "http://app.example.com")
+
+        with pytest.raises(RuntimeError, match="SP_ALLOWED_ORIGINS"):
+            assert_cloud_hardening_intact()
+
+    def test_cloud_valid_https_origins_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Valid https:// origins must not raise."""
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        self._set_required(monkeypatch)
+        monkeypatch.setenv("SP_ALLOWED_ORIGINS", "https://app.example.com,https://www.example.com")
+
+        assert_cloud_hardening_intact()  # must not raise
+
+    def test_cloud_https_plus_localhost_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """https:// origin combined with http://localhost must not raise."""
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        self._set_required(monkeypatch)
+        monkeypatch.setenv("SP_ALLOWED_ORIGINS", "https://app.example.com,http://localhost:3000")
+
+        assert_cloud_hardening_intact()  # must not raise
+
+    def test_cloud_127_loopback_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """https:// origin combined with http://127.0.0.1 must not raise."""
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        self._set_required(monkeypatch)
+        monkeypatch.setenv("SP_ALLOWED_ORIGINS", "https://app.example.com,http://127.0.0.1:3000")
+
+        assert_cloud_hardening_intact()  # must not raise
+
+    def test_local_mode_wildcard_does_not_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """assert_cloud_hardening_intact is a no-op in local mode; wildcard must not raise."""
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "local")
+        monkeypatch.setenv("SP_ALLOWED_ORIGINS", "*")
+
+        assert_cloud_hardening_intact()  # must not raise
+
+    def test_local_mode_unset_does_not_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """assert_cloud_hardening_intact is a no-op in local mode; unset must not raise."""
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "local")
+        monkeypatch.delenv("SP_ALLOWED_ORIGINS", raising=False)
+
+        assert_cloud_hardening_intact()  # must not raise
+
+    def test_descriptor_includes_var_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """RuntimeError message must contain the literal string 'SP_ALLOWED_ORIGINS'."""
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        self._set_required(monkeypatch)
+        monkeypatch.setenv("SP_ALLOWED_ORIGINS", "http://bad.example.com")
+
+        with pytest.raises(RuntimeError) as exc_info:
+            assert_cloud_hardening_intact()
+        assert "SP_ALLOWED_ORIGINS" in str(exc_info.value)
+
+    def test_no_origin_value_in_exception_message(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Origin values must NOT appear in the RuntimeError message (names-only invariant)."""
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        self._set_required(monkeypatch)
+        monkeypatch.setenv("SP_ALLOWED_ORIGINS", "https://*.secret-internal.corp,*")
+
+        with pytest.raises(RuntimeError) as exc_info:
+            assert_cloud_hardening_intact()
+        assert "secret-internal" not in str(exc_info.value)

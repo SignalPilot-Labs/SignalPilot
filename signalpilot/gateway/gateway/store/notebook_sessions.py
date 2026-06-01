@@ -123,6 +123,7 @@ async def update_session_status(
     session: AsyncSession,
     *,
     session_id: str,
+    org_id: str,
     status: str,
     pod_ip: str | None = None,
     pod_ip_internal: str | None = None,
@@ -134,7 +135,10 @@ async def update_session_status(
         values["pod_ip_internal"] = pod_ip_internal
     await session.execute(
         update(GatewayNotebookSession)
-        .where(GatewayNotebookSession.id == session_id)
+        .where(
+            GatewayNotebookSession.id == session_id,
+            GatewayNotebookSession.org_id == org_id,
+        )
         .values(**values)
     )
     await session.commit()
@@ -173,10 +177,13 @@ async def ping_session_by_id(
     return _to_info(row)
 
 
-async def mark_stopped(session: AsyncSession, *, session_id: str) -> None:
+async def mark_stopped(session: AsyncSession, *, session_id: str, org_id: str) -> None:
     await session.execute(
         update(GatewayNotebookSession)
-        .where(GatewayNotebookSession.id == session_id)
+        .where(
+            GatewayNotebookSession.id == session_id,
+            GatewayNotebookSession.org_id == org_id,
+        )
         .values(status="stopped")
     )
     await session.commit()

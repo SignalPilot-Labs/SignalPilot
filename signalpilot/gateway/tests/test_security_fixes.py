@@ -6,11 +6,15 @@ Each test class covers one vulnerability finding.
 from __future__ import annotations
 
 import asyncio
+import logging
 import struct
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import FastAPI
+from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.testclient import TestClient
 
 from gateway.dbt_proxy.tokens import RunTokenClaims
 from gateway.engine.dbt_validation import validate_dbt_statement
@@ -364,6 +368,47 @@ class TestV4DefaultBindHost:
         assert not any("non-loopback" in r.message for r in caplog.records)
 
 
+# ─── L7: Cloud-mode non-loopback bind hard-fail ──────────────────────────────
+
+
+class TestL7CloudModeBindHardFail:
+    """enforce_bind_safety() hard-fails in cloud mode; warns in local mode."""
+
+    def test_cloud_mode_non_loopback_raises(self) -> None:
+        from gateway.dbt_proxy.config import DbtProxyConfig
+
+        config = DbtProxyConfig(sp_dbt_proxy_host="0.0.0.0")
+        with pytest.raises(RuntimeError, match="non-loopback") as exc_info:
+            config.enforce_bind_safety(cloud=True)
+        msg = str(exc_info.value)
+        assert "0.0.0.0" in msg
+        assert "SP_DBT_PROXY_HOST" in msg
+
+    @pytest.mark.parametrize("host", ["127.0.0.1", "::1", "localhost"])
+    def test_cloud_mode_loopback_hosts_ok(self, host: str) -> None:
+        from gateway.dbt_proxy.config import DbtProxyConfig
+
+        config = DbtProxyConfig(sp_dbt_proxy_host=host)
+        config.enforce_bind_safety(cloud=True)  # must not raise
+
+    def test_local_mode_non_loopback_warns_no_raise(self, caplog) -> None:  # type: ignore[no-untyped-def]
+        import logging
+
+        from gateway.dbt_proxy.config import DbtProxyConfig
+
+        config = DbtProxyConfig(sp_dbt_proxy_host="0.0.0.0")
+        with caplog.at_level(logging.WARNING):
+            config.enforce_bind_safety(cloud=False)  # must not raise
+
+        assert any("non-loopback" in r.message for r in caplog.records)
+
+    def test_cloud_mode_default_host_ok(self) -> None:
+        from gateway.dbt_proxy.config import DbtProxyConfig
+
+        config = DbtProxyConfig()  # default 127.0.0.1
+        config.enforce_bind_safety(cloud=True)  # must not raise
+
+
 # ─── V5: Inline param substitution safety ────────────────────────────────────
 
 
@@ -621,3 +666,547 @@ class TestAuthErrorSanitization:
             # org_id must NOT appear in the format args of the log line
             log_args = str(info_call)
             assert "SENSITIVE_ORG" not in log_args
+
+
+# ─── L1: Cookie-auth CSRF Origin check ───────────────────────────────────────
+
+
+class TestL1CookieCsrfOriginCheck:
+    """Verify CookieAuthCsrfMiddleware blocks cross-origin cookie-only mutations."""
+
+    @pytest.fixture(scope="class")
+    def client(self) -> TestClient:
+        from gateway.http.middleware.csrf import CookieAuthCsrfMiddleware
+
+        mini = FastAPI()
+        mini.add_middleware(
+            CookieAuthCsrfMiddleware,
+            allowed_origins=["https://app.signalpilot.ai"],
+            enabled=True,
+        )
+
+        @mini.post("/echo")
+        async def echo_post() -> dict[str, str]:
+            return {"ok": "true"}
+
+        @mini.get("/echo")
+        async def echo_get() -> dict[str, str]:
+            return {"ok": "true"}
+
+        @mini.post("/api/webhooks/test")
+        async def webhook_post() -> dict[str, str]:
+            return {"ok": "true"}
+
+        @mini.post("/auth/github/test")
+        async def github_post() -> dict[str, str]:
+            return {"ok": "true"}
+
+        return TestClient(mini, raise_server_exceptions=False)
+
+    @pytest.fixture(scope="class")
+    def disabled_client(self) -> TestClient:
+        from gateway.http.middleware.csrf import CookieAuthCsrfMiddleware
+
+        mini = FastAPI()
+        mini.add_middleware(
+            CookieAuthCsrfMiddleware,
+            allowed_origins=["https://app.signalpilot.ai"],
+            enabled=False,
+        )
+
+        @mini.post("/echo")
+        async def echo_post() -> dict[str, str]:
+            return {"ok": "true"}
+
+        return TestClient(mini, raise_server_exceptions=False)
+
+    def test_cookie_post_no_origin_no_sec_fetch_rejected(self, client: TestClient) -> None:
+        resp = client.post("/echo", cookies={"__session": "abc"})
+        assert resp.status_code == 403
+
+    def test_cookie_post_allowed_origin_ok(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Origin": "https://app.signalpilot.ai"},
+        )
+        assert resp.status_code == 200
+
+    def test_cookie_post_disallowed_origin_rejected(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Origin": "https://evil.example"},
+        )
+        assert resp.status_code == 403
+
+    def test_cookie_post_sec_fetch_same_origin_no_origin_ok(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Sec-Fetch-Site": "same-origin"},
+        )
+        assert resp.status_code == 200
+
+    def test_cookie_post_sec_fetch_cross_site_rejected(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Sec-Fetch-Site": "cross-site"},
+        )
+        assert resp.status_code == 403
+
+    def test_bearer_post_no_origin_ok(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            headers={"Authorization": "Bearer sp_xxx"},
+        )
+        assert resp.status_code == 200
+
+    def test_cookie_plus_bearer_post_no_origin_ok(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Authorization": "Bearer sp_xxx"},
+        )
+        assert resp.status_code == 200
+
+    def test_apikey_header_post_no_origin_ok(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"X-API-Key": "sp_xxx"},
+        )
+        assert resp.status_code == 200
+
+    def test_get_cookie_no_origin_ok(self, client: TestClient) -> None:
+        resp = client.get("/echo", cookies={"__session": "abc"})
+        assert resp.status_code == 200
+
+    def test_options_preflight_ok(self, client: TestClient) -> None:
+        # OPTIONS is a safe method — CSRF check skips it entirely.
+        # Starlette returns 405 for OPTIONS on a POST-only handler in this isolated app
+        # (no CORS middleware); asserting NOT 403 is the meaningful check.
+        resp = client.options("/echo", cookies={"__session": "abc"})
+        assert resp.status_code != 403
+
+    def test_webhook_path_exempt(self, client: TestClient) -> None:
+        resp = client.post("/api/webhooks/test", cookies={"__session": "abc"})
+        assert resp.status_code == 200
+
+    def test_github_callback_path_exempt(self, client: TestClient) -> None:
+        resp = client.post("/auth/github/test", cookies={"__session": "abc"})
+        assert resp.status_code == 200
+
+    def test_referer_fallback_allowed_ok(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Referer": "https://app.signalpilot.ai/dashboard"},
+        )
+        assert resp.status_code == 200
+
+    def test_referer_fallback_disallowed_rejected(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Referer": "https://evil.example/x"},
+        )
+        assert resp.status_code == 403
+
+    def test_referer_subdomain_spoofing_rejected(self, client: TestClient) -> None:
+        # Referer: https://app.signalpilot.ai.evil.com/x must NOT match because
+        # urlsplit recomposition produces https://app.signalpilot.ai.evil.com
+        # which is not in the allow-list.
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Referer": "https://app.signalpilot.ai.evil.com/x"},
+        )
+        assert resp.status_code == 403
+
+    def test_referer_schemeless_rejected(self, client: TestClient) -> None:
+        # Referer: //app.signalpilot.ai/x — urlsplit returns empty scheme,
+        # so recomposition produces "" which must never match the allow-list.
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Referer": "//app.signalpilot.ai/x"},
+        )
+        assert resp.status_code == 403
+
+    def test_local_mode_bypass_disallowed_origin_ok(self, disabled_client: TestClient) -> None:
+        # enabled=False → middleware is a pass-through regardless of Origin
+        resp = disabled_client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Origin": "https://evil.example"},
+        )
+        assert resp.status_code == 200
+
+    def test_rejection_response_shape(self, client: TestClient) -> None:
+        resp = client.post("/echo", cookies={"__session": "abc"})
+        assert resp.status_code == 403
+        assert resp.json() == {"detail": "Forbidden."}
+
+
+# ─── L-1: CLERK_JWT_AUDIENCE hard-fail in cloud mode ─────────────────────────
+
+
+# Env vars that must be set to avoid other kill-switches tripping during L-1/I-5 tests.
+_CLOUD_HARDENING_BASE_ENV = {
+    "SP_DEPLOYMENT_MODE": "cloud",
+    "SP_NOTEBOOK_RUNTIME_CLASS": "gvisor",
+    "CLERK_JWT_AUDIENCE": "my-app",
+    # R11 added SP_ALLOWED_ORIGINS to assert_cloud_hardening_intact; without it
+    # these L-1/I-5 tests would trip the unrelated SP_ALLOWED_ORIGINS violation.
+    "SP_ALLOWED_ORIGINS": "https://app.signalpilot.ai",
+}
+
+
+def _set_cloud_base(monkeypatch, **overrides) -> None:
+    """Set the minimum env to pass assert_cloud_hardening_intact in cloud mode."""
+    env = {**_CLOUD_HARDENING_BASE_ENV, **overrides}
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    # Ensure vars that should be absent are absent
+    monkeypatch.delenv("SP_NOTEBOOK_DIRECT_URL", raising=False)
+    monkeypatch.delenv("SP_DISABLE_SANDBOX", raising=False)
+    monkeypatch.delenv("SP_NOTEBOOK_NETWORK_POLICY", raising=False)
+    monkeypatch.delenv("SP_NOTEBOOK_NETWORK_POLICY_CLOUD_ACK", raising=False)
+
+
+class TestL1ClerkAudienceHardFailCloud:
+    """L-1: assert_cloud_hardening_intact() fails fast when CLERK_JWT_AUDIENCE is
+    unset or empty in cloud mode."""
+
+    def test_cloud_mode_missing_audience_raises(self, monkeypatch) -> None:
+        _set_cloud_base(monkeypatch)
+        monkeypatch.delenv("CLERK_JWT_AUDIENCE", raising=False)
+
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        with pytest.raises(RuntimeError, match="CLERK_JWT_AUDIENCE"):
+            assert_cloud_hardening_intact()
+
+    def test_cloud_mode_present_audience_passes(self, monkeypatch) -> None:
+        _set_cloud_base(monkeypatch, CLERK_JWT_AUDIENCE="my-app")
+
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        assert_cloud_hardening_intact()  # must not raise
+
+    def test_local_mode_missing_audience_passes(self, monkeypatch) -> None:
+        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "local")
+        monkeypatch.delenv("CLERK_JWT_AUDIENCE", raising=False)
+
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        assert_cloud_hardening_intact()  # local mode: no checks
+
+    def test_cloud_mode_empty_string_audience_raises(self, monkeypatch) -> None:
+        _set_cloud_base(monkeypatch, CLERK_JWT_AUDIENCE="   ")
+
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        with pytest.raises(RuntimeError, match="CLERK_JWT_AUDIENCE"):
+            assert_cloud_hardening_intact()
+
+
+# ─── I-5: SP_NOTEBOOK_NETWORK_POLICY=false hard-fail with opt-in ─────────────
+
+
+class TestI5NetworkPolicyOptOutHardFailCloud:
+    """I-5: SP_NOTEBOOK_NETWORK_POLICY=false must trigger RuntimeError in cloud
+    mode unless SP_NOTEBOOK_NETWORK_POLICY_CLOUD_ACK=1|true|yes is set."""
+
+    def test_cloud_netpol_false_no_ack_raises(self, monkeypatch) -> None:
+        _set_cloud_base(monkeypatch)
+        monkeypatch.setenv("SP_NOTEBOOK_NETWORK_POLICY", "false")
+        monkeypatch.delenv("SP_NOTEBOOK_NETWORK_POLICY_CLOUD_ACK", raising=False)
+
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        with pytest.raises(RuntimeError, match="SP_NOTEBOOK_NETWORK_POLICY"):
+            assert_cloud_hardening_intact()
+
+    def test_cloud_netpol_false_with_ack_warns_only(self, monkeypatch, caplog) -> None:
+        _set_cloud_base(monkeypatch)
+        monkeypatch.setenv("SP_NOTEBOOK_NETWORK_POLICY", "false")
+        monkeypatch.setenv("SP_NOTEBOOK_NETWORK_POLICY_CLOUD_ACK", "1")
+
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        with caplog.at_level(logging.WARNING, logger="gateway.runtime.mode"):
+            assert_cloud_hardening_intact()  # must not raise
+
+        assert any("SP_NOTEBOOK_NETWORK_POLICY=false" in r.message for r in caplog.records)
+
+    def test_cloud_netpol_true_passes(self, monkeypatch) -> None:
+        _set_cloud_base(monkeypatch)
+        monkeypatch.setenv("SP_NOTEBOOK_NETWORK_POLICY", "true")
+
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        assert_cloud_hardening_intact()  # must not raise
+
+    def test_local_netpol_false_passes(self, monkeypatch) -> None:
+        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "local")
+        monkeypatch.setenv("SP_NOTEBOOK_NETWORK_POLICY", "false")
+        monkeypatch.delenv("SP_NOTEBOOK_NETWORK_POLICY_CLOUD_ACK", raising=False)
+
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        assert_cloud_hardening_intact()  # local mode: no checks
+
+    @pytest.mark.parametrize(
+        "ack,should_raise",
+        [
+            ("1", False),
+            ("true", False),
+            ("yes", False),
+            ("TRUE", False),
+            ("Yes", False),
+            ("", True),
+            ("0", True),
+            ("false", True),
+            ("no", True),
+        ],
+    )
+    def test_cloud_netpol_false_ack_truthy_variants(
+        self, monkeypatch, ack: str, should_raise: bool
+    ) -> None:
+        _set_cloud_base(monkeypatch)
+        monkeypatch.setenv("SP_NOTEBOOK_NETWORK_POLICY", "false")
+        monkeypatch.setenv("SP_NOTEBOOK_NETWORK_POLICY_CLOUD_ACK", ack)
+
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        if should_raise:
+            with pytest.raises(RuntimeError, match="SP_NOTEBOOK_NETWORK_POLICY"):
+                assert_cloud_hardening_intact()
+        else:
+            assert_cloud_hardening_intact()  # must not raise
+
+
+# ─── L-6: org_id filter on session mutation helpers ──────────────────────────
+
+
+class TestL6SessionMutationsOrgFilter:
+    """L-6: update_session_status and mark_stopped must pass org_id in the WHERE
+    clause so a cross-org call is a silent no-op (defense-in-depth).
+
+    We capture the SQLAlchemy Update clause passed to session.execute and verify
+    that org_id is present in the WHERE criteria — no live DB required.
+    """
+
+    def _make_async_session_capture(self) -> tuple[AsyncMock, list]:
+        """Return a mock AsyncSession and the list that captures execute calls."""
+        captured: list = []
+
+        async def _fake_execute(stmt, *args, **kwargs):
+            captured.append(stmt)
+            return MagicMock()
+
+        session = AsyncMock(spec=AsyncSession)
+        session.execute.side_effect = _fake_execute
+        session.commit = AsyncMock()
+        return session, captured
+
+    def _where_clause_str(self, stmt) -> str:
+        """Compile the WHERE clause of an Update statement to a string for inspection."""
+        from sqlalchemy.dialects import sqlite
+
+        return str(stmt.whereclause.compile(dialect=sqlite.dialect(), compile_kwargs={"literal_binds": True}))
+
+    @pytest.mark.asyncio
+    async def test_update_session_status_includes_org_id_in_where(self) -> None:
+        from gateway.store.notebook_sessions import update_session_status
+
+        session, captured = self._make_async_session_capture()
+
+        await update_session_status(
+            session,
+            session_id="sess-1",
+            org_id="org-b",
+            status="running",
+            pod_ip="1.2.3.4",
+        )
+
+        assert len(captured) == 1
+        where_str = self._where_clause_str(captured[0])
+        assert "org-b" in where_str
+        assert "sess-1" in where_str
+
+    @pytest.mark.asyncio
+    async def test_update_session_status_correct_org_in_where(self) -> None:
+        from gateway.store.notebook_sessions import update_session_status
+
+        session, captured = self._make_async_session_capture()
+
+        await update_session_status(
+            session,
+            session_id="sess-2",
+            org_id="org-a",
+            status="running",
+            pod_ip="10.0.0.1",
+        )
+
+        assert len(captured) == 1
+        where_str = self._where_clause_str(captured[0])
+        assert "org-a" in where_str
+        assert "sess-2" in where_str
+
+    @pytest.mark.asyncio
+    async def test_mark_stopped_wrong_org_includes_org_id_in_where(self) -> None:
+        from gateway.store.notebook_sessions import mark_stopped
+
+        session, captured = self._make_async_session_capture()
+
+        await mark_stopped(session, session_id="sess-3", org_id="org-b")
+
+        assert len(captured) == 1
+        where_str = self._where_clause_str(captured[0])
+        assert "org-b" in where_str
+        assert "sess-3" in where_str
+
+    @pytest.mark.asyncio
+    async def test_mark_stopped_correct_org_in_where(self) -> None:
+        from gateway.store.notebook_sessions import mark_stopped
+
+        session, captured = self._make_async_session_capture()
+
+        await mark_stopped(session, session_id="sess-4", org_id="org-a")
+
+        assert len(captured) == 1
+        where_str = self._where_clause_str(captured[0])
+        assert "org-a" in where_str
+        assert "sess-4" in where_str
+
+
+# ─── I-2: SP_EXPECTED_AZP allowlist enforcement in Clerk verifier ────────────
+
+
+class TestClerkAzpAllowlist:
+    """I-2: SP_EXPECTED_AZP azp allowlist enforcement in the Clerk JWT verifier."""
+
+    @pytest.mark.asyncio
+    async def test_azp_mismatch_rejected_when_allowlist_set(self, monkeypatch) -> None:
+        """azp not in allowlist → 401 Invalid authentication token."""
+        import base64
+        import json
+        import time
+
+        from fastapi import HTTPException
+
+        from gateway.auth.user import resolve_user_id
+
+        monkeypatch.setattr("gateway.auth.user.EXPECTED_AZP", frozenset({"https://app.signalpilot.com"}))
+
+        clerk_payload = {
+            "iss": "https://clerk.example.com",
+            "sub": "user_1",
+            "azp": "https://evil.example.com",
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 3600,
+        }
+        header_b64 = base64.urlsafe_b64encode(json.dumps({"alg": "RS256", "typ": "JWT"}).encode()).rstrip(b"=")
+        payload_b64 = base64.urlsafe_b64encode(json.dumps(clerk_payload).encode()).rstrip(b"=")
+        fake_sig = base64.urlsafe_b64encode(b"fakesignature").rstrip(b"=")
+        clerk_token = f"{header_b64.decode()}.{payload_b64.decode()}.{fake_sig.decode()}"
+
+        with patch("gateway.auth.user.is_cloud_mode", return_value=True):
+            mock_client = MagicMock()
+            mock_client.get_signing_key_from_jwt.return_value = MagicMock()
+
+            with patch("gateway.auth.user._get_jwks_client", return_value=mock_client):
+                with patch("gateway.auth.user.jwt.decode", return_value=clerk_payload):
+                    request = MagicMock()
+                    request.headers.get.return_value = f"Bearer {clerk_token}"
+                    request.cookies.get.return_value = None
+                    request.state = MagicMock(spec=[])
+
+                    with pytest.raises(HTTPException) as exc_info:
+                        await resolve_user_id(request)
+
+                    assert exc_info.value.status_code == 401
+                    assert exc_info.value.detail == "Invalid authentication token"
+
+    @pytest.mark.asyncio
+    async def test_azp_missing_rejected_when_allowlist_set(self, monkeypatch) -> None:
+        """azp claim absent → 401 Invalid authentication token when allowlist set."""
+        import base64
+        import json
+        import time
+
+        from fastapi import HTTPException
+
+        from gateway.auth.user import resolve_user_id
+
+        monkeypatch.setattr("gateway.auth.user.EXPECTED_AZP", frozenset({"https://app.signalpilot.com"}))
+
+        clerk_payload = {
+            "iss": "https://clerk.example.com",
+            "sub": "user_1",
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 3600,
+        }
+        header_b64 = base64.urlsafe_b64encode(json.dumps({"alg": "RS256", "typ": "JWT"}).encode()).rstrip(b"=")
+        payload_b64 = base64.urlsafe_b64encode(json.dumps(clerk_payload).encode()).rstrip(b"=")
+        fake_sig = base64.urlsafe_b64encode(b"fakesignature").rstrip(b"=")
+        clerk_token = f"{header_b64.decode()}.{payload_b64.decode()}.{fake_sig.decode()}"
+
+        with patch("gateway.auth.user.is_cloud_mode", return_value=True):
+            mock_client = MagicMock()
+            mock_client.get_signing_key_from_jwt.return_value = MagicMock()
+
+            with patch("gateway.auth.user._get_jwks_client", return_value=mock_client):
+                with patch("gateway.auth.user.jwt.decode", return_value=clerk_payload):
+                    request = MagicMock()
+                    request.headers.get.return_value = f"Bearer {clerk_token}"
+                    request.cookies.get.return_value = None
+                    request.state = MagicMock(spec=[])
+
+                    with pytest.raises(HTTPException) as exc_info:
+                        await resolve_user_id(request)
+
+                    assert exc_info.value.status_code == 401
+                    assert exc_info.value.detail == "Invalid authentication token"
+
+    @pytest.mark.asyncio
+    async def test_azp_not_enforced_when_env_unset(self, monkeypatch) -> None:
+        """EXPECTED_AZP empty frozenset → azp check is a no-op, returns user_id."""
+        import base64
+        import json
+        import time
+
+        from gateway.auth.user import resolve_user_id
+
+        monkeypatch.setattr("gateway.auth.user.EXPECTED_AZP", frozenset())
+
+        clerk_payload = {
+            "iss": "https://clerk.example.com",
+            "sub": "user_1",
+            "azp": "anything",
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 3600,
+        }
+        header_b64 = base64.urlsafe_b64encode(json.dumps({"alg": "RS256", "typ": "JWT"}).encode()).rstrip(b"=")
+        payload_b64 = base64.urlsafe_b64encode(json.dumps(clerk_payload).encode()).rstrip(b"=")
+        fake_sig = base64.urlsafe_b64encode(b"fakesignature").rstrip(b"=")
+        clerk_token = f"{header_b64.decode()}.{payload_b64.decode()}.{fake_sig.decode()}"
+
+        with patch("gateway.auth.user.is_cloud_mode", return_value=True):
+            mock_client = MagicMock()
+            mock_client.get_signing_key_from_jwt.return_value = MagicMock()
+
+            with patch("gateway.auth.user._get_jwks_client", return_value=mock_client):
+                with patch("gateway.auth.user.jwt.decode", return_value=clerk_payload):
+                    request = MagicMock()
+                    request.headers.get.return_value = f"Bearer {clerk_token}"
+                    request.cookies.get.return_value = None
+                    request.state = MagicMock(spec=[])
+
+                    result = await resolve_user_id(request)
+
+                    assert result == "user_1"

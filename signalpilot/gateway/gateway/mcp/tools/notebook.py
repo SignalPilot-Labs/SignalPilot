@@ -4,9 +4,12 @@ import logging
 import re
 import uuid
 
+from gateway.auth.notebook_jwt import mint_session_jwt
+from gateway.config.k8s import get_k8s_settings as _get_k8s_settings
 from gateway.mcp.audit import audited_tool
 from gateway.mcp.context import _store_session, mcp_org_id_var, mcp_user_id_var
 from gateway.mcp.server import mcp
+from gateway.runtime.mode import is_cloud_mode
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +33,58 @@ def _validate_branch(branch: str) -> str | None:
     if not branch or branch.startswith("-") or not _BRANCH_RE.match(branch):
         return f"Error: agent_branch {branch!r} is invalid (must match [A-Za-z0-9._/\\-]+ and not start with -)"
     return None
+
+
+def _build_export_invocation(
+    *,
+    cloud: bool,
+    user_id: str,
+    org_id: str,
+    session_id: str,
+    project_id: str,
+    branch: str,
+    export_target: str,
+) -> tuple[list[str], bytes | None]:
+    """Return (argv, stdin_bytes) for the pod export exec.
+
+    L-3: In cloud mode we mint a notebook session JWT scoped to
+    read/write/query/execute and pipe it as SP_API_KEY over stdin (never argv —
+    argv lands in the k8s control-plane audit log). The caller's raw API key is
+    NEVER forwarded into the pod — it may be admin-scoped, and the in-pod kernel
+    only needs data-plane access.
+
+    In local mode no credential is needed; the local gateway has no auth.
+    """
+    if cloud:
+        export_jwt = mint_session_jwt(
+            user_id=user_id,
+            org_id=org_id,
+            session_id=session_id,
+            project_id=project_id,
+            branch=branch,
+            ttl=_get_k8s_settings().sp_session_jwt_ttl_seconds,
+        )
+        # standalone_mode default (True): Click calls sys.exit(code) so a failed
+        # export propagates a non-zero exit code to exec_in_pod, same as the
+        # `python -m signalpilot export` path below.
+        wrapper = (
+            "import os,sys;"
+            "os.environ['SP_API_KEY']=sys.stdin.readline().strip();"
+            "from signalpilot._cli.cli import main;"
+            "main(args=['export','session',"
+            f"{export_target!r},'--force-overwrite','--verbose'],prog_name='sp')"
+        )
+        return (
+            ["python", "-c", wrapper],
+            (export_jwt + "\n").encode("utf-8"),
+        )
+    return (
+        [
+            "python", "-m", "signalpilot", "export", "session",
+            export_target, "--force-overwrite", "--verbose",
+        ],
+        None,
+    )
 
 
 @audited_tool(mcp)
@@ -118,16 +173,13 @@ async def run_notebook(
             import hashlib
             import os
 
-            from gateway.auth.notebook_jwt import mint_session_jwt
-            from gateway.config.k8s import get_k8s_settings
-
             h = hashlib.sha256(f"{org_id}:{user_id}".encode()).hexdigest()[:12]
             pod_name = f"nb-{h}"
-            k8s_settings = get_k8s_settings()
+            k8s_settings = _get_k8s_settings()
 
             # Clean up any stale session
             if existing:
-                await ns.mark_stopped(session, session_id=existing.id)
+                await ns.mark_stopped(session, session_id=existing.id, org_id=existing.org_id)
             await ns.delete_stopped(session, org_id=org_id, user_id=user_id)
 
             session_info = await ns.create_session(
@@ -152,7 +204,7 @@ async def run_notebook(
 
             await orch._ensure_client()
             if not orch._core_api:
-                await ns.update_session_status(session, session_id=session_id, status="error")
+                await ns.update_session_status(session, session_id=session_id, org_id=org_id, status="error")
                 return "Error starting notebook pod: K8s orchestrator not available"
             core_v1 = orch._core_api
             # Ensure the namespace exists BEFORE the Secret (else create fails on a new org).
@@ -177,7 +229,7 @@ async def run_notebook(
                     session_jwt=session_jwt, create_pod_fn=_create_pod_fn,
                 )
             except Exception as exc:
-                await ns.update_session_status(session, session_id=session_id, status="error")
+                await ns.update_session_status(session, session_id=session_id, org_id=org_id, status="error")
                 return f"Error starting notebook pod: {exc}"
 
             # Outer try: pod EXISTS here; readiness waits are ours to clean up.
@@ -188,12 +240,12 @@ async def run_notebook(
                 await orch.wait_for_ready(pod_name, org_id=org_id, timeout=90)
                 pod_info = await orch.get_pod(pod_name, org_id=org_id)
                 await ns.update_session_status(
-                    session, session_id=session_id, status="running",
+                    session, session_id=session_id, org_id=org_id, status="running",
                     pod_ip=pod_info.ip if pod_info else None,
                     pod_ip_internal=pod_info.ip if pod_info else None,
                 )
             except Exception as exc:
-                await ns.update_session_status(session, session_id=session_id, status="error")
+                await ns.update_session_status(session, session_id=session_id, org_id=org_id, status="error")
                 try:
                     await orch.delete_pod(pod_name, org_id=org_id)
                 except Exception:
@@ -230,40 +282,27 @@ async def run_notebook(
     # 6. Run sp export session. The export runs as a fresh exec'd process (not the
     # pod's `sp edit` server), so it doesn't inherit the kernel SP_API_KEY the
     # server injects — the Data SDK (sp.init()) would have no gateway credential.
-    # Pass the MCP caller's own API key so the SDK authenticates as that caller.
-    # The key is read from STDIN by a constant wrapper (never argv — argv lands in
-    # the k8s control-plane audit log), which sets SP_API_KEY then exec's the real
-    # export; the export's kernel inherits SP_API_KEY via construct_kernel_env.
-    # The wrapper string is constant (no user-data interpolation) — F-4-safe.
-    from gateway.mcp.context import mcp_raw_key_var
-
-    mcp_key = mcp_raw_key_var.get(None)
+    # L-3: We mint a notebook session JWT scoped to read/write/query/execute and
+    # pipe it as SP_API_KEY over stdin (never argv — argv lands in the k8s
+    # control-plane audit log). The caller's raw API key is NEVER forwarded into
+    # the pod — it may be admin-scoped, and the in-pod kernel only needs
+    # data-plane access.
     export_target = f"{project_dir}/{filename}"
-    if mcp_key:
-        # standalone_mode default (True): Click calls sys.exit(code) so a failed
-        # export propagates a non-zero exit code to exec_in_pod, same as the
-        # `python -m signalpilot export` path below.
-        wrapper = (
-            "import os,sys;"
-            "os.environ['SP_API_KEY']=sys.stdin.readline().strip();"
-            "from signalpilot._cli.cli import main;"
-            "main(args=['export','session',"
-            f"{export_target!r},'--force-overwrite','--verbose'],prog_name='sp')"
-        )
-        stdout, stderr, exit_code = await orch.exec_in_pod(
-            pod_name, org_id=org_id,
-            argv=["python", "-c", wrapper],
-            stdin_bytes=(mcp_key + "\n").encode("utf-8"),
-            timeout=300,
-        )
-    else:
-        # Local mode (no MCP key) — gateway needs no credential.
-        stdout, stderr, exit_code = await orch.exec_in_pod(
-            pod_name, org_id=org_id,
-            argv=["python", "-m", "signalpilot", "export", "session",
-                  export_target, "--force-overwrite", "--verbose"],
-            timeout=300,
-        )
+    export_argv, export_stdin = _build_export_invocation(
+        cloud=is_cloud_mode(),
+        user_id=user_id,
+        org_id=org_id,
+        session_id=session_id,
+        project_id=project_id,
+        branch=agent_branch,
+        export_target=export_target,
+    )
+    stdout, stderr, exit_code = await orch.exec_in_pod(
+        pod_name, org_id=org_id,
+        argv=export_argv,
+        stdin_bytes=export_stdin,
+        timeout=300,
+    )
 
     # 7. Read session JSON from pod to extract cell outputs
     cell_outputs = ""
@@ -291,9 +330,6 @@ async def run_notebook(
         # we mint a short-lived session JWT and pipe it over stdin (never on argv,
         # so it never lands in /proc/<pid>/cmdline). The git_auth CLI takes the
         # repo path as its first arg, so we pass project_dir (no cd).
-        from gateway.auth.notebook_jwt import mint_session_jwt
-        from gateway.config.k8s import get_k8s_settings as _get_k8s_settings
-
         push_jwt = mint_session_jwt(
             user_id=user_id, org_id=org_id, session_id=session_id,
             project_id=project_id, branch=agent_branch,

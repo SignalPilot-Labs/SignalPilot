@@ -31,6 +31,7 @@ from .dbt_proxy.config import DbtProxyConfig
 from .governance.context import current_org_id_var
 from .http import (
     APIKeyAuthMiddleware,
+    CookieAuthCsrfMiddleware,
     RateLimitMiddleware,
     RequestBodySizeLimitMiddleware,
     RequestCorrelationMiddleware,
@@ -109,6 +110,10 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("STARTUP: Encryption health check passed.")
 
+    # Verify OAuth state-signing key is resolvable (cloud mode raises if SP_ENCRYPTION_KEY absent)
+    from .api._oauth_state import get_state_hmac_key
+    get_state_hmac_key()  # raises RuntimeError in cloud mode when key missing — fail fast
+
     # Configure BYOK provider — type and config are read from env vars at startup.
     # SP_BYOK_PROVIDER: provider type string (default: "local")
     # SP_BYOK_PROVIDER_CONFIG: JSON-encoded provider config dict (optional)
@@ -155,7 +160,7 @@ async def lifespan(app: FastAPI):
                 except Exception:
                     alive = False
                 if not alive:
-                    await mark_stopped(db_session, session_id=s.id)
+                    await mark_stopped(db_session, session_id=s.id, org_id=s.org_id or "")
                     logger.info("STARTUP: cleaned stale session %s (pod %s dead)", s.id, s.pod_name)
             await db_session.commit()
     except Exception as e:
@@ -321,7 +326,7 @@ async def lifespan(app: FastAPI):
                         logger.info("Cleaning up stale notebook session %s (pod=%s)", s.id, s.pod_name)
                         if s.pod_name:
                             await orch.delete_pod(s.pod_name, org_id=s.org_id or "")
-                        await ns.mark_stopped(session, session_id=s.id)
+                        await ns.mark_stopped(session, session_id=s.id, org_id=s.org_id or "")
             except Exception as e:
                 logger.warning("Notebook cleanup loop error: %s", e)
             # F-13: reap sp-jwt-* Secrets orphaned by a gateway crash between
@@ -351,7 +356,7 @@ async def lifespan(app: FastAPI):
 
     # Start dbt-proxy TCP listener
     dbt_proxy_config = DbtProxyConfig()
-    dbt_proxy_config.warn_if_non_loopback()
+    dbt_proxy_config.enforce_bind_safety(cloud=is_cloud_mode())
 
     # Fail closed: if secret is absent, token store is not created and the
     # server.start() context manager will log an error and skip binding.
@@ -435,14 +440,20 @@ def _build_allowed_origins() -> list[str]:
 
 
 _ALLOWED_ORIGINS = _build_allowed_origins()
+_CSRF_ENABLED = is_cloud_mode()
 
 # Middleware stack (last added = outermost = runs first)
 # Execution order (outermost → innermost):
-#   CORS → BodySizeLimit → SecurityHeaders → RateLimit → Correlation → Auth
+#   CORS → BodySizeLimit → SecurityHeaders → RateLimit → Correlation → CSRF → Auth
 # CORS is outermost so all error responses (including auth errors) get CORS headers.
-# RequestCorrelationMiddleware runs before Auth so auth logs already have a request ID.
+# RequestCorrelationMiddleware runs before CSRF so CSRF logs already have a request ID.
+# CookieAuthCsrfMiddleware runs after Correlation and before Auth — it inspects
+#   headers/cookies directly (same primitives as auth.py) without coupling to
+#   request.state.auth set by Auth.  RateLimit is outer of CSRF so a CSRF-blocked
+#   flood still costs the attacker general-tier quota.
 # APIKeyAuthMiddleware is innermost — closest to the application handlers.
 app.add_middleware(APIKeyAuthMiddleware)
+app.add_middleware(CookieAuthCsrfMiddleware, allowed_origins=_ALLOWED_ORIGINS, enabled=_CSRF_ENABLED)
 app.add_middleware(RequestCorrelationMiddleware)
 app.add_middleware(RateLimitMiddleware, general_rpm=10000, expensive_rpm=1000, auth_rpm=100)
 app.add_middleware(SecurityHeadersMiddleware)

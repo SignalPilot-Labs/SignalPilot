@@ -571,7 +571,7 @@ class TestSessionReuse:
 
         mark_stopped_calls = []
 
-        async def _mock_mark_stopped(session, *, session_id):
+        async def _mock_mark_stopped(session, *, session_id, org_id):
             mark_stopped_calls.append(session_id)
 
         async def _mock_delete_stopped(session, *, org_id, user_id):

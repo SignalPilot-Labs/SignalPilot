@@ -69,10 +69,10 @@ async def create_session(body: NotebookSessionCreate, store: StoreD):
         if await orch.is_pod_alive(existing.pod_name, org_id=org_id):
             return existing
         # Pod is dead — clean up stale session
-        await ns.mark_stopped(store.session, session_id=existing.id)
+        await ns.mark_stopped(store.session, session_id=existing.id, org_id=existing.org_id)
     elif existing:
         # creating state or no pod_ip — mark stopped and recreate
-        await ns.mark_stopped(store.session, session_id=existing.id)
+        await ns.mark_stopped(store.session, session_id=existing.id, org_id=existing.org_id)
 
     await ns.delete_stopped(store.session, org_id=org_id, user_id=user_id)
 
@@ -93,6 +93,7 @@ async def create_session(body: NotebookSessionCreate, store: StoreD):
         await ns.update_session_status(
             store.session,
             session_id=session_info.id,
+            org_id=org_id,
             status="running",
             pod_ip=host_port,
             pod_ip_internal=host_port,
@@ -188,6 +189,7 @@ async def create_session(body: NotebookSessionCreate, store: StoreD):
         await ns.update_session_status(
             store.session,
             session_id=session_info.id,
+            org_id=org_id,
             status="running",
             pod_ip=pod_info.ip,
             pod_ip_internal=pod_info.internal_ip,
@@ -200,15 +202,15 @@ async def create_session(body: NotebookSessionCreate, store: StoreD):
 
     except ValueError as e:
         logger.warning("Invalid org_id for notebook session: %s", e)
-        await ns.update_session_status(store.session, session_id=session_info.id, status="error")
+        await ns.update_session_status(store.session, session_id=session_info.id, org_id=org_id, status="error")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         if _is_quota_exceeded_error(e):
             logger.warning("Org quota exhausted for org %s: %s", org_id, e)
-            await ns.update_session_status(store.session, session_id=session_info.id, status="error")
+            await ns.update_session_status(store.session, session_id=session_info.id, org_id=org_id, status="error")
             raise HTTPException(status_code=429, detail="Org quota exhausted")
         logger.error("Failed to create notebook pod %s: %s: %s", pod, type(e).__name__, e)
-        await ns.update_session_status(store.session, session_id=session_info.id, status="error")
+        await ns.update_session_status(store.session, session_id=session_info.id, org_id=org_id, status="error")
         # Best-effort pod cleanup on failure.
         try:
             await orch.delete_pod(pod, org_id=org_id)
@@ -272,7 +274,7 @@ async def delete_session(store: StoreD):
     direct_url = os.getenv("SP_NOTEBOOK_DIRECT_URL", "")
     if not direct_url and session.pod_name:
         await orch.delete_pod(session.pod_name, org_id=org_id or "")
-    await ns.mark_stopped(store.session, session_id=session.id)
+    await ns.mark_stopped(store.session, session_id=session.id, org_id=session.org_id)
 
 
 @router.delete("/{session_id}", status_code=204, response_model=None, dependencies=[RequireScope("write")])
@@ -302,7 +304,7 @@ async def delete_session_by_id(session_id: str, store: StoreD):
 
     if session.pod_name:
         await orch.delete_pod(session.pod_name, org_id=org_id)
-    await ns.mark_stopped(store.session, session_id=session.id)
+    await ns.mark_stopped(store.session, session_id=session.id, org_id=session.org_id)
 
 
 @router.post("/{session_id}/ping", response_model=NotebookSessionInfo | None, dependencies=[RequireScope("read")])

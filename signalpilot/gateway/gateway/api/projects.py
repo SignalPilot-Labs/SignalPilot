@@ -9,6 +9,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ..models import ProjectCreate, ProjectUpdate
+from ..network.validation import validate_connection_host
+from ..runtime.mode import is_cloud_mode
 from ..security.scope_guard import RequireScope
 from .deps import StoreD
 
@@ -93,6 +95,14 @@ class DbtCloudDiscoverRequest(BaseModel):
 @router.post("/dbt-cloud/projects", dependencies=[RequireScope("admin")])
 async def discover_dbt_cloud_projects(req: DbtCloudDiscoverRequest):
     """Fetch project list from dbt Cloud API (proxied to avoid CORS)."""
+    # Cloud-mode SSRF: admin-controlled `host` must not resolve to
+    # loopback/link-local/IMDS/CGNAT/RFC1918. Local mode keeps free-form host
+    # for private dbt Cloud installations, mirroring the connections pattern.
+    if is_cloud_mode():
+        try:
+            validate_connection_host(req.host)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid dbt Cloud host: {e}")
     url = f"https://{req.host}/api/v2/accounts/{req.account_id}/projects/"
     try:
         async with httpx.AsyncClient(timeout=15) as client:

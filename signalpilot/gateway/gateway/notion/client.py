@@ -86,6 +86,7 @@ async def search_pages(
 
 MAX_DEPTH = 4
 MAX_CONTENT_CHARS = 8000
+MAX_TOTAL_BLOCKS = 2000
 
 
 async def _fetch_blocks_recursive(
@@ -93,8 +94,12 @@ async def _fetch_blocks_recursive(
     headers: dict[str, str],
     block_id: str,
     depth: int,
+    counter: list[int] | None = None,
 ) -> tuple[list[str], list[dict[str, str]]]:
     """Recursively fetch all text and child pages from a block tree."""
+    if counter is None:
+        counter = [0]
+
     if depth > MAX_DEPTH:
         return [], []
 
@@ -110,6 +115,11 @@ async def _fetch_blocks_recursive(
     child_pages: list[dict[str, str]] = []
 
     for block in blocks:
+        if counter[0] >= MAX_TOTAL_BLOCKS:
+            break
+
+        counter[0] += 1
+
         block_type = block.get("type", "")
 
         if block_type == "child_page":
@@ -125,7 +135,7 @@ async def _fetch_blocks_recursive(
 
         if block.get("has_children", False):
             sub_lines, sub_children = await _fetch_blocks_recursive(
-                client, headers, block["id"], depth + 1,
+                client, headers, block["id"], depth + 1, counter=counter,
             )
             lines.extend(sub_lines)
             child_pages.extend(sub_children)

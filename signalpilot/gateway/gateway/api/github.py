@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import logging
-import secrets
 import time
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -19,44 +16,14 @@ from ..models.github import (
     GitHubRepoLinkCreate,
     GitHubRepoLinkInfo,
 )
+from ..runtime.mode import is_cloud_mode
 from ..security.scope_guard import RequireScope
+from ._oauth_state import make_state, verify_state
 from .deps import StoreD
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# ─── OAuth State ──────────────────────────────────────────────────────────
-
-_HMAC_KEY: bytes | None = None
-
-
-def _get_hmac_key() -> bytes:
-    global _HMAC_KEY
-    if _HMAC_KEY is None:
-        import os
-        raw = os.getenv("SP_ENCRYPTION_KEY", "github-oauth-state-key")
-        _HMAC_KEY = hashlib.sha256(raw.encode()).digest()
-    return _HMAC_KEY
-
-
-def _make_state(org_id: str) -> str:
-    nonce = secrets.token_hex(16)
-    payload = f"{org_id}:{nonce}"
-    sig = hmac.new(_get_hmac_key(), payload.encode(), hashlib.sha256).hexdigest()[:16]
-    return f"{payload}.{sig}"
-
-
-def _verify_state(state: str) -> str | None:
-    parts = state.rsplit(".", 1)
-    if len(parts) != 2:
-        return None
-    payload, sig = parts
-    expected = hmac.new(_get_hmac_key(), payload.encode(), hashlib.sha256).hexdigest()[:16]
-    if not hmac.compare_digest(sig, expected):
-        return None
-    org_id = payload.split(":", 1)[0]
-    return org_id
 
 
 # ─── OAuth Flow ──────────────────────────────────────────────────────────
@@ -75,7 +42,7 @@ async def github_install_url(store: StoreD):
         raise HTTPException(status_code=503, detail="GitHub App not configured")
 
     org_id = store.org_id or "local"
-    state = _make_state(org_id)
+    state = make_state(org_id)
     install_url = f"https://github.com/apps/{settings.sp_github_app_slug}/installations/new?state={state}"
     return {"install_url": install_url}
 
@@ -87,11 +54,10 @@ async def github_oauth_start(request: Request):
     if not settings.is_configured:
         raise HTTPException(status_code=503, detail="GitHub App not configured")
 
-    from ..runtime.mode import is_cloud_mode
     if is_cloud_mode():
         raise HTTPException(status_code=400, detail="Use GET /api/github/install-url instead")
 
-    state = _make_state("local")
+    state = make_state("local")
     install_url = f"https://github.com/apps/{settings.sp_github_app_slug}/installations/new?state={state}"
     return RedirectResponse(url=install_url, status_code=302)
 
@@ -107,9 +73,26 @@ async def github_oauth_callback(
     if not settings.is_configured:
         raise HTTPException(status_code=503, detail="GitHub App not configured")
 
-    org_id = _verify_state(state) if state else "local"
-    if org_id is None:
-        org_id = "local"
+    if is_cloud_mode():
+        if not state:
+            raise HTTPException(
+                status_code=400,
+                detail="OAuth state invalid. Please retry the GitHub install from the SignalPilot UI.",
+            )
+        org_id = verify_state(state)
+        if org_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="OAuth state invalid. Please retry the GitHub install from the SignalPilot UI.",
+            )
+    else:
+        # Local mode: empty state falls back to "local", non-empty state is verified
+        if state:
+            org_id = verify_state(state)
+            if org_id is None:
+                org_id = "local"
+        else:
+            org_id = "local"
 
     from ..github_client import (
         create_installation_token,

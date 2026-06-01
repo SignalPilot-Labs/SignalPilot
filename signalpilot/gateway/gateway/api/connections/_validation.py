@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from gateway.models import ConnectionCreate
-from gateway.network import validate_cloud_warehouse_params, validate_connection_params
+from gateway.network import validate_cloud_warehouse_params, validate_connection_host, validate_connection_params
 
 
 def _validate_connection_params(conn: ConnectionCreate) -> list[str]:
@@ -98,5 +98,22 @@ def _validate_connection_params(conn: ConnectionCreate) -> list[str]:
             errors.append("SSH tunnel with password auth requires a password")
         if db not in ("postgres", "mysql", "redshift", "clickhouse", "mssql", "trino"):
             errors.append(f"SSH tunnels are not supported for {db} (only host:port databases)")
+
+        # Cloud-mode SSRF: validate bastion and HTTP-proxy hosts against the
+        # denylist (loopback, link-local, IMDS, CGNAT, RFC1918).
+        # validate_connection_host does NOT gate on SP_DEPLOYMENT_MODE itself —
+        # that gating lives here, mirroring the existing validate_connection_params
+        # pattern. Local-mode users with private bastions must not be broken.
+        if is_cloud_mode():
+            if conn.ssh_tunnel.host:
+                try:
+                    validate_connection_host(conn.ssh_tunnel.host)
+                except ValueError as e:
+                    errors.append(f"SSH bastion host failed validation: {e}")
+            if conn.ssh_tunnel.proxy_host:
+                try:
+                    validate_connection_host(conn.ssh_tunnel.proxy_host)
+                except ValueError as e:
+                    errors.append(f"SSH HTTP proxy host failed validation: {e}")
 
     return errors

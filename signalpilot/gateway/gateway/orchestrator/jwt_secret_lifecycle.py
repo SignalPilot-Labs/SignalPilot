@@ -53,8 +53,20 @@ async def create_jwt_secret_with_owner_ref(
         On pod-create or patch failure, delete_namespaced_secret is called before re-raising.
     """
     from kubernetes_asyncio import client as k8s_client
+    from kubernetes_asyncio.client.exceptions import ApiException
 
     secret_name = f"sp-jwt-{pod_name}"
+
+    # The pod name (and thus secret name) is deterministic per (org,user), so a
+    # Secret from a prior session can linger if its pod was deleted before kube GC
+    # removed the owner-ref'd Secret, or if a previous create half-failed. Delete
+    # any stale Secret first so create is idempotent (otherwise create 409s
+    # "already exists" and the session never starts).
+    try:
+        await core_v1.delete_namespaced_secret(name=secret_name, namespace=namespace)
+    except ApiException as exc:
+        if exc.status != 404:
+            raise
 
     # Step (a): create the Secret.  On failure, nothing to clean up — just re-raise.
     await core_v1.create_namespaced_secret(

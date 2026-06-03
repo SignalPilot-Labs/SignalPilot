@@ -1,6 +1,6 @@
 ---
 # kyverno test for restrict-pod-exec-signalpilot ClusterPolicy.
-# Run with: kyverno test signalpilot/deploy/k8s/admission/
+# Run with: kyverno test deploy/k8s/admission/
 #
 # Cases:
 #   A: nb-abc123def456 in labeled namespace, container=notebook → both rules pass

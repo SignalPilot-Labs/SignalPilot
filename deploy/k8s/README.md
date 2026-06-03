@@ -1,5 +1,29 @@
 # SignalPilot Gateway — Kubernetes Deployment Notes
 
+This is the single source of truth for deploying the SignalPilot gateway and its
+sandboxed notebook pods to Kubernetes. All manifests live alongside this file:
+`gateway-rbac.yaml`, `gateway-runtime-rbac.yaml`, and the `admission/` policies.
+
+## Deployment targets
+
+- **EKS (reference path)** — the hosted SignalPilot deployment runs on EKS, with
+  notebook nodes provisioned on demand. EKS-specific steps are called out inline.
+- **k3s (self-hosters)** — k3s instructions are retained for single-node and
+  on-prem clusters. The two tracks are equivalent; follow the one matching your
+  cluster wherever a step lists both.
+
+Both tracks require, in order: a NetworkPolicy-enforcing CNI (a), the gateway
+RBAC (b), a sandbox RuntimeClass (c), the gateway env vars (d), IMDS hardening
+(e), the pod PID limit (h), and the admission policies (j).
+
+## Workspace storage
+
+Workspaces are git-backed. Each notebook pod's entrypoint clones the project's
+bare git repository (managed by the gateway, mirrored from GitHub) into
+`/workspace` before starting `sp edit`; changes are pushed back over the same
+channel. Pod-local state is ephemeral — durability lives in git, so **no
+PersistentVolume or shared filesystem is required**.
+
 ## Prerequisites
 
 ### (a) NetworkPolicy-enforcing CNI is required
@@ -129,6 +153,7 @@ kubectl apply -f deploy/k8s/gateway-rbac.yaml
 | `SP_NOTEBOOK_UPSTREAM_MODE` | `pod_ip` | Required for `KubernetesOrchestrator`. |
 | `SP_PUBLIC_GATEWAY_URL` | `https://gateway.example.com` | Gateway URL injected into pods. |
 | `SP_PUBLIC_GATEWAY_PORT` | `3300` | Port used in NetworkPolicy egress rules. |
+| `SP_SESSION_JWT_TTL_SECONDS` | `3600` | TTL (seconds) for the per-session notebook JWT minted for pod→gateway callbacks. |
 | `SP_GATEWAY_NAMESPACE` | `signalpilot` | Namespace where the gateway pod runs. |
 | `SP_GATEWAY_POD_SELECTOR` | `app=signalpilot-gateway` | Single k=v label selector for gateway pods. Used in NetworkPolicy ingress. |
 | `SP_GATEWAY_SERVICE_ACCOUNT` | `signalpilot-gateway` | SA name for per-namespace RoleBinding subjects. |
@@ -287,3 +312,29 @@ When rotating `SP_ENCRYPTION_KEY`:
 
 **Old key cap:** Maximum 8 entries in `SP_ENCRYPTION_KEY_OLD` (comma-separated).
 Exceeding this limit raises a hard error at startup.
+
+### (j) Admission policies (defense-in-depth)
+
+The `admission/` directory holds cluster admission policies that backstop the RBAC
+and runtime controls. Apply them on any multi-tenant cluster:
+
+- **`require-gvisor-*`** — reject any notebook pod whose `runtimeClassName` is not
+  the sandbox runtime, so a pod can never schedule without gVisor/Kata isolation
+  even if the gateway is misconfigured.
+- **`restrict-pod-exec-*`** — narrow the gateway's `pods/exec` grant in a way RBAC
+  cannot express: only `container=notebook` on pods named `^nb-[0-9a-f]{12}$`. The
+  gateway's `pods/exec` Role is broad by necessity (RBAC can't prefix-match pod
+  names); this policy enforces the pod-name shape and container at admission time.
+
+Each control ships as both a `ValidatingAdmissionPolicy` (vanilla k8s 1.30+) and a
+Kyverno variant — apply whichever your cluster supports:
+
+```bash
+kubectl apply -f deploy/k8s/admission/require-gvisor-validatingadmissionpolicy.yaml
+kubectl apply -f deploy/k8s/admission/restrict-pod-exec-validatingadmissionpolicy.yaml
+# (or the *-kyverno.yaml variants if you run Kyverno)
+```
+
+At the application boundary this is reinforced: only `orchestrator/pod_exec_io.py`
+issues `pods/exec` (enforced by a CI AST test) and the container name is hardcoded
+to `notebook`. See `admission/README.md` for the policy test suite.

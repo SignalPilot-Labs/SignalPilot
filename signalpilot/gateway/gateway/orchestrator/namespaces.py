@@ -506,7 +506,7 @@ def _gateway_org_role(namespace: str) -> dict:
             # hardcoded to "notebook", paths confined to /workspace/, argv is a list literal.
             # R9 F-21: RBAC cannot prefix-match pod names, so the broad pods/exec grant is
             # narrowed by Kyverno admission policy. Operator MUST also deploy
-            # admission/restrict-pod-exec-kyverno.yaml; it enforces pod-name shape
+            # deploy/k8s/admission/restrict-pod-exec-kyverno.yaml; it enforces pod-name shape
             # (^nb-[0-9a-f]{12}$) and container=notebook as defense-in-depth.
             {
                 "apiGroups": [""],

@@ -91,7 +91,7 @@ label used by `require-gvisor-kyverno.yaml`). Operators using a non-default
 ### Test
 
 ```bash
-kyverno test signalpilot/deploy/k8s/admission/
+kyverno test deploy/k8s/admission/
 ```
 
 Should exit 0 with all cases passing.

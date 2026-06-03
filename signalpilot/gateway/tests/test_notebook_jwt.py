@@ -29,7 +29,6 @@ def _mint(monkeypatch, **overrides):
         user_id="user-1",
         org_id="org-1",
         session_id="sess-1",
-        project_id="proj-1",
         branch="main",
         ttl=3600,
     )
@@ -45,7 +44,6 @@ class TestMintAndVerifyRoundTrip:
         assert claims["sub"] == "user-1"
         assert claims["org_id"] == "org-1"
         assert claims["session_id"] == "sess-1"
-        assert claims["project_id"] == "proj-1"
         assert claims["branch"] == "main"
         assert claims["iss"] == NOTEBOOK_SESSION_ISS
         assert claims["aud"] == NOTEBOOK_SESSION_AUD

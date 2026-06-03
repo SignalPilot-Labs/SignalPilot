@@ -63,6 +63,9 @@ dependencies = [
     "numpy>=1.24.0",
     "plotly>=5.14.0",
     "matplotlib>=3.8.0",
+    # runtime AI agent used by chat and Notion analysis endpoints
+    "claude-agent-sdk>=0.1.0",
+    "requests>=2.31,<3",
 ]
 readme = "README.md"
 license = "Apache-2.0"
@@ -149,7 +152,6 @@ dev = [
     "pyarrow-stubs",
     # For linting
     "ruff>=0.15.9",
-    "claude-agent-sdk>=0.1.0",
 ]
 
 test = [

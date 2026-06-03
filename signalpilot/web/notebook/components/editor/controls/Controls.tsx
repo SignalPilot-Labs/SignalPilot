@@ -39,6 +39,8 @@ import { LayoutSelect } from "../renderers/layout-select";
 import { DbtToolbar } from "../dbt/dbt-toolbar";
 import { rawFileNeedsSaveAtom, rawFileSaveFnAtom } from "../raw-file-editor";
 import { CommandPaletteButton } from "./command-palette-button";
+import { useOptionalNotebookConfig } from "~/components/notebook/notebook-context";
+import type { NotebookProduct } from "../chrome/types";
 
 interface ControlsProps {
   presenting: boolean;
@@ -49,6 +51,20 @@ interface ControlsProps {
   connectionState: WebSocketState;
   running: boolean;
   appConfig: AppConfig;
+}
+
+function useNotebookProduct(): NotebookProduct {
+  const notebookConfig = useOptionalNotebookConfig();
+  if (notebookConfig?.product) {
+    return notebookConfig.product;
+  }
+  if (
+    typeof window !== "undefined" &&
+    window.location.pathname.startsWith("/notebooks")
+  ) {
+    return "notebooks";
+  }
+  return "projects";
 }
 
 export const Controls = ({
@@ -67,6 +83,7 @@ export const Controls = ({
   const closed = connectionState === WebSocketState.CLOSED;
   const activeTab = useActiveTab();
   const isRawFileView = activeTab?.type === "raw";
+  const showDbtToolbar = useNotebookProduct() === "projects";
 
   const disabled = isAppInteractionDisabled(connectionState);
   const connectionTooltip = disabled
@@ -101,7 +118,7 @@ export const Controls = ({
       <div className={topRightControls}>
         {!closed && (
           <>
-            {!presenting && <DbtToolbar />}
+            {!presenting && showDbtToolbar && <DbtToolbar />}
             {presenting && <LayoutSelect />}
             <NotebookMenuDropdown
               disabled={disabled}
@@ -163,6 +180,7 @@ const RawFileControls: React.FC<{
 }> = ({ disabled, connectionTooltip, closed }) => {
   const rawNeedsSave = useAtomValue(rawFileNeedsSaveAtom);
   const rawSaveFn = useAtomValue(rawFileSaveFnAtom);
+  const showDbtToolbar = useNotebookProduct() === "projects";
 
   return (
     <>
@@ -171,7 +189,7 @@ const RawFileControls: React.FC<{
       <div className={topRightControls}>
         {!closed && (
           <>
-            <DbtToolbar />
+            {showDbtToolbar && <DbtToolbar />}
             <NotebookMenuDropdown
               disabled={disabled}
               tooltip={connectionTooltip}

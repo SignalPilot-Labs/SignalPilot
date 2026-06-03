@@ -20,12 +20,18 @@ async function getBaseUrlAndHeaders(): Promise<{
   // Use NotebookConfig first — instant, no waiting, always available after boot.
   try {
     const { getNotebookConfig } = await import(
-      /* webpackIgnore: true */ "../../components/notebook/notebook-context"
+      "../../../components/notebook/notebook-context"
     );
     const config = getNotebookConfig();
     const token = await config.getToken();
+    const base = config.notebookProxyUrl ?? config.gatewayUrl;
+    const runtimeBase = base
+      ? base.replace(/\/$/, "")
+      : typeof window === "undefined"
+        ? ""
+        : window.location.origin;
     return {
-      baseUrl: `${config.gatewayUrl}/notebook/${config.sessionId}/`,
+      baseUrl: `${runtimeBase}/notebook/${config.sessionId}/`,
       headers: {
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),

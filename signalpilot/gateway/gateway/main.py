@@ -462,7 +462,17 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Request-ID", "Sp-Server-Token", "Sp-Session-Id", "x-runtime-url", "X-Gateway-Project-Id", "X-Gateway-Branch-Id"],
+    allow_headers=[
+        "Content-Type",
+        "Authorization",
+        "X-API-Key",
+        "X-Request-ID",
+        "Sp-Server-Token",
+        "Sp-Session-Id",
+        "x-runtime-url",
+        "X-Gateway-Project-Id",
+        "X-Gateway-Branch-Id",
+    ],
     expose_headers=["X-Request-ID"],
     allow_credentials=True,
 )

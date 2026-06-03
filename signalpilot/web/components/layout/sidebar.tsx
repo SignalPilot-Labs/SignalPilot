@@ -136,15 +136,20 @@ const nav: { href: string; label: string; icon: NavIconComponent; shortcut: stri
   { href: "/integrations", label: "integrations", icon: NavIconIntegrations, shortcut: "3" },
   { href: "/schema", label: "schema", icon: NavIconSchema, shortcut: "4" },
   { href: "/projects", label: "projects", icon: NavIconProject, shortcut: "5" },
-  { href: "/query", label: "query", icon: NavIconQuery, shortcut: "6" },
-  { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "7" },
-  { href: "/knowledge", label: "knowledge", icon: NavIconKnowledge, shortcut: "8" },
-  { href: "/health", label: "health", icon: NavIconHealth, shortcut: "9" },
+  { href: "/notebooks", label: "notebooks", icon: NavIconProject, shortcut: "6" },
+  { href: "/query", label: "query", icon: NavIconQuery, shortcut: "7" },
+  { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "8" },
+  { href: "/knowledge", label: "knowledge", icon: NavIconKnowledge, shortcut: "9" },
+  { href: "/health", label: "health", icon: NavIconHealth, shortcut: "H" },
   { href: "/settings", label: "settings", icon: NavIconSettings, shortcut: "0" },
 ];
 
 /** Routes where the sidebar should be hidden (auth + onboarding = locked flow) */
 const HIDDEN_SIDEBAR_PREFIXES = ["/sign-in", "/sign-up", "/onboarding", "/notebook"];
+
+function matchesRoutePrefix(pathname: string, prefix: string) {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
 
 function SignalPilotLogo() {
   return (
@@ -447,10 +452,11 @@ export default function Sidebar() {
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
-        const idx = parseInt(e.key, 10);
-        if (idx >= 1 && idx <= filteredNav.length) {
+        const key = e.key.toLowerCase();
+        const item = filteredNav.find((entry) => entry.shortcut.toLowerCase() === key);
+        if (item) {
           e.preventDefault();
-          router.push(filteredNav[idx - 1].href);
+          router.push(item.href);
         }
       }
     }
@@ -462,7 +468,7 @@ export default function Sidebar() {
   const tierBranding = useTierBranding();
   const showWordmark = tierBranding.enabled && tierBranding.tier !== "free";
 
-  if (HIDDEN_SIDEBAR_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
+  if (HIDDEN_SIDEBAR_PREFIXES.some((prefix) => matchesRoutePrefix(pathname, prefix))) {
     return null;
   }
 
@@ -515,8 +521,7 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 px-3 py-2 space-y-0.5">
-        {filteredNav.map(({ href, label, icon: Icon }, filteredIdx) => {
-          const shortcut = String(filteredIdx + 1);
+        {filteredNav.map(({ href, label, icon: Icon, shortcut }) => {
           const active = pathname.startsWith(href);
           const badge = 0;
           return (

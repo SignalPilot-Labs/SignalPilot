@@ -148,13 +148,18 @@ function applySecurityHeaders(
 // ---------------------------------------------------------------------------
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
+const NOTEBOOK_PROXY_TARGET_URL =
+  process.env.SP_GATEWAY_INTERNAL_URL || GATEWAY_URL;
 
 function isNotebookPath(pathname: string): boolean {
   return pathname.startsWith("/notebook/");
 }
 
 function proxyNotebook(req: NextRequest): NextResponse {
-  const target = new URL(req.nextUrl.pathname + req.nextUrl.search, GATEWAY_URL);
+  const target = new URL(
+    req.nextUrl.pathname + req.nextUrl.search,
+    NOTEBOOK_PROXY_TARGET_URL,
+  );
   return NextResponse.rewrite(target, {
     headers: req.headers,
   });
@@ -212,6 +217,8 @@ export default middlewareExport;
 
 export const config = {
   matcher: [
+    // Notebook proxy must include static assets such as fonts and JS chunks.
+    "/notebook/:path*",
     // Skip Next.js internals and all static files (Clerk-recommended pattern)
     "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
     // Always run for API routes

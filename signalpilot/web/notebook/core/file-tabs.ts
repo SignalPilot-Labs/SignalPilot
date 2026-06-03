@@ -7,6 +7,7 @@ import { store } from "./state/jotai";
 
 const createTabId = init({ length: 8 });
 const createSessionId = init({ length: 6 });
+const NOTION_THREAD_STORAGE_PREFIX = "sp:notion-thread:";
 
 /**
  * A file tab represents an open file in the editor.
@@ -51,12 +52,53 @@ export const activeTabAtom = atom<FileTab | null>((get) => {
 
 // ── Actions ──────────────────────────────────────────────────────
 
+function normalizePath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/^\/+/, "");
+}
+
+function isSameNotionPath(candidate: string, trailFile: string): boolean {
+  const normalizedCandidate = normalizePath(candidate);
+  const normalizedTrailFile = normalizePath(trailFile);
+  return (
+    normalizedCandidate === normalizedTrailFile ||
+    normalizedCandidate.endsWith(`/${normalizedTrailFile}`) ||
+    normalizedTrailFile.endsWith(normalizedCandidate)
+  );
+}
+
+function getNotionSessionIdForPath(path: string): SessionId | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  const trailFile = params.get("file") ?? "";
+  if (!trailFile.startsWith("signalpilot-notion-analyses/") || !isSameNotionPath(path, trailFile)) {
+    return null;
+  }
+
+  const urlSessionId = params.get("session_id");
+  if (urlSessionId?.startsWith("session-notion-")) {
+    return urlSessionId as SessionId;
+  }
+
+  try {
+    const storedSessionId = window.localStorage.getItem(`${NOTION_THREAD_STORAGE_PREFIX}${trailFile}`);
+    return storedSessionId?.startsWith("session-notion-")
+      ? (storedSessionId as SessionId)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Open a file in a tab. If the file is already open, activate that tab.
  * Otherwise create a new tab.
  */
 export function openFileInTab(path: string, forceRaw?: boolean): FileTab {
   const tabs = store.get(openTabsAtom);
+  const notionSessionId = getNotionSessionIdForPath(path);
 
   // Check if already open
   const existing = tabs.find((t) => t.path === path);
@@ -74,8 +116,14 @@ export function openFileInTab(path: string, forceRaw?: boolean): FileTab {
       const fixed: FileTab = {
         ...existing,
         type: "notebook",
-        sessionId: `s_${createSessionId()}` as SessionId,
+        sessionId: notionSessionId ?? (`s_${createSessionId()}` as SessionId),
       };
+      store.set(openTabsAtom, tabs.map((t) => (t.id === existing.id ? fixed : t)));
+      store.set(activeTabIdAtom, fixed.id);
+      return fixed;
+    }
+    if (notionSessionId && existing.type === "notebook" && existing.sessionId !== notionSessionId) {
+      const fixed: FileTab = { ...existing, sessionId: notionSessionId };
       store.set(openTabsAtom, tabs.map((t) => (t.id === existing.id ? fixed : t)));
       store.set(activeTabIdAtom, fixed.id);
       return fixed;
@@ -95,7 +143,7 @@ export function openFileInTab(path: string, forceRaw?: boolean): FileTab {
     type: fileType,
     sessionId:
       fileType === "notebook"
-        ? (`s_${createSessionId()}` as SessionId)
+        ? (notionSessionId ?? (`s_${createSessionId()}` as SessionId))
         : null,
     name,
   };

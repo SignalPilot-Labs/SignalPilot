@@ -23,8 +23,14 @@ export interface BootResult {
   staticData: NotebookStaticData;
 }
 
+function resolveRuntimeBase(config: NotebookConfig): string {
+  const base = config.notebookProxyUrl ?? config.gatewayUrl;
+  if (base) return base.replace(/\/$/, "");
+  return typeof window === "undefined" ? "" : window.location.origin;
+}
+
 /**
- * Pure async boot sequence: health → sync → takeover → client creation.
+ * Pure async boot sequence: health → optional project sync → takeover → client creation.
  *
  * Extracted from NotebookBoot so the component is thin and this logic
  * is testable without React.
@@ -35,11 +41,31 @@ export async function bootRuntime(
   navigate: (href: string) => void,
   signal: AbortSignal,
 ): Promise<BootResult> {
-  const runtimeUrl = `${config.gatewayUrl}/notebook/${config.sessionId}`;
   // Auth: the proxy verifies the caller's Clerk JWT (cloud) directly; in local
   // mode there's no token. Resolve once for the boot fetches; the long-lived
   // embed client gets the getToken thunk so it always uses a fresh token.
   const bootToken = await config.getToken();
+  const urlSessionId =
+    typeof window === "undefined"
+      ? ""
+      : new URL(window.location.href).searchParams.get("session_id") ?? "";
+  const resolvedKernelSessionId =
+    config.kernelSessionId ??
+    (config.file?.startsWith("signalpilot-notion-analyses/") &&
+    urlSessionId.startsWith("session-notion-")
+      ? urlSessionId
+      : undefined);
+  const isNotionTrail =
+    resolvedKernelSessionId?.startsWith("session-notion-") ||
+    config.file?.startsWith("signalpilot-notion-analyses/");
+
+  if (resolvedKernelSessionId) {
+    const { setSessionId } = await import("@/core/kernel/session");
+    setSessionId(resolvedKernelSessionId as any);
+  }
+
+  const runtimeBase = resolveRuntimeBase(config);
+  const runtimeUrl = `${runtimeBase}/notebook/${config.sessionId}`;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(bootToken ? { Authorization: `Bearer ${bootToken}` } : {}),
@@ -64,7 +90,7 @@ export async function bootRuntime(
   if (signal.aborted) throw new Error("Boot cancelled");
   if (!healthy) throw new Error("Runtime did not become healthy after 15 seconds");
 
-  // ── Phase 2: Sync project files (non-fatal) ───────────────────
+  // ── Phase 2: Sync dbt project files (project product only) ────
   let syncResult: { localDir: string; fileCount: number } | undefined;
   if (config.project) {
     onPhase("syncing");
@@ -128,33 +154,35 @@ export async function bootRuntime(
   if (signal.aborted) throw new Error("Boot cancelled");
 
   // ── Phase 3: Take over stale sessions ─────────────────────────
-  onPhase("sessions");
-  try {
-    const sessResp = await fetch(`${runtimeUrl}/api/sessions`, { headers, signal });
-    if (sessResp.ok) {
-      const sessions = (await sessResp.json()) as Record<string, { filename?: string | null }>;
-      let existingSessionId: string | undefined;
-      if (config.file) {
-        for (const [sid, info] of Object.entries(sessions)) {
-          if (info.filename && info.filename.endsWith(config.file)) {
-            existingSessionId = sid;
-            break;
+  if (!isNotionTrail) {
+    onPhase("sessions");
+    try {
+      const sessResp = await fetch(`${runtimeUrl}/api/sessions`, { headers, signal });
+      if (sessResp.ok) {
+        const sessions = (await sessResp.json()) as Record<string, { filename?: string | null }>;
+        let existingSessionId: string | undefined;
+        if (config.file) {
+          for (const [sid, info] of Object.entries(sessions)) {
+            if (info.filename && info.filename.endsWith(config.file)) {
+              existingSessionId = sid;
+              break;
+            }
           }
         }
+        if (existingSessionId || Object.keys(sessions).length > 0) {
+          const { takeoverKernel } = await import("@/core/kernel/takeover");
+          await takeoverKernel(runtimeUrl, headers).catch((err) => {
+            Logger.warn("Session takeover failed (non-fatal):", err);
+          });
+        }
+        if (existingSessionId) {
+          const { setSessionId } = await import("@/core/kernel/session");
+          setSessionId(existingSessionId as any);
+        }
       }
-      if (existingSessionId || Object.keys(sessions).length > 0) {
-        const { takeoverKernel } = await import("@/core/kernel/takeover");
-        await takeoverKernel(runtimeUrl, headers).catch((err) => {
-          Logger.warn("Session takeover failed (non-fatal):", err);
-        });
-      }
-      if (existingSessionId) {
-        const { setSessionId } = await import("@/core/kernel/session");
-        setSessionId(existingSessionId as any);
-      }
+    } catch (err) {
+      if (!signal.aborted) Logger.warn("Session check failed:", err);
     }
-  } catch (err) {
-    if (!signal.aborted) Logger.warn("Session check failed:", err);
   }
   if (signal.aborted) throw new Error("Boot cancelled");
 

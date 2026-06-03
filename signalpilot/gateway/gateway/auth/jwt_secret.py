@@ -25,7 +25,13 @@ from ..runtime.mode import is_cloud_mode
 
 logger = logging.getLogger(__name__)
 
-_GATEWAY_SECRET_PATH = Path("/gateway-secrets/notebook_jwt_secret")
+def _gateway_secret_path() -> Path:
+    return Path(
+        os.environ.get(
+            "SP_NOTEBOOK_JWT_SECRET_PATH",
+            "/gateway-secrets/notebook_jwt_secret",
+        )
+    )
 
 _cached_secret: str | None = None
 
@@ -72,7 +78,7 @@ def load_session_jwt_secret() -> str:
         return _cached_secret
 
     # Local mode: use /gateway-secrets/notebook_jwt_secret (gateway-private volume only)
-    path = _GATEWAY_SECRET_PATH
+    path = _gateway_secret_path()
     if path.exists():
         try:
             content = path.read_text().strip()

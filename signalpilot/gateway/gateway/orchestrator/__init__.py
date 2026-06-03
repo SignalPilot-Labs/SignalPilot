@@ -26,13 +26,13 @@ class NotebookOrchestrator(ABC):
         pod_name: str,
         user_id: str,
         org_id: str,
-        project_id: str | None,
         branch: str,
         image: str,
         gateway_url: str,
         session_jwt_secret_name: str,
         session_id: str,
         access_token: str | None,
+        project_id: str | None = None,
     ) -> PodInfo:
         ...
 

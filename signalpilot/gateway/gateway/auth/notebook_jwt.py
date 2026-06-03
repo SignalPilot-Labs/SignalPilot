@@ -38,9 +38,9 @@ def mint_session_jwt(
     user_id: str,
     org_id: str,
     session_id: str,
-    project_id: str | None,
     branch: str,
     ttl: int,
+    project_id: str | None = None,
 ) -> str:
     """Mint a signed HS256 JWT for a notebook session.
 
@@ -48,8 +48,8 @@ def mint_session_jwt(
         user_id: The user who owns the session.
         org_id: The org who owns the session.
         session_id: The DB row id for this session.
-        project_id: Associated project id (may be None).
-        branch: Associated branch name.
+        project_id: Associated dbt project id, if this is a project notebook.
+        branch: Notebook branch label for legacy clients.
         ttl: Token lifetime in seconds.
 
     Returns:

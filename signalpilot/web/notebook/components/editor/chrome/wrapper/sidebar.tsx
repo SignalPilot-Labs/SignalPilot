@@ -16,7 +16,22 @@ import {
   PANEL_MAP,
   PANELS,
   type PanelDescriptor,
+  type NotebookProduct,
 } from "../types";
+import { useOptionalNotebookConfig } from "~/components/notebook/notebook-context";
+
+function resolveNotebookProduct(product?: NotebookProduct): NotebookProduct {
+  if (product) {
+    return product;
+  }
+  if (
+    typeof window !== "undefined" &&
+    window.location.pathname.startsWith("/notebooks")
+  ) {
+    return "notebooks";
+  }
+  return "projects";
+}
 
 export const Sidebar: React.FC = () => {
   const { selectedPanel, selectedDeveloperPanelTab, isSidebarOpen } =
@@ -26,6 +41,8 @@ export const Sidebar: React.FC = () => {
   const [panelLayout, setPanelLayout] = useAtom(panelLayoutAtom);
   // Subscribe to capabilities to re-render when they change
   const capabilities = useAtomValue(capabilitiesAtom);
+  const notebookConfig = useOptionalNotebookConfig();
+  const product = resolveNotebookProduct(notebookConfig?.product);
 
   const renderIcon = ({ Icon }: PanelDescriptor, className?: string) => {
     return <Icon className={cn("h-5 w-5", className)} />;
@@ -36,7 +53,7 @@ export const Sidebar: React.FC = () => {
   const availableSidebarPanels = useMemo(() => {
     const devPanelIds = new Set(panelLayout.developerPanel);
     return PANELS.filter((p) => {
-      if (isPanelHidden(p, capabilities)) {
+      if (isPanelHidden(p, capabilities, product)) {
         return false;
       }
       // Exclude panels that are in the developer panel
@@ -45,19 +62,19 @@ export const Sidebar: React.FC = () => {
       }
       return true;
     });
-  }, [panelLayout.developerPanel, capabilities]);
+  }, [panelLayout.developerPanel, capabilities, product]);
 
   // Convert current sidebar items to PanelDescriptors
   // Filter out hidden panels (e.g., when capability is not available)
   const sidebarItems = useMemo(() => {
     return panelLayout.sidebar.flatMap((id) => {
       const panel = PANEL_MAP.get(id);
-      if (!panel || isPanelHidden(panel, capabilities)) {
+      if (!panel || isPanelHidden(panel, capabilities, product)) {
         return [];
       }
       return [panel];
     });
-  }, [panelLayout.sidebar, capabilities]);
+  }, [panelLayout.sidebar, capabilities, product]);
 
   const handleSetSidebarItems = (items: PanelDescriptor[]) => {
     setPanelLayout((prev) => ({

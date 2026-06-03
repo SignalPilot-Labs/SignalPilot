@@ -337,6 +337,30 @@ async def _ensure_chat_columns(engine) -> None:
     logger.info("Ensured chat conversation columns")
 
 
+async def _ensure_chat_trace_indexes(engine) -> None:
+    """Create durable trace lookup indexes idempotently."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_gw_trace_threads_session "
+                "ON gateway_chat_trace_threads (org_id, user_id, session_id, updated_at)"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_gw_trace_threads_source "
+                "ON gateway_chat_trace_threads (org_id, user_id, source, updated_at)"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_gw_trace_events_thread_idx "
+                "ON gateway_chat_trace_events (org_id, user_id, thread_id, idx)"
+            )
+        )
+    logger.info("Ensured chat trace indexes")
+
+
 async def _ensure_branch_columns(engine) -> None:
     """Add branch columns to gateway_workspace_projects."""
     async with engine.begin() as conn:
@@ -425,6 +449,7 @@ async def init_db() -> None:
     await _ensure_audit_indexes(engine)
     await _ensure_knowledge_columns(engine)
     await _ensure_chat_columns(engine)
+    await _ensure_chat_trace_indexes(engine)
     await _ensure_branch_columns(engine)
     await _ensure_notebook_session_columns(engine)
     await _ensure_notebook_session_org_id(engine)

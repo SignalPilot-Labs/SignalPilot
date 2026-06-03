@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import mimetypes
+import os
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -65,6 +66,20 @@ def _missing_index_html_detail() -> str:
             "Restart sp after building."
         )
     return "index.html not found and no asset_url configured"
+
+
+def _web_app_fallback_redirect(request: Request) -> RedirectResponse | None:
+    web_url = os.environ.get("SP_WEB_URL")
+    if not web_url:
+        return None
+    target = f"{web_url.rstrip('/')}/notebooks"
+    if request.url.query:
+        target = f"{target}?{request.url.query}"
+    return RedirectResponse(
+        url=target,
+        status_code=303,
+        headers=_HTML_SECURITY_HEADERS,
+    )
 
 
 def _has_symlinks(directory: Path) -> bool:
@@ -245,6 +260,9 @@ async def index(request: Request) -> Response:
 
     index_html = root / "index.html"
     if not index_html.exists():
+        fallback = _web_app_fallback_redirect(request)
+        if fallback is not None:
+            return fallback
         raise HTTPException(
             status_code=500,
             detail=_missing_index_html_detail(),

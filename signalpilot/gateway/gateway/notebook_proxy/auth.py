@@ -28,6 +28,7 @@ resolve_user_id / resolve_org_id are re-exported for tests/back-compat.
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 import re
@@ -38,6 +39,7 @@ from starlette.requests import HTTPConnection
 
 from ..auth.user import resolve_org_id, resolve_user_id, verify_jwt_token  # noqa: F401  # re-exported
 from ..runtime.mode import is_cloud_mode
+from ..store import get_local_api_key
 from ..store import notebook_sessions as ns
 from .constants import POD_PORT, SESSION_ID_PATTERN_STR
 
@@ -89,6 +91,34 @@ def _is_websocket(connection: HTTPConnection) -> bool:
     return getattr(connection, "scope", {}).get("type") == "websocket"
 
 
+def _extract_bearer_token(connection: HTTPConnection) -> str | None:
+    auth_header = connection.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        return auth_header[7:].strip()
+    return None
+
+
+def _resolve_local_proxy_auth(connection: HTTPConnection) -> str | None:
+    if is_cloud_mode():
+        return None
+    bearer = _extract_bearer_token(connection)
+    if bearer is None:
+        return None
+    local_key = get_local_api_key()
+    if local_key and hmac.compare_digest(bearer, local_key):
+        connection.state.auth = {
+            "user_id": "local",
+            "org_id": "local",
+            "auth_method": "local_key",
+        }
+        connection.state._jwt_claims = {"sub": "local", "org_id": "local"}
+        return "local"
+    if bearer.startswith("sp_"):
+        _log.warning("REJECT: invalid local proxy API key for session request")
+        raise HTTPException(status_code=401, detail="Invalid local API key")
+    return None
+
+
 async def resolve_proxy_session(
     connection: HTTPConnection,
     session_id: str,
@@ -108,7 +138,10 @@ async def resolve_proxy_session(
     # Step 1: resolve caller identity (Clerk/API-key/local).
     # WebSockets can't carry Authorization, so when this is a WS and no auth state
     # was pre-set, verify the JWT from the Sec-WebSocket-Protocol subprotocol.
-    if _is_websocket(connection) and getattr(connection.state, "auth", None) is None and is_cloud_mode():
+    local_user_id = _resolve_local_proxy_auth(connection)
+    if local_user_id is not None:
+        user_id = local_user_id
+    elif _is_websocket(connection) and getattr(connection.state, "auth", None) is None and is_cloud_mode():
         sub_token = _extract_subprotocol_token(connection)
         if sub_token is None:
             _log.warning("REJECT: no WS subprotocol auth token for session %s", session_id)

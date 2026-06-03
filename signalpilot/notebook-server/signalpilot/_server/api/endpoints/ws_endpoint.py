@@ -173,6 +173,11 @@ class WebSocketHandler(SessionConsumer):
         self.mode = mode
         self.status: ConnectionState
         self.cancel_close_handle: asyncio.TimerHandle | None = None
+        self._event_loop: asyncio.AbstractEventLoop | None = None
+        try:
+            self._event_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
         # Messages from the kernel are put in this queue
         # to be sent to the frontend
         self.message_queue: asyncio.Queue[KernelMessage]
@@ -391,6 +396,7 @@ class WebSocketHandler(SessionConsumer):
         """
         # Accept the websocket connection
         await self.websocket.accept()
+        self._event_loop = asyncio.get_running_loop()
         # Create a new queue for this session
         self.message_queue = asyncio.Queue()
 
@@ -522,16 +528,35 @@ class WebSocketHandler(SessionConsumer):
             or self.status == ConnectionState.CONNECTING
         ) and self.websocket.application_state is WebSocketState.CONNECTED
         if is_connected:
-            task = asyncio.create_task(
-                self._safe_close(
-                    WebSocketCodes.NORMAL_CLOSE, "SP_SHUTDOWN"
-                )
+            self._schedule_safe_close(
+                WebSocketCodes.NORMAL_CLOSE, "SP_SHUTDOWN"
             )
+
+        if self.ws_future:
+            loop = self._event_loop
+            if loop is not None and not loop.is_closed():
+                loop.call_soon_threadsafe(self.ws_future.cancel)
+            else:
+                self.ws_future.cancel()
+
+    def _schedule_safe_close(self, code: int, reason: str) -> None:
+        loop = self._event_loop
+
+        def create_task() -> None:
+            task = asyncio.create_task(self._safe_close(code, reason))
             _background_tasks.add(task)
             task.add_done_callback(_background_tasks.discard)
 
-        if self.ws_future:
-            self.ws_future.cancel()
+        if loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(create_task)
+            return
+
+        try:
+            create_task()
+        except RuntimeError:
+            LOGGER.debug(
+                "Skipping websocket close scheduling; no running event loop"
+            )
 
     def connection_state(self) -> ConnectionState:
         return self.status

@@ -22,6 +22,7 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 from signalpilot import _loggers
 from signalpilot._server.auth.session_token import load_session_jwt
@@ -74,6 +75,8 @@ def _get_dbt_project_context(search_dir: str | None = None) -> str:
     )
 
 _DONE = object()
+FILE_EDIT_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"]
+PLACEHOLDER_SP_API_KEYS = {"", "sp_test_key_here"}
 
 # ── Persistent chat session mapping ──────────────────────────────
 # Survives server restarts by saving to disk.
@@ -121,27 +124,38 @@ _event_buffers: dict[str, list[dict[str, Any]]] = {}
 MAX_BUFFER_EVENTS = 500
 
 
-def buffer_event(session_id: str, event_data: dict[str, Any]) -> int:
+def buffer_event(
+    session_id: str,
+    event_data: dict[str, Any],
+    *,
+    thread_id: str | None = None,
+) -> int:
     """Add an event to the buffer. Returns the event index."""
-    if session_id not in _event_buffers:
-        _event_buffers[session_id] = []
-    buf = _event_buffers[session_id]
+    buffer_key = thread_id or session_id
+    if buffer_key not in _event_buffers:
+        _event_buffers[buffer_key] = []
+    buf = _event_buffers[buffer_key]
     buf.append(event_data)
     # Trim old events
     if len(buf) > MAX_BUFFER_EVENTS:
-        _event_buffers[session_id] = buf[-MAX_BUFFER_EVENTS:]
+        _event_buffers[buffer_key] = buf[-MAX_BUFFER_EVENTS:]
     return len(buf) - 1
 
 
-def get_buffered_events(session_id: str, after_index: int = -1) -> list[dict[str, Any]]:
+def get_buffered_events(
+    session_id: str,
+    after_index: int = -1,
+    *,
+    thread_id: str | None = None,
+) -> list[dict[str, Any]]:
     """Get events after the given index."""
-    buf = _event_buffers.get(session_id, [])
+    buf = _event_buffers.get(thread_id or session_id, [])
     return buf[after_index + 1:]
 
 
-def clear_event_buffer(session_id: str) -> None:
+def clear_event_buffer(session_id: str, *, thread_id: str | None = None) -> None:
     """Clear the event buffer for a session."""
-    _event_buffers.pop(session_id, None)
+    _event_buffers.pop(thread_id or session_id, None)
 
 
 def _get_or_create_chat_session(notebook_session_id: str) -> tuple[str, bool]:
@@ -184,13 +198,22 @@ def _get_auth_config() -> dict[str, str]:
     if api_key:
         return {"type": "api_key", "token": api_key}
 
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    credentials_path = (
+        Path(config_dir) / ".credentials.json"
+        if config_dir
+        else Path.home() / ".claude" / ".credentials.json"
+    )
+    if credentials_path.is_file() and credentials_path.stat().st_size > 0:
+        return {"type": "config_dir", "token": ""}
+
     # Try fetching from gateway user secrets
     try:
-        from signalpilot._server.files.project_sync import _gateway_url, _gateway_headers
+        from signalpilot._server.gateway_client import gateway_headers, gateway_url
         import httpx
         resp = httpx.get(
-            f"{_gateway_url()}/api/user/secrets",
-            headers=_gateway_headers(),
+            f"{gateway_url()}/api/user/secrets",
+            headers=gateway_headers(),
             timeout=5.0,
         )
         if resp.status_code == 200:
@@ -214,20 +237,73 @@ def _get_oauth_token() -> str:
     return auth["token"]
 
 
-def _get_mcp_servers_config() -> dict[str, Any]:
+def _get_mcp_servers_config(mcp_config: dict[str, Any] | None = None) -> dict[str, Any]:
     from signalpilot._utils.localhost import fix_localhost_url
+
     servers: dict[str, Any] = {}
-    sp_gateway_url = fix_localhost_url(os.environ.get("SP_GATEWAY_URL", "http://localhost:3300/mcp"))
+    sp_gateway_url = os.environ.get("SP_GATEWAY_MCP_URL")
+    if not sp_gateway_url:
+        sp_gateway_url = os.environ.get("SP_GATEWAY_URL", "http://localhost:3300")
+        if not sp_gateway_url.rstrip("/").endswith("/mcp"):
+            sp_gateway_url = f"{sp_gateway_url.rstrip('/')}/mcp"
+    sp_gateway_url = fix_localhost_url(sp_gateway_url)
     sp_session_jwt = load_session_jwt()
-    sp_api_key = os.environ.get("SP_API_KEY", "")
+    sp_api_key = _normalized_sp_api_key(os.environ.get("SP_API_KEY", ""))
     auth_token = sp_session_jwt or sp_api_key
-    if auth_token:
-        servers["signalpilot"] = {
+    if auth_token or _is_local_url(sp_gateway_url):
+        signalpilot_server: dict[str, Any] = {
             "type": "http",
             "url": sp_gateway_url,
-            "headers": {"Authorization": f"Bearer {auth_token}"},
         }
+        if auth_token:
+            signalpilot_server["headers"] = {"Authorization": f"Bearer {auth_token}"}
+        servers["signalpilot"] = signalpilot_server
+    if mcp_config:
+        try:
+            from signalpilot._server.ai.mcp.config import append_presets
+
+            mcp_config = append_presets(mcp_config)  # type: ignore[arg-type]
+        except Exception:
+            pass
+        for name, config in mcp_config.get("mcpServers", {}).items():
+            if config.get("disabled"):
+                continue
+            if "command" in config:
+                server: dict[str, Any] = {
+                    "type": "stdio",
+                    "command": config["command"],
+                }
+                if config.get("args"):
+                    server["args"] = config["args"]
+                if config.get("env"):
+                    server["env"] = config["env"]
+                servers[name] = server
+            elif "url" in config:
+                server = {
+                    "type": config.get("type", "http"),
+                    "url": config["url"],
+                }
+                if config.get("headers"):
+                    server["headers"] = config["headers"]
+                servers[name] = server
     return servers
+
+
+def _normalized_sp_api_key(value: str) -> str:
+    stripped = value.strip()
+    if stripped in PLACEHOLDER_SP_API_KEYS:
+        return ""
+    return stripped
+
+
+def _is_local_url(url: str) -> bool:
+    return urlparse(url).hostname in {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        "0.0.0.0",
+        "gateway",
+    }
 
 
 def _get_system_prompt() -> str:
@@ -245,6 +321,7 @@ def _run_agent_in_thread(
     system_prompt: str,
     chat_session_id: str,
     is_resume: bool,
+    disallowed_tools: list[str] | None = None,
     app: Any | None = None,
     cwd: str | None = None,
 ) -> None:
@@ -279,6 +356,8 @@ def _run_agent_in_thread(
         turn_count = 0
 
         agent_env = dict(os.environ)
+        if _normalized_sp_api_key(agent_env.get("SP_API_KEY", "")) == "":
+            agent_env.pop("SP_API_KEY", None)
         # On Windows, python3 doesn't exist — create a shim so skills work
         if sys.platform == "win32":
             python_dir = os.path.dirname(sys.executable)
@@ -295,6 +374,8 @@ def _run_agent_in_thread(
             "cwd": cwd or os.getcwd(),
             "env": agent_env,
         }
+        if disallowed_tools:
+            agent_options_kwargs["disallowed_tools"] = disallowed_tools
 
         # MCP servers: external (SignalPilot gateway) + notebook tools
         all_mcp = dict(mcp_servers) if mcp_servers else {}
@@ -483,6 +564,20 @@ def stop_agent(session_id: str) -> bool:
     return True
 
 
+def _build_disallowed_tools(
+    *,
+    disallow_file_edits: bool,
+    additional_disallowed_tools: list[str] | None = None,
+) -> list[str] | None:
+    disallowed = [
+        *(FILE_EDIT_TOOLS if disallow_file_edits else []),
+        *(additional_disallowed_tools or []),
+    ]
+    if not disallowed:
+        return None
+    return list(dict.fromkeys(disallowed))
+
+
 async def run_notebook_agent(
     message: str,
     session_id: SessionId,
@@ -491,9 +586,14 @@ async def run_notebook_agent(
     new_chat: bool = False,
     message_history: list[dict[str, str]] | None = None,
     system_prompt_override: str | None = None,
+    mcp_config: dict[str, Any] | None = None,
+    thread_id: str | None = None,
+    notebook_mcp_app: Any | None = None,
     app: Any | None = None,
     context_file: str | None = None,
     cwd: str | None = None,
+    disallow_file_edits: bool = False,
+    additional_disallowed_tools: list[str] | None = None,
 ) -> AsyncGenerator[AgentEvent, None]:
     """
     Run the Claude Agent SDK for a chat message.
@@ -507,16 +607,23 @@ async def run_notebook_agent(
     auth = _get_auth_config()
     if auth["type"] == "oauth":
         os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = auth["token"]
-    else:
+    elif auth["type"] == "api_key":
         os.environ["ANTHROPIC_API_KEY"] = auth["token"]
 
+    effective_app = notebook_mcp_app or app
+    chat_session_key = thread_id or str(session_id)
+
     if new_chat:
-        clear_chat_session(str(session_id))
+        clear_chat_session(chat_session_key)
 
-    chat_session_id, is_resume = _get_or_create_chat_session(str(session_id))
+    chat_session_id, is_resume = _get_or_create_chat_session(chat_session_key)
 
-    mcp_servers = _get_mcp_servers_config()
+    mcp_servers = _get_mcp_servers_config(mcp_config)
     system_prompt = system_prompt_override or _get_system_prompt()
+    disallowed_tools = _build_disallowed_tools(
+        disallow_file_edits=disallow_file_edits,
+        additional_disallowed_tools=additional_disallowed_tools,
+    )
 
     # Reconstruct context from message history if session was lost
     if not is_resume and message_history and len(message_history) > 1:
@@ -540,10 +647,10 @@ async def run_notebook_agent(
     if context_file:
         context_block = f"\n\n## Current File Context\nThe user is currently viewing: `{context_file}`\n"
         matched_session = False
-        if app is not None:
+        if effective_app is not None:
             try:
                 from signalpilot._server.ai.tools.base import ToolContext
-                tc = ToolContext(app=app)
+                tc = ToolContext(app=effective_app)
                 cf_normalized = context_file.replace("\\", "/").strip("/")
                 LOGGER.info(f"[Agent Context] Looking for file: {cf_normalized}")
                 for sid, sess in tc.session_manager.sessions.items():
@@ -570,9 +677,9 @@ async def run_notebook_agent(
         if not matched_session:
             try:
                 resolved = Path(context_file)
-                if not resolved.is_absolute() and app is not None:
+                if not resolved.is_absolute() and effective_app is not None:
                     from signalpilot._server.ai.tools.base import ToolContext
-                    tc = ToolContext(app=app)
+                    tc = ToolContext(app=effective_app)
                     workspace_dir = getattr(tc.session_manager.workspace, "directory", None)
                     if workspace_dir:
                         resolved = Path(workspace_dir) / context_file
@@ -595,7 +702,7 @@ async def run_notebook_agent(
         target=_run_agent_in_thread,
         args=(
             agent, message, model, max_turns, mcp_servers,
-            system_prompt, chat_session_id, is_resume, app, cwd,
+            system_prompt, chat_session_id, is_resume, disallowed_tools, effective_app, cwd,
         ),
         daemon=True,
     )

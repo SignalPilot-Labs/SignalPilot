@@ -20,6 +20,8 @@ PUBLIC_PATHS = frozenset(
         "/health",
         "/docs",
         "/openapi.json",
+        "/api/integrations/notion/oauth/callback",
+        "/api/notion/webhooks/events",
     }
 )
 

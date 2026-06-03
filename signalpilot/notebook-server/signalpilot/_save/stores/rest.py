@@ -12,7 +12,7 @@ LOGGER = _loggers.sp_logger()
 
 class RestStore(Store):
     def __init__(
-        self, *, base_url: str, api_key: str, project_id: str | None = None
+        self, *, base_url: str, api_key: str
     ) -> None:
         super().__init__()
         assert api_key, "api_key is required"
@@ -20,7 +20,6 @@ class RestStore(Store):
 
         self.base_url = base_url
         self.api_key = api_key
-        self.project_id = project_id
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
             "User-Agent": f"sp/{__version__}",
@@ -91,7 +90,4 @@ class RestStore(Store):
             return False
 
     def _get_url(self, key: str) -> str:
-        url = self.base_url
-        if self.project_id:
-            url = f"{url}/{self.project_id}"
-        return f"{url}/{key}"
+        return f"{self.base_url}/{key}"

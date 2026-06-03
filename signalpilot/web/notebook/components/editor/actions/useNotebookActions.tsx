@@ -78,7 +78,7 @@ import { Strings } from "@/utils/strings";
 import { newNotebookURL } from "@/utils/urls";
 import { useRunAllCells } from "../cell/useRunCells";
 import { useChromeActions, useChromeState } from "../chrome/state";
-import { PANELS } from "../chrome/types";
+import { PANELS, type NotebookProduct } from "../chrome/types";
 import { keyboardShortcutsAtom } from "../controls/keyboard-shortcuts";
 import { commandPaletteAtom } from "../controls/state";
 import { displayLayoutName, getLayoutIcon } from "../renderers/layout-select";
@@ -90,11 +90,25 @@ import { useDbtActions } from "../dbt/use-dbt";
 import { useHideAllMarkdownCode } from "./useHideAllMarkdownCode";
 import { useRestartKernel } from "./useRestartKernel";
 import { navigate } from "@/embed/host-navigate";
+import { useOptionalNotebookConfig } from "~/components/notebook/notebook-context";
 
 const NOOP_HANDLER = (event?: Event) => {
   event?.preventDefault();
   event?.stopPropagation();
 };
+
+function resolveNotebookProduct(product?: NotebookProduct): NotebookProduct {
+  if (product) {
+    return product;
+  }
+  if (
+    typeof window !== "undefined" &&
+    window.location.pathname.startsWith("/notebooks")
+  ) {
+    return "notebooks";
+  }
+  return "projects";
+}
 
 export function useNotebookActions() {
   const filename = useFilename();
@@ -105,6 +119,9 @@ export function useNotebookActions() {
   const kioskMode = useAtomValue(kioskModeAtom);
   const hideAllMarkdownCode = useHideAllMarkdownCode();
   const [resolvedConfig] = useResolvedSpConfig();
+  const notebookConfig = useOptionalNotebookConfig();
+  const product = resolveNotebookProduct(notebookConfig?.product);
+  const showDbtActions = product === "projects";
 
   const {
     updateCellConfig,
@@ -362,8 +379,8 @@ export function useNotebookActions() {
       redundant: true,
       handle: NOOP_HANDLER,
       dropdown: PANELS.flatMap(
-        ({ type: id, Icon, hidden, additionalKeywords }) => {
-          if (hidden) {
+        ({ type: id, Icon, hidden, products, additionalKeywords }) => {
+          if (hidden || (products && !products.includes(product))) {
             return [];
           }
           return {
@@ -541,6 +558,7 @@ export function useNotebookActions() {
       divider: true,
       icon: <DatabaseZapIcon size={14} strokeWidth={1.5} />,
       label: "dbt",
+      hidden: !showDbtActions,
       handle: NOOP_HANDLER,
       additionalKeywords: ["sql", "data", "models", "build", "compile"],
       dropdown: [

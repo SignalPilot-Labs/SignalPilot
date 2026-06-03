@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime
 
 from pydantic import BaseModel, Field
 
@@ -34,3 +35,69 @@ class NotionIntegrationInfo(BaseModel):
     status: str = "unknown"
     created_at: float = Field(default_factory=time.time)
     org_id: str | None = None
+
+
+class NotionOAuthStartResponse(BaseModel):
+    """Authorization URL for the Notion public integration OAuth flow."""
+
+    authorize_url: str
+    state: str
+
+
+class NotionInstallationConfigInfo(BaseModel):
+    """Provisioned Notion resources for an OAuth installation."""
+
+    parent_page_id: str | None = None
+    trigger_page_id: str | None = None
+    requests_data_source_id: str | None = None
+    requests_database_page_id: str | None = None
+    enabled: bool = False
+
+
+class NotionOAuthInstallationInfo(BaseModel):
+    """Read-only OAuth install info returned from API."""
+
+    id: str
+    workspace_id: str
+    workspace_name: str | None = None
+    bot_id: str
+    owner_user_id: str | None = None
+    status: str = "connected"
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    org_id: str | None = None
+    config: NotionInstallationConfigInfo | None = None
+
+
+class NotionPageOption(BaseModel):
+    """A Notion page that can be selected as a setup parent."""
+
+    id: str
+    title: str
+    url: str | None = None
+
+
+class NotionProvisionRequest(BaseModel):
+    """Provision SignalPilot Notion resources.
+
+    When parent_page_id is omitted, resources are created privately at the
+    workspace level for the authorizing Notion user.
+    """
+
+    parent_page_id: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class NotionProvisionResponse(BaseModel):
+    """Provisioning result for a Notion OAuth installation."""
+
+    installation: NotionOAuthInstallationInfo
+    trigger_page_id: str
+    requests_data_source_id: str
+    requests_database_page_id: str
+
+
+class NotionWebhookResponse(BaseModel):
+    """Public webhook endpoint response."""
+
+    status: str
+    event_id: str | None = None

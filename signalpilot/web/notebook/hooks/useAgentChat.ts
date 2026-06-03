@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getGatewayBranchId, getGatewayProjectId, spApiUrl } from "@/core/network/api";
+import { spApiUrl } from "@/core/network/api";
 
 export interface AgentMessage {
   id: string;
@@ -22,6 +22,8 @@ export interface UseAgentChatOptions {
   baseUrl: string;
   headers: () => Record<string, string> | Promise<Record<string, string>>;
   getActiveFile?: () => string | null;
+  includeNotionConversations?: boolean;
+  initialSessionId?: string | null;
 }
 
 export interface UseAgentChatReturn {
@@ -46,6 +48,9 @@ export interface StoredChatSession {
   messages: AgentMessage[];
   createdAt: number;
   updatedAt: number;
+  source?: string;
+  status?: string;
+  notebookPath?: string;
 }
 
 // ── Gateway chat API helpers ────────────────────────────────────
@@ -76,13 +81,31 @@ function deserializeMessages(
   gwMessages: Array<{ role: string; content: string; metadata_json?: string | null; id: string; created_at: number }>,
 ): AgentMessage[] {
   const result: AgentMessage[] = [];
+  const appendMessage = (message: AgentMessage) => {
+    const previous = result.at(-1);
+    const hasToolCalls = (message.toolCalls?.length ?? 0) > 0;
+    const isToolOnly =
+      message.role === "assistant" &&
+      hasToolCalls &&
+      !message.content.trim() &&
+      !message.thinking;
+    if (isToolOnly && previous?.role === "assistant") {
+      previous.toolCalls = [
+        ...(previous.toolCalls ?? []),
+        ...(message.toolCalls ?? []),
+      ];
+      return;
+    }
+    result.push(message);
+  };
+
   for (const gm of gwMessages) {
     if (gm.role === "user") {
-      result.push({ id: gm.id, role: "user", content: gm.content });
+      appendMessage({ id: gm.id, role: "user", content: gm.content });
     } else if (gm.role === "assistant") {
       try {
         const parsed = JSON.parse(gm.content) as { content?: string; toolCalls?: AgentToolCall[]; thinking?: string };
-        result.push({
+        appendMessage({
           id: gm.id,
           role: "assistant",
           content: parsed.content ?? gm.content,
@@ -90,7 +113,7 @@ function deserializeMessages(
           thinking: parsed.thinking,
         });
       } catch {
-        result.push({ id: gm.id, role: "assistant", content: gm.content });
+        appendMessage({ id: gm.id, role: "assistant", content: gm.content });
       }
     }
   }
@@ -103,6 +126,8 @@ export function useAgentChat({
   baseUrl,
   headers,
   getActiveFile,
+  includeNotionConversations = false,
+  initialSessionId = null,
 }: UseAgentChatOptions): UseAgentChatReturn & {
   chatSessions: StoredChatSession[];
   activeSessionId: string | null;
@@ -119,17 +144,9 @@ export function useAgentChat({
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
-  // Wrap headers() to include gateway project/branch IDs. The underlying
-  // headers() may be async (e.g. when an auth token must be resolved).
+  // The underlying headers() may be async (e.g. when an auth token must be resolved).
   const getHeaders = useCallback(async (): Promise<Record<string, string>> => {
-    const hdrs = await headers();
-    const pid = getGatewayProjectId();
-    if (pid) {
-      hdrs["X-Gateway-Project-Id"] = pid;
-      const bid = getGatewayBranchId();
-      if (bid) {hdrs["X-Gateway-Branch-Id"] = bid;}
-    }
-    return hdrs;
+    return await headers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -138,43 +155,128 @@ export function useAgentChat({
   const assistantIdRef = useRef("");
   const lastEventWasTextRef = useRef(false);
   const conversationIdRef = useRef<string | null>(null);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [chatSessions, setChatSessions] = useState<StoredChatSession[]>([]);
 
   // Load sessions from gateway on mount
   useEffect(() => {
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const toSession = (c: Record<string, unknown>): StoredChatSession => ({
+      id: c.id as string,
+      title: (c.title as string) || "New chat",
+      messages: [],
+      createdAt: (c.created_at as number) * 1000 || Date.now(),
+      updatedAt: (c.updated_at as number) * 1000 || Date.now(),
+      source: c.source as string | undefined,
+      status: c.status as string | undefined,
+      notebookPath: c.notebook_path as string | undefined,
+    });
+    const mergeConversations = (
+      conversations: Array<Record<string, unknown>>,
+      next: Array<Record<string, unknown>>,
+    ) => {
+      const seen = new Set(conversations.map((c) => c.id));
+      for (const conversation of next) {
+        if (!seen.has(conversation.id)) {
+          conversations.push(conversation);
+        }
+      }
+    };
+
     setIsLoadingSessions(true);
-    getHeaders().then((hdrs) => chatFetch("/conversations", hdrs)).then((data) => {
-      const convs = (data as { conversations?: Array<Record<string, unknown>> })?.conversations;
-      if (!Array.isArray(convs)) {return;}
-      const sessions: StoredChatSession[] = convs.map((c) => ({
-        id: c.id as string,
-        title: (c.title as string) || "New chat",
-        messages: [],
-        createdAt: (c.created_at as number) * 1000 || Date.now(),
-        updatedAt: (c.updated_at as number) * 1000 || Date.now(),
-      }));
-      setChatSessions(sessions);
-    }).catch(() => {}).finally(() => setIsLoadingSessions(false));
-  }, []);
+    const loadSessions = async (attempt = 0): Promise<void> => {
+      try {
+        const hdrs = await getHeaders();
+        const data = await chatFetch("/conversations", hdrs);
+        const convs =
+          (data as { conversations?: Array<Record<string, unknown>> })?.conversations ?? [];
+        const conversations = Array.isArray(convs) ? [...convs] : [];
+
+        if (includeNotionConversations) {
+          const notionData = await chatFetch("/conversations?source=notion", hdrs);
+          const notionConvs =
+            (notionData as { conversations?: Array<Record<string, unknown>> })?.conversations ?? [];
+          if (Array.isArray(notionConvs)) {
+            mergeConversations(conversations, notionConvs);
+          }
+        }
+
+        if (
+          includeNotionConversations &&
+          conversations.length === 0 &&
+          attempt < 3 &&
+          !cancelled
+        ) {
+          retryTimer = setTimeout(() => {
+            retryTimer = null;
+            void loadSessions(attempt + 1);
+          }, 750 * (attempt + 1));
+          return;
+        }
+
+        if (!cancelled) {
+          setChatSessions(conversations.map(toSession));
+        }
+      } catch {
+        if (includeNotionConversations && attempt < 3 && !cancelled) {
+          retryTimer = setTimeout(() => {
+            retryTimer = null;
+            void loadSessions(attempt + 1);
+          }, 750 * (attempt + 1));
+          return;
+        }
+      } finally {
+        if (!cancelled && !retryTimer) {
+          setIsLoadingSessions(false);
+        }
+      }
+    };
+
+    void loadSessions();
+    return () => {
+      cancelled = true;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+      }
+    };
+  }, [includeNotionConversations]);
 
   const loadSession = useCallback(
     (sid: string) => {
       setIsLoadingMessages(true);
+      setError(null);
       getHeaders().then((hdrs) => chatFetch(`/conversations/${sid}`, hdrs)).then((data) => {
         const detail = data as {
           conversation?: Record<string, unknown>;
           messages?: Array<{ role: string; content: string; metadata_json?: string | null; id: string; created_at: number }>;
-        };
-        if (!detail?.messages) {return;}
+        } | null;
+        if (!detail?.messages) {
+          throw new Error(`Could not load chat thread ${sid}`);
+        }
         const msgs = deserializeMessages(detail.messages);
         setMessages(msgs);
         conversationIdRef.current = sid;
+        setActiveSessionId(sid);
         newChatRef.current = true;
         instanceIdRef.current = null;
-      }).catch(() => {}).finally(() => setIsLoadingMessages(false));
+      }).catch((err) => {
+        setError(err instanceof Error ? err.message : String(err));
+      }).finally(() => setIsLoadingMessages(false));
     },
-    [headers],
+    [getHeaders],
   );
+
+  useEffect(() => {
+    if (
+      !initialSessionId?.startsWith("session-notion-") ||
+      conversationIdRef.current === initialSessionId
+    ) {
+      return;
+    }
+
+    loadSession(initialSessionId);
+  }, [initialSessionId, loadSession]);
 
   const deleteSession = useCallback(
     (sid: string) => {
@@ -183,6 +285,7 @@ export function useAgentChat({
         if (conversationIdRef.current === sid) {
           setMessages([]);
           conversationIdRef.current = null;
+          setActiveSessionId(null);
           instanceIdRef.current = null;
         }
       }).catch(() => {});
@@ -199,6 +302,7 @@ export function useAgentChat({
 
   const clearMessages = useCallback(() => {
     conversationIdRef.current = null;
+    setActiveSessionId(null);
     instanceIdRef.current = null;
     setMessages([]);
     setError(null);
@@ -243,11 +347,12 @@ export function useAgentChat({
 
     const result = await chatFetch("/conversations", hdrs, {
       method: "POST",
-      body: { title, project_id: "signalpilot" },
+      body: { title },
     }) as { id?: string } | null;
 
     if (!result?.id) {throw new Error("Failed to create conversation");}
     conversationIdRef.current = result.id;
+    setActiveSessionId(result.id);
 
     setChatSessions((prev) => [{
       id: result.id!,
@@ -450,10 +555,6 @@ export function useAgentChat({
         break;
 
       case "tool_use": {
-        if (lastEventWasTextRef.current) {
-          startNewBlock();
-        }
-
         const currentId = assistantIdRef.current;
         const toolCall: AgentToolCall = {
           id: event.tool_call_id || nextId(),
@@ -549,7 +650,7 @@ export function useAgentChat({
     error,
     clearMessages,
     chatSessions,
-    activeSessionId: conversationIdRef.current,
+    activeSessionId,
     loadSession,
     deleteSession,
     renameSession,

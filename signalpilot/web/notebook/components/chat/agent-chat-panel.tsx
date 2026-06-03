@@ -35,6 +35,10 @@ import {
   type AgentMessage,
   type AgentToolCall,
 } from "@/hooks/useAgentChat";
+import {
+  parseFinalJsonSummary,
+  type FinalJsonSummary,
+} from "./final-json";
 
 
 /* ── API Key Setup ── */
@@ -118,10 +122,38 @@ const SCROLL_THRESHOLD = 20;
 const MAX_TEXTAREA_ROWS = 8;
 const TEXTAREA_LINE_HEIGHT = 22;
 const TEXTAREA_PADDING = 20;
+const NOTION_THREAD_EVENT = "sp:notion-thread-resolved";
+const NOTION_THREAD_STORAGE_PREFIX = "sp:notion-thread:";
+
+type NotionThreadWindow = Window & {
+  __signalPilotNotionThreadId?: string;
+  __signalPilotNotionThreadByFile?: Record<string, string>;
+};
+
+function normalizeNotionTrailFile(file?: string | null) {
+  return file?.replace(/^\/+/, "") ?? "";
+}
+
+function getRememberedNotionThreadId(file?: string | null) {
+  if (typeof window === "undefined") {return null;}
+
+  const trailFile = normalizeNotionTrailFile(file);
+  const win = window as NotionThreadWindow;
+  const rememberedByFile = trailFile
+    ? win.__signalPilotNotionThreadByFile?.[trailFile]
+    : null;
+  const rememberedGlobal = win.__signalPilotNotionThreadId ?? null;
+  const rememberedLocal = trailFile
+    ? window.localStorage.getItem(`${NOTION_THREAD_STORAGE_PREFIX}${trailFile}`)
+    : null;
+
+  const threadId = rememberedByFile || rememberedLocal || rememberedGlobal;
+  return threadId?.startsWith("session-notion-") ? threadId : null;
+}
 
 /* ── Main Panel ── */
 const AgentChatPanel: React.FC = () => {
-  const [aiConfigured, setAiConfigured] = useState<boolean | null>(null);
+  const [aiConfigured, setAiConfigured] = useState<boolean | null>(true);
   const runtimeManager = useRuntimeManager();
 
   useEffect(() => {
@@ -163,6 +195,40 @@ const AgentChatPanelInner: React.FC = () => {
   const runtimeManager = useRuntimeManager();
   const activeFile = useActiveFile();
   const notebookFilename = useAtomValue(filenameAtom);
+  const urlParams =
+    typeof window === "undefined"
+      ? null
+      : new URLSearchParams(window.location.search);
+  const urlSessionId =
+    urlParams?.get("session_id") ?? null;
+  const urlFile = urlParams?.get("file") ?? null;
+  const urlNotionThreadId = urlSessionId?.startsWith("session-notion-")
+    ? urlSessionId
+    : null;
+  const notionTrailFile = urlFile;
+  const [rememberedNotionThreadId, setRememberedNotionThreadId] = useState(
+    () => getRememberedNotionThreadId(notionTrailFile),
+  );
+  const explicitNotionThreadId =
+    urlNotionThreadId ?? rememberedNotionThreadId;
+  const includeNotionConversations =
+    Boolean(explicitNotionThreadId) ||
+    Boolean(notionTrailFile?.startsWith("signalpilot-notion-analyses/"));
+  const notionAutoLoadAttempts = useRef<Record<string, number>>({});
+
+  useEffect(() => {
+    const syncRememberedThread = () => {
+      setRememberedNotionThreadId(getRememberedNotionThreadId(notionTrailFile));
+    };
+
+    syncRememberedThread();
+    window.addEventListener(NOTION_THREAD_EVENT, syncRememberedThread);
+    window.addEventListener("storage", syncRememberedThread);
+    return () => {
+      window.removeEventListener(NOTION_THREAD_EVENT, syncRememberedThread);
+      window.removeEventListener("storage", syncRememberedThread);
+    };
+  }, [notionTrailFile]);
 
   const getActiveFile = useCallback(() => {
     return activeFile?.path || notebookFilename || null;
@@ -178,6 +244,7 @@ const AgentChatPanelInner: React.FC = () => {
     error,
     clearMessages,
     chatSessions,
+    activeSessionId,
     loadSession,
     deleteSession,
     renameSession,
@@ -185,7 +252,76 @@ const AgentChatPanelInner: React.FC = () => {
     baseUrl: runtimeManager.getAgentBaseURL(),
     headers: () => runtimeManager.headers(),
     getActiveFile,
+    includeNotionConversations,
+    initialSessionId: explicitNotionThreadId,
   });
+
+  const matchedNotionThreadId = useMemo(() => {
+    if (explicitNotionThreadId || !notionTrailFile) {return null;}
+
+    const trailFile = normalizeNotionTrailFile(notionTrailFile);
+    const session = chatSessions.find((chatSession) => {
+      const notebookPath = chatSession.notebookPath?.replace(/^\/+/, "");
+      if (!notebookPath) {return false;}
+      return (
+        chatSession.source === "notion" &&
+        (notebookPath === trailFile ||
+          notebookPath.endsWith(`/${trailFile}`) ||
+          trailFile.endsWith(notebookPath))
+      );
+    });
+    return session?.id?.startsWith("session-notion-") ? session.id : null;
+  }, [chatSessions, explicitNotionThreadId, notionTrailFile]);
+
+  const notionThreadId = explicitNotionThreadId ?? matchedNotionThreadId;
+
+  useEffect(() => {
+    if (
+      urlSessionId ||
+      !notionTrailFile?.startsWith("signalpilot-notion-analyses/") ||
+      !notionThreadId?.startsWith("session-notion-") ||
+      typeof window === "undefined"
+    ) {
+      return;
+    }
+
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.set("session_id", notionThreadId);
+    window.history.replaceState(null, "", nextUrl.toString());
+  }, [notionThreadId, notionTrailFile, urlSessionId]);
+
+  useEffect(() => {
+    const hasLoadedThread =
+      activeSessionId === notionThreadId && messages.length > 0;
+    const waitingForMatchedThread =
+      !explicitNotionThreadId && isLoadingSessions;
+    if (
+      !notionThreadId ||
+      waitingForMatchedThread ||
+      isLoadingMessages ||
+      hasLoadedThread
+    ) {
+      return;
+    }
+
+    const attempts = notionAutoLoadAttempts.current[notionThreadId] ?? 0;
+    if (attempts >= 4) {return;}
+
+    notionAutoLoadAttempts.current[notionThreadId] = attempts + 1;
+    const timeout = window.setTimeout(
+      () => loadSession(notionThreadId),
+      attempts === 0 ? 0 : attempts * 750,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [
+    activeSessionId,
+    explicitNotionThreadId,
+    notionThreadId,
+    isLoadingSessions,
+    isLoadingMessages,
+    messages.length,
+    loadSession,
+  ]);
 
   // Auto-scroll
   useEffect(() => {
@@ -402,7 +538,13 @@ const AssistantCard: React.FC<{
   isStreaming: boolean;
 }> = ({ message, isLast, isStreaming }) => {
   const [showThinking, setShowThinking] = useState(false);
+  const [showTools, setShowTools] = useState(false);
+  const finalJson = useMemo(
+    () => parseFinalJsonSummary(message.content),
+    [message.content],
+  );
   const showCursor = isLast && isStreaming && !message.toolCalls?.length;
+  const toolCount = message.toolCalls?.length ?? 0;
 
   return (
     <div
@@ -453,24 +595,38 @@ const AssistantCard: React.FC<{
         </div>
       )}
 
-      {/* Tool Calls */}
-      {message.toolCalls && message.toolCalls.length > 0 && (
-        <div className="mx-3 mb-2 space-y-1.5">
-          {message.toolCalls.map((tc) => (
-            <ToolCallCard key={tc.id} toolCall={tc} />
-          ))}
-        </div>
-      )}
-
       {/* Text Content */}
       {message.content && (
         <div className="px-3 pb-3 text-sm text-foreground/90 break-words leading-relaxed">
-          <MarkdownRenderer content={message.content} />
+          {finalJson ? (
+            <FinalJsonCard result={finalJson} />
+          ) : (
+            <MarkdownRenderer content={message.content} />
+          )}
           {showCursor && (
             <span
               className="inline-block w-[5px] h-[14px] ml-0.5 rounded-[1px] bg-green-500/30"
               style={{ animation: "blink 1s step-end infinite" }}
             />
+          )}
+        </div>
+      )}
+
+      {/* Tool Calls */}
+      {toolCount > 0 && (
+        <div className="mx-3 mb-2">
+          <button
+            onClick={() => setShowTools(!showTools)}
+            className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {showTools ? "hide" : "show"} technical activity ({toolCount})
+          </button>
+          {showTools && (
+            <div className="mt-1.5 space-y-1.5">
+              {message.toolCalls?.map((tc) => (
+                <ToolCallCard key={tc.id} toolCall={tc} />
+              ))}
+            </div>
           )}
         </div>
       )}
@@ -496,6 +652,74 @@ const AssistantCard: React.FC<{
           </span>
         </div>
       )}
+    </div>
+  );
+};
+
+/* ── Final JSON Compact View ── */
+const FinalJsonCard: React.FC<{ result: FinalJsonSummary }> = ({ result }) => {
+  const [showRaw, setShowRaw] = useState(false);
+  const confidence =
+    result.confidenceScore === null
+      ? "not provided"
+      : result.confidenceScore.toFixed(2);
+  const chartCount = result.notionCharts.length;
+  const caveatCount = result.gotchas.length;
+  const commentPreview = result.notionComment.trim();
+
+  return (
+    <div className="rounded-md border border-green-500/20 bg-green-500/[0.03] overflow-hidden">
+      <div className="px-3 py-2 border-b border-green-500/10">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] uppercase tracking-wider font-semibold text-green-500">
+            Final Notion JSON
+          </span>
+          <span className="text-[10px] text-muted-foreground">
+            confidence {confidence}
+          </span>
+          <button
+            onClick={() => setShowRaw((value) => !value)}
+            className="ml-auto text-[10px] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
+          >
+            {showRaw ? (
+              <ChevronDownIcon className="h-3 w-3" />
+            ) : (
+              <ChevronRightIcon className="h-3 w-3" />
+            )}
+            {showRaw ? "hide JSON" : "show JSON"}
+          </button>
+        </div>
+        {result.summary && (
+          <div className="mt-1 text-sm text-foreground/90">
+            {result.summary}
+          </div>
+        )}
+      </div>
+      <div className="px-3 py-2 space-y-2">
+        <div className="flex flex-wrap gap-2 text-[10px] text-muted-foreground">
+          <span className="rounded border border-border/40 bg-background/40 px-1.5 py-0.5">
+            {caveatCount} caveat{caveatCount === 1 ? "" : "s"}
+          </span>
+          <span className="rounded border border-border/40 bg-background/40 px-1.5 py-0.5">
+            {chartCount} chart{chartCount === 1 ? "" : "s"}
+          </span>
+        </div>
+        {commentPreview && (
+          <div>
+            <div className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground mb-1">
+              Notion comment
+            </div>
+            <div className="text-xs text-muted-foreground break-words max-h-[120px] overflow-y-auto">
+              <MarkdownRenderer content={commentPreview} />
+            </div>
+          </div>
+        )}
+        {showRaw && (
+          <pre className="text-[11px] leading-relaxed bg-background/60 rounded border border-border/30 p-2 overflow-x-auto max-h-[260px] overflow-y-auto whitespace-pre-wrap break-all font-mono">
+            {result.prettyJson}
+          </pre>
+        )}
+      </div>
     </div>
   );
 };

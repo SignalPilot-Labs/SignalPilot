@@ -10,6 +10,7 @@ const nextConfig: NextConfig = {
     "@tailwindcss/node",
   ],
   turbopack: {
+    root: process.cwd(),
     resolveAlias: {
       "vscode-jsonrpc/lib/common/cancellation.js":
         "vscode-jsonrpc/lib/common/cancellation",

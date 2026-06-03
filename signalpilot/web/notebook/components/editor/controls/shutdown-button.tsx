@@ -2,6 +2,7 @@ import { ArrowLeftIcon } from "lucide-react";
 
 import { Tooltip } from "../../ui/tooltip";
 import { Button } from "../inputs/Inputs";
+import { tryGetNotebookConfig } from "~/components/notebook/notebook-context";
 
 interface Props {
   description?: string;
@@ -11,6 +12,17 @@ interface Props {
 export const ShutdownButton: React.FC<Props> = ({
   tooltip = "Back to home",
 }) => {
+  const config = tryGetNotebookConfig();
+  const queryHasProject =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).has("project");
+  const homePath =
+    config?.product === "notebooks"
+      ? "/notebooks"
+      : config?.product === "projects" || config?.project || queryHasProject
+        ? "/projects"
+        : "/notebooks";
+
   return (
     <Tooltip content={tooltip}>
       <Button
@@ -22,7 +34,7 @@ export const ShutdownButton: React.FC<Props> = ({
         className="h-[27px] w-[27px]"
         onClick={(e) => {
           e.stopPropagation();
-          window.location.href = "/projects";
+          window.location.href = homePath;
         }}
       >
         <ArrowLeftIcon strokeWidth={1.5} />

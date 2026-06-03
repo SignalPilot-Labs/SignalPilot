@@ -59,17 +59,29 @@ async def create_session(body: NotebookSessionCreate, store: StoreD):
     if is_cloud_mode() and not store.user_id:
         raise HTTPException(status_code=401, detail="User identity required")
     user_id = store.user_id or "local"
+    project_id = body.project_id or None
+    direct_url = os.getenv("SP_NOTEBOOK_DIRECT_URL", "")
 
     existing = await ns.get_active_session(store.session, org_id=org_id, user_id=user_id)
-    if existing and existing.status == "running" and existing.pod_ip and existing.pod_name:
-        direct_url = os.getenv("SP_NOTEBOOK_DIRECT_URL", "")
-        if direct_url:
-            return existing
-        orch = await _get_orchestrator()
-        if await orch.is_pod_alive(existing.pod_name, org_id=org_id):
-            return existing
-        # Pod is dead — clean up stale session
+    if existing and (existing.project_id or None) != project_id:
         await ns.mark_stopped(store.session, session_id=existing.id, org_id=existing.org_id)
+        existing = None
+    if existing and existing.status == "running" and existing.pod_ip and existing.pod_name:
+        if direct_url:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(direct_url)
+            host_port = f"{parsed.hostname}:{parsed.port or 2718}"
+            if existing.pod_ip == host_port:
+                return existing
+            await ns.mark_stopped(store.session, session_id=existing.id, org_id=existing.org_id)
+            existing = None
+        if existing:
+            orch = await _get_orchestrator()
+            if await orch.is_pod_alive(existing.pod_name, org_id=org_id):
+                return existing
+            # Pod is dead — clean up stale session
+            await ns.mark_stopped(store.session, session_id=existing.id, org_id=existing.org_id)
     elif existing:
         # creating state or no pod_ip — mark stopped and recreate
         await ns.mark_stopped(store.session, session_id=existing.id, org_id=existing.org_id)
@@ -77,7 +89,6 @@ async def create_session(body: NotebookSessionCreate, store: StoreD):
     await ns.delete_stopped(store.session, org_id=org_id, user_id=user_id)
 
     # ── Direct mode: skip K8s entirely ────────────────────────────
-    direct_url = os.getenv("SP_NOTEBOOK_DIRECT_URL", "")
     if direct_url:
         from urllib.parse import urlparse
         parsed = urlparse(direct_url)
@@ -86,7 +97,7 @@ async def create_session(body: NotebookSessionCreate, store: StoreD):
             store.session,
             org_id=org_id,
             user_id=user_id,
-            project_id=body.project_id,
+            project_id=project_id,
             branch=body.branch,
             pod_name="local-notebook",
         )
@@ -112,18 +123,19 @@ async def create_session(body: NotebookSessionCreate, store: StoreD):
         store.session,
         org_id=org_id,
         user_id=user_id,
-        project_id=body.project_id,
+        project_id=project_id,
         branch=body.branch,
         pod_name=pod,
     )
 
     # Fetch latest from GitHub before starting the pod (best-effort)
-    if body.project_id:
+    if project_id:
         try:
             from ..git.sync import sync_project_with_github
-            sync_result = await sync_project_with_github(body.project_id, org_id)
+
+            sync_result = await sync_project_with_github(project_id, org_id)
             if sync_result.get("synced"):
-                logger.info("Pre-session GitHub sync for project %s: %s", body.project_id, sync_result)
+                logger.info("Pre-session GitHub sync for project %s: %s", project_id, sync_result)
         except Exception as e:
             logger.warning("Pre-session GitHub sync failed (non-fatal): %s", e)
 
@@ -132,7 +144,7 @@ async def create_session(body: NotebookSessionCreate, store: StoreD):
         user_id=user_id,
         org_id=org_id,
         session_id=session_info.id,
-        project_id=body.project_id,
+        project_id=project_id,
         branch=body.branch,
         ttl=k8s_settings.sp_session_jwt_ttl_seconds,
     )
@@ -162,7 +174,7 @@ async def create_session(body: NotebookSessionCreate, store: StoreD):
                 pod_name=pod,
                 user_id=user_id,
                 org_id=org_id,
-                project_id=body.project_id,
+                project_id=project_id,
                 branch=body.branch,
                 image=os.getenv("SP_NOTEBOOK_IMAGE", "signalpilot-notebook:latest"),
                 gateway_url=gateway_url,

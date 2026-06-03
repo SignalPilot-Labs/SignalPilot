@@ -22,7 +22,6 @@ def _make_manifest(**kwargs) -> dict:
         "image": "signalpilot-notebook:latest",
         "user_id": "user-1",
         "org_id": "org-1",
-        "project_id": None,
         "branch": "main",
         "gateway_url": "http://gateway:3300",
         "session_jwt": "test.jwt.token",

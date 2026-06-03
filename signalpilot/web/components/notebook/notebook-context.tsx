@@ -4,6 +4,8 @@ import React from "react";
 
 export interface NotebookConfig {
   gatewayUrl: string;
+  notebookProxyUrl?: string;
+  product?: "projects" | "notebooks";
   sessionId: string;
   /**
    * Resolve the gateway auth token (Clerk JWT in cloud, null in local-noauth).
@@ -11,6 +13,11 @@ export interface NotebookConfig {
    * proxy authenticates this token directly — there is no per-session cookie.
    */
   getToken: () => Promise<string | null>;
+  /** Kernel/session ID used inside the notebook runtime. For Notion trails this
+   * is also the AI trace thread ID. */
+  kernelSessionId?: string;
+  /** Local API key for gateway workspace calls */
+  apiKey?: string;
   /** Project ID from URL */
   project?: string;
   /** Branch from URL */
@@ -30,9 +37,14 @@ export function NotebookProvider({
   children: React.ReactNode;
   value: NotebookConfig;
 }) {
+  _config = value;
   React.useEffect(() => {
     _config = value;
-    return () => { _config = null; };
+    return () => {
+      if (_config === value) {
+        _config = null;
+      }
+    };
   }, [value]);
 
   return (
@@ -47,6 +59,10 @@ export function useNotebookConfig(): NotebookConfig {
   if (!ctx)
     throw new Error("useNotebookConfig must be used inside NotebookProvider");
   return ctx;
+}
+
+export function useOptionalNotebookConfig(): NotebookConfig | null {
+  return React.useContext(NotebookContext);
 }
 
 // ── Non-React access (for apiCall and boot-phase code) ──────────

@@ -57,6 +57,8 @@ services:
       SP_PUBLIC_GATEWAY_PORT: "3300"
       SP_REPOS_DIR: /repos
       SP_WEB_URL: http://localhost:3200
+      SIGNALPILOT_NOTEBOOK_INTERNAL_URL: http://notebook:2718
+      SIGNALPILOT_NOTEBOOK_PUBLIC_URL: http://localhost:3200/notebook
       # Sandbox
       SP_SANDBOX_MANAGER_URL: http://sandbox:8080
       SP_SANDBOX_ENABLED: "true"
@@ -105,9 +107,14 @@ services:
       SP_LOG_LEVEL: "10"
       SP_GATEWAY_URL: http://gateway:3300
       SP_GATEWAY_INTERNAL_URL: http://gateway:3300
+      SP_WEB_URL: ${SP_WEB_URL:-http://localhost:3200}
+      CLAUDE_CONFIG_DIR: ${CLAUDE_CONFIG_DIR:-/home/notebook/.claude}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
       - signalpilot-workspace:/workspace
       - signalpilot-shared:/shared:ro
+      - ${CLAUDE_HOST_CONFIG_DIR:-${HOME}/.config/signalpilot/claude-code-docker}:/home/notebook/.claude
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:2718/health"]
       interval: 5s
@@ -119,10 +126,12 @@ services:
   # ─── Web Frontend ─────────────────────────────────────────────
   web:
     build:
-      context: ../
-      dockerfile: sp-dev-work/Dockerfile.web
+      context: .
+      dockerfile: Dockerfile.web
     ports:
       - "3200:3200"
+    environment:
+      SP_GATEWAY_INTERNAL_URL: http://gateway:3300
     volumes:
       - signalpilot-shared:/shared:ro
     depends_on:

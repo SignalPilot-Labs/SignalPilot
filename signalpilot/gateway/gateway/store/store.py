@@ -656,6 +656,94 @@ class Store:
         oid = self._require_org_id()
         return await notion_mod.get_api_key(self.session, org_id=oid, name=name)
 
+    async def create_notion_oauth_state(self, redirect_after: str | None, ttl_seconds: int = 600) -> str:
+        """Create a short-lived Notion OAuth state value."""
+        oid = self._require_org_id()
+        return await notion_mod.create_oauth_state(
+            self.session,
+            org_id=oid,
+            user_id=self.user_id,
+            redirect_after=redirect_after,
+            ttl_seconds=ttl_seconds,
+        )
+
+    async def list_notion_oauth_installations(self) -> list[notion_mod.NotionOAuthInstallationInfo]:
+        """List Notion OAuth installations for this org."""
+        oid = self._require_org_id()
+        return await notion_mod.list_oauth_installations(self.session, org_id=oid)
+
+    async def get_notion_oauth_installation(
+        self, installation_id: str,
+    ) -> notion_mod.NotionOAuthInstallationInfo | None:
+        """Get a Notion OAuth installation for this org."""
+        oid = self._require_org_id()
+        return await notion_mod.get_oauth_installation(self.session, org_id=oid, installation_id=installation_id)
+
+    async def get_notion_oauth_installation_token(self, installation_id: str) -> str | None:
+        """Get the decrypted Notion OAuth access token for this org."""
+        oid = self._require_org_id()
+        return await notion_mod.get_oauth_installation_token(
+            self.session,
+            org_id=oid,
+            installation_id=installation_id,
+        )
+
+    async def get_notion_oauth_installation_tokens(self, installation_id: str) -> tuple[str, str | None] | None:
+        """Get the decrypted Notion OAuth access and refresh tokens for this org."""
+        oid = self._require_org_id()
+        return await notion_mod.get_oauth_installation_tokens(
+            self.session,
+            org_id=oid,
+            installation_id=installation_id,
+        )
+
+    async def update_notion_oauth_installation_tokens(
+        self,
+        installation_id: str,
+        access_token: str,
+        refresh_token: str | None,
+    ) -> None:
+        """Update encrypted Notion OAuth tokens after refresh."""
+        oid = self._require_org_id()
+        await notion_mod.update_oauth_installation_tokens(
+            self.session,
+            org_id=oid,
+            installation_id=installation_id,
+            access_token=access_token,
+            refresh_token=refresh_token,
+        )
+
+    async def save_notion_oauth_installation_config(
+        self,
+        installation_id: str,
+        parent_page_id: str | None,
+        trigger_page_id: str,
+        requests_data_source_id: str,
+        requests_database_page_id: str,
+        enabled: bool = True,
+    ) -> notion_mod.NotionOAuthInstallationInfo | None:
+        """Save provisioned Notion resources for an OAuth installation."""
+        oid = self._require_org_id()
+        return await notion_mod.save_oauth_installation_config(
+            self.session,
+            org_id=oid,
+            installation_id=installation_id,
+            parent_page_id=parent_page_id,
+            trigger_page_id=trigger_page_id,
+            requests_data_source_id=requests_data_source_id,
+            requests_database_page_id=requests_database_page_id,
+            enabled=enabled,
+        )
+
+    async def disable_notion_oauth_installation(self, installation_id: str) -> bool:
+        """Disable a Notion OAuth installation for this org."""
+        oid = self._require_org_id()
+        return await notion_mod.disable_oauth_installation(
+            self.session,
+            org_id=oid,
+            installation_id=installation_id,
+        )
+
     # ─── API Keys ───────────────────────────────────────────────────────
     async def list_api_keys(self) -> list[ApiKeyRecord]:
         return await api_keys.list_api_keys(self.session, org_id=self.org_id, allow_unscoped=self._allow_unscoped)
@@ -955,6 +1043,56 @@ class Store:
         oid = self._require_org_id()
         return await chat.list_messages(
             self.session, org_id=oid, user_id=self.user_id or "local", conversation_id=conversation_id, **kwargs
+        )
+
+    # ─── Chat Traces ─────────────────────────────────────────────────────────
+
+    async def upsert_chat_trace_thread(self, thread):
+        from . import chat_traces
+
+        oid = self._require_org_id()
+        return await chat_traces.upsert_thread(
+            self.session, org_id=oid, user_id=self.user_id or "local", thread=thread
+        )
+
+    async def clear_chat_trace_events(self, thread_id: str):
+        from . import chat_traces
+
+        oid = self._require_org_id()
+        return await chat_traces.clear_events(
+            self.session, org_id=oid, user_id=self.user_id or "local", thread_id=thread_id
+        )
+
+    async def append_chat_trace_event(self, thread_id: str, event):
+        from . import chat_traces
+
+        oid = self._require_org_id()
+        return await chat_traces.append_event(
+            self.session, org_id=oid, user_id=self.user_id or "local", thread_id=thread_id, event=event
+        )
+
+    async def list_chat_trace_threads(self, **kwargs):
+        from . import chat_traces
+
+        oid = self._require_org_id()
+        return await chat_traces.list_threads(
+            self.session, org_id=oid, user_id=self.user_id or "local", **kwargs
+        )
+
+    async def get_chat_trace_thread(self, thread_id: str):
+        from . import chat_traces
+
+        oid = self._require_org_id()
+        return await chat_traces.get_thread(
+            self.session, org_id=oid, user_id=self.user_id or "local", thread_id=thread_id
+        )
+
+    async def get_chat_trace_events(self, thread_id: str, **kwargs):
+        from . import chat_traces
+
+        oid = self._require_org_id()
+        return await chat_traces.get_events(
+            self.session, org_id=oid, user_id=self.user_id or "local", thread_id=thread_id, **kwargs
         )
 
     # ─── Agent Runs ──────────────────────────────────────────────────────────

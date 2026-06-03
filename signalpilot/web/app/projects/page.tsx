@@ -108,6 +108,7 @@ export default function ProjectsPage() {
     // or runs without auth (local). No per-session token / cookie / handshake.
     return {
       gatewayUrl: GATEWAY_URL,
+      product: "projects",
       sessionId,
       getToken: getGatewayAuthToken,
       project: urlProject || undefined,
@@ -139,7 +140,7 @@ export default function ProjectsPage() {
           // If deep-linking to a specific project, verify the session matches.
           // A stale session from a different project would route to the wrong files.
           const sessionProject = session.project_id || "";
-          if (urlProject && sessionProject && sessionProject !== urlProject) {
+          if (urlProject && sessionProject !== urlProject) {
             console.log("[projects] Session project mismatch — deleting stale session");
             await deleteNotebookSession().catch(() => {});
           } else {

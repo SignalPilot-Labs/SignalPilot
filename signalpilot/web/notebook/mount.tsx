@@ -470,11 +470,10 @@ export function initStore(
   s.set(userConfigAtom, parseUserConfig(parsedOptions.data.config));
   s.set(appConfigAtom, parseAppConfig(parsedOptions.data.appConfig));
 
-  // Branch-variant atoms (shared with warm reboot path)
+  // Runtime config atoms shared with the warm reboot path.
   applyMountConfigDeltas(parsedOptions.data, targetStore);
 
   // connectionAtom: only on cold boot, when the runtime is eager
-  // (warm reboot triggers reconnect via gatewayBranchIdAtom effect in edit-app.tsx)
   if (
     parsedOptions.data.runtimeConfig.length > 0 &&
     !parsedOptions.data.runtimeConfig[0].lazy &&

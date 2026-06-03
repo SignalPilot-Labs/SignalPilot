@@ -15,6 +15,7 @@ import json
 import uuid
 from dataclasses import asdict, is_dataclass
 from typing import Any
+from urllib.parse import urlunsplit
 
 from signalpilot import _loggers
 from signalpilot._ast.cell import CellConfig
@@ -36,6 +37,31 @@ from signalpilot._types.ids import CellId_t
 from signalpilot._utils.dataclass_to_openapi import PythonTypeToOpenAPI
 
 LOGGER = _loggers.sp_logger()
+
+
+def _local_server_url(context: ToolContext, path: str = "") -> str:
+    """Build an HTTP URL for the currently running notebook server."""
+    state = context.get_app().state
+    host = getattr(state, "host", "127.0.0.1") or "127.0.0.1"
+    if host in {"0.0.0.0", "::", "[::]"}:
+        host = "127.0.0.1"
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    port = int(getattr(state, "port", 2718))
+    base_url = str(getattr(state, "base_url", "") or "").rstrip("/")
+    normalized_path = "/" + path.lstrip("/") if path else ""
+    return urlunsplit(
+        ("http", f"{host}:{port}", f"{base_url}{normalized_path}", "", "")
+    )
+
+
+def _server_headers(context: ToolContext, session_id: str) -> dict[str, str]:
+    token = str(context.session_manager.skew_protection_token)
+    return {
+        "Content-Type": "application/json",
+        "Sp-Server-Token": token,
+        "Sp-Session-Id": str(session_id),
+    }
 
 
 def build_notebook_mcp_server(context: ToolContext) -> Any:
@@ -300,21 +326,11 @@ def _handle_edit_notebook(
     # 3. Execute updated/new cells via HTTP (put_control_request doesn't work from MCP thread)
     if execute_ids:
         try:
-            import re as _re
-
             import requests as _requests
 
-            token_resp = _requests.get("http://localhost:2718", timeout=5)
-            token_match = _re.search(r'data-token="([^"]+)"', token_resp.text)
-            server_token = token_match.group(1) if token_match else ""
-
             resp = _requests.post(
-                "http://localhost:2718/api/kernel/run",
-                headers={
-                    "Content-Type": "application/json",
-                    "Sp-Server-Token": server_token,
-                    "Sp-Session-Id": str(session_id),
-                },
+                _local_server_url(context, "/api/kernel/run"),
+                headers=_server_headers(context, str(session_id)),
                 json={
                     "cellIds": [str(c) for c in execute_ids],
                     "codes": execute_codes,
@@ -394,30 +410,20 @@ def _handle_run_cells(
 
     # Execute via HTTP API (put_control_request doesn't work from MCP thread)
     try:
-        import re as _re
-
         import requests as _requests
 
-        token_resp = _requests.get("http://localhost:2718", timeout=5)
-        token_match = _re.search(r'data-token="([^"]+)"', token_resp.text)
-        server_token = token_match.group(1) if token_match else ""
-
-        hdrs = {
-            "Content-Type": "application/json",
-            "Sp-Server-Token": server_token,
-            "Sp-Session-Id": str(session_id),
-        }
+        hdrs = _server_headers(context, str(session_id))
 
         # Ensure kernel is instantiated first
         _requests.post(
-            "http://localhost:2718/api/kernel/instantiate",
+            _local_server_url(context, "/api/kernel/instantiate"),
             headers=hdrs,
             json={"objectIds": [], "values": [], "autoRun": False},
             timeout=10,
         )
 
         resp = _requests.post(
-            "http://localhost:2718/api/kernel/run",
+            _local_server_url(context, "/api/kernel/run"),
             headers=hdrs,
             json={"cellIds": [str(c) for c in run_ids], "codes": run_codes},
             timeout=15,
@@ -581,24 +587,11 @@ def _handle_start_notebook_session(
         LOGGER.info(f"[start_session] Created session {new_session_id} for {file_path}")
 
         # Wait for kernel to be ready, then instantiate via HTTP
-        import re as _re
         import time
 
         import requests as _requests
 
-        # Get server token
-        try:
-            token_resp = _requests.get("http://localhost:2718", timeout=5)
-            token_match = _re.search(r'data-token="([^"]+)"', token_resp.text)
-            server_token = token_match.group(1) if token_match else ""
-        except Exception:
-            server_token = ""
-
-        hdrs = {
-            "Content-Type": "application/json",
-            "Sp-Server-Token": server_token,
-            "Sp-Session-Id": str(new_session_id),
-        }
+        hdrs = _server_headers(context, str(new_session_id))
 
         # Wait for kernel process to be alive
         for attempt in range(10):
@@ -615,7 +608,7 @@ def _handle_start_notebook_session(
         for attempt in range(5):
             try:
                 resp = _requests.post(
-                    "http://localhost:2718/api/kernel/instantiate",
+                    _local_server_url(context, "/api/kernel/instantiate"),
                     headers=hdrs,
                     json={"objectIds": [], "values": [], "autoRun": auto_run},
                     timeout=15,

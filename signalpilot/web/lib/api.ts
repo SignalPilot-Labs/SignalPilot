@@ -454,7 +454,7 @@ export type NotebookSession = {
   created_at: number;
 };
 
-export const createNotebookSession = (body: { project_id: string; branch: string }) =>
+export const createNotebookSession = (body: { project_id?: string | null; branch?: string } = {}) =>
   request<NotebookSession>("/api/notebook-sessions", {
     method: "POST",
     body: JSON.stringify(body),
@@ -735,6 +735,26 @@ export const listKnowledgeEdits = (id: string, limit = 20) =>
 
 // Notion Integrations
 export type NotionIntegration = { id: string; name: string; search_page_ids: string[]; report_parent_page_id: string | null; status: string; created_at: number; org_id: string | null };
+export type NotionOAuthInstallationConfig = {
+  parent_page_id: string | null;
+  trigger_page_id: string | null;
+  requests_data_source_id: string | null;
+  requests_database_page_id: string | null;
+  enabled: boolean;
+};
+export type NotionOAuthInstallation = {
+  id: string;
+  workspace_id: string;
+  workspace_name: string | null;
+  bot_id: string;
+  owner_user_id: string | null;
+  status: string;
+  created_at: string | null;
+  updated_at: string | null;
+  org_id: string | null;
+  config: NotionOAuthInstallationConfig | null;
+};
+export type NotionPageOption = { id: string; title: string; url: string | null };
 export const getNotionIntegrations = () => request<NotionIntegration[]>("/api/integrations/notion");
 export const createNotionIntegration = (payload: { name: string; api_key: string; search_page_ids: string[]; report_parent_page_id?: string }) =>
   request<NotionIntegration>("/api/integrations/notion", { method: "POST", body: JSON.stringify(payload) });
@@ -744,6 +764,28 @@ export const deleteNotionIntegration = (name: string) =>
   request<void>(`/api/integrations/notion/${name}`, { method: "DELETE" });
 export const testNotionIntegration = (name: string) =>
   request<{ status: string; message: string }>(`/api/integrations/notion/${name}/test`, { method: "POST" });
+export const startNotionOAuth = (redirectAfter?: string) => {
+  const qs = redirectAfter ? `?redirect_after=${encodeURIComponent(redirectAfter)}` : "";
+  return request<{ authorize_url: string; state: string }>(`/api/integrations/notion/oauth/start${qs}`);
+};
+export const getNotionOAuthInstallations = () =>
+  request<NotionOAuthInstallation[]>("/api/integrations/notion/oauth/installations");
+export const getNotionOAuthPages = (installationId: string, query?: string) => {
+  const qs = query ? `?query=${encodeURIComponent(query)}` : "";
+  return request<NotionPageOption[]>(`/api/integrations/notion/oauth/${installationId}/pages${qs}`);
+};
+export const provisionNotionOAuthInstallation = (installationId: string, parentPageId?: string | null) =>
+  request<{
+    installation: NotionOAuthInstallation;
+    trigger_page_id: string;
+    requests_data_source_id: string;
+    requests_database_page_id: string;
+  }>(`/api/integrations/notion/oauth/${installationId}/provision`, {
+    method: "POST",
+    body: JSON.stringify(parentPageId ? { parent_page_id: parentPageId } : {}),
+  });
+export const deleteNotionOAuthInstallation = (installationId: string) =>
+  request<void>(`/api/integrations/notion/oauth/${installationId}`, { method: "DELETE" });
 
 // Metrics SSE (uses fetch instead of EventSource so we can send auth headers)
 export function subscribeMetrics(cb: (data: import("./types").MetricsSnapshot) => void): () => void {

@@ -28,7 +28,7 @@ export function isSessionId(value: string | null): value is SessionId {
   if (!value) {
     return false;
   }
-  return /^s_[\da-z]{6}$/.test(value);
+  return /^s_[\da-z]{6}$/.test(value) || /^session-[A-Za-z0-9][A-Za-z0-9_-]{0,120}$/.test(value);
 }
 
 function getProjectDirFromStorage(): string | null {
@@ -62,12 +62,23 @@ function computeInitialSessionId(): SessionId {
     KnownQueryParams.sessionId,
   ) as SessionId | null;
   if (isSessionId(id)) {
-    updateQueryParams((params) => {
-      if (params.has(KnownQueryParams.kiosk)) {
+    const shouldPreserveSessionId =
+      id.startsWith("session-notion-") || url.pathname.startsWith("/notebooks");
+    if (!shouldPreserveSessionId) {
+      updateQueryParams((params) => {
+        if (params.has(KnownQueryParams.kiosk)) {
+          return;
+        }
+        params.delete(KnownQueryParams.sessionId);
+      });
+    } else {
+      updateQueryParams((params) => {
+        if (!params.has(KnownQueryParams.sessionId)) {
+          params.set(KnownQueryParams.sessionId, id);
+        }
         return;
-      }
-      params.delete(KnownQueryParams.sessionId);
-    });
+      });
+    }
     Logger.debug("Connecting to existing session", { sessionId: id });
     return id;
   }

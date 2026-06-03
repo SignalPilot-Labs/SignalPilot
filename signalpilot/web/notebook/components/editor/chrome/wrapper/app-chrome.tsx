@@ -44,6 +44,8 @@ import { LspStatus } from "./footer-items/lsp-status";
 import { PanelsWrapper } from "./panels";
 import { useDependencyPanelTab } from "./useDependencyPanelTab";
 import { handleDragging } from "./utils";
+import { useOptionalNotebookConfig } from "~/components/notebook/notebook-context";
+import type { NotebookProduct } from "../types";
 
 const LazyTerminal = React.lazy(() => import("@/components/terminal/terminal"));
 const LazyAgentChatPanel = React.lazy(
@@ -82,6 +84,19 @@ const LazyAgentBranchesPanel = React.lazy(
   () => import("../panels/agent-branches-panel"),
 );
 
+function resolveNotebookProduct(product?: NotebookProduct): NotebookProduct {
+  if (product) {
+    return product;
+  }
+  if (
+    typeof window !== "undefined" &&
+    window.location.pathname.startsWith("/notebooks")
+  ) {
+    return "notebooks";
+  }
+  return "projects";
+}
+
 export const AppChrome: React.FC<PropsWithChildren> = ({ children }) => {
   const {
     isSidebarOpen,
@@ -98,18 +113,44 @@ export const AppChrome: React.FC<PropsWithChildren> = ({ children }) => {
   const [panelLayout, setPanelLayout] = useAtom(panelLayoutAtom);
   // Subscribe to capabilities to re-render when they change (e.g., terminal capability)
   const capabilities = useAtomValue(capabilitiesAtom);
+  const notebookConfig = useOptionalNotebookConfig();
+  const product = resolveNotebookProduct(notebookConfig?.product);
+  const kernelSessionId = notebookConfig?.kernelSessionId;
+  const didAutoOpenNotionAgent = React.useRef(false);
+
+  useEffect(() => {
+    if (
+      didAutoOpenNotionAgent.current ||
+      product !== "notebooks" ||
+      !kernelSessionId?.startsWith("session-notion-")
+    ) {
+      return;
+    }
+    didAutoOpenNotionAgent.current = true;
+    const openAgentPanel = () => {
+      openApplication("ai");
+      setIsSidebarOpen(true);
+      sidebarRef.current?.expand();
+      sidebarRef.current?.resize(30);
+    };
+    openAgentPanel();
+    const retries = [250, 1000, 2000].map((delay) =>
+      window.setTimeout(openAgentPanel, delay),
+    );
+    return () => retries.forEach((retry) => window.clearTimeout(retry));
+  }, [product, kernelSessionId, openApplication, setIsSidebarOpen]);
 
   // Convert current developer panel items to PanelDescriptors
   // Filter out hidden panels (e.g., terminal when capability is not available)
   const devPanelItems = useMemo(() => {
     return panelLayout.developerPanel.flatMap((id) => {
       const panel = PANEL_MAP.get(id);
-      if (!panel || isPanelHidden(panel, capabilities)) {
+      if (!panel || isPanelHidden(panel, capabilities, product)) {
         return [];
       }
       return [panel];
     });
-  }, [panelLayout.developerPanel, capabilities]);
+  }, [panelLayout.developerPanel, capabilities, product]);
 
   const handleSetDevPanelItems = (items: PanelDescriptor[]) => {
     setPanelLayout((prev) => ({
@@ -146,7 +187,7 @@ export const AppChrome: React.FC<PropsWithChildren> = ({ children }) => {
   const availableDevPanels = useMemo(() => {
     const sidebarIds = new Set(panelLayout.sidebar);
     return PANELS.filter((p) => {
-      if (isPanelHidden(p, capabilities)) {
+      if (isPanelHidden(p, capabilities, product)) {
         return false;
       }
       // Exclude panels that are in the sidebar
@@ -155,7 +196,7 @@ export const AppChrome: React.FC<PropsWithChildren> = ({ children }) => {
       }
       return true;
     });
-  }, [panelLayout.sidebar, capabilities]);
+  }, [panelLayout.sidebar, capabilities, product]);
 
   const emitResizeEvent = useEvent(() => {
     // HACK: Unfortunately, we have to do this twice to make sure the

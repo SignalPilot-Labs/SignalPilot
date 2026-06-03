@@ -52,7 +52,6 @@ def _make_nb_token(
         "sub": user_id,
         "org_id": org_id,
         "session_id": session_id,
-        "project_id": "proj-1",
         "branch": "main",
         "scopes": scopes if scopes is not None else ["read", "write"],
         "iat": int(time.time()),
@@ -218,7 +217,6 @@ class TestGatewayUrlFromConfig:
             id="sess-url-test",
             org_id="org-1",
             user_id="user-1",
-            project_id="proj-1",
             branch="main",
             pod_name="nb-url-test",
             pod_ip=None,
@@ -251,7 +249,7 @@ class TestGatewayUrlFromConfig:
 
         from gateway.models.notebook_sessions import NotebookSessionCreate
 
-        body = NotebookSessionCreate(project_id="proj-1", branch="main")
+        body = NotebookSessionCreate(branch="main")
 
         mock_response = MagicMock()
         mock_response.headers = {}
@@ -401,7 +399,7 @@ class TestCloudModeEmptyUserId:
 
         from gateway.models.notebook_sessions import NotebookSessionCreate
 
-        body = NotebookSessionCreate(project_id="proj-1", branch="main")
+        body = NotebookSessionCreate(branch="main")
 
         mock_response = MagicMock()
         mock_response.headers = {}
@@ -432,7 +430,6 @@ class TestCloudModeEmptyUserId:
             id="sess-local",
             org_id="local",
             user_id="local",
-            project_id=None,
             branch="main",
             pod_name="nb-local",
             pod_ip=None,
@@ -463,7 +460,7 @@ class TestCloudModeEmptyUserId:
 
         from gateway.models.notebook_sessions import NotebookSessionCreate
 
-        body = NotebookSessionCreate(project_id=None, branch="main")
+        body = NotebookSessionCreate(branch="main")
         mock_response = MagicMock()
         mock_response.headers = {}
         result = await ns_api.create_session(body, store, mock_response)
@@ -482,13 +479,12 @@ class TestMintedJWTContainsScopes:
             user_id="user-1",
             org_id="org-1",
             session_id="sess-1",
-            project_id="proj-1",
             branch="main",
             ttl=3600,
         )
         claims = verify_session_jwt(token)
         assert "scopes" in claims
-        assert claims["scopes"] == ["read", "write"]
+        assert claims["scopes"] == ["read", "write", "query", "execute"]
 
     def test_verifier_rejects_token_with_empty_scopes(self, monkeypatch):
         _patch_secret(monkeypatch)

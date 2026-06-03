@@ -192,6 +192,17 @@ export function useSpKernelConnection(opts: {
     "SP_WRONG_KERNEL_ID",
   ]);
   const MAX_TERMINAL_RETRIES = 2;
+  const getUrlSessionId = () => {
+    if (typeof window === "undefined") return null;
+    return new URL(window.location.href).searchParams.get("session_id");
+  };
+  const resetSessionForRetry = () => {
+    const urlSessionId = getUrlSessionId();
+    if (urlSessionId?.startsWith("session-notion-")) {
+      return;
+    }
+    regenerateSessionId();
+  };
   const { autoInstantiate, sessionId: _sessionId, setCells } = opts;
   const { showBoundary } = useErrorBoundary();
 
@@ -599,11 +610,11 @@ export function useSpKernelConnection(opts: {
               body: "{}",
             })
           ).then(() => {
-              regenerateSessionId();
+              resetSessionForRetry();
               setTimeout(() => ws.reconnect(), 300);
             })
             .catch(() => {
-              regenerateSessionId();
+              resetSessionForRetry();
               setTimeout(() => ws.reconnect(), 500);
             });
           return;
@@ -615,7 +626,7 @@ export function useSpKernelConnection(opts: {
         ) {
           retryCount.current += 1;
           setConnection({ state: WebSocketState.CONNECTING });
-          regenerateSessionId();
+          resetSessionForRetry();
           setTimeout(() => ws.reconnect(), 500);
           return;
         }
@@ -650,7 +661,7 @@ export function useSpKernelConnection(opts: {
     ws.close();
     setTimeout(() => {
       shouldTryReconnecting.current = true;
-      regenerateSessionId();
+      resetSessionForRetry();
       ws.reconnect();
     }, 500);
   };

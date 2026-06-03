@@ -59,17 +59,28 @@ class AgentEventsRequest(msgspec.Struct, rename="camel"):
 async def agent_auth_status(*, request: Request) -> Response:
     """Check if AI credentials are configured."""
     import os
+    from pathlib import Path
+
     has_oauth = bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("OAUTH_TOKEN"))
     has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    credentials_path = (
+        Path(config_dir) / ".credentials.json"
+        if config_dir
+        else Path.home() / ".claude" / ".credentials.json"
+    )
+    has_claude_config = (
+        credentials_path.is_file() and credentials_path.stat().st_size > 0
+    )
 
     # Also check gateway user secrets
     has_gateway_key = False
     try:
-        from signalpilot._server.files.project_sync import _gateway_url, _gateway_headers
+        from signalpilot._server.gateway_client import gateway_headers, gateway_url
         import httpx
         resp = httpx.get(
-            f"{_gateway_url()}/api/user/secrets",
-            headers=_gateway_headers(),
+            f"{gateway_url()}/api/user/secrets",
+            headers=gateway_headers(),
             timeout=5.0,
         )
         if resp.status_code == 200:
@@ -77,8 +88,20 @@ async def agent_auth_status(*, request: Request) -> Response:
     except Exception:
         pass
 
-    configured = has_oauth or has_api_key or has_gateway_key
-    method = "oauth" if has_oauth else ("api_key" if has_api_key else ("gateway" if has_gateway_key else "none"))
+    configured = has_oauth or has_api_key or has_gateway_key or has_claude_config
+    method = (
+        "oauth"
+        if has_oauth
+        else (
+            "api_key"
+            if has_api_key
+            else (
+                "claude_config"
+                if has_claude_config
+                else ("gateway" if has_gateway_key else "none")
+            )
+        )
+    )
 
     return Response(
         content=json.dumps({
@@ -103,11 +126,11 @@ async def save_api_key(*, request: Request) -> Response:
 
     import os
     try:
-        from signalpilot._server.files.project_sync import _gateway_url, _gateway_headers
+        from signalpilot._server.gateway_client import gateway_headers, gateway_url
         import httpx
         resp = httpx.put(
-            f"{_gateway_url()}/api/user/secrets",
-            headers={**_gateway_headers(), "Content-Type": "application/json"},
+            f"{gateway_url()}/api/user/secrets",
+            headers={**gateway_headers(), "Content-Type": "application/json"},
             json={"anthropic_api_key": api_key},
             timeout=10.0,
         )
@@ -170,12 +193,13 @@ async def send_agent_message(*, request: Request) -> StreamingResponse:
     async def event_stream() -> AsyncGenerator[str, None]:
         try:
             idx = 0
-            # Resolve cloud project cwd if applicable
+            # Resolve cloud project cwd if applicable.
             agent_cwd = None
             project_id = request.headers.get("x-gateway-project-id")
             if project_id:
                 branch = request.headers.get("x-gateway-branch-id", "main")
                 from signalpilot._server.files.project_sync import local_project_dir
+
                 local_dir = local_project_dir(project_id, branch)
                 if local_dir.exists():
                     agent_cwd = str(local_dir)

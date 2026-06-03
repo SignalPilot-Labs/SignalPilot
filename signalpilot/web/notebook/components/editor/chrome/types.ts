@@ -46,6 +46,7 @@ export type PanelType =
   | "cache";
 
 export type PanelSection = "sidebar" | "developer-panel";
+export type NotebookProduct = "projects" | "notebooks";
 
 export interface PanelDescriptor {
   type: PanelType;
@@ -60,6 +61,8 @@ export interface PanelDescriptor {
   defaultSection: PanelSection;
   /** Capability required for this panel to be visible. If the capability is false, the panel is hidden. */
   requiredCapability?: keyof Capabilities;
+  /** Products this panel belongs to. Omitted means all products. */
+  products?: NotebookProduct[];
   /** Additional search keywords for the command palette */
   additionalKeywords?: string[];
 }
@@ -132,6 +135,7 @@ export const PANELS: PanelDescriptor[] = [
     label: "dbt",
     tooltip: "dbt commands & output",
     defaultSection: "sidebar",
+    products: ["projects"],
     additionalKeywords: ["sql", "models", "build", "run", "test", "compile"],
   },
   {
@@ -140,6 +144,7 @@ export const PANELS: PanelDescriptor[] = [
     label: "Git",
     tooltip: "Source control",
     defaultSection: "sidebar",
+    products: ["projects"],
     additionalKeywords: ["commit", "push", "pull", "branch", "sync", "vcs"],
   },
   {
@@ -148,6 +153,7 @@ export const PANELS: PanelDescriptor[] = [
     label: "Agents",
     tooltip: "Agent branches",
     defaultSection: "sidebar",
+    products: ["projects"],
     additionalKeywords: ["agent", "runs", "automation", "signalpilot-agent"],
   },
   {
@@ -156,6 +162,7 @@ export const PANELS: PanelDescriptor[] = [
     label: "Lineage",
     tooltip: "Explore dbt lineage",
     defaultSection: "sidebar",
+    products: ["projects"],
     additionalKeywords: [
       "dag",
       "kimball",
@@ -239,8 +246,12 @@ export const PANEL_MAP = new Map<PanelType, PanelDescriptor>(
 export function isPanelHidden(
   panel: PanelDescriptor,
   capabilities: Capabilities,
+  product: NotebookProduct = "projects",
 ): boolean {
   if (panel.hidden) {
+    return true;
+  }
+  if (panel.products && !panel.products.includes(product)) {
     return true;
   }
   if (panel.requiredCapability && !capabilities[panel.requiredCapability]) {

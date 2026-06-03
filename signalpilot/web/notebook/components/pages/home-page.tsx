@@ -87,6 +87,41 @@ import {
 } from "../home/state";
 import { Spinner } from "../icons/spinner";
 import { Input } from "../ui/input";
+import { tryGetNotebookConfig } from "~/components/notebook/notebook-context";
+
+function isProjectsProduct(): boolean {
+  const config = tryGetNotebookConfig();
+  if (config?.product === "projects") return true;
+  if (config?.product === "notebooks") return false;
+  if (config?.project) return true;
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).has("project");
+}
+
+function isNotionNotebookFile(file: SpFile): boolean {
+  return (
+    file.path.includes("signalpilot-notion-analyses/") ||
+    file.path.startsWith("session-notion-") ||
+    Boolean(file.sessionId?.startsWith("session-notion-"))
+  );
+}
+
+function mergeNotionNotebookFiles(
+  runningFiles: SpFile[],
+  recentFiles: SpFile[],
+): SpFile[] {
+  const byPath = new Map<string, SpFile>();
+  for (const file of [...runningFiles, ...recentFiles]) {
+    if (!isNotionNotebookFile(file)) continue;
+    if (!byPath.has(file.path)) {
+      byPath.set(file.path, file);
+    }
+  }
+  return [...byPath.values()];
+}
+
+const EMPTY_RUNNING_NOTEBOOKS = new Map<string, SpFile>();
+const EMPTY_RECENT_FILES: SpFile[] = [];
 
 const HomePage: React.FC = () => {
   const [nonce, setNonce] = useState(0);
@@ -123,11 +158,18 @@ const HomePage: React.FC = () => {
   }
 
   const data = response.data;
+  const running = data?.[1] ?? EMPTY_RUNNING_NOTEBOOKS;
+  const recentFiles = data?.[0]?.files ?? EMPTY_RECENT_FILES;
+  const projectsProduct = isProjectsProduct();
+  const runningFiles = useMemo(() => [...running.values()], [running]);
+  const notionFiles = useMemo(
+    () => mergeNotionNotebookFiles(runningFiles, recentFiles),
+    [recentFiles, runningFiles],
+  );
+
   if (!data) {
     return <Spinner centered={true} size="xlarge" />;
   }
-
-  const [recents, running] = data;
 
   return (
     <Suspense>
@@ -152,21 +194,46 @@ const HomePage: React.FC = () => {
               SignalPilot
             </h1>
           </div>
-          <DbtProjectActions onProjectCreated={recentsResponse.refetch} />
-          <ErrorBoundary>
-            <DbtProjectList onRefresh={recentsResponse.refetch} />
-          </ErrorBoundary>
-          <NotebookList
-            header={<Header Icon={PlayCircleIcon}>Running notebooks</Header>}
-            files={[...running.values()]}
-          />
-          <NotebookList
-            header={<Header Icon={ClockIcon}>Recent notebooks</Header>}
-            files={recents.files}
-          />
+          {projectsProduct ? (
+            <>
+              <DbtProjectActions onProjectCreated={recentsResponse.refetch} />
+              <ErrorBoundary>
+                <DbtProjectList onRefresh={recentsResponse.refetch} />
+              </ErrorBoundary>
+              <NotebookList
+                header={<Header Icon={PlayCircleIcon}>Running notebooks</Header>}
+                files={runningFiles}
+              />
+              <NotebookList
+                header={<Header Icon={ClockIcon}>Recent notebooks</Header>}
+                files={recentFiles}
+              />
+            </>
+          ) : (
+            <NotionNotebookHome files={notionFiles} />
+          )}
         </div>
       </RunningNotebooksContext>
     </Suspense>
+  );
+};
+
+const NotionNotebookHome: React.FC<{ files: SpFile[] }> = ({ files }) => {
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        <CreateNewNotebook />
+      </div>
+      <NotebookList
+        header={<Header Icon={BookTextIcon}>Notion analyses</Header>}
+        files={files}
+        empty={
+          <div className="border border-border bg-card px-5 py-10 text-center text-sm text-muted-foreground">
+            No Notion analysis notebooks yet.
+          </div>
+        }
+      />
+    </div>
   );
 };
 
@@ -515,9 +582,10 @@ const FolderArrow = ({ node }: { node: NodeApi<FileInfo> }) => {
 const NotebookList: React.FC<{
   header: React.ReactNode;
   files: SpFile[];
-}> = ({ header, files }) => {
+  empty?: React.ReactNode;
+}> = ({ header, files, empty = null }) => {
   if (files.length === 0) {
-    return null;
+    return empty;
   }
 
   return (
@@ -534,6 +602,9 @@ const NotebookList: React.FC<{
 
 const SpFileComponent = ({ file }: { file: SpFile }) => {
   const { locale } = useLocale();
+  const { runningNotebooks } = use(RunningNotebooksContext);
+  const runningSession = runningNotebooks.get(file.path);
+  const runningSessionId = runningSession?.sessionId ?? null;
 
   // If path is a sessionId, then it has not been saved yet
   // We want to keep the sessionId in this case
@@ -542,7 +613,13 @@ const SpFileComponent = ({ file }: { file: SpFile }) => {
     ? asURL(
         `?file=${encodeURIComponent(file.initializationId ?? file.path)}&session_id=${file.path}`,
       )
-    : asURL(`?file=${encodeURIComponent(file.path)}`);
+    : asURL(
+        `?file=${encodeURIComponent(file.path)}${
+          runningSessionId
+            ? `&session_id=${encodeURIComponent(runningSessionId)}`
+            : ""
+        }`,
+      );
 
   const isMarkdown = file.path.endsWith(".md");
 
@@ -555,7 +632,7 @@ const SpFileComponent = ({ file }: { file: SpFile }) => {
       onMouseEnter={preconnectKernel}
       onFocus={preconnectKernel}
       onClick={(e) => {
-        if (isNewNotebook) return; // session-id notebooks need full nav
+        if (isNewNotebook || runningSessionId) return; // session-id notebooks need full nav
         if (!isPlainLeftClick(e)) return;
         e.preventDefault();
         openNotebook(file.path);
@@ -564,6 +641,11 @@ const SpFileComponent = ({ file }: { file: SpFile }) => {
       <div className="flex flex-col justify-between flex-1">
         <span className="flex items-center gap-2">
           {file.name}
+          {runningSessionId && (
+            <span className="rounded border border-emerald-500/30 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-emerald-400">
+              running
+            </span>
+          )}
           {isMarkdown && (
             <span className="opacity-80">
               <MarkdownIcon />

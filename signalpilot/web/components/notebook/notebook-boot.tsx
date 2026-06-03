@@ -65,7 +65,7 @@ export default function NotebookBoot({
       const sameProject = next.searchParams.get("project") === current.searchParams.get("project");
       const newFile = next.searchParams.get("file");
 
-      if (sameProject && newFile && newFile !== "__new__project") {
+      if (newFile && newFile !== "__new__project" && sameProject) {
         spaNavigate(href);
       } else {
         router.push(href);
@@ -104,7 +104,18 @@ export default function NotebookBoot({
       staticDataRef.current = null;
       setReady(false);
     };
-  }, [config.sessionId, config.gatewayUrl, config.project, config.branch, hostNavigate, handlePhase]);
+  }, [
+    config.sessionId,
+    config.kernelSessionId,
+    config.getToken,
+    config.gatewayUrl,
+    config.notebookProxyUrl,
+    config.file,
+    config.project,
+    config.branch,
+    hostNavigate,
+    handlePhase,
+  ]);
 
   if (error) {
     return (

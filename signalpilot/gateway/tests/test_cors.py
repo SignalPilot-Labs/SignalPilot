@@ -46,3 +46,18 @@ class TestCorsRequestId:
         assert "X-Request-ID" in allow_headers, (
             f"Expected X-Request-ID in Access-Control-Allow-Headers, got: {allow_headers!r}"
         )
+
+    def test_cors_allows_notebook_project_headers(self) -> None:
+        """Project notebook runtime calls send project/branch headers from the browser."""
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.options(
+            "/notebook/session-1/api/project/sync-down",
+            headers={
+                "Origin": _ALLOWED_ORIGIN,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "X-Gateway-Project-Id,X-Gateway-Branch-Id",
+            },
+        )
+        allow_headers = response.headers.get("access-control-allow-headers", "")
+        assert "X-Gateway-Project-Id" in allow_headers
+        assert "X-Gateway-Branch-Id" in allow_headers

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -129,6 +130,64 @@ class ChatMessageInfo(BaseModel):
     metadata_json: dict | None = None
     sequence: int
     created_at: float
+
+
+ChatTraceSource = Literal["user", "notion"]
+ChatTraceStatus = Literal["active", "done", "failed"]
+
+
+class ChatTraceThreadUpsert(BaseModel):
+    thread_id: str = Field(..., min_length=1, max_length=300)
+    session_id: str = Field(..., min_length=1, max_length=300)
+    source: ChatTraceSource
+    title: str = Field(default="", max_length=500)
+    status: ChatTraceStatus = "active"
+    notebook_path: str = Field(default="", max_length=4000)
+    notion_request_page_id: str | None = Field(None, max_length=100)
+    notion_discussion_id: str | None = Field(None, max_length=100)
+    metadata: dict[str, Any] | None = None
+
+
+class ChatTraceThreadInfo(BaseModel):
+    thread_id: str
+    session_id: str
+    source: str
+    title: str = ""
+    status: str = "active"
+    notebook_path: str = ""
+    notion_request_page_id: str | None = None
+    notion_discussion_id: str | None = None
+    created_at: float = Field(default_factory=time.time)
+    updated_at: float = Field(default_factory=time.time)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ChatTraceEventCreate(BaseModel):
+    type: str = Field(..., min_length=1, max_length=80)
+    role: str | None = Field(None, max_length=30)
+    content: str | None = Field(default="", max_length=1_000_000)
+    tool_name: str | None = Field(default="", max_length=300)
+    tool_input: Any = None
+    tool_call_id: str | None = Field(default="", max_length=200)
+    is_error: bool | None = False
+    cost_usd: float | None = None
+    turn: int | None = 0
+    metadata: dict[str, Any] | None = None
+
+
+class ChatTraceEventInfo(BaseModel):
+    idx: int
+    type: str
+    role: str | None = None
+    content: str = ""
+    tool_name: str = ""
+    tool_input: Any = None
+    tool_call_id: str = ""
+    is_error: bool = False
+    cost_usd: float | None = None
+    turn: int = 0
+    created_at: float = Field(default_factory=time.time)
+    metadata: dict[str, Any] | None = None
 
 
 # ─── Agent Runs ──────────────────────────────────────────────────────────────

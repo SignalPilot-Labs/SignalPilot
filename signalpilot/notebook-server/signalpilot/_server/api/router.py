@@ -47,6 +47,9 @@ from signalpilot._server.api.endpoints.mount_config import (
 from signalpilot._server.api.endpoints.notebook_static import (
     router as notebook_static_router,
 )
+from signalpilot._server.api.endpoints.notion_analysis import (
+    router as notion_analysis_router,
+)
 from signalpilot._server.api.endpoints.packages import (
     router as packages_router,
 )
@@ -109,6 +112,11 @@ def build_routes(base_url: str = "") -> list[BaseRoute]:
         project_sync_router, prefix="/api/project", name="project_sync"
     )
     app_router.include_router(git_router, prefix="/api/git", name="git")
+    app_router.include_router(
+        notion_analysis_router,
+        prefix="/api/notion-analysis",
+        name="notion_analysis",
+    )
     app_router.include_router(home_router, prefix="/api/home", name="home")
     app_router.include_router(login_router, prefix="/auth", name="auth")
     app_router.include_router(

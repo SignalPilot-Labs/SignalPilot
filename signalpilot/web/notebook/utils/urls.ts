@@ -3,7 +3,17 @@ import { asURL } from "./url";
 
 export function updateQueryParams(updater: (params: URLSearchParams) => void) {
   const url = new URL(window.location.href);
+  const notionSessionId = url.searchParams.get("session_id") ?? "";
+  const notionFile = url.searchParams.get("file") ?? "";
   updater(url.searchParams);
+  const updatedFile = url.searchParams.get("file") ?? notionFile;
+  if (
+    notionSessionId.startsWith("session-notion-") &&
+    updatedFile.startsWith("signalpilot-notion-analyses/") &&
+    !url.searchParams.has("session_id")
+  ) {
+    url.searchParams.set("session_id", notionSessionId);
+  }
   window.history.replaceState({}, "", url.toString());
 }
 

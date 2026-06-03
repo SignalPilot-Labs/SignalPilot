@@ -332,6 +332,79 @@ class GatewayNotionIntegration(GatewayBase):
         }
 
 
+class NotionInstallation(GatewayBase):
+    """OAuth-installed Notion public connection scoped by org."""
+
+    __tablename__ = "notion_installations"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    workspace_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    workspace_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    bot_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    owner_user_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    access_token_enc: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    refresh_token_enc: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    owner: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="connected", server_default="connected")
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "workspace_id", "bot_id", name="uq_notion_install_org_workspace_bot"),
+        Index("ix_notion_install_org_status", "org_id", "status"),
+        Index("ix_notion_install_workspace", "workspace_id"),
+    )
+
+
+class NotionInstallationConfig(GatewayBase):
+    """Provisioning metadata for a Notion OAuth installation."""
+
+    __tablename__ = "notion_installation_config"
+
+    installation_id: Mapped[str] = mapped_column(String, primary_key=True)
+    parent_page_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    trigger_page_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    requests_data_source_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    requests_database_page_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+
+
+class NotionWebhookDelivery(GatewayBase):
+    """Idempotency and audit record for Notion webhook deliveries."""
+
+    __tablename__ = "notion_webhook_deliveries"
+
+    event_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    installation_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    org_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    attempt_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
+    processed_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_notion_delivery_install", "installation_id"),
+        Index("ix_notion_delivery_org_status", "org_id", "status"),
+    )
+
+
+class NotionOAuthState(GatewayBase):
+    """Short-lived OAuth state for CSRF protection and post-install redirect."""
+
+    __tablename__ = "notion_oauth_states"
+
+    state: Mapped[str] = mapped_column(String(128), primary_key=True)
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    redirect_after: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+    __table_args__ = (Index("ix_notion_oauth_states_expires", "expires_at"),)
+
+
 class GatewayApiKey(GatewayBase):
     __tablename__ = "gateway_api_keys"
 
@@ -526,6 +599,61 @@ class GatewayChatMessage(GatewayBase):
         Index("ix_gw_chat_conversation", "conversation_id", "sequence"),
         Index("ix_gw_chat_org_user_proj", "org_id", "user_id", "project_id"),
         Index("ix_gw_chat_org_created", "org_id", "created_at"),
+    )
+
+
+class GatewayChatTraceThread(GatewayBase):
+    """Durable agent trace thread metadata for notebook-originated chats."""
+
+    __tablename__ = "gateway_chat_trace_threads"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    thread_id: Mapped[str] = mapped_column(String, nullable=False)
+    session_id: Mapped[str] = mapped_column(String, nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    notebook_path: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    notion_request_page_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    notion_discussion_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "user_id", "thread_id", name="uq_gw_trace_thread_scope"),
+        Index("ix_gw_trace_threads_session", "org_id", "user_id", "session_id", "updated_at"),
+        Index("ix_gw_trace_threads_source", "org_id", "user_id", "source", "updated_at"),
+    )
+
+
+class GatewayChatTraceEvent(GatewayBase):
+    """Ordered trace event within a durable notebook chat thread."""
+
+    __tablename__ = "gateway_chat_trace_events"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    thread_id: Mapped[str] = mapped_column(String, nullable=False)
+    idx: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    role: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    tool_name: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    tool_input_json: Mapped[dict | list | str | int | float | bool | None] = mapped_column(JSON)
+    tool_call_id: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    is_error: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    turn: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "user_id", "thread_id", "idx", name="uq_gw_trace_event_scope_idx"),
+        Index("ix_gw_trace_events_thread_idx", "org_id", "user_id", "thread_id", "idx"),
     )
 
 

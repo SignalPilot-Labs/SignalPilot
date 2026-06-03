@@ -202,7 +202,7 @@ export function createClientWithRuntimeManager(runtimeManager: RuntimeManager) {
         req.headers.set(key, value);
       }
 
-      // Inject gateway project/branch IDs for cloud file operations
+      // Inject gateway project/branch IDs for dbt project operations.
       const projectId = getGatewayProjectId();
       if (projectId) {
         req.headers.set("X-Gateway-Project-Id", projectId);

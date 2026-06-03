@@ -293,9 +293,15 @@ export const EditApp: React.FC<AppProps> = ({
         }
         // Only write if the URL doesn't already reflect this file, so we don't
         // create a pushState→replaceState double-drive when navigate() set it.
-        const currentFileParam = new URLSearchParams(window.location.search).get(
-          KnownQueryParams.filePath,
-        );
+        const currentParams = new URLSearchParams(window.location.search);
+        const currentFileParam = currentParams.get(KnownQueryParams.filePath);
+        const currentSessionId = currentParams.get(KnownQueryParams.sessionId) ?? "";
+        const isNotionTrailUrl =
+          currentSessionId.startsWith("session-notion-") ||
+          currentFileParam?.startsWith("signalpilot-notion-analyses/");
+        if (isNotionTrailUrl && currentFileParam && currentFileParam !== canonicalFilePath) {
+          return;
+        }
         if (currentFileParam === canonicalFilePath) return;
         params.set(KnownQueryParams.filePath, canonicalFilePath);
       }

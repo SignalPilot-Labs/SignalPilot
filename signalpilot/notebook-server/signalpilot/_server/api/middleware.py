@@ -142,6 +142,9 @@ class SkewProtectionMiddleware:
         # If /api/chat/, skip (proxied to gateway which has its own auth)
         if "/api/chat/" in request.url.path:
             return await self.app(scope, receive, send)
+        # If /api/notion-analysis/, skip (server-to-server webhook worker path)
+        if "/api/notion-analysis/" in request.url.path:
+            return await self.app(scope, receive, send)
         # If ws, skip
         if request.url.path.startswith("/ws") or request.url.path.endswith(
             "/ws"

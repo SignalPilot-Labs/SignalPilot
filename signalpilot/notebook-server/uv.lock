@@ -7604,6 +7604,7 @@ name = "sp-notebook"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "claude-agent-sdk" },
     { name = "click" },
     { name = "docutils" },
     { name = "itsdangerous" },
@@ -7671,7 +7672,6 @@ sql = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "claude-agent-sdk" },
     { name = "duckdb" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-grpc" },
@@ -7821,6 +7821,7 @@ typecheck = [
 [package.metadata]
 requires-dist = [
     { name = "altair", marker = "extra == 'recommended'", specifier = ">=5.4.0" },
+    { name = "claude-agent-sdk", specifier = ">=0.1.0" },
     { name = "click", specifier = ">=8.0,<9" },
     { name = "docutils", specifier = ">=0.16.0" },
     { name = "duckdb", marker = "extra == 'sql'", specifier = ">=1.0.0" },
@@ -7869,7 +7870,6 @@ provides-extras = ["sql", "sandbox", "recommended", "lsp", "mcp", "otel"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "claude-agent-sdk", specifier = ">=0.1.0" },
     { name = "duckdb", specifier = ">=1.0.0" },
     { name = "opentelemetry-api", specifier = "~=1.28.0" },
     { name = "opentelemetry-exporter-otlp-proto-grpc", specifier = "~=1.28.0" },

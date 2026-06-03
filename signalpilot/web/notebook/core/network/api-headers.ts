@@ -5,7 +5,7 @@ import { getRuntimeManager } from "@/core/runtime/config";
 /**
  * Build standard API headers for all backend calls.
  * Includes server token, gateway project/branch IDs, and runtime
- * session headers (Authorization, Sp-Session-Id) when available.
+ * session headers when available.
  */
 export async function getApiHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {

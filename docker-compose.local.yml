@@ -19,9 +19,14 @@ services:
       SP_LOG_LEVEL: "10"
       SP_GATEWAY_URL: http://gateway:3300
       SP_GATEWAY_INTERNAL_URL: http://gateway:3300
+      SP_WEB_URL: ${SP_WEB_URL:-http://localhost:3200}
+      CLAUDE_CONFIG_DIR: ${CLAUDE_CONFIG_DIR:-/home/notebook/.claude}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
       - signalpilot-workspace:/workspace
       - signalpilot-shared:/shared:ro
+      - ${CLAUDE_HOST_CONFIG_DIR:-${HOME}/.config/signalpilot/claude-code-docker}:/home/notebook/.claude
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:2718/health"]
       interval: 5s

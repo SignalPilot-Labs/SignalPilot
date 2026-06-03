@@ -2,9 +2,11 @@
 
 # ⚡ SignalPilot Data Agent
 
-### 🏆 #1 on [Spider 2.0-DBT](https://spider2-sql.github.io/) — **51.56**, +7.45 over JetBrains DataBao (Apr 2026)
+### 🏆 #1 on [Spider 2.0-DBT](https://spider2-sql.github.io/) — the public state of the art for AI data engineering
 
-**Governed AI agents for your data stack — db, dbt, and more.** Optimized by [AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn).
+**65.6 — +5.3 ahead of the next-best system** (Databao by JetBrains, May 2026)  ·  **96.9% accuracy on ADE-bench**
+
+**Governed AI agents for your data stack — db, dbt, and more.** Optimized and secured by [AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn).
 
 [![GitHub stars](https://img.shields.io/github/stars/SignalPilot-Labs/signalpilot?style=social)](https://github.com/SignalPilot-Labs/signalpilot/stargazers)
 
@@ -19,7 +21,7 @@
 ## For Agentic Data and Platform Teams
 
 - **Governed production access** — Snowflake, BigQuery, Postgres, dbt with enterprise guardrails
-- **Harness optimization with [AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn)** — tune prompts, skills, retrieval to your data
+- **Optimized & hardened by [AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn)** — the autonomous security agent that's surfaced vulnerabilities in Next.js, MetaMask, and other major platforms — now tuning prompts, skills, and security guardrails for your data agents
 - **Benchmark-driven evaluation** — same eval rigor that earned [#1 on Spider 2.0-DBT](https://www.signalpilot.ai/benchmark)
 - **Enterprise support** — SSO, private deployments, SLAs
 
@@ -39,7 +41,23 @@ Today the supported entrypoint is **[Claude Code](https://claude.com/claude-code
 
 ---
 
-**Index** — [What It Is](#what-signalpilot-is) · [How It Works](#how-it-works) · [Try](#try-signalpilot-data-agent) · [Architecture](#architecture) · [MCP Tools](#mcp-tools) · [Community](#community)
+## Benchmarks
+
+Most data agents look impressive in a demo and fall apart on a real warehouse. We measure ours against the field — and lead it.
+
+### 🥇 #1 on Spider 2.0-DBT
+
+The hardest public benchmark for AI data engineering — 68 tasks that demand real project navigation, complex SQL environments, and long-context reasoning. SignalPilot tops the leaderboard at **65.6 — +5.3 ahead of the next-best system** (Databao by JetBrains, May 2026), and well clear of the GPT-5-based agents below it. [See the leaderboard →](https://www.signalpilot.ai/benchmark)
+
+### 🎯 96.9% on ADE-bench
+
+Across **64 real analytics-engineering tasks** — building dbt models against live warehouses — SignalPilot's agents delivered **correct, production-ready output 62 of 64 times**. Not plausible-looking SQL: models you can ship.
+
+> That gap is the difference between an agent you babysit and one you trust in production.
+
+---
+
+**Index** — [What It Is](#what-signalpilot-is) · [Benchmarks](#benchmarks) · [How It Works](#how-it-works) · [Try](#try-signalpilot-data-agent) · [Architecture](#architecture) · [MCP Tools](#mcp-tools) · [Community](#community)
 
 ---
 
@@ -71,14 +89,14 @@ Five stages, every task: plan → scan → govern → build → report.
 - Per-session budget cap kills queries that would scan over your $ threshold
 - Every query audited: timestamp, agent ID, policy reason, full SQL
 
-### 04 — DAG builds itself
+### 04 — Plan, build, and verify
 
-![DAG builds itself](docs/docs/images/dag.gif)
+![Plan, build, and verify](docs/docs/images/dag.gif)
 
-- `dbt parse` runs first to catch structural errors
-- Models materialized in topological order
-- Verifier agent reads dbt errors and proposes fixes (renames, missing CTEs, fan-out, date-spine guards)
-- Tests run after build and feed back into the loop
+- Writes a structured build spec first — sources, joins, grain, filters, expected rows per model — before a line of SQL
+- `dbt parse` catches structural errors; models build in dependency order
+- Read-only verification checks every built model — structure (row count, fan-out, cardinality, column completeness) **and** values — and prescribes exact fixes
+- Re-verifies after each fix and stops only when every check passes
 
 ### 05 — Full audit receipt
 
@@ -255,7 +273,7 @@ SignalPilot/
 │   ├── agents/               # Verifier agent (7-check post-build protocol)
 │   └── skills/               # dbt-workflow, sql-workflow, db-specific SQL, etc.
 ├── sp-sandbox/               # gVisor sandboxed Python execution
-├── benchmark/                # Spider 2.0-DBT benchmark suite (SOTA: 51.56%)
+├── benchmark/                # Spider 2.0-DBT (SOTA 65.6) + ADE-bench (96.9%) suites
 └── docker-compose.yml        # Full stack: web, gateway, postgres, sandbox
 ```
 
@@ -285,6 +303,15 @@ If SignalPilot is useful, please ⭐ — it helps a ton.
    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=SignalPilot-Labs/signalpilot&type=date&legend=top-left" />
  </picture>
 </a>
+---
+
+## Contributing
+
+Contributions are welcome — bug fixes, new connectors, docs, and features. Start with the **[Contributing Guide](CONTRIBUTING.md)** for setup, coding standards, and the PR process. For anything non-trivial, [open an issue](https://github.com/SignalPilot-Labs/signalpilot/issues) first so we can align on the approach.
+
+- 🛠️ [Contributing Guide](CONTRIBUTING.md) — dev setup, standards, PR workflow
+- 🐛 [Report a bug](https://github.com/SignalPilot-Labs/signalpilot/issues) · 💬 [Discussions](https://github.com/SignalPilot-Labs/signalpilot/discussions) · 🔒 [Security policy](SECURITY.md)
+
 ---
 
 ## License

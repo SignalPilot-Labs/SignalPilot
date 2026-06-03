@@ -7,12 +7,30 @@ import json
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from starlette.requests import Request
 
 from gateway.api import notion as notion_api
 from gateway.db.models import NotionInstallation, NotionInstallationConfig
 from gateway.notion import client as notion_client
 from gateway.notion import webhooks as notion_webhooks
 from gateway.store import notion as notion_store
+
+
+def _json_request(payload: dict) -> Request:
+    body = json.dumps(payload).encode()
+
+    async def receive() -> dict:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/notion/webhooks/events",
+            "headers": [],
+        },
+        receive,
+    )
 
 
 def test_authorize_url_includes_state_and_required_oauth_fields() -> None:
@@ -87,6 +105,20 @@ async def test_webhook_background_task_logs_unhandled_exception(
 
     assert "Unhandled Notion webhook processing task failure" in caplog.text
     assert "evt-1" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_webhook_verification_token_is_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level("WARNING", logger="gateway.api.notion"):
+        response = await notion_api.receive_notion_webhook(
+            _json_request({"verification_token": "verify-secret"}),
+            db=object(),
+        )
+
+    assert response.status == "verification_received"
+    assert "NOTION WEBHOOK VERIFICATION TOKEN RECEIVED: verify-secret" in caplog.text
 
 
 def test_comment_page_mention_matches_trigger_page_id() -> None:

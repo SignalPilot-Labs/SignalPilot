@@ -449,7 +449,8 @@ async def receive_notion_webhook(
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
 
-    if payload.get("verification_token"):
+    if verification_token := payload.get("verification_token"):
+        logger.warning("NOTION WEBHOOK VERIFICATION TOKEN RECEIVED: %s", verification_token)
         return NotionWebhookResponse(status="verification_received")
 
     verification_token = _webhook_verification_token()

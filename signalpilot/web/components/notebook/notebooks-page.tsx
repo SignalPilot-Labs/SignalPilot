@@ -26,6 +26,10 @@ import {
   NotebookProvider,
   type NotebookConfig,
 } from "~/components/notebook/notebook-context";
+import { NotebooksProjectsPaywall } from "~/components/billing/notebooks-projects-paywall";
+import { useSubscription } from "~/lib/subscription-context";
+
+const PAID_TIERS = ["pro", "team", "enterprise", "unlimited"];
 
 const NotebookBoot = dynamic(
   () => import("~/components/notebook/notebook-boot"),
@@ -103,6 +107,10 @@ function IDEHeader({
 export default function NotebooksPage() {
   const { toast } = useToast();
   const searchParams = useSearchParams();
+  const { planTier, isLoaded: subLoaded } = useSubscription();
+
+  const isPaid = PAID_TIERS.includes(planTier);
+  const gated = IS_CLOUD_MODE && subLoaded && !isPaid;
 
   const urlSessionId = searchParams.get("session_id") || "";
   const rawFile = searchParams.get("file") || "";
@@ -355,6 +363,12 @@ export default function NotebooksPage() {
   }
 
   useEffect(() => {
+    if (IS_CLOUD_MODE && !subLoaded) return;
+    if (gated) {
+      setState("no-session");
+      return;
+    }
+
     let cancelled = false;
 
     async function init() {
@@ -404,7 +418,7 @@ export default function NotebooksPage() {
       cancelled = true;
       if (pingRef.current) clearInterval(pingRef.current);
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [subLoaded, gated]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (notebookConfig && (state === "ready" || state === "booting")) {
@@ -596,6 +610,11 @@ export default function NotebooksPage() {
         </div>
       </div>
     );
+  }
+
+  // ─── Render: Paywall (free-tier cloud users) ──────────────────
+  if (gated) {
+    return <NotebooksProjectsPaywall />;
   }
 
   // ─── Render: No session (landing) ─────────────────────────────

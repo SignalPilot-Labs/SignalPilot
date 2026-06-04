@@ -136,6 +136,50 @@ def test_public_signalpilot_url_preserves_durable_notebooks_trail_url() -> None:
     assert "/notebook/runtime-session-1/notebooks" not in rewritten
 
 
+def test_public_signalpilot_url_rewrites_internal_notebooks_trail_to_app_origin() -> None:
+    runtime = NotebookRuntime(
+        session_id="runtime-session-1",
+        internal_base_url="http://172.31.11.176:2718/notebook/runtime-session-1",
+        public_base_url="https://app.signalpilot.ai/notebook/runtime-session-1",
+    )
+    wrong_url = (
+        "http://172.31.11.176:2718/notebooks?"
+        "file=signalpilot-notion-analyses/do-an-analysis-of-my-db-9a50e7.py"
+        "&session_id=session-notion-97728a45b49a50e7"
+    )
+
+    rewritten = notion_analysis._public_signalpilot_url(wrong_url, runtime)
+
+    assert (
+        rewritten
+        == "https://app.signalpilot.ai/notebooks?"
+        "file=signalpilot-notion-analyses/do-an-analysis-of-my-db-9a50e7.py"
+        "&session_id=session-notion-97728a45b49a50e7"
+    )
+    assert "172.31.11.176" not in rewritten
+    assert "/notebook/runtime-session-1/notebooks" not in rewritten
+
+
+def test_public_signalpilot_url_rewrites_relative_notebooks_trail_to_app_origin() -> None:
+    runtime = NotebookRuntime(
+        session_id="runtime-session-1",
+        internal_base_url="http://10.0.0.5:2718/notebook/runtime-session-1",
+        public_base_url="https://app.signalpilot.ai/notebook/runtime-session-1",
+    )
+
+    for url in (
+        "/notebooks?file=signalpilot-notion-analyses/analysis.py&session_id=session-notion-abc123",
+        "notebooks?file=signalpilot-notion-analyses/analysis.py&session_id=session-notion-abc123",
+    ):
+        rewritten = notion_analysis._public_signalpilot_url(url, runtime)
+
+        assert (
+            rewritten
+            == "https://app.signalpilot.ai/notebooks?"
+            "file=signalpilot-notion-analyses/analysis.py&session_id=session-notion-abc123"
+        )
+
+
 def test_public_signalpilot_url_rewrites_runtime_urls_to_public_runtime_proxy() -> None:
     runtime = NotebookRuntime(
         session_id="runtime-session-1",

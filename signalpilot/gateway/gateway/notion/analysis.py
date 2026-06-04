@@ -242,6 +242,27 @@ def _join_base_path(base: str, url: str) -> str:
     return f"{base.rstrip('/')}/{url.lstrip('/')}"
 
 
+def _public_web_base_url(runtime: NotebookRuntime) -> str:
+    parsed = urlparse(runtime.public_base_url)
+    if parsed.scheme and parsed.netloc:
+        return urlunparse((parsed.scheme, parsed.netloc, "", "", "", "")).rstrip("/")
+    return runtime.public_base_url.rstrip("/")
+
+
+def _is_notebooks_path(path: str) -> bool:
+    normalized = f"/{path.lstrip('/')}".rstrip("/") or "/"
+    return normalized == "/notebooks" or normalized.startswith("/notebooks/")
+
+
+def _path_query_fragment(parsed: Any) -> str:
+    result = parsed.path or "/"
+    if parsed.query:
+        result = f"{result}?{parsed.query}"
+    if parsed.fragment:
+        result = f"{result}#{parsed.fragment}"
+    return result
+
+
 def _relative_url_for_base(url: str, base: str, *, require_base_path: bool = False) -> str | None:
     parsed = urlparse(url)
     base_parsed = urlparse(base)
@@ -267,11 +288,15 @@ def _public_signalpilot_url(url: str, runtime: NotebookRuntime | None = None) ->
     try:
         parsed = urlparse(url)
         if parsed.scheme:
+            if _same_origin(url, runtime.internal_base_url) and _is_notebooks_path(parsed.path):
+                return _join_base_path(_public_web_base_url(runtime), _path_query_fragment(parsed))
             for candidate_base in (runtime.internal_base_url, runtime.public_base_url):
                 relative = _relative_url_for_base(url, candidate_base, require_base_path=True)
                 if relative is not None:
                     return _join_base_path(runtime.public_base_url, relative)
             return url
+        if _is_notebooks_path(parsed.path):
+            return _join_base_path(_public_web_base_url(runtime), _path_query_fragment(parsed))
         return _join_base_path(base, url)
     except Exception:
         return url

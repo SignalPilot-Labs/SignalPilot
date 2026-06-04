@@ -4,12 +4,20 @@ import { Strings } from "../../utils/strings";
 import { getCurrentStore } from "../state/store-binding";
 import { getRuntimeManager } from "../runtime/config";
 import type { RuntimeManager } from "../runtime/runtime";
+import { isNotionTrailSearchParams } from "../notion/trail";
 import {
   gatewayProjectIdAtom,
   gatewayBranchIdAtom,
   GATEWAY_PROJECT_STORAGE_KEY,
   GATEWAY_BRANCH_STORAGE_KEY,
 } from "./gateway-state";
+
+function isCurrentPageNotionTrail(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return isNotionTrailSearchParams(new URL(window.location.href).searchParams);
+}
 
 // ── Gateway project ID ──────────────────────────────────────────
 // Accessors delegate to per-client Jotai atoms via getCurrentStore().
@@ -18,10 +26,16 @@ import {
 // call setGatewayProjectId (or should pre-write the atom before mounting).
 
 export function getGatewayProjectId(): string | null {
+  if (isCurrentPageNotionTrail()) {
+    return null;
+  }
   return getCurrentStore().get(gatewayProjectIdAtom);
 }
 
 export function setGatewayProjectId(id: string | null): void {
+  if (id && isCurrentPageNotionTrail()) {
+    return;
+  }
   getCurrentStore().set(gatewayProjectIdAtom, id);
   if (typeof localStorage !== "undefined") {
     if (id) {
@@ -35,10 +49,16 @@ export function setGatewayProjectId(id: string | null): void {
 // ── Gateway branch ID ──────────────────────────────────────────
 
 export function getGatewayBranchId(): string | null {
+  if (isCurrentPageNotionTrail()) {
+    return null;
+  }
   return getCurrentStore().get(gatewayBranchIdAtom);
 }
 
 export function setGatewayBranchId(id: string | null): void {
+  if (id && isCurrentPageNotionTrail()) {
+    return;
+  }
   getCurrentStore().set(gatewayBranchIdAtom, id);
   if (typeof localStorage !== "undefined") {
     if (id) {

@@ -1,4 +1,8 @@
 import { Logger } from "@/utils/Logger";
+import {
+  isNotionTrailSearchParams,
+  sanitizeNotionTrailSearchParams,
+} from "../notion/trail";
 
 /**
  * POST to /api/kernel/takeover to disconnect any stale WebSocket session
@@ -8,7 +12,10 @@ export async function takeoverKernel(
   runtimeUrl: string,
   headers: Record<string, string>,
 ): Promise<void> {
-  const searchParams = new URLSearchParams(window.location.search);
+  const currentParams = new URLSearchParams(window.location.search);
+  const searchParams = isNotionTrailSearchParams(currentParams)
+    ? sanitizeNotionTrailSearchParams(currentParams)
+    : currentParams;
   const url = `${runtimeUrl}/api/kernel/takeover?${searchParams.toString()}`;
 
   Logger.debug("Taking over kernel session", { url });

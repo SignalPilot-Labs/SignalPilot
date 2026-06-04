@@ -28,6 +28,21 @@ import {
 } from "~/components/notebook/notebook-context";
 import { NotebooksProjectsPaywall } from "~/components/billing/notebooks-projects-paywall";
 import { useSubscription } from "~/lib/subscription-context";
+import { dbtProjectDirAtom } from "@/components/editor/dbt/use-dbt";
+import { gatewayBranchIdAtom as persistedGatewayBranchIdAtom } from "@/core/branch/branch-state";
+import { KnownQueryParams } from "@/core/constants";
+import {
+  GATEWAY_BRANCH_STORAGE_KEY,
+  GATEWAY_PROJECT_STORAGE_KEY,
+  gatewayBranchIdAtom,
+  gatewayProjectIdAtom,
+} from "@/core/network/gateway-state";
+import {
+  setGatewayBranchId,
+  setGatewayProjectId,
+} from "@/core/network/api";
+import { isNotionTrailParams } from "@/core/notion/trail";
+import { store } from "@/core/state/jotai";
 
 const PAID_TIERS = ["pro", "team", "enterprise", "unlimited"];
 
@@ -136,10 +151,31 @@ export default function NotebooksPage() {
   const handleBootReady = useCallback(() => { setState("ready"); }, []);
 
   function isNotionTrail(file = urlFile, sessionId = urlSessionId) {
-    return (
-      sessionId.startsWith("session-notion-") ||
-      file.startsWith("signalpilot-notion-analyses/")
-    );
+    return isNotionTrailParams({ file, sessionId });
+  }
+
+  function clearNotionTrailProjectState() {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    setGatewayProjectId(null);
+    setGatewayBranchId(null);
+    store.set(gatewayProjectIdAtom, null);
+    store.set(gatewayBranchIdAtom, null);
+    store.set(persistedGatewayBranchIdAtom, null);
+    store.set(dbtProjectDirAtom, null);
+    window.localStorage.removeItem(GATEWAY_PROJECT_STORAGE_KEY);
+    window.localStorage.removeItem(GATEWAY_BRANCH_STORAGE_KEY);
+    window.localStorage.removeItem("sp:dbt-project-dir");
+
+    const nextUrl = new URL(window.location.href);
+    const before = nextUrl.toString();
+    nextUrl.searchParams.delete(KnownQueryParams.project);
+    nextUrl.searchParams.delete(KnownQueryParams.branch);
+    if (nextUrl.toString() !== before) {
+      window.history.replaceState(null, "", nextUrl.toString());
+    }
   }
 
   function primeNotionTrailChrome(kernelSessionId?: string) {
@@ -185,7 +221,7 @@ export default function NotebooksPage() {
       ];
       window.localStorage.setItem("sp:open-tabs", JSON.stringify(nextTabs));
       window.localStorage.setItem("sp:active-tab-id", JSON.stringify(tabId));
-      window.localStorage.removeItem("sp:dbt-project-dir");
+      clearNotionTrailProjectState();
     } catch (err) {
       console.warn("Failed to prime Notion trail editor state:", err);
     }
@@ -321,6 +357,9 @@ export default function NotebooksPage() {
 
   async function buildConfig(sessionId: string, apiKey?: string): Promise<NotebookConfig> {
     const kernelSessionId = await resolveNotionThreadId();
+    if (isNotionTrail(urlFile, kernelSessionId || urlSessionId)) {
+      clearNotionTrailProjectState();
+    }
     rememberResolvedNotionThread(kernelSessionId);
     preserveResolvedNotionSessionInUrl(kernelSessionId);
     primeNotionTrailChrome(kernelSessionId);
@@ -509,8 +548,9 @@ export default function NotebooksPage() {
     const kernelSessionId = urlSessionId.startsWith("session-notion-")
       ? urlSessionId
       : config.kernelSessionId;
+    const { project: _project, branch: _branch, ...isolatedConfig } = config;
     return {
-      ...config,
+      ...isolatedConfig,
       file: urlFile || config.file,
       kernelSessionId,
     };

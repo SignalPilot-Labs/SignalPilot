@@ -2,6 +2,10 @@ import { Deferred } from "@/utils/Deferred";
 import { Logger } from "@/utils/Logger";
 import { KnownQueryParams } from "../constants";
 import { getSessionId, type SessionId } from "../kernel/session";
+import {
+  isNotionTrailSearchParams,
+  sanitizeNotionTrailSearchParams,
+} from "../notion/trail";
 import { isStaticNotebook } from "../static/static-state";
 import type { RuntimeConfig } from "./types";
 
@@ -95,6 +99,12 @@ export class RuntimeManager {
         continue;
       }
       baseUrl.searchParams.set(key, value);
+    }
+
+    if (isNotionTrailSearchParams(baseUrl.searchParams)) {
+      baseUrl.search = sanitizeNotionTrailSearchParams(
+        baseUrl.searchParams,
+      ).toString();
     }
 
     const cleanPath = baseUrl.pathname.replace(/\/$/, "");

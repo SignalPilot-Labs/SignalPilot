@@ -17,8 +17,15 @@ import { isSwitchingNotebookAtom } from "./notebook-switcher";
 import { dbtProjectDirAtom, dbtProjectInfoAtom } from "@/components/editor/dbt/use-dbt";
 import { fileTreeRefreshNonceAtom } from "@/components/editor/file-tree/state";
 import type { DbtProjectInfo } from "@/components/editor/dbt/types";
-import { gatewayBranchIdAtom } from "@/core/branch/branch-state";
+import { gatewayBranchIdAtom as branchSelectionAtom } from "@/core/branch/branch-state";
 import { getGatewayBranchId, getGatewayProjectId, setGatewayBranchId, setGatewayProjectId } from "./network/api";
+import {
+  GATEWAY_BRANCH_STORAGE_KEY,
+  GATEWAY_PROJECT_STORAGE_KEY,
+  gatewayBranchIdAtom as coreGatewayBranchIdAtom,
+  gatewayProjectIdAtom,
+} from "./network/gateway-state";
+import { isNotionTrailSearchParams } from "./notion/trail";
 import { store } from "./state/jotai";
 import { rawFallbackAtom } from "./meta/state";
 import { filenameAtom } from "./saving/file-state";
@@ -50,6 +57,28 @@ import { lastSavedNotebookAtom } from "./saving/state";
 import { useSpKernelConnection } from "./websocket/useSpKernelConnection";
 
 const TooltipProvider = Tooltip.Provider;
+
+function currentSearchParams(): URLSearchParams {
+  return new URL(window.location.href).searchParams;
+}
+
+function isCurrentPageNotionTrail(): boolean {
+  return isNotionTrailSearchParams(currentSearchParams());
+}
+
+function clearNotionTrailProjectState() {
+  setGatewayProjectId(null);
+  setGatewayBranchId(null);
+  store.set(gatewayProjectIdAtom, null);
+  store.set(coreGatewayBranchIdAtom, null);
+  store.set(branchSelectionAtom, null);
+  store.set(dbtProjectDirAtom, null);
+  if (typeof window !== "undefined") {
+    window.localStorage.removeItem(GATEWAY_PROJECT_STORAGE_KEY);
+    window.localStorage.removeItem(GATEWAY_BRANCH_STORAGE_KEY);
+    window.localStorage.removeItem("sp:dbt-project-dir");
+  }
+}
 
 interface AppProps {
   /**
@@ -150,18 +179,23 @@ export const EditApp: React.FC<AppProps> = ({
   // On mount: read branch from URL, sync cloud project files, set up tabs
   useEffect(() => {
     const init = async () => {
-      const params = new URL(window.location.href).searchParams;
+      const params = currentSearchParams();
+      const isNotionTrail = isNotionTrailSearchParams(params);
 
       // Hydrate project/branch from URL (shareable links)
       const urlProject = params.get(KnownQueryParams.project);
       const urlBranch = params.get(KnownQueryParams.branch);
-      if (urlProject) {setGatewayProjectId(urlProject);}
-      if (urlBranch) {
+      if (isNotionTrail) {
+        clearNotionTrailProjectState();
+      } else if (urlProject) {
+        setGatewayProjectId(urlProject);
+      }
+      if (!isNotionTrail && urlBranch) {
         setGatewayBranchId(urlBranch);
-        store.set(gatewayBranchIdAtom, urlBranch);
+        store.set(branchSelectionAtom, urlBranch);
       }
 
-      const projectId = urlProject || getGatewayProjectId();
+      const projectId = isNotionTrail ? null : urlProject || getGatewayProjectId();
 
       if (projectId && !store.get(dbtProjectDirAtom)) {
         // Cloud project: sync-down if not already synced by NotebookBoot.
@@ -191,14 +225,14 @@ export const EditApp: React.FC<AppProps> = ({
         // No cloud project — nothing to sync.
       }
 
-      const fileInUrl = new URL(window.location.href).searchParams.get("file");
+      const fileInUrl = currentSearchParams().get("file");
       const isRawFallback = store.get(rawFallbackAtom);
       const storedFilename = store.get(filenameAtom);
       let filePath = isRawFallback && storedFilename ? storedFilename : fileInUrl;
 
       // Resolve relative file paths to absolute using the synced project dir.
       // URL has "models/schema.yml" but the pod needs the full path.
-      const projectDir = store.get(dbtProjectDirAtom);
+      const projectDir = isNotionTrail ? null : store.get(dbtProjectDirAtom);
       if (filePath && projectDir && !filePath.startsWith("/") && !filePath.startsWith("__new__")) {
         filePath = `${projectDir.replace(/\/$/, "")}/${filePath}`;
       }
@@ -229,13 +263,14 @@ export const EditApp: React.FC<AppProps> = ({
   // mount-time init path, so WS reconnect and autosave guards all fire.
   useEffect(() => {
     const onUrlChange = () => {
-      const params = new URL(window.location.href).searchParams;
+      const params = currentSearchParams();
+      const isNotionTrail = isNotionTrailSearchParams(params);
       const file = params.get(KnownQueryParams.filePath);
       console.log("[onUrlChange] file param:", file, "activeTabPath:", activeTabPathRef.current?.slice(-30));
       if (!file || file.startsWith("__new__")) return;
       // Resolve relative paths (e.g. "notebooks/intro.py" → "/workspace/.../notebooks/intro.py")
       let filePath = file;
-      const projectDir = store.get(dbtProjectDirAtom);
+      const projectDir = isNotionTrail ? null : store.get(dbtProjectDirAtom);
       if (projectDir && !filePath.startsWith("/")) {
         filePath = `${projectDir.replace(/\/$/, "")}/${filePath}`;
       }
@@ -260,13 +295,20 @@ export const EditApp: React.FC<AppProps> = ({
   // This prevents a pushState→replaceState double-drive.
   useEffect(() => {
     updateQueryParams((params) => {
+      const currentParams = new URLSearchParams(window.location.search);
+      const isNotionTrailUrl = isNotionTrailSearchParams(currentParams);
+      if (isNotionTrailUrl) {
+        params.delete(KnownQueryParams.project);
+        params.delete(KnownQueryParams.branch);
+      }
+
       const projectId = getGatewayProjectId();
       const branchId = getGatewayBranchId();
 
-      if (projectId) {
+      if (!isNotionTrailUrl && projectId) {
         params.set(KnownQueryParams.project, projectId);
       }
-      if (branchId && projectId) {
+      if (!isNotionTrailUrl && branchId && projectId) {
         params.set(KnownQueryParams.branch, branchId);
       }
 
@@ -293,12 +335,7 @@ export const EditApp: React.FC<AppProps> = ({
         }
         // Only write if the URL doesn't already reflect this file, so we don't
         // create a pushState→replaceState double-drive when navigate() set it.
-        const currentParams = new URLSearchParams(window.location.search);
         const currentFileParam = currentParams.get(KnownQueryParams.filePath);
-        const currentSessionId = currentParams.get(KnownQueryParams.sessionId) ?? "";
-        const isNotionTrailUrl =
-          currentSessionId.startsWith("session-notion-") ||
-          currentFileParam?.startsWith("signalpilot-notion-analyses/");
         if (isNotionTrailUrl && currentFileParam && currentFileParam !== canonicalFilePath) {
           return;
         }
@@ -340,8 +377,12 @@ export const EditApp: React.FC<AppProps> = ({
   // rebootMountConfig() writes gatewayBranchIdAtom; this effect is the
   // sole reconnect trigger — rebootMountConfig does not touch the WS directly.
   const lastBranchId = useRef<string | null>(null);
-  const branchId = useAtomValue(gatewayBranchIdAtom);
+  const branchId = useAtomValue(branchSelectionAtom);
   useEffect(() => {
+    if (isCurrentPageNotionTrail()) {
+      lastBranchId.current = null;
+      return;
+    }
     if (lastBranchId.current === null) {
       lastBranchId.current = branchId;
       return;

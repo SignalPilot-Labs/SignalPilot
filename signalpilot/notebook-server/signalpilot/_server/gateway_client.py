@@ -12,10 +12,14 @@ def gateway_url() -> str:
 
 
 def gateway_headers() -> dict[str, str]:
-    jwt = os.environ.get("SP_SESSION_JWT", "")
+    from signalpilot._server.auth.session_token import load_session_jwt
+
+    jwt = load_session_jwt()
     if jwt:
         return {"Authorization": f"Bearer {jwt}"}
-    api_key = os.environ.get("SP_API_KEY", "")
+    api_key = os.environ.get("SP_API_KEY", "").strip()
     if api_key:
-        return {"X-API-Key": api_key}
+        if api_key.startswith("sp_"):
+            return {"X-API-Key": api_key}
+        return {"Authorization": f"Bearer {api_key}"}
     return {}

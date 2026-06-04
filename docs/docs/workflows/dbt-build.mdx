@@ -4,91 +4,317 @@ sidebar_position: 1
 
 import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
 
-# dbt Model Build Walk-through
+# The 8-Step dbt Build Workflow
 
-An end-to-end example of building a dbt model with SignalPilot.
+When you ask Claude Code to build, edit, or fix a dbt model, the `dbt-workflow` skill (`/signalpilot-dbt:dbt-workflow`) drives an 8-step procedure. This page walks each step: its purpose, the MCP tools and CLI helpers it calls, the skills it loads, and the artifact it produces.
 
-## The scenario
+> **Step count note:** the plugin manifest description calls this a "5-step workflow." The `SKILL.md` file is the source of truth — it defines **8 steps**. The manifest text is stale.
 
-You want to build `shopify__daily_shop` — a mart model that aggregates orders, abandoned checkouts, and fulfillment counts by day.
+## Helper tools
 
-## Step 1 — Describe the task
+The skill ships four local helpers (declared in frontmatter as `allowed-tools`: `Bash(dbt *)`, `Bash(python3 *)`, `Bash(map-columns *)`, `Bash(verify-values *)`), each bound to a specific step:
 
-In Claude Code:
+| Helper | Step | Purpose |
+|--------|------|---------|
+| `scan_project.py` | 1 | Project scanner. Returns models to build, stubs to rewrite, dependencies, required columns, sources, macros (with full definitions), and `current_date` hazards. |
+| `validate_project.py` | 3 | Runs `dbt parse`; returns structured errors, warnings, and orphan patches. Optional 2nd arg = timeout seconds (default 60). |
+| `map-columns` | 7 | Queries each upstream table's columns from DuckDB, maps against the YML contract. Labels every column `MAPPED`, `UNMAPPED-INCLUDE`, or `UNMAPPED-EXCLUDE` with a recommended output alias. Run **before** writing each model's SQL. |
+| `verify-values` | 8 | Queries model output, finds the upstream fact table, picks the largest slice, compares the model's metrics against `COUNT(*)` and `COUNT(DISTINCT <key>)` from the raw source. Reports `MATCH`, `MISMATCH`, or `WARNING`. |
 
-> "Build `shopify__daily_shop` — orders, abandoned checkouts, fulfillment counts by day."
+## Pre-workflow: knowledge base check
 
-The `dbt-workflow` skill auto-loads. Claude reads the YML description to infer output shape before touching the database:
+Before Step 1, the agent calls the MCP tool `get_knowledge` with the task description. If the knowledge base returns entries, they are read for project conventions, data patterns, and prior research. KB entries **inform but do not skip** any step — the full 8-step workflow always runs. The KB makes the agent faster (it knows what to look for) but every fact is still verified via `query_database` and the Step 8 verifier subagents.
 
-- **ENTITY**: one row per day
-- **TEMPORAL SCOPE**: daily grain
-- No rank constraint, no period-over-period
+## Gating: which steps are mandatory
 
-## Step 2 — Scan the project
+- **Always run** Steps 1, 2, 3, and 8.
+- Steps **4–7 run only** when the Step 1 scan finds stubs to rewrite or models to build.
+- Scan shows **0 stubs AND 0 missing models** AND the task does not ask to edit/fix/remove/modify existing files → skip Steps 4–7; go from Step 3 straight to Step 8.
+- Task **edits existing models** (edit, fix, remove a variable, refactor) → do **not** skip Steps 4–7 even if the scan shows nothing to build. Edit files in Step 7, then `dbt run --select <edited_model>` (edited SQL only takes effect after materialization).
+- Task says "create model X" but `X.sql` is in the scan's **EXISTING COMPLETE** list → it is already created; verify in Step 8, do not recreate.
+- **Task tracking:** after Step 1, create a task for each remaining step with `TaskCreate`. Mark `in_progress` on start, `completed` on finish. If skipping Steps 4–7, mark them `completed` with no work.
 
-Claude calls `list_workspace_projects` to find the dbt project, then `list_tables` to enumerate the available sources:
+---
 
-<MiniCopyBlock
-  label="list tables"
-  plain
-  code={`Tool: list_tables\n→ shopify.orders (48,291 rows)\n→ shopify.order_items (182,044 rows)\n→ shopify.checkouts (61,203 rows)\n→ shopify.fulfillments (45,882 rows)`}
-/>
+## Step 1 — Map the project
 
-Then `describe_table` on each relevant source to understand column types and nullability. Claude checks for date hazards — any model using `current_date` or `now()` will be flagged by the `dbt-date-spines` skill.
+**Purpose:** inventory everything the project requires before any work — what to build, dependencies, required columns, available macros, and time-based hazards.
 
-## Step 3 — Validate before executing
-
-Before running any query against the warehouse, Claude calls `validate_sql`:
-
-<MiniCopyBlock
-  label="validate sql"
-  plain
-  code={`Tool: validate_sql\nSQL: SELECT order_date, COUNT(*) as order_count FROM shopify.orders GROUP BY 1\n→ valid: true\n→ estimated rows: 365`}
-/>
-
-For expensive Snowflake or BigQuery queries, `estimate_query_cost` runs first:
+**Tools / commands:**
 
 <MiniCopyBlock
-  label="estimate query cost"
-  plain
-  code={`Tool: estimate_query_cost\n→ estimated_cost: $0.003\n→ bytes_processed: 12.4 MB`}
+  label="scan project"
+  code={`python3 "\${CLAUDE_SKILL_DIR}/scan_project.py" "<project_directory>"`}
 />
 
-## Step 4 — Generate the SQL skeleton
+- Conditional: if the task describes a runtime bug (type mismatch, wrong values, broken output), run `dbt run --select <pre_existing_model> 2>&1 | tail -50` on the affected model — `dbt parse` passing does **not** mean the model produces correct output.
+- `TaskCreate` — create tasks for Steps 2–8.
+
+**Skills loaded:** none.
+
+**Output:** read the **entire** scan output. Record `STUBS TO REWRITE`, `MODELS TO BUILD`, `DEPENDENCIES`, `REQUIRED COLUMNS`, and `AVAILABLE MACROS` (with definitions). Create tasks for Steps 2–8, named exactly:
+
+- `Step 2: Load supporting skills`
+- `Step 3: Validate project`
+- `Step 4: Discover macros`
+- `Step 5: Research (data exploration)`
+- `Step 6: Write technical spec`
+- `Step 7: Write and build models`
+- `Step 8: Verify and fix`
+
+---
+
+## Step 2 — Load supporting skills
+
+**Purpose:** load all rule-bearing skills **before** writing (Step 7) **and** verifying (Step 8) models. These skills affect both — that is why this step must not be skipped.
+
+**Tools:** none (skills load via the Skill mechanism / `/signalpilot-dbt:<skill>` references).
+
+**Always loaded (all three, unconditionally):**
+
+1. `/signalpilot-dbt:dbt-write` — SQL writing rules.
+2. The database SQL skill — e.g. `/signalpilot-dbt:duckdb-sql` (match the project DB).
+3. The domain skill matching the task. Classify the domain from the task instruction plus the source table names in the Step 1 scan:
+
+| Domain signals | Skill |
+|----------------|-------|
+| Revenue / invoices / ledgers / fiscal | `/signalpilot-dbt:domain-financial` |
+| Campaigns / clicks / email / SMS / messaging / attribution | `/signalpilot-dbt:domain-marketing` |
+| Events / sessions / features / guides / analytics | `/signalpilot-dbt:domain-product` |
+| Employees / hiring / issues / SCD / tickets | `/signalpilot-dbt:domain-hr` |
+| Orders / products / discounts / returns / charges / spend | `/signalpilot-dbt:domain-ecommerce` |
+| Movies / sports / credits / rankings / content | `/signalpilot-dbt:domain-media` |
+| Clinical / patients / encounters / diagnoses / costs | `/signalpilot-dbt:domain-healthcare` |
+
+**Conditionally loaded (only when the trigger matches):**
+
+| Skill | Trigger |
+|-------|---------|
+| `/signalpilot-dbt:dbt-testing` | Task mentions `test`, `unit test`, `add tests`, `verify logic`, `verify the logic`, `check logic`, `check correctness`, OR the scan found `unit_tests:` blocks in YML. Load **before** writing any test YAML (unit tests use a different YAML structure than schema tests). |
+| `/signalpilot-dbt:dbt-snapshots` | Task mentions `snapshot`, `SCD`, `slowly changing`, `track changes`, `history`, OR the scan found a `snapshots/` directory. |
+| `/signalpilot-dbt:dbt-versioning` | Task mentions `version`, `v2`, `backward compatible`, OR the scan found `versions:` blocks in YML. |
+
+**Output:** all applicable skills loaded into context. Explicit instruction: do not skip this step — these skills contain rules that apply to verification (Step 8), not just writing.
+
+---
+
+## Step 3 — Validate and fix stale upstreams
+
+**Purpose:** confirm the project parses, fix parse errors, and rebuild pre-existing models holding stale time-dependent data so downstream row counts are correct.
+
+**Tools / commands:**
 
 <MiniCopyBlock
-  label="generate sql skeleton"
-  plain
-  code={`Tool: generate_sql_skeleton\nproject: shopify\nmodel: shopify__daily_shop\n→ Returns a SQL template with CTEs for each declared column in the YML`}
+  label="validate project"
+  code={`python3 "\${CLAUDE_SKILL_DIR}/validate_project.py" "<project_directory>"`}
 />
 
-Claude fills in the CTE logic using the schema information from Step 2. The `dbt-write` skill enforces:
+- Fix any parse errors before proceeding.
+- **Mandatory rebuild:** if the Step 1 scan flagged `current_date` or `now()` hazards in **pre-existing** models, rebuild them now: `dbt run --select <flagged_model1> <flagged_model2>`. These hold stale data from a prior run; without rebuilding, all downstream models inherit wrong row counts. Do **not** skip even if the KB has entries — the KB cannot fix stale materialized data.
+- Do **not** use `+`. If no hazards are flagged, skip the rebuild.
 
-- Column aliases match YML exactly (case-sensitive)
-- Types preserved from source tables
-- LEFT JOINs by default (unless YML description implies INNER)
+**Skills loaded:** none.
 
-## Step 5 — Build and verify
+**Output:** project parses cleanly; stale time-hazard pre-existing models rebuilt with fresh data.
 
-Claude runs `dbt run` (via the terminal, not MCP — dbt CLI runs locally). Then the verifier agent kicks in:
+---
+
+## Step 4 — Discover project macros
+
+**Purpose:** identify project macros not yet used by any complete model and determine which models must use them, to capture **additional** output columns beyond the YML list.
+
+**Tools:** none — reads the `AVAILABLE MACROS` section printed in the Step 1 scan output.
+
+**Procedure:** for each macro not referenced by any existing complete model:
+
+1. Read its definition (printed in the scan output).
+2. Identify the column it produces — e.g. `extract_hour(created_at)` produces `hour_created_at`; `normalize_timestamp(created_at)` produces `normalized_created_at`.
+3. Record which models **must** use it — any model whose source table has the macro's input column.
+
+**Skills loaded:** none.
+
+**Output:** a list of macro-derived columns (additional columns beyond YML) mapped to the models that must include them. These get added to the SQL in Step 7.
+
+---
+
+## Step 5 — Research (data exploration)
+
+**Purpose:** for **each** model needing SQL, gather the facts required to write it correctly.
+
+**Tools / commands:** `query_database` (multiple uses), plus reading YML and sibling/package files.
+
+**The five facts to gather per model:**
+
+1. **Driving table.** The scan's `AGGREGATION DRIVING TABLE` hint flags a parent whose rows have no matching children. Classify by the model's metrics, then **follow the result** (binding; do not override based on the task phrase "aggregate X by Y" — that names what to summarize, not the FROM clause):
+   - Every child metric is a `COUNT` or `SUM` (e.g. `total_parts`, `total_orders`), meaningful as 0 for a childless parent → **keep** childless rows: drive `FROM` the parent, `LEFT JOIN` children.
+   - Any metric is a ratio, average, or score that divides by child count (e.g. NPS = (positive − negative) / total, `avg_rating`), undefined for a childless parent → **drop** childless rows: drive `FROM` the child aggregation, `INNER JOIN` the entity.
+   - `LEFT JOIN` all other upstreams.
+2. **Cardinalities.** Run `query_database` with `SELECT COUNT(*)` and `SELECT COUNT(DISTINCT <key>)` on each upstream to confirm grain.
+3. **Contract.** Read the model's YML entry for column names, tests, descriptions.
+4. **Sibling patterns.** Read sibling SQL and the YML in `dbt_packages/` for JOIN types, `CASE WHEN` predicates, and categorical vocabulary. Test data is often too sparse to reveal every value; the package YML descriptions are not.
+5. **Categorical values.** Run `query_database` with `SELECT DISTINCT <col>` on status/flag/type columns before writing `CASE WHEN`. The values determine which rows are purchases vs returns vs cancelled.
+
+**CTE-extraction override:** if extracting CTEs from a parent model, read the parent's outermost final `SELECT` — the table in its `FROM` clause is the true spine. Run `SELECT COUNT(DISTINCT <key>)` on both the spine and the aggregation source; if counts differ, use the spine.
+
+**Skills loaded:** none (already loaded in Step 2).
+
+**Output:** per-model research facts (chosen driving table + JOIN strategy, confirmed cardinalities/grain, contract column list, sibling JOIN/CASE patterns, distinct categorical vocabularies). Feeds directly into the Step 6 spec.
+
+---
+
+## Step 6 — Write technical spec
+
+**Purpose:** distill Step 5 research into a structured written plan of decisions (sources, joins, filters, expressions, grain) for every model.
+
+**Tools:** none.
+
+**Skills loaded:** `/signalpilot-dbt:knowledge-base` (loaded at the **start** of this step). This skill owns the spec format, quality rules, and update protocol.
+
+**Procedure / output:**
+
+- The knowledge-base skill writes `<project_dir>/technical_spec.md` — a structured plan distilling Step 5 research into decisions about sources, joins, filters, expressions, and grain for every model.
+- **Retry behavior:** if `technical_spec.md` already exists, the skill reads it and skips re-research.
+- **Stop condition:** the spec file is written **and** every model has all seven required fields (defined in knowledge-base skill Section 3).
+
+**Artifact:** `<project_dir>/technical_spec.md` with all seven required fields per model. This is the single input to Step 7 and is updated first before any Step 8 fix.
+
+---
+
+## Step 7 — Write and build all models
+
+**Purpose:** implement SQL for every model from the technical spec, then materialize only the models you wrote.
+
+**Tools / commands:** `map-columns` (run **before** writing each model), `dbt run --select <model1> <model2>` (no `+` prefix), and reads `<project_dir>/technical_spec.md`.
+
+**Per model, in dependency order:**
+
+1. Match YML column names **exactly** where they exist.
+2. Copy JOIN types and aggregation patterns from sibling analysis. Before finalizing, re-check the scan's `LOOKUP JOINS` section and the sibling's date/timestamp handling for this model's columns (these two are easiest to skip).
+3. Add macro-derived columns from Step 4.
+4. Read the YML description for date boundaries. If it says "to the current date" or "to today", add `WHERE date_col <= current_date`.
+5. Read the YML description for transformation rules. If it states explicit logic ("categorized as X if Y"), implement that logic.
+6. Write the SQL file.
+
+**Bug-fix constraint:** do **not** rewrite pre-existing SQL files from scratch. Edit minimally — change only the broken expression (e.g. add a `CAST`, fix an aggregation function). Keep all existing JOINs, CTEs, column aliases, and WHERE clauses intact. Rewriting from scratch drops logic you may not notice is missing.
+
+**Build rules:**
 
 <MiniCopyBlock
-  label="verifier checks"
-  plain
-  code={`Tool: check_model_schema    → 12/12 columns match YML\nTool: validate_model_output → 365 rows, no fan-out\nTool: audit_model_sources   → sources stable\nTool: analyze_grain         → 1.00 rows per order_date`}
+  label="build only your models"
+  code={`dbt run --select <model1> <model2> <model3>`}
 />
 
-**Verifier receipt:**
+- Build **only the models you wrote** (no `+`). The `+` prefix rebuilds upstream models you did not write, destroying surrogate key assignments and FK relationships. Try without `+` first; if a model fails because an upstream dependency is not materialized, **then** add `+` for that specific model only.
+- If `dbt run` fails on **any** model (including package models in `dbt_packages/`), load the `dbt-debugging` skill and fix the error. Broken upstream models block all downstream evaluation.
+- Do **not** run a bare `dbt run` (rebuilds all models including pre-existing ones).
 
-<MiniCopyBlock
-  label="verifier receipt"
-  plain
-  code={`duration:          18.2s\nagent turns:       6\ngoverned queries:  12\nqueries blocked:   0\nmodels built:      1\ncolumns validated: 12`}
-/>
+**Skills loaded (conditional, on failure):** `dbt-debugging`.
 
-## Cross-links
+**Output:** SQL files written for all target models; those models materialized in the warehouse.
 
-- [How It Works](/docs/how-it-works) — the full 5-stage lifecycle
-- [`generate_sql_skeleton`](/docs/reference/tools-dbt#generate_sql_skeleton) — SQL template generation
-- [`validate_model_output`](/docs/reference/tools-dbt#validate_model_output) — row count + fan-out check
-- [Verifier agent](/docs/plugin/verifier-agent) — full 7-check receipt
+---
+
+## Step 8 — Verify and fix
+
+**Purpose:** independently verify structure and values of built models via two read-only subagents dispatched in parallel, then apply only prescribed fixes until all checks PASS.
+
+**Tools / commands:** `query_database` (`SELECT 1` readiness gate), `verify-values` (the CLI cross-validator used by the value-verifier subagent), the Agent tool to dispatch verifiers, and `dbt run --select +<model>` (only on specific FAILs).
+
+### The verify-and-fix loop
+
+1. Run `query_database` with `SELECT 1`. If it errors, wait and retry (gateway readiness gate).
+2. Dispatch **both** verifiers in parallel via the Agent tool:
+   - `subagent_type="verifier"` — structure checks.
+   - `subagent_type="value-verifier"` — value checks.
+
+   Both are read-only; they return reports and fix nothing. Pass each: project directory, connection name, model names, the **domain skill name from Step 2** (e.g. `signalpilot-dbt:domain-ecommerce`), and the path to `technical_spec.md`. Do **not** pass column definitions, SQL logic, or your interpretation — the verifiers must discover these themselves.
+3. Read **both** reports. Act **only** on checks marked FAIL. If a check is PASS or INFO, accept it (do not override the verifier). If a row count differs from your spec but the verifier says CHECK 3 PASS, update the spec to match reality.
+4. **Stop** when both reports show all checks PASS. Once verification passes, do **not** modify any model files — the task is complete. No further investigation, no "what if" queries, no source table changes. The verifiers are the final authority.
+
+After applying fixes and rebuilding, the loop returns to step 2 (re-dispatch the verifiers). The cycle repeats until both reports are all-PASS.
+
+### Verifier subagent — structure checks
+
+Runs CHECK 1–5 on every named model. (The agent's description says "CHECK 1 through CHECK 4"; CHECK 5 was appended without updating that text.) Read-only — never edits files, runs dbt, or modifies state.
+
+| Check | Verifies | Tools |
+|-------|----------|-------|
+| **CHECK 1 — Table existence** | Every model in `models/*.yml` (each `name:` under `models:`) is materialized as a table. Reads YML, `Glob`s `models/**/*.sql` (excluding `dbt_packages/`), calls `list_tables`, reports any model not materialized. | `list_tables` (MCP), `Glob`, `Read` |
+| **CHECK 2 — Column completeness** | Model outputs all required columns; YML names/types match. Runs `map-columns "<project_dir>" "<model>"`; for created models reports every `UNMAPPED-INCLUDE`; for modified models only verifies existing columns are intact. Calls `check_model_schema` for YML name/type mismatches. | `map-columns` (CLI), `check_model_schema` (MCP) |
+| **CHECK 3 — Row count, fan-out, cardinality** | Calls `audit_model_sources` with `sample_nulls=true` once per model — returns model row count, source row counts, fan-out ratios, per-column distinct counts, NULL fractions. Ratio > 1.0 = possible fan-out; < 0.9 = over-filtering. Fan-out is **correct** when duplicate lookup rows differ in any column (even a label like "Brunei" vs "BruneiDarussalam") → PASS with a note; only FAIL when duplicate rows are byte-identical across all columns. Manual `SELECT` only for fan-out dup identification. | `audit_model_sources` (MCP, `sample_nulls=true`), `query_database` |
+| **CHECK 4 — Non-deterministic SQL** | Reads **only** SQL the agent wrote/modified. `ORDER BY NULL` in `ROW_NUMBER`/`RANK`, or `ROW_NUMBER()`/`RANK()` without `ORDER BY` → FAIL; prescribe `ORDER BY <primary_key_column>`. Same pattern in a pre-existing unmodified model → WARN, no fix (changing it destroys frozen surrogate keys). | `Read` only |
+| **CHECK 5 — Source table preservation** | For each **modified** model: read original SQL via `git show HEAD:<path>`, compare `FROM`/`ref()` tables. If the agent changed the source table (e.g. `standings` → `results`) → FAIL (changes semantic meaning) unless the task explicitly requires it. | `Bash` (`git show`), `Read` |
+
+Output: per-model PASS/FAIL/WARN lines per check plus a Summary. If a check cannot run, report SKIP with a reason.
+
+### Value-verifier subagent — value checks
+
+If the main agent passes a domain skill name, the value-verifier loads it **first** with the Skill tool (domain rules affect verification — e.g. whether returns are excluded). Runs CHECK 1–3. Read-only.
+
+| Check | Verifies | Tools |
+|-------|----------|-------|
+| **CHECK 1 — Sample value spot-check** | `SELECT * FROM <model> LIMIT 5`; compares shared columns to a sibling. Negative `lifetime_value`/`net_amount`/`balance` are valid in e-commerce — do not flag. NULL timestamp and 0/NULL count metrics are expected when aggregating a parent driving table whose rows have no matching child (LEFT JOIN no match) — do not FAIL or prescribe changing the driving table/JOIN. Reports NULL grain keys, implausible dates, sibling contradictions. | `query_database` (MCP) |
+| **CHECK 2 — Aggregate cross-validation** (core) | **Step A (mandatory, first):** call `mcp__signalpilot__verify_model_values` with `connection_name` and `model_name`. Manual aggregate queries are **forbidden** for this check. Retry up to 2× on error; after 3 failures → SKIP. **Step B:** the tool returns candidate upstreams with `COUNT(*)` and `COUNT(DISTINCT <key>)`; read the SQL to find the actual upstream and use only that candidate. `total_X` must match `COUNT(*)`; `unique_X`/`distinct_X` must match `COUNT(DISTINCT)`; matches `COUNT(DISTINCT)` but named "total" with larger `COUNT(*)` → FAIL. Date-spine models: scope to the spine's date range. **Step C (FAIL only):** prescribe `CHANGE: <old expr> → <new expr> in <file> line <N>`. | `verify_model_values` (MCP, mandatory), `Read` |
+| **CHECK 3 — Status column filtering** | Only if the loaded domain skill defines return/cancellation/refund exclusion. Read the FROM table, `SELECT DISTINCT <status_col>`; if return/cancel values exist and the SQL has no excluding WHERE, compute `COUNT(DISTINCT <key>) WHERE <status_col> != '<return_value>'` and compare to the model's row count. Differ → FAIL; prescribe adding the WHERE clause. | `query_database` (MCP), `Read` |
+
+Output: per-model CHECK 1/2/3 PASS/FAIL with metric, model value, `COUNT(*)`, `COUNT(DISTINCT <key>)`, implied aggregation, verdict, and `CHANGE:` fix; plus a Summary. Never rationalizes a mismatch as "intentional" or "by design" — the numbers are measured from source data.
+
+### Per-FAIL remediation
+
+| FAIL | Fix |
+|------|-----|
+| Structure CHECK 1 (missing table) | `dbt run --select +<model>` |
+| Structure CHECK 2 (missing columns) | A column appearing **only** in YML (no source counterpart, no sibling outputs it, not named by the task) is aspirational → do **not** add it (makes output one column too wide, fails the equality test). Otherwise it is a real source column → add it and rebuild. |
+| Structure CHECK 3 (row count) | Investigate SQL logic, pre-aggregate or add `GROUP BY`, rebuild. |
+| Value CHECK 2 (aggregate mismatch) | Apply the verifier's prescribed fix **exactly**. Do not rationalize as intentional — the numbers are measured from source. |
+
+For **any** fix: update `technical_spec.md` **first** (knowledge-base skill Section 6), then rewrite the SQL from the updated spec, then rebuild. The rebuild feeds back into the verify-and-fix loop.
+
+**Skills loaded:** none directly — the verifier subagents are passed the Step-2 domain skill name and load it themselves.
+
+**Output:** two verifier reports (structure + value); applied fixes; final state where all checks PASS.
+
+---
+
+## Error recovery (dbt-debugging skill)
+
+Loaded on demand when `dbt run` or `dbt parse` fails (Step 7, referenced in Step 8 remediation). Patterns:
+
+| Pattern | Fix |
+|---------|-----|
+| **Duplicate YML patches** (very common; "Duplicate patch") | `Glob` `models/**/*.yml`; keep the entry with the full contract (descriptions/refs/columns); remove the duplicate from `schema.yml` (usually tests-only). |
+| **Ref not found** (`node not found for ref()`) | Check if it is a raw DuckDB table; if so create an ephemeral stub or replace `{{ ref('name') }}` with `main.name`. |
+| **Passthrough model warning** | Never create `.sql` files named after raw tables (destroys source data). Fix: add `schema: main` to the source definition in YML. |
+| **current_date** (when `dbt_project_map` warns) | Call `get_date_boundaries`, find the "USE THIS" column; replace `current_date`/`now()` with `(SELECT MAX(<col>) FROM {{ ref('<table>') }})`. |
+| **ROW_NUMBER non-determinism** | If ORDER BY columns are not unique within a partition, append the primary key; re-run `dbt run --select <model>`. |
+| **DuckDB errors** | `invalid date field format` → `STRPTIME(col, '%d/%m/%Y')::DATE`; `Table does not exist` → `describe_table`; `column not found` → check exact names (case matters); `Cannot mix TIMESTAMP and INTEGER` → cast both args; `No function matches DOUBLE / VARCHAR` → explicit `CAST()`; `fivetran_utils is undefined` → `dbt deps` (only if `packages.yml` exists). |
+| **Package model build failures** | Fix the package SQL directly (no internet to reinstall) — add `CAST`/conversion. |
+| **Zero-row model** | Binary search: comment out WHERE clauses and JOINs one at a time. Most common cause: INNER JOIN where LEFT JOIN is needed. |
+| **Fan-out (too many rows)** | Diagnose `SELECT join_key, COUNT(*) ... HAVING COUNT(*) > 1`; fix by pre-aggregating, `SELECT DISTINCT`, or a `ROW_NUMBER()` dedup pattern. |
+
+---
+
+## Cross-cutting rules
+
+These apply across steps, not to a single step:
+
+- **Output shape:** read the YML `description:` **before** writing SQL. Extract `ENTITY` (one row per entity), `QUALIFIER` (filter / INNER JOIN), `RANK CONSTRAINT` (top N → exactly N rows via `ROW_NUMBER` with a deterministic tiebreaker; **not** `DENSE_RANK`), `TEMPORAL SCOPE` (rolling/MoM/WoW → one latest date via `WHERE date_col = (SELECT MAX(date_col) FROM source)`), `DATE BOUNDARY` ("to current date"/"to today" → `WHERE date_col <= current_date`), `PERIOD-OVER-PERIOD` (from-scratch comparison column → `CAST(NULL AS DOUBLE)`). Write at the top of the SQL: `-- EXPECTED SHAPE: <row count or formula> - REASON: <quote>`.
+- **Descriptions tell you what data means, not literal code** — verify logic against source data.
+- **Incremental models:** on first run with no prior state, period-over-period columns must be `CAST(NULL AS DOUBLE)` and output the latest date only — this overrides sibling LAG/LEAD patterns. Debug missing-row incrementals via the boundary predicate (`>` vs `>=` + `unique_key`); never use `--full-refresh` as a fix.
+- **What to trust in YML:** trust column names (exact match), column descriptions, and ref dependencies. Do **not** trust for grain/row count (unique/not_null tests may be aspirational). `not_null` are output assertions, not input filters; apply `WHERE IS NOT NULL` only on `_id` join-key columns; not_null tests cannot override the driving-table rule. Derive grain by priority: (1) unique key structure, (2) column list, (3) upstream model grain, (4) source cardinality, (5) sibling row counts.
+- **Google Sheets / CSV sources** produce trailing all-NULL rows; collapse with `SELECT DISTINCT` after `UNION ALL`, not `WHERE col IS NOT NULL`.
+- **Do not pre-deduplicate lookup tables** before joining (fan-out may be valid — see dbt-write §3).
+- **General:** trace every output column to source for review/MCQ tasks (a computed-but-unused column is a defect); never run dbt with `run_in_background`/`&` (write lock); do not modify `.yml` unless fixing a missing source `schema:`; do not guess column names (YML is source of truth, exception per dbt-write §3); do not install external packages (all pre-bundled in `dbt_packages/`).
+
+## Skill ownership
+
+| Topic | Owned by |
+|-------|----------|
+| 8-step workflow | `dbt-workflow` |
+| SQL writing patterns | `dbt-write` |
+| Error recovery | `dbt-debugging` |
+| Date spine fixes | `dbt-date-spines` |
+| Unit tests | `dbt-testing` |
+| Snapshots / SCD2 | `dbt-snapshots` |
+| Model versioning | `dbt-versioning` |
+| Technical spec format + update protocol | `knowledge-base` |

@@ -70,6 +70,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'how-it-works',
         'workflows/dbt-build',
+        'workflows/verification',
         'workflows/sql-exploration',
         'workflows/custom-workflow',
       ],

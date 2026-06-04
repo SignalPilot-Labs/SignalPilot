@@ -95,8 +95,11 @@ Five stages, every task: plan → scan → govern → build → report.
 
 - Writes a structured build spec first — sources, joins, grain, filters, expected rows per model — before a line of SQL
 - `dbt parse` catches structural errors; models build in dependency order
-- Read-only verification checks every built model — structure (row count, fan-out, cardinality, column completeness) **and** values — and prescribes exact fixes
-- Re-verifies after each fix and stops only when every check passes
+- Two read-only subagents verify every built model in parallel — neither edits files, runs dbt, or touches state
+- The 7-check **verifier** audits structure: table existence, column completeness, row count vs source, fan-out, cardinality/grain, non-deterministic SQL, and source-table preservation
+- The **value-verifier** audits values: sample spot-checks, aggregate cross-validation (total vs distinct, measured against source), and status-column filtering for returns/cancellations
+- Each verifier returns PASS/FAIL/WARN per check and prescribes the exact `CHANGE:` fix — no editorializing, numbers measured from source
+- The agent applies only FAIL fixes, rebuilds, and re-dispatches both verifiers — looping until every check passes, then stops
 
 ### 05 — Full audit receipt
 

@@ -66,6 +66,32 @@ def _settings() -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
+async def test_pod_ai_env_includes_gateway_oauth_and_user_anthropic_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-token")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "global-ant-key")
+    monkeypatch.setattr(
+        session_service.user_secrets_store,
+        "get_user_anthropic_key",
+        AsyncMock(return_value="user-ant-key"),
+    )
+
+    env = await session_service._pod_ai_env(
+        AsyncMock(),
+        org_id="org-1",
+        user_id="user-1",
+        extra_env={"SP_AGENT_MODE": "true"},
+    )
+
+    assert env == {
+        "CLAUDE_CODE_OAUTH_TOKEN": "oauth-token",
+        "ANTHROPIC_API_KEY": "user-ant-key",
+        "SP_AGENT_MODE": "true",
+    }
+
+
+@pytest.mark.asyncio
 async def test_ensure_notion_session_spawns_without_static_notebook_url(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SIGNALPILOT_NOTEBOOK_INTERNAL_URL", raising=False)
     monkeypatch.delenv("SIGNALPILOT_NOTEBOOK_URL", raising=False)
@@ -96,6 +122,11 @@ async def test_ensure_notion_session_spawns_without_static_notebook_url(monkeypa
     monkeypatch.setattr(session_service.ns, "create_session", AsyncMock(return_value=created))
     monkeypatch.setattr(session_service.ns, "update_session_status", AsyncMock())
     monkeypatch.setattr(session_service.ns, "get_session_internal", AsyncMock(return_value=_internal()))
+    monkeypatch.setattr(
+        session_service.user_secrets_store,
+        "get_user_anthropic_key",
+        AsyncMock(return_value="sk-ant-user"),
+    )
     monkeypatch.setattr(session_service, "_get_orchestrator", AsyncMock(return_value=orch))
     monkeypatch.setattr(session_service, "get_k8s_settings", lambda: _settings())
     monkeypatch.setattr(session_service, "mint_session_jwt", lambda **kwargs: "jwt-1")
@@ -107,6 +138,7 @@ async def test_ensure_notion_session_spawns_without_static_notebook_url(monkeypa
     assert runtime.internal_base_url == "http://10.2.3.4:2718/notebook/session-1"
     assert runtime.public_base_url == "https://app.test/notebook/session-1"
     assert create_pod_calls[0]["image"] == _settings().sp_notebook_image
+    assert create_pod_calls[0]["extra_env"]["ANTHROPIC_API_KEY"] == "sk-ant-user"
 
 
 @pytest.mark.asyncio
@@ -120,6 +152,11 @@ async def test_ensure_notion_session_reuses_matching_running_session(monkeypatch
 
     monkeypatch.setattr(session_service.ns, "get_active_session", AsyncMock(return_value=existing))
     monkeypatch.setattr(session_service.ns, "get_session_internal", AsyncMock(return_value=_internal()))
+    monkeypatch.setattr(
+        session_service.user_secrets_store,
+        "get_user_anthropic_key",
+        AsyncMock(return_value=None),
+    )
     monkeypatch.setattr(session_service.ns, "mark_stopped", AsyncMock())
     monkeypatch.setattr(session_service.ns, "delete_stopped", AsyncMock())
     monkeypatch.setattr(session_service.ns, "create_session", AsyncMock())
@@ -143,6 +180,11 @@ async def test_ensure_notebook_session_recreates_when_branch_does_not_match(monk
     monkeypatch.setattr(session_service.ns, "delete_stopped", AsyncMock())
     monkeypatch.setattr(session_service.ns, "create_session", AsyncMock(return_value=created))
     monkeypatch.setattr(session_service.ns, "update_session_status", AsyncMock())
+    monkeypatch.setattr(
+        session_service.user_secrets_store,
+        "get_user_anthropic_key",
+        AsyncMock(return_value=None),
+    )
 
     result = await session_service.ensure_notebook_session(
         AsyncMock(),
@@ -175,6 +217,11 @@ async def test_ensure_notion_session_marks_error_on_pod_spawn_failure(monkeypatc
     monkeypatch.setattr(session_service.ns, "delete_stopped", AsyncMock())
     monkeypatch.setattr(session_service.ns, "create_session", AsyncMock(return_value=created))
     monkeypatch.setattr(session_service.ns, "update_session_status", AsyncMock())
+    monkeypatch.setattr(
+        session_service.user_secrets_store,
+        "get_user_anthropic_key",
+        AsyncMock(return_value=None),
+    )
     monkeypatch.setattr(session_service, "_get_orchestrator", AsyncMock(return_value=orch))
     monkeypatch.setattr(session_service, "get_k8s_settings", lambda: _settings())
     monkeypatch.setattr(session_service, "mint_session_jwt", lambda **kwargs: "jwt-1")

@@ -18,10 +18,12 @@ from gateway.notebook_proxy.constants import POD_PORT
 from gateway.orchestrator import NotebookOrchestrator
 from gateway.orchestrator.jwt_secret_lifecycle import create_jwt_secret_with_owner_ref
 from gateway.store import notebook_sessions as ns
+from gateway.store import user_secrets as user_secrets_store
 
 logger = logging.getLogger(__name__)
 
 OrchestratorFactory = Callable[[], Awaitable[NotebookOrchestrator]]
+_AI_CREDENTIAL_ENV_NAMES = ("CLAUDE_CODE_OAUTH_TOKEN", "OAUTH_TOKEN", "ANTHROPIC_API_KEY")
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,28 @@ def _http_base_for_pod_address(address: str) -> str:
 
 def _session_matches(session: NotebookSessionInfo, *, project_id: str | None, branch: str) -> bool:
     return (session.project_id or None) == project_id and session.branch == branch
+
+
+async def _pod_ai_env(
+    session: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    extra_env: dict[str, str] | None,
+) -> dict[str, str] | None:
+    env: dict[str, str] = {
+        name: value
+        for name in _AI_CREDENTIAL_ENV_NAMES
+        if (value := os.getenv(name))
+    }
+
+    anthropic_key = await user_secrets_store.get_user_anthropic_key(session, org_id, user_id)
+    if anthropic_key:
+        env["ANTHROPIC_API_KEY"] = anthropic_key
+
+    if extra_env:
+        env.update(extra_env)
+    return env or None
 
 
 def _public_base_url(session_id: str) -> str:
@@ -212,6 +236,12 @@ async def ensure_notebook_session(
             logger.warning("Pre-session GitHub sync failed (non-fatal): %s", exc)
 
     k8s_settings = get_k8s_settings()
+    pod_extra_env = await _pod_ai_env(
+        session,
+        org_id=org_id,
+        user_id=user_id,
+        extra_env=extra_env,
+    )
     session_jwt = mint_session_jwt(
         user_id=user_id,
         org_id=org_id,
@@ -240,7 +270,7 @@ async def ensure_notebook_session(
                 session_jwt_secret_name=f"sp-jwt-{pod}",
                 session_id=session_info.id,
                 access_token=session_info.access_token,
-                extra_env=extra_env,
+                extra_env=pod_extra_env,
             )
 
         await create_jwt_secret_with_owner_ref(

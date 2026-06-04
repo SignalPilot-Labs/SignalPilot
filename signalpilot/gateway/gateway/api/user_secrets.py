@@ -122,25 +122,6 @@ async def update_secrets(body: UserSecretsUpdate, store: StoreD):
 
 async def get_user_anthropic_key(session, org_id: str, user_id: str) -> str | None:
     """Internal: get the decrypted Anthropic API key for pod injection."""
-    from sqlalchemy import select
+    from ..store.user_secrets import get_user_anthropic_key as _get_user_anthropic_key
 
-    from ..db.models import GatewayUserSecrets
-    from ..store.crypto import _decrypt_with_migration, _encrypt
-
-    result = await session.execute(
-        select(GatewayUserSecrets).where(
-            GatewayUserSecrets.org_id == org_id,
-            GatewayUserSecrets.user_id == user_id,
-        )
-    )
-    row = result.scalar_one_or_none()
-    if not row or not row.anthropic_api_key_enc:
-        return None
-    try:
-        plaintext, needs_migration = _decrypt_with_migration(row.anthropic_api_key_enc)
-        if needs_migration:
-            row.anthropic_api_key_enc = _encrypt(plaintext)
-            await session.commit()
-        return plaintext
-    except Exception:
-        return None
+    return await _get_user_anthropic_key(session, org_id, user_id)

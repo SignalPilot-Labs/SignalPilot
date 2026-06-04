@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 OrchestratorFactory = Callable[[], Awaitable[NotebookOrchestrator]]
 _AI_CREDENTIAL_ENV_NAMES = ("CLAUDE_CODE_OAUTH_TOKEN", "OAUTH_TOKEN", "ANTHROPIC_API_KEY")
+_DEFAULT_CLOUD_WEB_URL = "https://app.signalpilot.ai"
 
 
 @dataclass(frozen=True)
@@ -80,7 +81,16 @@ def _session_matches(session: NotebookSessionInfo, *, project_id: str | None, br
     return (session.project_id or None) == project_id and session.branch == branch
 
 
-async def _pod_ai_env(
+def _pod_web_url() -> str | None:
+    web_url = os.getenv("SP_WEB_URL") or os.getenv("SIGNALPILOT_WEB_URL")
+    if web_url:
+        return web_url.rstrip("/")
+    if os.getenv("SP_DEPLOYMENT_MODE", "").lower() == "cloud":
+        return _DEFAULT_CLOUD_WEB_URL
+    return None
+
+
+async def _pod_extra_env(
     session: AsyncSession,
     *,
     org_id: str,
@@ -92,6 +102,10 @@ async def _pod_ai_env(
         for name in _AI_CREDENTIAL_ENV_NAMES
         if (value := os.getenv(name))
     }
+
+    web_url = _pod_web_url()
+    if web_url:
+        env["SP_WEB_URL"] = web_url
 
     anthropic_key = await user_secrets_store.get_user_anthropic_key(session, org_id, user_id)
     if anthropic_key:
@@ -236,7 +250,7 @@ async def ensure_notebook_session(
             logger.warning("Pre-session GitHub sync failed (non-fatal): %s", exc)
 
     k8s_settings = get_k8s_settings()
-    pod_extra_env = await _pod_ai_env(
+    pod_extra_env = await _pod_extra_env(
         session,
         org_id=org_id,
         user_id=user_id,

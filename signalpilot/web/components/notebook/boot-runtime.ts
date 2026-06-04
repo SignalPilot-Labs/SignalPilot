@@ -5,7 +5,14 @@ import {
 import { Logger } from "@/utils/Logger";
 import type { NotebookConfig } from "./notebook-context";
 
-export type BootPhase = "health" | "syncing" | "sessions" | "ready";
+export type BootPhase = "health" | "notion" | "syncing" | "sessions" | "ready";
+
+export class NotebookBootUserError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NotebookBootUserError";
+  }
+}
 
 export interface NotebookStaticData {
   filename?: string;
@@ -27,6 +34,36 @@ function resolveRuntimeBase(config: NotebookConfig): string {
   const base = config.notebookProxyUrl ?? config.gatewayUrl;
   if (base) return base.replace(/\/$/, "");
   return typeof window === "undefined" ? "" : window.location.origin;
+}
+
+function notionRequestIdFromSessionId(
+  sessionId: string | undefined,
+): string | undefined {
+  if (!sessionId?.startsWith("session-notion-")) {
+    return undefined;
+  }
+  return `notion-${sessionId.slice("session-notion-".length)}`;
+}
+
+async function rehydrateNotionTrail(
+  runtimeUrl: string,
+  requestId: string,
+  headers: Record<string, string>,
+  signal: AbortSignal,
+): Promise<void> {
+  const resp = await fetch(
+    `${runtimeUrl}/api/notion-analysis/status/${requestId}`,
+    {
+      headers,
+      signal,
+    },
+  );
+  if (resp.status === 404) {
+    throw new NotebookBootUserError("Trail record not found");
+  }
+  if (!resp.ok) {
+    throw new Error(`Notion trail rehydrate failed: HTTP ${resp.status}`);
+  }
 }
 
 /**
@@ -58,6 +95,10 @@ export async function bootRuntime(
   const isNotionTrail =
     resolvedKernelSessionId?.startsWith("session-notion-") ||
     config.file?.startsWith("signalpilot-notion-analyses/");
+  const notionRequestId =
+    config.file?.startsWith("signalpilot-notion-analyses/")
+      ? notionRequestIdFromSessionId(resolvedKernelSessionId)
+      : undefined;
 
   if (resolvedKernelSessionId) {
     const { setSessionId } = await import("@/core/kernel/session");
@@ -89,6 +130,13 @@ export async function bootRuntime(
   }
   if (signal.aborted) throw new Error("Boot cancelled");
   if (!healthy) throw new Error("Runtime did not become healthy after 15 seconds");
+
+  // ── Phase 1b: Rehydrate Notion trail kernels before WS connect ─
+  if (notionRequestId) {
+    onPhase("notion");
+    await rehydrateNotionTrail(runtimeUrl, notionRequestId, headers, signal);
+  }
+  if (signal.aborted) throw new Error("Boot cancelled");
 
   // ── Phase 2: Sync dbt project files (project product only) ────
   let syncResult: { localDir: string; fileCount: number } | undefined;

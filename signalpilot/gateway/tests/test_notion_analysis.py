@@ -119,6 +119,46 @@ def test_start_comment_links_request_details_without_raw_url() -> None:
     assert any(part.get("text", {}).get("link", {}).get("url") == url for part in rich_text)
 
 
+def test_public_signalpilot_url_preserves_durable_notebooks_trail_url() -> None:
+    runtime = NotebookRuntime(
+        session_id="runtime-session-1",
+        internal_base_url="http://10.0.0.5:2718/notebook/runtime-session-1",
+        public_base_url="https://app.signalpilot.ai/notebook/runtime-session-1",
+    )
+    durable_url = (
+        "https://app.signalpilot.ai/notebooks?"
+        "file=signalpilot-notion-analyses%2Fanalysis.py&session_id=session-notion-abc123"
+    )
+
+    rewritten = notion_analysis._public_signalpilot_url(durable_url, runtime)
+
+    assert rewritten == durable_url
+    assert "/notebook/runtime-session-1/notebooks" not in rewritten
+
+
+def test_public_signalpilot_url_rewrites_runtime_urls_to_public_runtime_proxy() -> None:
+    runtime = NotebookRuntime(
+        session_id="runtime-session-1",
+        internal_base_url="http://10.0.0.5:2718/notebook/runtime-session-1",
+        public_base_url="https://app.signalpilot.ai/notebook/runtime-session-1",
+    )
+
+    rewritten = notion_analysis._public_signalpilot_url(
+        "http://10.0.0.5:2718/notebook/runtime-session-1/"
+        "api/notion-analysis/chart/notion-1/chart.png",
+        runtime,
+    )
+
+    expected = (
+        "https://app.signalpilot.ai/notebook/runtime-session-1/"
+        "api/notion-analysis/chart/notion-1/chart.png"
+    )
+    assert (
+        rewritten
+        == expected
+    )
+
+
 def test_final_comment_rich_text_formats_bullets_links_and_code() -> None:
     request_url = "https://notion.test/request-page-1"
     status = {

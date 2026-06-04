@@ -14,7 +14,7 @@ import struct
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
-from urllib.parse import quote, unquote, urlparse, urlunparse
+from urllib.parse import unquote, urlparse, urlunparse
 from uuid import NAMESPACE_URL, uuid5
 
 import msgspec
@@ -25,6 +25,10 @@ from signalpilot import _loggers
 from signalpilot._messaging.cell_output import CellOutput
 from signalpilot._runtime.commands import SerializedQueryParams
 from signalpilot._server.api.deps import AppState
+from signalpilot._server.api.endpoints.notion_urls import (
+    notebooks_base_url as _notebooks_base_url,
+)
+from signalpilot._server.api.endpoints.notion_urls import trail_url as _trail_url
 from signalpilot._server.api.utils import parse_request
 from signalpilot._server.export._session_cache import (
     persist_session_view_to_cache,
@@ -245,22 +249,6 @@ def _request_id(discussion_id: str) -> str:
 
 def _session_id(request_id: str) -> SessionId:
     return SessionId(f"session-{request_id}")
-
-
-def _notebooks_base_url(request_base_url: str) -> str:
-    base_url = (os.environ.get("SP_WEB_URL") or request_base_url).rstrip("/")
-    parsed = urlparse(base_url)
-    path = parsed.path.rstrip("/")
-    if not path.endswith("/notebooks"):
-        path = f"{path}/notebooks" if path else "/notebooks"
-    return urlunparse(
-        parsed._replace(path=path, params="", query="", fragment="")
-    ).rstrip("/")
-
-
-def _trail_url(file_key: str, session_id: str, request_base_url: str) -> str:
-    trail_base_url = _notebooks_base_url(request_base_url)
-    return f"{trail_base_url}?file={quote(file_key)}&session_id={quote(session_id)}"
 
 
 def _refresh_trail_url(

@@ -66,18 +66,20 @@ def _settings() -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
-async def test_pod_ai_env_includes_gateway_oauth_and_user_anthropic_key(
+async def test_pod_extra_env_includes_gateway_oauth_user_anthropic_key_and_web_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-token")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "global-ant-key")
+    monkeypatch.delenv("SP_WEB_URL", raising=False)
+    monkeypatch.setenv("SIGNALPILOT_WEB_URL", "https://app.signalpilot.ai")
     monkeypatch.setattr(
         session_service.user_secrets_store,
         "get_user_anthropic_key",
         AsyncMock(return_value="user-ant-key"),
     )
 
-    env = await session_service._pod_ai_env(
+    env = await session_service._pod_extra_env(
         AsyncMock(),
         org_id="org-1",
         user_id="user-1",
@@ -87,8 +89,30 @@ async def test_pod_ai_env_includes_gateway_oauth_and_user_anthropic_key(
     assert env == {
         "CLAUDE_CODE_OAUTH_TOKEN": "oauth-token",
         "ANTHROPIC_API_KEY": "user-ant-key",
+        "SP_WEB_URL": "https://app.signalpilot.ai",
         "SP_AGENT_MODE": "true",
     }
+
+
+@pytest.mark.asyncio
+async def test_pod_extra_env_defaults_web_url_in_cloud_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SP_WEB_URL", raising=False)
+    monkeypatch.delenv("SIGNALPILOT_WEB_URL", raising=False)
+    monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
+    monkeypatch.setattr(
+        session_service.user_secrets_store,
+        "get_user_anthropic_key",
+        AsyncMock(return_value=None),
+    )
+
+    env = await session_service._pod_extra_env(
+        AsyncMock(),
+        org_id="org-1",
+        user_id="user-1",
+        extra_env=None,
+    )
+
+    assert env == {"SP_WEB_URL": "https://app.signalpilot.ai"}
 
 
 @pytest.mark.asyncio
@@ -139,6 +163,7 @@ async def test_ensure_notion_session_spawns_without_static_notebook_url(monkeypa
     assert runtime.public_base_url == "https://app.test/notebook/session-1"
     assert create_pod_calls[0]["image"] == _settings().sp_notebook_image
     assert create_pod_calls[0]["extra_env"]["ANTHROPIC_API_KEY"] == "sk-ant-user"
+    assert create_pod_calls[0]["extra_env"]["SP_WEB_URL"] == "https://app.test"
 
 
 @pytest.mark.asyncio

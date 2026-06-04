@@ -602,7 +602,9 @@ export function useSpKernelConnection(opts: {
           retryCount.current += 1;
           setConnection({ state: WebSocketState.CONNECTING });
           const searchParams = new URL(window.location.href).searchParams;
-          const takeoverUrl = runtimeManager.formatHttpURL(`/api/kernel/takeover?${searchParams.toString()}`).toString();
+          const takeoverUrl = runtimeManager
+            .formatHttpURL("/api/kernel/takeover", searchParams)
+            .toString();
           runtimeManager.headers().then((hdrs) =>
             fetch(takeoverUrl, {
               method: "POST",

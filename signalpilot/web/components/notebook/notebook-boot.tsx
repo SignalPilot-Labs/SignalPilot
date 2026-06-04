@@ -6,10 +6,15 @@ import { Loader2 } from "lucide-react";
 import { SignalpilotEditor, type SignalpilotClient } from "@/embed";
 import { spaNavigate } from "@/core/router/spa-navigate";
 import { useNotebookConfig } from "./notebook-context";
-import { bootRuntime, type NotebookStaticData } from "./boot-runtime";
+import {
+  NotebookBootUserError,
+  bootRuntime,
+  type NotebookStaticData,
+} from "./boot-runtime";
 
 const PHASE_LABELS: Record<string, string> = {
   health: "starting runtime...",
+  notion: "loading trail...",
   syncing: "syncing project files...",
   sessions: "connecting kernel...",
   ready: "loading notebook...",
@@ -91,7 +96,11 @@ export default function NotebookBoot({
           // UI — error bodies can contain internal paths, stack traces, or other
           // sensitive details that should not be shown to end users.
           console.error("[NotebookBoot] Failed to load notebook:", err);
-          setError("Failed to load notebook");
+          setError(
+            err instanceof NotebookBootUserError
+              ? err.message
+              : "Failed to load notebook",
+          );
         }
       });
 

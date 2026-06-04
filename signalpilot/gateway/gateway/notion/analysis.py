@@ -242,7 +242,7 @@ def _join_base_path(base: str, url: str) -> str:
     return f"{base.rstrip('/')}/{url.lstrip('/')}"
 
 
-def _relative_url_for_base(url: str, base: str) -> str | None:
+def _relative_url_for_base(url: str, base: str, *, require_base_path: bool = False) -> str | None:
     parsed = urlparse(url)
     base_parsed = urlparse(base)
     if parsed.scheme and not _same_origin(url, base):
@@ -254,6 +254,8 @@ def _relative_url_for_base(url: str, base: str) -> str | None:
         path = path[len(base_path) :]
     elif base_path and path == base_path:
         path = "/"
+    elif require_base_path:
+        return None
     query = f"?{parsed.query}" if parsed.query else ""
     return f"{path}{query}"
 
@@ -266,7 +268,7 @@ def _public_signalpilot_url(url: str, runtime: NotebookRuntime | None = None) ->
         parsed = urlparse(url)
         if parsed.scheme:
             for candidate_base in (runtime.internal_base_url, runtime.public_base_url):
-                relative = _relative_url_for_base(url, candidate_base)
+                relative = _relative_url_for_base(url, candidate_base, require_base_path=True)
                 if relative is not None:
                     return _join_base_path(runtime.public_base_url, relative)
             return url

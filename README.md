@@ -2,7 +2,7 @@
 
 # ⚡ SignalPilot Data Agent
 
-### 🏆 #1 on [Spider 2.0-DBT](https://spider2-sql.github.io/) — **51.56**, +7.45 over JetBrains DataBao (Apr 2026)
+### 🏆 #1 on [Spider 2.0-DBT](https://spider2-sql.github.io/) — **65.63%** (42 of 64 tasks, claude-sonnet-4-6)
 
 **Governed AI agents for your data stack — db, dbt, and more.** Optimized by [AutoFyn](https://github.com/SignalPilot-Labs/AutoFyn).
 
@@ -255,7 +255,7 @@ SignalPilot/
 │   ├── agents/               # Verifier agent (7-check post-build protocol)
 │   └── skills/               # dbt-workflow, sql-workflow, db-specific SQL, etc.
 ├── sp-sandbox/               # gVisor sandboxed Python execution
-├── benchmark/                # Spider 2.0-DBT benchmark suite (SOTA: 51.56%)
+├── benchmark/                # Spider 2.0-DBT benchmark suite (SOTA: 65.63%)
 └── docker-compose.yml        # Full stack: web, gateway, postgres, sandbox
 ```
 

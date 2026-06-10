@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import {
@@ -52,6 +52,7 @@ import {
   setGatewayProjectId,
 } from "@/core/network/api";
 import { isNotionTrailParams } from "@/core/notion/trail";
+import { SPA_NAVIGATE_EVENT } from "@/core/router/spa-navigate";
 import { store } from "@/core/state/jotai";
 
 const PAID_TIERS = ["pro", "team", "enterprise", "unlimited"];
@@ -178,14 +179,23 @@ export default function NotebooksPage() {
   const pathname = usePathname();
   const { planTier, isLoaded: subLoaded } = useSubscription();
   const isExternalView = pathname?.startsWith("/notebook") ?? false;
+  const [browserSearch, setBrowserSearch] = useState(() =>
+    typeof window === "undefined" ? "" : window.location.search,
+  );
 
   const isPaid = PAID_TIERS.includes(planTier);
   const gated = IS_CLOUD_MODE && subLoaded && !isPaid;
 
-  const urlProject = searchParams.get("project") || "";
-  const urlBranch = searchParams.get("branch") || "";
-  const urlSessionId = searchParams.get("session_id") || "";
-  const rawFile = searchParams.get("file") || "";
+  const nextSearch = searchParams.toString();
+  const effectiveSearchParams = useMemo(
+    () => new URLSearchParams(browserSearch || nextSearch),
+    [browserSearch, nextSearch],
+  );
+
+  const urlProject = effectiveSearchParams.get("project") || "";
+  const urlBranch = effectiveSearchParams.get("branch") || "";
+  const urlSessionId = effectiveSearchParams.get("session_id") || "";
+  const rawFile = effectiveSearchParams.get("file") || "";
   const urlFile = rawFile === "__new__project" ? "" : rawFile;
   const runtimeMode = resolveRuntimeMode({
     project: urlProject,
@@ -221,6 +231,31 @@ export default function NotebooksPage() {
 
   const handleBootPhase = useCallback((phase: string) => { setBootPhase(phase); }, []);
   const handleBootReady = useCallback(() => { setState("ready"); }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    setBrowserSearch(window.location.search);
+  }, [nextSearch]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const syncBrowserSearch = () => {
+      setBrowserSearch(window.location.search);
+    };
+
+    window.addEventListener("popstate", syncBrowserSearch);
+    window.addEventListener(SPA_NAVIGATE_EVENT, syncBrowserSearch);
+    return () => {
+      window.removeEventListener("popstate", syncBrowserSearch);
+      window.removeEventListener(SPA_NAVIGATE_EVENT, syncBrowserSearch);
+    };
+  }, []);
 
   function isNotionTrail(file = urlFile, sessionId = urlSessionId) {
     return isNotionTrailParams({ file, sessionId });
@@ -373,6 +408,15 @@ export default function NotebooksPage() {
   useEffect(() => {
     restoreMissingNotionSessionInUrl();
   }, [urlFile, urlSessionId]);
+
+  useEffect(() => {
+    return () => {
+      if (pingRef.current) {
+        clearInterval(pingRef.current);
+        pingRef.current = null;
+      }
+    };
+  }, []);
 
   function toNotionConversation(thread: ChatTraceThread): NotionConversation {
     return {
@@ -554,6 +598,9 @@ export default function NotebooksPage() {
       setState("no-session");
       return;
     }
+    if (state === "booting" || state === "ready") {
+      return;
+    }
 
     let cancelled = false;
 
@@ -618,9 +665,8 @@ export default function NotebooksPage() {
     init();
     return () => {
       cancelled = true;
-      if (pingRef.current) clearInterval(pingRef.current);
     };
-  }, [subLoaded, gated]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [subLoaded, gated, runtimeMode, urlProject, activeBranch, urlFile, urlSessionId, hasDeepLink]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (notebookConfig && (state === "ready" || state === "booting")) {

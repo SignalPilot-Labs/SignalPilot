@@ -114,7 +114,7 @@ services:
     volumes:
       - signalpilot-workspace:/workspace
       - signalpilot-shared:/shared:ro
-      - ${CLAUDE_HOST_CONFIG_DIR:-${HOME}/.config/signalpilot/claude-code-docker}:/home/notebook/.claude
+      - ${CLAUDE_HOST_CONFIG_DIR:-${HOME:-~}/.config/signalpilot/claude-code-docker}:/home/notebook/.claude
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:2718/health"]
       interval: 5s
@@ -159,7 +159,9 @@ services:
       SP_GATEWAY_URL: http://gateway:3300
       SP_MAX_VMS: "10"
     volumes:
-      - /tmp:/host-data:ro
+      # Users root (C:\Users, /home, /Users) — sandboxed DuckDB/SQLite translate
+      # host file paths to /host-data/<user>/... (see sandboxed_duckdb.py).
+      - ${SP_HOST_DATA_DIR:-${HOME:-~}/..}:/host-data:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 5s

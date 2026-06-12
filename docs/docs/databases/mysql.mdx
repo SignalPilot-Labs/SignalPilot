@@ -1,0 +1,71 @@
+---
+sidebar_position: 3
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
+# MySQL
+
+`PyMySQL`-backed connector. `db_type` is `mysql`. Tier 1. Supports MySQL 5.7+, MariaDB 10.2+, and managed instances (RDS, Cloud SQL, PlanetScale).
+
+## Connection config
+
+<MiniCopyBlock
+  label="mysql"
+  plain
+  code={`{\n  "name": "prod-mysql",\n  "db_type": "mysql",\n  "host": "db.example.com",\n  "port": 3306,\n  "database": "analytics",\n  "username": "readonly",\n  "password": "..."\n}`}
+/>
+
+## Connection fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Connection name. `[a-zA-Z0-9_-]`, max 64 chars. |
+| `db_type` | Yes | `mysql`. |
+| `host` | Yes | Hostname or IP. Defaults to `localhost`. |
+| `port` | No | Defaults to 3306. |
+| `database` | No | Default database/schema. |
+| `username` | Yes | Database user (use a read-only account). Defaults to `root`. |
+| `password` | Yes | Password. Omit when using IAM auth. |
+| `ssl` / `ssl_config` | No | TLS. `ssl_config.mode` is one of `disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`. `ca_cert`/`client_cert`/`client_key` are PEM strings. With SSL enabled but no certs, the connector enforces TLS without certificate verification. |
+| `ssh_tunnel` | No | Connect through a bastion. See [Connect a Database](/docs/connect-database#ssh-tunneling). |
+| `connection_timeout` | No | Seconds, 1–300. |
+| `query_timeout` | No | Seconds, 1–3600. Mapped to PyMySQL `read_timeout` and enforced server-side via `SET SESSION max_execution_time`. |
+
+**AWS RDS IAM auth:** set `auth_method` to `iam` plus `aws_region` (default `us-east-1`) and optionally `aws_access_key_id` / `aws_secret_access_key`. The connector generates a short-lived RDS auth token in place of `password` and forces SSL.
+
+## Capabilities
+
+| Capability | Supported | Notes |
+|------------|-----------|-------|
+| Query | Yes | The session is set `TRANSACTION READ ONLY` on connect (defense in depth on top of governance). Auto-reconnect on a dropped connection. |
+| Schema introspection | Yes (full) | `information_schema` TABLES + COLUMNS. Tables and views, column comments, table comments. Skips `mysql`, `information_schema`, `performance_schema`, `sys`. |
+| FK discovery | Yes | `information_schema.KEY_COLUMN_USAGE` (rows where `REFERENCED_TABLE_NAME` is set). |
+| EXPLAIN | Yes | `explain_query` available. |
+| Cost estimation | Yes | `EXPLAIN FORMAT=JSON` — parses `query_cost` and `rows_examined_per_scan`. USD is a rough heuristic, not a billed amount. |
+| Schema stats | Yes | Row counts and table size (`DATA_LENGTH` + `INDEX_LENGTH`) from `information_schema.TABLES`; indexes and lead-column cardinality from `information_schema.STATISTICS`. |
+
+Tier 1. Schema metadata queries run sequentially (PyMySQL uses a single connection; no parallel schema fetch, no connection pooling).
+
+## Dialect notes / gotchas
+
+- Identifiers are quoted with backticks (`` `col` ``).
+- No `FULL OUTER JOIN` — use a `UNION` of `LEFT JOIN` and `RIGHT JOIN`.
+- `TABLE_ROWS` from `information_schema` is an estimate for InnoDB, not an exact count.
+- Connection charset is `utf8mb4`.
+
+## Blocked functions
+
+The governance layer blocks these MySQL functions even inside a `SELECT` (in addition to all DDL/DML statements):
+
+- `load_file`, `sys_exec`, `sys_eval`
+
+`SELECT ... INTO OUTFILE` / `INTO DUMPFILE` is blocked by the `INTO`-clause check. The universal `load_extension` / `install_extension` block also applies.
+
+## Recommended plugin skill
+
+`sql-workflow` — general output-shape inference, schema exploration, and CTE-based query building.
+
+## Cloud vs local
+
+Supported in both cloud and local (self-hosted) deployments.

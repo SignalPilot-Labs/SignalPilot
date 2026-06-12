@@ -1,0 +1,170 @@
+import { fromUnixTime } from "date-fns";
+import { toast } from "@/components/ui/use-toast";
+import { parseHtmlContent } from "@/utils/dom";
+import { Strings } from "@/utils/strings";
+import type { CellMessage, OutputMessage } from "../kernel/messages";
+import { isErrorMime } from "../mime";
+import type { CellId } from "./ids";
+import { currentModeAtom } from "../mode";
+import { store } from "../state/jotai";
+import { tracebackModalAtom } from "../errors/traceback-atom";
+import React from "react";
+import { ToastAction } from "@/components/ui/toast";
+
+export interface CellLog {
+  timestamp: number;
+  level: "stdout" | "stderr";
+  message: string;
+  cellId: CellId;
+}
+
+let didAlreadyToastError = false;
+
+export function getCellLogsForMessage(cell: CellMessage): CellLog[] {
+  const logs: CellLog[] = [];
+  const consoleOutputs: OutputMessage[] = [cell.console].filter(Boolean).flat();
+
+  for (const output of consoleOutputs) {
+    // Handle text/plain, text/html, and traceback MIME types
+    const isTextPlain = output.mimetype === "text/plain";
+    const isHtml =
+      output.mimetype === "text/html" ||
+      output.mimetype === "application/vnd.sp+traceback";
+
+    if (isTextPlain || isHtml) {
+      const isError =
+        output.channel === "stderr" || output.channel === "sp-error";
+      switch (output.channel) {
+        case "stdout":
+        case "stderr":
+        case "sp-error": {
+          // Convert data to string and process based on MIME type
+          const rawData = Strings.asString(output.data);
+          const message = isHtml ? parseHtmlContent(rawData) : rawData;
+
+          logs.push({
+            timestamp: output.timestamp || Date.now(),
+            level: isError ? "stderr" : "stdout",
+            message: message,
+            cellId: cell.cell_id,
+          });
+          break;
+        }
+        default:
+          break;
+      }
+    }
+  }
+
+  // Log each to the console
+  logs.forEach(CellLogLogger.log);
+
+  // If there is no console output, but there is an error output, let's log that instead
+  // This happens in run mode when stderr is not sent to the client.
+  if (
+    consoleOutputs.length === 0 &&
+    isErrorMime(cell.output?.mimetype) &&
+    Array.isArray(cell.output.data)
+  ) {
+    cell.output.data.forEach((error) => {
+      CellLogLogger.log({
+        level: "stderr",
+        cellId: cell.cell_id,
+        timestamp: cell.timestamp ?? 0,
+        message: JSON.stringify(error),
+      });
+    });
+
+    // Find exception errors and check for traceback
+    const exceptionErrors = cell.output.data.filter(
+      (error) =>
+        ("type" in error && error.type === "exception") ||
+        error.type === "internal",
+    );
+
+    // Only show the toast in app mode: edit mode already surfaces errors in
+    // the cell UI, so toasting there would be noisy and duplicative. Read the
+    // atom directly so an unset initial mode (e.g. in tests/islands) simply
+    // returns undefined instead of throwing and masking real errors.
+    const isAppMode = store.get(currentModeAtom) === "read";
+
+    // Only show toast once, and only in app mode
+    if (exceptionErrors.length > 0 && !didAlreadyToastError && isAppMode) {
+      didAlreadyToastError = true;
+
+      // Find first error with a traceback
+      const errorWithTraceback = exceptionErrors.find(
+        (error) => error.traceback,
+      );
+
+      if (errorWithTraceback) {
+        // Show toast with action button to open modal
+        const handleClick = () => {
+          store.set(tracebackModalAtom, {
+            traceback: errorWithTraceback.traceback,
+            errorMessage:
+              errorWithTraceback.msg || "An internal error occurred",
+          });
+        };
+
+        toast({
+          title: "An internal error occurred",
+          description:
+            errorWithTraceback.msg || "Click 'View' to see traceback",
+          variant: "danger",
+          action: React.createElement(
+            ToastAction,
+            {
+              altText: "View traceback",
+              onClick: handleClick,
+            },
+            "View",
+          ),
+        });
+      } else {
+        toast({
+          title: "An internal error occurred",
+          description: "See console for details.",
+          variant: "danger",
+        });
+      }
+    }
+  }
+
+  return logs;
+}
+
+const CellLogLogger = {
+  log: (payload: CellLog) => {
+    const color =
+      payload.level === "stdout"
+        ? "gray"
+        : payload.level === "stderr"
+          ? "red"
+          : "orange";
+    const status = payload.level.toUpperCase();
+    // oxlint-disable-next-line no-console -- intentional debug logging
+    console.log(
+      `%c[${status}]`,
+      `color:${color}; padding:2px 0; border-radius:2px; font-weight:bold`,
+      `[${formatLogTimestamp(payload.timestamp)}]`,
+      `(${payload.cellId}) ${payload.message}`,
+    );
+  },
+};
+
+// e.g. 9:45:10 AM
+export function formatLogTimestamp(timestamp: number): string {
+  try {
+    // parse from UTC
+    const date = fromUnixTime(timestamp);
+    return date.toLocaleTimeString(undefined, {
+      hour12: true,
+      hour: "numeric",
+      minute: "numeric",
+      second: "numeric",
+    });
+  } catch {
+    return "";
+  }
+}

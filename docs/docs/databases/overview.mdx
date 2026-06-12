@@ -1,0 +1,35 @@
+---
+sidebar_position: 1
+---
+
+# Databases
+
+SignalPilot ships 11 database connectors. Each maps to a `db_type` value used in connection config, runs through the same SQL governance layer (DDL/DML blocking, LIMIT injection, dangerous-function denylist, PII-redacted audit logs), and is grouped into a capability tier.
+
+## All connectors
+
+| Database | `db_type` | Cloud / Local | Tier | Page |
+|----------|-----------|---------------|------|------|
+| PostgreSQL | `postgres` | Cloud + Local | 1 | [PostgreSQL](/docs/databases/postgresql) |
+| MySQL | `mysql` | Cloud + Local | 1 | [MySQL](/docs/databases/mysql) |
+| Snowflake | `snowflake` | Cloud | 1 | [Snowflake](/docs/databases/snowflake) |
+| BigQuery | `bigquery` | Cloud | 1 | [BigQuery](/docs/databases/bigquery) |
+| Redshift | `redshift` | Cloud | 2 | [Redshift](/docs/databases/redshift) |
+| ClickHouse | `clickhouse` | Cloud + Local | 2 | [ClickHouse](/docs/databases/clickhouse) |
+| Databricks | `databricks` | Cloud | 2 | [Databricks](/docs/databases/databricks) |
+| Microsoft SQL Server | `mssql` | Cloud + Local | 2 | [SQL Server](/docs/databases/mssql) |
+| Trino | `trino` | Cloud + Local | 2 | [Trino](/docs/databases/trino) |
+| DuckDB | `duckdb` | Local (+ MotherDuck) | 3 | [DuckDB](/docs/databases/duckdb) |
+| SQLite | `sqlite` | Local | 3 | [SQLite](/docs/databases/sqlite) |
+
+## Tiers
+
+Tiers describe the depth of metadata and governance features available per connector.
+
+| Tier | Query | Schema introspection | FK discovery | EXPLAIN | Cost estimation | Schema stats |
+|------|-------|----------------------|--------------|---------|-----------------|--------------|
+| **1** | Full | Full | Yes | Yes | Yes (BigQuery exact; Snowflake estimated) | Yes |
+| **2** | Full | Full | Yes | Yes | Limited | Partial |
+| **3** | Full | Full | Yes | Yes | No | No |
+
+Use the `connector_capabilities` MCP tool to see the detected tier and feature set for any connection. See the [Dialect Support Matrix](/docs/reference/dialects) for per-dialect facts.

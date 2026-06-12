@@ -6,9 +6,37 @@ type: skill
 
 # SQL Workflow Skill
 
+## 0. Load Knowledge Base Context FIRST
+
+Project-specific conventions, decisions, and quirks live in the Knowledge Base. Always consult before exploring the schema.
+
+### Step 0a — `get_knowledge`
+
+Call once at the start of every task with a 1-line `task_description`. Returns the always-loaded baseline (org/project understanding + conventions) plus up to 5 task-relevant decisions/debugging/quirks. Treat the returned `## title` blocks as authoritative for naming, joins, and known traps.
+
+### Step 0b — `search_knowledge(query=...)`
+
+Call when you hit something unexpected — column meaning unclear, ambiguous join, surprising row count. Pass a 2–4 word query. It is a pure read — no side effects.
+
+### Step 0c — `propose_knowledge`
+
+Call ONLY after you have completed work and verified a finding. Use it to record:
+
+- `category="decisions"` for choices made (auto-accepted).
+- `category="debugging"` for root-cause traps you hit and resolved (auto-accepted).
+- `category="quirks"` (scope=connection) for connector/dialect oddities (auto-accepted).
+- Do NOT propose `understanding` — humans only. Do NOT propose `conventions` or `domain-rules` as part of automated runs unless explicitly asked (these queue for human review).
+- Title must be a slug (`^[a-z0-9-]+$`, ≤120 chars). Body is markdown.
+- On duplicate-title: re-call with `supersedes=<existing_id>` only if the prior doc is genuinely outdated.
+
+### What NOT to do
+
+- Do not paste raw KB text back into SQL comments — reference the doc title instead.
+- Do not call `propose_knowledge` mid-exploration — only after success.
+
 ## 1. Schema Exploration — Do This First
 
-Before writing any SQL, understand the data:
+Before writing any SQL, load KB context (Phase 0 above) then understand the data:
 
 0. **Read local schema files first** (if schema/ directory exists in workdir):
    - `schema/DDL.csv` — all CREATE TABLE statements (if it exists)

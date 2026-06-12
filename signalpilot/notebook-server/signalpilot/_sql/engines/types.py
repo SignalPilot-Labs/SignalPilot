@@ -1,0 +1,172 @@
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Any, Generic, Literal, TypeVar
+
+from signalpilot._config.config import SqlOutputType
+from signalpilot._data.models import Database, DataTable, Schema
+from signalpilot._dependencies.dependencies import DependencyManager
+from signalpilot._runtime.context.types import (
+    ContextNotInitializedError,
+    get_context,
+    runtime_context_installed,
+)
+from signalpilot._sql.parse import (
+    format_query_with_globals,
+    replace_brackets_with_quotes,
+)
+from signalpilot._sql.utils import (
+    is_query_empty,
+    strip_explain_from_error_message,
+    wrap_query_with_explain,
+)
+from signalpilot._types.ids import VariableName
+
+NO_SCHEMA_NAME = ""
+
+
+@dataclass
+class InferenceConfig(ABC):
+    auto_discover_schemas: bool | Literal["auto"]
+    auto_discover_tables: bool | Literal["auto"]
+    auto_discover_columns: bool | Literal["auto"]
+
+
+def _validate_sql_output_format(sql_output: SqlOutputType) -> SqlOutputType:
+    if sql_output in ("lazy-polars", "polars"):
+        DependencyManager.polars.require(
+            why="to display SQL results as a Polars DataFrame"
+        )
+    elif sql_output == "pandas":
+        DependencyManager.pandas.require(
+            why="to display SQL results as a Pandas DataFrame"
+        )
+    return sql_output
+
+
+CONN = TypeVar("CONN")
+
+
+class BaseEngine(ABC, Generic[CONN]):
+    """Base fields for all engines and catalogs."""
+
+    def __init__(
+        self, connection: CONN, engine_name: VariableName | None = None
+    ) -> None:
+        self._connection: CONN = connection
+        self._engine_name: VariableName | None = engine_name
+
+    @property
+    @abstractmethod
+    def source(self) -> str:
+        """Return the source of the engine. Usually the name of the library used to connect to the database."""
+
+    @property
+    @abstractmethod
+    def dialect(self) -> str:
+        """Return the sqlglot dialect for this engine."""
+
+    @staticmethod
+    @abstractmethod
+    def is_compatible(var: Any) -> bool:
+        """Check if a variable is a compatible engine."""
+
+
+T = TypeVar("T", bound=BaseEngine[Any])
+
+
+class EngineCatalog(BaseEngine[CONN], ABC):
+    """Protocol for querying the catalog of an engine."""
+
+    @property
+    @abstractmethod
+    def inference_config(self) -> InferenceConfig:
+        """Return the inference config for the engine."""
+
+    @abstractmethod
+    def get_default_database(self) -> str | None:
+        """Return the default database for the engine."""
+
+    @abstractmethod
+    def get_default_schema(self) -> str | None:
+        """Return the default schema for the engine."""
+
+    @abstractmethod
+    def get_databases(
+        self,
+        *,
+        include_schemas: bool | Literal["auto"],
+        include_tables: bool | Literal["auto"],
+        include_table_details: bool | Literal["auto"],
+    ) -> list[Database]:
+        """Return the databases for the engine."""
+
+    @abstractmethod
+    def get_schemas(
+        self,
+        *,
+        database: str | None,
+        include_tables: bool,
+        include_table_details: bool,
+    ) -> list[Schema]:
+        """Return the schemas for a database in the engine."""
+
+    @abstractmethod
+    def get_tables_in_schema(
+        self, *, schema: str, database: str, include_table_details: bool
+    ) -> list[DataTable]:
+        """Return all tables in a schema."""
+
+    @abstractmethod
+    def get_table_details(
+        self, *, table_name: str, schema_name: str, database_name: str
+    ) -> DataTable | None:
+        """Get a single table from the engine."""
+
+
+class QueryEngine(BaseEngine[CONN], ABC):
+    """Protocol for SQL engines that can execute queries."""
+
+    @abstractmethod
+    def execute(self, query: str) -> Any:
+        """Execute a SQL query and return a dataframe."""
+
+    def sql_output_format(self) -> SqlOutputType:
+        if runtime_context_installed():
+            try:
+                ctx = get_context()
+                return _validate_sql_output_format(ctx.app_config.sql_output)
+            except ContextNotInitializedError:
+                return "auto"
+        return "auto"
+
+    def execute_in_explain_mode(
+        self, query: str, globals_dict: dict[str, Any] | None = None
+    ) -> tuple[Any, str | None]:
+        """Execute a query in explain mode. Returns a tuple of the result and an error if there is one."""
+
+        if globals_dict is None:
+            globals_dict = {}
+
+        explain_query = wrap_query_with_explain(query)
+        if self.dialect == "duckdb":
+            explain_query = format_query_with_globals(
+                explain_query, globals_dict
+            )
+        else:
+            explain_query, _ = replace_brackets_with_quotes(explain_query)
+
+        try:
+            return self.execute(explain_query), None
+        except Exception as e:
+            if is_query_empty(query):
+                return None, None
+            return None, strip_explain_from_error_message(str(e))
+
+
+class SQLConnection(EngineCatalog[CONN], QueryEngine[CONN]):
+    """Combines the catalog and query interfaces for an SQL engine."""
+
+
+SQLConnectionType = EngineCatalog[Any] | QueryEngine[Any]

@@ -1,0 +1,126 @@
+from __future__ import annotations
+
+import json
+import re
+from html import escape, unescape
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    TypeVar,
+    cast,
+)
+
+from signalpilot._messaging.msgspec_encoder import encode_json_str
+from signalpilot._output.md import _md
+from signalpilot._output.mime import MIME
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+    from typing import TypeAlias
+
+    JSONType: TypeAlias = (
+        Mapping[str, "JSONType"]
+        | Sequence["JSONType"]
+        | str
+        | int
+        | float
+        | bool
+        | object
+        | MIME
+        | None
+    )
+
+else:
+    JSONType = Any
+
+S = TypeVar("S", bound=JSONType)
+
+
+def _build_attr(name: str, value: JSONType) -> str:
+    processed = escape(encode_json_str(value))
+    # manual escapes for things html.escape doesn't escape
+    #
+    # - backslashes, when unescaped can lead to problems
+    # when embedding in markdown
+    # - dollar sign, when unescaped can incorrectly be recognized as
+    # latex delimiter when embedding into markdown
+    processed = processed.replace("\\", "&#92;").replace("$", "&#36;")
+    return f"data-{name}='{processed}'"
+
+
+def build_ui_plugin(
+    component_name: str,
+    initial_value: JSONType | None,
+    label: str | None,
+    args: dict[str, JSONType],
+    slotted_html: str = "",
+) -> str:
+    """
+    Build HTML for a UI (stateful) plugin.
+
+    Args:
+    ----
+    component_name: tag name of the component
+    initial_value: JSON-serializable initial value of the component
+    label: markdown string that component may use a text label
+    args: mapping from arg names to JSON-serializable value
+    slotted_html: HTML to slot in the component
+
+    Returns:
+    -------
+    HTML text for the component
+    """
+    if "initial-value" in args:
+        raise ValueError("initial-value is a reserved argument.")
+    if "label" in args:
+        raise ValueError("label is a reserved argument.")
+
+    attrs: list[str] = [_build_attr("initial-value", initial_value)]
+    if label is not None and label:
+        attrs.append(_build_attr("label", _md(label).text))
+    else:
+        attrs.append(_build_attr("label", None))
+
+    for name, value in args.items():
+        if value is not None:
+            attrs.append(_build_attr(name, value))
+
+    return (
+        f"<{component_name} {' '.join(attrs)}>"
+        f"{slotted_html}"
+        f"</{component_name}>"
+    )
+
+
+def build_stateless_plugin(
+    component_name: str,
+    args: dict[str, JSONType],
+    slotted_html: str = "",
+) -> str:
+    """
+    Build HTML for a stateless plugin.
+
+    Args:
+    ----
+    component_name: tag name of the component
+    args: mapping from arg names to JSON-serializable value
+    slotted_html: HTML to slot in the component
+
+    Returns:
+    -------
+    HTML text for the component
+    """
+    attrs = [_build_attr(name, value) for name, value in args.items()]
+    return (
+        f"<{component_name} {' '.join(attrs)}>"
+        f"{slotted_html}"
+        f"</{component_name}>"
+    )
+
+
+def parse_initial_value(text: str) -> JSONType:
+    """Get initial value from HTML for a UI element."""
+    match = re.search("data-initial-value='(.*?)'", text)
+    if match is None:
+        raise ValueError("Invalid component HTML: ", text)
+    return cast(JSONType, json.loads(unescape(match.groups()[0])))

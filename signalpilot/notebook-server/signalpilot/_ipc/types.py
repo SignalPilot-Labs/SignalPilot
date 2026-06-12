@@ -1,0 +1,47 @@
+from __future__ import annotations
+
+import msgspec
+import msgspec.json
+
+from signalpilot._ast.cell import CellConfig
+from signalpilot._config.config import SpConfig
+from signalpilot._messaging.msgspec_encoder import encode_json_bytes
+from signalpilot._runtime.commands import AppMetadata
+from signalpilot._types.ids import CellId_t
+
+
+class ConnectionInfo(msgspec.Struct):
+    """ZeroMQ socket connection info."""
+
+    control: int
+    ui_element: int
+    completion: int
+    win32_interrupt: int | None
+
+    input: int
+    stream: int
+
+
+class KernelArgs(msgspec.Struct):
+    """Args to send to the kernel."""
+
+    configs: dict[CellId_t, CellConfig]
+    app_metadata: AppMetadata
+    user_config: SpConfig
+    log_level: int
+    profile_path: str | None
+    connection_info: ConnectionInfo
+    # Whether to use run-mode config (autorun) vs edit-mode config (lazy)
+    is_run_mode: bool = False
+    # Runtime behavior flags
+    # virtual_files_supported is ignored, but kept for backward compatibility
+    virtual_files_supported: bool = True
+    redirect_console_to_browser: bool = True
+    parent_pid: int | None = None
+
+    def encode_json(self) -> bytes:
+        return encode_json_bytes(self)
+
+    @classmethod
+    def decode_json(cls, buf: bytes) -> KernelArgs:
+        return msgspec.json.decode(buf, type=cls)

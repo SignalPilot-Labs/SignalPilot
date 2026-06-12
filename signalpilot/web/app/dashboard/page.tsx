@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -20,26 +20,26 @@ import {
   Plug,
   Plus,
 } from "lucide-react";
-import { subscribeMetrics } from "@/lib/api";
-import { useConnectionsHealth, useCacheStats, useBudgets, useAudit, usePlan, prefetchCommonData } from "@/lib/hooks/use-gateway-data";
-import type { MetricsSnapshot, AuditEntry, ConnectionHealthStats } from "@/lib/types";
-import { useConnection } from "@/lib/connection-context";
-import { useAppAuth } from "@/lib/auth-context";
-import { useSubscription } from "@/lib/subscription-context";
-import { useBackendClient } from "@/lib/backend-client";
-import type { UsageSummaryResponse, DailyUsagePoint } from "@/lib/backend-client";
-import { GovernancePipeline } from "@/components/ui/governance-pipeline";
-import { EmptyTerminal, EmptyState } from "@/components/ui/empty-states";
-import { RingGauge, Sparkline, StatusDot, MiniBar, StackedBar, ResponsiveAreaChart } from "@/components/ui/data-viz";
-import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { SystemDiagram } from "@/components/ui/system-diagram";
-import { SqlHighlight } from "@/components/ui/sql-highlight";
-import { TimeAgo } from "@/components/ui/time-ago";
-import { DashboardSkeleton } from "@/components/ui/skeleton";
-import { useOnboardingStatus } from "@/lib/onboarding";
-import { useTierBranding } from "@/lib/hooks/use-tier-branding";
-import { TierWordmark } from "@/components/branding/tier-wordmark";
-import { TierBadge } from "@/components/branding/tier-badge";
+import { subscribeMetrics } from "~/lib/api";
+import { useConnectionsHealth, useCacheStats, useBudgets, useAudit, usePlan, prefetchCommonData } from "~/lib/hooks/use-gateway-data";
+import type { MetricsSnapshot, AuditEntry, ConnectionHealthStats } from "~/lib/types";
+import { useConnection } from "~/lib/connection-context";
+import { useAppAuth } from "~/lib/auth-context";
+import { useSubscription } from "~/lib/subscription-context";
+import { useBackendClient } from "~/lib/backend-client";
+import type { UsageSummaryResponse, DailyUsagePoint } from "~/lib/backend-client";
+import { GovernancePipeline } from "~/components/ui/governance-pipeline";
+import { EmptyTerminal, EmptyState } from "~/components/ui/empty-states";
+import { RingGauge, Sparkline, StatusDot, MiniBar, StackedBar, ResponsiveAreaChart } from "~/components/ui/data-viz";
+import { PageHeader, TerminalBar } from "~/components/ui/page-header";
+import { SystemDiagram } from "~/components/ui/system-diagram";
+import { SqlHighlight } from "~/components/ui/sql-highlight";
+import { TimeAgo } from "~/components/ui/time-ago";
+import { DashboardSkeleton } from "~/components/ui/skeleton";
+import { useOnboardingStatus } from "~/lib/onboarding";
+import { useTierBranding } from "~/lib/hooks/use-tier-branding";
+import { TierWordmark } from "~/components/branding/tier-wordmark";
+import { TierBadge } from "~/components/branding/tier-badge";
 
 /* ── Metric card ── */
 function MetricCard({
@@ -351,7 +351,7 @@ function CloudAndUsageContent() {
         setSummary(summaryData);
       } else {
         // Fall back to mock summary derived from keys
-        import("@/lib/mock-usage").then(({ generateDailyUsage, generateKeyUsage, getRateLimitStatus }) => {
+        import("~/lib/mock-usage").then(({ generateDailyUsage, generateKeyUsage, getRateLimitStatus }) => {
           if (cancelled) return;
           const mockKeyStats = keysData.map((k) => generateKeyUsage(k));
           const mockRateLimit = getRateLimitStatus("free");
@@ -379,7 +379,7 @@ function CloudAndUsageContent() {
       if (dailyRes !== null) {
         setSparkPoints(dailyRes.points);
       } else {
-        import("@/lib/mock-usage").then(({ generateDailyUsage }) => {
+        import("~/lib/mock-usage").then(({ generateDailyUsage }) => {
           if (cancelled) return;
           setSparkPoints(generateDailyUsage(keysData, 7));
         });
@@ -452,24 +452,21 @@ function DashboardOnboardingCheck() {
   const { activeOrgId, isAuthenticated } = useAppAuth();
   const { isComplete, isLoading, markComplete } = useOnboardingStatus();
   const [autoCompleting, setAutoCompleting] = useState(false);
+  const triedRef = useRef(false);
 
   useEffect(() => {
-    if (isLoading) return;
-
-    // Not signed in — nothing to do, auth protection handled by middleware
+    if (isLoading || autoCompleting) return;
     if (!isAuthenticated) return;
-
-    if (isComplete === true) return; // already done
+    if (isComplete === true) return;
+    if (triedRef.current) return;
 
     if (activeOrgId) {
-      // User has an active org but onboarding flag not set.
-      // Auto-mark complete — they don't need the wizard.
+      triedRef.current = true;
       setAutoCompleting(true);
       markComplete()
         .catch(() => {})
         .finally(() => setAutoCompleting(false));
     } else {
-      // No org — send to onboarding to create/join a team
       router.push("/onboarding");
     }
   }, [isLoading, isComplete, activeOrgId, isAuthenticated, router, markComplete]);

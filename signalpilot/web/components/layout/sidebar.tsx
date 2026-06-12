@@ -4,15 +4,15 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useMemo } from "react";
 import dynamic from "next/dynamic";
-import { KeyRound, CreditCard, Plug, BarChart3, Shield, Lock, Users, BookOpen } from "lucide-react";
-import { Tooltip } from "@/components/ui/tooltip";
-import { useAppAuth } from "@/lib/auth-context";
-import { getSandboxes, getProjects } from "@/lib/api";
-import { useConnectionsHealth } from "@/lib/hooks/use-gateway-data";
-import { TierWordmark } from "@/components/branding/tier-wordmark";
-import { TierAccent } from "@/components/branding/tier-accent";
-import { TierSeal } from "@/components/branding/tier-seal";
-import { useTierBranding } from "@/lib/hooks/use-tier-branding";
+import { KeyRound, CreditCard, Plug, BarChart3, Shield, Lock, Users, GitBranch, BookOpen } from "lucide-react";
+import { Tooltip } from "~/components/ui/tooltip";
+import { useAppAuth } from "~/lib/auth-context";
+import { getProjects, getWorkspaceProjects } from "~/lib/api";
+import { useConnectionsHealth } from "~/lib/hooks/use-gateway-data";
+import { TierWordmark } from "~/components/branding/tier-wordmark";
+import { TierAccent } from "~/components/branding/tier-accent";
+import { TierSeal } from "~/components/branding/tier-seal";
+import { useTierBranding } from "~/lib/hooks/use-tier-branding";
 
 /* Custom SVG nav icons — geometric, minimal, brutalism-lite */
 function NavIconDashboard({ active }: { active: boolean }) {
@@ -107,6 +107,26 @@ function NavIconSettings({ active }: { active: boolean }) {
     </svg>
   );
 }
+function NavIconKnowledge({ active }: { active: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <rect x="1" y="3" width="10" height="10" stroke="currentColor" strokeWidth="1" />
+      <rect x="3" y="1" width="10" height="10" stroke="currentColor" strokeWidth="1" />
+      <line x1="5" y1="5" x2="11" y2="5" stroke="currentColor" strokeWidth="0.75" />
+      <line x1="5" y1="7.5" x2="11" y2="7.5" stroke="currentColor" strokeWidth="0.75" />
+      <line x1="5" y1="10" x2="9" y2="10" stroke="currentColor" strokeWidth="0.75" />
+      {active && <rect x="10" y="2" width="2" height="2" fill="var(--color-success)" />}
+    </svg>
+  );
+}
+
+function NavIconGitHub({ active }: { active: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <path d="M7 1C3.7 1 1 3.7 1 7c0 2.7 1.7 4.9 4.1 5.7.3.1.4-.1.4-.3v-1c-1.7.4-2-.8-2-.8-.3-.7-.7-.9-.7-.9-.5-.4 0-.4 0-.4.6 0 .9.6.9.6.5.9 1.4.6 1.7.5.1-.4.2-.6.4-.8-1.3-.1-2.7-.7-2.7-3 0-.7.2-1.2.6-1.7-.1-.1-.3-.8.1-1.6 0 0 .5-.2 1.7.6.5-.1 1-.2 1.5-.2s1 .1 1.5.2c1.2-.8 1.7-.6 1.7-.6.3.8.1 1.5.1 1.6.4.4.6 1 .6 1.7 0 2.3-1.4 2.8-2.7 3 .2.2.4.5.4 1.1v1.6c0 .2.1.4.4.3C11.3 11.9 13 9.7 13 7c0-3.3-2.7-6-6-6z" stroke="currentColor" strokeWidth="0.5" fill={active ? "currentColor" : "none"} />
+    </svg>
+  );
+}
 
 type NavIconComponent = React.FC<{ active: boolean }>;
 
@@ -116,15 +136,19 @@ const nav: { href: string; label: string; icon: NavIconComponent; shortcut: stri
   { href: "/integrations", label: "integrations", icon: NavIconIntegrations, shortcut: "3" },
   { href: "/schema", label: "schema", icon: NavIconSchema, shortcut: "4" },
   { href: "/projects", label: "projects", icon: NavIconProject, shortcut: "5" },
-  { href: "/sandboxes", label: "sandboxes", icon: NavIconSandbox, shortcut: "6" },
-  { href: "/query", label: "query", icon: NavIconQuery, shortcut: "7" },
-  { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "8" },
-  { href: "/health", label: "health", icon: NavIconHealth, shortcut: "9" },
+  { href: "/query", label: "query", icon: NavIconQuery, shortcut: "6" },
+  { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "7" },
+  { href: "/knowledge", label: "knowledge", icon: NavIconKnowledge, shortcut: "8" },
+  { href: "/health", label: "health", icon: NavIconHealth, shortcut: "H" },
   { href: "/settings", label: "settings", icon: NavIconSettings, shortcut: "0" },
 ];
 
 /** Routes where the sidebar should be hidden (auth + onboarding = locked flow) */
-const HIDDEN_SIDEBAR_PREFIXES = ["/sign-in", "/sign-up", "/onboarding"];
+const HIDDEN_SIDEBAR_PREFIXES = ["/sign-in", "/sign-up", "/onboarding", "/notebook"];
+
+function matchesRoutePrefix(pathname: string, prefix: string) {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
 
 function SignalPilotLogo() {
   return (
@@ -203,7 +227,7 @@ function UserSection() {
  * Gated on clerkEnabled in UserSection below.
  */
 const TeamSwitcher = dynamic(
-  () => import("@/components/layout/team-switcher"),
+  () => import("~/components/layout/team-switcher"),
   { ssr: false }
 );
 
@@ -380,11 +404,29 @@ function AccountSecurityNavLink({ pathname }: { pathname: string }) {
   );
 }
 
+/** GitHub nav link — nested under settings */
+function GitHubNavLink({ pathname }: { pathname: string }) {
+  const active = pathname.startsWith("/settings/github");
+
+  return (
+    <Link
+      href="/settings/github"
+      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 text-sm transition-all ${
+        active
+          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
+          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
+      }`}
+    >
+      <GitBranch size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
+      <span className="flex-1 tracking-wide text-[12px]">github</span>
+    </Link>
+  );
+}
+
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { isCloudMode, isAuthenticated } = useAppAuth();
-  const [activeSandboxes, setActiveSandboxes] = useState(0);
   const [projectCount, setProjectCount] = useState(0);
 
   // Connection health from shared SWR cache (auto-refreshes every 15s)
@@ -395,27 +437,25 @@ export default function Sidebar() {
     return { total: conns.length, healthy: conns.filter((c) => c.status === "healthy").length };
   }, [healthData]);
 
-  // Sandboxes & projects are local-only — poll separately
   useEffect(() => {
-    if (isCloudMode) return;
     const fetch = () => {
-      getSandboxes().then((s) => setActiveSandboxes(s.filter((x) => x.status === "running").length)).catch(() => {});
-      getProjects().then((p) => setProjectCount(p.length)).catch(() => {});
+      getWorkspaceProjects().then((res) => setProjectCount(res.total)).catch(() => getProjects().then((p) => setProjectCount(p.length)).catch(() => {}));
     };
     fetch();
     const i = setInterval(fetch, 30000);
     return () => clearInterval(i);
   }, [isCloudMode]);
 
-  const filteredNav = nav.filter(({ href }) => !(isCloudMode && (href === "/projects" || href === "/sandboxes" || href === "/settings")));
+  const filteredNav = nav.filter(({ href }) => !(isCloudMode && href === "/settings"));
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
-        const idx = parseInt(e.key, 10);
-        if (idx >= 1 && idx <= filteredNav.length) {
+        const key = e.key.toLowerCase();
+        const item = filteredNav.find((entry) => entry.shortcut.toLowerCase() === key);
+        if (item) {
           e.preventDefault();
-          router.push(filteredNav[idx - 1].href);
+          router.push(item.href);
         }
       }
     }
@@ -427,7 +467,7 @@ export default function Sidebar() {
   const tierBranding = useTierBranding();
   const showWordmark = tierBranding.enabled && tierBranding.tier !== "free";
 
-  if (HIDDEN_SIDEBAR_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
+  if (HIDDEN_SIDEBAR_PREFIXES.some((prefix) => matchesRoutePrefix(pathname, prefix))) {
     return null;
   }
 
@@ -480,10 +520,9 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 px-3 py-2 space-y-0.5">
-        {filteredNav.map(({ href, label, icon: Icon }, filteredIdx) => {
-          const shortcut = String(filteredIdx + 1);
+        {filteredNav.map(({ href, label, icon: Icon, shortcut }) => {
           const active = pathname.startsWith(href);
-          const badge = href === "/sandboxes" ? activeSandboxes : href === "/projects" ? projectCount : 0;
+          const badge = 0;
           return (
             <Link
               key={href}
@@ -520,6 +559,8 @@ export default function Sidebar() {
         <TeamNavLink pathname={pathname} />
         {/* Account Security sub-link — cloud-mode only */}
         <AccountSecurityNavLink pathname={pathname} />
+        {/* GitHub sub-link */}
+        <GitHubNavLink pathname={pathname} />
       </nav>
 
       {/* User section — Clerk UserButton or sign-in link */}

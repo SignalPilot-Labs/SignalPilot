@@ -1,0 +1,61 @@
+---
+# F-21: Restrict pods/exec in tenant namespaces to nb-<12hex> pods and the
+# notebook container — ValidatingAdmissionPolicy form (default path).
+#
+# DEFAULT install path — apply this on k8s >= 1.30 with the
+# ValidatingAdmissionPolicy GA feature gate enabled (default since 1.30).
+# Use the Kyverno form (restrict-pod-exec-kyverno.yaml) ONLY if your cluster is
+# < 1.30 or VAP is disabled. Do NOT install both — see README.md.
+#
+# Defense-in-depth layer over:
+#   - Gateway AST gate (tests/test_pod_exec_caller_invariant.py, R4 C4)
+#   - Hardcoded container name "notebook" in kubernetes.py pod_exec_io
+#   - RBAC broad pods/exec (RBAC cannot prefix-match dynamic pod names)
+#
+# Admission for `kubectl exec` is a CONNECT on the pods/exec subresource:
+#   - request.name      = the target pod name (nb-<12hex> for gateway pods)
+#   - object            = the PodExecOptions (object.container = target container)
+# The policy is SA-agnostic; scope comes from the namespace label
+# signalpilot.dev/tenant=user (same label as require-gvisor).
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: restrict-pod-exec-signalpilot
+  labels:
+    app.kubernetes.io/managed-by: signalpilot
+    signalpilot.dev/component: admission
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CONNECT"]
+        resources: ["pods/exec"]
+  validations:
+    # Rule 1 — pod name must be a gateway-minted notebook pod.
+    - expression: "request.name.matches('^nb-[0-9a-f]{12}$')"
+      message: "Exec on tenant namespaces is only allowed for nb-<12hex> pods."
+    # Rule 2 — target container must be 'notebook'. The gateway always sets the
+    # container field; an unset field (kubectl picking the first container) is
+    # also rejected, so a non-gateway caller cannot omit it to slip through.
+    - expression: "has(object.container) && object.container == 'notebook'"
+      message: "Exec on tenant pods is only allowed for container=notebook."
+
+---
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: restrict-pod-exec-signalpilot-binding
+  labels:
+    app.kubernetes.io/managed-by: signalpilot
+    signalpilot.dev/component: admission
+spec:
+  policyName: restrict-pod-exec-signalpilot
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        signalpilot.dev/tenant: user

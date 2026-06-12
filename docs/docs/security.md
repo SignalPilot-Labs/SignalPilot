@@ -65,6 +65,13 @@ See [Governance reference](/docs/reference/governance) for the complete rule set
 - **DNS rebinding defense**: Hostnames resolved and validated before connection
 - **Non-root containers**: Gateway and backend run as UID 10001
 
+## Sandboxed Workspaces
+
+- **gVisor isolation**: Notebook pods (`run_notebook`) execute under the gVisor runtime, not a shared host kernel.
+- **Per-org NetworkPolicy**: Each org's notebook pods are network-isolated from other tenants' workloads.
+- **Read-only rootfs**: Pod root filesystem is mounted read-only.
+- **IMDS egress blocked**: Access to the cloud instance metadata service is denied from inside the pod.
+
 ## Audit
 
 - **Every query logged** with timestamp, org, user, connection, and SQL

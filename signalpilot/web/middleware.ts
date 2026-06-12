@@ -41,21 +41,48 @@ function applySecurityHeaders(
   let connectSrc = "'self'";
   if (isSafeUrl(gatewayUrl)) {
     connectSrc += ` ${gatewayUrl}`;
+    // WebSocket connections to the gateway (notebook kernel) use ws:// or wss://
+    try {
+      const gwUrl = new URL(gatewayUrl);
+      const wsScheme = gwUrl.protocol === "https:" ? "wss:" : "ws:";
+      connectSrc += ` ${wsScheme}//${gwUrl.host}`;
+    } catch {}
   } else {
     console.warn(`CSP: NEXT_PUBLIC_GATEWAY_URL is not a valid URL, omitting from connect-src: ${gatewayUrl}`);
   }
   // CSP script-src: 'unsafe-inline' is required because Next.js injects inline
-  // scripts for hydration/chunk preloading that cannot carry a nonce (the nonce
-  // is generated in middleware but Next.js renders inline scripts at build time).
-  // 'unsafe-eval' is REMOVED — this is the main XSS hardening win, blocking
-  // eval(), new Function(), setTimeout(string), etc.
-  let scriptSrc = "'self' 'unsafe-inline'";
-  let imgSrc = "'self' data: blob:";
+  // scripts for hydration/chunk preloading that cannot carry a nonce.
+  // 'unsafe-eval' is required because Vega (used by Altair charts) compiles
+  // expressions via new Function(). Without it, all Altair/Vega charts fail.
+  let scriptSrc = "'self' 'unsafe-inline' 'unsafe-eval'";
+  let imgSrc = `'self' data: blob: ${gatewayUrl}`;
   const fontSrc = "'self' data: https://cdn.jsdelivr.net";
 
   let workerSrc = "'self'";
 
+  // frame-src: always allow 'self'. Add the gateway origin if it differs from
+  // the web app origin (cross-origin gateway deployment). NEXT_PUBLIC_GATEWAY_URL
+  // is a build-time constant — never sourced from a runtime API response so a
+  // malicious script cannot swap it to a different origin.
   let frameSrc = "'self'";
+  const gatewayOrigin = (() => {
+    try {
+      const u = new URL(gatewayUrl);
+      return u.origin; // e.g. "http://localhost:3300"
+    } catch {
+      return null;
+    }
+  })();
+  // Include localhost wildcard for dev convenience only — in production the
+  // gatewayOrigin covers the exact gateway host and there is no need to allow
+  // arbitrary localhost ports. L-1: gate on NODE_ENV to avoid widening frame-src
+  // in production builds.
+  if (process.env.NODE_ENV === "development") {
+    frameSrc += " http://localhost:* https://localhost:*";
+  }
+  if (gatewayOrigin && isSafeUrl(gatewayUrl) && gatewayOrigin !== "null") {
+    frameSrc += ` ${gatewayOrigin}`;
+  }
 
   if (withClerk) {
     connectSrc +=
@@ -87,7 +114,7 @@ function applySecurityHeaders(
       `frame-src ${frameSrc}`,
       "object-src 'none'",
       "frame-ancestors 'none'",
-      "base-uri 'self'",
+      `base-uri 'self' ${gatewayUrl}`,
       "form-action 'self'",
     ].join("; ")
   );
@@ -116,6 +143,42 @@ function applySecurityHeaders(
 // so @clerk/nextjs/server is never loaded and CLERK_SECRET_KEY is not needed.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Notebook proxy — rewrite /notebook/* to the gateway
+// ---------------------------------------------------------------------------
+
+const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
+const NOTEBOOK_PROXY_TARGET_URL =
+  process.env.SP_GATEWAY_INTERNAL_URL || GATEWAY_URL;
+
+function isNotebookPath(pathname: string): boolean {
+  return pathname.startsWith("/notebook/");
+}
+
+function isLegacyNotebooksPath(pathname: string): boolean {
+  return pathname === "/notebooks" || pathname.startsWith("/notebooks/");
+}
+
+function redirectLegacyNotebooks(req: NextRequest): NextResponse {
+  const target = req.nextUrl.clone();
+  target.pathname = target.pathname.replace(/^\/notebooks/, "/projects");
+  return NextResponse.redirect(target, 307);
+}
+
+function proxyNotebook(req: NextRequest): NextResponse {
+  const target = new URL(
+    req.nextUrl.pathname + req.nextUrl.search,
+    NOTEBOOK_PROXY_TARGET_URL,
+  );
+  return NextResponse.rewrite(target, {
+    headers: req.headers,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Middleware export
+// ---------------------------------------------------------------------------
+
 let middlewareExport: NextMiddleware;
 
 if (clerkEnabled) {
@@ -128,12 +191,21 @@ if (clerkEnabled) {
     "/sign-up(.*)",
     "/onboarding(.*)",
     "/",
+    "/notebook(.*)",
   ]);
 
   middlewareExport = clerkMiddleware(async (auth, req) => {
+    if (isLegacyNotebooksPath(req.nextUrl.pathname)) {
+      return redirectLegacyNotebooks(req);
+    }
+
+    // Notebook paths proxy to gateway — no Clerk auth needed (gateway handles it)
+    if (isNotebookPath(req.nextUrl.pathname)) {
+      return proxyNotebook(req);
+    }
+
     const { userId } = await auth();
 
-    // In cloud mode, protect non-public routes (unauthenticated users only)
     if (IS_CLOUD_MODE && !isPublicRoute(req) && !userId) {
       await auth.protect();
     }
@@ -144,6 +216,15 @@ if (clerkEnabled) {
   });
 } else {
   middlewareExport = (req: NextRequest) => {
+    if (isLegacyNotebooksPath(req.nextUrl.pathname)) {
+      return redirectLegacyNotebooks(req);
+    }
+
+    // Notebook paths proxy to gateway
+    if (isNotebookPath(req.nextUrl.pathname)) {
+      return proxyNotebook(req);
+    }
+
     const response = NextResponse.next();
     applySecurityHeaders(response, false, req);
     return response;
@@ -154,6 +235,8 @@ export default middlewareExport;
 
 export const config = {
   matcher: [
+    // Notebook proxy must include static assets such as fonts and JS chunks.
+    "/notebook/:path*",
     // Skip Next.js internals and all static files (Clerk-recommended pattern)
     "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
     // Always run for API routes

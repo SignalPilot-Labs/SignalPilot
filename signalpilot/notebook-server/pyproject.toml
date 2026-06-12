@@ -1,0 +1,617 @@
+[build-system]
+requires = ["uv_build>=0.8.3,<0.12.0"]
+build-backend = "uv_build"
+
+[project]
+name = "sp-notebook"
+version = "0.1.0"
+description = "A library for making reactive notebooks and apps"
+# We try to keep dependencies to a minimum, to avoid conflicts with
+# user environments; we need a very compelling reason for each dependency added.
+# Dependencies should have lower bounds, which should be as loose as possible.
+dependencies = [
+    # For maintainable cli
+    "click>=8.0,<9",
+    # code completion (upper bound applied temporarily for resolution)
+    "jedi>=0.18.0,<0.20.0",
+    # compile markdown to html
+    "markdown>=3.6,<4",
+    # add features to markdown
+    # Pinned to specific version for introduction of codeblock handling.
+    "pymdown-extensions>=10.21.2,<11",
+    # syntax highlighting of code in markdown
+    "pygments>=2.19,<3",
+    # for reading, writing configs
+    "tomlkit>=0.12.0",
+    # for managing frontmatter headers in markdown
+    "pyyaml>=6.0.1",
+    # web server
+    # - 0.22.0 introduced timeout-graceful-shutdown, which we use
+    "uvicorn>=0.22.0",
+    # web framework
+    # - 0.29.0 introduced Middleware kwargs, which we use
+    # - starlette 0.36.0 introduced a bug
+    # - starlette 0.37.2 fixed httpx 0.28 compatibility
+    "starlette>=0.37.2",
+    # multipart form parsing for file uploads (Starlette's request.form() requires it)
+    "python-multipart>=0.0.18",
+    # websockets for use with starlette, and for lsp
+    "websockets >= 14.2.0",
+    # loro for collaborative editing
+    "loro>=1.10.0",
+    # python <=3.10 compatibility
+    "typing_extensions>=4.4.0; python_version < '3.11'",
+    # for rst parsing; lowerbound determined by awscli requiring < 0.17,
+    "docutils>=0.16.0",
+    # to show RAM, CPU usage, other system utilities
+    "psutil>=5.0",
+    # required dependency in Starlette for SessionMiddleware support
+    "itsdangerous>=2.0.0",
+    # for dataframe support
+    "narwhals>=2.0.0",
+    # for packaging.version; not sure what the lower bound is.
+    "packaging",
+    "msgspec>=0.20.0",
+    # for IPC, required for sp edit --sandbox, sp run <multiple notebooks>
+    "pyzmq>=27.1.0; python_version < '3.15'",
+    # file watching for live reload on external edits
+    "watchdog>=3.0.0",
+    # Windows terminal support (ConPTY)
+    "pywinpty>=2.0.0; sys_platform == 'win32'",
+    # data science essentials — always available in sp-notebook
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "plotly>=5.14.0",
+    "matplotlib>=3.8.0",
+    # runtime AI agent used by chat and Notion analysis endpoints
+    "claude-agent-sdk>=0.1.0",
+    "requests>=2.31,<3",
+]
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+classifiers = [
+    "Operating System :: OS Independent",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Education",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3 :: Only",
+]
+
+[project.scripts]
+sp = "signalpilot._cli.cli:main"
+
+[project.urls]
+homepage = "https://github.com/marimo-team/sp"
+
+[project.entry-points."docstring_to_markdown"]
+sp_converter = "signalpilot._utils.docs:SpConverter"
+
+[project.optional-dependencies]
+sql = [
+    "duckdb>=1.0.0",           # SQL cells
+    "polars[pyarrow]>=1.9.0",  # SQL output back in Python
+    "sqlglot[c]>=26.8.0"       # SQL cells parsing;
+]
+
+# For per-notebook sandboxed kernels
+sandbox = [
+    "pyzmq>=27.1.0",           # IPC communication for sandbox kernels
+    "uv>=0.9.21",              # for sandbox management
+]
+
+# List of deps that are recommended for most users
+# in order to unlock all features in sp
+recommended = [
+    "sp-notebook[sql]",
+    "sp-notebook[sandbox]",                  # For `sp edit --sandbox DIRECTORY`
+    "altair>=5.4.0",                    # Plotting in datasource viewer
+    "ruff",                             # Formatting
+    "nbformat>=5.7.0",                  # Export as IPYNB
+]
+
+lsp = [
+    "python-lsp-server>=1.13.0",
+    "python-lsp-ruff>=2.0.0",
+]
+
+mcp = [
+    "mcp>=1.0.0",
+    "pydantic>2",
+]
+
+otel = [
+    "opentelemetry-api~=1.28.0",
+    "opentelemetry-sdk~=1.28.0",
+    "opentelemetry-exporter-otlp-proto-http~=1.28.0",
+    "opentelemetry-exporter-otlp-proto-grpc~=1.28.0",
+]
+
+[dependency-groups]
+dev = [
+    # Typo checking
+    "typos~=1.23.6",
+    # For tracing debugging
+    "opentelemetry-api~=1.28.0",
+    "opentelemetry-sdk~=1.28.0",
+    "opentelemetry-exporter-otlp-proto-http~=1.28.0",
+    "opentelemetry-exporter-otlp-proto-grpc~=1.28.0",
+    # For SQL
+    "duckdb>=1.0.0",
+    "sqlglot[c]>=26.8.0",
+    # Stubs for optional dataframe backends
+    "pyarrow-stubs",
+    # For linting
+    "ruff>=0.15.9",
+]
+
+test = [
+    # For server testing
+    "httpx~=0.28.0",
+    "urllib3~=2.5.0",
+    # Pytest and plugins
+    "pytest~=9.0.2",
+    "pytest-timeout~=2.4.0",
+    "pytest-codecov~=0.7.0",
+    "pytest-rerunfailures~=16.1",
+    "pytest-asyncio~=1.3.0",
+    "pytest-picked>=0.5.1",
+    "pytest-sugar~=1.1.1",
+    "pytest-xdist~=3.5",
+    # Comparison testing
+    "inline-snapshot~=0.29.0",
+    "hypothesis~=6.102.1",
+    "dirty-equals~=0.9.0",
+    # Forced for modern matplotlib.
+    "matplotlib~=3.10.7",
+    "pillow>=9",
+    "zstandard>=0.21.0",
+    "cffi>=1.16.0",
+]
+
+test-optional = [
+    {include-group = "test"},
+    # For testing ADBC driver-based SQL connections
+    "adbc_driver_manager",
+    "adbc_driver_sqlite",
+    "python-lsp-server>=1.10.0",
+    # For testing mo.ui.chart, table, ...
+    "vl-convert-python",
+    "vegafusion",
+    "pyarrow>=19.0.1",
+    "pyarrow_hotfix",
+    "altair>=5.4.0",
+    "plotly>=5.14.0",
+    "polars>=1.32.2",
+    "sqlglot[c]>=26.8.0",
+    "sqlalchemy>=2.0.40",
+    "obstore>=0.8.2",
+    "fsspec>=2026.2.0",
+    "pyiceberg>=0.9.0",
+    "cloudpathlib>=0.23.0",
+    # For testing clickhouse
+    "chdb>=3; platform_system != 'Windows'", # there is no suitable wheel for windows
+    "clickhouse-connect>=0.8.18",
+    "redshift-connector[full]>=2.1.7",
+    # For testing starrocks
+    "starrocks>=1.3.0",
+    "pandas>=1.5.3",
+    "hvplot~=0.11.3",
+    "geopandas>=1.1.0",
+    "duckdb>=1.0.0",
+    "ibis-framework[duckdb]>=10.3.0",
+    # For testing mo.image
+    "pillow~=12.0.0",
+    "anywidget~=0.9.21",
+    "ipython~=8.12.3",
+    # testing gen ai
+    # - google-auth uses cachetools, and cachetools<5.0.0 uses collections.MutableMapping (removed in Python 3.10)
+    "cachetools>=5.0.0",
+    "boto3>=1.38.46",
+    # for bedrock ui chat
+    # exporting as ipynb
+    "nbformat>=5.10.4",
+    "nbconvert>=7.17.0",
+    "sympy>=1.13.3",
+    "jupytext>=1.17.2",
+    # For standard scientific computing/ ML
+    "jax>=0.4.0; python_version == '3.12'",
+    "torch>=2.4.0; python_version == '3.12'",
+    "scikit-bio>=0.6.3; python_version == '3.12'",
+    "mcp>=1.0.0",
+    # zeromq
+    "pyzmq>=27.1.0",
+    # weave tracing integration
+    "weave>=0.51.0",
+    # For type-checking tests
+    "basedpyright>=1.28.0",
+]
+
+typecheck = [
+    "mypy~=1.15.0",
+    # Types for mypy
+    "altair>=5.4.0",
+    "leafmap~=0.39.2",
+    "panel>=1.5.3",
+    "polars>=1.9.0",
+    "duckdb>=1.0.0",
+    "narwhals>=2.0.0",
+    "matplotlib>=3.8.0",
+    "sqlglot[c]>=26.8.0",
+    "sqlalchemy>=2.0.40",
+    "obstore>=0.8.2",
+    "fsspec>=2026.2.0",
+    "loro>=1.5.0",
+    "boto3-stubs>=1.38.46",
+    "pandas-stubs>=1.5.3.230321",
+    "pyiceberg>=0.9.0",
+    "python-dotenv>=1.0.1",
+    "jupytext>=1.17.2",
+    "types-Pillow>=10.2.0.20240520",
+    "types-Pygments>=2.18.0.20240506",
+    "types-psutil>=5.9.5.20240516",
+    "types-redis>=4.6.0.20241004",
+    "types-Markdown>=3.6.0.20240316",
+    "types-PyYAML>=6.0.12.20240808",
+    "mcp>=1.0.0",
+    # zeromq
+    "pyzmq>=27.1.0",
+    "pyarrow-stubs",
+]
+
+docs = [
+    "sp_docs",
+    "ruff>=0.15.9",
+    "mkdocs>=1.6.1",
+    # Live reloading broken in >= 9.6.21: https://github.com/squidfunk/mkdocs-material/issues/8478
+    "mkdocs-material==9.6.20",
+    "mkdocstrings[python]>=0.27.0",
+    "mkdocs-material-extensions>=1.3.1",
+    "mkdocs-autorefs>=1.2.2",
+    "mkdocs-git-revision-date-localized-plugin>=1.3.0",
+    "mkdocs-minify-plugin>=0.8.0",
+    "mkdocs-glightbox>=0.4.0",
+    "mkdocs-macros-plugin>=1.3.7",
+    "mkdocs-redirects>=1.2.2",
+    "mkdocs-click>=0.8.1",
+    "mike>=2.0.0",  # for versioning
+    "pillow>=10.2.0,!=11.3.0",  # for social cards, 11.3.0 doesn't have manylinux wheels
+    "cairosvg>=2.7.1",  # for social cards
+    "mdx-include>=1.4.2",
+    "pymdown-extensions>=10.21.2",
+    "lzstring>=1.0.4",
+    "beautifulsoup4>=4.12.0",
+    "markdownify>=0.13.0",
+]
+
+
+[tool.uv.sources]
+sp_docs = { path = "./docs", editable = true }
+
+[tool.uv.build-backend]
+module-name = "signalpilot"
+module-root = ""
+source-include = ["third_party.txt", "third_party_licenses.txt"]
+wheel-exclude = ["signalpilot/_smoke_tests/**"]
+
+[tool.ruff]
+line-length = 79
+target-version = "py310"
+include = ["signalpilot/**/*.py", "tests/**/*.py", "dagger/**/*.py"]
+exclude = [
+    "build",
+    "docs",
+    "examples",
+    "frontend",
+    "signalpilot/_smoke_tests",
+    "signalpilot/_snippets/data",
+    "signalpilot/_static/files/wasm-intro.py",
+    "signalpilot/_test_utils/_tutorials",
+    "signalpilot/_test_utils/codegen_data",
+    "signalpilot/_tutorials",
+    "scripts",
+    "tests/_ast/app_data",
+    "tests/_ast/cell_data",
+    "tests/_ast/codegen_data",
+    "tests/_ast/test_app.py",
+    "tests/_cli/cli_data",
+    "tests/**/fixtures",
+    "tests/_lint/test_files",
+    "tests/_runtime/runtime_data",
+]
+
+[tool.ruff.lint]
+preview = true
+ignore = [
+    "G004",   # Logging statement uses f-string
+    "TC001", # Move application import into a type-checking block
+    "TC006", # Add quotes to type expression in typing.cast()
+    "D301",   # Use r""" if any backslashes in a docstring
+    "PERF203", # try-except within a loop incurs performance overhead; not always possible
+    "PERF401", # Use {message_str} to create a transformed list; at the cost of readability
+    "PERF403", # Use a dictionary comprehension instead of a for-loop; at the cost of readability
+    # TODO: we should fix these, and enable this rule
+    "PT011", # `pytest.raises(ValueError)` is too broad, set the `match` parameter or use a more specific exception
+    "E501",  # Line too long, we still trim
+    "D415", # First line should end with a period, question mark, or exclamation point
+    "FA102", # Use `from __future__ import annotations`
+    "PLR1711", # Useless returns. We use this currently to delimit the end of a cell.
+
+    # From new version of Ruff: We should fix these, but it raises too many errors
+    "BLE001", # Do not catch blind exception: `Exception`
+    "RUF059", # Unused unpacked variable
+    "DTZ001", # `datetime.datetime()` called without a `tzinfo` argument
+    "PLW1510", # `subprocess.run` without explicit `check`
+    "S110", # `try`-`except`-`pass`
+    "TRY004", # Type check without `TypeError`
+    "SIM102", # Use a single `if` statement instead of nested `if` statements
+    "SIM117", # Use a single `with` statement with multiple contexts instead of nested `with` statements
+    "RUF012", # Mutable class default
+    "S102", # Use of `exec`
+    "PYI036", # Bad `sys.exit` annotation
+    "DTZ005", # `datetime.now()` called without `tzinfo`
+    "PLC0206", # Dict index without `.items()`
+    "PYI066", # Put branches for newer Python versions first when branching on `sys.version_info` comparisons
+    "SIM115", # Open file without context handler
+    "DTZ006", # `datetime.fromtimestamp()` called without `tzinfo`
+    "DTZ007", # `datetime.strptime()` called without zone
+    "DTZ011", # `date.today()` used
+    "TRY401", # Verbose log message
+    "UP007", # Use `X | Y` for type annotations
+    "DTZ012", # `date.fromtimestamp()` called without `tzinfo`
+    "DTZ901", # `datetime.min` / `datetime.max` used
+    "PLW0602", # Global variable not assigned
+    "S112", # `try`-`except`-`continue`
+    "TRY203", # Useless `try`-`except`
+    "PLC0105", # Type name incorrect variance
+    "PLE1205", # Logging too many args
+    "PLW1508", # Invalid envvar default
+    "PLW1509", # `subprocess` `preexec_fn` argument
+    "PYI063", # PEP 484-style positional-only parameter
+    "DTZ002", # `datetime.today()` called without tz
+    "PLC0205", # Single string `__slots__`
+    "PLE0704", # Misplaced bare `raise`
+    "PLR1704", # Redefined argument from local
+    "PLW0129", # Assert on string literal
+    "PLW0642", # Self or cls assignment
+    "PYI006", # Bad `sys.version_info` comparison
+    "SIM113", # `enumerate` for loop
+    "T100", # Debugger
+    "UP045", # Use `X | None` for optional type annotations
+]
+
+extend-select = [
+    # pyflakes
+    "F",
+    # pycodestyle
+    "E",
+    # warning
+    "W",
+    # flake8 builtin-variable-shadowing
+    "A001",
+    # flake8 builtin-argument-shadowing
+    "A002",
+    # flake8-unused-arguments
+    "ARG",
+    # flake8-bugbear
+    "B",
+    # Performance
+    "PERF",
+    "ANN002", # missing-type-args
+    "ANN003", # missing-type-kwargs
+    "ANN201", # missing-return-type-undocumented-public-function
+    "ANN202", # missing-return-type-private-function
+    "ANN205", # missing-return-type-static-method
+    "ANN206", # missing-return-type-class-method
+    # isort
+    "I001",
+    # Enable entire ruff rule section
+    "ASYNC", # subset of flake8-async rules
+    "TCH",   # Rules around TYPE_CHECKING blocks
+    "G",     # flake8-logging-format rules
+    "LOG",   # flake8-logging rules, most of them autofixable
+    "PT",    # flake8-pytest-style rules
+    "TID25", # flake8-tidy-imports rules
+    # Per rule enables
+    # "RUF100", # Unused noqa (auto-fixable)
+    # We ignore more pydocstyle than we enable, so be more selective at what we enable
+    # "D101", # Missing docstring in public class
+    "D106",
+    # "D2",
+    "D3",
+    # "D400", # First line should end with a period
+    # "D401", # First line of docstring should be in imperative mood
+    "D402",
+    "D403",
+    "D412",
+    "D419",
+    "PGH004", # Use specific rule codes when using noqa
+    "PGH005", # Invalid unittest.mock.Mock methods/attributes/properties
+    "RUF006", # Store a reference to the return value of asyncio.create_task
+    # "S101", # Checks use `assert` outside the test cases, test cases should be added into the exclusions
+    "B004",   # Checks for use of hasattr(x, "__call__") and replaces it with callable(x)
+    "B006",   # Checks for uses of mutable objects as function argument defaults.
+    "B017",   # Checks for pytest.raises context managers that catch Exception or BaseException.
+    "B019",   # Use of functools.lru_cache or functools.cache on methods can lead to memory leaks
+    "TRY002", # Prohibit use of `raise Exception`, use specific exceptions instead.
+    "T201",   # No print statements
+    "D3",  # pydocstyle Quotes Issues
+    "D4",  # pydocstyle Docstring Content Issues
+    "D207",  # Docstring is under-indented
+    "D208",  # Docstring is over-indented
+    "D210",  # No whitespaces allowed surrounding docstring text
+    "D211",  # No blank lines allowed before class docstring
+    "D214",  # Section is over-indented
+    "D215",  # Section underline is over-indented
+    "PLW1514", # Unspecified encoding in open()
+    "UP",  # Upgrades
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"**/{tests}/*" = ["ANN201", "ANN202", "T201", "D", "F841", "PLW1514"]
+"dagger/*" = ["TID252"]
+# Prefer multi-line "\n".join([...]) expected strings in codegen tests.
+"tests/_ast/test_codegen.py" = ["FLY002"]
+
+[tool.ruff.lint.isort]
+required-imports = ["from __future__ import annotations"]
+combine-as-imports = true
+
+[tool.ruff.lint.flake8-type-checking]
+exempt-modules = ["typing", "typing_extensions"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint.flake8-tidy-imports]
+# Disallow all relative imports.
+ban-relative-imports = "all"
+# Ban certain modules from being imported at module level, instead requiring
+# that they're imported lazily (e.g., within a function definition).
+banned-module-level-imports = [
+    "altair",
+    "anywidget",
+    "chdb",
+    "clickhouse_connect",
+    "duckdb",
+    "ipython",
+    "numpy",
+    "packaging",
+    "pandas",
+    "polars",
+    "psutil",
+    "pyarrow",
+    "redis",
+    "sqlalchemy",
+    "obstore",
+    "fsspec",
+    "sqlglot",
+    "tomlkit",
+    "typing_extensions",
+    "pyiceberg",
+    "redshift_connector",
+    "starrocks",
+    # a top-level import of zmq may break WASM
+    "zmq"
+]
+
+[tool.ruff.lint.flake8-pytest-style]
+mark-parentheses = false
+fixture-parentheses = false
+
+[tool.mypy]
+strict = true
+exclude = [
+    'examples',
+    'tests/_ast/app_data',
+    'tests/_ast/codegen_data',
+    'tests/_ast/cell_data',
+    'tests/_cli/cli_data',
+    'tests/_runtime/runtime_data',
+    'signalpilot/_snippets/data/',
+    'signalpilot/_smoke_tests/',
+]
+warn_unused_ignores = false
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q -v --import-mode=importlib --ignore tests/_cli/fixtures --ignore tests/_ast/codegen_data --ignore tests/_ast/app_data"
+testpaths = ["tests", "signalpilot"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+timeout = 120 # seconds, per test (Windows CI needs extra headroom)
+faulthandler_timeout = 120 # seconds, during collection
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+    "flaky: marks tests that are known to be flaky",
+    "requires(dep1, dep2, ...): requires one or more dependencies to be installed",
+]
+
+[tool.coverage.run]
+omit = ["signalpilot/_tutorials/*"]
+
+[tool.typos.default]
+extend-ignore-re = ["[0-9a-zA-Z_-]{43}"]
+
+[tool.typos.default.extend-words]
+wheres = "wheres"
+Ue = "Ue"         # Used in one of the cell IDs
+Nd = "Nd"         # Confused with And
+pn = "pn"         # Panel
+caf = "caf"       # cafe
+ser = "ser"       # Used in pydantic-core package as part of a function name
+oint = "oint"     # Contour integrals in markdown completions
+
+[tool.typos.files]
+extend-exclude = [
+    "MultiSelectPlugin.test.ts",
+    "module_name_to_pypi_name.py",
+    "**/pnpm-lock.yaml",
+    "**/snapshots/*",
+    "**/__demo__/*",
+    "base64.test.ts",
+    "SECURITY.md", # Contains usernames that trigger typos
+    "patches/*", # Patches may contain typos from source code,
+    "frontend/dist/assets/*", # Assets may contain typos from source code
+    "tests/_sql/test_sql_parse.py", # Contains intentional invalid SQL for testing
+]
+
+
+[tool.sp.save]
+autosave_delay = 1000
+autosave = "after_delay"
+format_on_save = true
+
+[tool.sp.experimental]
+multi_column = true
+cache_panel = true
+isolate_apps = true
+
+[tool.sp.display]
+dataframes = "rich"
+
+[tool.sp.runtime]
+auto_instantiate = false
+watcher_on_save = "autorun"
+output_max_bytes = 10_000_000
+std_stream_max_bytes = 2_000_000
+dotenv = [".env"]
+
+[tool.sp.package_management]
+manager = "uv"
+
+[tool.sp.keymap]
+vimrc = "configs/.vimrc"
+
+[tool.basedpyright]
+reportUnusedCallResult = false
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
+
+[tool.pixi.dependencies]
+nodejs = "22.*"
+pnpm = "10.*"
+make = ">=4.4.1,<5"
+pre_commit = ">=4.2.0,<5"
+uv = ">=0.6.12,<0.7"
+python = "3.12.*"
+pip = ">=25.0.1,<26"
+
+[tool.pixi.pypi-dependencies]
+sp-notebook = {path = ".", editable = true}

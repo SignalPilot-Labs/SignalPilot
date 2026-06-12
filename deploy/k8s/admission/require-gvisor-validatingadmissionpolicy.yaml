@@ -1,0 +1,47 @@
+---
+# F-12: Require runtimeClassName: gvisor on all pods in tenant namespaces.
+#
+# DEFAULT install path — apply this file on k8s >= 1.30 with the
+# ValidatingAdmissionPolicy GA feature gate enabled (enabled by default since 1.30).
+#
+# Do NOT also install the Kyverno policy.  See README.md for full guidance.
+#
+# Namespace scope: namespaces with label signalpilot.dev/tenant=user.
+# The gateway sets this label on every tenant namespace it creates via
+# orchestrator/namespaces.py::_namespace_manifest.
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: require-gvisor-runtime-class
+  labels:
+    app.kubernetes.io/managed-by: signalpilot
+    signalpilot.dev/component: admission
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+  validations:
+    - expression: "object.spec.runtimeClassName == 'gvisor'"
+      message: "Pods in tenant namespaces must set runtimeClassName: gvisor"
+
+---
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: require-gvisor-runtime-class-binding
+  labels:
+    app.kubernetes.io/managed-by: signalpilot
+    signalpilot.dev/component: admission
+spec:
+  policyName: require-gvisor-runtime-class
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        signalpilot.dev/tenant: user

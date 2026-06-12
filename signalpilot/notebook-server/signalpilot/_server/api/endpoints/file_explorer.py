@@ -1,0 +1,362 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from starlette.authentication import requires
+
+from signalpilot import _loggers
+from signalpilot._server.api.deps import AppState
+from signalpilot._server.api.utils import (
+    parse_multipart_request,
+    parse_request,
+)
+from signalpilot._server.files.file_system import FileSystem
+from signalpilot._server.files.os_file_system import OSFileSystem
+from signalpilot._server.models.files import (
+    FileCopyRequest,
+    FileCopyResponse,
+    FileCreateMultipartRequest,
+    FileCreateResponse,
+    FileDeleteRequest,
+    FileDeleteResponse,
+    FileDetailsRequest,
+    FileDetailsResponse,
+    FileListRequest,
+    FileListResponse,
+    FileMoveRequest,
+    FileMoveResponse,
+    FileOpenRequest,
+    FileSearchRequest,
+    FileSearchResponse,
+    FileUpdateRequest,
+    FileUpdateResponse,
+)
+from signalpilot._server.models.models import (
+    BaseResponse,
+    ErrorResponse,
+    SuccessResponse,
+)
+from signalpilot._server.router import APIRouter
+
+if TYPE_CHECKING:
+    from starlette.requests import Request
+
+LOGGER = _loggers.sp_logger()
+
+# Router for file system endpoints
+router = APIRouter()
+
+_local_fs = OSFileSystem()
+
+
+def _get_cloud_context(request: Request) -> tuple[str, str] | None:
+    """Return (project_id, branch) if this is a cloud project request."""
+    project_id = request.headers.get("x-gateway-project-id")
+    if not project_id:
+        return None
+    branch = request.headers.get("x-gateway-branch-id", "main")
+    return (project_id, branch)
+
+
+def _get_fs(request: Request) -> FileSystem:
+    """Return the appropriate file system.
+
+    For cloud projects, use OSFileSystem pointed at the local git clone.
+    """
+    ctx = _get_cloud_context(request)
+    if ctx:
+        project_id, _ = ctx
+        from signalpilot._server.files.project_sync import local_project_dir
+
+        local_dir = local_project_dir(project_id)
+        if local_dir.exists():
+            return OSFileSystem(root=str(local_dir))
+    return _local_fs
+
+
+@router.post("/list_files")
+@requires("edit")
+async def list_files(
+    *,
+    request: Request,
+) -> FileListResponse:
+    """
+    requestBody:
+        content:
+            application/json:
+                schema:
+                    $ref: "#/components/schemas/FileListRequest"
+    responses:
+        200:
+            description: List files and directories in a given path
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/FileListResponse"
+    """
+    app_state = AppState(request)
+    body = await parse_request(request, cls=FileListRequest)
+    fs = _get_fs(request)
+    is_cloud = _get_cloud_context(request) is not None
+    if isinstance(fs, OSFileSystem) and not is_cloud:
+        directory = app_state.session_manager.workspace.directory
+        root = body.path or directory or fs.get_root()
+    else:
+        root = body.path or fs.get_root()
+    files = fs.list_files(root)
+    return FileListResponse(files=files, root=root)
+
+
+@router.post("/file_details")
+@requires("edit")
+async def file_details(
+    *,
+    request: Request,
+) -> FileDetailsResponse:
+    """
+    requestBody:
+        content:
+            application/json:
+                schema:
+                    $ref: "#/components/schemas/FileDetailsRequest"
+    responses:
+        200:
+            description: Get details of a specific file or directory
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/FileDetailsResponse"
+    """
+    body = await parse_request(request, cls=FileDetailsRequest)
+    return _get_fs(request).get_details(body.path)
+
+
+@router.post("/create")
+@requires("edit")
+async def create_file_or_directory(
+    *,
+    request: Request,
+) -> FileCreateResponse:
+    """
+    requestBody:
+        content:
+            multipart/form-data:
+                schema:
+                    $ref: "#/components/schemas/FileCreateMultipartRequest"
+    responses:
+        200:
+            description: Create a new file or directory
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/FileCreateResponse"
+    """
+    try:
+        parsed = await parse_multipart_request(
+            request, FileCreateMultipartRequest
+        )
+        info = _get_fs(request).create_file_or_directory(
+            parsed.body.path,
+            parsed.body.type,
+            parsed.body.name,
+            parsed.files.get("file"),
+        )
+        return FileCreateResponse(success=True, info=info)
+    except Exception as e:
+        LOGGER.error(f"Error creating file or directory: {e}")
+        return FileCreateResponse(success=False, message=str(e))
+
+
+@router.post("/delete")
+@requires("edit")
+async def delete_file_or_directory(
+    *,
+    request: Request,
+) -> FileDeleteResponse:
+    """
+    requestBody:
+        content:
+            application/json:
+                schema:
+                    $ref: "#/components/schemas/FileDeleteRequest"
+    responses:
+        200:
+            description: Delete a file or directory
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/FileDeleteResponse"
+    """
+    body = await parse_request(request, cls=FileDeleteRequest)
+    try:
+        fs = _get_fs(request)
+        fs.get_details(body.path)
+        success = fs.delete_file_or_directory(body.path)
+        return FileDeleteResponse(success=success)
+    except Exception as e:
+        LOGGER.error(f"Error deleting file or directory: {e}")
+        return FileDeleteResponse(success=False, message=str(e))
+
+
+@router.post("/copy")
+@requires("edit")
+async def copy_file_or_directory(
+    *,
+    request: Request,
+) -> FileCopyResponse:
+    """
+    requestBody:
+        content:
+            application/json:
+                schema:
+                    $ref: "#/components/schemas/FileCopyRequest"
+    responses:
+        200:
+            description: Copy a file or directory
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/FileCopyResponse"
+    """
+    body = await parse_request(request, cls=FileCopyRequest)
+    try:
+        fs = _get_fs(request)
+        fs.get_details(body.path)
+        info = fs.copy_file_or_directory(body.path, body.new_path)
+        return FileCopyResponse(success=True, info=info)
+    except Exception as e:
+        LOGGER.error(f"Error copying file or directory: {e}")
+        return FileCopyResponse(success=False, message=str(e))
+
+
+@router.post("/move")
+@requires("edit")
+async def move_file_or_directory(
+    *,
+    request: Request,
+) -> FileMoveResponse:
+    """
+    requestBody:
+        content:
+            application/json:
+                schema:
+                    $ref: "#/components/schemas/FileMoveRequest"
+    responses:
+        200:
+            description: Move a file or directory
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/FileMoveResponse"
+    """
+    body = await parse_request(request, cls=FileMoveRequest)
+    try:
+        fs = _get_fs(request)
+        fs.get_details(body.path)
+        info = fs.move_file_or_directory(body.path, body.new_path)
+        return FileMoveResponse(success=True, info=info)
+    except Exception as e:
+        LOGGER.error(f"Error moving file or directory: {e}")
+        return FileMoveResponse(success=False, message=str(e))
+
+
+@router.post("/update")
+@requires("edit")
+async def update_file(
+    *,
+    request: Request,
+) -> FileUpdateResponse:
+    """
+    requestBody:
+        content:
+            application/json:
+                schema:
+                    $ref: "#/components/schemas/FileUpdateRequest"
+    responses:
+        200:
+            description: Update a file or directory
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/FileUpdateResponse"
+    """
+    app_state = AppState(request)
+    body = await parse_request(request, cls=FileUpdateRequest)
+    try:
+        fs = _get_fs(request)
+        fs.get_details(body.path)
+        info = fs.update_file(body.path, body.contents)
+
+        if isinstance(fs, OSFileSystem):
+            session_manager = app_state.session_manager
+            await session_manager.trigger_file_change(body.path)
+
+        return FileUpdateResponse(success=True, info=info)
+    except Exception as e:
+        LOGGER.error(f"Error updating file or directory: {e}")
+        return FileUpdateResponse(success=False, message=str(e))
+
+
+@router.post("/open")
+@requires("edit")
+async def open_file(
+    *,
+    request: Request,
+) -> BaseResponse:
+    """
+    requestBody:
+        content:
+            application/json:
+                schema:
+                    $ref: "#/components/schemas/FileOpenRequest"
+    responses:
+        200:
+            description: Open a file in the system editor
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/BaseResponse"
+    """
+    body = await parse_request(request, cls=FileOpenRequest)
+    try:
+        fs = _get_fs(request)
+        fs.get_details(body.path)
+        success = fs.open_in_editor(body.path, body.line_number) if isinstance(fs, OSFileSystem) else False
+        return SuccessResponse(success=success)
+    except Exception as e:
+        LOGGER.error(f"Error opening file: {e}")
+        return ErrorResponse(success=False, message=str(e))
+
+
+@router.post("/search")
+@requires("edit")
+async def search_files(
+    *,
+    request: Request,
+) -> FileSearchResponse:
+    """
+    requestBody:
+        content:
+            application/json:
+                schema:
+                    $ref: "#/components/schemas/FileSearchRequest"
+    responses:
+        200:
+            description: Search for files and directories matching a query
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/FileSearchResponse"
+    """
+    body = await parse_request(request, cls=FileSearchRequest)
+    files = _get_fs(request).search(
+        query=body.query,
+        path=body.path,
+        include_directories=body.include_directories,
+        include_files=body.include_files,
+        depth=body.depth,
+        limit=body.limit,
+    )
+    return FileSearchResponse(
+        files=files, query=body.query, total_found=len(files)
+    )

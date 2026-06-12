@@ -1,0 +1,71 @@
+---
+# kyverno test for restrict-pod-exec-signalpilot ClusterPolicy.
+# Run with: kyverno test deploy/k8s/admission/
+#
+# Cases:
+#   A: nb-abc123def456 in labeled namespace, container=notebook → both rules pass
+#   B: nb-abc123def456, container=other → deny (Rule 2: restrict-container)
+#   C: not-an-nb-pod in labeled namespace → deny (Rule 1: restrict-pod-name)
+#   D: pod in unlabeled namespace → policy does not match (skip both rules)
+#
+# NOTE: kyverno test for Pod/exec subresource admission uses the request context.
+# Container field comes from PodExecOptions (request.object.container).
+# This test file documents expected behavior; run with `kyverno test ./` in this dir.
+
+apiVersion: cli.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: restrict-pod-exec-test
+policies:
+  - restrict-pod-exec-kyverno.yaml
+resources:
+  - restrict-pod-exec-resources.yaml
+namespaces:
+  - name: sp-nb-tenant-labeled
+    labels:
+      signalpilot.dev/tenant: user
+  - name: kube-system
+results:
+  # Case A: valid nb-pod + container=notebook → allow (both rules pass)
+  - policy: restrict-pod-exec-signalpilot
+    rule: restrict-pod-name
+    resource: nb-abc123def456
+    namespace: sp-nb-tenant-labeled
+    kind: Pod
+    result: pass
+  - policy: restrict-pod-exec-signalpilot
+    rule: restrict-container
+    resource: nb-abc123def456
+    namespace: sp-nb-tenant-labeled
+    kind: Pod
+    result: pass
+
+  # Case B: valid pod name, wrong container → deny (restrict-container)
+  - policy: restrict-pod-exec-signalpilot
+    rule: restrict-container
+    resource: nb-bad-container
+    namespace: sp-nb-tenant-labeled
+    kind: Pod
+    result: fail
+
+  # Case C: invalid pod name → deny (restrict-pod-name)
+  - policy: restrict-pod-exec-signalpilot
+    rule: restrict-pod-name
+    resource: not-an-nb-pod
+    namespace: sp-nb-tenant-labeled
+    kind: Pod
+    result: fail
+
+  # Case D: unlabeled namespace → policy does not apply (skip)
+  - policy: restrict-pod-exec-signalpilot
+    rule: restrict-pod-name
+    resource: nb-abc123def456
+    namespace: kube-system
+    kind: Pod
+    result: skip
+  - policy: restrict-pod-exec-signalpilot
+    rule: restrict-container
+    resource: nb-abc123def456
+    namespace: kube-system
+    kind: Pod
+    result: skip

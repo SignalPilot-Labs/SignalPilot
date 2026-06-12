@@ -2,8 +2,8 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
-import { getConnections } from "@/lib/api";
-import type { ConnectionInfo } from "@/lib/types";
+import { getConnections } from "~/lib/api";
+import type { ConnectionInfo } from "~/lib/types";
 
 const PUBLIC_PATHS = ["/sign-in", "/sign-up", "/"];
 

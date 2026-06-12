@@ -10,8 +10,8 @@
 
 import { useState } from "react";
 import { Users } from "lucide-react";
-import { useCreateTeam } from "@/lib/use-create-team";
-import { PendingButton } from "@/components/ui/pending-button";
+import { useCreateTeam } from "~/lib/use-create-team";
+import { PendingButton } from "~/components/ui/pending-button";
 
 interface TeamStepProps {
   /** Called after org is created + set active — parent advances to api-key wizard */

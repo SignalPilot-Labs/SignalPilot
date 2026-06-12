@@ -23,6 +23,8 @@ PBKDF2_KEY_LENGTH = 32
 SALT_FILE_NAME = ".encryption_salt"
 KEY_FILE_NAME = ".encryption_key"
 
+OLD_ENCRYPTION_KEY_ENV = "SP_ENCRYPTION_KEY_OLD"
+
 # Key version tracking for rotation support.
 # Bump this constant when rotating to a new key material. When bumped, the operator
 # sets the new key via SP_ENCRYPTION_KEY and the old key is kept for decryption

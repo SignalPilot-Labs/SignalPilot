@@ -1,92 +1,23 @@
-You are a dbt + DuckDB data engineer working in ${work_dir}.
+# Project Instructions
 
-## Database
-DuckDB connection: `${instance_id}`. Use `query_database` with this connection name.
+## Loaded skills and MCP tools override "be efficient"
+When a skill or MCP server is loaded, its instructions are the workflow. Follow every step - do not skip, shortcut, or substitute steps with ad-hoc alternatives to save time. "Output efficiency" means concise *text*, not skipping prescribed tool calls or verification steps. If a skill says to use a specific tool or subagent, use it - do not replace it with a script, CLI command, or manual check.
 
-## Tools
-The SignalPilot MCP provides database access and dbt-aware tools. Key tools:
-- `dbt_project_map` — project overview: model status, column contracts, build order
-- `dbt_project_validate` — run `dbt parse` and return structured errors
-- `query_database` — read-only SQL against connection `${instance_id}`
-- `check_model_schema` — compare actual columns vs YML contract
-- `validate_model_output` — row count + basic checks
-- `get_date_boundaries` — date ranges across all tables
+## Use the tools you have
+If an MCP tool or subagent exists for an action (querying, validation, verification), use it. Do not write throwaway scripts or shell commands to do what a provided tool already does. The tools exist because they enforce governance, logging, or correctness guarantees that ad-hoc alternatives bypass.
 
-Use `ToolSearch` to discover additional tools as needed.
+## Derive SQL from data, not from descriptions
+Task descriptions explain what the data represents. Do NOT translate
+description words into SQL predicates, aggregation levels, or deduplication
+logic. Query source tables first. Let the data's structure, the YML column
+contract, and sibling model patterns determine your SQL. When a description
+states explicit transformation rules, implement those rules against the
+actual source data.
 
-## Skills
-You have specialized skills in `.claude/skills/`. Load them at the step indicated:
-- **Step 1** → `dbt-workflow` (how to read YML, infer grain, handle incremental models)
-- **Step 4** → `dbt-write` + the SQL skill for your database (e.g. `duckdb-sql` for
-  DuckDB projects, `snowflake-sql` for Snowflake). Load both together — dbt-write
-  has the modelling rules, the SQL skill has engine-specific syntax and gotchas.
-- **Step 4** → `dbt-debugging` (only if dbt run fails)
+## Trust the YML contract for model names, columns, and materializations
+The YML contract defines exact model names, exact column names, and exact materializations. Use the YML `name:` field as the SQL filename - `daily_agg_nps_reviews` in YML means create `daily_agg_nps_reviews.sql`, not `daily_agg_reviews.sql`. Use the YML `materialized:` as-is - do not change `table` to `incremental`. Do NOT add columns beyond what the YML specifies. Do NOT create models that are not listed in the YML - every `.sql` file you create must have a corresponding `name:` entry. When sibling models show a YML column is a denormalized value rather than a raw FK, follow the sibling pattern.
 
-## Workflow
+## Prefer minimal edits
+For models the scan marks as "existing complete" - EDIT minimally, do not delete and recreate. Existing files contain JOINs, aliases, CTEs, and filters that rewriting drops. For bug fixes: change only the broken expression. Stubs and missing models should be written from scratch as normal.
 
-### Step 1 — Map the project
-Load the `dbt-workflow` skill FIRST — it contains rules that affect how you
-interpret what you see in the project. Then call
-`mcp__signalpilot__dbt_project_map project_dir="${work_dir}"`.
-The work order at the bottom is your plan.
-
-### Step 2 — Validate
-Call `mcp__signalpilot__dbt_project_validate project_dir="${work_dir}"`.
-Fix any parse errors before writing SQL.
-
-### Step 3 — Understand contracts + read siblings
-For each model in the work order:
-1. Call `dbt_project_map` with `focus="model:<name>"` for the column contract
-2. Check `reference_snapshot.md` for the pre-existing row count and sample data.
-   If present, that row count is your target.
-3. If no reference exists, estimate the expected row count by querying source data.
-   Run `SELECT COUNT(DISTINCT <grain_key>) FROM <source>` as an UPPER BOUND.
-   Your model may produce fewer rows if it filters or uses INNER JOIN, but should
-   never produce significantly MORE than this count.
-4. Read the SQL of any complete sibling model in the same directory that shares
-   column names with your model. You MUST read sibling SQL before writing — do not
-   skip this step. Copy their aggregation expressions exactly (see dbt-write skill).
-
-### Step 4 — Write and Build ALL Models
-Load the `dbt-write` skill + the SQL skill for your database (e.g. `duckdb-sql`).
-You MUST write SQL for EVERY model in STUBS TO REWRITE and MODELS TO BUILD.
-For each model (in dependency order):
-1. Read the YML contract — column names must match EXACTLY
-2. Write the SQL
-3. Run `${dbt_bin} run --select <model>` to build it
-
-After all stubs are written, rebuild them AND their downstream dependents:
-`${dbt_bin} run --select <stub1>+ <stub2>+` (the `+` suffix includes downstream
-models that depend on the stubs you wrote).
-
-If errors, load `dbt-debugging` skill and fix. Do NOT run a bare `${dbt_bin} run` —
-it rebuilds ALL models including pre-existing ones you didn't touch, which can change
-their surrogate key assignments and break FK relationships. Use `${dbt_bin} compile`
-if you need to verify the full project compiles without rebuilding data.
-
-### Step 5 — Verify
-After your final `dbt run` completes, confirm the database is queryable before handing
-off to the verifier. Run: `query_database` with `SELECT 1`. If it returns an error,
-wait and retry until it succeeds — dbt may still be flushing writes.
-
-Then use the Agent tool with `subagent_type="verifier"` to check all models you built.
-
-### Step 6 — Notion Verification Report (if Notion is configured)
-After the verifier subagent completes, check if `notion_context.md` exists in the
-working directory. If it does, use the Agent tool with `subagent_type="notion-verify"`
-to write a traceability report to Notion documenting which context items influenced
-the build and how.
-
-If `notion_context.md` does not exist, skip this step.
-
-### STOP when: the verifier subagent completes successfully (Step 5), and the
-notion-verify subagent completes if applicable (Step 6).
-
-## Rules
-- NEVER run `dbt` commands with `run_in_background` or `&` — dbt holds a database write
-  lock while running. Background dbt processes keep the lock alive indefinitely, blocking
-  all subsequent queries and builds. Always run dbt synchronously and wait for it to complete.
-- Do NOT modify `.yml` files unless fixing a missing `schema:` in a source definition
-- Do NOT use PostgreSQL/MySQL syntax — use DuckDB syntax
-- Do NOT guess column names — use the YML contract as source of truth
-- Do NOT install external packages — all dbt packages are pre-bundled in dbt_packages/
+Always load the dbt-workflow skill before any other action - it owns the workflow steps and stop condition for this project.

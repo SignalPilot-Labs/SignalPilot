@@ -1,0 +1,67 @@
+---
+sidebar_position: 5
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
+# BigQuery
+
+`google-cloud-bigquery`-backed connector. `db_type` is `bigquery`. Tier 1.
+
+## Connection config
+
+<MiniCopyBlock
+  label="bigquery"
+  plain
+  code={`{\n  "name": "prod-bigquery",\n  "db_type": "bigquery",\n  "project": "my-gcp-project",\n  "dataset": "analytics",\n  "location": "US",\n  "credentials_json": "{...service account JSON...}",\n  "maximum_bytes_billed": 10737418240\n}`}
+/>
+
+## Connection fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Connection name. `[a-zA-Z0-9_-]`, max 64 chars. |
+| `db_type` | Yes | `bigquery`. |
+| `project` | Yes | GCP project ID. |
+| `credentials_json` | One of | Service account JSON key (must be a JSON object with a `type` field). Omit to fall back to ADC or OAuth. |
+| `dataset` | No | Default dataset; sets the query `default_dataset`. |
+| `location` | No | BQ region: `US`, `EU`, `us-east1`, etc. |
+| `maximum_bytes_billed` | No | Safety limit in bytes; a query fails before execution if it would scan more (e.g. `10737418240` = 10 GB). |
+
+**Auth methods:** service account JSON (`credentials_json`), OAuth (`oauth_access_token`), service-account impersonation (`impersonate_service_account`), or Application Default Credentials (`adc`, the fallback). BigQuery does not use the shared SSL/timeout fields.
+
+## Capabilities
+
+| Capability | Supported | Notes |
+|------------|-----------|-------|
+| Query | Yes | Per-query job stats captured: bytes processed, bytes billed, cache hit, estimated USD cost. |
+| Schema introspection | Yes (full) | Lists datasets and tables via the client API; nested `RECORD`/`STRUCT` fields are flattened with dotted names. Detects `VIEW` / `MATERIALIZED_VIEW`. |
+| FK discovery | Limited | BigQuery does not enforce FKs at write time. |
+| EXPLAIN | Yes | Query plan with per-stage byte estimates. |
+| Cost estimation | Yes (exact) | Dry-run returns exact bytes that would be processed and an estimated USD cost. `estimate_query_cost` is highly accurate. |
+| Schema stats | Yes | `num_rows` and `num_bytes` per table; time partitioning field/type and clustering fields. |
+
+Tier 1.
+
+## Dialect notes / gotchas
+
+- Identifiers are quoted with backticks. Table references take the form `` `project.dataset.table` ``.
+- Each query job has roughly 500ms of overhead; sample-value lookups batch columns into a single `UNION ALL` query.
+- Use `UNNEST` for array expansion, `STRUCT`, `ARRAY_AGG`, `DATE_DIFF`/`DATE_ADD`, and `EXCEPT`/`REPLACE` in `SELECT`.
+- Set `maximum_bytes_billed` to cap scan cost; queries that would exceed it fail before running.
+
+## Blocked functions
+
+This BigQuery function is blocked inside `SELECT` (plus all DDL/DML):
+
+- `external_query` (Cloud SQL federated queries)
+
+The universal `load_extension` / `install_extension` block also applies.
+
+## Recommended plugin skill
+
+`bigquery-sql` — UNNEST, STRUCT, ARRAY_AGG, partitioned and wildcard tables, backtick-quoted references, EXCEPT/REPLACE.
+
+## Cloud vs local
+
+Cloud-only warehouse. In cloud mode, hostnames are validated against the SSRF allow-list (`bigquery.googleapis.com` is allowed by default).

@@ -20,7 +20,7 @@ import {
 import {
   getConnectionHealth,
   testConnection,
-} from "@/lib/api";
+} from "~/lib/api";
 
 const isCloud = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 import {
@@ -28,14 +28,14 @@ import {
   useConnectionsHealth,
   useSchemaCache,
   SWR_KEYS,
-} from "@/lib/hooks/use-gateway-data";
-import type { ConnectionHealthStats, ConnectionInfo } from "@/lib/types";
-import { EmptyChart, EmptyState } from "@/components/ui/empty-states";
-import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { PageLoader } from "@/components/ui/page-loader";
-import { RingGauge, StatusDot, Sparkline, MiniBar } from "@/components/ui/data-viz";
-import { Tooltip } from "@/components/ui/tooltip";
-import { TimeAgo } from "@/components/ui/time-ago";
+} from "~/lib/hooks/use-gateway-data";
+import type { ConnectionHealthStats, ConnectionInfo } from "~/lib/types";
+import { EmptyChart, EmptyState } from "~/components/ui/empty-states";
+import { PageHeader, TerminalBar } from "~/components/ui/page-header";
+import { PageLoader } from "~/components/ui/page-loader";
+import { RingGauge, StatusDot, Sparkline, MiniBar } from "~/components/ui/data-viz";
+import { Tooltip } from "~/components/ui/tooltip";
+import { TimeAgo } from "~/components/ui/time-ago";
 
 const statusConfig: Record<string, { color: string; bg: string; icon: React.ElementType; label: string }> = {
   healthy: { color: "text-[var(--color-success)]", bg: "bg-[var(--color-success)]", icon: CheckCircle2, label: "healthy" },

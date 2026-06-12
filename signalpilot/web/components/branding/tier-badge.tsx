@@ -1,6 +1,6 @@
 "use client";
 
-import { useTierBranding } from "@/lib/hooks/use-tier-branding";
+import { useTierBranding } from "~/lib/hooks/use-tier-branding";
 
 export function TierBadge() {
   const b = useTierBranding();

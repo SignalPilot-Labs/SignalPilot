@@ -1,0 +1,178 @@
+import type { Loader } from "@/plugins/impl/vega/vega-loader";
+import { deserializeBlob } from "@/utils/blob";
+import type { DataURLString } from "@/utils/json/base64";
+import { Logger } from "@/utils/Logger";
+import { getStaticVirtualFiles } from "./static-state";
+import type { StaticVirtualFiles } from "./types";
+
+/**
+ * Patch fetch to resolve virtual files
+ */
+export function patchFetch(
+  files: StaticVirtualFiles = getStaticVirtualFiles(),
+) {
+  // Store the original fetch function
+  const originalFetch = window.fetch;
+
+  // Override the global fetch so when /@file/ is used, it returns the blob data
+  window.fetch = async (input, init) => {
+    // oxlint-disable-next-line typescript/no-base-to-string
+    const urlString = input instanceof Request ? input.url : input.toString();
+
+    if (urlString.startsWith("data:")) {
+      return originalFetch(input, init);
+    }
+
+    try {
+      const vfile = maybeGetVirtualFile(urlString, files);
+      if (vfile) {
+        const base64 = vfile;
+        // Convert data URL to blob
+        const response = await originalFetch(base64);
+        const buffer = await response.arrayBuffer();
+        return new Response(buffer, {
+          headers: {
+            "Content-Type": getContentType(urlString),
+          },
+        });
+      }
+
+      // Fallback to the original fetch
+      return originalFetch(input, init);
+    } catch (error) {
+      Logger.error("Error parsing URL", error);
+      // If the URL is invalid, just fallback to the original fetch
+      return originalFetch(input, init);
+    }
+  };
+
+  return () => {
+    window.fetch = originalFetch;
+  };
+}
+
+function getContentType(fileName: string): string {
+  if (fileName.endsWith(".csv")) {
+    return "text/csv";
+  }
+  if (fileName.endsWith(".json")) {
+    return "application/json";
+  }
+  if (fileName.endsWith(".txt")) {
+    return "text/plain";
+  }
+  // Default to octet-stream if unknown
+  return "application/octet-stream";
+}
+
+export function patchVegaLoader(
+  loader: Loader,
+  files: StaticVirtualFiles = getStaticVirtualFiles(),
+) {
+  const originalHttp = loader.http.bind(loader);
+  const originalLoad = loader.load.bind(loader);
+
+  loader.http = async (url: string) => {
+    const vfile = maybeGetVirtualFile(url, files);
+    if (vfile) {
+      // If the file is a virtual file, fetch it
+      return await window.fetch(vfile).then((r) => r.text());
+    }
+
+    try {
+      return await originalHttp(url);
+    } catch (error) {
+      // If its a data URL, just return the data
+      if (url.startsWith("data:")) {
+        return await window.fetch(url).then((r) => r.text());
+      }
+      // Re-throw the error
+      throw error;
+    }
+  };
+
+  loader.load = async (url: string) => {
+    const vfile = maybeGetVirtualFile(url, files);
+    if (vfile) {
+      // If the file is a virtual file, fetch it
+      return await window.fetch(vfile).then((r) => r.text());
+    }
+
+    try {
+      return await originalLoad(url);
+    } catch (error) {
+      // If it's a data URL, just return the data
+      if (url.startsWith("data:")) {
+        return await window.fetch(url).then((r) => r.text());
+      }
+      // Re-throw the error
+      throw error;
+    }
+  };
+
+  return () => {
+    loader.http = originalHttp;
+    loader.load = originalLoad;
+  };
+}
+
+function withoutLeadingDot(path: string): string {
+  return path.startsWith(".") ? path.slice(1) : path;
+}
+
+/**
+ * Resolve a URL to a blob URL if it's a virtual file, for use with dynamic import().
+ * Unlike fetch, import() can't be patched, so we need to convert data URLs to blob URLs.
+ *
+ * @returns The original URL if not a virtual file, or a blob URL if it is
+ */
+export function resolveVirtualFileURL(
+  url: string,
+  files: StaticVirtualFiles = getStaticVirtualFiles(),
+): string {
+  const vfile = maybeGetVirtualFile(url, files);
+  if (!vfile) {
+    return url;
+  }
+  const blob = deserializeBlob(vfile as DataURLString);
+  return URL.createObjectURL(blob);
+}
+
+function maybeGetVirtualFile(
+  url: string,
+  files: StaticVirtualFiles,
+): string | undefined {
+  let base = document.baseURI;
+  if (base.startsWith("blob:")) {
+    base = base.replace("blob:", "");
+  }
+  const pathname = new URL(url, base).pathname;
+
+  // Extract the /@file/... suffix from the URL or pathname
+  // This handles URLs like https://example.com/prefix/@file/foo.js
+  // or file:///path/to/@file/foo.js
+  const filePathFromUrl = extractFilePath(url);
+  const filePathFromPathname = extractFilePath(pathname);
+
+  // Few variations to grab the URL.
+  // This can happen if a static file was open at file:// or https://
+  return (
+    files[url] ||
+    files[withoutLeadingDot(url)] ||
+    files[pathname] ||
+    files[withoutLeadingDot(pathname)] ||
+    (filePathFromUrl && files[filePathFromUrl]) ||
+    (filePathFromPathname && files[filePathFromPathname])
+  );
+}
+
+/**
+ * Extract the /@file/... path from a URL string
+ */
+function extractFilePath(url: string): string | null {
+  const indexOfFile = url.indexOf("/@file/");
+  if (indexOfFile !== -1) {
+    return url.slice(indexOfFile);
+  }
+  return null;
+}

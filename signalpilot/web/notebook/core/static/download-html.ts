@@ -1,0 +1,54 @@
+import { downloadBlob } from "@/utils/download";
+import { Filenames } from "@/utils/filenames";
+import { Paths } from "@/utils/paths";
+import { getRequestClient } from "../network/requests";
+import { VirtualFileTracker } from "./virtual-file-tracker";
+
+/**
+ * Downloads the current notebook as an HTML file.
+ */
+export async function downloadAsHTML(opts: {
+  filename: string;
+  includeCode: boolean;
+}) {
+  const client = getRequestClient();
+  const { filename, includeCode } = opts;
+  const html = await client.exportAsHTML({
+    download: true,
+    includeCode: includeCode,
+    files: VirtualFileTracker.INSTANCE.filenames(),
+  });
+  const filenameWithoutPath = Paths.basename(filename) ?? "notebook.py";
+
+  downloadBlob(
+    new Blob([html], { type: "text/html" }),
+    Filenames.toHTML(filenameWithoutPath),
+  );
+}
+
+function updateAssetUrl(existingUrl: string, assetBaseUrl: string) {
+  // Converts local asset URLs to the CDN base URL
+
+  // relative './...'
+  if (existingUrl.startsWith("./")) {
+    return `${assetBaseUrl}${existingUrl.slice(1)}`;
+  }
+
+  // relative '/...'
+  if (existingUrl.startsWith("/")) {
+    return `${assetBaseUrl}${existingUrl}`;
+  }
+
+  // absolute path
+  const url = new URL(existingUrl);
+  if (url.origin !== window.location.origin) {
+    return `${assetBaseUrl}${url.pathname}`;
+  }
+
+  // otherwise, leave as is
+  return existingUrl;
+}
+
+export const visibleForTesting = {
+  updateAssetUrl,
+};

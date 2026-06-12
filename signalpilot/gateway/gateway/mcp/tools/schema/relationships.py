@@ -1,7 +1,5 @@
 """Schema relationships tools: find_join_path, get_relationships (tools 4, 5)."""
 
-from __future__ import annotations
-
 import json
 
 import httpx

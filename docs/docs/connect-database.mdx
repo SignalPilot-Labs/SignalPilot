@@ -6,20 +6,25 @@ import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
 
 # Connect a Database
 
-SignalPilot supports 7 SQL dialects. Connections are encrypted at rest with AES-GCM.
+SignalPilot supports 11 SQL dialects. Connections are encrypted at rest with AES-GCM.
 
 ## Supported databases
 
-| Database | Dialect | Cloud support | Tier |
-|----------|---------|---------------|------|
-| PostgreSQL | `postgresql` | Yes | 1 |
-| DuckDB | `duckdb` | Local | 1 |
-| Snowflake | `snowflake` | Yes | 1 |
-| BigQuery | `bigquery` | Yes | 1 |
-| MySQL | `mysql` | Yes | 2 |
-| SQLite | `sqlite` | Local only | 2 |
-| SQL Server | `mssql` | Yes | 2 |
-| Databricks | `databricks` | Yes | 3 |
+For full per-database connection fields, capabilities, and dialect gotchas, see each database's dedicated page (linked below).
+
+| Database | db_type | Cloud/Local | Tier |
+|----------|---------|-------------|------|
+| [PostgreSQL](/docs/databases/postgresql) | `postgresql` | Cloud + Local | 1 |
+| [MySQL](/docs/databases/mysql) | `mysql` | Cloud + Local | 1 |
+| [Snowflake](/docs/databases/snowflake) | `snowflake` | Cloud | 1 |
+| [BigQuery](/docs/databases/bigquery) | `bigquery` | Cloud | 1 |
+| [Amazon Redshift](/docs/databases/redshift) | `redshift` | Cloud | 2 |
+| [ClickHouse](/docs/databases/clickhouse) | `clickhouse` | Cloud + Local | 2 |
+| [Databricks](/docs/databases/databricks) | `databricks` | Cloud | 2 |
+| [SQL Server](/docs/databases/mssql) | `mssql` | Cloud + Local | 2 |
+| [Trino](/docs/databases/trino) | `trino` | Cloud + Local | 2 |
+| [DuckDB](/docs/databases/duckdb) | `duckdb` | Local | 3 |
+| [SQLite](/docs/databases/sqlite) | `sqlite` | Local | 3 |
 
 ## Add a connection via the web UI
 
@@ -33,6 +38,8 @@ Go to `http://localhost:3200` → Connections → Add Connection. Fill in the co
 />
 
 ## Connection examples by dialect
+
+These are minimal examples. See each database's dedicated page (linked in the table above) for the full field reference, auth methods, and dialect-specific details.
 
 ### PostgreSQL
 
@@ -93,6 +100,36 @@ SQLite connections are local-only (the gateway must have filesystem access to th
   plain
   code={`{\n  "name": "prod-bigquery",\n  "db_type": "bigquery",\n  "project": "my-gcp-project",\n  "dataset": "analytics",\n  "credentials_json": "{...service account JSON...}"\n}`}
 />
+
+### Amazon Redshift
+
+<MiniCopyBlock
+  label="redshift"
+  plain
+  code={`{\n  "name": "prod-redshift",\n  "db_type": "redshift",\n  "host": "my-cluster.abc123.us-east-1.redshift.amazonaws.com",\n  "port": 5439,\n  "database": "dev",\n  "username": "readonly",\n  "password": "..."\n}`}
+/>
+
+Redshift uses the PostgreSQL wire protocol. Both provisioned clusters and Redshift Serverless are supported. IAM auth (temporary credentials via `GetClusterCredentials` / Serverless `GetCredentials`) is available — see the [Redshift page](/docs/databases/redshift).
+
+### ClickHouse
+
+<MiniCopyBlock
+  label="clickhouse"
+  plain
+  code={`{\n  "name": "prod-clickhouse",\n  "db_type": "clickhouse",\n  "host": "my-host.clickhouse.cloud",\n  "port": 9440,\n  "database": "default",\n  "username": "default",\n  "password": "...",\n  "protocol": "native"\n}`}
+/>
+
+The connector tries native TCP first (default port 9000, TLS 9440) and falls back to HTTP (port 8123, TLS 8443). Set `protocol` to `native` or `http` to force one. ClickHouse Cloud, on-premise, and self-hosted instances are supported.
+
+### Trino
+
+<MiniCopyBlock
+  label="trino"
+  plain
+  code={`{\n  "name": "prod-trino",\n  "db_type": "trino",\n  "host": "trino.example.com",\n  "port": 8080,\n  "username": "analyst",\n  "password": "...",\n  "catalog": "hive",\n  "schema_name": "analytics"\n}`}
+/>
+
+Trino runs federated queries across catalogs. A password switches the connection to HTTPS. JWT, certificate, and Kerberos auth are also supported — see the [Trino page](/docs/databases/trino).
 
 ## Environment variables for connections
 

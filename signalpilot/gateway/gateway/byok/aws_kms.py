@@ -13,7 +13,10 @@ import asyncio
 import logging
 import random
 import re
+import urllib.parse
 
+from ..network.validation import validate_connection_host
+from ..runtime.mode import byok_custom_endpoint_allowed, is_cloud_mode
 from .provider import BYOKKeyError, BYOKProvider  # noqa: F401 (re-exported for clarity)
 
 logger = logging.getLogger(__name__)
@@ -70,7 +73,17 @@ class AWSKMSProvider:
             raise ValueError("provider_config must include 'kms_key_arn'")
 
         self._kms_key_arn: str = kms_key_arn
-        self._endpoint_url: str | None = provider_config.get("endpoint_url")
+
+        raw_endpoint_url: str | None = provider_config.get("endpoint_url")
+        if raw_endpoint_url is not None:
+            if not byok_custom_endpoint_allowed():
+                raise ValueError(
+                    "provider_config.endpoint_url is not permitted; set "
+                    "SP_BYOK_ALLOW_CUSTOM_ENDPOINT=1 to enable for testing"
+                )
+            self._endpoint_url: str | None = _validate_endpoint_url(raw_endpoint_url)
+        else:
+            self._endpoint_url = None
 
         region = provider_config.get("region")
         if not region:
@@ -206,6 +219,32 @@ def _extract_region_from_arn(arn: str) -> str:
         logger.error("Invalid KMS ARN format: %r", arn)
         raise ValueError("Invalid KMS key ARN format — cannot extract region")
     return match.group(1)
+
+
+def _validate_endpoint_url(endpoint_url: str) -> str:
+    """Validate and return the endpoint_url for use in boto3 client construction.
+
+    Enforces scheme restrictions and passes the hostname through the SSRF
+    host-validation helper. Raises ValueError on any violation.
+    """
+    parsed = urllib.parse.urlparse(endpoint_url)
+
+    allowed_schemes = {"https"}
+    if not is_cloud_mode():
+        allowed_schemes = {"https", "http"}
+
+    if parsed.scheme not in allowed_schemes:
+        raise ValueError(
+            f"provider_config.endpoint_url scheme {parsed.scheme!r} is not permitted; "
+            f"allowed: {sorted(allowed_schemes)}"
+        )
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("provider_config.endpoint_url must include a non-empty host")
+
+    validate_connection_host(hostname)
+    return endpoint_url
 
 
 def _handle_kms_error(exc: Exception, org_id: str, key_alias: str) -> BYOKKeyError:

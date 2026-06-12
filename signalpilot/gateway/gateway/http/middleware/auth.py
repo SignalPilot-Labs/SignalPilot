@@ -20,6 +20,8 @@ PUBLIC_PATHS = frozenset(
         "/health",
         "/docs",
         "/openapi.json",
+        "/api/integrations/notion/oauth/callback",
+        "/api/notion/webhooks/events",
     }
 )
 
@@ -41,6 +43,19 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
 
         # MCP endpoints have their own auth (MCPAuthMiddleware) — skip
         if request.url.path.startswith("/mcp"):
+            return await call_next(request)
+
+        # GitHub OAuth flow — browser redirects, no API key
+        if request.url.path.startswith("/auth/github"):
+            return await call_next(request)
+
+        # Git smart HTTP — auth handled inside the git router via Basic Auth.
+        if request.url.path.startswith("/git/"):
+            return await call_next(request)
+
+        # Notebook proxy — auth handled by resolve_proxy_session (session cookie).
+        # The iframe doesn't have the Clerk __session cookie (different origin).
+        if request.url.path.startswith("/notebook/"):
             return await call_next(request)
 
         from ...store import get_local_api_key

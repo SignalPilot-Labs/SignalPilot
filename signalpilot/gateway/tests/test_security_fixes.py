@@ -1,0 +1,1216 @@
+"""Tests for Round 3 security fixes (V1-V6 + hardening items).
+
+Each test class covers one vulnerability finding.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import struct
+import uuid
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from fastapi import FastAPI
+from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.testclient import TestClient
+
+from gateway.dbt_proxy.tokens import RunTokenClaims
+from gateway.engine.dbt_validation import validate_dbt_statement
+
+
+def _claims(connector: str = "my_db") -> RunTokenClaims:
+    return RunTokenClaims(
+        run_id=uuid.uuid4(),
+        org_id="test-org",
+        user_id="test-user",
+        connector_name=connector,
+        expires_at=9999999999.0,
+    )
+
+
+def _make_frontend_msg(type_byte: bytes, payload: bytes) -> bytes:
+    length = struct.pack("!I", len(payload) + 4)
+    return type_byte + length + payload
+
+
+def _make_simple_query(sql: str) -> bytes:
+    return _make_frontend_msg(b"Q", sql.encode() + b"\x00")
+
+
+def _make_terminate() -> bytes:
+    return _make_frontend_msg(b"X", b"")
+
+
+# ─── V1: Upstream errors sanitized ───────────────────────────────────────────
+
+
+class TestV1UpstreamErrorSanitization:
+    """Verify that upstream exception text (potentially containing DSN) is never
+    forwarded to the client. Only a generic message with a correlation ID is sent."""
+
+    async def test_upstream_exception_sends_generic_ref_not_exc_message(self) -> None:
+        from gateway.dbt_proxy.session import DbtProxySession
+
+        claims = _claims()
+        fake_store = MagicMock()
+
+        sql_bytes = _make_simple_query("SELECT 1")
+        terminate = _make_terminate()
+
+        reader = asyncio.StreamReader()
+        reader.feed_data(sql_bytes + terminate)
+
+        buf: list[bytes] = []
+
+        class FakeWriter:
+            def write(self, data: bytes) -> None:
+                buf.append(data)
+
+            async def drain(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        writer = FakeWriter()
+
+        import gateway.dbt_proxy.session as session_mod
+
+        original_execute = session_mod.execute_query
+
+        async def _fake_execute_dsn_error(c, s, *, store):
+            raise ConnectionRefusedError(
+                "Connection failed: postgresql://user:SECRET_PASSWORD@warehouse.host:5432/db"
+            )
+
+        session_mod.execute_query = _fake_execute_dsn_error  # type: ignore[assignment]
+        try:
+            session = DbtProxySession(reader, writer, claims, fake_store)
+            await session.run()
+        finally:
+            session_mod.execute_query = original_execute
+
+        combined = b"".join(buf)
+        # The DSN must NOT appear in the response to the client
+        assert b"SECRET_PASSWORD" not in combined
+        assert b"warehouse.host" not in combined
+        # A correlation ref must be present
+        assert b"ref=" in combined
+        # SQLSTATE 58000 must be present
+        assert b"58000" in combined
+
+    async def test_upstream_error_ref_id_logged_not_sent_to_client(self) -> None:
+        from gateway.dbt_proxy.session import DbtProxySession
+
+        claims = _claims()
+        fake_store = MagicMock()
+
+        sql_bytes = _make_simple_query("SELECT 1")
+        terminate = _make_terminate()
+
+        reader = asyncio.StreamReader()
+        reader.feed_data(sql_bytes + terminate)
+
+        buf: list[bytes] = []
+
+        class FakeWriter:
+            def write(self, data: bytes) -> None:
+                buf.append(data)
+
+            async def drain(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        writer = FakeWriter()
+
+        import gateway.dbt_proxy.session as session_mod
+
+        original_execute = session_mod.execute_query
+
+        async def _fake_execute_generic_error(c, s, *, store):
+            raise RuntimeError("dsn=postgresql://admin:hunter2@db/prod")
+
+        session_mod.execute_query = _fake_execute_generic_error  # type: ignore[assignment]
+
+        with patch("gateway.dbt_proxy.session.logger") as mock_logger:
+            try:
+                session = DbtProxySession(reader, writer, claims, fake_store)
+                await session.run()
+            finally:
+                session_mod.execute_query = original_execute
+
+            # The full exc must appear in the server-side log
+            assert mock_logger.error.called
+            log_call = mock_logger.error.call_args
+            # exc= in log format string
+            assert "exc=%r" in log_call[0][0]
+
+
+# ─── V2: Governance deny-list expanded ───────────────────────────────────────
+
+
+class TestV2GovernanceDenyList:
+    """Verify the expanded deny-list blocks DO blocks, LOAD, dangerous functions,
+    and CREATE FUNCTION/PROCEDURE/etc. Tests use the AST-walk path."""
+
+    def test_do_block_plpgsql_blocked(self) -> None:
+        result = validate_dbt_statement(
+            "DO $$ BEGIN EXECUTE 'COPY foo FROM PROGRAM ''evil'''; END $$ LANGUAGE plpgsql",
+            claims=_claims(),
+        )
+        assert result.blocked
+        assert "do" in (result.block_reason or "")
+
+    def test_do_keyword_alone_blocked(self) -> None:
+        result = validate_dbt_statement("DO 'SELECT 1'", claims=_claims())
+        assert result.blocked
+
+    def test_load_command_blocked(self) -> None:
+        result = validate_dbt_statement("LOAD '/usr/lib/postgresql/evil.so'", claims=_claims())
+        assert result.blocked
+        assert "load" in (result.block_reason or "")
+
+    def test_create_function_plpython3u_blocked(self) -> None:
+        result = validate_dbt_statement(
+            "CREATE FUNCTION evil() RETURNS void LANGUAGE plpython3u AS $$ import os; os.system('id') $$",
+            claims=_claims(),
+        )
+        assert result.blocked
+
+    def test_create_function_c_blocked(self) -> None:
+        result = validate_dbt_statement(
+            "CREATE FUNCTION evil() RETURNS void LANGUAGE c AS '/path/to/lib.so', 'evil_func'",
+            claims=_claims(),
+        )
+        assert result.blocked
+
+    def test_create_procedure_blocked(self) -> None:
+        result = validate_dbt_statement(
+            "CREATE PROCEDURE bad_proc() LANGUAGE plpgsql AS $$ BEGIN SELECT 1; END $$",
+            claims=_claims(),
+        )
+        assert result.blocked
+        assert "procedure" in (result.block_reason or "")
+
+    def test_create_trigger_blocked(self) -> None:
+        result = validate_dbt_statement(
+            "CREATE TRIGGER bad_trig AFTER INSERT ON foo FOR EACH ROW EXECUTE FUNCTION bad_func()",
+            claims=_claims(),
+        )
+        assert result.blocked
+
+    def test_create_language_blocked(self) -> None:
+        result = validate_dbt_statement("CREATE LANGUAGE plpython3u", claims=_claims())
+        assert result.blocked
+
+    def test_security_definer_blocked(self) -> None:
+        result = validate_dbt_statement(
+            "CREATE FUNCTION priv_esc() RETURNS void LANGUAGE sql SECURITY DEFINER AS 'SELECT 1'",
+            claims=_claims(),
+        )
+        assert result.blocked
+        assert "security_definer" in (result.block_reason or "")
+
+    def test_pg_read_server_files_blocked(self) -> None:
+        result = validate_dbt_statement(
+            "SELECT pg_read_server_files('/etc/postgresql/postgresql.conf')",
+            claims=_claims(),
+        )
+        assert result.blocked
+        assert "pg_read_server_files" in (result.block_reason or "")
+
+    def test_pg_read_file_blocked(self) -> None:
+        result = validate_dbt_statement(
+            "SELECT pg_read_file('/etc/passwd')",
+            claims=_claims(),
+        )
+        assert result.blocked
+
+    def test_pg_read_binary_file_blocked(self) -> None:
+        result = validate_dbt_statement(
+            "SELECT pg_read_binary_file('/etc/passwd')",
+            claims=_claims(),
+        )
+        assert result.blocked
+
+    def test_pg_ls_dir_blocked(self) -> None:
+        result = validate_dbt_statement("SELECT pg_ls_dir('/etc')", claims=_claims())
+        assert result.blocked
+
+    def test_lo_import_blocked(self) -> None:
+        result = validate_dbt_statement("SELECT lo_import('/etc/passwd')", claims=_claims())
+        assert result.blocked
+
+    def test_lo_export_blocked(self) -> None:
+        result = validate_dbt_statement(
+            "SELECT lo_export(12345, '/tmp/out')", claims=_claims()
+        )
+        assert result.blocked
+
+    def test_dblink_blocked(self) -> None:
+        result = validate_dbt_statement(
+            "SELECT * FROM dblink('host=evil.com user=hacker password=pw', 'SELECT 1')",
+            claims=_claims(),
+        )
+        assert result.blocked
+        assert "dblink" in (result.block_reason or "")
+
+    def test_pg_stat_file_blocked(self) -> None:
+        result = validate_dbt_statement("SELECT pg_stat_file('/etc/passwd')", claims=_claims())
+        assert result.blocked
+
+    def test_current_setting_blocked(self) -> None:
+        result = validate_dbt_statement(
+            "SELECT current_setting('ssl_cert_file')", claims=_claims()
+        )
+        assert result.blocked
+
+    def test_normal_select_still_allowed(self) -> None:
+        result = validate_dbt_statement("SELECT id, name FROM users WHERE active = TRUE", claims=_claims())
+        assert not result.blocked
+
+    def test_create_table_as_select_still_allowed(self) -> None:
+        result = validate_dbt_statement(
+            "CREATE TABLE foo AS SELECT id FROM bar", claims=_claims()
+        )
+        assert not result.blocked
+
+    def test_create_extension_prefix_check_still_blocks(self) -> None:
+        result = validate_dbt_statement("CREATE EXTENSION pg_stat_statements", claims=_claims())
+        assert result.blocked
+
+
+# ─── V3: Fail closed when secret is missing ──────────────────────────────────
+
+
+class TestV3FailClosedMissingSecret:
+    """Verify that DbtProxyServer.start() does NOT bind a port when the secret
+    is absent, and that no token_store operations are reachable."""
+
+    async def test_server_does_not_bind_when_secret_missing(self) -> None:
+        from gateway.dbt_proxy.config import DbtProxyConfig
+        from gateway.dbt_proxy.server import DbtProxyServer
+
+        config = DbtProxyConfig(
+            sp_dbt_proxy_host="127.0.0.1",
+            sp_dbt_proxy_port=0,
+            sp_gateway_run_token_secret="",  # missing
+            sp_dbt_proxy_enabled=True,
+        )
+
+        bound_ports: list[int] = []
+        original_start_server = asyncio.start_server
+
+        async def _spy_start_server(handler, host, port, **kwargs):
+            bound_ports.append(port)
+            return await original_start_server(handler, host, port, **kwargs)
+
+        with patch("gateway.dbt_proxy.server.asyncio.start_server", side_effect=_spy_start_server):
+            async with DbtProxyServer.start(config, token_store=None, store_factory=None):
+                pass
+
+        # Port must NOT have been bound
+        assert bound_ports == []
+
+    async def test_server_binds_when_secret_present(self) -> None:
+        from gateway.dbt_proxy.config import DbtProxyConfig
+        from gateway.dbt_proxy.server import DbtProxyServer
+        from gateway.dbt_proxy.tokens import RunTokenStore
+
+        config = DbtProxyConfig(
+            sp_dbt_proxy_host="127.0.0.1",
+            sp_dbt_proxy_port=0,  # OS assigns
+            sp_gateway_run_token_secret="good-secret",
+            sp_dbt_proxy_enabled=True,
+        )
+        token_store = RunTokenStore("good-secret")
+
+        async with DbtProxyServer.start(
+            config, token_store=token_store, store_factory=lambda: MagicMock()
+        ) as server:
+            assert server is not None
+
+
+# ─── V4: Default bind host is 127.0.0.1 ──────────────────────────────────────
+
+
+class TestV4DefaultBindHost:
+    def test_default_host_is_loopback(self) -> None:
+        from gateway.dbt_proxy.config import DbtProxyConfig
+
+        config = DbtProxyConfig()
+        assert config.sp_dbt_proxy_host == "127.0.0.1"
+
+    def test_non_loopback_emits_warning(self, caplog) -> None:  # type: ignore[no-untyped-def]
+        import logging
+
+        from gateway.dbt_proxy.config import DbtProxyConfig
+
+        config = DbtProxyConfig(sp_dbt_proxy_host="0.0.0.0")
+        with caplog.at_level(logging.WARNING):
+            config.warn_if_non_loopback()
+
+        assert any("non-loopback" in r.message for r in caplog.records)
+
+    def test_loopback_no_warning(self, caplog) -> None:  # type: ignore[no-untyped-def]
+        import logging
+
+        from gateway.dbt_proxy.config import DbtProxyConfig
+
+        config = DbtProxyConfig(sp_dbt_proxy_host="127.0.0.1")
+        with caplog.at_level(logging.WARNING):
+            config.warn_if_non_loopback()
+
+        assert not any("non-loopback" in r.message for r in caplog.records)
+
+
+# ─── L7: Cloud-mode non-loopback bind hard-fail ──────────────────────────────
+
+
+class TestL7CloudModeBindHardFail:
+    """enforce_bind_safety() hard-fails in cloud mode; warns in local mode."""
+
+    def test_cloud_mode_non_loopback_raises(self) -> None:
+        from gateway.dbt_proxy.config import DbtProxyConfig
+
+        config = DbtProxyConfig(sp_dbt_proxy_host="0.0.0.0")
+        with pytest.raises(RuntimeError, match="non-loopback") as exc_info:
+            config.enforce_bind_safety(cloud=True)
+        msg = str(exc_info.value)
+        assert "0.0.0.0" in msg
+        assert "SP_DBT_PROXY_HOST" in msg
+
+    @pytest.mark.parametrize("host", ["127.0.0.1", "::1", "localhost"])
+    def test_cloud_mode_loopback_hosts_ok(self, host: str) -> None:
+        from gateway.dbt_proxy.config import DbtProxyConfig
+
+        config = DbtProxyConfig(sp_dbt_proxy_host=host)
+        config.enforce_bind_safety(cloud=True)  # must not raise
+
+    def test_local_mode_non_loopback_warns_no_raise(self, caplog) -> None:  # type: ignore[no-untyped-def]
+        import logging
+
+        from gateway.dbt_proxy.config import DbtProxyConfig
+
+        config = DbtProxyConfig(sp_dbt_proxy_host="0.0.0.0")
+        with caplog.at_level(logging.WARNING):
+            config.enforce_bind_safety(cloud=False)  # must not raise
+
+        assert any("non-loopback" in r.message for r in caplog.records)
+
+    def test_cloud_mode_default_host_ok(self) -> None:
+        from gateway.dbt_proxy.config import DbtProxyConfig
+
+        config = DbtProxyConfig()  # default 127.0.0.1
+        config.enforce_bind_safety(cloud=True)  # must not raise
+
+
+# ─── V5: Inline param substitution safety ────────────────────────────────────
+
+
+class TestV5InlineParamSubstitution:
+    """Verify that NUL bytes and NaN/Inf floats are rejected, not forwarded."""
+
+    def test_nul_byte_in_text_param_raises(self) -> None:
+        from gateway.dbt_proxy.session import _format_param
+
+        with pytest.raises(ValueError, match="NUL byte"):
+            _format_param("hello\x00world")
+
+    def test_nan_float_raises(self) -> None:
+        from gateway.dbt_proxy.session import _format_param
+
+        with pytest.raises(ValueError, match="NaN"):
+            _format_param(float("nan"))
+
+    def test_inf_float_raises(self) -> None:
+        from gateway.dbt_proxy.session import _format_param
+
+        with pytest.raises(ValueError, match="Inf"):
+            _format_param(float("inf"))
+
+    def test_neg_inf_float_raises(self) -> None:
+        from gateway.dbt_proxy.session import _format_param
+
+        with pytest.raises(ValueError, match="Inf"):
+            _format_param(float("-inf"))
+
+    def test_normal_float_formats_correctly(self) -> None:
+        from gateway.dbt_proxy.session import _format_param
+
+        assert _format_param(3.14) == "3.14"
+        assert _format_param(0.0) == "0.0"
+
+    def test_text_with_single_quote_escaped(self) -> None:
+        from gateway.dbt_proxy.session import _format_param
+
+        result = _format_param("O'Brien")
+        assert result == "'O''Brien'"
+
+    def test_none_formats_as_null(self) -> None:
+        from gateway.dbt_proxy.session import _format_param
+
+        assert _format_param(None) == "NULL"
+
+    def test_bool_formats(self) -> None:
+        from gateway.dbt_proxy.session import _format_param
+
+        assert _format_param(True) == "TRUE"
+        assert _format_param(False) == "FALSE"
+
+    def test_substitute_params_raises_on_nul_byte(self) -> None:
+        from gateway.dbt_proxy.session import _substitute_params
+
+        with pytest.raises(ValueError, match="NUL byte"):
+            _substitute_params("SELECT $1", ["evil\x00injection"])
+
+    def test_substitute_params_raises_on_nan(self) -> None:
+        from gateway.dbt_proxy.session import _substitute_params
+
+        with pytest.raises(ValueError, match="NaN"):
+            _substitute_params("SELECT $1", [float("nan")])
+
+
+# ─── V6: Audit failure aborts statement ──────────────────────────────────────
+
+
+class TestV6AuditFailureAbortsStatement:
+    """Verify that an audit write failure raises AuditWriteError and the
+    statement execution is aborted (not silently swallowed)."""
+
+    async def test_audit_write_failure_raises_audit_write_error(self) -> None:
+        from gateway.dbt_proxy.audit import AuditWriteError, record
+
+        claims = _claims()
+        fake_store = MagicMock()
+        fake_store.append_audit = AsyncMock(side_effect=Exception("DB down"))
+
+        with pytest.raises(AuditWriteError):
+            await record(
+                claims,
+                "SELECT 1",
+                blocked=False,
+                block_reason=None,
+                kind="read",
+                store=fake_store,
+            )
+
+    async def test_audit_write_failure_is_logged_as_error(self) -> None:
+        from gateway.dbt_proxy.audit import AuditWriteError, record
+
+        claims = _claims()
+        fake_store = MagicMock()
+        fake_store.append_audit = AsyncMock(side_effect=Exception("DB down"))
+
+        with patch("gateway.dbt_proxy.audit.logger") as mock_logger:
+            with pytest.raises(AuditWriteError):
+                await record(
+                    claims,
+                    "SELECT 1",
+                    blocked=False,
+                    block_reason=None,
+                    kind="read",
+                    store=fake_store,
+                )
+            assert mock_logger.error.called
+
+    async def test_audit_failure_propagates_through_execute_query(self) -> None:
+        """AuditWriteError from audit.record() propagates through execute_query."""
+        import gateway.dbt_proxy.forwarder as forwarder_mod
+        from gateway.dbt_proxy.audit import AuditWriteError
+
+        claims = _claims()
+        fake_store = MagicMock()
+        fake_store.append_audit = AsyncMock(side_effect=Exception("PG primary down"))
+        # get_connection must return None to trigger early exit before pool acquire
+        fake_store.get_connection = AsyncMock(return_value=None)
+
+        # The blocked-branch audit call should raise AuditWriteError
+        with pytest.raises(AuditWriteError):
+            await forwarder_mod.execute_query(
+                claims,
+                "COPY secret TO '/tmp/out'",  # will be blocked → audit call
+                store=fake_store,
+            )
+
+    async def test_unaudited_statement_sends_error_to_client(self) -> None:
+        """When audit fails, session sends ErrorResponse rather than executing."""
+        from gateway.dbt_proxy.audit import AuditWriteError
+        from gateway.dbt_proxy.session import DbtProxySession
+
+        claims = _claims()
+        fake_store = MagicMock()
+
+        sql_bytes = _make_simple_query("SELECT 1")
+        terminate = _make_terminate()
+
+        reader = asyncio.StreamReader()
+        reader.feed_data(sql_bytes + terminate)
+
+        buf: list[bytes] = []
+
+        class FakeWriter:
+            def write(self, data: bytes) -> None:
+                buf.append(data)
+
+            async def drain(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        writer = FakeWriter()
+
+        import gateway.dbt_proxy.session as session_mod
+
+        original_execute = session_mod.execute_query
+
+        async def _fake_execute_audit_fail(c, s, *, store):
+            raise AuditWriteError("audit write failed (ref=abc123)")
+
+        session_mod.execute_query = _fake_execute_audit_fail  # type: ignore[assignment]
+        try:
+            session = DbtProxySession(reader, writer, claims, fake_store)
+            await session.run()
+        finally:
+            session_mod.execute_query = original_execute
+
+        combined = b"".join(buf)
+        # ErrorResponse 'E' must be present — statement was aborted
+        assert b"E" in combined
+        # ReadyForQuery 'Z' must still be sent (session continues)
+        assert b"Z" in combined
+
+
+# ─── Auth.py error sanitization (hardening) ──────────────────────────────────
+
+
+class TestAuthErrorSanitization:
+    """Verify auth.py never echoes raw exception text to the client."""
+
+    async def test_bad_startup_message_sends_generic_protocol_error(self) -> None:
+        from gateway.dbt_proxy.auth import handle_startup
+        from gateway.dbt_proxy.errors import AuthFailed
+        from gateway.dbt_proxy.tokens import RunTokenStore
+
+        token_store = RunTokenStore("test-secret")
+
+        # Feed garbage — will fail read_startup_message
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"\x00\x00\x00\x08garbage!!")
+        reader.feed_eof()
+
+        buf: list[bytes] = []
+
+        class FakeWriter:
+            def write(self, data: bytes) -> None:
+                buf.append(data)
+
+            async def drain(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        writer = FakeWriter()
+
+        with pytest.raises(AuthFailed):
+            await handle_startup(reader, writer, token_store)
+
+        combined = b"".join(buf)
+        # Must NOT echo any python exception repr
+        assert b"Traceback" not in combined
+        # Must contain the generic message
+        assert b"protocol error" in combined
+
+    async def test_auth_ok_does_not_log_org_id(self) -> None:
+        """auth_ok log line should NOT include org_id (per masking policy)."""
+        from gateway.dbt_proxy.auth import handle_startup
+        from gateway.dbt_proxy.tokens import RunTokenStore
+
+        secret = "test-secret"
+        token_store = RunTokenStore(secret)
+        run_id = uuid.uuid4()
+        token_hex, _ = await token_store.mint(run_id, "SENSITIVE_ORG", "user-1", "conn", ttl_seconds=300)
+
+        startup_proto = struct.pack("!I", 0x00030000)
+        body = startup_proto
+        for k, v in [("user", f"run-{run_id}"), ("database", "conn")]:
+            body += k.encode() + b"\x00" + v.encode() + b"\x00"
+        body += b"\x00"
+        startup = struct.pack("!I", len(body) + 4) + body
+        password_msg = struct.pack("!cI", b"p", len(token_hex) + 5) + token_hex.encode() + b"\x00"
+
+        reader = asyncio.StreamReader()
+        reader.feed_data(startup + password_msg)
+
+        class FakeWriter:
+            def write(self, data: bytes) -> None:
+                pass
+
+            async def drain(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        writer = FakeWriter()
+
+        with patch("gateway.dbt_proxy.auth.logger") as mock_logger:
+            await handle_startup(reader, writer, token_store)
+            info_call = mock_logger.info.call_args
+            # org_id must NOT appear in the format args of the log line
+            log_args = str(info_call)
+            assert "SENSITIVE_ORG" not in log_args
+
+
+# ─── L1: Cookie-auth CSRF Origin check ───────────────────────────────────────
+
+
+class TestL1CookieCsrfOriginCheck:
+    """Verify CookieAuthCsrfMiddleware blocks cross-origin cookie-only mutations."""
+
+    @pytest.fixture(scope="class")
+    def client(self) -> TestClient:
+        from gateway.http.middleware.csrf import CookieAuthCsrfMiddleware
+
+        mini = FastAPI()
+        mini.add_middleware(
+            CookieAuthCsrfMiddleware,
+            allowed_origins=["https://app.signalpilot.ai"],
+            enabled=True,
+        )
+
+        @mini.post("/echo")
+        async def echo_post() -> dict[str, str]:
+            return {"ok": "true"}
+
+        @mini.get("/echo")
+        async def echo_get() -> dict[str, str]:
+            return {"ok": "true"}
+
+        @mini.post("/api/webhooks/test")
+        async def webhook_post() -> dict[str, str]:
+            return {"ok": "true"}
+
+        @mini.post("/auth/github/test")
+        async def github_post() -> dict[str, str]:
+            return {"ok": "true"}
+
+        return TestClient(mini, raise_server_exceptions=False)
+
+    @pytest.fixture(scope="class")
+    def disabled_client(self) -> TestClient:
+        from gateway.http.middleware.csrf import CookieAuthCsrfMiddleware
+
+        mini = FastAPI()
+        mini.add_middleware(
+            CookieAuthCsrfMiddleware,
+            allowed_origins=["https://app.signalpilot.ai"],
+            enabled=False,
+        )
+
+        @mini.post("/echo")
+        async def echo_post() -> dict[str, str]:
+            return {"ok": "true"}
+
+        return TestClient(mini, raise_server_exceptions=False)
+
+    def test_cookie_post_no_origin_no_sec_fetch_rejected(self, client: TestClient) -> None:
+        resp = client.post("/echo", cookies={"__session": "abc"})
+        assert resp.status_code == 403
+
+    def test_cookie_post_allowed_origin_ok(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Origin": "https://app.signalpilot.ai"},
+        )
+        assert resp.status_code == 200
+
+    def test_cookie_post_disallowed_origin_rejected(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Origin": "https://evil.example"},
+        )
+        assert resp.status_code == 403
+
+    def test_cookie_post_sec_fetch_same_origin_no_origin_ok(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Sec-Fetch-Site": "same-origin"},
+        )
+        assert resp.status_code == 200
+
+    def test_cookie_post_sec_fetch_cross_site_rejected(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Sec-Fetch-Site": "cross-site"},
+        )
+        assert resp.status_code == 403
+
+    def test_bearer_post_no_origin_ok(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            headers={"Authorization": "Bearer sp_xxx"},
+        )
+        assert resp.status_code == 200
+
+    def test_cookie_plus_bearer_post_no_origin_ok(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Authorization": "Bearer sp_xxx"},
+        )
+        assert resp.status_code == 200
+
+    def test_apikey_header_post_no_origin_ok(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"X-API-Key": "sp_xxx"},
+        )
+        assert resp.status_code == 200
+
+    def test_get_cookie_no_origin_ok(self, client: TestClient) -> None:
+        resp = client.get("/echo", cookies={"__session": "abc"})
+        assert resp.status_code == 200
+
+    def test_options_preflight_ok(self, client: TestClient) -> None:
+        # OPTIONS is a safe method — CSRF check skips it entirely.
+        # Starlette returns 405 for OPTIONS on a POST-only handler in this isolated app
+        # (no CORS middleware); asserting NOT 403 is the meaningful check.
+        resp = client.options("/echo", cookies={"__session": "abc"})
+        assert resp.status_code != 403
+
+    def test_webhook_path_exempt(self, client: TestClient) -> None:
+        resp = client.post("/api/webhooks/test", cookies={"__session": "abc"})
+        assert resp.status_code == 200
+
+    def test_github_callback_path_exempt(self, client: TestClient) -> None:
+        resp = client.post("/auth/github/test", cookies={"__session": "abc"})
+        assert resp.status_code == 200
+
+    def test_referer_fallback_allowed_ok(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Referer": "https://app.signalpilot.ai/dashboard"},
+        )
+        assert resp.status_code == 200
+
+    def test_referer_fallback_disallowed_rejected(self, client: TestClient) -> None:
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Referer": "https://evil.example/x"},
+        )
+        assert resp.status_code == 403
+
+    def test_referer_subdomain_spoofing_rejected(self, client: TestClient) -> None:
+        # Referer: https://app.signalpilot.ai.evil.com/x must NOT match because
+        # urlsplit recomposition produces https://app.signalpilot.ai.evil.com
+        # which is not in the allow-list.
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Referer": "https://app.signalpilot.ai.evil.com/x"},
+        )
+        assert resp.status_code == 403
+
+    def test_referer_schemeless_rejected(self, client: TestClient) -> None:
+        # Referer: //app.signalpilot.ai/x — urlsplit returns empty scheme,
+        # so recomposition produces "" which must never match the allow-list.
+        resp = client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Referer": "//app.signalpilot.ai/x"},
+        )
+        assert resp.status_code == 403
+
+    def test_local_mode_bypass_disallowed_origin_ok(self, disabled_client: TestClient) -> None:
+        # enabled=False → middleware is a pass-through regardless of Origin
+        resp = disabled_client.post(
+            "/echo",
+            cookies={"__session": "abc"},
+            headers={"Origin": "https://evil.example"},
+        )
+        assert resp.status_code == 200
+
+    def test_rejection_response_shape(self, client: TestClient) -> None:
+        resp = client.post("/echo", cookies={"__session": "abc"})
+        assert resp.status_code == 403
+        assert resp.json() == {"detail": "Forbidden."}
+
+
+# ─── L-1: CLERK_JWT_AUDIENCE optional in cloud mode ──────────────────────────
+
+
+# Env vars that must be set to avoid other kill-switches tripping during L-1/I-5 tests.
+_CLOUD_HARDENING_BASE_ENV = {
+    "SP_DEPLOYMENT_MODE": "cloud",
+    "SP_NOTEBOOK_RUNTIME_CLASS": "gvisor",
+    # R11 added SP_ALLOWED_ORIGINS to assert_cloud_hardening_intact; without it
+    # these L-1/I-5 tests would trip the unrelated SP_ALLOWED_ORIGINS violation.
+    "SP_ALLOWED_ORIGINS": "https://app.signalpilot.ai",
+}
+
+
+def _set_cloud_base(monkeypatch, **overrides) -> None:
+    """Set the minimum env to pass assert_cloud_hardening_intact in cloud mode."""
+    env = {**_CLOUD_HARDENING_BASE_ENV, **overrides}
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    # Ensure vars that should be absent are absent
+    monkeypatch.delenv("SP_NOTEBOOK_DIRECT_URL", raising=False)
+    monkeypatch.delenv("SP_DISABLE_SANDBOX", raising=False)
+    monkeypatch.delenv("SP_NOTEBOOK_NETWORK_POLICY", raising=False)
+    monkeypatch.delenv("SP_NOTEBOOK_NETWORK_POLICY_CLOUD_ACK", raising=False)
+
+
+class TestL1ClerkAudienceCloud:
+    """L-1: CLERK_JWT_AUDIENCE remains optional at startup.
+
+    Clerk's default session JWTs may not include an aud claim. The request-time
+    Clerk verifier still validates aud when CLERK_JWT_AUDIENCE is configured.
+    """
+
+    def test_cloud_mode_missing_audience_passes(self, monkeypatch) -> None:
+        _set_cloud_base(monkeypatch)
+        monkeypatch.delenv("CLERK_JWT_AUDIENCE", raising=False)
+
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        assert_cloud_hardening_intact()
+
+    def test_cloud_mode_present_audience_passes(self, monkeypatch) -> None:
+        _set_cloud_base(monkeypatch, CLERK_JWT_AUDIENCE="my-app")
+
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        assert_cloud_hardening_intact()  # must not raise
+
+    def test_local_mode_missing_audience_passes(self, monkeypatch) -> None:
+        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "local")
+        monkeypatch.delenv("CLERK_JWT_AUDIENCE", raising=False)
+
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        assert_cloud_hardening_intact()  # local mode: no checks
+
+    def test_cloud_mode_empty_string_audience_passes(self, monkeypatch) -> None:
+        _set_cloud_base(monkeypatch, CLERK_JWT_AUDIENCE="   ")
+
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        assert_cloud_hardening_intact()
+
+
+# ─── I-5: SP_NOTEBOOK_NETWORK_POLICY=false warns in cloud mode ───────────────
+
+
+class TestI5NetworkPolicyOptOutCloud:
+    """I-5: SP_NOTEBOOK_NETWORK_POLICY=false must not block boot.
+
+    gVisor + VPC CNI NetworkPolicy currently breaks notebook pod egress in the
+    cloud demo, so the gateway logs a warning instead of hard-failing startup.
+    """
+
+    def test_cloud_netpol_false_no_ack_warns_only(self, monkeypatch, caplog) -> None:
+        _set_cloud_base(monkeypatch)
+        monkeypatch.setenv("SP_NOTEBOOK_NETWORK_POLICY", "false")
+        monkeypatch.delenv("SP_NOTEBOOK_NETWORK_POLICY_CLOUD_ACK", raising=False)
+
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        with caplog.at_level(logging.WARNING, logger="gateway.runtime.mode"):
+            assert_cloud_hardening_intact()
+
+        assert any("SP_NOTEBOOK_NETWORK_POLICY=false" in r.message for r in caplog.records)
+
+    def test_cloud_netpol_false_with_ack_warns_only(self, monkeypatch, caplog) -> None:
+        _set_cloud_base(monkeypatch)
+        monkeypatch.setenv("SP_NOTEBOOK_NETWORK_POLICY", "false")
+        monkeypatch.setenv("SP_NOTEBOOK_NETWORK_POLICY_CLOUD_ACK", "1")
+
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        with caplog.at_level(logging.WARNING, logger="gateway.runtime.mode"):
+            assert_cloud_hardening_intact()  # must not raise
+
+        assert any("SP_NOTEBOOK_NETWORK_POLICY=false" in r.message for r in caplog.records)
+
+    def test_cloud_netpol_true_passes(self, monkeypatch) -> None:
+        _set_cloud_base(monkeypatch)
+        monkeypatch.setenv("SP_NOTEBOOK_NETWORK_POLICY", "true")
+
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        assert_cloud_hardening_intact()  # must not raise
+
+    def test_local_netpol_false_passes(self, monkeypatch) -> None:
+        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "local")
+        monkeypatch.setenv("SP_NOTEBOOK_NETWORK_POLICY", "false")
+        monkeypatch.delenv("SP_NOTEBOOK_NETWORK_POLICY_CLOUD_ACK", raising=False)
+
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        assert_cloud_hardening_intact()  # local mode: no checks
+
+    @pytest.mark.parametrize(
+        "ack",
+        [
+            "1",
+            "true",
+            "yes",
+            "TRUE",
+            "Yes",
+            "",
+            "0",
+            "false",
+            "no",
+        ],
+    )
+    def test_cloud_netpol_false_ack_variants_warn_only(
+        self, monkeypatch, caplog, ack: str
+    ) -> None:
+        _set_cloud_base(monkeypatch)
+        monkeypatch.setenv("SP_NOTEBOOK_NETWORK_POLICY", "false")
+        monkeypatch.setenv("SP_NOTEBOOK_NETWORK_POLICY_CLOUD_ACK", ack)
+
+        from gateway.runtime.mode import assert_cloud_hardening_intact
+
+        with caplog.at_level(logging.WARNING, logger="gateway.runtime.mode"):
+            assert_cloud_hardening_intact()
+
+        assert any("SP_NOTEBOOK_NETWORK_POLICY=false" in r.message for r in caplog.records)
+
+
+# ─── L-6: org_id filter on session mutation helpers ──────────────────────────
+
+
+class TestL6SessionMutationsOrgFilter:
+    """L-6: update_session_status and mark_stopped must pass org_id in the WHERE
+    clause so a cross-org call is a silent no-op (defense-in-depth).
+
+    We capture the SQLAlchemy Update clause passed to session.execute and verify
+    that org_id is present in the WHERE criteria — no live DB required.
+    """
+
+    def _make_async_session_capture(self) -> tuple[AsyncMock, list]:
+        """Return a mock AsyncSession and the list that captures execute calls."""
+        captured: list = []
+
+        async def _fake_execute(stmt, *args, **kwargs):
+            captured.append(stmt)
+            return MagicMock()
+
+        session = AsyncMock(spec=AsyncSession)
+        session.execute.side_effect = _fake_execute
+        session.commit = AsyncMock()
+        return session, captured
+
+    def _where_clause_str(self, stmt) -> str:
+        """Compile the WHERE clause of an Update statement to a string for inspection."""
+        from sqlalchemy.dialects import sqlite
+
+        return str(stmt.whereclause.compile(dialect=sqlite.dialect(), compile_kwargs={"literal_binds": True}))
+
+    @pytest.mark.asyncio
+    async def test_update_session_status_includes_org_id_in_where(self) -> None:
+        from gateway.store.notebook_sessions import update_session_status
+
+        session, captured = self._make_async_session_capture()
+
+        await update_session_status(
+            session,
+            session_id="sess-1",
+            org_id="org-b",
+            status="running",
+            pod_ip="1.2.3.4",
+        )
+
+        assert len(captured) == 1
+        where_str = self._where_clause_str(captured[0])
+        assert "org-b" in where_str
+        assert "sess-1" in where_str
+
+    @pytest.mark.asyncio
+    async def test_update_session_status_correct_org_in_where(self) -> None:
+        from gateway.store.notebook_sessions import update_session_status
+
+        session, captured = self._make_async_session_capture()
+
+        await update_session_status(
+            session,
+            session_id="sess-2",
+            org_id="org-a",
+            status="running",
+            pod_ip="10.0.0.1",
+        )
+
+        assert len(captured) == 1
+        where_str = self._where_clause_str(captured[0])
+        assert "org-a" in where_str
+        assert "sess-2" in where_str
+
+    @pytest.mark.asyncio
+    async def test_mark_stopped_wrong_org_includes_org_id_in_where(self) -> None:
+        from gateway.store.notebook_sessions import mark_stopped
+
+        session, captured = self._make_async_session_capture()
+
+        await mark_stopped(session, session_id="sess-3", org_id="org-b")
+
+        assert len(captured) == 1
+        where_str = self._where_clause_str(captured[0])
+        assert "org-b" in where_str
+        assert "sess-3" in where_str
+
+    @pytest.mark.asyncio
+    async def test_mark_stopped_correct_org_in_where(self) -> None:
+        from gateway.store.notebook_sessions import mark_stopped
+
+        session, captured = self._make_async_session_capture()
+
+        await mark_stopped(session, session_id="sess-4", org_id="org-a")
+
+        assert len(captured) == 1
+        where_str = self._where_clause_str(captured[0])
+        assert "org-a" in where_str
+        assert "sess-4" in where_str
+
+
+# ─── I-2: SP_EXPECTED_AZP allowlist enforcement in Clerk verifier ────────────
+
+
+class TestClerkAzpAllowlist:
+    """I-2: SP_EXPECTED_AZP azp allowlist enforcement in the Clerk JWT verifier."""
+
+    @pytest.mark.asyncio
+    async def test_azp_mismatch_rejected_when_allowlist_set(self, monkeypatch) -> None:
+        """azp not in allowlist → 401 Invalid authentication token."""
+        import base64
+        import json
+        import time
+
+        from fastapi import HTTPException
+
+        from gateway.auth.user import resolve_user_id
+
+        monkeypatch.setattr("gateway.auth.user.EXPECTED_AZP", frozenset({"https://app.signalpilot.com"}))
+
+        clerk_payload = {
+            "iss": "https://clerk.example.com",
+            "sub": "user_1",
+            "azp": "https://evil.example.com",
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 3600,
+        }
+        header_b64 = base64.urlsafe_b64encode(json.dumps({"alg": "RS256", "typ": "JWT"}).encode()).rstrip(b"=")
+        payload_b64 = base64.urlsafe_b64encode(json.dumps(clerk_payload).encode()).rstrip(b"=")
+        fake_sig = base64.urlsafe_b64encode(b"fakesignature").rstrip(b"=")
+        clerk_token = f"{header_b64.decode()}.{payload_b64.decode()}.{fake_sig.decode()}"
+
+        with patch("gateway.auth.user.is_cloud_mode", return_value=True):
+            mock_client = MagicMock()
+            mock_client.get_signing_key_from_jwt.return_value = MagicMock()
+
+            with patch("gateway.auth.user._get_jwks_client", return_value=mock_client):
+                with patch("gateway.auth.user.jwt.decode", return_value=clerk_payload):
+                    request = MagicMock()
+                    request.headers.get.return_value = f"Bearer {clerk_token}"
+                    request.cookies.get.return_value = None
+                    request.state = MagicMock(spec=[])
+
+                    with pytest.raises(HTTPException) as exc_info:
+                        await resolve_user_id(request)
+
+                    assert exc_info.value.status_code == 401
+                    assert exc_info.value.detail == "Invalid authentication token"
+
+    @pytest.mark.asyncio
+    async def test_azp_missing_rejected_when_allowlist_set(self, monkeypatch) -> None:
+        """azp claim absent → 401 Invalid authentication token when allowlist set."""
+        import base64
+        import json
+        import time
+
+        from fastapi import HTTPException
+
+        from gateway.auth.user import resolve_user_id
+
+        monkeypatch.setattr("gateway.auth.user.EXPECTED_AZP", frozenset({"https://app.signalpilot.com"}))
+
+        clerk_payload = {
+            "iss": "https://clerk.example.com",
+            "sub": "user_1",
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 3600,
+        }
+        header_b64 = base64.urlsafe_b64encode(json.dumps({"alg": "RS256", "typ": "JWT"}).encode()).rstrip(b"=")
+        payload_b64 = base64.urlsafe_b64encode(json.dumps(clerk_payload).encode()).rstrip(b"=")
+        fake_sig = base64.urlsafe_b64encode(b"fakesignature").rstrip(b"=")
+        clerk_token = f"{header_b64.decode()}.{payload_b64.decode()}.{fake_sig.decode()}"
+
+        with patch("gateway.auth.user.is_cloud_mode", return_value=True):
+            mock_client = MagicMock()
+            mock_client.get_signing_key_from_jwt.return_value = MagicMock()
+
+            with patch("gateway.auth.user._get_jwks_client", return_value=mock_client):
+                with patch("gateway.auth.user.jwt.decode", return_value=clerk_payload):
+                    request = MagicMock()
+                    request.headers.get.return_value = f"Bearer {clerk_token}"
+                    request.cookies.get.return_value = None
+                    request.state = MagicMock(spec=[])
+
+                    with pytest.raises(HTTPException) as exc_info:
+                        await resolve_user_id(request)
+
+                    assert exc_info.value.status_code == 401
+                    assert exc_info.value.detail == "Invalid authentication token"
+
+    @pytest.mark.asyncio
+    async def test_azp_not_enforced_when_env_unset(self, monkeypatch) -> None:
+        """EXPECTED_AZP empty frozenset → azp check is a no-op, returns user_id."""
+        import base64
+        import json
+        import time
+
+        from gateway.auth.user import resolve_user_id
+
+        monkeypatch.setattr("gateway.auth.user.EXPECTED_AZP", frozenset())
+
+        clerk_payload = {
+            "iss": "https://clerk.example.com",
+            "sub": "user_1",
+            "azp": "anything",
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 3600,
+        }
+        header_b64 = base64.urlsafe_b64encode(json.dumps({"alg": "RS256", "typ": "JWT"}).encode()).rstrip(b"=")
+        payload_b64 = base64.urlsafe_b64encode(json.dumps(clerk_payload).encode()).rstrip(b"=")
+        fake_sig = base64.urlsafe_b64encode(b"fakesignature").rstrip(b"=")
+        clerk_token = f"{header_b64.decode()}.{payload_b64.decode()}.{fake_sig.decode()}"
+
+        with patch("gateway.auth.user.is_cloud_mode", return_value=True):
+            mock_client = MagicMock()
+            mock_client.get_signing_key_from_jwt.return_value = MagicMock()
+
+            with patch("gateway.auth.user._get_jwks_client", return_value=mock_client):
+                with patch("gateway.auth.user.jwt.decode", return_value=clerk_payload):
+                    request = MagicMock()
+                    request.headers.get.return_value = f"Bearer {clerk_token}"
+                    request.cookies.get.return_value = None
+                    request.state = MagicMock(spec=[])
+
+                    result = await resolve_user_id(request)
+
+                    assert result == "user_1"

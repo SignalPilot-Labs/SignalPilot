@@ -1,0 +1,616 @@
+from __future__ import annotations
+
+import os
+import sys
+from dataclasses import dataclass
+
+from signalpilot._config.packages import infer_package_manager
+from signalpilot._config.utils import deep_copy
+
+if sys.version_info < (3, 11):
+    from typing_extensions import NotRequired
+else:
+    from typing import NotRequired
+
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Literal,
+    TypedDict,
+    cast,
+)
+
+from signalpilot._output.rich_help import mddoc
+from signalpilot._utils.deep_merge import deep_merge
+
+
+@mddoc
+@dataclass
+class CompletionConfig(TypedDict):
+    """Configuration for code completion.
+
+    A dict with key/value pairs configuring code completion in the sp
+    editor.
+
+    **Keys.**
+
+    - `activate_on_typing`: if `False`, completion won't activate
+    until the completion hotkey is entered
+    - `signature_hint_on_typing`: if `False`, signature hint won't be shown when typing
+    - `copilot`: one of `"github"`, `"codeium"`, or `"custom"`
+    - `codeium_api_key`: the Codeium API key
+    """
+
+    activate_on_typing: bool
+    signature_hint_on_typing: bool
+    copilot: bool | Literal["github", "codeium", "custom"]
+
+    # Codeium
+    codeium_api_key: NotRequired[str | None]
+
+    # @deprecated: use `ai.models.autocomplete_model` instead
+    api_key: NotRequired[str | None]
+    model: NotRequired[str | None]
+    base_url: NotRequired[str | None]
+
+
+@mddoc
+@dataclass
+class SaveConfig(TypedDict):
+    """Configuration for saving.
+
+    **Keys.**
+
+    - `autosave`: one of `"off"` or `"after_delay"`
+    - `delay`: number of milliseconds to wait before autosaving
+    - `format_on_save`: if `True`, format the code on save
+    """
+
+    autosave: Literal["off", "after_delay"]
+    autosave_delay: int
+    format_on_save: bool
+
+
+@mddoc
+@dataclass
+class KeymapConfig(TypedDict):
+    """Configuration for keymaps.
+
+    **Keys.**
+
+    - `preset`: one of `"default"` or `"vim"`
+    - `overrides`: a dict of keymap actions to their keymap override
+    - `vimrc`: path to a vimrc file to load keymaps from
+    - `destructive_delete`: if `True`, allows deleting cells with content.
+    """
+
+    preset: Literal["default", "vim"]
+    overrides: NotRequired[dict[str, str]]
+    vimrc: NotRequired[str | None]
+    destructive_delete: NotRequired[bool]
+
+
+OnCellChangeType = Literal["lazy", "autorun"]
+ExecutionType = Literal["relaxed", "strict"]
+
+
+@mddoc
+@dataclass
+class VenvConfig(TypedDict, total=False):
+    """Configuration for external Python environment in home sandbox mode.
+
+    Allows specifying an existing virtualenv to use instead of creating
+    ephemeral sandboxes per notebook. Only applies in home sandbox mode.
+
+    **Keys.**
+
+    - `path`: path to a virtualenv directory (absolute or relative to
+      pyproject.toml)
+    - `writable`: if true, sp will manage script metadata (inline
+      dependencies). Defaults to false.
+    """
+
+    path: str
+    writable: bool
+
+
+# TODO(akshayka): remove normal, migrate to compact
+# normal == compact
+WidthType = Literal["normal", "compact", "medium", "full", "columns"]
+Theme = Literal["light", "dark", "system"]
+ExportType = Literal["html", "markdown", "ipynb"]
+SqlOutputType = Literal["polars", "lazy-polars", "pandas", "native", "auto"]
+StoreKey = Literal["file", "redis", "rest", "tiered"]
+
+
+@mddoc
+@dataclass
+class RuntimeConfig(TypedDict):
+    """Configuration for runtime.
+
+    **Keys.**
+
+    - `auto_instantiate`: if `False`, cells won't automatically
+        run on startup. This only applies when editing a notebook,
+        and not when running as an application.
+        The default is `True`.
+    - `auto_reload`: if `lazy`, cells importing modified modules will marked
+      as stale; if `autorun`, affected cells will be automatically run. similar
+      to IPython's %autoreload extension but with more code intelligence.
+    - `reactive_tests`: if `True`, sp will automatically run pytest on cells containing only test functions and test classes.
+      execution.
+    - `on_cell_change`: if `lazy`, cells will be marked stale when their
+      ancestors run but won't autorun; if `autorun`, cells will automatically
+      run when their ancestors run.
+    - `execution_type`: if `relaxed`, sp will not clone cell declarations;
+      if `strict` sp will clone cell declarations by default, avoiding
+      hidden potential state build up.
+    - `watcher_on_save`: how to handle file changes when saving. `"lazy"` marks
+        affected cells as stale, `"autorun"` automatically runs affected cells.
+    - `output_max_bytes`: the maximum size in bytes of cell outputs; larger
+        values may affect frontend performance
+    - `serve_cached_sessions_in_apps`: if `True`, initialize applications with session cache.
+        The default is `False`.
+    - `std_stream_max_bytes`: the maximum size in bytes of console outputs;
+      larger values may affect frontend performance
+    - `pythonpath`: a list of directories to add to the Python search path.
+        Directories will be added to the head of sys.path. Similar to the
+        `PYTHONPATH` environment variable, the directories will be included in
+        where Python will look for imported modules.
+    - `dotenv`: a list of paths to `.env` files to load.
+        If the file does not exist, it will be silently ignored.
+        The default is `[".env"]` if a pyproject.toml is found, otherwise `[]`.
+    - `default_sql_output`: the default output format for SQL queries. Can be one of:
+        `"auto"`, `"native"`, `"polars"`, `"lazy-polars"`, or `"pandas"`.
+        The default is `"auto"`.
+    - `default_auto_download`: an Optional list of export types to automatically snapshot your notebook as:
+       `html`, `markdown`, `ipynb`.
+       The default is None.
+    - `default_csv_encoding`: the default encoding for CSV exports.
+        The default is `"utf-8"`.
+    - `show_tracebacks`: if `True`, show detailed error tracebacks in run mode.
+        When enabled, exceptions will display a clickable toast that opens a modal with the full traceback.
+        The default is `False`.
+    """
+
+    auto_instantiate: bool
+    auto_reload: Literal["off", "lazy", "autorun"]
+    reactive_tests: bool
+    on_cell_change: OnCellChangeType
+    watcher_on_save: Literal["lazy", "autorun"]
+    output_max_bytes: int
+    serve_cached_sessions_in_apps: NotRequired[bool]
+    std_stream_max_bytes: int
+    pythonpath: NotRequired[list[str]]
+    dotenv: NotRequired[list[str]]
+    default_sql_output: SqlOutputType
+    default_auto_download: NotRequired[list[ExportType]]
+    default_csv_encoding: NotRequired[str]
+    show_tracebacks: NotRequired[bool]
+
+
+@mddoc
+@dataclass
+class DisplayConfig(TypedDict):
+    """Configuration for display.
+
+    **Keys.**
+
+    - `theme`: `"light"`, `"dark"`, or `"system"`
+    - `code_editor_font_size`: font size for the code editor
+    - `cell_output`: `"above"` or `"below"`
+    - `dataframes`: `"rich"` or `"plain"`
+    - `custom_css`: list of paths to custom CSS files
+    - `default_table_page_size`: default number of rows to display in tables
+    - `default_table_max_columns`: default maximum number of columns to display in tables
+    - `reference_highlighting`: if `True`, highlight reactive variable references
+    - `locale`: locale for date formatting and internationalization (e.g., "en-US", "en-GB", "de-DE")
+    """
+
+    theme: Theme
+    code_editor_font_size: int
+    cell_output: Literal["above", "below"]
+    default_width: WidthType
+    dataframes: Literal["rich", "plain"]
+    custom_css: NotRequired[list[str]]
+    default_table_page_size: int
+    default_table_max_columns: int
+    reference_highlighting: NotRequired[bool]
+    locale: NotRequired[str | None]
+
+
+@mddoc
+@dataclass
+class FormattingConfig(TypedDict):
+    """Configuration for code formatting.
+
+    **Keys.**
+
+    - `line_length`: max line length
+    """
+
+    line_length: int
+
+
+@dataclass
+class ServerConfig(TypedDict):
+    """Configuration for the server.
+
+    **Keys.**
+
+    - `browser`: the web browser to use. `"default"` or a browser registered
+        with Python's webbrowser module (eg, `"firefox"` or `"chrome"`)
+    - `follow_symlink`: if true, the server will follow symlinks it finds
+        inside its static assets directory.
+    - `disable_file_downloads`: if true, the file download button will be
+        hidden in the file explorer.
+    """
+
+    browser: Literal["default"] | str
+    follow_symlink: bool
+    disable_file_downloads: NotRequired[bool]
+
+
+@dataclass
+class PackageManagementConfig(TypedDict):
+    """Configuration options for package management.
+
+    **Keys.**
+
+    - `manager`: the package manager to use
+    """
+
+    manager: Literal["pip", "rye", "uv", "poetry", "pixi"]
+
+
+
+
+@dataclass
+class PythonLanguageServerConfig(TypedDict, total=False):
+    """
+    Configuration options for Python Language Server.
+
+    pylsp handles completion, hover, go-to-definition, and diagnostics.
+    """
+
+    enabled: bool
+    enable_mypy: bool
+    enable_ruff: bool
+    enable_flake8: bool
+    enable_pydocstyle: bool
+    enable_pylint: bool
+    enable_pyflakes: bool
+
+
+@dataclass
+class BasedpyrightServerConfig(TypedDict, total=False):
+    """
+    Configuration options for basedpyright Language Server.
+
+    basedpyright handles completion, hover, go-to-definition, and diagnostics,
+    but we only use it for diagnostics.
+    """
+
+    enabled: bool
+
+
+@dataclass
+class TyLanguageServerConfig(TypedDict, total=False):
+    """
+    Configuration options for Ty Language Server.
+
+    ty handles completion, hover, go-to-definition, and diagnostics,
+    but we only use it for diagnostics.
+    """
+
+    enabled: bool
+
+
+@dataclass
+class PyreflyLanguageServerConfig(TypedDict, total=False):
+    """
+    Configuration options for Pyrefly Language Server.
+
+    Pyrefly handles completion, hover, go-to-definition, and diagnostics.
+    """
+
+    enabled: bool
+
+
+@dataclass
+class LanguageServersConfig(TypedDict, total=False):
+    """Configuration options for language servers.
+
+    **Keys.**
+
+    - `pylsp`: the pylsp config
+    - `basedpyright`: the basedpyright config
+    - `ty`: the ty config
+    - `pyrefly`: the pyrefly config
+    """
+
+    pylsp: PythonLanguageServerConfig
+    basedpyright: BasedpyrightServerConfig
+    ty: TyLanguageServerConfig
+    pyrefly: PyreflyLanguageServerConfig
+
+
+@dataclass
+class DiagnosticsConfig(TypedDict, total=False):
+    """Configuration options for diagnostics.
+
+    **Keys.**
+
+    - `enabled`: if `True`, diagnostics will be shown in the editor
+    - `sql_linter`: if `True`, SQL cells will have linting enabled
+    """
+
+    enabled: bool
+    sql_linter: bool
+
+
+@dataclass
+class LintConfig(TypedDict, total=False):
+    """Configuration for lint rule selection.
+
+    Follows ruff-inspired semantics for selecting which rules to run
+    during ``sp check``.
+
+    **Keys.**
+
+    - ``select``: list of rule code prefixes that replaces the default
+      enabled set. Use ``"ALL"`` to select all rules.
+      Example: ``["MB", "MR001"]``
+    - ``ignore``: list of rule code prefixes to remove from the
+      enabled set.
+    """
+
+    select: list[str]
+    ignore: list[str]
+
+
+@dataclass
+class SnippetsConfig(TypedDict):
+    """Configuration for snippets.
+
+    **Keys.**
+
+    - `custom_path`: the path to the custom snippets directory
+    """
+
+    custom_paths: NotRequired[list[str]]
+    include_default_snippets: NotRequired[bool]
+
+
+@dataclass
+class DatasourcesConfig(TypedDict):
+    """Configuration for datasources panel.
+
+    **Keys.**
+
+    - `auto_discover_schemas`: if `True`, include schemas in the datasource
+    - `auto_discover_tables`: if `True`, include tables in the datasource
+    - `auto_discover_columns`: if `True`, include columns & table metadata in the datasource
+    """
+
+    auto_discover_schemas: NotRequired[bool | Literal["auto"]]
+    auto_discover_tables: NotRequired[bool | Literal["auto"]]
+    auto_discover_columns: NotRequired[bool | Literal["auto"]]
+
+
+@mddoc
+@dataclass
+class SharingConfig(TypedDict):
+    """Configuration for sharing features.
+
+    **Keys.**
+
+    - `html`: if `False`, HTML sharing options will be hidden from the UI
+    - `wasm`: if `False`, WebAssembly sharing options will be hidden from the UI
+    """
+
+    html: NotRequired[bool]
+    wasm: NotRequired[bool]
+
+
+@dataclass
+class StoreConfig(TypedDict, total=False):
+    """Configuration for cache stores."""
+
+    type: StoreKey
+    args: dict[str, Any]
+
+
+CacheConfig = list[StoreConfig] | StoreConfig
+
+
+class ExperimentalConfig(TypedDict, total=False):
+    """
+    Configuration for experimental features.
+
+    Features exposed on the frontend must match the frontend config.
+    """
+
+    markdown: bool  # Used in playground (community cloud)
+    wasm_layouts: bool  # Used in playground (community cloud)
+    rtc_v2: bool
+    isolate_apps: bool
+
+    # Internal features
+    cache: CacheConfig
+    execution_type: ExecutionType
+
+
+# Prefer to accept any dict since feature flags can change frequently
+# But maintain type safety for known flags
+ExperimentalConfigType = dict[str, Any]
+
+
+@mddoc
+@dataclass
+class SpConfig(TypedDict):
+    """Configuration for the sp editor"""
+
+    completion: CompletionConfig
+    display: DisplayConfig
+    formatting: FormattingConfig
+    keymap: KeymapConfig
+    runtime: RuntimeConfig
+    save: SaveConfig
+    server: ServerConfig
+    package_management: PackageManagementConfig
+    language_servers: NotRequired[LanguageServersConfig]
+    diagnostics: NotRequired[DiagnosticsConfig]
+    lint: NotRequired[LintConfig]
+    experimental: NotRequired[ExperimentalConfigType]
+    snippets: NotRequired[SnippetsConfig]
+    datasources: NotRequired[DatasourcesConfig]
+    sharing: NotRequired[SharingConfig]
+    venv: NotRequired[VenvConfig]
+
+
+@mddoc
+@dataclass
+class PartialSignalPilotConfig(TypedDict, total=False):
+    """Partial configuration for the sp editor"""
+
+    completion: CompletionConfig
+    display: DisplayConfig
+    formatting: FormattingConfig
+    keymap: KeymapConfig
+    runtime: RuntimeConfig
+    save: SaveConfig
+    server: ServerConfig
+    package_management: PackageManagementConfig
+    language_servers: NotRequired[LanguageServersConfig]
+    diagnostics: NotRequired[DiagnosticsConfig]
+    lint: NotRequired[LintConfig]
+    experimental: NotRequired[ExperimentalConfigType]
+    snippets: SnippetsConfig
+    datasources: NotRequired[DatasourcesConfig]
+    sharing: NotRequired[SharingConfig]
+    venv: NotRequired[VenvConfig]
+
+
+DEFAULT_CONFIG: SpConfig = {
+    "completion": {
+        "activate_on_typing": True,
+        "signature_hint_on_typing": False,
+        "copilot": False,
+    },
+    "display": {
+        "theme": "light",
+        "code_editor_font_size": 14,
+        "cell_output": "below",
+        "default_width": "medium",
+        "dataframes": "rich",
+        "default_table_page_size": 10,
+        "default_table_max_columns": 50,
+        "reference_highlighting": True,
+    },
+    "formatting": {"line_length": 79},
+    "keymap": {"preset": "default", "overrides": {}},
+    # dotenv's default value is set at runtime, depending on whether a
+    # pyproject.toml is found.
+    "runtime": {
+        "auto_instantiate": False,
+        "auto_reload": "off",
+        "reactive_tests": True,
+        "on_cell_change": "lazy",
+        "watcher_on_save": "lazy",
+        "output_max_bytes": int(
+            os.getenv("SP_OUTPUT_MAX_BYTES", 8_000_000)
+        ),
+        "std_stream_max_bytes": int(
+            os.getenv("SP_STD_STREAM_MAX_BYTES", 1_000_000)
+        ),
+        "default_sql_output": "auto",
+        "default_csv_encoding": "utf-8",
+        "show_tracebacks": False,
+    },
+    "save": {
+        "autosave": "after_delay",
+        "autosave_delay": 1000,
+        "format_on_save": False,
+    },
+    "package_management": {"manager": infer_package_manager()},
+    "server": {
+        "browser": "default",
+        "follow_symlink": False,
+    },
+    "language_servers": {
+        "pylsp": {
+            "enabled": False,
+            "enable_mypy": True,
+            "enable_ruff": True,
+            "enable_flake8": False,
+            "enable_pydocstyle": False,
+            "enable_pylint": False,
+            "enable_pyflakes": False,
+        }
+    },
+    "snippets": {
+        "custom_paths": [],
+        "include_default_snippets": True,
+    },
+    "diagnostics": {
+        "sql_linter": True,
+    },
+}
+
+
+def merge_default_config(
+    config: PartialSignalPilotConfig | SpConfig,
+) -> SpConfig:
+    """Merge a user configuration with the default configuration."""
+    return merge_config(DEFAULT_CONFIG, config)
+
+
+def merge_config(
+    config: SpConfig, new_config: PartialSignalPilotConfig | SpConfig
+) -> SpConfig:
+    """Merge a user configuration with a new configuration. The new config
+    will take precedence over the default config.
+
+    Args:
+        config: The default configuration.
+        new_config: The new configuration to merge with the default config.
+
+    Returns:
+        A merged configuration.
+    """
+    # Remove the keymap overrides from the incoming config,
+    # so that they don't get merged into the new config
+    if new_config.get("keymap", {}).get("overrides") is not None:
+        # Clone config to avoid modifying the original
+        config = deep_copy(config)
+        config.get("keymap", {}).pop("overrides", {})
+
+    # Fields that should be replaced instead of merged.
+    # These are "record" types where keys can be added/removed,
+    # as opposed to config objects where you only set specific fields.
+    replace_paths = frozenset({"ai.custom_providers"})
+
+    merged = cast(
+        SpConfig,
+        deep_merge(
+            cast(dict[Any, Any], config),
+            cast(dict[Any, Any], new_config),
+            replace_paths=replace_paths,
+        ),
+    )
+
+    # Patches for backward compatibility
+    if "runtime" in merged:
+        if (
+            merged["runtime"].get("auto_reload") is False  # type:ignore[comparison-overlap]
+        ):
+            merged["runtime"]["auto_reload"] = "off"
+        elif (
+            merged["runtime"].get("auto_reload") is True  # type:ignore[comparison-overlap]
+        ) or (
+            merged["runtime"].get("auto_reload") == "detect"  # type:ignore[comparison-overlap]
+        ):
+            merged["runtime"]["auto_reload"] = "lazy"
+
+    return merged

@@ -6,7 +6,9 @@ import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
 
 # Query Intelligence Tools
 
-11 tools for writing, validating, and executing SQL queries with governance.
+7 tools for writing, validating, and executing SQL queries with governance.
+
+> Schema-link, join-path, ERD, join-type comparison, and date-boundary tools moved to the [Schema & Exploration](/docs/reference/tools-schema) reference.
 
 ---
 
@@ -106,85 +108,17 @@ Break a CTE query into steps and validate each CTE independently.
 
 ---
 
-## schema_link
+## check_budget
 
-Find tables relevant to a natural-language question. Maps NL → schema.
-
-**Parameters:**
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `connection` | string | Yes | Connection name |
-| `question` | string | Yes | Natural-language question |
-| `top_k` | integer | No | Number of tables to return (default: 5) |
-
-**Returns:** Ranked list of relevant tables with relevance scores.
-
----
-
-## find_join_path
-
-Discover FK-based join paths between two tables. Searches up to 6 hops.
+Remaining query budget for the current session.
 
 **Parameters:**
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `connection` | string | Yes | Connection name |
-| `from_table` | string | Yes | Source table |
-| `to_table` | string | Yes | Target table |
-| `max_hops` | integer | No | Maximum join hops (default: 6) |
 
-**Returns:** List of join paths with intermediate tables and join conditions.
-
----
-
-## get_relationships
-
-Return the full ERD for a database: all FK relationships as arrows or adjacency list.
-
-**Parameters:**
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `connection` | string | Yes | Connection name |
-| `format` | string | No | `arrows` or `adjacency` (default: `arrows`) |
-
-**Returns:** All FK relationships in the specified format.
-
----
-
-## compare_join_types
-
-Compare row counts across INNER, LEFT, RIGHT, and FULL OUTER JOIN for a given join condition.
-
-**Parameters:**
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `connection` | string | Yes | Connection name |
-| `left_table` | string | Yes | Left table |
-| `right_table` | string | Yes | Right table |
-| `join_on` | string | Yes | Join condition (e.g. `order_id`) |
-
-**Returns:** Row count per join type, NULL counts on each side — helps pick the right join.
-
----
-
-## get_date_boundaries
-
-Return MIN/MAX dates across all DATE and TIMESTAMP columns in a table or database.
-
-**Parameters:**
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `connection` | string | Yes | Connection name |
-| `table` | string | No | Specific table (omit for database-wide scan) |
-
-**Returns:** Per-column MIN/MAX date boundaries.
-
-**When to use:** Before writing date-range queries — anchor to actual data dates, not `current_date`.
+**Returns:** Budget cap (USD), amount spent this session, amount remaining. Applies to warehouses that report scan cost (BigQuery, Snowflake).
 
 ---
 

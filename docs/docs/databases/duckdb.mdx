@@ -1,0 +1,75 @@
+---
+sidebar_position: 3
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
+# DuckDB
+
+Zero-config local analytics engine. `db_type` is `duckdb`. Supports local file databases, in-memory (`:memory:`), and MotherDuck cloud (`md:` URLs). Tier 3.
+
+## Connection config
+
+<MiniCopyBlock
+  label="duckdb"
+  plain
+  code={`{\n  "name": "local-duckdb",\n  "db_type": "duckdb",\n  "database": "/path/to/warehouse.duckdb"\n}`}
+/>
+
+MotherDuck:
+
+<MiniCopyBlock
+  label="motherduck"
+  plain
+  code={`{\n  "name": "motherduck",\n  "db_type": "duckdb",\n  "database": "md:my_database",\n  "motherduck_token": "..."\n}`}
+/>
+
+## Connection fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Connection name. `[a-zA-Z0-9_-]`, max 64 chars. |
+| `db_type` | Yes | `duckdb`. |
+| `database` | Yes | File path to the `.duckdb` file, `:memory:`, or a `md:` MotherDuck URL. |
+| `motherduck_token` | No | MotherDuck personal access token. Required for `md:` connections. |
+| `query_timeout` | No | Seconds, 1–3600. |
+
+## Capabilities
+
+| Capability | Supported | Notes |
+|------------|-----------|-------|
+| Query | Yes | File-based DBs open a transient read-only connection per query, so the gateway never holds a write lock that would block dbt. In-memory DBs use a persistent connection. |
+| Schema introspection | Yes (full) | `information_schema` for columns/tables, `duckdb_tables()` / `duckdb_columns()` for comments and estimated sizes. |
+| FK discovery | Yes | Via `information_schema` table constraints. |
+| EXPLAIN | Yes | Supported. |
+| Cost estimation | No | Not byte-billed. |
+| Schema stats | Yes | Estimated row count from `duckdb_tables().estimated_size`; table and column comments. |
+
+Tier 3.
+
+## Dialect notes / gotchas
+
+- Identifiers are quoted with double quotes (`"col"`).
+- Integer division truncates.
+- `INTERVAL` syntax requires quotes.
+- `DATE_TRUNC` returns a `TIMESTAMP`.
+- File-based connections are opened read-only per query; dbt can take the write lock between MCP queries.
+
+## Blocked functions
+
+These DuckDB functions are blocked inside `SELECT` (plus all DDL/DML):
+
+- File system: `read_csv`, `read_csv_auto`, `read_parquet`, `read_json`, `read_json_auto`, `read_blob`, `read_text`
+- Network: `httpfs_get`, `http_get`, `http_post`
+- Cross-engine scanning: `postgres_scan`, `sqlite_scan`, `mysql_scan`, `iceberg_scan`, `delta_scan`
+- Extension loading: `load_extension`, `install_extension`
+
+The universal `load_extension` / `install_extension` block also applies.
+
+## Recommended plugin skill
+
+`duckdb-sql` — covers DuckDB-specific patterns and gotchas that differ from PostgreSQL/MySQL.
+
+## Cloud vs local
+
+DuckDB is a local connector: the gateway needs filesystem access to the `.duckdb` file. MotherDuck (`md:` URLs with a `motherduck_token`) provides a cloud-hosted DuckDB. When the sandbox service is enabled (`SP_SANDBOX_ENABLED=true`) in local mode, DuckDB runs through the sandboxed connector.

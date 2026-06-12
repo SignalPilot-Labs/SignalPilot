@@ -1,0 +1,69 @@
+# Python 3.12 (gateway requires >=3.12), pinned dbt/duckdb versions match ADE-bench
+FROM python:3.12-slim
+
+# System deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl build-essential libpq-dev libssl-dev libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node.js (required for Claude Code CLI)
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Claude Code CLI
+RUN npm install -g @anthropic-ai/claude-code@2.1.156
+
+# Python deps: pinned to official ADE-bench versions (docker/base/Dockerfile.duckdb-dbt)
+# dbt-core==1.10.11, dbt-duckdb==1.9.3, duckdb==1.3.0
+COPY signalpilot/gateway/ /tmp/gateway-install/
+RUN pip install --no-cache-dir /tmp/gateway-install/ \
+    && pip install --no-cache-dir \
+    "dbt-core==1.10.11" \
+    "dbt-duckdb==1.9.3" \
+    "duckdb==1.3.0" \
+    pandas \
+    pyarrow \
+    pyyaml \
+    "claude-agent-sdk==0.1.59" \
+    && rm -rf /tmp/gateway-install/
+
+# Fix dbt-core 1.10.11 bug: function.sql declares 'javascript' but ModelLanguage enum lacks it
+RUN sed -i "s/supported_languages=\['sql', 'python', 'javascript'\]/supported_languages=['sql', 'python']/" \
+    /usr/local/lib/python3.12/site-packages/dbt/include/global_project/macros/materializations/functions/function.sql
+
+# Non-root user (Claude CLI requires this)
+RUN useradd -m agentuser \
+    && mkdir -p /home/agentuser/.claude /workspace \
+    && echo '{}' > /home/agentuser/.claude.json \
+    && chown -R agentuser:agentuser /home/agentuser /workspace
+
+USER agentuser
+
+RUN git config --global user.name "Benchmark Agent" \
+    && git config --global user.email "benchmark@noreply.com" \
+    && git config --global --add safe.directory '*'
+
+WORKDIR /workspace
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
+
+# Copy benchmark + gateway code into image.
+# Build context must be the repo root: docker build -f benchmark/Dockerfile.ade-agent .
+COPY benchmark/ /app/benchmark/
+COPY signalpilot/gateway/ /app/signalpilot/gateway/
+
+# Install SignalPilot plugin
+RUN gosu agentuser bash -c '\
+    claude plugin marketplace add /app/benchmark/signalpilot-plugin/.claude-plugin/marketplace.json 2>/dev/null; \
+    claude plugin install signalpilot-dbt@signalpilot --scope user 2>/dev/null; \
+    echo "Plugin installed"'
+
+# MCP config: stdio subprocess running the baked-in gateway code.
+RUN printf '{"mcpServers":{"signalpilot":{"type":"stdio","command":"bash","args":["-c","cd /app/signalpilot/gateway && exec python3 -c \\"from gateway.mcp.server import main; main()\\""],"env":{"PYTHONPATH":"/app/signalpilot/gateway","SP_DISABLE_SANDBOX":"1"}}}}\n' \
+    > /app/benchmark/mcp_baked_config.json
+
+# No FAKETIME needed for ADE-bench (no current_date hazards in their tasks)
+
+ENTRYPOINT ["bash"]

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useAppAuth } from "@/lib/auth-context";
+import { useAppAuth } from "~/lib/auth-context";
 
 /**
  * Landing / boot sequence page.

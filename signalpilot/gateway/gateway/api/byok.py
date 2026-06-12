@@ -11,7 +11,7 @@ import logging
 import time
 import uuid
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,8 +24,10 @@ from ..byok import (
     revert_to_managed,
     rotate_byok_key,
 )
+from ..common.ip import request_meta
 from ..db.models import GatewayBYOKKey, GatewayConnection, GatewayCredential, GatewayOrg
 from ..models import (
+    AuditEntry,
     BYOKKeyCreate,
     BYOKKeyResponse,
     BYOKKeyUpdate,
@@ -83,6 +85,8 @@ async def create_byok_key(
     _user_id: UserID,
     org_id: OrgID,
     _role: OrgAdmin,
+    store: StoreD,
+    request: Request,
 ) -> BYOKKeyResponse:
     """Register a BYOK key for an org. org_id is derived from JWT, not body."""
     # Check uniqueness
@@ -122,6 +126,22 @@ async def create_byok_key(
     if isinstance(provider, LocalBYOKProvider):
         provider.register_key(org_id, body.key_alias)
         logger.info("Local BYOK key registered in-memory for org=%s alias=%s", org_id, body.key_alias)
+
+    client_ip, user_agent = request_meta(request)
+    # Audit-DB failure must not block the successful key creation; best-effort observability.
+    try:
+        await store.append_audit(
+            AuditEntry(
+                id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                event_type="byok_key_create",
+                metadata={"key_id": key_id, "key_alias": body.key_alias, "provider_type": body.provider_type},
+                client_ip=client_ip,
+                user_agent=user_agent,
+            )
+        )
+    except Exception:
+        logger.warning("Failed to append audit log for byok_key_create key_id=%s", key_id)
 
     return _key_to_response(key)
 
@@ -263,11 +283,35 @@ async def validate_byok_key(
     _user_id: UserID,
     org_id: OrgID,
     _role: OrgAdmin,
+    store: StoreD,
+    request: Request,
 ) -> dict:
     """Round-trip encrypt/decrypt test for a BYOK key, scoped to the org from JWT."""
     from ..store.byok_state import _byok_provider as provider
 
+    client_ip, user_agent = request_meta(request)
+
     if provider is None:
+        metadata = {
+            "key_id": key_id,
+            "provider_type": "unknown",
+            "result": "error",
+            "reason": "provider_not_found",
+        }
+        # Audit-DB failure must not block the error response; best-effort observability.
+        try:
+            await store.append_audit(
+                AuditEntry(
+                    id=str(uuid.uuid4()),
+                    timestamp=time.time(),
+                    event_type="byok_key_validate",
+                    metadata=metadata,
+                    client_ip=client_ip,
+                    user_agent=user_agent,
+                )
+            )
+        except Exception:
+            logger.warning("Failed to append audit log for byok_key_validate key_id=%s", key_id)
         raise HTTPException(status_code=503, detail="BYOK provider not configured")
 
     result = await db.execute(
@@ -278,22 +322,78 @@ async def validate_byok_key(
     )
     key = result.scalar_one_or_none()
     if key is None or key.org_id != org_id:
+        metadata = {
+            "key_id": key_id,
+            "provider_type": "unknown",
+            "result": "error",
+            "reason": "key_not_found",
+        }
+        # Audit-DB failure must not block the error response; best-effort observability.
+        try:
+            await store.append_audit(
+                AuditEntry(
+                    id=str(uuid.uuid4()),
+                    timestamp=time.time(),
+                    event_type="byok_key_validate",
+                    metadata=metadata,
+                    client_ip=client_ip,
+                    user_agent=user_agent,
+                )
+            )
+        except Exception:
+            logger.warning("Failed to append audit log for byok_key_validate key_id=%s", key_id)
         raise HTTPException(status_code=404, detail="Key not found")
 
+    result_status = "success"
     try:
         ciphertext, wrapped_dek = await encrypt_envelope(
             provider, key.org_id, key.key_alias, BYOK_HEALTH_CHECK_PLAINTEXT
         )
         recovered = await decrypt_envelope(provider, key.org_id, key.key_alias, wrapped_dek, ciphertext)
         if recovered != BYOK_HEALTH_CHECK_PLAINTEXT:
-            return {"valid": False, "error": "Round-trip produced incorrect plaintext"}
-        return {"valid": True}
+            result_status = "invalid"
     except BYOKKeyError as exc:
         logger.warning("BYOK key validation failed for key_id=%s: %s", key_id, exc)
-        return {"valid": False, "error": "Key validation failed"}
+        result_status = "invalid"
     except Exception:
         logger.exception("BYOK key validation failed for key_id=%s", key_id)
-        return {"valid": False, "error": "Validation failed due to an internal error"}
+        result_status = "invalid"
+
+    if result_status == "invalid":
+        audit_metadata = {
+            "key_id": key_id,
+            "key_alias": key.key_alias,
+            "provider_type": key.provider_type,
+            "result": "error",
+            "reason": "validation_failed",
+        }
+    else:
+        audit_metadata = {
+            "key_id": key_id,
+            "key_alias": key.key_alias,
+            "provider_type": key.provider_type,
+            "result": "success",
+            "reason": "success",
+        }
+
+    # Audit-DB failure must not block the validation response; best-effort observability.
+    try:
+        await store.append_audit(
+            AuditEntry(
+                id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                event_type="byok_key_validate",
+                metadata=audit_metadata,
+                client_ip=client_ip,
+                user_agent=user_agent,
+            )
+        )
+    except Exception:
+        logger.warning("Failed to append audit log for byok_key_validate key_id=%s", key_id)
+
+    if result_status == "invalid":
+        return {"valid": False, "error": "Key validation failed"}
+    return {"valid": True}
 
 
 @router.post("/byok/migrate", dependencies=[RequireScope("admin")])
@@ -302,6 +402,7 @@ async def migrate_credentials_to_byok(
     store: StoreD,
     org_id: OrgID,
     _role: OrgAdmin,
+    request: Request,
 ) -> BYOKMigrateResponse:
     """Migrate org credentials from managed to BYOK encryption.
 
@@ -334,6 +435,28 @@ async def migrate_credentials_to_byok(
         key_alias=key.key_alias,
         managed_decrypt=_decrypt_with_migration,
     )
+
+    client_ip, user_agent = request_meta(request)
+    # Audit-DB failure must not block the completed migration; best-effort observability.
+    try:
+        await store.append_audit(
+            AuditEntry(
+                id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                event_type="byok_migrate",
+                metadata={
+                    "key_id": body.key_id,
+                    "key_alias": key.key_alias,
+                    "migrated": migrated,
+                    "failed": failed,
+                },
+                client_ip=client_ip,
+                user_agent=user_agent,
+            )
+        )
+    except Exception:
+        logger.warning("Failed to append audit log for byok_migrate key_id=%s", body.key_id)
+
     return BYOKMigrateResponse(migrated=migrated, failed=failed, errors=errors)
 
 
@@ -342,6 +465,7 @@ async def revert_credentials_to_managed(
     store: StoreD,
     org_id: OrgID,
     _role: OrgAdmin,
+    request: Request,
 ) -> BYOKMigrateResponse:
     """Revert org credentials from BYOK back to managed encryption.
 
@@ -364,6 +488,23 @@ async def revert_credentials_to_managed(
         managed_encrypt=_encrypt,
         cache=cache,
     )
+
+    client_ip, user_agent = request_meta(request)
+    # Audit-DB failure must not block the completed revert; best-effort observability.
+    try:
+        await store.append_audit(
+            AuditEntry(
+                id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                event_type="byok_revert",
+                metadata={"migrated": migrated, "failed": failed},
+                client_ip=client_ip,
+                user_agent=user_agent,
+            )
+        )
+    except Exception:
+        logger.warning("Failed to append audit log for byok_revert org_id=%s", org_id)
+
     return BYOKMigrateResponse(migrated=migrated, failed=failed, errors=errors)
 
 
@@ -374,6 +515,7 @@ async def rotate_byok_key_endpoint(
     store: StoreD,
     org_id: OrgID,
     _role: OrgAdmin,
+    request: Request,
 ) -> BYOKRotateResponse:
     """Rotate credentials from one BYOK key to another.
 
@@ -430,6 +572,29 @@ async def rotate_byok_key_endpoint(
         old_key.status = "active"
         await store.session.commit()
         raise
+
+    client_ip, user_agent = request_meta(request)
+    # Audit-DB failure must not block the completed rotation; best-effort observability.
+    try:
+        await store.append_audit(
+            AuditEntry(
+                id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                event_type="byok_key_rotate",
+                metadata={
+                    "old_key_id": key_id,
+                    "old_key_alias": old_key.key_alias,
+                    "new_key_id": body.new_key_id,
+                    "new_key_alias": new_key.key_alias,
+                    "rotated": rotated,
+                    "failed": failed,
+                },
+                client_ip=client_ip,
+                user_agent=user_agent,
+            )
+        )
+    except Exception:
+        logger.warning("Failed to append audit log for byok_key_rotate old_key_id=%s", key_id)
 
     return BYOKRotateResponse(rotated=rotated, failed=failed, errors=errors)
 

@@ -1,0 +1,1135 @@
+#!/usr/bin/env python3
+"""Map all upstream columns to a target model's output columns.
+
+Given a dbt project directory and a model name, finds all upstream refs,
+lists every column from each upstream table, profiles each for analytical
+value, and maps them against the YML column contract. Outputs MAPPED,
+UNMAPPED-INCLUDE, or UNMAPPED-EXCLUDE (with reason) for each source column.
+
+Usage:
+    python3 map_columns.py "<project_dir>" "<model_name>"
+    python3 map_columns.py "<project_dir>"  # maps all stubs/missing models
+"""
+
+from __future__ import annotations
+
+import io
+import re
+import sys
+from pathlib import Path
+
+if sys.stdout.encoding != "utf-8":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+
+SKIP_DIRS = (".claude", "dbt_packages", "target", "__pycache__")
+
+
+def _read_text(path: Path) -> str:
+    raw = path.read_bytes()
+    if raw[:3] == b"\xef\xbb\xbf":
+        raw = raw[3:]
+    return raw.decode("utf-8", errors="replace")
+
+
+def _extract_refs(sql_text: str) -> list[str]:
+    """Extract ref('model_name') references from SQL."""
+    return re.findall(r"\{\{\s*ref\(['\"](\w+)['\"]\)\s*\}\}", sql_text)
+
+
+def _extract_sources(sql_text: str) -> list[tuple[str, str]]:
+    """Extract source('schema', 'table') references from SQL."""
+    return re.findall(r"\{\{\s*source\(['\"](\w+)['\"],\s*['\"](\w+)['\"]\)\s*\}\}", sql_text)
+
+
+def _extract_yml_columns(work_dir: Path, model_name: str) -> list[str]:
+    """Extract column names for a model from YML files."""
+    columns: list[str] = []
+    for ext in ("*.yml", "*.yaml"):
+        for yml_file in work_dir.rglob(ext):
+            if any(skip in str(yml_file) for skip in SKIP_DIRS):
+                continue
+            try:
+                text = _read_text(yml_file)
+            except Exception:
+                continue
+            current_model = None
+            in_columns = False
+            for line in text.splitlines():
+                stripped = line.lstrip()
+                indent = len(line) - len(stripped)
+                m = re.match(r"-\s*name:\s*(\S+)", stripped)
+                if m and 1 <= indent <= 4:
+                    current_model = m.group(1)
+                    in_columns = False
+                    continue
+                if current_model == model_name and stripped.startswith("columns:"):
+                    in_columns = True
+                    continue
+                if in_columns and indent <= 4 and stripped and not stripped.startswith("-"):
+                    in_columns = False
+                    continue
+                if in_columns and current_model == model_name:
+                    cm = re.match(r"-\s*name:\s*(\S+)", stripped)
+                    if cm:
+                        columns.append(cm.group(1))
+    return columns
+
+
+def _get_source_identifier(work_dir: Path, source_name: str, table_name: str) -> str:
+    """Resolve source table identifier from YML (handles identifier: overrides)."""
+    for ext in ("*.yml", "*.yaml"):
+        for yml_file in work_dir.rglob(ext):
+            if any(skip in str(yml_file) for skip in SKIP_DIRS):
+                continue
+            try:
+                text = _read_text(yml_file)
+            except Exception:
+                continue
+            in_source = False
+            in_tables = False
+            found_table = False
+            for line in text.splitlines():
+                stripped = line.lstrip()
+                m = re.match(r"-\s*name:\s*(\S+)", stripped)
+                if m and not in_tables:
+                    in_source = m.group(1) == source_name
+                    continue
+                if in_source and stripped.startswith("tables:"):
+                    in_tables = True
+                    continue
+                if in_tables and m:
+                    found_table = m.group(1) == table_name
+                    continue
+                if found_table and stripped.startswith("identifier"):
+                    ident = stripped.split(":", 1)[1].strip().strip("'\"")
+                    if ident:
+                        return ident
+    return table_name
+
+
+def _get_db_columns(work_dir: Path, table_name: str) -> list[tuple[str, str]]:
+    """Get columns from a DuckDB table. Returns [(col_name, col_type), ...].
+
+    Falls back to parsing the model's SQL file if the table isn't materialized yet.
+    """
+    try:
+        import duckdb
+    except ImportError:
+        return []
+
+    for db_file in work_dir.glob("*.duckdb"):
+        try:
+            con = duckdb.connect(str(db_file), read_only=True)
+            # Try exact name
+            try:
+                cols = con.execute(f'DESCRIBE "{table_name}"').fetchall()
+                con.close()
+                return [(c[0], c[1]) for c in cols]
+            except Exception:
+                pass
+            # Try case-insensitive match
+            tables = [r[0] for r in con.execute("SHOW TABLES").fetchall()]
+            for t in tables:
+                if t.lower() == table_name.lower():
+                    cols = con.execute(f'DESCRIBE "{t}"').fetchall()
+                    con.close()
+                    return [(c[0], c[1]) for c in cols]
+            con.close()
+        except Exception:
+            pass
+
+    # Fallback: parse the model's SQL file for column names
+    # This handles models that haven't been materialized yet
+    for sql_file in work_dir.rglob("*.sql"):
+        if any(skip in str(sql_file) for skip in SKIP_DIRS):
+            continue
+        if sql_file.stem.lower() == table_name.lower():
+            try:
+                sql = _read_text(sql_file)
+                cols = _parse_sql_columns(sql)
+                if cols:
+                    return cols
+            except Exception:
+                pass
+            break
+    return []
+
+
+def _parse_sql_columns(sql: str) -> list[tuple[str, str]]:
+    """Parse column names from a dbt SQL file. Handles CTEs, Jinja, aliases."""
+    # Strip Jinja tags and comments
+    clean = re.sub(r'\{\{.*?\}\}', '___REF___', sql)
+    clean = re.sub(r'\{%.*?%\}', '', clean)
+    clean = re.sub(r'/\*.*?\*/', '', clean, flags=re.DOTALL)
+    clean = re.sub(r'--.*$', '', clean, flags=re.MULTILINE)
+
+    # Find ALL SELECT...FROM blocks
+    matches = list(re.finditer(
+        r'SELECT\s+(.*?)\s+FROM\b', clean, re.IGNORECASE | re.DOTALL
+    ))
+    if not matches:
+        return []
+
+    # Use the LAST SELECT...FROM (the outermost/final select)
+    sel_text = matches[-1].group(1)
+
+    # Handle SELECT * — can't extract columns
+    if sel_text.strip() == "*":
+        return []
+
+    cols: list[tuple[str, str]] = []
+    # Split on commas, handling parenthesized expressions
+    depth = 0
+    current: list[str] = []
+    parts: list[str] = []
+    for ch in sel_text:
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth -= 1
+        elif ch == ',' and depth == 0:
+            parts.append(''.join(current).strip())
+            current = []
+            continue
+        current.append(ch)
+    if current:
+        parts.append(''.join(current).strip())
+
+    for part in parts:
+        part = part.strip()
+        if not part or part == "*":
+            continue
+        # Remove inline comments
+        part = re.sub(r'--.*$', '', part, flags=re.MULTILINE).strip()
+        if not part:
+            continue
+
+        # Check for AS alias (case insensitive)
+        as_match = re.search(r'\bAS\s+(\w+)\s*$', part, re.IGNORECASE)
+        if as_match:
+            cols.append((as_match.group(1), "VARCHAR"))
+        else:
+            # Take the last word, strip table prefix
+            words = part.split()
+            name = words[-1].split(".")[-1] if words else ""
+            # Skip Jinja placeholders and keywords
+            if name and name != "___REF___" and not name.upper() in (
+                "THEN", "ELSE", "END", "WHEN", "CASE", "AND", "OR", "NOT",
+                "NULL", "TRUE", "FALSE", "AS", "FROM", "WHERE", "SELECT",
+            ):
+                cols.append((name, "VARCHAR"))
+
+    return cols
+
+
+BINARY_TYPES = {"BLOB", "BYTEA", "BINARY", "VARBINARY", "IMAGE"}
+
+
+def _profile_columns(work_dir: Path, table_name: str, columns: list[tuple[str, str]]) -> dict[str, dict]:
+    """Profile columns for exclusion signals. Returns {col: {null_count, distinct_count, total}}.
+
+    Gracefully handles: missing tables, reserved-word column names, empty tables.
+    """
+    try:
+        import duckdb
+    except ImportError:
+        return {}
+
+    if not columns:
+        return {}
+
+    for db_file in work_dir.glob("*.duckdb"):
+        try:
+            con = duckdb.connect(str(db_file), read_only=True)
+            # Verify table exists
+            try:
+                con.execute(f'SELECT 1 FROM "{table_name}" LIMIT 0')
+            except Exception:
+                con.close()
+                return {}
+
+            # Profile each column individually to avoid one bad column killing all
+            result: dict[str, dict] = {}
+            for col_name, col_type in columns:
+                try:
+                    row = con.execute(
+                        f'SELECT COUNT(*) - COUNT("{col_name}"), '
+                        f'COUNT(DISTINCT "{col_name}"), COUNT(*) '
+                        f'FROM "{table_name}"'
+                    ).fetchone()
+                    result[col_name] = {
+                        "null_count": row[0], "distinct_count": row[1], "total": row[2]
+                    }
+                except Exception:
+                    result[col_name] = {"null_count": 0, "distinct_count": 0, "total": 0}
+            con.close()
+            return result
+        except Exception:
+            pass
+    return {}
+
+
+def _detect_system_columns(work_dir: Path) -> dict[str, dict]:
+    """Detect columns that appear in raw tables with no data anywhere.
+
+    Returns {col_lower: {tables: N, has_data_anywhere: bool}}.
+    Only checks raw source tables (skips dbt models and gold seeds).
+    Columns that already have data somewhere get has_data_anywhere=True
+    early — no further checks needed for them.
+    """
+    MODEL_PREFIXES = ("stg_", "dim_", "fact_", "int_", "obt_",
+                      "fct_", "solution__", "mart_", "auto_")
+    col_stats: dict[str, dict] = {}
+    try:
+        import duckdb
+    except ImportError:
+        return col_stats
+    for db_file in work_dir.glob("*.duckdb"):
+        try:
+            con = duckdb.connect(str(db_file), read_only=True)
+            all_tables = {r[0] for r in con.execute("SHOW TABLES").fetchall()}
+            raw_tables = [t for t in all_tables
+                          if not any(t.lower().startswith(p) for p in MODEL_PREFIXES)]
+            for tbl in raw_tables:
+                try:
+                    tbl_cols = con.execute(f'DESCRIBE "{tbl}"').fetchall()
+                except Exception:
+                    continue
+                for c in tbl_cols:
+                    cl = c[0].lower()
+                    if cl not in col_stats:
+                        col_stats[cl] = {"tables": 0, "has_data_anywhere": False}
+                    col_stats[cl]["tables"] += 1
+                    if col_stats[cl]["has_data_anywhere"]:
+                        continue  # Already known to have data — skip query
+                    try:
+                        cnt = con.execute(
+                            f'SELECT COUNT("{c[0]}") FROM "{tbl}"'
+                        ).fetchone()[0]
+                        if cnt > 0:
+                            col_stats[cl]["has_data_anywhere"] = True
+                    except Exception:
+                        pass
+            con.close()
+        except Exception:
+            pass
+        break
+    return col_stats
+
+
+def _classify_column(col_name: str, col_type: str, profile: dict,
+                     exclude_set: set[str], has_yml_contract: bool,
+                     system_cols: dict[str, dict] | None = None) -> tuple[str, str]:
+    """Classify an unmapped column. Returns (status, reason).
+
+    UNMAPPED-EXCLUDE: agent explicitly blacklisted it.
+    UNMAPPED-INCLUDE [warning]: tool reports a data signal but includes it.
+    The agent sees the warning and decides whether to exclude.
+    """
+    cl = col_name.lower()
+
+    # Agent-specified blacklist — hard exclude
+    if cl in exclude_set:
+        return "UNMAPPED-EXCLUDE", "agent_blacklist"
+
+    # Data-driven signals
+    warning = ""
+    is_binary = col_type.upper() in BINARY_TYPES
+    is_all_null = False
+    if profile:
+        stats = profile.get(col_name, {})
+        total = stats.get("total", 0)
+        if total > 0:
+            if stats.get("null_count", 0) == total:
+                is_all_null = True
+            elif stats.get("distinct_count", 0) == 1 and stats.get("null_count", 0) == 0:
+                warning = "constant_value"
+
+    # Auto-exclude: binary/blob columns that are 100% NULL carry no data
+    if is_binary and is_all_null:
+        return "UNMAPPED-EXCLUDE", "all_null_binary"
+    if is_binary:
+        warning = "binary_type"
+    elif is_all_null:
+        # Check if this column is NULL in ALL raw tables (unused system column)
+        if system_cols:
+            sc = system_cols.get(cl, {})
+            if sc.get("tables", 0) > 1 and not sc.get("has_data_anywhere", False):
+                return "UNMAPPED-EXCLUDE", "unused_system_column"
+            else:
+                warning = "all_null"
+        else:
+            warning = "all_null"
+
+    # Detect VARCHAR columns with date-like names
+    if col_type.upper() == "VARCHAR" and not warning:
+        if cl.endswith("_date") or cl.endswith("_on") or cl.endswith("_at"):
+            # Audit timestamps (modified, updated) → keep as-is
+            if any(w in cl for w in ("modified", "updated", "changed")):
+                warning = "varchar_audit_timestamp→keep_as_VARCHAR"
+            # Event dates (created, ordered, shipped, paid) → cast to DATE
+            elif any(w in cl for w in ("created", "order", "ship", "paid")):
+                warning = "varchar_event_date→CAST_to_DATE"
+
+    return "UNMAPPED-INCLUDE", warning
+
+
+def _infer_prefix(model_name: str, upstream_name: str) -> str:
+    """Infer the domain prefix for columns from an upstream model.
+
+    E.g. int__daily_klaviyo_user_metrics -> 'klaviyo_'
+         int__daily_shopify_customer_orders -> 'shopify_'
+    """
+    # Common patterns: int__daily_<domain>_*, int__<domain>_*
+    parts = upstream_name.replace("int__", "").replace("daily_", "").split("_")
+    if parts:
+        # Check if the model name already suggests a prefix
+        for domain in ["klaviyo", "shopify", "facebook", "instagram", "twitter",
+                        "linkedin", "google", "hubspot", "salesforce", "stripe",
+                        "twilio", "pendo", "jira", "asana", "xero", "zuora",
+                        "recharge", "quickbooks"]:
+            if domain in upstream_name.lower():
+                return domain + "_"
+    return ""
+
+
+def _detect_collisions(all_upstream_cols: list[tuple[str, str, str, str]]) -> dict[str, list[str]]:
+    """Find column names that appear in multiple upstreams. Returns {col_lower: [upstream1, upstream2, ...]}."""
+    col_to_upstreams: dict[str, list[str]] = {}
+    for upstream, col_name, _, status in all_upstream_cols:
+        if status == "UNMAPPED-EXCLUDE":
+            continue  # excluded columns don't collide
+        cl = col_name.lower()
+        if cl not in col_to_upstreams:
+            col_to_upstreams[cl] = []
+        if upstream not in col_to_upstreams[cl]:
+            col_to_upstreams[cl].append(upstream)
+    return {col: ups for col, ups in col_to_upstreams.items() if len(ups) > 1}
+
+
+def _print_collisions(collisions: dict[str, list[str]], is_obt: bool,
+                      work_dir: Path | None = None, model_name: str | None = None,
+                      all_upstream_cols: list[tuple[str, str, str, str]] | None = None) -> None:
+    """Print collision warnings with aliasing instructions."""
+    if not collisions:
+        return
+    print("### COLLISIONS — duplicate column names across upstreams")
+    for col, upstreams in sorted(collisions.items()):
+        ups_str = ", ".join(upstreams)
+        print(f"  {col} — appears in: {ups_str}")
+    # Show pre-existing table aliases if model already exists in DB
+    if work_dir and model_name and all_upstream_cols:
+        model_db_cols = _get_db_columns(work_dir, model_name)
+        if model_db_cols:
+            upstream_col_set = {c.lower() for _, c, _, _ in all_upstream_cols}
+            non_upstream = [c[0] for c in model_db_cols if c[0].lower() not in upstream_col_set]
+            if non_upstream:
+                print(f"  Pre-existing table has alias(es): {', '.join(non_upstream)}")
+    print()
+
+
+def _find_driving_ref(sql_text: str) -> str | None:
+    """Find the driving table (first FROM ref) in SQL text."""
+    # Match FROM {{ ref('xxx') }} — the first ref after FROM is the driving table
+    m = re.search(r"\bFROM\s+\{\{\s*ref\(['\"](\w+)['\"]\)\s*\}\}", sql_text, re.IGNORECASE)
+    return m.group(1) if m else None
+
+
+def _detect_lookups(work_dir: Path) -> dict[str, tuple[str, str, str]]:
+    """Detect _id/_ids columns with matching lookup tables.
+
+    Returns: {col_lower: (lookup_table, join_key, display_col)}
+    e.g., {"supplier_id": ("suppliers", "id", "company")}
+    """
+    result: dict[str, tuple[str, str, str]] = {}
+    try:
+        import duckdb
+    except ImportError:
+        return result
+
+    for db_file in work_dir.glob("*.duckdb"):
+        try:
+            con = duckdb.connect(str(db_file), read_only=True)
+            all_tables = {r[0] for r in con.execute("SHOW TABLES").fetchall()}
+            table_cols: dict[str, list[str]] = {}
+            for t in all_tables:
+                try:
+                    table_cols[t] = [r[0] for r in con.execute(f'DESCRIBE "{t}"').fetchall()]
+                except Exception:
+                    pass
+
+            # For each table, find _id/_ids columns with matching lookups
+            for tbl in all_tables:
+                for col in table_cols.get(tbl, []):
+                    low = col.lower()
+                    if low.endswith("_ids"):
+                        prefix = low[:-4]
+                    elif low.endswith("_id") and low != "id":
+                        prefix = low[:-3]
+                    else:
+                        continue
+                    # Find matching lookup table
+                    for candidate in all_tables:
+                        cl = candidate.lower()
+                        if cl in (f"{prefix}s", f"stg_{prefix}s", f"{prefix}",
+                                  f"stg_{prefix}", f"dim_{prefix}s"):
+                            if candidate == tbl:
+                                continue
+                            lk_cols = table_cols.get(candidate, [])
+                            name_cols = [c for c in lk_cols
+                                         if "name" in c.lower() or "company" in c.lower()]
+                            id_col = next((c for c in lk_cols if c.lower() == "id"), None)
+                            if name_cols and id_col:
+                                display = name_cols[0]
+                                alias = f"{prefix}_{display}" if not display.lower().startswith(prefix) else display
+                                result[low] = (candidate, id_col, alias)
+                            break
+            con.close()
+        except Exception:
+            pass
+        break
+    return result
+
+
+def map_model(work_dir: Path, model_name: str, exclude_cols: set[str] | None = None) -> None:
+    """Map all upstream columns for a single model."""
+    exclude_set = {c.lower() for c in (exclude_cols or set())}
+    is_obt = model_name.lower().startswith("obt_")
+
+    # Pre-compute system column stats for tagging unused columns
+    system_cols = _detect_system_columns(work_dir) if is_obt else {}
+
+    # Find the model's SQL file
+    sql_file = None
+    for f in work_dir.rglob("*.sql"):
+        if any(skip in str(f) for skip in SKIP_DIRS):
+            continue
+        if f.stem == model_name:
+            sql_file = f
+            break
+
+    if not sql_file:
+        print(f"## {model_name}\nSQL file not found.\n")
+        return
+
+    sql_text = _read_text(sql_file)
+    yml_columns = set(_extract_yml_columns(work_dir, model_name))
+    yml_columns_lower = {c.lower() for c in yml_columns}
+
+    refs = _extract_refs(sql_text)
+    sources = _extract_sources(sql_text)
+
+    # For OBT models, identify the driving table (first FROM ref)
+    driving_ref = _find_driving_ref(sql_text) if is_obt else None
+
+    # Detect lookup tables for _id/_ids resolution
+    lookups = _detect_lookups(work_dir)
+    is_dim_model = model_name.lower().startswith("dim_")
+
+    # Detect sibling column sets (materialized models in same directory)
+    sibling_cols: dict[str, set[str]] = {}
+    if sql_file:
+        for sib in sql_file.parent.glob("*.sql"):
+            if sib.stem == model_name or any(skip in str(sib) for skip in SKIP_DIRS):
+                continue
+            sib_db_cols = _get_db_columns(work_dir, sib.stem)
+            if sib_db_cols:
+                sibling_cols[sib.stem] = {c[0].lower() for c in sib_db_cols}
+
+    # Pre-compute sibling skip set: YML cols that no mode-count sibling includes
+    # and that exist in the upstream (passthrough cols the project omits)
+    sibling_skip_set: set[str] = set()
+    if sql_file and yml_columns:
+        from collections import Counter
+        sib_yml_counts: dict[str, int] = {}
+        for sib in sql_file.parent.glob("*.sql"):
+            if sib.stem == model_name or any(skip in str(sib) for skip in SKIP_DIRS):
+                continue
+            sib_yml = _extract_yml_columns(work_dir, sib.stem)
+            if sib_yml:
+                sib_yml_counts[sib.stem] = len(sib_yml)
+        if len(sib_yml_counts) >= 2:
+            count_freq = Counter(sib_yml_counts.values())
+            mode_count, mode_freq = count_freq.most_common(1)[0]
+            if mode_freq >= 2 and len(yml_columns) > mode_count:
+                # Try built siblings first, fall back to YML columns
+                mode_sib_cols: set[str] = set()
+                mode_sibs = {n: c for n, c in sibling_cols.items() if len(c) == mode_count}
+                if mode_sibs:
+                    for sc in mode_sibs.values():
+                        mode_sib_cols.update(sc)
+                else:
+                    for sib_name, sib_count in sib_yml_counts.items():
+                        if sib_count == mode_count:
+                            for c in _extract_yml_columns(work_dir, sib_name):
+                                mode_sib_cols.add(c.lower())
+                if mode_sib_cols:
+                    upstream_col_names: set[str] = set()
+                    for ref_name in sorted(set(refs)):
+                        for c in _get_db_columns(work_dir, ref_name):
+                            upstream_col_names.add(c[0].lower())
+                    sibling_skip_set = {c.lower() for c in yml_columns
+                                        if c.lower() not in mode_sib_cols
+                                        and c.lower() in upstream_col_names}
+
+    print(f"## Column Map: {model_name}")
+    if yml_columns:
+        print(f"YML contract: {len(yml_columns)} columns")
+    else:
+        print("YML contract: NONE (no columns defined in YML)")
+    print()
+
+    all_upstream_cols: list[tuple[str, str, str, str]] = []  # (upstream, col, type, status)
+
+    # Identify lookup upstreams: tables JOINed for a display column only.
+    # The lookup table must NOT share the model's entity name (that's the primary source).
+    lookup_upstreams: dict[str, str] = {}  # {upstream_name: display_col}
+    if is_dim_model:
+        model_entity = model_name.lower()
+        for pfx in ("dim_", "fact_", "stg_", "int_", "obt_", "fct_"):
+            if model_entity.startswith(pfx):
+                model_entity = model_entity[len(pfx):]
+                break
+        for lk_col, (lk_tbl, lk_key, lk_alias) in lookups.items():
+            for ref_name in refs:
+                ref_lower = ref_name.lower()
+                if ref_lower in (lk_tbl.lower(), f"stg_{lk_tbl.lower()}"):
+                    # Skip if this ref IS the primary source (shares entity name)
+                    ref_entity = ref_lower
+                    for pfx in ("dim_", "fact_", "stg_", "int_", "obt_", "fct_"):
+                        if ref_entity.startswith(pfx):
+                            ref_entity = ref_entity[len(pfx):]
+                            break
+                    if ref_entity == model_entity or model_entity in ref_entity:
+                        continue  # This is the primary source, not a lookup
+                    lookup_upstreams[ref_name] = lk_alias
+                    break
+
+    # Process ref() upstreams
+    for ref_name in sorted(set(refs)):
+        db_cols = _get_db_columns(work_dir, ref_name)
+        if not db_cols:
+            print(f"### Upstream: ref('{ref_name}') — NO COLUMNS FOUND (not materialized?)")
+            print()
+            continue
+
+        prefix = _infer_prefix(model_name, ref_name)
+        profile = _profile_columns(work_dir, ref_name, db_cols)
+        is_driving = is_obt and ref_name == driving_ref
+        is_dim = is_obt and not is_driving
+
+        # For dim models: if this upstream is a lookup table, only include display col
+        is_lookup_upstream = ref_name in lookup_upstreams
+        lookup_display_alias = lookup_upstreams.get(ref_name, "").lower() if is_lookup_upstream else ""
+        # Match display col by alias OR by raw name (alias may have prefix)
+        lookup_display_cols: set[str] = set()
+        if lookup_display_alias:
+            lookup_display_cols.add(lookup_display_alias)
+            # Also match the raw column: "supplier_company" → "company"
+            for c in [r[0] for r in db_cols]:
+                if c.lower() in lookup_display_alias or lookup_display_alias.endswith(c.lower()):
+                    lookup_display_cols.add(c.lower())
+
+        label = "driving" if is_driving else ("dim" if is_dim else "")
+        if is_lookup_upstream:
+            label = "lookup"
+        tag = f" ({label})" if label else ""
+        print(f"### Upstream: ref('{ref_name}'){tag} — {len(db_cols)} columns")
+        for col_name, col_type in db_cols:
+            prefixed = prefix + col_name if prefix else col_name
+            if col_name.lower() in yml_columns_lower or prefixed.lower() in yml_columns_lower:
+                # Check if this MAPPED col should be skipped (sibling pattern)
+                if col_name.lower() in sibling_skip_set:
+                    status = "UNMAPPED-EXCLUDE"
+                    reason = "sibling_skip"
+                else:
+                    status = "MAPPED"
+                    reason = ""
+                target = col_name if col_name.lower() in yml_columns_lower else prefixed
+            else:
+                status, reason = _classify_column(col_name, col_type, profile, exclude_set, bool(yml_columns), system_cols)
+                target = prefixed if prefix else col_name
+
+            # For lookup upstreams: exclude everything except the display column
+            if is_lookup_upstream and col_name.lower() not in lookup_display_cols:
+                status = "UNMAPPED-EXCLUDE"
+                reason = "lookup_table_col"
+
+            reason_tag = f" [{reason}]" if reason else ""
+            # Check for lookup resolution (FK column in the primary upstream)
+            lookup_info = lookups.get(col_name.lower())
+            if lookup_info and is_dim_model and not is_lookup_upstream:
+                lk_tbl, lk_key, lk_alias = lookup_info
+                print(f"  {col_name} ({col_type}) → UNMAPPED-EXCLUDE [lookup_join_key: JOIN {lk_tbl} ON {lk_tbl}.{lk_key}, output {lk_alias} instead]")
+            elif reason and "CAST_to_DATE" in reason:
+                print(f"  {col_name} ({col_type}) → UNMAPPED-INCLUDE [varchar_event_date]")
+            elif reason and "keep_as_VARCHAR" in reason:
+                print(f"  {col_name} ({col_type}) → UNMAPPED-INCLUDE [varchar_audit_timestamp]")
+            else:
+                print(f"  {col_name} ({col_type}) → {status}{reason_tag}: {target}")
+            all_upstream_cols.append((ref_name, col_name, col_type, status))
+        print()
+
+    # Process source() upstreams
+    for source_name, table_name in sorted(set(sources)):
+        identifier = _get_source_identifier(work_dir, source_name, table_name)
+        db_cols = _get_db_columns(work_dir, identifier)
+        if not db_cols:
+            db_cols = _get_db_columns(work_dir, table_name)
+        if not db_cols:
+            print(f"### Upstream: source('{source_name}', '{table_name}') — NO COLUMNS FOUND")
+            print()
+            continue
+
+        profile = _profile_columns(work_dir, identifier if identifier != table_name else table_name, db_cols)
+
+        print(f"### Upstream: source('{source_name}', '{table_name}') — {len(db_cols)} columns")
+        for col_name, col_type in db_cols:
+            if col_name.lower() in yml_columns_lower:
+                status = "MAPPED"
+                reason = ""
+            else:
+                status, reason = _classify_column(col_name, col_type, profile, exclude_set, bool(yml_columns), system_cols)
+            reason_tag = f" [{reason}]" if reason else ""
+            # Check for lookup resolution (same as ref() section)
+            lookup_info = lookups.get(col_name.lower())
+            if lookup_info and is_dim_model:
+                lk_tbl, lk_key, lk_alias = lookup_info
+                print(f"  {col_name} ({col_type}) → UNMAPPED-EXCLUDE [lookup_join_key: JOIN {lk_tbl} ON {lk_tbl}.{lk_key}, output {lk_alias} instead]")
+            elif reason and "CAST_to_DATE" in reason:
+                print(f"  {col_name} ({col_type}) → UNMAPPED-INCLUDE [varchar_event_date]")
+            elif reason and "keep_as_VARCHAR" in reason:
+                print(f"  {col_name} ({col_type}) → UNMAPPED-INCLUDE [varchar_audit_timestamp]")
+            else:
+                print(f"  {col_name} ({col_type}) → {status}{reason_tag}: {col_name}")
+            all_upstream_cols.append((f"{source_name}.{table_name}", col_name, col_type, status))
+        print()
+
+    # Detect and report column name collisions across upstreams
+    collisions = _detect_collisions(all_upstream_cols)
+    _print_collisions(collisions, is_obt, work_dir, model_name, all_upstream_cols)
+
+    # Summary
+    mapped = sum(1 for _, _, _, s in all_upstream_cols if s == "MAPPED")
+    excluded = sum(1 for _, _, _, s in all_upstream_cols if s == "UNMAPPED-EXCLUDE")
+    included = sum(1 for _, _, _, s in all_upstream_cols if s == "UNMAPPED-INCLUDE")
+    total = len(all_upstream_cols)
+    print(f"### Summary: {total} upstream columns — {mapped} mapped, {included} include, {excluded} exclude")
+    if collisions:
+        print(f"### COLLISIONS: {len(collisions)} column(s) appear in multiple upstreams — MUST alias")
+
+    # Sibling column analysis — compare against built siblings and YML
+    if sql_file and yml_columns:
+        from collections import Counter
+        sib_yml_counts: dict[str, int] = {}
+        for sib in sql_file.parent.glob("*.sql"):
+            if sib.stem == model_name or any(skip in str(sib) for skip in SKIP_DIRS):
+                continue
+            sib_yml = _extract_yml_columns(work_dir, sib.stem)
+            if sib_yml:
+                sib_yml_counts[sib.stem] = len(sib_yml)
+        if len(sib_yml_counts) >= 2:
+            count_freq = Counter(sib_yml_counts.values())
+            mode_count, mode_freq = count_freq.most_common(1)[0]
+            yml_count = len(yml_columns)
+            if mode_freq >= 2 and yml_count > mode_count:
+                print(f"\n### SIBLING INFO: {mode_freq} of {len(sib_yml_counts)} "
+                      f"sibling YMLs have {mode_count} columns. This model's "
+                      f"YML has {yml_count}.")
+                # Identify extra YML cols not in mode-count siblings
+                if sibling_cols:
+                    # Only compare against siblings matching the mode count
+                    mode_sibs = {name: cols for name, cols in sibling_cols.items()
+                                 if len(cols) == mode_count}
+                    if mode_sibs:
+                        mode_sib_cols = set()
+                        for sc in mode_sibs.values():
+                            mode_sib_cols.update(sc)
+                        upstream_col_set = {c.lower() for _, c, _, _ in all_upstream_cols}
+                        extra_yml = {c for c in yml_columns
+                                     if c.lower() not in mode_sib_cols
+                                     and c.lower() in upstream_col_set}
+                        if extra_yml:
+                            print(f"    SKIP these — in YML and upstream but "
+                                  f"no sibling with {mode_count} cols includes them: "
+                                  f"{sorted(extra_yml)}")
+    print()
+
+
+def map_upstreams(work_dir: Path, model_name: str, upstream_tables: list[str],
+                  exclude_cols: set[str] | None = None) -> None:
+    """Map columns from explicitly named upstream tables (no SQL file needed).
+
+    For OBT models: the FIRST upstream is treated as the driving/fact table.
+    Subsequent upstreams are labeled as dimension tables. Column collisions
+    across upstreams are detected and reported.
+    """
+    exclude_set = {c.lower() for c in (exclude_cols or set())}
+    is_obt = model_name.lower().startswith("obt_")
+    is_dim_model = model_name.lower().startswith("dim_")
+    yml_columns = set(_extract_yml_columns(work_dir, model_name))
+    yml_columns_lower = {c.lower() for c in yml_columns}
+    lookups = _detect_lookups(work_dir)
+    system_cols = _detect_system_columns(work_dir) if is_obt else {}
+
+    # Pre-compute sibling skip set (same logic as map_model)
+    sibling_skip_set: set[str] = set()
+    sql_file = None
+    for f in work_dir.rglob("*.sql"):
+        if any(skip in str(f) for skip in SKIP_DIRS):
+            continue
+        if f.stem == model_name:
+            sql_file = f
+            break
+    if sql_file and yml_columns:
+        from collections import Counter
+        sibling_cols_up: dict[str, set[str]] = {}
+        sib_yml_counts: dict[str, int] = {}
+        for sib in sql_file.parent.glob("*.sql"):
+            if sib.stem == model_name or any(skip in str(sib) for skip in SKIP_DIRS):
+                continue
+            sib_db = _get_db_columns(work_dir, sib.stem)
+            if sib_db:
+                sibling_cols_up[sib.stem] = {c[0].lower() for c in sib_db}
+            sib_yml = _extract_yml_columns(work_dir, sib.stem)
+            if sib_yml:
+                sib_yml_counts[sib.stem] = len(sib_yml)
+        if len(sib_yml_counts) >= 2:
+            count_freq = Counter(sib_yml_counts.values())
+            mode_count, mode_freq = count_freq.most_common(1)[0]
+            if mode_freq >= 2 and len(yml_columns) > mode_count:
+                # Try built siblings first, fall back to YML columns
+                mode_sib_cols: set[str] = set()
+                mode_sibs = {n: c for n, c in sibling_cols_up.items() if len(c) == mode_count}
+                if mode_sibs:
+                    for sc in mode_sibs.values():
+                        mode_sib_cols.update(sc)
+                else:
+                    # Fallback: use YML column names from mode-count siblings
+                    for sib_name, sib_count in sib_yml_counts.items():
+                        if sib_count == mode_count:
+                            for c in _extract_yml_columns(work_dir, sib_name):
+                                mode_sib_cols.add(c.lower())
+                if mode_sib_cols:
+                    up_col_set: set[str] = set()
+                    for t in upstream_tables:
+                        for c in _get_db_columns(work_dir, t):
+                            up_col_set.add(c[0].lower())
+                    sibling_skip_set = {c.lower() for c in yml_columns
+                                        if c.lower() not in mode_sib_cols
+                                        and c.lower() in up_col_set}
+
+    print(f"## Column Map: {model_name}")
+    if yml_columns:
+        print(f"YML contract: {len(yml_columns)} columns")
+    else:
+        print("YML contract: NONE (no columns defined in YML)")
+    print()
+
+    all_upstream_cols: list[tuple[str, str, str, str]] = []
+    # Determine driving table: fact/fct prefix = driving, regardless of arg order
+    driving_table = None
+    if upstream_tables:
+        for t in upstream_tables:
+            if t.lower().startswith(("fact_", "fct_")):
+                driving_table = t
+                break
+        if not driving_table:
+            driving_table = upstream_tables[0]
+
+    missing_upstreams: list[str] = []
+    for table_name in upstream_tables:
+        db_cols = _get_db_columns(work_dir, table_name)
+        if not db_cols:
+            # Try YML columns as last resort
+            yml_cols = _extract_yml_columns(work_dir, table_name)
+            if yml_cols:
+                db_cols = [(c, "VARCHAR") for c in yml_cols]
+                print(f"### Upstream: {table_name} — {len(db_cols)} columns (from YML, not materialized)")
+            else:
+                missing_upstreams.append(table_name)
+                print(f"### Upstream: {table_name} — NOT MATERIALIZED")
+                print(f"  ⚠ Build this model first, then re-run map-columns for accurate data tags.")
+                print()
+                continue
+
+        prefix = _infer_prefix(model_name, table_name)
+        profile = _profile_columns(work_dir, table_name, db_cols)
+        is_driving = is_obt and table_name == driving_table
+        is_dim = is_obt and not is_driving
+
+        label = "driving" if is_driving else ("dim" if is_dim else "")
+        tag = f" ({label})" if label else ""
+        print(f"### Upstream: {table_name}{tag} — {len(db_cols)} columns")
+        for col_name, col_type in db_cols:
+            prefixed = prefix + col_name if prefix else col_name
+            if col_name.lower() in yml_columns_lower or prefixed.lower() in yml_columns_lower:
+                if col_name.lower() in sibling_skip_set:
+                    status = "UNMAPPED-EXCLUDE"
+                    reason = "sibling_skip"
+                else:
+                    status = "MAPPED"
+                    reason = ""
+                target = col_name if col_name.lower() in yml_columns_lower else prefixed
+            else:
+                status, reason = _classify_column(col_name, col_type, profile, exclude_set, bool(yml_columns), system_cols)
+                target = prefixed if prefix else col_name
+            reason_tag = f" [{reason}]" if reason else ""
+            # Check for lookup resolution
+            lookup_info = lookups.get(col_name.lower())
+            if lookup_info and is_dim_model:
+                lk_tbl, lk_key, lk_alias = lookup_info
+                print(f"  {col_name} ({col_type}) → UNMAPPED-EXCLUDE [lookup_join_key: JOIN {lk_tbl} ON {lk_tbl}.{lk_key}, output {lk_alias} instead]")
+            elif reason and "CAST_to_DATE" in reason:
+                print(f"  {col_name} ({col_type}) → UNMAPPED-INCLUDE [varchar_event_date]")
+            elif reason and "keep_as_VARCHAR" in reason:
+                print(f"  {col_name} ({col_type}) → UNMAPPED-INCLUDE [varchar_audit_timestamp]")
+            else:
+                print(f"  {col_name} ({col_type}) → {status}{reason_tag}: {target}")
+            all_upstream_cols.append((table_name, col_name, col_type, status))
+        print()
+
+    # Detect and report column name collisions across upstreams
+    collisions = _detect_collisions(all_upstream_cols)
+    _print_collisions(collisions, is_obt, work_dir, model_name, all_upstream_cols)
+
+    mapped = sum(1 for _, _, _, s in all_upstream_cols if s == "MAPPED")
+    excluded = sum(1 for _, _, _, s in all_upstream_cols if s == "UNMAPPED-EXCLUDE")
+    included = sum(1 for _, _, _, s in all_upstream_cols if s == "UNMAPPED-INCLUDE")
+    total = len(all_upstream_cols)
+    print(f"### Summary: {total} upstream columns — {mapped} mapped, {included} include, {excluded} exclude")
+    if collisions:
+        print(f"### COLLISIONS: {len(collisions)} column(s) appear in multiple upstreams — MUST alias")
+
+    # Surface system columns (unused across entire DB) for OBT models
+    if is_obt and system_cols:
+        sys_cols = [col for col, s in system_cols.items()
+                    if s.get("tables", 0) > 1 and not s.get("has_data_anywhere", False)]
+        if sys_cols:
+            header = "### SYSTEM COLUMNS (100% NULL in all raw tables — drop from OBT)"
+            if missing_upstreams:
+                header += f"\n  ⚠ {len(missing_upstreams)} upstream(s) not materialized — these tags could not be applied per-column above."
+                header += "\n  Re-run map-columns after building upstreams for per-column tags."
+            print(f"\n{header}")
+            for col in sorted(sys_cols):
+                print(f"  {col} — appears in {system_cols[col]['tables']} raw tables, zero data everywhere")
+    print()
+
+
+def audit_obt(work_dir: Path, model_name: str) -> None:
+    """Audit a built OBT model: check column count and collision handling."""
+    # Get the model's actual columns
+    model_cols = _get_db_columns(work_dir, model_name)
+    if not model_cols:
+        print(f"AUDIT {model_name}: SKIP — model not materialized")
+        return
+
+    model_col_names = {c[0].lower() for c in model_cols}
+    print(f"## OBT Audit: {model_name} ({len(model_cols)} columns)")
+
+    # Find the model's SQL to get upstream refs
+    sql_file = None
+    for f in work_dir.rglob("*.sql"):
+        if any(skip in str(f) for skip in SKIP_DIRS):
+            continue
+        if f.stem == model_name:
+            sql_file = f
+            break
+    if not sql_file:
+        print("AUDIT: SKIP — no SQL file found")
+        return
+
+    sql_text = _read_text(sql_file)
+    refs = _extract_refs(sql_text)
+
+    # Count upstream columns and find collisions
+    upstream_totals: dict[str, list[str]] = {}
+    for ref_name in sorted(set(refs)):
+        db_cols = _get_db_columns(work_dir, ref_name)
+        if db_cols:
+            upstream_totals[ref_name] = [c[0] for c in db_cols]
+
+    if len(upstream_totals) < 2:
+        print("AUDIT: SKIP — fewer than 2 upstreams")
+        return
+
+    # Find shared columns (collisions)
+    all_col_sets = list(upstream_totals.values())
+    all_col_names = [set(c.lower() for c in cols) for cols in all_col_sets]
+    shared = set.intersection(*all_col_names) if all_col_names else set()
+    total_unique = sum(len(cols) for cols in upstream_totals.values()) - len(shared)
+
+    print(f"  Upstreams: {', '.join(f'{k} ({len(v)} cols)' for k, v in upstream_totals.items())}")
+    print(f"  Shared join keys: {sorted(shared) if shared else 'none'}")
+    print(f"  Expected minimum columns: {total_unique} (sum - shared keys)")
+    print(f"  Actual columns: {len(model_cols)}")
+
+    issues = []
+    if len(model_cols) < total_unique:
+        missing_count = total_unique - len(model_cols)
+        # Find which upstream columns are missing
+        all_upstream_cols = set()
+        for cols in upstream_totals.values():
+            all_upstream_cols.update(c.lower() for c in cols)
+        missing = all_upstream_cols - model_col_names
+        issues.append(f"FAIL: {missing_count} column(s) missing. Missing: {sorted(missing)}")
+
+    # Identify driving table (first ref in FROM clause)
+    driving = _find_driving_ref(sql_text) if sql_text else None
+
+    # Check collision handling: for each shared column, verify OBT has 2 copies
+    extra_cols = len(model_cols) - total_unique  # positive = aliases exist
+    for col in sorted(shared):
+        matches = [c for c in model_col_names if c == col]
+        if len(matches) == 1 and extra_cols <= 0:
+            issues.append(
+                f"COLLISION: '{col}' appears in {len(upstream_totals)} upstreams "
+                f"but OBT has only 1 copy and no alias. "
+                f"Driving table: {driving or 'unknown'}."
+            )
+        elif len(matches) == 1 and extra_cols > 0:
+            issues.append(
+                f"COLLISION RESOLVED: '{col}' has 1 original + likely 1 alias "
+                f"(model has {extra_cols} column(s) beyond expected)."
+            )
+
+    # Flag all-null columns from non-driving (dim) upstreams
+    # Also detect system columns (appear in many tables)
+    # Analyze column presence and null rates across the entire database
+    col_db_stats: dict[str, dict] = {}  # {col_lower: {tables: N, null_everywhere: bool}}
+    all_db_tables: set = set()
+    try:
+        import duckdb
+        for db_file in work_dir.glob("*.duckdb"):
+            con = duckdb.connect(str(db_file), read_only=True)
+            all_db_tables = {r[0] for r in con.execute("SHOW TABLES").fetchall()}
+            # Only count raw source tables (skip dbt models and gold seeds)
+            raw_tables = [t for t in all_db_tables
+                          if not any(t.lower().startswith(p)
+                                     for p in ("stg_", "dim_", "fact_", "int_", "obt_",
+                                               "fct_", "solution__", "mart_"))]
+            for tbl in raw_tables:
+                try:
+                    for c in con.execute(f'DESCRIBE "{tbl}"').fetchall():
+                        cl = c[0].lower()
+                        if cl not in col_db_stats:
+                            col_db_stats[cl] = {"tables": 0, "has_data_anywhere": False}
+                        col_db_stats[cl]["tables"] += 1
+                        if not col_db_stats[cl]["has_data_anywhere"]:
+                            try:
+                                cnt = con.execute(
+                                    f'SELECT COUNT("{c[0]}") FROM "{tbl}"'
+                                ).fetchone()[0]
+                                if cnt > 0:
+                                    col_db_stats[cl]["has_data_anywhere"] = True
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+            con.close()
+            break
+    except Exception:
+        pass
+
+    for ref_name, cols in upstream_totals.items():
+        if ref_name == driving:
+            continue
+        profile = _profile_columns(work_dir, ref_name, _get_db_columns(work_dir, ref_name))
+        for col_name in cols:
+            stats = profile.get(col_name, {})
+            total = stats.get("total", 0)
+            is_null = total > 0 and stats.get("null_count", 0) == total
+            if is_null and col_name.lower() in model_col_names:
+                stats = col_db_stats.get(col_name.lower(), {})
+                tbl_count = stats.get("tables", 0)
+                has_data = stats.get("has_data_anywhere", False)
+                if tbl_count > 1 and not has_data:
+                    issues.append(
+                        f"INFO: '{col_name}' from {ref_name} is 100% NULL here "
+                        f"AND in all {tbl_count} tables where it appears in the DB "
+                        f"(unused system column — no data anywhere)."
+                    )
+                elif not has_data:
+                    issues.append(
+                        f"INFO: '{col_name}' from {ref_name} is 100% NULL."
+                    )
+                # If has_data_anywhere=True but null HERE, don't flag —
+                # column is a real attribute, just empty in this table
+
+    if issues:
+        for issue in issues:
+            print(f"  {issue}")
+    else:
+        print("  PASS: all upstream columns present, collisions handled")
+    print()
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage:")
+        print("  map-columns <project_dir> <model_name>              # parse refs from SQL")
+        print("  map-columns <project_dir> <model_name> --upstream table1 table2  # explicit upstreams")
+        print("  map-columns <project_dir> <model_name> --audit      # audit built OBT model")
+        print("  map-columns <project_dir> <model_name> --exclude col1,col2      # blacklist columns")
+        sys.exit(1)
+
+    work_dir = Path(sys.argv[1]).resolve()
+    if not (work_dir / "dbt_project.yml").exists():
+        print(f"(no dbt_project.yml found in {work_dir})")
+        sys.exit(1)
+
+    # Parse --exclude flag
+    exclude_cols: set[str] = set()
+    if "--exclude" in sys.argv:
+        idx = sys.argv.index("--exclude")
+        if idx + 1 < len(sys.argv):
+            exclude_cols = {c.strip() for c in sys.argv[idx + 1].split(",")}
+            sys.argv = sys.argv[:idx] + sys.argv[idx + 2:]  # Remove from argv
+
+    # Check for --audit flag
+    if "--audit" in sys.argv:
+        model_name = sys.argv[2]
+        audit_obt(work_dir, model_name)
+        return
+
+    # Check for --upstream flag
+    if "--upstream" in sys.argv:
+        idx = sys.argv.index("--upstream")
+        model_name = sys.argv[2]
+        upstream_tables = sys.argv[idx + 1:]
+        map_upstreams(work_dir, model_name, upstream_tables, exclude_cols)
+        return
+
+    if len(sys.argv) >= 3:
+        # Map a specific model
+        map_model(work_dir, sys.argv[2], exclude_cols)
+    else:
+        # Map all stubs and missing models
+        # Find stubs
+        from scan_project import classify_sql_models, _extract_model_names, _read_text as _rt
+        complete, stubs = classify_sql_models(work_dir)
+        yml_models: set[str] = set()
+        for ext in ("*.yml", "*.yaml"):
+            for yml_file in work_dir.rglob(ext):
+                if any(skip in str(yml_file) for skip in SKIP_DIRS):
+                    continue
+                try:
+                    yml_models.update(_extract_model_names(_rt(yml_file)))
+                except Exception:
+                    pass
+        missing = yml_models - (complete | stubs)
+        work_models = sorted(stubs | missing)
+
+        if not work_models:
+            print("No stubs or missing models found.")
+            return
+
+        for model_name in work_models:
+            map_model(work_dir, model_name)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print(f"(column map error: {e})")

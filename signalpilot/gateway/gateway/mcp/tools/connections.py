@@ -1,7 +1,5 @@
 """Connection tools: list_database_connections, connection_health, connector_capabilities."""
 
-from __future__ import annotations
-
 import httpx
 
 from gateway.errors.mcp import sanitize_proxy_response

@@ -13,8 +13,8 @@ import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { Loader2 } from "lucide-react";
-import { useAppAuth } from "@/lib/auth-context";
-import { DashboardSkeleton } from "@/components/ui/skeleton";
+import { useAppAuth } from "~/lib/auth-context";
+import { DashboardSkeleton } from "~/components/ui/skeleton";
 
 /**
  * Dynamically imported with ssr:false so @clerk/nextjs hooks inside

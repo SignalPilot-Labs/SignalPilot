@@ -36,19 +36,6 @@ def _preview(text: str, limit: int = _LOG_PREVIEW) -> str:
     return flat[:limit] + ("..." if len(flat) > limit else "")
 
 
-SKILL_TOOL_NAMES = (
-    "dbt-workflow",
-    "dbt-debugging",
-    "duckdb-sql",
-    "sql-workflow",
-    "snowflake-sql",
-    "bigquery-sql",
-    "sqlite-sql",
-    "notion-context",
-    "notion-setup",
-)
-
-
 async def run_sdk_agent(
     prompt: str,
     work_dir: Path,
@@ -57,13 +44,10 @@ async def run_sdk_agent(
     timeout: int,
     label: str = "agent",
     max_retries: int = 3,
-    skill_names: tuple[str, ...] | None = None,
     system_prompt: str | None = None,
-    agents: dict | None = None,
+    continue_conversation: bool = False,
 ) -> dict:
     """Run the Claude Agent SDK with retry on 529/overload errors."""
-    if skill_names:
-        log(f"[sdk_runner] skill_names: {skill_names}")
 
     agent_options_kwargs: dict = {
         "model": model,
@@ -74,10 +58,10 @@ async def run_sdk_agent(
         "debug_stderr": True,
         "thinking": {"type": "enabled", "budget_tokens": 20_000},
     }
+    if continue_conversation:
+        agent_options_kwargs["continue_conversation"] = True
     if system_prompt is not None:
         agent_options_kwargs["system_prompt"] = system_prompt
-    if agents is not None:
-        agent_options_kwargs["agents"] = agents
 
     options = ClaudeAgentOptions(**agent_options_kwargs)
 
@@ -138,9 +122,7 @@ async def run_sdk_agent(
                                 "name": block.name,
                                 "input": block.input,
                             })
-                            if block.name in SKILL_TOOL_NAMES:
-                                log(f"[skill] Agent invoked /{block.name}")
-                            elif block.name == "Skill" and isinstance(block.input, dict):
+                            if block.name == "Skill" and isinstance(block.input, dict):
                                 skill_name = block.input.get("skill", "unknown")
                                 log(f"[skill] Agent invoked /{skill_name}")
                         elif isinstance(block, ToolResultBlock):

@@ -1,0 +1,423 @@
+import { pick } from "lodash-es";
+import type * as Plotly from "plotly.js";
+
+import { createParser, type PlotlyTemplateParser } from "./parse-from-template";
+
+type AxisName = string;
+type AxisDatum = unknown;
+
+const SUNBURST_DATA_KEYS: (keyof Plotly.SunburstPlotDatum)[] = [
+  "color",
+  "curveNumber",
+  "entry",
+  "hovertext",
+  "id",
+  "label",
+  "parent",
+  "percentEntry",
+  "percentParent",
+  "percentRoot",
+  "pointNumber",
+  "root",
+  "value",
+] as const;
+
+// Fields emitted by go.Funnel click events: includes x/y coordinates plus
+// funnel-specific percent metrics.
+const FUNNEL_DATA_KEYS: string[] = [
+  "curveNumber",
+  "pointIndex",
+  "pointNumber",
+  "x",
+  "y",
+  "label",
+  "value",
+  "percentInitial",
+  "percentPrevious",
+  "percentTotal",
+] as const;
+
+// Fields emitted by go.FunnelArea click events: sector-based, no x/y.
+const FUNNEL_AREA_DATA_KEYS: string[] = [
+  "curveNumber",
+  "pointNumber",
+  "label",
+  "value",
+  "percentInitial",
+  "percentPrevious",
+  "percentTotal",
+] as const;
+
+const LINE_CLICK_TRACE_TYPES = new Set(["scatter", "scattergl"]);
+
+const STANDARD_POINT_KEYS: string[] = [
+  "x",
+  "y",
+  "z",
+  "lat",
+  "lon",
+  "curveNumber",
+  "pointNumber",
+  "pointNumbers",
+  "pointIndex",
+] as const;
+
+type PointWithFullData = Plotly.PlotDatum & {
+  pointNumbers?: number[];
+  fullData?: {
+    type?: string;
+    mode?: string;
+    x?: unknown[];
+    y?: unknown[];
+    hovertemplate?: string | string[];
+  };
+};
+
+interface TraceSource {
+  type?: string;
+  mode?: string;
+  x?: unknown[];
+  y?: unknown[];
+  hovertemplate?: string | string[];
+}
+
+export type ModeBarButton = NonNullable<
+  Plotly.Config["modeBarButtonsToAdd"]
+>[number];
+
+function coalesceField<T>(
+  primary: T | undefined,
+  fallback: T | undefined,
+): T | undefined {
+  return primary ?? fallback;
+}
+
+function getTraceSource(point: Plotly.PlotDatum): TraceSource {
+  const withFullData = point as PointWithFullData;
+  const data = (point.data ?? {}) as TraceSource;
+  const fullData = (withFullData.fullData ?? {}) as TraceSource;
+
+  // Plotly click payloads sometimes include partial `data` plus richer `fullData`.
+  // Merge field-by-field so we don't lose type/mode/x/y metadata for pure lines.
+  return {
+    type: coalesceField(data.type, fullData.type),
+    mode: coalesceField(data.mode, fullData.mode),
+    x: coalesceField(data.x, fullData.x),
+    y: coalesceField(data.y, fullData.y),
+    hovertemplate: coalesceField(data.hovertemplate, fullData.hovertemplate),
+  };
+}
+
+function asFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function getPointIndex(point: Plotly.PlotDatum): number | undefined {
+  const pointIndex = asFiniteNumber(point.pointIndex);
+  if (pointIndex !== undefined) {
+    return pointIndex;
+  }
+
+  const pointNumber = asFiniteNumber(point.pointNumber);
+  if (pointNumber !== undefined) {
+    return pointNumber;
+  }
+
+  const pointNumbers = (point as PointWithFullData).pointNumbers;
+  if (!Array.isArray(pointNumbers)) {
+    return undefined;
+  }
+
+  return pointNumbers.map(asFiniteNumber).find((n) => n !== undefined);
+}
+
+function isLinePoint(point: Plotly.PlotDatum): boolean {
+  const trace = getTraceSource(point);
+  if (!LINE_CLICK_TRACE_TYPES.has(String(trace.type))) {
+    return false;
+  }
+
+  const mode = trace.mode;
+  if (typeof mode !== "string") {
+    // Some Plotly click payloads omit mode on point.data, especially with
+    // line traces; treat scatter/scattergl as line-like in this case.
+    return true;
+  }
+
+  return mode.split("+").includes("lines");
+}
+
+function isPureLineMode(mode: unknown): boolean {
+  if (typeof mode !== "string") {
+    return false;
+  }
+  const parts = mode.split("+");
+  return parts.includes("lines") && !parts.includes("markers");
+}
+
+export function hasPureLineTrace(
+  data: readonly Plotly.Data[] | undefined,
+): boolean {
+  if (!data) {
+    return false;
+  }
+
+  return data.some((trace) => {
+    const t = trace as Record<string, unknown>;
+    const isScatterLike =
+      t.type === undefined || LINE_CLICK_TRACE_TYPES.has(String(t.type));
+    if (!isScatterLike) {
+      return false;
+    }
+    return isPureLineMode(t.mode);
+  });
+}
+
+/**
+ * Return true when any scatter/scattergl trace has a non-empty fill or a
+ * stackgroup, i.e. it is an area chart.
+ *
+ * Area traces built with `mode="none"` have no visible line or markers, so
+ * `hasPureLineTrace` returns false for them even though they need select/lasso
+ * buttons just as much as `mode="lines"` area charts.  This function covers
+ * that gap and is OR-ed with `hasPureLineTrace` in the config builder.
+ */
+export function hasAreaTrace(
+  data: readonly Plotly.Data[] | undefined,
+): boolean {
+  if (!data) {
+    return false;
+  }
+
+  return data.some((trace) => {
+    const t = trace as Record<string, unknown>;
+    // Only scatter/scattergl can be area traces.
+    if (t.type !== undefined && !LINE_CLICK_TRACE_TYPES.has(String(t.type))) {
+      return false;
+    }
+    // A trace is an area trace when fill is a non-empty string other than
+    // "none", OR it belongs to a stackgroup (px.area always sets stackgroup).
+    return (
+      (typeof t.fill === "string" && t.fill !== "" && t.fill !== "none") ||
+      t.stackgroup != null
+    );
+  });
+}
+
+function createDragmodeButton(
+  name: string,
+  title: string,
+  svg: string,
+  dragmode: Plotly.Layout["dragmode"],
+  setDragmode: (dragmode: Plotly.Layout["dragmode"]) => void,
+): ModeBarButton {
+  return {
+    name,
+    title,
+    icon: { svg },
+    click: () => setDragmode(dragmode),
+  };
+}
+
+export function lineSelectionButtons(
+  setDragmode: (dragmode: Plotly.Layout["dragmode"]) => void,
+): ModeBarButton[] {
+  return [
+    createDragmodeButton(
+      "line-box-select",
+      "Box select",
+      `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4" y="4" width="16" height="16" stroke-dasharray="2 2" />
+      </svg>`,
+      "select",
+      setDragmode,
+    ),
+    createDragmodeButton(
+      "line-lasso-select",
+      "Lasso select",
+      `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 8c0-2.2 2.2-4 5-4s5 1.8 5 4-2.2 4-5 4-5 1.8-5 4 2.2 4 5 4" />
+        <circle cx="17.5" cy="16.5" r="1.5" />
+      </svg>`,
+      "lasso",
+      setDragmode,
+    ),
+  ];
+}
+
+export function mergeModeBarButtonsToAdd(
+  defaults: readonly ModeBarButton[],
+  userButtons: readonly ModeBarButton[] | undefined,
+): ModeBarButton[] {
+  const merged: ModeBarButton[] = [];
+  const seenStrings = new Set<string>();
+
+  const pushButton = (button: ModeBarButton) => {
+    if (typeof button === "string") {
+      if (seenStrings.has(button)) {
+        return;
+      }
+      seenStrings.add(button);
+      merged.push(button);
+      return;
+    }
+    merged.push(button);
+  };
+
+  defaults.forEach(pushButton);
+  userButtons?.forEach(pushButton);
+  return merged;
+}
+
+export function shouldHandleClickSelection(
+  points: readonly Plotly.PlotDatum[],
+): boolean {
+  return points.some((point) => {
+    const type = getTraceSource(point).type;
+    return (
+      type === "bar" ||
+      type === "box" ||
+      type === "funnel" ||
+      type === "funnelarea" ||
+      type === "heatmap" ||
+      type === "histogram" ||
+      type === "violin" ||
+      type === "waterfall" ||
+      isLinePoint(point)
+    );
+  });
+}
+
+export function extractIndices(points: readonly Plotly.PlotDatum[]): number[] {
+  return points
+    .map(getPointIndex)
+    .filter((pointIndex): pointIndex is number => pointIndex !== undefined);
+}
+
+function getIndexedValue(series: unknown, index: number): unknown {
+  if (Array.isArray(series) || ArrayBuffer.isView(series)) {
+    return (series as ArrayLike<unknown>)[index];
+  }
+  if (typeof series === "object" && series !== null && "length" in series) {
+    const maybeLength = Number(
+      (series as { length?: unknown }).length ?? Number.NaN,
+    );
+    if (Number.isFinite(maybeLength) && index >= 0 && index < maybeLength) {
+      return (series as Record<number, unknown>)[index];
+    }
+  }
+  return undefined;
+}
+
+function withInferredXY(
+  point: Plotly.PlotDatum,
+  fields: Record<AxisName, AxisDatum>,
+): Record<AxisName, AxisDatum> {
+  // For some pure-line clicks Plotly provides index metadata but omits x/y.
+  // Recover x/y from trace arrays so Python gets a stable payload.
+  if (fields.x !== undefined && fields.y !== undefined) {
+    return fields;
+  }
+
+  const pointIndex = getPointIndex(point);
+  if (pointIndex === undefined) {
+    return fields;
+  }
+
+  const nextFields: Record<AxisName, AxisDatum> = { ...fields };
+  if (nextFields.pointIndex === undefined) {
+    nextFields.pointIndex = pointIndex;
+  }
+
+  const trace = getTraceSource(point);
+  if (nextFields.x === undefined) {
+    const inferredX = getIndexedValue(trace.x, pointIndex);
+    if (inferredX !== undefined) {
+      nextFields.x = inferredX;
+    }
+  }
+  if (nextFields.y === undefined) {
+    const inferredY = getIndexedValue(trace.y, pointIndex);
+    if (inferredY !== undefined) {
+      nextFields.y = inferredY;
+    }
+  }
+
+  return nextFields;
+}
+
+export function extractPoints(
+  points: readonly Plotly.PlotDatum[],
+): Record<AxisName, AxisDatum>[] {
+  let parser: PlotlyTemplateParser | undefined;
+
+  return points.map((point) => {
+    const trace = getTraceSource(point);
+
+    // FunnelArea: sector-based chart with no x/y coordinates.
+    // Pick funnel-area-specific keys, then merge any hovertemplate-parsed
+    // fields (e.g. customdata columns) so user-defined fields are preserved.
+    if (trace.type === "funnelarea") {
+      const base = pick(point, FUNNEL_AREA_DATA_KEYS);
+      const ht = Array.isArray(trace.hovertemplate)
+        ? trace.hovertemplate[0]
+        : trace.hovertemplate;
+      if (!ht) {
+        return base;
+      }
+      parser = parser ? parser.update(ht) : createParser(ht);
+      return { ...base, ...parser.parse(point) };
+    }
+
+    // Funnel: bar-like chart with x/y plus per-stage percent metrics.
+    // Pick funnel-specific keys, then merge hovertemplate-parsed fields so
+    // callers get both percentInitial et al. and any user-defined columns.
+    if (trace.type === "funnel") {
+      const base = pick(point, FUNNEL_DATA_KEYS);
+      const ht = Array.isArray(trace.hovertemplate)
+        ? trace.hovertemplate[0]
+        : trace.hovertemplate;
+      if (!ht) {
+        return base;
+      }
+      parser = parser ? parser.update(ht) : createParser(ht);
+      return { ...base, ...parser.parse(point) };
+    }
+
+    const standardPointFields = withInferredXY(
+      point,
+      pick(point, STANDARD_POINT_KEYS),
+    );
+
+    // Get the first hovertemplate
+    const hovertemplate = Array.isArray(trace.hovertemplate)
+      ? trace.hovertemplate[0]
+      : trace.hovertemplate;
+
+    // For chart types with standard point keys (e.g. heatmaps),
+    // or when there's no hovertemplate, pick keys directly from the point.
+    if (!hovertemplate || trace.type === "heatmap") {
+      return standardPointFields;
+    }
+
+    parser = parser
+      ? parser.update(hovertemplate)
+      : createParser(hovertemplate);
+    return {
+      ...standardPointFields,
+      ...parser.parse(point),
+    };
+  });
+}
+
+export function extractSunburstPoints(
+  points: readonly Plotly.PlotDatum[],
+): Record<string, unknown>[] {
+  return points.map((point) => pick(point, SUNBURST_DATA_KEYS));
+}
+
+export const extractTreemapPoints = extractSunburstPoints;

@@ -9,21 +9,21 @@
 
 import React, { useState } from "react";
 import { AlertTriangle } from "lucide-react";
-import { PendingButton } from "@/components/ui/pending-button";
+import { PendingButton } from "~/components/ui/pending-button";
 import { useReverification, useClerk } from "@clerk/nextjs";
 import { useRouter } from "next/navigation";
 import type { OrganizationResource, DeletedObjectResource } from "@clerk/types";
-import { SectionHeader } from "@/components/ui/section-header";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { SectionHeader } from "~/components/ui/section-header";
+import { ConfirmDialog } from "~/components/ui/confirm-dialog";
 import {
   FIELD_INPUT_CLASS,
   LABEL_CLASS,
   ERROR_CLASS,
   NEUTRAL_CLASS,
-} from "@/components/auth/auth-primitives";
-import { isReverificationCancelledError } from "@/lib/security/use-reverify";
-import { formatClerkError } from "@/lib/security/clerk-errors";
-import type { TeamPermissions } from "@/lib/team/use-team-permissions";
+} from "~/components/auth/auth-primitives";
+import { isReverificationCancelledError } from "~/lib/security/use-reverify";
+import { formatClerkError } from "~/lib/security/clerk-errors";
+import type { TeamPermissions } from "~/lib/team/use-team-permissions";
 
 interface LeaveOrganizationUser {
   leaveOrganization: (organizationId: string) => Promise<DeletedObjectResource>;

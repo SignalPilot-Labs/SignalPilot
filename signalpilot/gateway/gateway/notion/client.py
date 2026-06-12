@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
+from urllib.parse import urlencode
 
 import httpx
 
+from gateway.notion import formatting as notion_formatting
+
 NOTION_API_BASE = "https://api.notion.com/v1"
-NOTION_API_VERSION = "2022-06-28"
+NOTION_AUTHORIZE_URL = "https://api.notion.com/v1/oauth/authorize"
+NOTION_API_VERSION = "2026-03-11"
 REQUEST_TIMEOUT = 15
+SIGNALPILOT_TRIGGER_PAGE_TITLE = "SignalPilot"
+SIGNALPILOT_REQUESTS_DATABASE_TITLE = "SignalPilot Requests"
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +29,16 @@ def _headers(api_key: str) -> dict[str, str]:
     }
 
 
+def _multipart_headers(api_key: str) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Notion-Version": NOTION_API_VERSION,
+    }
+
+
+def normalize_id(value: str) -> str:
+    return value.replace("-", "")
+
 
 def _extract_page_title(page: dict) -> str:
     """Extract the title from a Notion page object."""
@@ -31,6 +48,103 @@ def _extract_page_title(page: dict) -> str:
             title_parts = prop.get("title", [])
             return "".join(t.get("plain_text", "") for t in title_parts)
     return "(untitled)"
+
+
+def _plain_text(content: str) -> dict:
+    return {"type": "text", "text": {"content": content[:2000]}}
+
+
+def _title(content: str) -> list[dict]:
+    return [_plain_text(content)]
+
+
+def _rich_text(content: str) -> list[dict]:
+    if not content:
+        return []
+    return notion_formatting.plain_rich_text(content)
+
+
+def _parent_payload(parent_page_id: str | None) -> dict:
+    if parent_page_id:
+        return {"type": "page_id", "page_id": parent_page_id}
+    return {"type": "workspace", "workspace": True}
+
+
+REQUEST_DATABASE_PROPERTIES: dict[str, dict] = {
+    "Request": {"title": {}},
+    "Source": {"url": {}},
+    "Trail URL": {"url": {}},
+    "Confidence score": {"number": {}},
+    "Status": {"rich_text": {}},
+    "Created at": {"rich_text": {}},
+    "Requester": {"select": {"options": []}},
+    "Summary": {"rich_text": {}},
+    "Escalated to": {"rich_text": {}},
+}
+
+
+def build_authorize_url(client_id: str, redirect_uri: str, state: str) -> str:
+    """Build Notion's public integration authorization URL."""
+    query = urlencode(
+        {
+            "owner": "user",
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "state": state,
+        }
+    )
+    return f"{NOTION_AUTHORIZE_URL}?{query}"
+
+
+async def exchange_oauth_code(
+    client_id: str,
+    client_secret: str,
+    code: str,
+    redirect_uri: str,
+) -> dict:
+    """Exchange an OAuth authorization code for Notion tokens."""
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        response = await client.post(
+            f"{NOTION_API_BASE}/oauth/token",
+            auth=httpx.BasicAuth(client_id, client_secret),
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Notion-Version": NOTION_API_VERSION,
+            },
+            json={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+            },
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+async def refresh_oauth_token(
+    client_id: str,
+    client_secret: str,
+    refresh_token: str,
+) -> dict:
+    """Refresh a Notion OAuth token."""
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        response = await client.post(
+            f"{NOTION_API_BASE}/oauth/token",
+            auth=httpx.BasicAuth(client_id, client_secret),
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Notion-Version": NOTION_API_VERSION,
+            },
+            json={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+            },
+        )
+        response.raise_for_status()
+        return response.json()
 
 
 async def test_connection(api_key: str) -> tuple[bool, str]:
@@ -86,6 +200,7 @@ async def search_pages(
 
 MAX_DEPTH = 4
 MAX_CONTENT_CHARS = 8000
+MAX_TOTAL_BLOCKS = 2000
 
 
 async def _fetch_blocks_recursive(
@@ -93,8 +208,12 @@ async def _fetch_blocks_recursive(
     headers: dict[str, str],
     block_id: str,
     depth: int,
+    counter: list[int] | None = None,
 ) -> tuple[list[str], list[dict[str, str]]]:
     """Recursively fetch all text and child pages from a block tree."""
+    if counter is None:
+        counter = [0]
+
     if depth > MAX_DEPTH:
         return [], []
 
@@ -110,6 +229,11 @@ async def _fetch_blocks_recursive(
     child_pages: list[dict[str, str]] = []
 
     for block in blocks:
+        if counter[0] >= MAX_TOTAL_BLOCKS:
+            break
+
+        counter[0] += 1
+
         block_type = block.get("type", "")
 
         if block_type == "child_page":
@@ -125,7 +249,7 @@ async def _fetch_blocks_recursive(
 
         if block.get("has_children", False):
             sub_lines, sub_children = await _fetch_blocks_recursive(
-                client, headers, block["id"], depth + 1,
+                client, headers, block["id"], depth + 1, counter=counter,
             )
             lines.extend(sub_lines)
             child_pages.extend(sub_children)
@@ -170,38 +294,21 @@ async def fetch_page(api_key: str, page_id: str) -> dict[str, str | list[dict[st
 
 
 def _text_to_blocks(text: str) -> list[dict]:
-    """Convert plain text to Notion paragraph blocks.
-
-    Splits on double newlines for paragraphs, single newlines within
-    a paragraph become part of the same block.
-    """
-    paragraphs = text.split("\n\n")
-    blocks: list[dict] = []
-    for para in paragraphs:
-        para = para.strip()
-        if not para:
-            continue
-        blocks.append({
-            "object": "block",
-            "type": "paragraph",
-            "paragraph": {
-                "rich_text": [{"type": "text", "text": {"content": para[:2000]}}],
-            },
-        })
-    return blocks
+    """Convert text to structured Notion blocks."""
+    return notion_formatting.markdown_blocks(text)
 
 
 async def create_page(
     api_key: str,
-    parent_page_id: str,
+    parent_page_id: str | None,
     title: str,
     content: str,
 ) -> dict[str, str]:
-    """Create a child page under the configured report parent.
+    """Create a page under a parent page, or privately at workspace level.
 
     Args:
         api_key: Notion internal integration token.
-        parent_page_id: The parent page ID (report destination).
+        parent_page_id: The parent page ID, or None for workspace-private content.
         title: Page title.
         content: Plain text content for the page body.
 
@@ -215,7 +322,7 @@ async def create_page(
             f"{NOTION_API_BASE}/pages",
             headers=_headers(api_key),
             json={
-                "parent": {"page_id": parent_page_id},
+                "parent": _parent_payload(parent_page_id),
                 "properties": {
                     "title": {
                         "title": [{"type": "text", "text": {"content": title}}],
@@ -232,3 +339,399 @@ async def create_page(
         "title": title,
         "url": data.get("url", ""),
     }
+
+
+async def notion_json(
+    api_key: str,
+    method: str,
+    path: str,
+    *,
+    json_body: dict | None = None,
+    params: dict | None = None,
+) -> dict:
+    """Perform a Notion API request and return JSON."""
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        response = await client.request(
+            method,
+            f"{NOTION_API_BASE}{path}",
+            headers=_headers(api_key),
+            json=json_body,
+            params=params,
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+async def list_parent_pages(api_key: str, query: str | None = None) -> list[dict[str, str]]:
+    """List pages visible to an OAuth installation for setup."""
+    payload: dict = {
+        "filter": {"value": "page", "property": "object"},
+        "page_size": 50,
+    }
+    if query:
+        payload["query"] = query
+    data = await notion_json(api_key, "POST", "/search", json_body=payload)
+    pages = data.get("results", [])
+    return [
+        {
+            "id": page.get("id", ""),
+            "title": _extract_page_title(page),
+            "url": page.get("url", ""),
+        }
+        for page in pages
+        if page.get("id")
+    ]
+
+
+async def list_block_children(api_key: str, block_id: str) -> list[dict]:
+    """List all direct block children with pagination."""
+    children: list[dict] = []
+    cursor: str | None = None
+    while True:
+        params: dict[str, str | int] = {"page_size": 100}
+        if cursor:
+            params["start_cursor"] = cursor
+        data = await notion_json(api_key, "GET", f"/blocks/{block_id}/children", params=params)
+        children.extend(data.get("results", []))
+        if not data.get("has_more"):
+            return children
+        cursor = data.get("next_cursor")
+        if not cursor:
+            return children
+
+
+async def ensure_child_page(
+    api_key: str,
+    parent_page_id: str | None,
+    title: str = SIGNALPILOT_TRIGGER_PAGE_TITLE,
+) -> dict[str, str]:
+    """Find or create the mentionable SignalPilot trigger page."""
+    if parent_page_id is None:
+        return await create_page(
+            api_key,
+            None,
+            title,
+            "Mention this page in a Notion comment to start SignalPilot analysis.",
+        )
+
+    for block in await list_block_children(api_key, parent_page_id):
+        if block.get("type") == "child_page" and block.get("child_page", {}).get("title") == title:
+            return {
+                "id": block.get("id", ""),
+                "title": title,
+                "url": f"https://www.notion.so/{normalize_id(block.get('id', ''))}",
+            }
+
+    return await create_page(
+        api_key,
+        parent_page_id,
+        title,
+        "Mention this page in a Notion comment to start SignalPilot analysis.",
+    )
+
+
+async def retrieve_database(api_key: str, database_id: str) -> dict:
+    return await notion_json(api_key, "GET", f"/databases/{database_id}")
+
+
+def _database_data_source_id(database: dict) -> str | None:
+    data_sources = database.get("data_sources")
+    if isinstance(data_sources, list) and data_sources:
+        first = data_sources[0]
+        if isinstance(first, dict) and first.get("id"):
+            return str(first["id"])
+    initial = database.get("initial_data_source")
+    if isinstance(initial, dict) and initial.get("id"):
+        return str(initial["id"])
+    return None
+
+
+async def create_requests_database(
+    api_key: str,
+    parent_page_id: str | None,
+    title: str = SIGNALPILOT_REQUESTS_DATABASE_TITLE,
+) -> tuple[str, str]:
+    """Create the worker-compatible SignalPilot Requests database."""
+    body = {
+        "parent": _parent_payload(parent_page_id),
+        "title": _title(title),
+        "initial_data_source": {
+            "properties": REQUEST_DATABASE_PROPERTIES,
+        },
+    }
+    if parent_page_id:
+        body["is_inline"] = True
+    data = await notion_json(
+        api_key,
+        "POST",
+        "/databases",
+        json_body=body,
+    )
+    database_id = data.get("id", "")
+    data_source_id = _database_data_source_id(data)
+    if not data_source_id and database_id:
+        data_source_id = _database_data_source_id(await retrieve_database(api_key, database_id))
+    if not database_id or not data_source_id:
+        raise ValueError("Notion did not return a database_id and data_source_id for SignalPilot Requests")
+    return database_id, data_source_id
+
+
+async def ensure_requests_database(
+    api_key: str,
+    parent_page_id: str | None,
+    title: str = SIGNALPILOT_REQUESTS_DATABASE_TITLE,
+) -> tuple[str, str]:
+    """Find or create the SignalPilot Requests database and return database/data-source IDs."""
+    if parent_page_id is None:
+        return await create_requests_database(api_key, None, title)
+
+    for block in await list_block_children(api_key, parent_page_id):
+        if block.get("type") == "child_database" and block.get("child_database", {}).get("title") == title:
+            database_id = block.get("id", "")
+            database = await retrieve_database(api_key, database_id)
+            data_source_id = _database_data_source_id(database)
+            if not data_source_id:
+                raise ValueError(f"Existing Notion database {database_id} has no data source")
+            return database_id, data_source_id
+    return await create_requests_database(api_key, parent_page_id, title)
+
+
+async def provision_signalpilot_resources(api_key: str, parent_page_id: str | None = None) -> dict[str, str | None]:
+    """Create/fetch all Notion resources needed by SignalPilot analysis."""
+    trigger_page = await ensure_child_page(api_key, parent_page_id)
+    database_id, data_source_id = await ensure_requests_database(api_key, parent_page_id)
+    return {
+        "parent_page_id": parent_page_id,
+        "trigger_page_id": trigger_page["id"],
+        "requests_database_page_id": database_id,
+        "requests_data_source_id": data_source_id,
+    }
+
+
+async def retrieve_page(api_key: str, page_id: str) -> dict:
+    return await notion_json(api_key, "GET", f"/pages/{page_id}")
+
+
+async def retrieve_block(api_key: str, block_id: str) -> dict:
+    return await notion_json(api_key, "GET", f"/blocks/{block_id}")
+
+
+async def query_request_page_by_source(
+    api_key: str,
+    data_source_id: str,
+    source_url: str,
+) -> dict[str, str] | None:
+    data = await notion_json(
+        api_key,
+        "POST",
+        f"/data_sources/{data_source_id}/query",
+        json_body={
+            "filter": {
+                "property": "Source",
+                "url": {"equals": source_url},
+            },
+            "page_size": 1,
+        },
+    )
+    results = data.get("results", [])
+    if not results:
+        return None
+    first = results[0]
+    return {
+        "id": first.get("id", ""),
+        "url": first.get("url") or f"https://www.notion.so/{normalize_id(first.get('id', ''))}",
+    }
+
+
+async def create_request_page(
+    api_key: str,
+    data_source_id: str,
+    *,
+    headline: str,
+    source_url: str,
+    requester_id: str,
+    prompt: str,
+    created_at: str,
+) -> dict[str, str]:
+    body = {
+        "parent": {"type": "data_source_id", "data_source_id": data_source_id},
+        "properties": {
+            "Request": {"title": _title(headline)},
+            "Source": {"url": source_url},
+            "Trail URL": {"url": None},
+            "Confidence score": {"number": None},
+            "Status": {"rich_text": _rich_text("New")},
+            "Created at": {"rich_text": _rich_text(created_at)},
+            "Requester": {"select": {"name": requester_id[:100] or "Unknown"}},
+            "Summary": {"rich_text": _rich_text(prompt)},
+            "Escalated to": {"rich_text": []},
+        },
+    }
+    data = await notion_json(
+        api_key,
+        "POST",
+        "/pages",
+        json_body=body,
+    )
+    return {
+        "id": data.get("id", ""),
+        "url": data.get("url") or f"https://www.notion.so/{normalize_id(data.get('id', ''))}",
+    }
+
+
+async def update_page_properties(api_key: str, page_id: str, properties: dict) -> None:
+    await notion_json(api_key, "PATCH", f"/pages/{page_id}", json_body={"properties": properties})
+
+
+async def append_page_blocks(api_key: str, page_id: str, children: list[dict]) -> None:
+    if not children:
+        return
+    await notion_json(api_key, "PATCH", f"/blocks/{page_id}/children", json_body={"children": children[:100]})
+
+
+async def list_comments(api_key: str, block_id: str) -> list[dict]:
+    data = await notion_json(api_key, "GET", "/comments", params={"block_id": block_id, "page_size": 100})
+    return data.get("results", [])
+
+
+async def retrieve_comment(api_key: str, comment_id: str) -> dict:
+    return await notion_json(api_key, "GET", f"/comments/{comment_id}")
+
+
+async def upload_file(api_key: str, *, filename: str, content_type: str, content: bytes) -> dict:
+    created = await notion_json(
+        api_key,
+        "POST",
+        "/file_uploads",
+        json_body={
+            "mode": "single_part",
+            "filename": filename,
+            "content_type": content_type,
+        },
+    )
+    upload_id = created.get("id")
+    if not upload_id:
+        raise RuntimeError("Notion did not return a file upload id")
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        response = await client.post(
+            f"{NOTION_API_BASE}/file_uploads/{upload_id}/send",
+            headers=_multipart_headers(api_key),
+            files={"file": (filename, content, content_type)},
+        )
+        response.raise_for_status()
+        sent = response.json()
+    return sent or created
+
+
+async def create_comment(
+    api_key: str,
+    *,
+    discussion_id: str,
+    rich_text: list[dict],
+    attachments: list[dict] | None = None,
+) -> None:
+    body: dict = {
+        "discussion_id": discussion_id,
+        "rich_text": rich_text,
+    }
+    if attachments:
+        body["attachments"] = attachments[:3]
+    await notion_json(
+        api_key,
+        "POST",
+        "/comments",
+        json_body=body,
+    )
+
+
+def comment_has_page_mention(comment: dict, page_id: str) -> bool:
+    for item in comment.get("rich_text") or []:
+        mention = item.get("mention") if item.get("type") == "mention" else None
+        page = mention.get("page") if isinstance(mention, dict) and mention.get("type") == "page" else None
+        if isinstance(page, dict) and normalize_id(str(page.get("id", ""))) == normalize_id(page_id):
+            return True
+    return False
+
+
+def extract_comment_text(comment: dict) -> str:
+    parts = []
+    for item in comment.get("rich_text") or []:
+        if item.get("type") == "mention":
+            continue
+        parts.append(item.get("plain_text") or "")
+    return "".join(parts).strip()
+
+
+def is_bot_comment(comment: dict) -> bool:
+    return comment.get("created_by", {}).get("type") == "bot"
+
+
+async def page_belongs_to_scope(
+    api_key: str,
+    page_id: str,
+    *,
+    parent_page_id: str | None,
+    trigger_page_id: str | None,
+    requests_data_source_id: str | None,
+    requests_database_page_id: str | None,
+    max_depth: int = 8,
+) -> bool:
+    """Best-effort ancestry check used to route webhook events to one install."""
+    if parent_page_id is None:
+        return True
+
+    target_pages = {normalize_id(p) for p in (parent_page_id, trigger_page_id, requests_database_page_id) if p}
+    target_data_sources = {normalize_id(p) for p in (requests_data_source_id,) if p}
+    current_id = page_id
+    for _ in range(max_depth):
+        if normalize_id(current_id) in target_pages:
+            return True
+        try:
+            page = await retrieve_page(api_key, current_id)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return False
+            raise
+        parent = page.get("parent") or {}
+        parent_type = parent.get("type")
+        if parent_type == "data_source_id":
+            return normalize_id(str(parent.get("data_source_id", ""))) in target_data_sources
+        if parent_type == "database_id":
+            return normalize_id(str(parent.get("database_id", ""))) in target_pages
+        if parent_type == "page_id":
+            current_id = str(parent.get("page_id", ""))
+            continue
+        if parent_type == "block_id":
+            current_id = str(parent.get("block_id", ""))
+            if normalize_id(current_id) in target_pages:
+                return True
+            try:
+                block = await retrieve_block(api_key, current_id)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 404:
+                    return False
+                raise
+            block_parent = block.get("parent") or {}
+            if block_parent.get("type") == "page_id":
+                current_id = str(block_parent.get("page_id", ""))
+                continue
+        return False
+    return False
+
+
+async def with_token_refresh(
+    operation: Callable[[str], Awaitable[dict | list[dict] | None]],
+    access_token: str,
+    refresh: Callable[[], Awaitable[str | None]] | None,
+) -> dict | list[dict] | None:
+    """Run a Notion operation and refresh once on 401 if a refresh callback exists."""
+    try:
+        return await operation(access_token)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code != 401 or refresh is None:
+            raise
+        refreshed = await refresh()
+        if not refreshed:
+            raise
+        return await operation(refreshed)

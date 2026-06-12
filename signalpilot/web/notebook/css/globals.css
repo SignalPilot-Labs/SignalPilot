@@ -1,0 +1,200 @@
+@import url("@radix-ui/colors/amber-dark.css") layer(base);
+@import url("@radix-ui/colors/amber.css") layer(base);
+@import url("@radix-ui/colors/blue-dark.css") layer(base);
+@import url("@radix-ui/colors/blue.css") layer(base);
+@import url("@radix-ui/colors/crimson-dark.css") layer(base);
+@import url("@radix-ui/colors/crimson.css") layer(base);
+@import url("@radix-ui/colors/cyan-dark.css") layer(base);
+@import url("@radix-ui/colors/cyan.css") layer(base);
+@import url("@radix-ui/colors/grass-dark.css") layer(base);
+@import url("@radix-ui/colors/grass.css") layer(base);
+@import url("@radix-ui/colors/gray-dark.css") layer(base);
+@import url("@radix-ui/colors/gray.css") layer(base);
+@import url("@radix-ui/colors/green-dark.css") layer(base);
+@import url("@radix-ui/colors/green.css") layer(base);
+@import url("@radix-ui/colors/lime-dark.css") layer(base);
+@import url("@radix-ui/colors/lime.css") layer(base);
+@import url("@radix-ui/colors/orange-dark.css") layer(base);
+@import url("@radix-ui/colors/orange.css") layer(base);
+@import url("@radix-ui/colors/purple-dark.css") layer(base);
+@import url("@radix-ui/colors/purple.css") layer(base);
+@import url("@radix-ui/colors/red-dark.css") layer(base);
+@import url("@radix-ui/colors/red.css") layer(base);
+@import url("@radix-ui/colors/sage-dark.css") layer(base);
+@import url("@radix-ui/colors/sage.css") layer(base);
+@import url("@radix-ui/colors/sky-dark.css") layer(base);
+@import url("@radix-ui/colors/sky.css") layer(base);
+@import url("@radix-ui/colors/slate-dark.css") layer(base);
+@import url("@radix-ui/colors/slate.css") layer(base);
+@import url("@radix-ui/colors/yellow-dark.css") layer(base);
+@import url("@radix-ui/colors/yellow.css") layer(base);
+/* stylelint-disable-next-line import-notation */
+@import "tailwindcss";
+
+@config "../tailwind.config.cjs";
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  :root,
+  .sp {
+    --monospace-font: var(--sp-monospace-font, "Fira Mono", monospace);
+    --text-font: var(--sp-text-font, "PT Sans", sans-serif);
+    --heading-font: var(--sp-heading-font, "Lora", serif);
+    --radius: 8px;
+    /* stylelint-disable-next-line unit-allowed-list */
+    --markdown-max-width: 80ch;
+
+    /* SignalPilot dark palette */
+
+    /* Base colors — near-black dark theme */
+    --background: #050505;
+    --foreground: #eeeeee;
+    --muted: #0a0a0a;
+    --muted-foreground: #999999;
+    --popover: #0d0d0d;
+    --popover-foreground: #999999;
+    --card: #0a0a0a;
+    --card-foreground: #eeeeee;
+    --border: #222222;
+    --input: #222222;
+    --primary: #00ff88;
+    --primary-foreground: #050505;
+    --secondary: #111111;
+    --secondary-foreground: #eeeeee;
+    --accent: #111111;
+    --accent-foreground: #eeeeee;
+    --ring: #333333;
+
+    /* Semantic colors. */
+    --destructive: #ff4444;
+    --destructive-foreground: #050505;
+    --error: #ff4444;
+    --error-foreground: #050505;
+    --success: #00ff88;
+    --success-foreground: #050505;
+    --action: #ffaa00;
+    --action-hover: #ffcc44;
+    --action-foreground: #050505;
+    --link: #00ff88;
+    --link-visited: #999999;
+    --stale: rgba(255, 170, 0, 0.25);
+
+    /* Base shadows — soft, depth styling */
+    --base-shadow: hsla(0deg 0% 36% / 60%);
+    --base-shadow-darker: hsl(0deg 0% 50% / 60%);
+    --base-shadow-opacity: 5%;
+
+    /* Codemirror editor */
+    --cm-background: #0a0a0a;
+    --cm-comment: #666666;
+  }
+
+  .dark,
+  .sp:is(.dark *) {
+    color-scheme: dark;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+
+    font-feature-settings:
+      "rlig" 1,
+      "calt" 1;
+  }
+
+  a.hyperlink {
+    @apply text-link;
+  }
+
+  a.hyperlink:hover {
+    text-decoration: underline;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  /* Scrollbar — thin, dark, with rounded thumb */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #222222; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #333333; }
+
+  /* Selection — SignalPilot green tint */
+  ::selection {
+    background: rgba(0, 255, 136, 0.15);
+    color: #fff;
+  }
+
+  /* Smooth transitions on interactive elements */
+  a, button, input, select, textarea {
+    transition: all 0.15s ease;
+  }
+
+  /* Button press effect */
+  button:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+}
+
+@theme {
+  /* Migrated from tailwind.config.cjs - theme.extend.boxShadow */
+  --shadow-none: none;
+  --shadow-xxs: 0px 0px 2px 0px var(--base-shadow-darker);
+
+  /* oxfmt-ignore: definition needs to be oneline or breaks variants */
+  --shadow-xs: 1px 1px 2px 0px var(--base-shadow), 0px 0px 2px 0px hsl(0deg 0% 25% / var(--base-shadow-opacity));
+
+  /* oxfmt-ignore: definition needs to be oneline or breaks variants */
+  --shadow-sm: 2px 2px 2px 0px var(--base-shadow), 0px 0px 2px 0px hsl(0deg 0% 25% / var(--base-shadow-opacity));
+
+  /* oxfmt-ignore: definition needs to be oneline or breaks variants */
+  --shadow-md: 4px 4px 4px 0px var(--base-shadow), 0 0px 4px 0px hsl(0deg 0% 60% / var(--base-shadow-opacity));
+
+  /* oxfmt-ignore: definition needs to be oneline or breaks variants */
+  --shadow-lg: 5px 6px 4px 0px var(--base-shadow), 0 0px 4px 0px hsl(0deg 0% 75% / var(--base-shadow-opacity));
+
+  /* oxfmt-ignore: definition needs to be oneline or breaks variants */
+  --shadow-xl: 8px 9px 4px 0px var(--base-shadow), 0 0px 6px 0px hsl(0deg 0% 85% / var(--base-shadow-opacity));
+
+  /* oxfmt-ignore: definition needs to be oneline or breaks variants */
+  --shadow-2xl: 10px 12px 10px 0px var(--base-shadow), 0 0px 8px 0px hsl(0deg 0% 90% / var(--base-shadow-opacity));
+
+  /* oxfmt-ignore: definition needs to be oneline or breaks variants */
+  --shadow-xs-solid: 1px 1px 0px 0px var(--base-shadow-darker), 0px 0px 2px 0px hsl(0deg 0% 50% / 20%);
+
+  /* oxfmt-ignore: definition needs to be oneline or breaks variants */
+  --shadow-sm-solid: 2px 2px 0px 0px var(--base-shadow-darker), 0px 0px 2px 0px hsl(0deg 0% 50% / 20%);
+
+  /* oxfmt-ignore: definition needs to be oneline or breaks variants */
+  --shadow-md-solid: 4px 4px 0px 0px var(--base-shadow-darker), 0 0px 2px 0px hsl(0deg 0% 60% / 50%);
+
+  /* oxfmt-ignore: definition needs to be oneline or breaks variants */
+  --shadow-lg-solid: 5px 6px 0px 0px var(--base-shadow-darker), 0 0px 4px 0px hsl(0deg 0% 75% / 50%);
+
+  /* oxfmt-ignore: definition needs to be oneline or breaks variants */
+  --shadow-xl-solid: 7px 8px 0px 0px var(--base-shadow-darker), 0 0px 4px 0px hsl(0deg 0% 85% / 50%);
+
+  /* oxfmt-ignore: definition needs to be oneline or breaks variants */
+  --shadow-2xl-solid: 10px 12px 0px 0px var(--base-shadow-darker), 0 0px 8px 0px hsl(0deg 0% 90% / 50%);
+
+  /* Solid shadows with lighter shade color */
+
+  /* oxfmt-ignore: definition needs to be oneline or breaks variants */
+  --shadow-sm-solid-shade:
+    2px 2px 0px 0px var(--base-shadow), 0px 0px 2px 0px hsl(0deg 0% 50% / 20%);
+
+  /* oxfmt-ignore: definition needs to be oneline or breaks variants */
+  --shadow-md-solid-shade:
+    4px 4px 0px 0px var(--base-shadow), 0 0px 2px 0px hsl(0deg 0% 60% / 50%);
+}

@@ -1,0 +1,67 @@
+---
+sidebar_position: 4
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
+# SQLite
+
+`sqlite3`-backed connector. `db_type` is `sqlite`. Tier 3. The gateway opens a local `.db` file directly (or `:memory:`).
+
+## Connection config
+
+<MiniCopyBlock
+  label="sqlite"
+  plain
+  code={`{\n  "name": "local-sqlite",\n  "db_type": "sqlite",\n  "database": "/data/analytics.db"\n}`}
+/>
+
+## Connection fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Connection name. `[a-zA-Z0-9_-]`, max 64 chars. |
+| `db_type` | Yes | `sqlite`. |
+| `database` | Yes | Filesystem path to the `.db` file (passed as the connection string), or `:memory:`. The gateway process must have read access to this path. |
+| `query_timeout` | No | Seconds, 1–3600. Enforced via a `sqlite3` progress handler that cancels the operation once exceeded. |
+
+No `host`, `port`, `username`, `password`, SSL, or SSH tunnel — SQLite is a local file.
+
+## Capabilities
+
+| Capability | Supported | Notes |
+|------------|-----------|-------|
+| Query | Yes | Per-query timeout via progress handler. |
+| Schema introspection | Yes (full) | `sqlite_master` for tables and views (skips `sqlite_%`); `PRAGMA table_info` for columns, types, nullability, primary keys, defaults. |
+| FK discovery | Yes | `PRAGMA foreign_key_list`. `PRAGMA foreign_keys = ON` is set on connect. |
+| EXPLAIN | No | Not exposed as a cost/plan feature for this connector. |
+| Cost estimation | No | Local file — no cost model (estimator returns minimal cost). |
+| Schema stats | Partial | Exact row counts via a batched `UNION ALL` of `COUNT(*)`. No column stats, no comments, no index metadata. |
+
+Tier 3.
+
+## Dialect notes / gotchas
+
+- Identifiers are quoted with brackets (`[col]`).
+- All tables report schema `main`.
+- No `FULL OUTER JOIN`.
+- No `ILIKE` — use `LIKE` with `LOWER()`.
+- No `SPLIT_PART` / `POSITION` — use `substr` / `instr`.
+- String concatenation uses the `||` operator.
+- SQLite columns are dynamically typed; the reported `type` is the declared column affinity.
+
+## Blocked functions
+
+The governance layer blocks these SQLite functions even inside a `SELECT` (in addition to all DDL/DML statements):
+
+- `load_extension`, `readfile`, `writefile`, `edit`, `zipfile`, `sqlar`
+
+The universal `load_extension` / `install_extension` block also applies.
+
+## Recommended plugin skill
+
+`sqlite-sql` — covers `substr`/`instr` string ops, `||` concatenation, `date()`/`strftime()`, `CAST` coercion, `GROUP_CONCAT`, `typeof()`, `COALESCE`/`IFNULL`, and `printf()` formatting.
+
+## Cloud vs local
+
+Local (self-hosted) only — the gateway must have filesystem access to the `.db` file. Not available in cloud deployments.

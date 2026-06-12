@@ -1,5 +1,12 @@
 FROM python:3.12-slim
 
+RUN apt-get update && apt-get install -y git curl unzip && \
+    curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip && \
+    unzip -q /tmp/awscliv2.zip -d /tmp && /tmp/aws/install && \
+    rm -rf /tmp/awscliv2.zip /tmp/aws && \
+    apt-get remove -y unzip && apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY pyproject.toml .
@@ -20,7 +27,7 @@ RUN pip install --no-cache-dir -e . && \
 # Run as non-root for defense-in-depth
 RUN groupadd -g 10001 appuser && \
     useradd -r -u 10001 -g appuser appuser
-RUN mkdir -p /data /shared && chown -R appuser:appuser /app /data /shared
+RUN mkdir -p /data /shared /gateway-secrets /repos && chown -R appuser:appuser /app /data /shared /gateway-secrets /repos
 
 USER appuser
 

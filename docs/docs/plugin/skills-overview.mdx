@@ -8,38 +8,98 @@ import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
 
 ## What a skill is
 
-A skill is a markdown knowledge file registered with Claude Code. Skills auto-load into the model's context based on task relevance — you don't prompt for them explicitly. Each skill tells Claude:
+A skill is a markdown knowledge file with a `name` and `description` in its frontmatter. The description is the trigger contract — the model loads the skill into context when a task matches it. Each skill tells the model:
 
 - When to activate (trigger conditions)
 - What tool call sequences to follow
 - Dialect-specific gotchas and patterns
 
-Skills are Claude Code-specific. They don't run in Cursor, Codex, or other MCP clients.
+Skills run on **both** the Claude Code plugin and the Codex plugin — they are plain markdown, not host-specific code.
 
-## How skills auto-load
+## How skills load
 
-Claude Code scans your message and active context for skill triggers. When a match is found, the skill's markdown is prepended to the model's context window. Multiple skills can be active simultaneously (e.g. `dbt-workflow` + `duckdb-sql` for a DuckDB-backed dbt project).
+Skills are **conditionally loaded**, mostly orchestrated by `dbt-workflow`. The flow for a dbt task is:
 
-You can inspect which skills are currently active:
+1. `signalpilot` loads first — it is a blocking requirement whenever a message mentions dbt, SQL, database, or data pipeline. It points at the rest of the system.
+2. `dbt-workflow` loads next and drives the 8 steps below.
+3. In **Step 2**, `dbt-workflow` loads the always-on skills (`dbt-write`, one SQL-dialect skill, one domain skill) plus any conditional skills the task needs (`dbt-testing`, `dbt-snapshots`, `dbt-versioning`).
+4. `dbt-debugging` loads on demand when `dbt run`/`dbt parse` fails.
 
-<MiniCopyBlock
-  label="check active skills"
-  plain
-  code="/skills"
-/>
+Multiple skills are active at once — e.g. `dbt-workflow` + `duckdb-sql` + `domain-ecommerce` + `dbt-write` for a DuckDB-backed e-commerce dbt project.
 
-## The 9 plugin skills
+The plugin ships **23 skills** and **2 verifier agents**.
 
-| Skill | One-line description |
-|-------|---------------------|
-| `dbt-workflow` | Full 5-step dbt lifecycle: output shape inference, incremental handling, what to trust in YML |
-| `dbt-write` | Writing SQL models: column naming, type preservation, JOIN defaults, materialization rules |
-| `dbt-debugging` | Debugging `dbt run`/`dbt parse` failures: YML duplicate patches, ref errors, zero-row diagnosis |
-| `dbt-date-spines` | Fixing `current_date`/`now()` hazards in date-spine models |
-| `sql-workflow` | Pre-query schema exploration, CTE-based query building, structured verification loop |
-| `duckdb-sql` | DuckDB-specific patterns: integer division, INTERVAL syntax, DATE_TRUNC gotchas |
-| `snowflake-sql` | Snowflake-specific patterns: QUALIFY, LATERAL FLATTEN, VARIANT, ILIKE |
-| `bigquery-sql` | BigQuery-specific patterns: UNNEST, STRUCT, backtick table refs, EXCEPT/REPLACE |
-| `sqlite-sql` | SQLite-specific patterns: substr/instr, string concatenation with pipe-pipe, no ILIKE, strftime() |
+## The 23 skills, by group
 
-See [Skills reference](/docs/plugin/skills-reference) for per-skill detail.
+### Orchestration
+
+| Skill | Role |
+|-------|------|
+| `signalpilot` | Entry point. Blocking first call for any dbt/SQL/database message. Maps the MCP tools, skills, and governed workflow. |
+| `dbt-workflow` | Loads first for dbt project work. Drives the full 8-step lifecycle. |
+
+### Core dbt
+
+| Skill | Role |
+|-------|------|
+| `dbt-write` | SQL-model writing rules (Step 2 of the workflow). |
+| `dbt-debugging` | On-demand error recovery when `dbt run`/`dbt parse` fails. |
+| `dbt-testing` | dbt unit tests (conditional). |
+| `dbt-snapshots` | Snapshots / SCD Type 2 (conditional). |
+| `dbt-versioning` | Model versioning / v2 (conditional). |
+| `dbt-knowledgebase` | Populate the knowledge base from project research. |
+| `knowledge-base` | Write the per-task `technical_spec.md` (Step 6). |
+
+### SQL dialects
+
+| Skill | Role |
+|-------|------|
+| `duckdb-sql` | DuckDB gotchas vs Postgres/MySQL. |
+| `snowflake-sql` | QUALIFY, LATERAL FLATTEN, VARIANT, ILIKE, time travel. |
+| `bigquery-sql` | UNNEST, STRUCT, ARRAY_AGG, backtick refs, EXCEPT/REPLACE. |
+| `sqlite-sql` | substr/instr, `||` concat, no ILIKE, strftime, GROUP_CONCAT. |
+
+### Domain packs
+
+| Skill | Role |
+|-------|------|
+| `domain-ecommerce` | Transaction lifecycle, driving tables, status filtering. |
+| `domain-financial` | Grain consistency, ledgers, fiscal-year boundaries, period-over-period. |
+| `domain-healthcare` | Encounter grain, clinical coding hierarchies, cost allocation, clinical NULLs. |
+| `domain-hr` | SCD current-record filtering, issue-resolution metrics. |
+| `domain-marketing` | Attribution models, engagement funnel order. |
+| `domain-media` | Content catalogs, participation tables, ranking determinism. |
+| `domain-product` | Calendar spine cross-joins, date boundary caps, event pivoting, first-run NULLs. |
+
+### Generic SQL / output
+
+| Skill | Role |
+|-------|------|
+| `sql-workflow` | Standalone (non-dbt) SQL query workflow: shape inference, schema exploration, CTE building, verification loop. |
+| `write-report` | HTML report of dbt project work. Loads only when explicitly requested. |
+
+## The 8-step dbt-workflow
+
+`dbt-workflow` orchestrates the whole dbt lifecycle. Before Step 1 it calls `get_knowledge`. Steps 1, 2, 3, and 8 always run; Steps 4–7 run only when there are stubs/models to build or edit.
+
+| Step | Name | What happens |
+|------|------|-------------|
+| 1 | Map the project | Run `scan_project.py`: stubs to rewrite, models to build, dependencies, required columns, sources, macros, `current_date` hazards. Create tasks for Steps 2–8. |
+| 2 | Load supporting skills | Load `dbt-write`, the matching SQL-dialect skill, and the matching domain skill. Conditionally load `dbt-testing`, `dbt-snapshots`, `dbt-versioning`. |
+| 3 | Validate and fix stale upstreams | Run `validate_project.py` (`dbt parse`); fix errors. Rebuild any pre-existing models flagged with `current_date`/`now()` hazards. |
+| 4 | Discover project macros | Read each macro definition from the scan; identify the column it produces and which models must use it. |
+| 5 | Research (data exploration) | Determine driving table, cardinalities, contract, sibling patterns, and categorical values via `query_database`. |
+| 6 | Write technical spec | Load `knowledge-base`; write `technical_spec.md` with the seven required fields per model. Retries read the existing spec. |
+| 7 | Write and build models | Write SQL matching YML column names exactly; build only the written models with `dbt run --select <models>` (no `+`). |
+| 8 | Verify and fix | Run `SELECT 1`; dispatch the `verifier` and `value-verifier` agents in parallel; act only on FAIL checks; stop when both reports are all PASS. |
+
+## The 2 verifier agents
+
+Both are dispatched in parallel in Step 8. Both are strictly **read-only** — they return reports and fix nothing.
+
+| Agent | Purpose | Checks |
+|-------|---------|--------|
+| `verifier` | Structure verification | CHECK 1 table existence, CHECK 2 column completeness (`map-columns` + `check_model_schema`), CHECK 3 row count / fan-out / cardinality (`audit_model_sources`), CHECK 4 non-deterministic SQL, CHECK 5 source-table preservation. |
+| `value-verifier` | Aggregate value verification | CHECK 1 sample value spot-check, CHECK 2 aggregate cross-validation via `verify_model_values` (COUNT(*) vs COUNT(DISTINCT) alignment to column names), CHECK 3 status-column filtering (returns/cancellations excluded per the domain skill). |
+
+See [Skills reference](/docs/plugin/skills-reference) for the per-skill load triggers and coverage of all 23 skills.

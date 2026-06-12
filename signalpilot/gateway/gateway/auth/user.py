@@ -17,7 +17,9 @@ from typing import Annotated
 import jwt
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.requests import HTTPConnection
 
+from ..auth.notebook_jwt import NOTEBOOK_SESSION_ISS, NotebookSessionJWTError, verify_session_jwt
 from ..config import get_auth_settings
 from ..db.engine import get_db
 from ..runtime.mode import is_cloud_mode
@@ -33,10 +35,11 @@ if is_cloud_mode() and not os.environ.get("CLERK_PUBLISHABLE_KEY"):
 
 _auth_cfg = get_auth_settings()
 EXPECTED_AUDIENCE = _auth_cfg.clerk_jwt_audience
+EXPECTED_AZP: frozenset[str] = frozenset(
+    p.strip() for p in _auth_cfg.sp_expected_azp.split(",") if p.strip()
+)
 JWT_LEEWAY_SECONDS = _auth_cfg.sp_jwt_leeway
 
-if is_cloud_mode() and not EXPECTED_AUDIENCE:
-    logger.warning("CLERK_JWT_AUDIENCE not set — audience verification disabled. Set this for production security.")
 
 LOCAL_USER_ID = "local"
 LOCAL_ORG_ID = "local"
@@ -81,47 +84,60 @@ if is_cloud_mode():
         ) from e
 
 
-def _extract_jwt_token(request: Request) -> str | None:
-    """Extract JWT from Authorization header or __session cookie."""
-    auth = request.headers.get("authorization", "")
-    if auth.startswith("Bearer ") and not auth[7:].startswith("sp_"):
+def _extract_bearer_token(connection: HTTPConnection) -> str | None:
+    """Extract the raw bearer token from Authorization header (no filtering)."""
+    auth = connection.headers.get("authorization", "")
+    if auth.startswith("Bearer "):
         return auth[7:]
-    # Clerk stores session token in __session cookie
-    return request.cookies.get("__session")
+    return None
 
 
-async def resolve_user_id(request: Request) -> str:
-    """Resolve the current user_id from the request.
+def _extract_jwt_token(connection: HTTPConnection) -> str | None:
+    """Extract JWT from Authorization header or __session cookie.
 
-    - MCP requests: user_id is set by MCPAuthMiddleware in scope state.
-    - Cloud browser requests: verify Clerk JWT.
-    - Local mode: return "local".
-
-    Side effect: caches decoded JWT claims on request.state._jwt_claims for
-    resolve_org_id. Both functions must share this state to avoid decoding the
-    JWT twice. resolve_org_id depends on UserID (which triggers this function)
-    and then reads request.state._jwt_claims.
+    Returns None for sp_-prefixed tokens (handled separately as local API keys).
     """
-    # Check if MCP auth already resolved user_id
-    auth_state = getattr(request.state, "auth", None)
-    if auth_state and isinstance(auth_state, dict) and "user_id" in auth_state:
-        # Cache minimal claims for resolve_org_id
-        request.state._jwt_claims = {
-            "sub": auth_state["user_id"],
-            "org_id": auth_state.get("org_id"),
-        }
-        return auth_state["user_id"]
+    token = _extract_bearer_token(connection)
+    if token is not None:
+        if token.startswith("sp_"):
+            return None
+        return token
+    # Clerk stores session token in __session cookie
+    return connection.cookies.get("__session")
 
-    if not is_cloud_mode():
-        # Local mode: set synthetic claims so resolve_org_id can read them
-        request.state._jwt_claims = {"sub": LOCAL_USER_ID, "org_id": LOCAL_ORG_ID}
-        return LOCAL_USER_ID
 
-    # Cloud mode: verify Clerk JWT
-    token = _extract_jwt_token(request)
-    if not token:
-        raise HTTPException(status_code=401, detail="Authentication required")
+async def _resolve_via_notebook_jwt(connection: HTTPConnection, token: str) -> str:
+    """Verify a notebook session JWT and set auth state. Returns user_id."""
+    try:
+        claims = verify_session_jwt(token)
+    except NotebookSessionJWTError as e:
+        logger.warning("Notebook session JWT verification failed: %s", e)
+        raise HTTPException(status_code=401, detail="Invalid notebook session token")
 
+    user_id = claims["sub"]
+    org_id = claims["org_id"]
+    session_id = claims["session_id"]
+    # Read scopes from the verified JWT claims — never hard-code them here.
+    # The scope_guard will intersect these against its own allowlist.
+    token_scopes: list[str] = claims.get("scopes", [])
+
+    connection.state.auth = {
+        "auth_method": "notebook_session",
+        "user_id": user_id,
+        "org_id": org_id,
+        "session_id": session_id,
+        "scopes": token_scopes,
+    }
+    connection.state._jwt_claims = {
+        "sub": user_id,
+        "org_id": org_id,
+        "session_id": session_id,
+    }
+    return user_id
+
+
+async def _resolve_via_clerk(connection: HTTPConnection, token: str) -> str:
+    """Verify a Clerk JWT and set _jwt_claims. Returns user_id."""
     client = _get_jwks_client()
     if client is None:
         raise HTTPException(status_code=500, detail="JWKS client not configured")
@@ -139,16 +155,14 @@ async def resolve_user_id(request: Request) -> str:
         else:
             options["verify_aud"] = False
         decode_kwargs["options"] = options
-        claims = jwt.decode(
-            token,
-            signing_key.key,
-            **decode_kwargs,
-        )
+        claims = jwt.decode(token, signing_key.key, **decode_kwargs)
+        if EXPECTED_AZP and claims.get("azp") not in EXPECTED_AZP:
+            logger.warning("Clerk JWT azp mismatch")
+            raise HTTPException(status_code=401, detail="Invalid authentication token")
         user_id = claims.get("sub")
         if not user_id:
             raise HTTPException(status_code=401, detail="Token missing sub claim")
-        # Cache full claims for resolve_org_id
-        request.state._jwt_claims = claims
+        connection.state._jwt_claims = claims
         return user_id
     except jwt.PyJWKClientConnectionError as e:
         logger.error("JWKS endpoint unreachable: %s", e)
@@ -163,11 +177,105 @@ async def resolve_user_id(request: Request) -> str:
         raise HTTPException(status_code=401, detail="Invalid authentication token")
 
 
-async def resolve_org_id(request: Request, _user_id: UserID) -> str:
+async def resolve_user_id(connection: HTTPConnection) -> str:
+    """Resolve the current user_id from the request.
+
+    Accepts HTTPConnection so this works for both HTTP (Request) and WebSocket
+    endpoints. WebSocket is a subclass of HTTPConnection but NOT of Request —
+    FastAPI cannot inject a Request into a WS dependency.
+
+    Dispatch order:
+    1. If auth state already set (MCP/API-key middleware) → short-circuit.
+    2. If Bearer token starts with sp_ → local API key path (NO JWT decode).
+    3. Else decode token payload unverified, read iss:
+       - iss == "signalpilot-notebook-session" → notebook_jwt.verify_session_jwt only.
+       - else → Clerk verify only.
+    4. Local mode without a Bearer token → return LOCAL_USER_ID.
+    5. Any failure → 401.
+
+    Side effect: caches decoded JWT claims on connection.state._jwt_claims for
+    resolve_org_id. Both functions must share this state to avoid decoding the
+    JWT twice.
+    """
+    # 1. Check if auth middleware already resolved user_id (MCP / API-key)
+    auth_state = getattr(connection.state, "auth", None)
+    if auth_state and isinstance(auth_state, dict) and "user_id" in auth_state:
+        connection.state._jwt_claims = {
+            "sub": auth_state["user_id"],
+            "org_id": auth_state.get("org_id"),
+        }
+        return auth_state["user_id"]
+
+    # 2. Check for sp_-prefixed local API key (short-circuit, no JWT decode)
+    bearer = _extract_bearer_token(connection)
+    if bearer is not None and bearer.startswith("sp_"):
+        if not is_cloud_mode():
+            # Local mode: API key auth handled by APIKeyAuthMiddleware which sets auth state.
+            # If we reach here without auth state set, the key wasn't recognized.
+            raise HTTPException(status_code=401, detail="Invalid local API key")
+        # Cloud mode: sp_ keys are not supported
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    if not is_cloud_mode():
+        # Local mode without a sp_ bearer: synthetic local identity
+        connection.state._jwt_claims = {"sub": LOCAL_USER_ID, "org_id": LOCAL_ORG_ID}
+        return LOCAL_USER_ID
+
+    # Cloud mode: must have a JWT
+    token = _extract_jwt_token(connection)
+    if not token:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    return await verify_jwt_token(connection, token)
+
+
+async def verify_jwt_token(connection: HTTPConnection, token: str) -> str:
+    """Verify an explicit JWT (Clerk or notebook-session) and return user_id.
+
+    Decodes the iss unverified to pick exactly one verifier (one token → one
+    verifier), then verifies signature. Sets connection.state._jwt_claims so
+    resolve_org_id can read org without re-decoding. Used both by resolve_user_id
+    (token from Authorization header / __session cookie) and by the notebook WS
+    proxy (token from the Sec-WebSocket-Protocol two-token form, since browsers
+    cannot set Authorization on a WebSocket).
+    """
+    # Decode unverified to inspect iss. Pin algorithm first: reject alg=none and
+    # any unexpected algorithm before reading payload claims, to guard against
+    # PyJWT regressions.
+    try:
+        header = jwt.get_unverified_header(token)
+    except jwt.DecodeError:
+        raise HTTPException(status_code=401, detail="Malformed authentication token")
+
+    alg = header.get("alg", "")
+    if alg not in {"HS256", "RS256"}:
+        raise HTTPException(status_code=401, detail="Malformed authentication token")
+
+    try:
+        unverified = jwt.decode(
+            token,
+            options={"verify_signature": False},
+            algorithms=["HS256", "RS256"],
+        )
+    except jwt.DecodeError:
+        raise HTTPException(status_code=401, detail="Malformed authentication token")
+
+    iss = unverified.get("iss", "")
+    if iss == NOTEBOOK_SESSION_ISS:
+        return await _resolve_via_notebook_jwt(connection, token)
+
+    # Default: Clerk path
+    return await _resolve_via_clerk(connection, token)
+
+
+async def resolve_org_id(connection: HTTPConnection, _user_id: UserID) -> str:
     """Resolve the current org_id from the request.
 
+    Accepts HTTPConnection so this works for both HTTP (Request) and WebSocket
+    endpoints. See resolve_user_id docstring for rationale.
+
     Depends on UserID (resolve_user_id) to guarantee JWT is decoded exactly once.
-    Reads cached claims from request.state._jwt_claims set by resolve_user_id.
+    Reads cached claims from connection.state._jwt_claims set by resolve_user_id.
 
     - Local mode: returns LOCAL_ORG_ID ("local").
     - Cloud mode: extracts org_id claim from JWT. Raises 403 if missing.
@@ -178,7 +286,7 @@ async def resolve_org_id(request: Request, _user_id: UserID) -> str:
     """
     from ..governance.context import current_org_id_var
 
-    claims = getattr(request.state, "_jwt_claims", None)
+    claims = getattr(connection.state, "_jwt_claims", None)
     if claims is None:
         # Should never happen since _user_id dependency ran first
         raise HTTPException(status_code=500, detail="JWT claims not available")
@@ -199,7 +307,7 @@ async def resolve_org_id(request: Request, _user_id: UserID) -> str:
         return LOCAL_ORG_ID
 
     # MCP / API-key auth state: require org_id in cloud mode
-    auth_state = getattr(request.state, "auth", None)
+    auth_state = getattr(connection.state, "auth", None)
     if auth_state and isinstance(auth_state, dict):
         if org_id:
             current_org_id_var.set(org_id)

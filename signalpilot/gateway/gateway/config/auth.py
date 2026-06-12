@@ -4,7 +4,7 @@ Cached because no test monkeypatches these vars after import.
 If you add an env var here, audit tests/ for monkeypatch.setenv("YOUR_VAR")
 before adding — if any test touches it, keep it as os.getenv (Class B).
 
-Class A vars managed here: CLERK_JWT_AUDIENCE, SP_JWT_LEEWAY
+Class A vars managed here: CLERK_JWT_AUDIENCE, SP_JWT_LEEWAY, SP_EXPECTED_AZP
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ class AuthSettings(_GatewaySettingsBase):
     """Typed auth configuration read from process environment at instantiation."""
 
     clerk_jwt_audience: str = Field("", alias="CLERK_JWT_AUDIENCE")
+    sp_expected_azp: str = Field("", alias="SP_EXPECTED_AZP")
     sp_jwt_leeway: int = Field(30, alias="SP_JWT_LEEWAY")
 
 

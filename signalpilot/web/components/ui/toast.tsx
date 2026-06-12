@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react";
-import { useTierBranding } from "@/lib/hooks/use-tier-branding";
+import { useTierBranding } from "~/lib/hooks/use-tier-branding";
 
 interface Toast {
   id: string;

@@ -37,10 +37,10 @@ if (typeof window !== "undefined" && IS_CLOUD_MODE) {
 let _localKeyPromise: Promise<string | null> | null = null;
 
 function _fetchLocalKey(): Promise<string | null> {
-  if (typeof window === "undefined") return Promise.resolve(null);
+  if (typeof window === "undefined" || IS_CLOUD_MODE) return Promise.resolve(null);
   return fetch("/api/local-key")
     .then((r) => r.ok ? r.json() : null)
-    .then((data) => {
+    .then((data: any) => {
       if (data?.key) {
         sessionStorage.setItem("sp_api_key", data.key);
         return data.key as string;
@@ -104,6 +104,19 @@ export async function getAuthHeaders(): Promise<Record<string, string>> {
   const h: Record<string, string> = {};
   if (auth) h["Authorization"] = auth;
   return h;
+}
+
+/**
+ * Resolve the raw gateway auth token (no "Bearer " prefix): the Clerk JWT in
+ * cloud mode, the sp_ API key in local mode, or null when local-noauth. The
+ * notebook proxy authenticates with this exact token — over the Authorization
+ * header for HTTP and the Sec-WebSocket-Protocol two-token form for WS — so the
+ * embed client is given this as its authToken thunk.
+ */
+export async function getGatewayAuthToken(): Promise<string | null> {
+  const header = await _getAuthHeader();
+  if (!header) return null;
+  return header.startsWith("Bearer ") ? header.slice(7) : header;
 }
 
 export async function request<T>(path: string, options?: RequestInit, _retried = false): Promise<T> {
@@ -291,7 +304,7 @@ export const importConnections = (manifest: Record<string, unknown>) =>
     errors: { name: string; error: string }[];
   }>("/api/connections/import", { method: "POST", body: JSON.stringify(manifest) });
 
-// Projects
+// Projects (legacy dbt projects)
 export const getProjects = () => request<import("./types").ProjectInfo[]>("/api/projects");
 export const getProject = (name: string) => request<import("./types").ProjectInfo>(`/api/projects/${name}`);
 export const createProject = (p: Record<string, unknown>) =>
@@ -305,6 +318,65 @@ export const discoverDbtCloudProjects = (token: string, account_id: string, host
     method: "POST",
     body: JSON.stringify({ token, account_id, host }),
   });
+
+// Workspace Projects (S3-backed)
+export const getWorkspaceProjects = (status?: string) =>
+  request<{ projects: import("./types").WorkspaceProjectInfo[]; total: number }>(
+    `/api/workspace-projects${status ? `?status=${status}` : ""}`
+  );
+export const getWorkspaceProject = (id: string) =>
+  request<import("./types").WorkspaceProjectInfo>(`/api/workspace-projects/${id}`);
+export const createWorkspaceProject = (p: {
+  name: string;
+  display_name: string;
+  description?: string;
+  source?: "managed" | "github" | "dbt-cloud";
+  connection_name?: string;
+  git_remote?: string;
+  tags?: string[];
+}) =>
+  request<import("./types").WorkspaceProjectInfo>("/api/workspace-projects", { method: "POST", body: JSON.stringify(p) });
+export const updateWorkspaceProject = (id: string, p: Record<string, unknown>) =>
+  request<import("./types").WorkspaceProjectInfo>(`/api/workspace-projects/${id}`, { method: "PUT", body: JSON.stringify(p) });
+export const deleteWorkspaceProject = (id: string) =>
+  request<void>(`/api/workspace-projects/${id}`, { method: "DELETE" });
+
+// Workspace Project Branches
+export const getWorkspaceBranches = (projectId: string) =>
+  request<{ branches: import("./types").WorkspaceBranchInfo[] }>(`/api/workspace-projects/${projectId}/branches`);
+export const createWorkspaceBranch = (projectId: string, name: string, fromBranch = "main") =>
+  request<import("./types").WorkspaceBranchInfo>(`/api/workspace-projects/${projectId}/branches`, {
+    method: "POST",
+    body: JSON.stringify({ name, from_branch: fromBranch }),
+  });
+export const deleteWorkspaceBranch = (projectId: string, branch: string) =>
+  request<void>(`/api/workspace-projects/${projectId}/branches/${branch}`, { method: "DELETE" });
+
+// Workspace Project Files (branch-scoped)
+export const getWorkspaceFiles = (projectId: string, branch = "main", prefix?: string) =>
+  request<{ project_id: string; branch: string; prefix: string; files: import("./types").WorkspaceFileInfo[] }>(
+    `/api/workspace-projects/${projectId}/branches/${branch}/files${prefix ? `?prefix=${prefix}` : ""}`
+  );
+export const getWorkspaceFile = (projectId: string, branch: string, path: string) =>
+  request<string>(`/api/workspace-projects/${projectId}/branches/${branch}/files/${path}`, {}, true);
+export const uploadWorkspaceFile = (projectId: string, branch: string, path: string, content: string) =>
+  request<{ key: string; size: number }>(`/api/workspace-projects/${projectId}/branches/${branch}/files/${path}`, {
+    method: "PUT",
+    body: content,
+    headers: { "Content-Type": "text/plain" },
+  });
+export const deleteWorkspaceFile = (projectId: string, branch: string, path: string) =>
+  request<void>(`/api/workspace-projects/${projectId}/branches/${branch}/files/${path}`, { method: "DELETE" });
+
+// User Session
+export const getUserSession = (projectId: string) =>
+  request<{ user_id: string; project_id: string; active_branch: string; updated_at: number }>(
+    `/api/workspace-projects/${projectId}/user-session`
+  );
+export const switchBranch = (projectId: string, branch: string) =>
+  request<{ user_id: string; project_id: string; active_branch: string; updated_at: number }>(
+    `/api/workspace-projects/${projectId}/user-session`, { method: "PUT", body: JSON.stringify({ branch }) }
+  );
 
 // API Keys (org-scoped)
 export const getApiKeys = () =>
@@ -367,6 +439,71 @@ export const createBudget = (session_id: string, budget_usd: number) =>
   });
 export const getBudget = (session_id: string) =>
   request<Record<string, unknown>>(`/api/budget/${session_id}`);
+
+// Notebook Sessions
+// access_token is intentionally absent: the gateway issues an HttpOnly cookie
+// at /_init and never surfaces the token to frontend JavaScript.
+export type NotebookSession = {
+  id: string;
+  status: string;
+  project_id: string | null;
+  branch: string | null;
+  notebook_url: string | null;
+  pod_ip: string | null;
+  last_ping: number | null;
+  created_at: number;
+};
+
+export const createNotebookSession = (body: { project_id?: string | null; branch?: string } = {}) =>
+  request<NotebookSession>("/api/notebook-sessions", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const getNotebookSession = () =>
+  request<NotebookSession | null>("/api/notebook-sessions");
+
+export const deleteNotebookSession = () =>
+  request<void>("/api/notebook-sessions", { method: "DELETE" });
+
+export const pingNotebookSession = () =>
+  request<void>("/api/notebook-sessions/ping", { method: "POST" });
+
+// GitHub App
+export const getGitHubInstallUrl = () =>
+  request<{ install_url: string }>("/api/github/install-url");
+
+export const getGitHubInstallations = () =>
+  request<GitHubInstallation[]>("/api/github/installations");
+
+export const deleteGitHubInstallation = (id: string) =>
+  request<void>(`/api/github/installations/${id}`, { method: "DELETE" });
+
+export const getGitHubRepos = (installationId: string) =>
+  request<GitHubRepo[]>(`/api/github/installations/${installationId}/repos`);
+
+export const linkGitHubRepo = (body: {
+  project_id: string;
+  installation_id: string;
+  repo_full_name: string;
+  repo_id: number;
+  default_branch: string;
+}) =>
+  request<GitHubRepoLink>("/api/github/repo-links", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const unlinkGitHubRepo = (linkId: string) =>
+  request<void>(`/api/github/repo-links/${linkId}`, { method: "DELETE" });
+
+export const getGitHubRepoLinks = (projectId?: string) =>
+  request<GitHubRepoLink[]>(
+    `/api/github/repo-links${projectId ? `?project_id=${projectId}` : ""}`
+  );
+
+export const getGitCredentials = (projectId: string) =>
+  request<GitCredentials>(`/api/github/credentials/${projectId}`);
 
 // Health
 export const getHealth = () => request<Record<string, unknown>>("/health");
@@ -567,8 +704,57 @@ export const browseFiles = (path?: string, pattern = "*.duckdb") => {
   }>(`/api/files/browse?${params}`);
 };
 
+// Knowledge Base
+import type { KnowledgeDoc, KnowledgeEdit, KnowledgeUsage } from "./types";
+import type { GitHubInstallation, GitHubRepo, GitHubRepoLink, GitCredentials } from "./types";
+
+export const listKnowledge = (params?: { scope?: string; scope_ref?: string; category?: string; status?: string }) => {
+  const qs = params ? new URLSearchParams(
+    Object.entries(params).filter(([, v]) => v !== undefined) as [string, string][]
+  ).toString() : "";
+  return request<KnowledgeDoc[]>(`/api/knowledge${qs ? `?${qs}` : ""}`);
+};
+export const getKnowledgeUsage = () => request<KnowledgeUsage>("/api/knowledge/usage");
+export const getKnowledgeDoc = (id: string) => request<KnowledgeDoc>(`/api/knowledge/${id}`);
+export const createKnowledgeDoc = (payload: {
+  scope: KnowledgeDoc["scope"];
+  scope_ref: string | null;
+  category: KnowledgeDoc["category"];
+  title: string;
+  body: string;
+  status?: KnowledgeDoc["status"];
+}) => request<KnowledgeDoc>("/api/knowledge", { method: "POST", body: JSON.stringify(payload) });
+export const updateKnowledgeDoc = (id: string, body: string) =>
+  request<KnowledgeDoc>(`/api/knowledge/${id}`, { method: "PUT", body: JSON.stringify({ body }) });
+export const archiveKnowledgeDoc = (id: string) =>
+  request<void>(`/api/knowledge/${id}`, { method: "DELETE" });
+export const approveKnowledgeDoc = (id: string) =>
+  request<KnowledgeDoc>(`/api/knowledge/${id}/approve`, { method: "POST" });
+export const listKnowledgeEdits = (id: string, limit = 20) =>
+  request<KnowledgeEdit[]>(`/api/knowledge/${id}/edits?limit=${limit}`);
+
 // Notion Integrations
 export type NotionIntegration = { id: string; name: string; search_page_ids: string[]; report_parent_page_id: string | null; status: string; created_at: number; org_id: string | null };
+export type NotionOAuthInstallationConfig = {
+  parent_page_id: string | null;
+  trigger_page_id: string | null;
+  requests_data_source_id: string | null;
+  requests_database_page_id: string | null;
+  enabled: boolean;
+};
+export type NotionOAuthInstallation = {
+  id: string;
+  workspace_id: string;
+  workspace_name: string | null;
+  bot_id: string;
+  owner_user_id: string | null;
+  status: string;
+  created_at: string | null;
+  updated_at: string | null;
+  org_id: string | null;
+  config: NotionOAuthInstallationConfig | null;
+};
+export type NotionPageOption = { id: string; title: string; url: string | null };
 export const getNotionIntegrations = () => request<NotionIntegration[]>("/api/integrations/notion");
 export const createNotionIntegration = (payload: { name: string; api_key: string; search_page_ids: string[]; report_parent_page_id?: string }) =>
   request<NotionIntegration>("/api/integrations/notion", { method: "POST", body: JSON.stringify(payload) });
@@ -578,6 +764,28 @@ export const deleteNotionIntegration = (name: string) =>
   request<void>(`/api/integrations/notion/${name}`, { method: "DELETE" });
 export const testNotionIntegration = (name: string) =>
   request<{ status: string; message: string }>(`/api/integrations/notion/${name}/test`, { method: "POST" });
+export const startNotionOAuth = (redirectAfter?: string) => {
+  const qs = redirectAfter ? `?redirect_after=${encodeURIComponent(redirectAfter)}` : "";
+  return request<{ authorize_url: string; state: string }>(`/api/integrations/notion/oauth/start${qs}`);
+};
+export const getNotionOAuthInstallations = () =>
+  request<NotionOAuthInstallation[]>("/api/integrations/notion/oauth/installations");
+export const getNotionOAuthPages = (installationId: string, query?: string) => {
+  const qs = query ? `?query=${encodeURIComponent(query)}` : "";
+  return request<NotionPageOption[]>(`/api/integrations/notion/oauth/${installationId}/pages${qs}`);
+};
+export const provisionNotionOAuthInstallation = (installationId: string, parentPageId?: string | null) =>
+  request<{
+    installation: NotionOAuthInstallation;
+    trigger_page_id: string;
+    requests_data_source_id: string;
+    requests_database_page_id: string;
+  }>(`/api/integrations/notion/oauth/${installationId}/provision`, {
+    method: "POST",
+    body: JSON.stringify(parentPageId ? { parent_page_id: parentPageId } : {}),
+  });
+export const deleteNotionOAuthInstallation = (installationId: string) =>
+  request<void>(`/api/integrations/notion/oauth/${installationId}`, { method: "DELETE" });
 
 // Metrics SSE (uses fetch instead of EventSource so we can send auth headers)
 export function subscribeMetrics(cb: (data: import("./types").MetricsSnapshot) => void): () => void {
@@ -618,7 +826,7 @@ export function subscribeMetrics(cb: (data: import("./types").MetricsSnapshot) =
           buf = lines.pop() ?? "";
           for (const line of lines) {
             if (line.startsWith("data: ")) {
-              try { cb(JSON.parse(line.slice(6))); } catch {}
+              try { cb(JSON.parse(line.slice(6)) as any); } catch {}
             }
           }
         }

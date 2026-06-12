@@ -1,0 +1,68 @@
+---
+sidebar_position: 5
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
+# Microsoft SQL Server
+
+`pymssql`-backed connector. `db_type` is `mssql`. Tier 2. Supports SQL Server 2016+, Azure SQL Database, and Azure SQL Managed Instance.
+
+## Connection config
+
+<MiniCopyBlock
+  label="sql server"
+  plain
+  code={`{\n  "name": "prod-mssql",\n  "db_type": "mssql",\n  "host": "sqlserver.example.com",\n  "port": 1433,\n  "database": "Analytics",\n  "username": "readonly",\n  "password": "..."\n}`}
+/>
+
+## Connection fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Connection name. `[a-zA-Z0-9_-]`, max 64 chars. |
+| `db_type` | Yes | `mssql`. |
+| `host` | Yes | Hostname or IP. For a named instance, append it in connection-string mode (`?instance=SQLEXPRESS`). |
+| `port` | No | Defaults to 1433. |
+| `database` | No | Defaults to `master`. |
+| `username` | Yes | Database user (use a read-only login). Defaults to `sa`. |
+| `password` | Yes | Password. Omit when using Azure AD auth. |
+| `ssl` / `ssl_config` | No | TLS. With `ssl_config.mode` `verify-ca`/`verify-full` the connector sets `Encrypt=yes;TrustServerCertificate=no`; otherwise `Encrypt=yes;TrustServerCertificate=yes`. |
+| `ssh_tunnel` | No | Connect through a bastion. See [Connect a Database](/docs/connect-database#ssh-tunneling). |
+| `connection_timeout` | No | Seconds, 1–300. Mapped to pymssql `login_timeout`. |
+| `query_timeout` | No | Seconds, 1–3600. Also drives `SET LOCK_TIMEOUT` to bound lock-contention waits. |
+
+**Azure AD / Entra ID auth:** set `auth_method` to `azure_ad` (or `azure_ad_auth: true`) plus `azure_tenant_id`, `azure_client_id`, and `azure_client_secret` (service principal). The connector uses MSAL client-credentials flow to acquire a token used in place of `password`, and forces encryption (`Encrypt=yes;TrustServerCertificate=no`). Requires the `msal` package.
+
+## Capabilities
+
+| Capability | Supported | Notes |
+|------------|-----------|-------|
+| Query | Yes | `SET TRANSACTION ISOLATION LEVEL READ COMMITTED` on connect. Single reconnect attempt on a dropped connection. Default TDS version 7.4. |
+| Schema introspection | Yes (full) | `sys.*` catalog views — tables and views, columns with precision/scale, identity flag, defaults via `OBJECT_DEFINITION`, comments from `sys.extended_properties` (`MS_Description`). |
+| FK discovery | Yes | `sys.foreign_keys` joined to `sys.foreign_key_columns`. |
+| EXPLAIN | Yes | Via `SET SHOWPLAN_ALL` (estimated plan, no execution). |
+| Cost estimation | Yes | `SET SHOWPLAN_ALL ON` — parses `EstimateRows` and `TotalSubtreeCost`. USD is a rough heuristic, not a billed amount. |
+| Schema stats | Yes | Exact row counts and table size (MB) from `sys.dm_db_partition_stats`; indexes and unique lead columns from `sys.indexes`; column auto-stats presence and row count from `sys.stats` / `dm_db_stats_properties`. |
+
+Tier 2. Schema metadata queries run sequentially (single connection; no parallel schema fetch, no connection pooling).
+
+## Dialect notes / gotchas
+
+- Identifiers are quoted with brackets (`[col]`).
+- sqlglot dialect is `tsql`.
+- Row limiting uses `SELECT TOP n`, not `LIMIT n`.
+- Introspection skips `sys`, `INFORMATION_SCHEMA`, and `guest` schemas and MS-shipped objects.
+- `nvarchar`/`varchar`/`char` types are reported with their length (`(max)` for MAX columns; `nvarchar` lengths are halved from byte length).
+
+## Blocked functions
+
+There is no SQL Server–specific dangerous-function denylist. The governance layer still blocks all DDL/DML statement types, statement stacking, and `SELECT ... INTO`, and the universal `load_extension` / `install_extension` functions.
+
+## Recommended plugin skill
+
+`sql-workflow` — general output-shape inference, schema exploration, and CTE-based query building.
+
+## Cloud vs local
+
+Supported in both cloud and local (self-hosted) deployments.

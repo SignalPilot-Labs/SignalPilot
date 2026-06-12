@@ -4,7 +4,7 @@ sidebar_position: 4
 
 # dbt Tools
 
-6 tools for dbt intelligence and model verification (3 + 3).
+8 tools for dbt intelligence and model verification.
 
 ---
 
@@ -69,6 +69,23 @@ Cardinality analysis: per-key distinct counts and fan-out factors.
 
 ---
 
+### compare_join_types
+
+Compare row counts across INNER, LEFT, RIGHT, and FULL OUTER JOIN for a given join condition.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `connection` | string | Yes | Connection name |
+| `left_table` | string | Yes | Left table |
+| `right_table` | string | Yes | Right table |
+| `join_on` | string | Yes | Join condition (e.g. `order_id`) |
+
+**Returns:** Row count per join type, NULL counts on each side — helps pick the right join before writing a model.
+
+---
+
 ## Model Verification
 
 ### check_model_schema
@@ -103,6 +120,23 @@ Row count validation, fan-out detection, and empty model detection.
 | `fan_out_threshold` | number | No | Max acceptable fan-out ratio (default: 1.5) |
 
 **Returns:** Row count, empty model flag, fan-out ratio per key column, pass/fail per check.
+
+---
+
+### verify_model_values
+
+Cross-validate a model's aggregate metric values against raw source data. Queries the model output, identifies numeric (metric) columns and the largest dimension slice, then independently runs `COUNT(*)` and `COUNT(DISTINCT <key>)` on each upstream table for that slice.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `connection_name` | string | Yes | Connection name |
+| `model_name` | string | Yes | dbt model / table to verify |
+
+**Returns:** Value verification report — model values vs source baselines, flagging any discrepancy.
+
+**When to use:** After building a model, to catch wrong aggregation functions (e.g. `COUNT(DISTINCT id)` where `COUNT(*)` is correct).
 
 ---
 

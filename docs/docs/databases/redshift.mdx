@@ -1,0 +1,75 @@
+---
+sidebar_position: 6
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
+# Amazon Redshift
+
+`psycopg2`-backed connector. `db_type` is `redshift`. Tier 2. Supports provisioned Redshift clusters and Redshift Serverless.
+
+Redshift is wire-compatible with PostgreSQL: the connector normalizes a `redshift://` connection string to `postgresql://` and connects with `psycopg2`. The sqlglot dialect is `redshift` (its own dialect, not `postgres`), and schema introspection uses Redshift-specific system views (`pg_table_def`, `svv_table_info`) rather than the generic Postgres catalog.
+
+## Connection config
+
+<MiniCopyBlock
+  label="redshift"
+  plain
+  code={`{\n  "name": "prod-redshift",\n  "db_type": "redshift",\n  "host": "my-cluster.abc123.us-east-1.redshift.amazonaws.com",\n  "port": 5439,\n  "database": "dev",\n  "username": "readonly",\n  "password": "..."\n}`}
+/>
+
+## Connection fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Connection name. `[a-zA-Z0-9_-]`, max 64 chars. |
+| `db_type` | Yes | `redshift`. |
+| `host` | Yes | Cluster or Serverless endpoint hostname. |
+| `port` | No | Redshift default is 5439. |
+| `database` | Yes | Database name (Redshift default is often `dev`). |
+| `username` | Yes | Database user (use a read-only user). Omit when using IAM auth. |
+| `password` | Yes | Password. Omit when using IAM auth. |
+| `ssl` / `ssl_config` | No | TLS. `ssl_config.mode` maps to psycopg2 `sslmode` (`disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`). `ca_cert`/`client_cert`/`client_key` are PEM strings. |
+| `ssh_tunnel` | No | Connect through a bastion. See [Connect a Database](/docs/connect-database#ssh-tunneling). |
+| `connection_timeout` | No | Seconds, 1–300. Used as psycopg2 `connect_timeout`. |
+| `query_timeout` | No | Seconds, 1–3600. Enforced server-side via `SET statement_timeout`. |
+
+**IAM auth:** set `auth_method` to `iam` (or `iam_auth: true`) plus `aws_region` (default `us-east-1`) and optionally `aws_access_key_id` / `aws_secret_access_key`.
+
+- **Provisioned cluster:** uses `redshift:GetClusterCredentials`. Pass `cluster_id`, or let the connector derive it from the leading label of a standard Redshift endpoint hostname.
+- **Serverless:** pass `workgroup` to use `redshift-serverless:GetCredentials`.
+
+IAM auth generates temporary credentials in place of `username`/`password` and forces SSL.
+
+## Capabilities
+
+| Capability | Supported | Notes |
+|------------|-----------|-------|
+| Query | Yes | The session is opened `readonly=True` (defense in depth on top of governance). Reconnects on a stale connection. |
+| Schema introspection | Yes (full) | `pg_table_def` for columns, types, nullability, distkey/sortkey; primary keys and views via `pg_catalog`; comments via `pg_description`. Skips `pg_catalog`, `information_schema`, `pg_internal`. |
+| FK discovery | Yes | `pg_constraint` (`contype = 'f'`). |
+| EXPLAIN | Yes | Plain `EXPLAIN` (PostgreSQL-style plan text). |
+| Cost estimation | Yes | `EXPLAIN` — parses `rows=` estimates from the plan text. USD is a rough heuristic, not a billed amount. |
+| Schema stats | Yes | Row counts, table size (MB), diststyle, and sort keys from `svv_table_info`; column `n_distinct` and common values from `pg_stats`. |
+
+Tier 2. Schema metadata queries run sequentially in a single background thread (psycopg2 connections are not thread-safe; no connection pooling).
+
+## Dialect notes / gotchas
+
+- Identifiers are quoted with double quotes (`"col"`).
+- `db_type` is `redshift`; a `redshift://` connection string is rewritten to `postgresql://` for psycopg2.
+- Column metadata includes Redshift-specific attributes: compression `encoding`, `dist_key` flag, and `sort_key_position` (composite sort keys are concatenated in order on the table).
+- Row counts from `svv_table_info` (`tbl_rows`) are planner estimates.
+- `n_distinct` in column stats is signed: positive is an exact distinct count, negative is a fraction of total rows.
+
+## Blocked functions
+
+There is no Redshift-specific dangerous-function denylist (the `redshift` dialect is distinct from `postgres`, so the Postgres function list does not apply). The governance layer still blocks all DDL/DML statement types, statement stacking, and `SELECT ... INTO`, and the universal `load_extension` / `install_extension` functions.
+
+## Recommended plugin skill
+
+`sql-workflow` — general output-shape inference, schema exploration, and CTE-based query building.
+
+## Cloud vs local
+
+Supported in both cloud and local (self-hosted) deployments. In cloud mode, connection hostnames are subject to the SSRF allow-list; extend it with `SP_SSRF_ALLOW_LIST`.

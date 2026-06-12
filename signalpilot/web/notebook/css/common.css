@@ -1,0 +1,56 @@
+@reference "../css/globals.css";
+
+/* Agent chat cursor blink */
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+/* Hover actions */
+
+/* Ignore for touch devices */
+@media (hover: hover) and (pointer: fine) {
+  .hover-action {
+    display: none !important;
+  }
+
+  [data-is-dragging="true"] {
+    .hover-actions-parent.hover-actions-parent .hover-action:not(:hover) {
+      display: none !important;
+    }
+  }
+}
+
+.hover-action:hover,
+.hover-action:focus {
+  display: inline-flex !important;
+}
+
+.hover-actions-parent:hover .hover-action,
+.hover-actions-parent:focus .hover-action {
+  display: inline-flex !important;
+}
+
+/* If parent has any children that have an open pop, show hover actions */
+.hover-actions-parent:has([data-state="open"]) .hover-action {
+  display: inline-flex !important;
+}
+
+/* When any element is fullscreen, hide the element with this class */
+:root:has(:fullscreen) .hide-on-fullscreen {
+  display: none !important;
+}
+
+.mo-dropdown-icon {
+  @apply mr-2 h-3.5 w-3.5 text-muted-foreground/70;
+}
+
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}

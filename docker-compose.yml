@@ -1,30 +1,41 @@
-# SignalPilot — self-contained local stack
+# SignalPilot — Local Development Stack
 #
 # Usage: docker compose up --build
 #
-# Starts: Postgres + Gateway + Web + Sandbox
-# No external dependencies, no .env required.
+# Starts: Postgres + Gateway + Notebook + Web + Sandbox
+# No K8s, no .env file, no external dependencies. Works on any OS.
+#
+# Services:
+#   - db        (Postgres 17)          localhost:5601
+#   - gateway   (FastAPI backend)      localhost:3300
+#   - notebook  (Notebook kernel)      localhost:2718
+#   - web       (Next.js frontend)     localhost:3200
+#   - sandbox   (gVisor code exec)     internal only
+#
+# Open http://localhost:3200 to start.
 
 name: signalpilot
 
 services:
+  # ─── Database ──────────────────────────────────────────────────
   db:
     image: postgres:17
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-signalpilot}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_dev_only}
-      POSTGRES_DB: ${POSTGRES_DB:-signalpilot}
+      POSTGRES_USER: signalpilot
+      POSTGRES_PASSWORD: changeme_dev_only
+      POSTGRES_DB: signalpilot
     ports:
-      - "5601:5432"
+      - "127.0.0.1:5601:5432"
     volumes:
       - signalpilot-pg-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-signalpilot}"]
+      test: ["CMD-SHELL", "pg_isready -U signalpilot"]
       interval: 5s
       timeout: 3s
       retries: 10
     restart: unless-stopped
 
+  # ─── Gateway (API + proxy) ────────────────────────────────────
   gateway:
     build:
       context: ./signalpilot/gateway
@@ -32,37 +43,102 @@ services:
     ports:
       - "3300:3300"
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-signalpilot}:${POSTGRES_PASSWORD:-changeme_dev_only}@db:5432/${POSTGRES_DB:-signalpilot}
+      DATABASE_URL: postgresql+asyncpg://signalpilot:changeme_dev_only@db:5432/signalpilot
       SP_DATA_DIR: /data
-      SP_SANDBOX_MANAGER_URL: http://sandbox:8080
-      SP_SANDBOX_TOKEN: ${SP_SANDBOX_TOKEN:-}
       SP_DEPLOYMENT_MODE: local
-      SP_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:3200
+      SP_ENCRYPTION_KEY: 5d1aa5ETRcln8vkPWrzDkdfSEuqAua5xcZCWMLMDXmc=
+      SP_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:3200,http://localhost:3300,http://localhost:2718
+      # Notebook: direct mode (no K8s)
+      SP_NOTEBOOK_DIRECT_URL: http://notebook:2718
+      SP_NOTEBOOK_UPSTREAM_MODE: direct
+      SP_NOTEBOOK_IMAGE: signalpilot-notebook:latest
+      SP_NOTEBOOK_NETWORK_POLICY: "false"
+      SP_PUBLIC_GATEWAY_URL: http://localhost:3300
+      SP_PUBLIC_GATEWAY_PORT: "3300"
+      SP_REPOS_DIR: /repos
+      SP_WEB_URL: http://localhost:3200
+      SIGNALPILOT_NOTEBOOK_INTERNAL_URL: http://notebook:2718
+      SIGNALPILOT_NOTEBOOK_PUBLIC_URL: http://localhost:3200/notebook
+      # Sandbox
+      SP_SANDBOX_MANAGER_URL: http://sandbox:8080
+      SP_SANDBOX_ENABLED: "true"
+      # Unused in local mode but required by gateway startup
+      SP_K8S_HOST: ""
+      KUBECONFIG: ""
+      SP_K8S_NAMESPACE: default
+      SP_GATEWAY_NAMESPACE: signalpilot
+      SP_GATEWAY_POD_SELECTOR: "app=signalpilot-gateway"
     volumes:
       - signalpilot-data:/data
       - signalpilot-shared:/shared
+      - signalpilot-gateway-secrets:/gateway-secrets
+      - signalpilot-repos:/repos
     command: >
-      sh -c "python3 -c \"from gateway.store import get_local_api_key; open('/shared/local_api_key','w').write(get_local_api_key())\" &&
+      sh -c "python3 -c 'from gateway.store import get_local_api_key; k=get_local_api_key(); open(\"/shared/local_api_key\",\"w\").write(k) if k else None' &&
              uvicorn gateway.main:app --host 0.0.0.0 --port 3300"
     depends_on:
       db:
+        condition: service_healthy
+      notebook:
         condition: service_healthy
       sandbox:
         condition: service_healthy
     restart: unless-stopped
 
+  # ─── Notebook Server ──────────────────────────────────────────
+  notebook:
+    build:
+      context: ./signalpilot/notebook-server
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:2718:2718"
+    entrypoint:
+      - sh
+      - -c
+      - |
+        export SP_API_KEY=$$(cat /shared/local_api_key 2>/dev/null || echo '')
+        exec python -m signalpilot edit \
+          --host 0.0.0.0 --port 2718 --headless \
+          --no-token --no-skew-protection \
+          --allow-origins http://localhost:3200,http://localhost:3300 \
+          /workspace
+    environment:
+      SP_LOG_DIR: /tmp/sp-logs
+      SP_LOG_LEVEL: "10"
+      SP_GATEWAY_URL: http://gateway:3300
+      SP_GATEWAY_INTERNAL_URL: http://gateway:3300
+      SP_WEB_URL: ${SP_WEB_URL:-http://localhost:3200}
+      CLAUDE_CONFIG_DIR: ${CLAUDE_CONFIG_DIR:-/home/notebook/.claude}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - signalpilot-workspace:/workspace
+      - signalpilot-shared:/shared:ro
+      - ${CLAUDE_HOST_CONFIG_DIR:-${HOME:-~}/.config/signalpilot/claude-code-docker}:/home/notebook/.claude
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:2718/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  # ─── Web Frontend ─────────────────────────────────────────────
   web:
     build:
-      context: ./signalpilot/web
-      dockerfile: ../../Dockerfile.web
+      context: .
+      dockerfile: Dockerfile.web
     ports:
       - "3200:3200"
+    environment:
+      SP_GATEWAY_INTERNAL_URL: http://gateway:3300
     volumes:
       - signalpilot-shared:/shared:ro
     depends_on:
       - gateway
     restart: unless-stopped
 
+  # ─── Sandbox (gVisor code execution) ──────────────────────────
   sandbox:
     build:
       context: ./sp-sandbox
@@ -81,13 +157,23 @@ services:
     pids_limit: 256
     environment:
       SP_GATEWAY_URL: http://gateway:3300
-      SP_SANDBOX_TOKEN: ${SP_SANDBOX_TOKEN:-}
       SP_MAX_VMS: "10"
     volumes:
-      - ${HOST_DATA_DIR:-/tmp}:/host-data:ro
+      # Users root (C:\Users, /home, /Users) — sandboxed DuckDB/SQLite translate
+      # host file paths to /host-data/<user>/... (see sandboxed_duckdb.py).
+      - ${SP_HOST_DATA_DIR:-${HOME:-~}/..}:/host-data:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
 
 volumes:
   signalpilot-pg-data:
   signalpilot-data:
   signalpilot-shared:
+  signalpilot-gateway-secrets:
+  signalpilot-repos:
+  signalpilot-workspace:

@@ -1,7 +1,5 @@
 """Schema DDL tools: schema_diff, schema_ddl, schema_link (tools 8, 9, 10)."""
 
-from __future__ import annotations
-
 import httpx
 
 from gateway.errors.mcp import sanitize_proxy_response

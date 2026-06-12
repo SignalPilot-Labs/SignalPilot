@@ -1,0 +1,56 @@
+# SignalPilot — K8s Mode Override
+#
+# Usage: docker compose -f docker-compose.yml -f docker-compose.k8s.yml up --build
+#
+# Adds K3s and reconfigures the gateway to orchestrate notebook pods
+# instead of using the local notebook container.
+
+services:
+  # ─── K3s (local Kubernetes) ────────────────────────────────────
+  k3s:
+    image: rancher/k3s:v1.31.4-k3s1
+    command: server --disable=traefik,metrics-server --tls-san=k3s
+    privileged: true
+    ports:
+      - "127.0.0.1:6443:6443"
+      - "30000-30100:30000-30100"
+    environment:
+      K3S_TOKEN: signalpilot-dev
+      K3S_KUBECONFIG_MODE: "644"
+    volumes:
+      - k3s-server:/var/lib/rancher/k3s
+      - k3s-config:/etc/rancher/k3s
+    restart: unless-stopped
+
+  # ─── Gateway: switch to K8s pod orchestration ──────────────────
+  gateway:
+    network_mode: "service:k3s"
+    ports: !reset []
+    environment:
+      SP_NOTEBOOK_DIRECT_URL: ""
+      SP_NOTEBOOK_UPSTREAM_MODE: pod_ip
+      SP_K8S_HOST: https://127.0.0.1:6443
+      SP_K8S_NAMESPACE: default
+      KUBECONFIG: /k3s/k3s.yaml
+    volumes:
+      - signalpilot-data:/data
+      - signalpilot-shared:/shared
+      - signalpilot-gateway-secrets:/gateway-secrets
+      - signalpilot-repos:/repos
+      - k3s-config:/k3s:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      sandbox:
+        condition: service_healthy
+      k3s:
+        condition: service_started
+
+  # ─── Disable local notebook in K8s mode ────────────────────────
+  notebook:
+    profiles:
+      - local-only
+
+volumes:
+  k3s-server:
+  k3s-config:

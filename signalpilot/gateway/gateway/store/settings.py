@@ -41,10 +41,13 @@ async def save_settings(session: AsyncSession, *, org_id: str, user_id: str | No
     await session.commit()
 
 
-async def get_credentials_needing_rotation(session: AsyncSession) -> int:
-    result = await session.execute(
+async def get_credentials_needing_rotation(session: AsyncSession, org_id: str | None = None) -> int:
+    query = (
         select(sa_func.count())
         .select_from(GatewayCredential)
         .where(GatewayCredential.key_version < CURRENT_KEY_VERSION)
     )
+    if org_id is not None:
+        query = query.where(GatewayCredential.org_id == org_id)
+    result = await session.execute(query)
     return result.scalar_one()

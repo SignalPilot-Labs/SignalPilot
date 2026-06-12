@@ -1,0 +1,76 @@
+---
+sidebar_position: 2
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
+# PostgreSQL
+
+`asyncpg`-backed connector. `db_type` is `postgres`. Tier 1.
+
+## Connection config
+
+<MiniCopyBlock
+  label="postgres"
+  plain
+  code={`{\n  "name": "prod-postgres",\n  "db_type": "postgres",\n  "host": "db.example.com",\n  "port": 5432,\n  "database": "analytics",\n  "username": "readonly",\n  "password": "..."\n}`}
+/>
+
+## Connection fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Connection name. `[a-zA-Z0-9_-]`, max 64 chars. |
+| `db_type` | Yes | `postgres`. |
+| `host` | Yes | Hostname or IP. |
+| `port` | No | Defaults to 5432. |
+| `database` | Yes | Database name. |
+| `username` | Yes | Database user (use a read-only role). |
+| `password` | Yes | Password. Omit when using IAM auth. |
+| `ssl` / `ssl_config` | No | TLS. `ssl_config.mode` is one of `disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`. `ca_cert`/`client_cert`/`client_key` are PEM strings. |
+| `ssh_tunnel` | No | Connect through a bastion. See [Connect a Database](/docs/connect-database#ssh-tunneling). |
+| `connection_timeout` | No | Seconds, 1–300. |
+| `query_timeout` | No | Seconds, 1–3600. Enforced server-side via `SET LOCAL statement_timeout`. |
+
+**AWS RDS IAM auth:** set `auth_method` to `iam` plus `aws_region` (default `us-east-1`) and optionally `aws_access_key_id` / `aws_secret_access_key`. The connector generates a short-lived RDS auth token in place of `password` and forces SSL.
+
+## Capabilities
+
+| Capability | Supported | Notes |
+|------------|-----------|-------|
+| Query | Yes | Each query runs inside a `READONLY` transaction (defense in depth on top of governance). |
+| Schema introspection | Yes (full) | `information_schema` + `pg_catalog`. Tables, views, columns, comments. |
+| FK discovery | Yes | Via `information_schema` table constraints / `key_column_usage` / `constraint_column_usage`. |
+| EXPLAIN | Yes | Execution plans available. |
+| Cost estimation | No | PostgreSQL is row-based, not byte-billed. |
+| Schema stats | Yes | Estimated row counts and table sizes from `pg_stat_user_tables`, indexes from `pg_indexes`, column `n_distinct` / common values from `pg_stats`. |
+
+Tier 1.
+
+## Dialect notes / gotchas
+
+- Identifiers are quoted with double quotes (`"col"`).
+- Schema introspection skips `pg_catalog` and `information_schema`.
+- `n_distinct` in column stats is signed: positive is an exact distinct count, negative is a fraction of total rows (e.g. `-1` means all-unique).
+
+## Blocked functions
+
+The governance layer blocks these PostgreSQL functions even inside a `SELECT` (in addition to all DDL/DML statements):
+
+- File system: `pg_read_server_files`, `pg_read_binary_file`, `pg_read_file`, `pg_ls_dir`, `pg_ls_logdir`, `pg_ls_waldir`, `pg_ls_tmpdir`, `pg_ls_archive_statusdir`, `pg_file_write`, `pg_file_rename`, `pg_file_unlink`
+- Large objects: `lo_import`, `lo_export`, `lo_from_bytea`, `lo_put`
+- Remote / out-of-band: `dblink`, `dblink_exec`, `dblink_connect`, `dblink_send_query`, `dblink_get_result`, `dblink_get_connections`
+- OS execution: `pg_execute_server_program`
+- Internal COPY helper: `copy_file_internal`
+- Server management / DoS: `pg_logfile_rotate`, `pg_reload_conf`, `pg_rotate_logfile`, `pg_terminate_backend`, `pg_cancel_backend`, `pg_advisory_lock`, `pg_advisory_xact_lock`
+- Config mutation: `set_config`
+
+The universal `load_extension` / `install_extension` block also applies.
+
+## Recommended plugin skill
+
+`sql-workflow` — general output-shape inference, schema exploration, and CTE-based query building.
+
+## Cloud vs local
+
+Supported in both cloud and local (self-hosted) deployments. In cloud mode, the SSRF allow-list applies to connection hostnames; extend it with `SP_SSRF_ALLOW_LIST`.

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .logging import log
-from .paths import EXAMPLES_DIR, PROJECT_ROOT, SKILLS_SRC, WORK_DIR
+from .paths import EXAMPLES_DIR, PROJECT_ROOT, WORK_DIR
 
 if TYPE_CHECKING:
     from .suite import DBBackend, SuiteConfig
@@ -36,27 +36,42 @@ def prepare_workdir(instance_id: str, data_dir: Path | None = None) -> Path:
     shutil.copytree(src, dst)
     log(f"Copied task files: {src} -> {dst}")
 
-    # Copy .mcp.json so Claude Code discovers SignalPilot MCP tools
-    mcp_json_src = PROJECT_ROOT / ".mcp.json"
-    if mcp_json_src.exists():
-        shutil.copy2(mcp_json_src, dst / ".mcp.json")
-        log("Copied .mcp.json for MCP tool discovery")
+    # Remove stale partial_parse.msgpack — causes KeyError on dbt parse
+    # when copied from the spider2-repo source (built with a different dbt version).
+    stale_parse = dst / "target" / "partial_parse.msgpack"
+    if stale_parse.exists():
+        stale_parse.unlink()
+        log("Removed stale target/partial_parse.msgpack")
 
-    # Copy skills into .claude/skills/ so Claude Code loads them natively
-    skills_dst = dst / ".claude" / "skills"
-    if SKILLS_SRC.exists():
-        shutil.copytree(
-            SKILLS_SRC,
-            skills_dst,
-            dirs_exist_ok=True,
-            ignore=shutil.ignore_patterns("*.json", "__pycache__"),
+    # Write .mcp.json with the same config the SDK runner uses (including
+    # runtime env injection: DATABASE_URL, SP_GATEWAY_URL, SP_DISABLE_SANDBOX).
+    # This ensures subagents and Claude CLI see the same MCP tools.
+    import json as _json
+    from .mcp import load_mcp_servers
+    try:
+        mcp_cfg = {"mcpServers": load_mcp_servers()}
+        (dst / ".mcp.json").write_text(_json.dumps(mcp_cfg, indent=2))
+        log("Wrote .mcp.json with runtime MCP config")
+    except Exception as e:
+        log(f"Failed to write .mcp.json: {e}", "WARN")
+
+    # Run dbt deps if packages.yml exists — some bundled packages are incomplete
+    # (missing dbt_project.yml). This fixes them before the agent starts.
+    if (dst / "packages.yml").exists():
+        result = subprocess.run(
+            [shutil.which("dbt") or "dbt", "deps"],
+            cwd=str(dst), capture_output=True, text=True, timeout=120,
         )
-        skill_count = len(list(skills_dst.rglob("SKILL.md")))
-        log(f"Copied {skill_count} skills -> {skills_dst}")
-    else:
-        log(f"Skills directory not found: {SKILLS_SRC}", "WARN")
+        if result.returncode == 0:
+            log("dbt deps completed successfully")
+        else:
+            log(f"dbt deps failed (non-fatal): {result.stderr[-200:]}", "WARN")
+        # Remove packages.yml after deps so the agent doesn't re-run it
+        (dst / "packages.yml").unlink(missing_ok=True)
+        (dst / "package-lock.yml").unlink(missing_ok=True)
+        log("Removed packages.yml (deps already resolved)")
 
-    # Initialize a git repo so Claude Code discovers skills in .claude/skills/
+    # Initialize a git repo so Claude Code can function
     subprocess.run(["git", "init"], cwd=str(dst), capture_output=True)
 
     return dst

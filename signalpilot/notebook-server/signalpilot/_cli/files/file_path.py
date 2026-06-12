@@ -1,0 +1,437 @@
+from __future__ import annotations
+
+import abc
+import os
+import re
+import urllib.parse
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import Any, cast
+from urllib.error import HTTPError
+
+from signalpilot import _loggers
+from signalpilot._cli.print import green
+from signalpilot._utils import requests
+from signalpilot._utils.sp_path import SpPath
+from signalpilot._utils.url import is_url
+
+LOGGER = _loggers.sp_logger()
+
+USER_AGENT_HEADER = {"User-Agent": requests.SP_USER_AGENT}
+
+
+def is_github_src(url: str, ext: str) -> bool:
+    if not is_url(url):
+        return False
+
+    hostname = urllib.parse.urlparse(url).hostname
+    if hostname != "github.com" and hostname != "raw.githubusercontent.com":
+        return False
+    path: str = urllib.parse.urlparse(url).path
+    return path.endswith(ext)
+
+
+def get_github_src_url(url: str) -> str:
+    # Change hostname to raw.githubusercontent.com
+    path = urllib.parse.urlparse(url).path
+    path = path.replace("/blob/", "/", 1)
+    return f"https://raw.githubusercontent.com{path}"
+
+
+def is_gist_src(url: str) -> bool:
+    if not is_url(url):
+        return False
+
+    hostname = urllib.parse.urlparse(url).hostname
+    return hostname in ("gist.github.com", "gist.githubusercontent.com")
+
+
+def get_gist_src_url(url: str) -> str:
+    # Return url if it's a direct link to a raw file,
+    # or get the first python or markdown file of the gist
+    # by getting the raw_url from api.github.com
+    path_parts = urllib.parse.urlparse(url).path.strip("/").split("/")
+    if "raw" in path_parts:
+        if not path_parts[-1].endswith((".py", ".md")):
+            raise ValueError("No python or markdown files found in the Gist")
+        return url
+    else:
+        gist_id = path_parts[1]
+        api_url = f"https://api.github.com/gists/{gist_id}"
+        api_response = requests.get(api_url, headers=USER_AGENT_HEADER)
+        api_response.raise_for_status()
+        gist_data = api_response.json()
+
+        files_dict = gist_data.get("files", {})
+        if not files_dict:
+            raise ValueError("No files found in the Gist")
+
+        py_or_md_url_generator = (
+            file_info["raw_url"]
+            for filename, file_info in files_dict.items()
+            if filename.lower().endswith((".py", ".md"))
+        )
+        raw_url = next(py_or_md_url_generator, "")
+
+        if raw_url == "":
+            raise ValueError("No python or markdown files found in the Gist")
+
+        return raw_url
+
+
+class FileReader(abc.ABC):
+    @abc.abstractmethod
+    def can_read(self, name: str) -> bool:
+        pass
+
+    @abc.abstractmethod
+    def read(self, name: str) -> tuple[str, str]:
+        """Read the file and return its content and filename."""
+
+
+class LocalFileReader(FileReader):
+    def can_read(self, name: str) -> bool:
+        return not is_url(name)
+
+    def read(self, name: str) -> tuple[str, str]:
+        file_path = Path(name)
+        # Is directory
+        if file_path.is_dir():
+            return "", file_path.name
+        content = file_path.read_text(encoding="utf-8")
+        return content, file_path.name
+
+
+class GitHubIssueReader(FileReader):
+    def can_read(self, name: str) -> bool:
+        return is_url(name) and name.startswith(
+            "https://docs.signalpilot.ai/docs/"
+        )
+
+    def read(self, name: str) -> tuple[str, str]:
+        issue_number = name.split("/")[-1]
+        api_url = f"https://api.github.com/repos/signalpilot-team/signalpilot/issues/{issue_number}"
+        response = requests.get(api_url)
+        response.raise_for_status()
+        issue_response = cast(dict[str, Any], response.json())
+
+        if "body" not in issue_response:
+            raise ValueError(
+                f"Failed to read GitHub issue {name}. No 'body' in response {issue_response}"
+            )
+
+        body = issue_response["body"]
+        code = self._find_python_code_in_github_issue(body)
+        return code, f"issue_{issue_number}.py"
+
+    @staticmethod
+    def _find_python_code_in_github_issue(body: str) -> str:
+        if "```python" not in body:
+            raise ValueError(f"No Python code found in GitHub issue {body}")
+
+        return body.split("```python")[1].rsplit("```", 1)[0]
+
+
+class StaticNotebookReader(FileReader):
+    CODE_TAG = r"sp-code"
+    CODE_REGEX = re.compile(
+        r"<sp-code\s+hidden(?:=['\"]{2})?\s*>\s*(.*?)\s*<"
+    )
+    FILENAME_REGEX = re.compile(
+        r"<sp-filename\s+hidden(?:=['\"]{2})?\s*>\s*(.*?)\s*<"
+    )
+    DEFAULT_FILENAME = "notebook.py"
+
+    def can_read(self, name: str) -> bool:
+        return self._is_static_signalpilot_notebook_url(name)[0]
+
+    def read(self, name: str) -> tuple[str, str]:
+        _, file_contents = self._is_static_signalpilot_notebook_url(name)
+        code = self._extract_code_from_static_notebook(file_contents)
+        filename = self._extract_filename_from_static_notebook(file_contents)
+        return code, filename
+
+    @staticmethod
+    def _is_static_signalpilot_notebook_url(url: str) -> tuple[bool, str]:
+        def download(url: str) -> tuple[bool, str]:
+            LOGGER.info("Downloading %s", url)
+            response = requests.get(url, headers=USER_AGENT_HEADER)
+            response.raise_for_status()
+            file_contents = response.text()
+            return (
+                StaticNotebookReader.CODE_TAG in file_contents,
+                file_contents,
+            )
+
+        # Not a URL
+        if not is_url(url):
+            # Read a local Static Notebook
+            if url.endswith(".html"):
+                file_contents = Path(url).read_text(encoding="utf-8")
+                return (
+                    StaticNotebookReader.CODE_TAG in file_contents,
+                    file_contents,
+                )
+
+            return False, ""
+
+        # Ends with .html, try to download it
+        if url.endswith(".html"):
+            return download(url)
+
+        # Starts with https://docs.signalpilot.ai/docs/ append /download
+        if url.startswith("https://docs.signalpilot.ai/docs/"):
+            normalized_url = url if url.endswith("/") else url + "/"
+            return download(urllib.parse.urljoin(normalized_url, "download"))
+
+        # Other sp domains
+        DOMAINS = [
+            "sp.app",
+            "docs.signalpilot.ai",
+        ]
+        if any(url.startswith(f"https://{domain}/") for domain in DOMAINS):
+            return download(url)
+
+        # TODO: Adjust for other various forms of static sp notebook URLs.
+        if "notebooks/nb" in url:
+            return download(url)
+
+        # Otherwise, not a static sp notebook
+        return False, ""
+
+    @staticmethod
+    def _extract_code_from_static_notebook(file_contents: str) -> str:
+        search = re.search(StaticNotebookReader.CODE_REGEX, file_contents)
+        assert search is not None, "<sp-code> not found in file contents"
+        return urllib.parse.unquote(search.group(1))
+
+    @staticmethod
+    def _extract_filename_from_static_notebook(file_contents: str) -> str:
+        if search := re.search(
+            StaticNotebookReader.FILENAME_REGEX, file_contents
+        ):
+            return urllib.parse.unquote(search.group(1))
+        return StaticNotebookReader.DEFAULT_FILENAME
+
+
+class GitHubSourceReader(FileReader):
+    def can_read(self, name: str) -> bool:
+        return is_github_src(name, ext=".py") or is_github_src(name, ext=".md")
+
+    def read(self, name: str) -> tuple[str, str]:
+        url = get_github_src_url(name)
+        response = requests.get(url, headers=USER_AGENT_HEADER)
+        response.raise_for_status()
+        content = response.text()
+        return content, os.path.basename(url)
+
+
+class GistSourceReader(FileReader):
+    def can_read(self, name: str) -> bool:
+        return is_gist_src(name) or is_gist_src(name)
+
+    def read(self, name: str) -> tuple[str, str]:
+        url = get_gist_src_url(name)
+        response = requests.get(url, headers=USER_AGENT_HEADER)
+        response.raise_for_status()
+        content = response.text()
+        return content, os.path.basename(url)
+
+
+class GenericURLReader(FileReader):
+    def can_read(self, name: str) -> bool:
+        return is_url(name)
+
+    def read(self, name: str) -> tuple[str, str]:
+        response = requests.get(name, headers=USER_AGENT_HEADER)
+        response.raise_for_status()
+        content = response.text()
+        # Remove query parameters from the URL
+        url_without_query = name.split("?")[0]
+        return content, os.path.basename(url_without_query)
+
+
+class FileContentReader:
+    def __init__(self) -> None:
+        self.readers = [
+            LocalFileReader(),
+            GitHubIssueReader(),
+            GitHubSourceReader(),
+            GistSourceReader(),
+            StaticNotebookReader(),
+            GenericURLReader(),
+        ]
+
+    def read_file(self, name: str) -> tuple[str, str]:
+        """
+        Read the file and return its content and filename
+
+        Args:
+            name (str): File path or URL
+
+        Returns:
+            Tuple[str, str]: File content and filename
+
+        Raises:
+            ValueError: If the file cannot be read
+        """
+        for reader in self.readers:
+            if reader.can_read(name):
+                return reader.read(name)
+        raise ValueError(f"Unable to read file contents of {name}")
+
+
+class FileHandler(abc.ABC):
+    @abc.abstractmethod
+    def can_handle(self, name: str) -> bool:
+        pass
+
+    @abc.abstractmethod
+    def handle(
+        self, name: str, temp_dir: TemporaryDirectory[str]
+    ) -> tuple[str, TemporaryDirectory[str] | None]:
+        pass
+
+
+class LocalFileHandler(FileHandler):
+    def __init__(self, allow_new_file: bool, allow_directory: bool):
+        self.allow_new_file = allow_new_file
+        self.allow_directory = allow_directory
+
+    def can_handle(self, name: str) -> bool:
+        return not is_url(name)
+
+    def handle(
+        self, name: str, temp_dir: TemporaryDirectory[str]
+    ) -> tuple[str, TemporaryDirectory[str] | None]:
+        import click
+
+        path = Path(name)
+
+        if self.allow_directory and path.is_dir():
+            return name, None
+
+        if path.suffix == ".ipynb":
+            prefix = str(path)[: -len(".ipynb")]
+            raise click.ClickException(
+                f"Invalid NAME - {name} is not a Python file.\n\n"
+                f"  {green('Tip:')} Convert {name} to a sp notebook with"
+                "\n\n"
+                f"    sp convert {name} -o {prefix}.py\n\n"
+                f"  then open with sp edit {prefix}.py"
+            )
+
+        if path.suffix == ".html":
+            reader = StaticNotebookReader()
+            if reader.can_read(name):
+                content, filename = reader.read(name)
+                path_to_app = self._create_tmp_file_from_content(
+                    content, filename, temp_dir
+                )
+                return path_to_app, temp_dir
+            else:
+                raise click.ClickException(
+                    f"Invalid HTML file - {name} does not contain Python code. Make sure the file was downloaded from signalpilot."
+                )
+
+        if not SpPath.is_valid_path(path):
+            raise click.ClickException(
+                f"Invalid NAME - {name} is not a Python or Markdown file"
+            )
+
+        if not self.allow_new_file:
+            if not path.exists():
+                raise click.ClickException(
+                    f"Invalid NAME - {name} does not exist"
+                )
+            if not path.is_file():
+                raise click.ClickException(
+                    f"Invalid NAME - {name} is not a file"
+                )
+
+        return name, None
+
+    @staticmethod
+    def _create_tmp_file_from_content(
+        content: str, name: str, temp_dir: TemporaryDirectory[str]
+    ) -> str:
+        LOGGER.info("Creating temporary file")
+        path_to_app = Path(temp_dir.name) / name
+        path_to_app.write_text(content, encoding="utf-8")
+        LOGGER.info("App saved to %s", path_to_app)
+        return str(path_to_app)
+
+
+class RemoteFileHandler(FileHandler):
+    def __init__(self) -> None:
+        self.reader = FileContentReader()
+
+    def can_handle(self, name: str) -> bool:
+        return is_url(name)
+
+    def handle(
+        self, name: str, temp_dir: TemporaryDirectory[str]
+    ) -> tuple[str, TemporaryDirectory[str] | None]:
+        try:
+            content, filename = self.reader.read_file(name)
+        except HTTPError as e:
+            import click
+
+            raise click.ClickException(f"Failed to read URL: {e}")  # noqa: B904
+        path_to_app = self._create_tmp_file_from_content(
+            content, filename, temp_dir
+        )
+        return path_to_app, temp_dir
+
+    @staticmethod
+    def _create_tmp_file_from_content(
+        content: str, name: str, temp_dir: TemporaryDirectory[str]
+    ) -> str:
+        LOGGER.info("Creating temporary file")
+        path_to_app = Path(temp_dir.name) / name
+        # If doesn't end in .py, add it
+        if path_to_app.suffix not in (".py", ".md", ".qmd"):
+            if "__generated_with" in content:
+                path_to_app = path_to_app.with_suffix(".py")
+            elif "sp-version" in content:
+                path_to_app = path_to_app.with_suffix(".md")
+            else:
+                # Fallback to .py
+                path_to_app = path_to_app.with_suffix(".py")
+        path_to_app.write_text(content, encoding="utf-8")
+        LOGGER.info("App saved to %s", path_to_app)
+        return str(path_to_app)
+
+
+def validate_name(
+    name: str, allow_new_file: bool, allow_directory: bool
+) -> tuple[str, TemporaryDirectory[str] | None]:
+    """
+    Validate the file name and return the path to the file.
+
+    Args:
+        name (str): Local file path, URL, or directory path
+        allow_new_file (bool): Whether to allow creating a new file
+        allow_directory (bool): Whether to allow a directory
+
+    Returns:
+        Path to the file and temporary directory
+
+    Raises:
+        ValueError: If the file name is invalid
+    """
+    from signalpilot._cli.files.cloudflare import R2FileHandler
+
+    handlers = [
+        R2FileHandler(),
+        LocalFileHandler(allow_new_file, allow_directory),
+        RemoteFileHandler(),
+    ]
+
+    temp_dir = TemporaryDirectory()
+
+    for handler in handlers:
+        if handler.can_handle(name):
+            return handler.handle(name, temp_dir)
+
+    raise ValueError(f"Unable to handle file {name}")

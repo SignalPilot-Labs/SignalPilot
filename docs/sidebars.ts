@@ -5,6 +5,7 @@ const sidebars: SidebarsConfig = {
     'quickstart',
     'concepts',
     'system-overview',
+    'workspaces',
     {
       type: 'category',
       label: 'Setup',
@@ -12,6 +13,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'setup/install',
         'setup/cloud',
+        'setup/self-hosting-production',
         'setup/configuration',
         'workflows/claude-md-recipes',
       ],
@@ -31,11 +33,31 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
+      label: 'Databases',
+      collapsed: true,
+      items: [
+        'databases/overview',
+        'databases/postgresql',
+        'databases/mysql',
+        'databases/snowflake',
+        'databases/bigquery',
+        'databases/redshift',
+        'databases/clickhouse',
+        'databases/databricks',
+        'databases/mssql',
+        'databases/trino',
+        'databases/duckdb',
+        'databases/sqlite',
+      ],
+    },
+    {
+      type: 'category',
       label: 'Plugin',
       collapsed: false,
       items: [
         'plugin',
         'plugin/install',
+        'plugin/codex',
         'plugin/skills-overview',
         'plugin/skills-reference',
         'plugin/verifier-agent',
@@ -48,6 +70,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'how-it-works',
         'workflows/dbt-build',
+        'workflows/verification',
         'workflows/sql-exploration',
         'workflows/custom-workflow',
       ],

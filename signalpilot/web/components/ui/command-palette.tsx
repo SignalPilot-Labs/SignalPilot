@@ -78,7 +78,7 @@ export function CommandPalette() {
     { id: "nav-connections", label: "connections", description: "database connections", shortcut: "^6", action: () => router.push("/connections"), icon: <IconNav />, category: "navigate" },
     { id: "nav-health", label: "health monitoring", description: "connection health and latency", shortcut: "^7", action: () => router.push("/health"), icon: <IconNav />, category: "navigate" },
     { id: "nav-audit", label: "audit log", description: "compliance audit trail", shortcut: "^8", action: () => router.push("/audit"), icon: <IconNav />, category: "navigate" },
-    { id: "nav-settings", label: "settings", description: "instance configuration", shortcut: "^9", action: () => router.push("/settings"), icon: <IconNav />, category: "navigate" },
+    { id: "nav-settings", label: "settings", description: "instance configuration", action: () => router.push("/settings"), icon: <IconNav />, category: "navigate" },
     // Actions
     { id: "action-new-sandbox", label: "create sandbox", description: "spin up a new sandbox", action: () => router.push("/sandboxes"), icon: <IconAction />, category: "actions" },
     { id: "action-new-connection", label: "add connection", description: "configure a new database", action: () => router.push("/connections"), icon: <IconAction />, category: "actions" },

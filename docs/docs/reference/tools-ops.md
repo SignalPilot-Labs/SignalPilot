@@ -4,11 +4,13 @@ sidebar_position: 5
 
 # Operational Tools
 
-4 operational tools and 2 project-management tools.
+Connections (3), Workspaces (2), Knowledge Base (3), and Notion (4) tools.
+
+> `check_budget` lives on the [Query Intelligence](/docs/reference/tools-query) reference.
 
 ---
 
-## Operational
+## Connections
 
 ### list_database_connections
 
@@ -58,40 +60,141 @@ Connector tier classification and feature availability for a connection.
 
 ---
 
-### check_budget
+## Workspaces
 
-Remaining query budget for the current session.
+### list_workspace_projects
+
+List the dbt and notebook projects available in the user's workspace.
+
+**Parameters:** None (uses current auth context to scope to the user/org).
+
+**Returns:** List of workspace projects with name and type.
+
+---
+
+### run_notebook
+
+Run a `.py` notebook in a sandboxed cloud Kubernetes pod. Writes the notebook into the user's notebook workspace and executes it with `sp export session`.
 
 **Parameters:**
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `connection` | string | Yes | Connection name |
+| `filename` | string | Yes | Name of the `.py` file (e.g. `analysis.py`), relative path inside the workspace |
+| `code` | string | Yes | Full contents of the `.py` notebook file |
+| `agent_branch` | string | No | Deprecated legacy label; ignored for project routing |
 
-**Returns:** Budget cap (USD), amount spent this session, amount remaining. Applies to warehouses that report scan cost (BigQuery, Snowflake).
+**Returns:** stdout/stderr from the run plus a URL to view the notebook in the browser.
+
+**Sandboxing:** Notebook pods run under gVisor with per-org NetworkPolicy isolation, read-only rootfs, and blocked IMDS egress. See [Security](/docs/security).
 
 ---
 
-## Project Management
+## Knowledge Base
 
-### list_projects
+### get_knowledge
 
-List all registered dbt projects.
+Load baseline knowledge docs plus task-relevant entries for a session.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `task_description` | string | No | Task text used to surface relevant entries |
+
+**Returns:** Baseline docs (understanding, conventions) plus matching task-relevant docs.
+
+---
+
+### search_knowledge
+
+Agent-directed search across the knowledge base.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | Yes | Search query (max 200 chars) |
+| `scope` | string | No | Scope filter |
+| `scope_ref` | string | No | Scope reference (e.g. project name) |
+| `category` | string | No | Category filter |
+| `limit` | integer | No | Max results (default: 20, capped at 50) |
+
+**Returns:** Matching docs: ID, scope, category, title, and a snippet.
+
+---
+
+### propose_knowledge
+
+Propose a new knowledge entry after a run. Entries are auto-accepted.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `scope` | string | Yes | Scope (e.g. `org`, `project`) |
+| `scope_ref` | string | No | Scope reference |
+| `category` | string | Yes | One of: understanding, conventions, decisions, domain-rules, debugging, quirks |
+| `title` | string | Yes | Entry title |
+| `body` | string | Yes | Entry body |
+| `supersedes` | string | No | ID of a doc this entry replaces |
+
+**Returns:** Confirmation with the new doc ID.
+
+---
+
+## Notion Integration
+
+### list_notion_integrations
+
+List configured Notion integrations with their search scope and report destination.
 
 **Parameters:** None.
 
-**Returns:** List of dbt projects: name, path, last-scanned timestamp, model count.
+**Returns:** Per-integration: name, search scope, report destination.
 
 ---
 
-### get_project
+### notion_search
 
-Get details of a specific dbt project.
+Search Notion pages visible to an integration's access token.
 
 **Parameters:**
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `project` | string | Yes | Project name |
+| `integration_name` | string | Yes | Configured Notion integration name |
+| `query` | string | Yes | Search query |
 
-**Returns:** Project path, dbt version, adapter, model count, source count, test count, last-scanned timestamp.
+**Returns:** Matching Notion pages with IDs and titles.
+
+---
+
+### notion_fetch_page
+
+Fetch the full content of a Notion page by ID.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `integration_name` | string | Yes | Configured Notion integration name |
+| `page_id` | string | Yes | Notion page ID |
+
+**Returns:** Full page content.
+
+---
+
+### notion_create_page
+
+Create a page under the integration's configured report destination.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `integration_name` | string | Yes | Configured Notion integration name |
+| `title` | string | Yes | Page title |
+| `content` | string | Yes | Page content |
+
+**Returns:** Created page ID and URL.

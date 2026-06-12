@@ -1,0 +1,147 @@
+---
+sidebar_position: 8
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
+# Workspaces
+
+Workspaces are reactive Python notebooks that an AI agent or a user drives. An agent calls the `run_notebook` MCP tool to spin up a sandboxed, git-backed workspace. Inside the notebook, the Data SDK (`import signalpilot as sp`) queries the warehouse through the same governed gateway used by every other SignalPilot tool — authenticated, LIMIT-injected, and audit-logged.
+
+Notebooks are reactive: cells form a DAG, and changing one cell re-runs its dependents. The same notebook can be built headless by an agent over MCP or opened and edited by a user in the web UI.
+
+## The MCP tools
+
+Two tools cover the agent workflow.
+
+### `list_workspace_projects`
+
+No parameters. Lists active workspace projects with their `id`, display name, source (`managed` or `github`), default branch, and file count. Use the returned `id` to pick where to work.
+
+<MiniCopyBlock
+  label="list_workspace_projects"
+  plain
+  code={`Tool: list_workspace_projects\n→ Found 2 workspace project(s):\n  - analytics-nb  (id=wsp_abc123)  branch=main  files=4\n  - github-mirror  (id=wsp_def456)  branch=main  files=12  [github]\n    remote: https://github.com/acme/analytics`}
+/>
+
+### `run_notebook`
+
+Writes a `.py` notebook file into the workspace and executes it in a sandboxed pod. Returns cell outputs and a URL to view the notebook in the browser.
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `filename` | string | yes | Name of the `.py` file, e.g. `analysis.py`. Must end in `.py` and be a relative path inside the workspace. |
+| `code` | string | yes | Full contents of the `.py` notebook file. |
+| `agent_branch` | string | no | Legacy label; ignored for routing. |
+
+The first call creates the pod and workspace. Subsequent calls reuse the running pod for the same org/user, so pod-local state persists across calls within a session. Each execution runs `sp export session` on the file and commits the result to the workspace git repo.
+
+<MiniCopyBlock
+  label="run_notebook"
+  plain
+  code={`Tool: run_notebook\n  filename = "analysis.py"\n  code     = "<full .py notebook file>"\n→ Notebook executed successfully.\n  --- Cell Outputs ---\n  [Cell 0] ...\n  notebook_url: https://app.signalpilot.ai/notebooks?file=analysis.py&session_id=...`}
+/>
+
+## Notebook format
+
+A notebook is a plain `.py` file. Each cell is an `@app.cell` function; the return tuple shares variables with downstream cells, and the last expression before `return` renders as the cell's visual output.
+
+```python
+import signalpilot
+
+__generated_with = "0.13.0"
+app = signalpilot.App()
+
+
+@app.cell
+def _():
+    import signalpilot as sp
+    sp.md("# My Analysis")
+    return (sp,)
+
+
+@app.cell
+def _(sp):
+    sp.init()
+    conn = sp.connect("my_connection")
+    df = conn.query("SELECT * FROM orders LIMIT 100")
+    df
+    return (conn, df,)
+
+
+@app.cell
+def _(df):
+    print(f"Rows: {len(df)}")
+    return ()
+
+
+if __name__ == "__main__":
+    app.run()
+```
+
+Cell rules:
+
+- One definition per name. Defining `df` in two cells is a hard error. Use a `_` prefix (`_tmp`) for cell-local temporaries.
+- The last expression before `return` is the cell's single visual output. A bare `df` renders as a table; `sp.md(...)` renders markdown.
+- A cell shows exactly one output. To show several things, wrap them with `sp.vstack([...])` or `sp.hstack([...])`.
+- `print()` goes to the console log — it appears in the MCP agent response, not in the cell's visual output.
+
+## Data SDK quickstart
+
+The notebook talks to the warehouse through the gateway via the `signalpilot` SDK. The first cell imports it; data calls require `sp.init()` first. In cloud/MCP mode `sp.init()` auto-detects the gateway URL and session token — no manual config.
+
+```python
+import signalpilot as sp
+
+sp.init()                              # REQUIRED before any data call
+conns = sp.connections()               # list available connections
+db = sp.connect("connection_name")     # get a connection
+
+rows = db.query("SELECT * FROM users LIMIT 10")   # returns list of dicts
+```
+
+Schema exploration:
+
+```python
+db.tables()                            # list all tables
+db.tables(filter="user")               # filter by name
+db.describe("users")                   # column details
+db.schema_overview()                   # high-level summary
+```
+
+Query analysis and SQL cells:
+
+```python
+db.explain("SELECT ...")               # execution plan
+db.sample_values("users", "country")   # sample distinct values
+db.join_path("orders", "customers")    # find join paths
+
+result = sp.sql("SELECT * FROM t", engine=db)  # returns a pandas DataFrame
+```
+
+UI widgets are reactive — changing one re-runs dependent cells. Each must be the cell's last expression (or inside `sp.vstack`) to render:
+
+```python
+slider   = sp.ui.slider(start=0, stop=100, value=50, label="X")
+dropdown = sp.ui.dropdown(["A", "B", "C"], label="Pick")
+table    = sp.ui.table(df)             # interactive data table
+explorer = sp.ui.dataframe(df)         # full filter/sort/search explorer
+```
+
+Pre-installed packages in the pod: pandas, polars, numpy, duckdb, sqlglot, altair, plotly, matplotlib, seaborn, scikit-learn, scipy, pyarrow, dbt-core, dbt-duckdb, anthropic, openai, mcp.
+
+## Isolation
+
+Each session runs in its own Kubernetes pod, one per org/user, named deterministically (`nb-<hash>`). Isolation is enforced at several layers:
+
+- **Sandboxed runtime.** On EKS, notebook pods run under the gVisor (`runsc`) runtime class and are pinned to a dedicated node pool. Local/dev clusters without gVisor run without the sandbox runtime.
+- **Per-org NetworkPolicy.** Each org gets its own namespace bootstrapped with a default-deny NetworkPolicy plus an allow-gateway policy. Egress is constrained to DNS, the gateway, and HTTPS. The cloud metadata endpoint (`169.254.169.254`) is denied — either by omission under default-deny, or by an explicit IMDS-block policy when default-deny is disabled.
+- **Resource limits.** Each namespace carries a ResourceQuota and LimitRange, with scoped RBAC for the gateway service account.
+- **Git-backed workspace.** The workspace lives in a git repo. Each `run_notebook` execution commits its result, so notebook history is versioned.
+- **Ephemeral pod-local state.** The running pod persists across `run_notebook` calls within a session for fast iteration, but pod-local filesystem state is ephemeral — durable state is the committed workspace git repo.
+
+## Opening and editing in the web UI
+
+`run_notebook` returns a `notebook_url` pointing at the web app (e.g. `https://app.signalpilot.ai/notebooks?file=analysis.py&session_id=...`). Open it to view and edit the notebook interactively. The same reactive engine runs in the browser, so editing a cell re-runs its dependents live. Notebooks an agent builds headless and notebooks a user edits in the UI are the same files in the same git-backed workspace.
+
+Notebooks live in the workspace under `<project>/notebooks/` — not in the project root or `models/`.

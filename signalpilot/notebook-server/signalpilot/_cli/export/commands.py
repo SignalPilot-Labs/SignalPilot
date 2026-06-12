@@ -1,0 +1,989 @@
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal
+
+import click
+
+from signalpilot._cli.errors import SpCLIMissingDependencyError
+from signalpilot._cli.export.cloudflare import create_cloudflare_files
+from signalpilot._cli.export.session import session
+from signalpilot._cli.export.thumbnail import thumbnail
+from signalpilot._cli.help_formatter import ColoredCommand, ColoredGroup
+from signalpilot._cli.install_hints import get_playwright_chromium_setup_commands
+from signalpilot._cli.parse_args import parse_args
+from signalpilot._cli.print import (
+    echo,
+    green,
+)
+from signalpilot._cli.utils import prompt_to_overwrite
+from signalpilot._dependencies.dependencies import DependencyManager
+from signalpilot._dependencies.errors import ManyModulesNotFoundError
+from signalpilot._server.api.utils import parse_title
+from signalpilot._server.export import (
+    ExportResult,
+    export_as_ipynb,
+    export_as_md,
+    export_as_script,
+    export_as_wasm,
+    notebook_uses_slides_layout,
+    run_app_then_export_as_html,
+    run_app_then_export_as_ipynb,
+    run_app_then_export_as_pdf,
+    run_app_then_export_as_wasm,
+)
+from signalpilot._server.export._status import PDFExportStatusEvent
+from signalpilot._server.export.exporter import Exporter
+from signalpilot._server.utils import asyncio_run
+from signalpilot._utils.file_watcher import FileWatcher
+from signalpilot._utils.sp_path import SpPath
+from signalpilot._utils.paths import maybe_make_dirs
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+_watch_message = (
+    "Watch notebook for changes and regenerate the output on modification. "
+    "If watchdog is installed, it will be used to watch the file. "
+    "Otherwise, file watcher will poll the file every 1s."
+)
+
+_sandbox_message = (
+    "Run the command in an isolated virtual environment using "
+    "`uv run --isolated`. Requires `uv`."
+)
+
+
+@click.group(
+    cls=ColoredGroup, help="""Export a notebook to various formats."""
+)
+def export() -> None:
+    pass
+
+
+class _PDFExportCLIReporter:
+    def __call__(self, event: PDFExportStatusEvent) -> None:
+        message = event.message
+        if event.current is not None and event.total is not None:
+            progress = f" [{event.current}/{event.total}]"
+            if message.endswith("..."):
+                message = f"{message[:-3]}{progress}..."
+            elif message.endswith("."):
+                message = f"{message[:-1]}{progress}."
+            else:
+                message = f"{message}{progress}"
+        echo(f"{green('Exporting PDF', bold=True)}: {message}", err=True)
+
+
+def watch_and_export(
+    sp_path: SpPath,
+    output: Path | None,
+    watch: bool,
+    export_callback: Callable[[SpPath], ExportResult],
+    force: bool,
+    *,
+    initial_export_in_watch: bool = False,
+) -> None:
+    if watch and not output:
+        raise click.UsageError(
+            "Cannot use --watch without providing "
+            + "an output file with --output."
+        )
+
+    def write_result(result: ExportResult) -> None:
+        if output:
+            # Make dirs if needed
+            maybe_make_dirs(output)
+            output.write_bytes(result.bytez)
+        else:
+            echo(result.text)
+        return
+
+    if output:
+        output_path = Path(output)
+        if not force and not watch:
+            if not prompt_to_overwrite(output_path):
+                return
+
+    # No watch, just run once
+    if not watch:
+        result = export_callback(sp_path)
+        write_result(result)
+        if result.did_error:
+            raise click.ClickException(
+                "Export was successful, but some cells failed to execute."
+            )
+        return
+
+    # Watch mode: optionally do an initial export before waiting for changes
+    if initial_export_in_watch:
+        result = export_callback(sp_path)
+        write_result(result)
+        if result.did_error:
+            echo(
+                "Warning: Export was successful, but some cells failed to execute.",
+                err=True,
+            )
+
+    async def on_file_changed(file_path: Path) -> None:
+        if output:
+            echo(
+                f"File {file_path!s} changed. Re-exporting to {green(str(output))}"
+            )
+        try:
+            # `export_callback` may call `asyncio_run()` internally. This callback
+            # runs inside the file watcher's event loop, so we must execute the
+            # export in a separate thread to avoid `asyncio.run()` nesting.
+            result = await asyncio.to_thread(
+                export_callback, SpPath(file_path)
+            )
+        except Exception as e:
+            echo(f"Error: {e}", err=True)
+            return
+
+        write_result(result)
+        if result.did_error:
+            echo(
+                "Warning: Export was successful, but some cells failed to execute.",
+                err=True,
+            )
+
+    async def start() -> None:
+        # Watch the file for changes
+        watcher = FileWatcher(sp_path.path, on_file_changed, asyncio.get_event_loop())
+        echo(f"Watching {green(sp_path.relative_name)} for changes...")
+        watcher.start()
+        try:
+            # Run forever
+            while True:  # noqa: ASYNC110
+                await asyncio.sleep(1)
+        except KeyboardInterrupt:
+            watcher.stop()
+
+    asyncio_run(start())
+
+
+@click.command(
+    cls=ColoredCommand,
+    help="""Run a notebook and export it as an HTML file.
+
+Example:
+
+    sp export html notebook.py -o notebook.html
+
+Optionally pass CLI args to the notebook:
+
+    sp export html notebook.py -o notebook.html -- -arg1 foo -arg2 bar
+""",
+)
+@click.option(
+    "--include-code/--no-include-code",
+    default=True,
+    type=bool,
+    help="Include notebook code in the exported HTML file.",
+)
+@click.option(
+    "--watch/--no-watch",
+    default=False,
+    type=bool,
+    help=_watch_message,
+)
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    default=None,
+    help=(
+        "Output file to save the HTML to. "
+        "If not provided, the HTML will be printed to stdout."
+    ),
+)
+@click.option(
+    "--sandbox/--no-sandbox",
+    is_flag=True,
+    default=None,
+    type=bool,
+    help=_sandbox_message,
+)
+@click.option(
+    "-f",
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Force overwrite of the output file if it already exists.",
+)
+@click.argument(
+    "name",
+    required=True,
+    type=click.Path(exists=True, file_okay=True, dir_okay=False),
+)
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+def html(
+    name: str,
+    include_code: bool,
+    output: Path,
+    watch: bool,
+    sandbox: bool | None,
+    force: bool,
+    args: tuple[str],
+) -> None:
+    """Run a notebook and export it as an HTML file."""
+    import sys
+
+    # Set default, if not provided
+    if sandbox is None:
+        from signalpilot._cli.sandbox import maybe_prompt_run_in_sandbox
+
+        sandbox = maybe_prompt_run_in_sandbox(name)
+
+    if sandbox:
+        from signalpilot._cli.sandbox import run_in_sandbox
+
+        run_in_sandbox(sys.argv[1:], name=name)
+        return
+
+    cli_args = parse_args(args)
+
+    def export_callback(file_path: SpPath) -> ExportResult:
+        return asyncio_run(
+            run_app_then_export_as_html(
+                file_path,
+                include_code=include_code,
+                cli_args=cli_args,
+                argv=list(args),
+            )
+        )
+
+    return watch_and_export(
+        SpPath(name), output, watch, export_callback, force
+    )
+
+
+@click.command(
+    cls=ColoredCommand,
+    help="""
+Export a sp notebook as a flat script, in topological order.
+
+Example:
+
+    sp export script notebook.py -o notebook.script.py
+
+Watch for changes and regenerate the script on modification:
+
+    sp export script notebook.py -o notebook.script.py --watch
+""",
+)
+@click.option(
+    "--watch/--no-watch",
+    default=False,
+    type=bool,
+    help=_watch_message,
+)
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    default=None,
+    help=(
+        "Output file to save the script to. "
+        "If not provided, the script will be printed to stdout."
+    ),
+)
+@click.option(
+    "--sandbox/--no-sandbox",
+    is_flag=True,
+    default=None,
+    type=bool,
+    help=_sandbox_message,
+)
+@click.option(
+    "-f",
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Force overwrite of the output file if it already exists.",
+)
+@click.argument(
+    "name",
+    required=True,
+    type=click.Path(exists=True, file_okay=True, dir_okay=False),
+)
+def script(
+    name: str, output: Path, watch: bool, sandbox: bool | None, force: bool
+) -> None:
+    """
+    Export a sp notebook as a flat script, in topological order.
+    """
+    import sys
+
+    if sandbox:
+        from signalpilot._cli.sandbox import run_in_sandbox
+
+        run_in_sandbox(sys.argv[1:], name=name)
+        return
+
+    def export_callback(file_path: SpPath) -> ExportResult:
+        return export_as_script(file_path)
+
+    return watch_and_export(
+        SpPath(name), output, watch, export_callback, force
+    )
+
+
+@click.command(
+    cls=ColoredCommand,
+    help="""
+Export a sp notebook as a code fenced Markdown file.
+
+Example:
+
+    sp export md notebook.py -o notebook.md
+
+Watch for changes and regenerate the script on modification:
+
+    sp export md notebook.py -o notebook.md --watch
+""",
+)
+@click.option(
+    "--watch/--no-watch",
+    default=False,
+    type=bool,
+    help=_watch_message,
+)
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    default=None,
+    help=(
+        "Output file to save the markdown to. "
+        "If not provided, markdown will be printed to stdout."
+    ),
+)
+@click.option(
+    "--sandbox/--no-sandbox",
+    is_flag=True,
+    default=None,
+    type=bool,
+    help=_sandbox_message,
+)
+@click.option(
+    "-f",
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Force overwrite of the output file if it already exists.",
+)
+@click.argument(
+    "name",
+    required=True,
+    type=click.Path(exists=True, file_okay=True, dir_okay=False),
+)
+def md(
+    name: str, output: Path, watch: bool, sandbox: bool | None, force: bool
+) -> None:
+    """
+    Export a sp notebook as a code fenced markdown document.
+    """
+    import sys
+
+    if sandbox:
+        from signalpilot._cli.sandbox import run_in_sandbox
+
+        run_in_sandbox(sys.argv[1:], name=name)
+        return
+
+    def export_callback(file_path: SpPath) -> ExportResult:
+        return export_as_md(file_path)
+
+    return watch_and_export(
+        SpPath(name), output, watch, export_callback, force
+    )
+
+
+@click.command(
+    cls=ColoredCommand,
+    help="""
+Export a sp notebook as a Jupyter notebook in topological order.
+
+Example:
+
+    sp export ipynb notebook.py -o notebook.ipynb
+
+Watch for changes and regenerate the script on modification:
+
+    sp export ipynb notebook.py -o notebook.ipynb --watch
+
+Optionally pass CLI args to the notebook:
+
+    sp export ipynb notebook.py -o notebook.ipynb --include-outputs -- -arg1 foo -arg2 bar
+
+Requires nbformat to be installed.
+""",
+)
+@click.option(
+    "--sort",
+    type=click.Choice(["top-down", "topological"]),
+    default="topological",
+    help="Sort cells top-down or in topological order.",
+)
+@click.option(
+    "--watch/--no-watch",
+    default=False,
+    type=bool,
+    help=_watch_message,
+)
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    default=None,
+    help=(
+        "Output file to save the ipynb file to. "
+        "If not provided, the ipynb contents will be printed to stdout."
+    ),
+)
+@click.option(
+    "--include-outputs/--no-include-outputs",
+    default=False,
+    type=bool,
+    help="Run the notebook and include outputs in the exported ipynb file.",
+)
+@click.option(
+    "--sandbox/--no-sandbox",
+    is_flag=True,
+    default=None,
+    type=bool,
+    help=_sandbox_message,
+)
+@click.option(
+    "-f",
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Force overwrite of the output file if it already exists.",
+)
+@click.argument(
+    "name",
+    required=True,
+    type=click.Path(exists=True, file_okay=True, dir_okay=False),
+)
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+def ipynb(
+    name: str,
+    output: Path,
+    watch: bool,
+    sort: Literal["top-down", "topological"],
+    include_outputs: bool,
+    sandbox: bool | None,
+    force: bool,
+    args: tuple[str],
+) -> None:
+    """
+    Export a sp notebook as a Jupyter notebook in topological order.
+    """
+    import sys
+
+    if include_outputs:
+        # Set default, if not provided
+        from signalpilot._cli.sandbox import maybe_prompt_run_in_sandbox
+
+        if sandbox is None:
+            sandbox = maybe_prompt_run_in_sandbox(name)
+
+        if sandbox:
+            from signalpilot._cli.sandbox import run_in_sandbox
+
+            run_in_sandbox(
+                sys.argv[1:],
+                name=name,
+                additional_deps=["nbformat"],
+            )
+            return
+
+    try:
+        DependencyManager.nbformat.require(
+            why="to convert sp notebooks to ipynb"
+        )
+    except ModuleNotFoundError as e:
+        package = getattr(e, "name", None) or "nbformat"
+        raise SpCLIMissingDependencyError(str(e), package) from None
+
+    cli_args = parse_args(args) if include_outputs else {}
+
+    def export_callback(file_path: SpPath) -> ExportResult:
+        if include_outputs:
+            return asyncio_run(
+                run_app_then_export_as_ipynb(
+                    file_path,
+                    sort_mode=sort,
+                    cli_args=cli_args,
+                    argv=list(args),
+                )
+            )
+        return export_as_ipynb(file_path, sort_mode=sort)
+
+    return watch_and_export(
+        SpPath(name), output, watch, export_callback, force
+    )
+
+
+@click.command(
+    cls=ColoredCommand,
+    help="""Export a sp notebook as a PDF file.
+
+Example:
+
+    sp export pdf notebook.py -o notebook.pdf
+
+Optionally pass CLI args to the notebook:
+
+    sp export pdf notebook.py -o notebook.pdf -- -arg1 foo -arg2 bar
+
+Export PDFs in a specific format such as slides:
+
+    sp export pdf notebook.py -o notebook.pdf --as=slides
+
+Requires nbformat and nbconvert to be installed.
+""",
+)
+@click.option(
+    "--include-outputs/--no-include-outputs",
+    default=True,
+    type=bool,
+    help="Run the notebook and include outputs in the exported PDF file.",
+)
+@click.option(
+    "--include-inputs/--no-include-inputs",
+    default=True,
+    type=bool,
+    help="Include code cell inputs in the exported PDF file.",
+)
+@click.option(
+    "--webpdf/--no-webpdf",
+    default=True,
+    type=bool,
+    help=(
+        "Use nbconvert's WebPDF exporter (Chromium). If disabled, sp will "
+        "try standard PDF export (pandoc + TeX) first and fall back to WebPDF."
+    ),
+)
+@click.option(
+    "--rasterize-outputs/--no-rasterize-outputs",
+    default=True,
+    type=bool,
+    help=(
+        "Rasterize sp widget HTML and Vega outputs to PNG fallbacks before PDF "
+        "conversion (enabled by default)."
+    ),
+)
+@click.option(
+    "--raster-scale",
+    type=click.FloatRange(min=1.0, max=4.0),
+    default=4.0,
+    help="Scale factor for rasterized output screenshots.",
+)
+@click.option(
+    "--raster-server",
+    type=click.Choice(["static", "live"], case_sensitive=False),
+    default="static",
+    help=(
+        "Server mode used for raster capture. Use 'static' (default) for "
+        "faster captures, or 'live' if outputs require a live Python connection. "
+        "For --as=slides, 'live' is recommended."
+    ),
+)
+@click.option(
+    "--as",
+    "export_as",
+    type=click.Choice(["document", "slides"]),
+    default=None,
+    help=(
+        "PDF export preset. Use `slides` for reveal.js slide-style output. "
+        "If omitted, sp exports as a standard document PDF."
+    ),
+)
+@click.option(
+    "--watch/--no-watch",
+    default=False,
+    type=bool,
+    help=_watch_message,
+)
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Output PDF file to save to.",
+)
+@click.option(
+    "--sandbox/--no-sandbox",
+    is_flag=True,
+    default=None,
+    type=bool,
+    help=_sandbox_message,
+)
+@click.option(
+    "-f",
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Force overwrite of the output file if it already exists.",
+)
+@click.argument(
+    "name",
+    required=True,
+    type=click.Path(exists=True, file_okay=True, dir_okay=False),
+)
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+@click.pass_context
+def pdf(
+    ctx: click.Context,
+    name: str,
+    output: Path,
+    watch: bool,
+    include_outputs: bool,
+    include_inputs: bool,
+    webpdf: bool,
+    rasterize_outputs: bool,
+    raster_scale: float,
+    raster_server: str,
+    export_as: Literal["document", "slides"] | None,
+    sandbox: bool | None,
+    force: bool,
+    args: tuple[str],
+) -> None:
+    """Run a notebook and export it as a PDF file."""
+    import sys
+
+    if not include_outputs:
+        rasterize_source = ctx.get_parameter_source("rasterize_outputs")
+        raster_scale_source = ctx.get_parameter_source("raster_scale")
+        raster_server_source = ctx.get_parameter_source("raster_server")
+        if (
+            rasterize_source is not click.core.ParameterSource.DEFAULT
+            or raster_scale_source is not click.core.ParameterSource.DEFAULT
+            or raster_server_source is not click.core.ParameterSource.DEFAULT
+        ):
+            raise click.ClickException(
+                "Rasterization options require --include-outputs."
+            )
+
+    if include_outputs:
+        # Set default, if not provided
+        if sandbox is None:
+            from signalpilot._cli.sandbox import maybe_prompt_run_in_sandbox
+
+            sandbox = maybe_prompt_run_in_sandbox(name)
+
+        if sandbox:
+            from signalpilot._cli.sandbox import run_in_sandbox
+
+            export_deps = ["nbformat"]
+            # Adding webpdf extras to sandbox even if `webpdf` is False, since standard PDF export may fall back to it.
+            export_deps.append("nbconvert[webpdf]")
+            run_in_sandbox(
+                sys.argv[1:],
+                name=name,
+                additional_deps=export_deps,
+            )
+            return
+
+    try:
+        DependencyManager.require_many(
+            "for PDF export",
+            DependencyManager.nbformat,
+            DependencyManager.nbconvert,
+            source="server",
+        )
+    except ManyModulesNotFoundError as e:
+        sandbox_rerun_command = (
+            f"sp export pdf {name} --output {output} --sandbox"
+        )
+        raise SpCLIMissingDependencyError(
+            str(e),
+            e.package_names,
+            followup_commands=sandbox_rerun_command,
+            followup_label="Alternative:",
+            additional_tip="Requires uv.",
+        ) from None
+
+    if export_as is None and notebook_uses_slides_layout(SpPath(name)):
+        echo(
+            f"{green('Tip:')} Notebook is using slides layout. "
+            "Use --as=slides for slide-style PDF export.",
+            err=True,
+        )
+
+    cli_args = parse_args(args) if include_outputs else {}
+    rasterization_enabled = include_outputs and rasterize_outputs
+    if (
+        export_as == "slides"
+        and rasterization_enabled
+        and raster_server.lower() != "live"
+    ):
+        echo(
+            f"{green('Tip:')} For --as=slides, prefer --raster-server=live "
+            "for better aspect-ratio capture and widget compatibility.",
+            err=True,
+        )
+
+    if rasterization_enabled:
+        try:
+            DependencyManager.playwright.require(
+                "for rasterized PDF output export"
+            )
+        except ModuleNotFoundError as e:
+            if getattr(e, "name", None) == "playwright":
+                raise SpCLIMissingDependencyError(
+                    "Playwright is required to rasterize HTML outputs for PDF export.",
+                    "playwright",
+                    followup_commands=get_playwright_chromium_setup_commands(),
+                ) from None
+            raise
+
+    from signalpilot._server.export._pdf_raster import PDFRasterizationOptions
+
+    rasterization_options = PDFRasterizationOptions(
+        enabled=rasterization_enabled,
+        scale=raster_scale,
+        server_mode=raster_server,
+    )
+    report_status = _PDFExportCLIReporter()
+
+    def export_callback(
+        file_path: SpPath,
+    ) -> tuple[bytes | None, bool]:
+        try:
+            return asyncio_run(
+                run_app_then_export_as_pdf(
+                    file_path,
+                    include_outputs=include_outputs,
+                    include_inputs=include_inputs,
+                    webpdf=webpdf,
+                    export_as=export_as,
+                    cli_args=cli_args,
+                    argv=list(args) if include_outputs else None,
+                    rasterization_options=rasterization_options,
+                    status_callback=report_status,
+                )
+            )
+        except ModuleNotFoundError as e:
+            if getattr(e, "name", None) == "playwright":
+                raise SpCLIMissingDependencyError(
+                    "Playwright is required for WebPDF export.",
+                    "nbconvert[webpdf]",
+                    followup_commands=get_playwright_chromium_setup_commands(),
+                ) from None
+            raise
+        except Exception as e:
+            raise click.ClickException(f"Failed to export PDF: {e}") from None
+
+    def export_callback_impl(file_path: SpPath) -> ExportResult:
+        pdf_bytes, did_error = export_callback(file_path)
+        if pdf_bytes is None:
+            raise click.ClickException("Failed to export PDF.")
+        return ExportResult(
+            contents=pdf_bytes,
+            download_filename=str(output),
+            did_error=did_error,
+        )
+
+    return watch_and_export(
+        SpPath(name),
+        output,
+        watch,
+        export_callback_impl,
+        force,
+        initial_export_in_watch=True,
+    )
+
+
+@click.command(
+    cls=ColoredCommand,
+    help="""Export a notebook as a WASM-powered standalone HTML file.
+
+Example:
+
+    sp export html-wasm notebook.py -o notebook.wasm.html
+
+The exported HTML file will run the notebook using WebAssembly, making it
+completely self-contained and executable in the browser. This lets you
+share interactive notebooks on the web without setting up
+infrastructure to run Python code.
+
+The exported notebook runs using Pyodide, which supports most
+but not all Python packages. To learn more, see the Pyodide
+documentation.
+
+In order for this file to be able to run, it must be served over HTTP,
+and cannot be opened directly from the file system (e.g. file://).
+""",
+)
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Output directory to save the HTML to.",
+)
+@click.option(
+    "--mode",
+    type=click.Choice(["edit", "run"]),
+    default="run",
+    help="Whether the notebook code should be editable or readonly.",
+    required=True,
+)
+@click.option(
+    "--watch/--no-watch",
+    default=False,
+    help=("Whether to watch the original file and export upon change"),
+)
+@click.option(
+    "--show-code/--no-show-code",
+    default=False,
+    help=(
+        "Whether to show code by default in the exported HTML file; "
+        "only relevant for run mode."
+    ),
+)
+@click.option(
+    "--include-cloudflare/--no-include-cloudflare",
+    default=False,
+    help=(
+        "Whether to include Cloudflare Worker configuration files"
+        " (index.js and wrangler.jsonc) for easy deployment."
+    ),
+)
+@click.option(
+    "--sandbox/--no-sandbox",
+    is_flag=True,
+    default=None,
+    type=bool,
+    help=_sandbox_message,
+)
+@click.option(
+    "-f",
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Force overwrite of the output file if it already exists.",
+)
+@click.option(
+    "--execute/--no-execute",
+    default=False,
+    help=(
+        "Execute the notebook before exporting and embed outputs as a "
+        "preview. Runs in the current Python environment."
+    ),
+)
+@click.argument(
+    "name",
+    required=True,
+    type=click.Path(exists=True, file_okay=True, dir_okay=False),
+)
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+def html_wasm(
+    name: str,
+    output: Path,
+    mode: Literal["edit", "run"],
+    watch: bool,
+    show_code: bool,
+    include_cloudflare: bool,
+    sandbox: bool | None,
+    force: bool,
+    execute: bool,
+    args: tuple[str, ...],
+) -> None:
+    """Export a notebook as a WASM-powered standalone HTML file."""
+    import sys
+
+    if execute and watch:
+        raise click.UsageError(
+            "--execute and --watch cannot be used together."
+        )
+
+    # Set default, if not provided
+    if sandbox is None:
+        from signalpilot._cli.sandbox import maybe_prompt_run_in_sandbox
+
+        sandbox = maybe_prompt_run_in_sandbox(name)
+
+    if sandbox:
+        from signalpilot._cli.sandbox import run_in_sandbox
+
+        run_in_sandbox(sys.argv[1:], name=name)
+        return
+
+    out_dir = output
+    filename = "index.html"
+    # If ends with .html, get the directory
+    if output.suffix == ".html":
+        out_dir = output.parent
+        filename = output.name
+
+    signalpilot_file = SpPath(name)
+
+    if execute:
+        cli_args = parse_args(args)
+
+        def export_callback(file_path: SpPath) -> ExportResult:
+            return asyncio_run(
+                run_app_then_export_as_wasm(
+                    file_path,
+                    mode=mode,
+                    show_code=show_code,
+                    cli_args=cli_args,
+                    argv=list(args),
+                )
+            )
+
+        echo("Executing notebook...")
+    else:
+
+        def export_callback(file_path: SpPath) -> ExportResult:
+            return export_as_wasm(file_path, mode, show_code=show_code)
+
+    # Export assets first
+    Exporter().export_assets(out_dir)
+
+    # Create .nojekyll file to prevent GitHub Pages from interfering with asset
+    # resolution
+    (Path(out_dir) / ".nojekyll").touch()
+
+    echo(
+        f"Assets copied to {green(str(out_dir))}. These assets are required for the "
+        "notebook to run in the browser."
+    )
+
+    did_export_public = Exporter().export_public_folder(out_dir, signalpilot_file)
+    if did_export_public:
+        echo(
+            f"The public folder next to your notebook was copied to "
+            f"{green(str(out_dir))}."
+        )
+
+    echo(
+        "To run the exported notebook, use:\n"
+        f"  python -m http.server --directory {out_dir}\n"
+        "Then open the URL that is printed to your terminal."
+    )
+
+    if include_cloudflare:
+        create_cloudflare_files(parse_title(name), out_dir)
+
+    outfile = out_dir / filename
+    return watch_and_export(
+        SpPath(name), outfile, watch, export_callback, force
+    )
+
+
+export.add_command(html)
+export.add_command(script)
+export.add_command(md)
+export.add_command(ipynb)
+export.add_command(pdf)
+export.add_command(html_wasm)
+export.add_command(thumbnail)
+export.add_command(session)

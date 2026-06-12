@@ -1,0 +1,179 @@
+from __future__ import annotations
+
+import msgspec
+
+from signalpilot._runtime.dataflow import EdgeWithVar
+from signalpilot._types.ids import CellId_t
+
+
+class SetupRootError(msgspec.Struct, tag="setup-refs"):
+    edges_with_vars: tuple[EdgeWithVar, ...]
+
+    def describe(self) -> str:
+        return "The setup cell cannot have references"
+
+
+class CycleError(msgspec.Struct, tag="cycle"):
+    edges_with_vars: tuple[EdgeWithVar, ...]
+
+    def describe(self) -> str:
+        return "This cell is in a cycle"
+
+
+class MultipleDefinitionError(msgspec.Struct, tag="multiple-defs"):
+    name: str
+    cells: tuple[CellId_t, ...]
+
+    def describe(self) -> str:
+        return f"The variable '{self.name}' was defined by another cell"
+
+
+class ImportStarError(msgspec.Struct, tag="import-star"):
+    msg: str
+    lineno: int | None = None
+
+    def describe(self) -> str:
+        return self.msg
+
+
+class SpInterruptionError(msgspec.Struct, tag="interruption"):
+    def describe(self) -> str:
+        return "This cell was interrupted and needs to be re-run"
+
+
+class SpAncestorPreventedError(msgspec.Struct, tag="ancestor-prevented"):
+    msg: str
+    raising_cell: CellId_t
+    blamed_cell: CellId_t | None
+
+    def describe(self) -> str:
+        return self.msg
+
+
+class SpAncestorStoppedError(msgspec.Struct, tag="ancestor-stopped"):
+    msg: str
+    raising_cell: CellId_t
+
+    def describe(self) -> str:
+        return self.msg
+
+
+class SpExceptionRaisedError(msgspec.Struct, tag="exception"):
+    msg: str
+    exception_type: str
+    # None for if raising_cell is the current cell
+    raising_cell: CellId_t | None
+    # Formatted traceback HTML (optional, for displaying full stacktrace)
+    traceback: str | None = None
+
+    def describe(self) -> str:
+        return self.msg
+
+
+class SpSyntaxError(msgspec.Struct, tag="syntax"):
+    msg: str
+    lineno: int | None = None
+
+    def describe(self) -> str:
+        return self.msg
+
+
+class UnknownError(msgspec.Struct, tag="unknown"):
+    msg: str
+    error_type: str | None = None
+
+    def describe(self) -> str:
+        return self.msg
+
+
+class SpStrictExecutionError(msgspec.Struct, tag="strict-exception"):
+    msg: str
+    ref: str
+    blamed_cell: CellId_t | None
+
+    def describe(self) -> str:
+        return self.msg
+
+
+class SpInternalError(msgspec.Struct, tag="internal"):
+    """
+    An internal error that should be hidden from the user.
+    The error is logged to the console and then a new error is broadcasted
+    such that the data is hidden.
+
+    They can be linked back to the original error by the error_id.
+    """
+
+    error_id: str
+    msg: str = ""
+
+    def __post_init__(self) -> None:
+        self.msg = f"An internal error occurred: {self.error_id}"
+
+    def describe(self) -> str:
+        return self.msg
+
+
+class SpSQLError(msgspec.Struct, tag="sql-error"):
+    """
+    SQL-specific error with enhanced metadata for debugging.
+    """
+
+    msg: str
+    sql_statement: str
+    hint: str | None = (
+        None  # Helpful hints like "Did you mean?" or "Candidate bindings"
+    )
+    sql_line: int | None = None  # 0-based line within SQL
+    sql_col: int | None = None  # 0-based column within SQL
+    node_lineno: int = 0
+    node_col_offset: int = 0
+
+    def describe(self) -> str:
+        return self.msg
+
+
+def is_unexpected_error(error: Error) -> bool:
+    """
+    These errors are unexpected, in that they are not intentional.
+    sp.stop and interrupt are intentional.
+    """
+    return not isinstance(
+        error,
+        (
+            SpAncestorPreventedError,
+            SpAncestorStoppedError,
+            SpInterruptionError,
+        ),
+    )
+
+
+def is_sensitive_error(error: Error) -> bool:
+    """
+    These errors are sensitive, in that they are intentional.
+    """
+    return not isinstance(
+        error,
+        (
+            SpAncestorPreventedError,
+            SpAncestorStoppedError,
+            SpInternalError,
+        ),
+    )
+
+
+Error = (
+    SetupRootError
+    | CycleError
+    | MultipleDefinitionError
+    | ImportStarError
+    | SpAncestorStoppedError
+    | SpAncestorPreventedError
+    | SpExceptionRaisedError
+    | SpStrictExecutionError
+    | SpInterruptionError
+    | SpSyntaxError
+    | SpInternalError
+    | SpSQLError
+    | UnknownError
+)

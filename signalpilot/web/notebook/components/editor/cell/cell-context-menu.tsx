@@ -1,0 +1,265 @@
+import {
+  ClipboardCopyIcon,
+  ClipboardPasteIcon,
+  CopyIcon,
+  ImageIcon,
+  ScissorsIcon,
+  SearchIcon,
+} from "lucide-react";
+import React, { Fragment } from "react";
+import { renderMinimalShortcut } from "@/components/shortcuts/renderShortcut";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import { menuItemVariants } from "@/components/ui/menu-items";
+import { Tooltip } from "@/components/ui/tooltip";
+import { toast } from "@/components/ui/use-toast";
+import { useCellData, useCellRuntime } from "@/core/cells/cells";
+import { CellOutputId } from "@/core/cells/ids";
+import { isOutputEmpty } from "@/core/cells/outputs";
+import { goToDefinitionAtCursorPosition } from "@/core/codemirror/go-to-definition/utils";
+import { sendToPanelManager } from "@/core/vscode/vscode-bindings";
+import { copyImageToClipboard, copyToClipboard } from "@/utils/copy";
+import { getImageExtension } from "@/utils/filenames";
+import { Logger } from "@/utils/Logger";
+import type { ActionButton } from "../actions/types";
+import {
+  type CellActionButtonProps,
+  useCellActionButtons,
+} from "../actions/useCellActionButton";
+
+interface Props extends Pick<
+  CellActionButtonProps,
+  "cellId" | "getEditorView"
+> {
+  children: React.ReactNode;
+}
+
+export const CellActionsContextMenu = ({
+  children,
+  cellId,
+  getEditorView,
+}: Props) => {
+  const cellData = useCellData(cellId);
+  const cellRuntime = useCellRuntime(cellId);
+  const actions = useCellActionButtons({
+    cell: {
+      cellId: cellId,
+      name: cellData.name,
+      config: cellData.config,
+      status: cellRuntime.status,
+      hasOutput: !isOutputEmpty(cellRuntime.output),
+      hasConsoleOutput: cellRuntime.consoleOutputs.length > 0,
+      getEditorView,
+    },
+  });
+  const [imageRightClicked, setImageRightClicked] =
+    React.useState<HTMLImageElement>();
+
+  const DEFAULT_CONTEXT_MENU_ITEMS: ActionButton[] = [
+    {
+      label: "Copy",
+      hidden: Boolean(imageRightClicked),
+      icon: <CopyIcon size={13} strokeWidth={1.5} />,
+      handle: async () => {
+        // Has selection, use browser copy
+        const hasSelection = window.getSelection()?.toString();
+        if (hasSelection) {
+          document.execCommand("copy");
+          return;
+        }
+
+        // No selection, copy the full cell output
+        const output = document.getElementById(CellOutputId.create(cellId));
+        if (!output) {
+          Logger.warn("cell-context-menu: output not found");
+          return;
+        }
+        // Copy the output of the cell
+        await copyToClipboard(output.textContent ?? "");
+      },
+    },
+    {
+      label: "Cut",
+      hidden: Boolean(imageRightClicked),
+      icon: <ScissorsIcon size={13} strokeWidth={1.5} />,
+      handle: () => {
+        document.execCommand("cut");
+      },
+    },
+    {
+      label: "Paste",
+      hidden: Boolean(imageRightClicked),
+      icon: <ClipboardPasteIcon size={13} strokeWidth={1.5} />,
+      handle: async () => {
+        const editorView = getEditorView();
+        if (!editorView) {
+          return;
+        }
+        // We can't use the native browser paste since we don't have focus
+        // so instead we use the editorViewView
+        try {
+          const clipText = await navigator.clipboard.readText();
+          if (clipText) {
+            // Get the current selection, or the start of the document if nothing is selected
+            const { from, to } = editorView.state.selection.main;
+            // Create a new transaction that replaces the selection with the clipboard text
+            const tr = editorView.state.update({
+              changes: { from, to, insert: clipText },
+            });
+            // Apply the transaction
+            editorView.dispatch(tr);
+          }
+        } catch (error) {
+          Logger.error("Failed to paste from clipboard", error);
+          // Try vscode or other parent
+          sendToPanelManager({ command: "paste" });
+        }
+      },
+    },
+    {
+      label: "Copy image",
+      hidden: !imageRightClicked,
+      icon: <ClipboardCopyIcon size={13} strokeWidth={1.5} />,
+      handle: async () => {
+        if (imageRightClicked) {
+          await copyImageToClipboard(imageRightClicked.src)
+            .then(() => {
+              toast({
+                title: "Copied image to clipboard",
+              });
+            })
+            .catch((error) => {
+              toast({
+                title:
+                  "Failed to copy image to clipboard. Try downloading instead.",
+                description: error.message,
+              });
+              Logger.error("Failed to copy image to clipboard", error);
+            });
+        }
+      },
+    },
+    {
+      icon: <ImageIcon size={13} strokeWidth={1.5} />,
+      label: "Download image",
+      hidden: !imageRightClicked,
+      handle: () => {
+        if (imageRightClicked) {
+          const link = document.createElement("a");
+          link.href = imageRightClicked.src;
+          const ext = getImageExtension(imageRightClicked.src) || "png";
+          link.download = `image.${ext}`;
+          link.click();
+        }
+      },
+    },
+    {
+      label: "Go to Definition",
+      icon: <SearchIcon size={13} strokeWidth={1.5} />,
+      handle: () => {
+        const editorView = getEditorView();
+        if (editorView) {
+          goToDefinitionAtCursorPosition(editorView);
+        }
+      },
+    },
+  ];
+
+  const allActions: ActionButton[][] = [DEFAULT_CONTEXT_MENU_ITEMS, ...actions];
+
+  const visibleActions = allActions
+    .map((group) =>
+      group.filter((action) => !action.hidden && !action.redundant),
+    )
+    .filter((group) => group.length > 0);
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger
+        onContextMenu={(evt) => {
+          if (evt.target instanceof HTMLImageElement) {
+            setImageRightClicked(evt.target);
+          } else {
+            setImageRightClicked(undefined);
+          }
+        }}
+        asChild={true}
+      >
+        {children}
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-[300px]" scrollable={true}>
+        {visibleActions.map((group, i) => (
+          <Fragment key={i}>
+            {group.map((action) => {
+              let body = (
+                <div className="flex items-center flex-1">
+                  {action.icon && (
+                    <div className="mr-2 w-5 text-muted-foreground">
+                      {action.icon}
+                    </div>
+                  )}
+                  <div className="flex-1">{action.label}</div>
+                  <div className="shrink-0 text-sm">
+                    {action.hotkey && renderMinimalShortcut(action.hotkey)}
+                    {action.rightElement}
+                  </div>
+                </div>
+              );
+
+              if (action.tooltip) {
+                body = (
+                  <Tooltip delayDuration={100} content={action.tooltip}>
+                    {body}
+                  </Tooltip>
+                );
+              }
+
+              return (
+                <Fragment key={action.label}>
+                  {
+                    // Set disableClick items such as cell name input
+                    // to div to prevent roving focus
+                    action.disableClick ? (
+                      <div
+                        className={menuItemVariants({
+                          className: action.disabled ? "opacity-50!" : "",
+                          variant: action.variant,
+                        })}
+                        onKeyDown={(evt) => {
+                          evt.stopPropagation();
+                        }}
+                        // Prevent keydown propagation, that focus does not jump to shortcut which start with same letter
+                        // e.g. input "C", then focus jump to "Copy"
+                      >
+                        {body}
+                      </div>
+                    ) : (
+                      <ContextMenuItem
+                        className={action.disabled ? "opacity-50!" : ""}
+                        onSelect={(evt) => {
+                          if (action.disableClick || action.disabled) {
+                            return;
+                          }
+                          action.handle(evt);
+                        }}
+                        variant={action.variant}
+                      >
+                        {body}
+                      </ContextMenuItem>
+                    )
+                  }
+                </Fragment>
+              );
+            })}
+            {i < visibleActions.length - 1 && <ContextMenuSeparator />}
+          </Fragment>
+        ))}
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+};

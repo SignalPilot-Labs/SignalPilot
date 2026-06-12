@@ -8,9 +8,9 @@
 
 import dynamic from "next/dynamic";
 import { Info } from "lucide-react";
-import { PageHeader } from "@/components/ui/page-header";
-import { DashboardSkeleton } from "@/components/ui/skeleton";
-import { useAppAuth } from "@/lib/auth-context";
+import { PageHeader } from "~/components/ui/page-header";
+import { DashboardSkeleton } from "~/components/ui/skeleton";
+import { useAppAuth } from "~/lib/auth-context";
 
 const TeamClient = dynamic(
   () => import("./team-client"),

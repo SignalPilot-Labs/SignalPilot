@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useSignIn, useAuth, useClerk } from "@clerk/nextjs";
 import { useRouter } from "next/navigation";
-import { AuthShell } from "@/components/auth/auth-shell";
+import { AuthShell } from "~/components/auth/auth-shell";
 import { Loader2 } from "lucide-react";
 
 const INPUT_CLASS =

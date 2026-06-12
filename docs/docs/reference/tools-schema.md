@@ -4,7 +4,7 @@ sidebar_position: 3
 
 # Schema & Exploration Tools
 
-9 tools for exploring database schemas, table structures, and column distributions.
+13 tools for exploring database schemas, table structures, column distributions, and relationships — 10 schema/exploration tools plus 3 relationship tools.
 
 ---
 
@@ -151,3 +151,70 @@ Compare the current schema against the last cached version. Returns DDL-level ch
 **Returns:** Added tables, removed tables, modified tables (columns added/removed/changed), FK changes.
 
 **When to use:** After a migration or dbt model promotion — verify only expected changes landed.
+
+---
+
+## get_date_boundaries
+
+Return MIN/MAX dates across all DATE and TIMESTAMP columns in a table or database.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `connection` | string | Yes | Connection name |
+| `table` | string | No | Specific table (omit for database-wide scan) |
+
+**Returns:** Per-column MIN/MAX date boundaries.
+
+**When to use:** Before writing date-range queries — anchor to actual data dates, not `current_date`.
+
+---
+
+## Relationships
+
+### get_relationships
+
+Return the full ERD for a database: all FK relationships as arrows or adjacency list.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `connection` | string | Yes | Connection name |
+| `format` | string | No | `arrows` or `adjacency` (default: `arrows`) |
+
+**Returns:** All FK relationships in the specified format.
+
+---
+
+### find_join_path
+
+Discover FK-based join paths between two tables. Searches up to 6 hops.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `connection` | string | Yes | Connection name |
+| `from_table` | string | Yes | Source table |
+| `to_table` | string | Yes | Target table |
+| `max_hops` | integer | No | Maximum join hops (default: 6) |
+
+**Returns:** List of join paths with intermediate tables and join conditions.
+
+---
+
+### schema_link
+
+Find tables relevant to a natural-language question. Maps NL → schema.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `connection` | string | Yes | Connection name |
+| `question` | string | Yes | Natural-language question |
+| `top_k` | integer | No | Number of tables to return (default: 5) |
+
+**Returns:** Ranked list of relevant tables with relevance scores.

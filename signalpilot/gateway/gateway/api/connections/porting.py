@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -10,7 +11,8 @@ from pydantic import BaseModel
 from gateway.api.connections._router import router
 from gateway.api.connections._validation import _validate_connection_params
 from gateway.api.deps import StoreD
-from gateway.models import ConnectionCreate
+from gateway.common.ip import request_meta
+from gateway.models import AuditEntry, ConnectionCreate
 from gateway.security.scope_guard import RequireScope, require_scopes
 from gateway.store import CredentialEncryptionError
 
@@ -102,6 +104,22 @@ async def export_connections(
 
         exported.append(entry)
 
+    client_ip, user_agent = request_meta(request)
+    # Audit-DB failure must not block the completed export; best-effort observability.
+    try:
+        await store.append_audit(
+            AuditEntry(
+                id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                event_type="credential_export",
+                metadata={"include_credentials": body.include_credentials, "connection_count": len(exported)},
+                client_ip=client_ip,
+                user_agent=user_agent,
+            )
+        )
+    except Exception:
+        logger.warning("Failed to append audit log for credential_export org_id=%s", store.org_id)
+
     return {
         "version": "1.0",
         "exported_at": time.time(),
@@ -112,7 +130,7 @@ async def export_connections(
 
 
 @router.post("/connections/import", dependencies=[RequireScope("write")])
-async def import_connections(manifest: dict, store: StoreD):
+async def import_connections(manifest: dict, store: StoreD, request: Request):
     """Import connections from an exported JSON manifest."""
     connections = manifest.get("connections", [])
     if len(connections) > 500:
@@ -139,5 +157,25 @@ async def import_connections(manifest: dict, store: StoreD):
             results["imported"] += 1
         except Exception:
             results["errors"].append({"name": name, "error": "Failed to import connection"})
+
+    client_ip, user_agent = request_meta(request)
+    # Audit-DB failure must not block the completed import; best-effort observability.
+    try:
+        await store.append_audit(
+            AuditEntry(
+                id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                event_type="connection_import",
+                metadata={
+                    "imported": results["imported"],
+                    "skipped_count": len(results["skipped"]),
+                    "errors_count": len(results["errors"]),
+                },
+                client_ip=client_ip,
+                user_agent=user_agent,
+            )
+        )
+    except Exception:
+        logger.warning("Failed to append audit log for connection_import org_id=%s", store.org_id)
 
     return results

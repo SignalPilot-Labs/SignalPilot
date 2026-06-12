@@ -12,11 +12,11 @@ import {
   RefreshCw,
   Key,
 } from "lucide-react";
-import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { SectionHeader } from "@/components/ui/section-header";
-import { StatusDot } from "@/components/ui/data-viz";
-import { useToast } from "@/components/ui/toast";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { PageHeader, TerminalBar } from "~/components/ui/page-header";
+import { SectionHeader } from "~/components/ui/section-header";
+import { StatusDot } from "~/components/ui/data-viz";
+import { useToast } from "~/components/ui/toast";
+import { ConfirmDialog } from "~/components/ui/confirm-dialog";
 import {
   listBYOKKeys,
   createBYOKKey,
@@ -25,8 +25,8 @@ import {
   getBYOKStatus,
   migrateToBYOK,
   revertToManaged,
-} from "@/lib/api";
-import type { BYOKKey, BYOKStatus } from "@/lib/api";
+} from "~/lib/api";
+import type { BYOKKey, BYOKStatus } from "~/lib/api";
 
 const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 

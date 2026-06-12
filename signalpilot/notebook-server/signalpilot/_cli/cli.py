@@ -1,0 +1,1501 @@
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import sys
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import click
+from click.core import ParameterSource
+
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
+
+import signalpilot._cli.cli_validators as validators
+from signalpilot import _loggers
+from signalpilot._ast import codegen
+from signalpilot._cli.config.commands import config
+from signalpilot._cli.convert.commands import convert
+from signalpilot._cli.development.commands import development
+from signalpilot._cli.envinfo import get_system_info
+from signalpilot._cli.errors import (
+    SpCLIMissingDependencyError,
+    SpCLIRuntimeError,
+)
+from signalpilot._cli.export.commands import export
+from signalpilot._cli.files.file_path import validate_name
+from signalpilot._cli.help_formatter import ColoredGroup
+from signalpilot._cli.pair.commands import pair
+from signalpilot._cli.parse_args import parse_args
+from signalpilot._cli.parser_ux import show_compact_usage_error
+from signalpilot._cli.print import bright_green, light_blue, red
+from signalpilot._cli.run_docker import (
+    prompt_run_in_docker_container,
+)
+from signalpilot._cli.tips import choose_startup_tip
+from signalpilot._cli.upgrade import check_for_updates, print_latest_version
+from signalpilot._cli.utils import (
+    check_app_correctness,
+    check_app_correctness_or_convert,
+    resolve_token,
+)
+from signalpilot._config.settings import GLOBAL_SETTINGS
+from signalpilot._lint import run_check
+from signalpilot._mcp.setup import McpType
+from signalpilot._server.files.directory_scanner import DirectoryScanner
+from signalpilot._server.models.home import SpFile
+from signalpilot._server.start import start
+from signalpilot._server.workspace import (
+    DirectoryWorkspace,
+    EmptyWorkspace,
+    FixedFilesWorkspace,
+    NotebookWorkspace,
+    SingleFileWorkspace,
+    flatten_files,
+    infer_workspace,
+)
+from signalpilot._session.model import SessionMode
+try:
+    from signalpilot._tutorials import (
+        Tutorial,
+        create_temp_tutorial_file,
+        tutorial_order,
+    )
+except ImportError:
+    Tutorial = None  # type: ignore[assignment,misc]
+    create_temp_tutorial_file = None  # type: ignore[assignment]
+    tutorial_order = []  # type: ignore[var-annotated]
+from signalpilot._utils.http import HTTPException, HTTPStatus
+from signalpilot._utils.sp_path import SpPath, create_temp_notebook_file
+from signalpilot._utils.platform import is_windows
+from signalpilot._version import __version__
+
+
+def helpful_usage_error(self: Any, file: Any = None) -> None:
+    show_compact_usage_error(self, file=file)
+
+
+click.exceptions.UsageError.show = helpful_usage_error  # type: ignore
+
+
+def _key_value_bullets(items: list[tuple[str, str]]) -> str:
+    max_length = max(len(item[0]) for item in items)
+    lines: list[str] = []
+
+    def _sep(desc: str) -> str:
+        return " " if desc else ""
+
+    for key, desc in items:
+        # "\b" tells click not to reformat our text
+        lines.append("\b")
+        lines.append(
+            "  * "
+            + light_blue(key, bold=True)
+            + _sep(desc)
+            + " " * (max_length - len(key) + 2)
+            + desc
+        )
+    return "\n".join(lines)
+
+
+main_help_msg = "\n".join(
+    [
+        "\b",
+        "Welcome to SignalPilot!",
+        "\b",
+        bright_green("Getting started:", bold=True),
+        "",
+        _key_value_bullets(
+            [
+                ("sp tutorial intro", ""),
+            ]
+        ),
+        "\b",
+        "",
+        bright_green("Example usage:", bold=True),
+        "",
+        _key_value_bullets(
+            [
+                (
+                    "sp edit",
+                    "create or edit notebooks",
+                ),
+                (
+                    "sp edit notebook.py",
+                    "create or edit a notebook called notebook.py",
+                ),
+                (
+                    "sp run notebook.py",
+                    "run a notebook as a read-only app",
+                ),
+                (
+                    "sp tutorial --help",
+                    "list tutorials",
+                ),
+            ]
+        ),
+    ]
+)
+
+token_message = (
+    "Use a token for authentication. "
+    "This enables session-based authentication. "
+    "A random token will be generated if --token-password is not set. "
+    "If --no-token is set, session-based authentication will not be used. "
+)
+
+token_password_message = (
+    "Use a specific token for authentication. "
+    "This enables session-based authentication. "
+    "A random token will be generated if not set. "
+)
+
+sandbox_message = (
+    "Run the notebook in an isolated environment, with dependencies tracked "
+    "via PEP 723 inline metadata. If already declared, dependencies will "
+    "install automatically. Requires uv."
+)
+
+check_message = "Disable a static check of the notebook before running."
+
+try:
+    MAX_TERM_WIDTH = shutil.get_terminal_size().columns
+except Exception:
+    MAX_TERM_WIDTH = 80
+
+
+@click.group(
+    cls=ColoredGroup,
+    help=main_help_msg,
+    context_settings={
+        "help_option_names": ["-h", "--help"],
+        "max_content_width": MAX_TERM_WIDTH,
+        "show_default": True,
+    },
+)
+@click.version_option(version=__version__, message="%(version)s")
+@click.option(
+    "-l",
+    "--log-level",
+    default="WARN",
+    type=click.Choice(
+        ["DEBUG", "INFO", "WARN", "ERROR", "CRITICAL"], case_sensitive=False
+    ),
+    help="Choose logging level.",
+)
+@click.option(
+    "-q",
+    "--quiet",
+    is_flag=True,
+    default=False,
+    help="Suppress standard out.",
+)
+@click.option(
+    "-y",
+    "--yes",
+    is_flag=True,
+    default=False,
+    help="Automatic yes to prompts, running non-interactively.",
+)
+@click.option(
+    "-d",
+    "--development-mode",
+    is_flag=True,
+    default=False,
+    help="Run in development mode; enables debug logs and server autoreload.",
+)
+def main(
+    log_level: str, quiet: bool, yes: bool, development_mode: bool
+) -> None:
+    log_level = "DEBUG" if development_mode else log_level
+    _loggers.set_level(log_level)
+
+    GLOBAL_SETTINGS.DEVELOPMENT_MODE = development_mode
+    GLOBAL_SETTINGS.QUIET = quiet
+    GLOBAL_SETTINGS.YES = yes
+    GLOBAL_SETTINGS.LOG_LEVEL = _loggers.log_level_string_to_int(log_level)
+
+
+def _get_stdin_contents() -> str | None:
+    # Utiity to get data from stdin a nonblocking way.
+    #
+    # Not supported on Windows.
+    #
+    # We support unix-style piping, e.g. cat notebook.py | sp edit
+    # Utility to support unix-style piping, e.g. cat notebook.py | sp edit
+    #
+    # This check is complicated, because we need to support running
+    #
+    #   sp edit
+    #
+    # without a filename as well. To distinguish between `sp edit` and
+    # `... | sp edit`, we need to check if sys.stdin() has data on it in a
+    # nonblocking way. This does not seem to be possible on Windows, but it
+    # is possible on unix-like systems with select.
+    if not is_windows():
+        import select
+
+        try:
+            if (
+                not sys.stdin.isatty()
+                and select.select([sys.stdin], [], [], 0)[0]
+                and (contents := sys.stdin.read().strip())
+            ):
+                return contents
+        except Exception:
+            ...
+
+    return None
+
+
+edit_help_msg = "\n".join(
+    [
+        "\b",
+        "Create or edit notebooks.",
+        "",
+        _key_value_bullets(
+            [
+                (
+                    "sp edit",
+                    "Start the sp notebook server",
+                ),
+                ("sp edit notebook.py", "Create or edit notebook.py"),
+            ]
+        ),
+    ]
+)
+
+
+class _OptionalValueOption(click.Option):
+    """A click Option that supports an optional value.
+
+    Works around a regression in click 8.3.x where the documented
+    ``is_flag=False, flag_value=...`` pattern is broken.
+    See: https://github.com/pallets/click/issues/3084
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        opt_flag_value = kwargs.pop("flag_value", None)
+        kwargs.setdefault("default", None)
+        kwargs["is_flag"] = False
+        super().__init__(*args, **kwargs)
+        self._flag_needs_value = True
+        if opt_flag_value is not None:
+            self.flag_value = opt_flag_value
+
+
+@main.command(help=edit_help_msg)
+@click.option(
+    "-p",
+    "--port",
+    default=None,
+    type=int,
+    help="Port to attach to.",
+)
+@click.option(
+    "--host",
+    default="127.0.0.1",
+    type=str,
+    help="Host to attach to.",
+)
+@click.option(
+    "--proxy",
+    default=None,
+    type=str,
+    help="Address of reverse proxy.",
+)
+@click.option(
+    "--headless",
+    is_flag=True,
+    default=False,
+    type=bool,
+    help="Don't launch a browser.",
+)
+@click.option(
+    "--token/--no-token",
+    default=True,
+    type=bool,
+    help=token_message,
+)
+@click.option(
+    "--token-password",
+    default=None,
+    type=str,
+    help=token_password_message,
+)
+@click.option(
+    "--token-password-file",
+    default=None,
+    type=str,
+    help="Path to file containing token password, or '-' for stdin. Mutually exclusive with --token-password.",
+)
+@click.option(
+    "--base-url",
+    default="",
+    type=str,
+    help="Base URL for the server. Should start with a /.",
+    callback=validators.base_url,
+)
+@click.option(
+    "--allow-origins",
+    default=None,
+    multiple=True,
+    help="Allowed origins for CORS. Can be repeated. Use * for all origins.",
+)
+@click.option(
+    "--skip-update-check",
+    is_flag=True,
+    default=False,
+    type=bool,
+    help="Don't check if a new version of sp is available for download.",
+)
+@click.option(
+    "--sandbox/--no-sandbox",
+    is_flag=True,
+    default=None,
+    type=bool,
+    help=sandbox_message,
+)
+@click.option(
+    "--trusted/--untrusted",
+    is_flag=True,
+    default=None,
+    type=bool,
+    help="Run notebooks hosted remotely on the host machine; if --untrusted, runs sp in a Docker container.",
+)
+@click.option("--profile-dir", default=None, type=str, hidden=True)
+@click.option(
+    "--watch/--no-watch",
+    is_flag=True,
+    default=True,
+    type=bool,
+    help="Watch the file for changes and reload the code when saved in another editor.",
+)
+@click.option(
+    "--skew-protection/--no-skew-protection",
+    is_flag=True,
+    default=True,
+    type=bool,
+    help="Enable skew protection middleware to prevent version mismatch issues.",
+)
+@click.option(
+    "--remote-url",
+    default=None,
+    type=str,
+    hidden=True,
+    help="Remote URL for runtime configuration.",
+)
+@click.option(
+    "--convert",
+    is_flag=True,
+    default=False,
+    type=bool,
+    hidden=True,
+    help="When opening a .py file, enable fallback conversion from pypercent, script, or text.",
+)
+@click.option(
+    "--mcp",
+    cls=_OptionalValueOption,
+    flag_value="tools",
+    default=None,
+    type=click.Choice(["tools", "code-mode"]),
+    hidden=True,
+    help="Enable MCP server endpoint.",
+)
+@click.option(
+    "--mcp-allow-remote",
+    is_flag=True,
+    default=False,
+    type=bool,
+    hidden=True,
+    help="Allow remote access to MCP server by disabling DNS rebinding protection.",
+)
+@click.option(
+    "--server-startup-command",
+    default=None,
+    type=str,
+    hidden=True,
+    help="Command to run on server startup.",
+)
+@click.option(
+    "--asset-url",
+    default=None,
+    type=str,
+    hidden=True,
+    help="Custom asset URL for loading static resources. Can include {version} placeholder.",
+)
+@click.option(
+    "--timeout",
+    required=False,
+    default=None,
+    type=float,
+    help="Enable a global timeout to shut down the server after specified number of minutes of no connection",
+)
+@click.option(
+    "--session-ttl",
+    default=None,
+    type=int,
+    help="Seconds to wait before closing a session on websocket disconnect. If None is provided, sessions are not automatically closed.",
+)
+@click.argument(
+    "name",
+    required=False,
+    type=click.Path(),
+)
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+def edit(
+    port: int | None,
+    host: str,
+    proxy: str | None,
+    headless: bool,
+    token: bool,
+    token_password: str | None,
+    token_password_file: str | None,
+    base_url: str,
+    allow_origins: tuple[str, ...] | None,
+    skip_update_check: bool,
+    sandbox: bool | None,
+    trusted: bool | None,
+    profile_dir: str | None,
+    watch: bool,
+    skew_protection: bool,
+    remote_url: str | None,
+    convert: bool,
+    mcp: McpType | None,
+    mcp_allow_remote: bool,
+    server_startup_command: str | None,
+    asset_url: str | None,
+    timeout: float | None,
+    session_ttl: int | None,
+    name: str | None,
+    args: tuple[str, ...],
+) -> None:
+    from signalpilot._cli.sandbox import SandboxMode, resolve_sandbox_mode
+
+    pass_on_stdin = token_password_file == "-"
+    # We support unix-style piping, e.g. cat notebook.py | sp edit
+    if (
+        not pass_on_stdin
+        and name is None
+        and (stdin_contents := _get_stdin_contents()) is not None
+    ):
+        temp_dir = tempfile.TemporaryDirectory()
+        path = create_temp_notebook_file(
+            "notebook.py", "py", stdin_contents, temp_dir
+        )
+        name = path.absolute_name
+
+    if prompt_run_in_docker_container(name, trusted=trusted):
+        from signalpilot._cli.run_docker import run_in_docker
+
+        run_in_docker(
+            name,
+            "edit",
+            port=port,
+            debug=GLOBAL_SETTINGS.DEVELOPMENT_MODE,
+        )
+        return
+
+    GLOBAL_SETTINGS.PROFILE_DIR = profile_dir
+
+    if name is not None:
+        # Validate name, or download from URL
+        # The second return value is an optional temporary directory. It is
+        # unused, but must be kept around because its lifetime on disk is bound
+        # to the life of the Python object
+        name, _ = validate_name(
+            name, allow_new_file=True, allow_directory=True
+        )
+        is_dir = os.path.isdir(name)
+        if os.path.exists(name) and not is_dir:
+            # module correctness check - don't start the server
+            # if we can't import the module
+            if convert:
+                check_app_correctness_or_convert(name)
+            else:
+                check_app_correctness(name)
+        elif not is_dir:
+            # write empty file
+            try:
+                with open(name, "w", encoding="utf-8"):
+                    pass
+            except OSError as e:
+                if isinstance(e, FileNotFoundError):
+                    # This means that the parent directory does not exist
+                    parent_dir = os.path.dirname(name)
+                    raise click.ClickException(
+                        f"Parent directory does not exist: {parent_dir}"
+                    ) from e
+                raise
+    else:
+        name = os.getcwd()
+
+    # We check this after name validation, because this will convert
+    # URLs into local file paths
+
+    # Resolve sandbox mode: None, SandboxMode.SINGLE, or SandboxMode.MULTI
+    sandbox_mode = resolve_sandbox_mode(sandbox=sandbox, name=name)
+
+    # Single-file sandbox: wrap with uv run
+    if sandbox_mode is SandboxMode.SINGLE:
+        from signalpilot._cli.sandbox import run_in_sandbox
+
+        run_in_sandbox(sys.argv[1:], name=name, additional_features=["lsp"])
+        return
+
+    # Multi-file sandbox: use IPC kernels with per-notebook sandboxed venvs
+    if sandbox_mode is SandboxMode.MULTI:
+        # Check for pyzmq dependency
+        from signalpilot._dependencies.dependencies import DependencyManager
+
+        if not DependencyManager.zmq.has():
+            raise SpCLIMissingDependencyError(
+                "pyzmq is required when running the sp edit server on a directory with --sandbox.",
+                "sp[sandbox]",
+            )
+
+        # Enable script metadata management for sandboxed notebooks
+        os.environ["SP_MANAGE_SCRIPT_METADATA"] = "true"
+        GLOBAL_SETTINGS.MANAGE_SCRIPT_METADATA = True
+
+    # Check shared memory availability early (required for edit mode to
+    # communicate between the server process and kernel subprocess)
+    from signalpilot._utils.platform import check_shared_memory_available
+
+    shm_available, shm_error = check_shared_memory_available()
+    if not shm_available:
+        shm_mount_example = "--shm-size=256m or -v /dev/shm:/dev/shm"
+        docker_shm_line = " ".join(
+            [
+                "  - If running in Docker, ensure /dev/shm is mounted with sufficient size",
+                f"(e.g., {shm_mount_example})",
+            ]
+        )
+        raise SpCLIRuntimeError(
+            "sp edit requires shared memory support for multiprocessing.\n\n"
+            f"{shm_error}\n\n"
+            "Possible solutions:\n"
+            f"{docker_shm_line}\n"
+            "  - If /dev/shm is full, clear unused shared memory segments\n"
+            "  - Use 'sp run' instead if you only need to view notebooks"
+        )
+
+    if not skip_update_check and os.getenv("SP_SKIP_UPDATE_CHECK") != "1":
+        GLOBAL_SETTINGS.CHECK_STATUS_UPDATE = True
+        # Check for version updates after preflight checks pass.
+        check_for_updates(print_latest_version)
+
+    base_url = validators.check_proxy_base_url(proxy, base_url)
+
+    start(
+        workspace=infer_workspace(name),
+        development_mode=GLOBAL_SETTINGS.DEVELOPMENT_MODE,
+        quiet=GLOBAL_SETTINGS.QUIET,
+        host=host,
+        port=port,
+        proxy=proxy,
+        headless=headless,
+        mode=SessionMode.EDIT,
+        include_code=True,
+        watch=watch,
+        skew_protection=skew_protection,
+        cli_args=parse_args(args),
+        argv=list(args),
+        auth_token=resolve_token(
+            token,
+            token_password=token_password,
+            token_password_file=token_password_file,
+        ),
+        base_url=base_url,
+        allow_origins=allow_origins,
+        redirect_console_to_browser=True,
+        ttl_seconds=session_ttl,
+        remote_url=remote_url,
+        mcp=mcp,
+        mcp_allow_remote=mcp_allow_remote,
+        server_startup_command=server_startup_command,
+        asset_url=asset_url,
+        timeout=timeout,
+        sandbox_mode=sandbox_mode,
+        startup_tip=choose_startup_tip(click.get_current_context()),
+    )
+
+
+new_help_msg = "\n".join(
+    [
+        "\b",
+        "Create an empty notebook",
+        "",
+        _key_value_bullets(
+            [
+                (
+                    "sp new",
+                    "Create an empty notebook",
+                ),
+            ]
+        ),
+    ]
+)
+
+
+@main.command(help=new_help_msg)
+@click.option(
+    "-p",
+    "--port",
+    default=None,
+    type=int,
+    help="Port to attach to.",
+)
+@click.option(
+    "--host",
+    default="127.0.0.1",
+    type=str,
+    help="Host to attach to.",
+)
+@click.option(
+    "--proxy",
+    default=None,
+    type=str,
+    help="Address of reverse proxy.",
+)
+@click.option(
+    "--headless",
+    is_flag=True,
+    default=False,
+    type=bool,
+    help="Don't launch a browser.",
+)
+@click.option(
+    "--token/--no-token",
+    default=True,
+    type=bool,
+    help=token_message,
+)
+@click.option(
+    "--token-password",
+    default=None,
+    type=str,
+    help=token_password_message,
+)
+@click.option(
+    "--token-password-file",
+    default=None,
+    type=str,
+    help="Path to file containing token password, or '-' for stdin. Mutually exclusive with --token-password.",
+)
+@click.option(
+    "--base-url",
+    default="",
+    type=str,
+    help="Base URL for the server. Should start with a /.",
+    callback=validators.base_url,
+)
+@click.option(
+    "--sandbox/--no-sandbox",
+    is_flag=True,
+    default=None,
+    type=bool,
+    help=sandbox_message,
+)
+@click.option(
+    "--skew-protection/--no-skew-protection",
+    is_flag=True,
+    default=True,
+    type=bool,
+    help="Enable skew protection middleware to prevent version mismatch issues.",
+)
+@click.option(
+    "--timeout",
+    required=False,
+    default=None,
+    type=float,
+    help="Enable a global timeout to shut down the server after specified number of minutes of no connection",
+)
+def new(
+    port: int | None,
+    host: str,
+    proxy: str | None,
+    headless: bool,
+    token: bool,
+    token_password: str | None,
+    token_password_file: str | None,
+    base_url: str,
+    sandbox: bool | None,
+    skew_protection: bool,
+    timeout: float | None,
+) -> None:
+    if sandbox:
+        from signalpilot._cli.sandbox import run_in_sandbox
+
+        # TODO: consider adding recommended as well
+        run_in_sandbox(sys.argv[1:], name=None, additional_features=["lsp"])
+        return
+
+    workspace: NotebookWorkspace | None = EmptyWorkspace()
+
+    base_url = validators.check_proxy_base_url(proxy, base_url)
+
+    start(
+        workspace=workspace,
+        development_mode=GLOBAL_SETTINGS.DEVELOPMENT_MODE,
+        quiet=GLOBAL_SETTINGS.QUIET,
+        host=host,
+        port=port,
+        proxy=proxy,
+        headless=headless,
+        mode=SessionMode.EDIT,
+        include_code=True,
+        watch=False,
+        skew_protection=skew_protection,
+        cli_args={},
+        argv=[],
+        auth_token=resolve_token(
+            token,
+            token_password=token_password,
+            token_password_file=token_password_file,
+        ),
+        base_url=base_url,
+        redirect_console_to_browser=True,
+        ttl_seconds=None,
+        timeout=timeout,
+        startup_tip=choose_startup_tip(click.get_current_context()),
+    )
+
+
+@dataclass(frozen=True)
+class _CollectedRunFiles:
+    files: list[SpFile]
+    root_dir: str | None
+
+
+def _split_run_paths_and_args(
+    name: str, args: tuple[str, ...]
+) -> tuple[list[str], tuple[str, ...]]:
+    paths = [name]
+    for index, arg in enumerate(args):
+        if arg == "--":
+            return paths, args[index + 1 :]
+        if arg.startswith("-"):
+            return paths, args[index:]
+        paths.append(arg)
+    return paths, ()
+
+
+def _resolve_root_dir(
+    directories: list[str], files: list[SpFile]
+) -> str | None:
+    # Choose a "root" directory for gallery links when there is an obvious
+    # shared base directory. This lets us use relative `?file=` keys (and
+    # avoids leaking absolute paths) when possible.
+    if len(directories) == 1:
+        directory = Path(directories[0]).absolute()
+        if not files:
+            return str(directory)
+        # Only use this directory root if it contains all selected files.
+        if all(
+            Path(file.path).absolute().is_relative_to(directory)
+            for file in files
+        ):
+            return str(directory)
+        return None
+
+    if not directories:
+        if not files:
+            return None
+        parent = Path(files[0].path).absolute().parent
+        # Only use a parent root when all files are siblings.
+        if all(Path(file.path).absolute().parent == parent for file in files):
+            return str(parent)
+
+    return None
+
+
+def _collect_signalpilot_files(paths: list[str]) -> _CollectedRunFiles:
+    directories: list[str] = []
+    files_by_path: dict[str, SpFile] = {}
+
+    for path in paths:
+        if Path(path).is_dir():
+            directories.append(path)
+            directory = Path(path).absolute()
+            scanner = DirectoryScanner(path, include_markdown=True)
+            try:
+                file_infos = scanner.scan()
+            except HTTPException as exc:
+                if exc.status_code != HTTPStatus.REQUEST_TIMEOUT:
+                    raise
+                file_infos = scanner.partial_results
+            for file_info in flatten_files(file_infos):
+                if not file_info.is_sp_file:
+                    continue
+                if "__sp__" in Path(file_info.path).parts:
+                    continue
+                absolute_path = str(directory / file_info.path)
+                files_by_path[absolute_path] = SpFile(
+                    name=file_info.name,
+                    path=absolute_path,
+                    last_modified=file_info.last_modified,
+                )
+        else:
+            sp_path = SpPath(path)
+            files_by_path[sp_path.absolute_name] = SpFile(
+                name=sp_path.relative_name,
+                path=sp_path.absolute_name,
+                last_modified=sp_path.last_modified,
+            )
+
+    files = sorted(files_by_path.values(), key=lambda file: file.path)
+    root_dir = _resolve_root_dir(directories, files)
+    return _CollectedRunFiles(files=files, root_dir=root_dir)
+
+
+def _create_run_workspace(
+    validated_paths: list[str], *, watch: bool
+) -> NotebookWorkspace:
+    """Create the workspace for `sp run`.
+
+    For `--watch` with a single directory, use a directory workspace so the
+    gallery index can reflect file additions/deletions on subsequent requests.
+    For all other invocation shapes, preserve static snapshot behavior.
+    """
+    if (
+        watch
+        and len(validated_paths) == 1
+        and Path(validated_paths[0]).is_dir()
+    ):
+        return DirectoryWorkspace(validated_paths[0], include_markdown=True)
+
+    has_directory = any(Path(path).is_dir() for path in validated_paths)
+    is_multi = has_directory or len(validated_paths) > 1
+    if is_multi:
+        signalpilot_files = _collect_signalpilot_files(validated_paths)
+        return FixedFilesWorkspace(
+            signalpilot_files.files,
+            directory=signalpilot_files.root_dir,
+        )
+
+    return SingleFileWorkspace.from_path(SpPath(validated_paths[0]))
+
+
+@main.command(
+    help="""Run a notebook as an app in read-only mode.
+
+If NAME is a url, the notebook will be downloaded to a temporary file.
+
+Example:
+
+    sp run notebook.py
+    sp run folder another_folder
+    sp run app.py -- --arg value
+"""
+)
+@click.option(
+    "-p",
+    "--port",
+    default=None,
+    type=int,
+    help="Port to attach to.",
+)
+@click.option(
+    "--host",
+    default="127.0.0.1",
+    type=str,
+    help="Host to attach to.",
+)
+@click.option(
+    "--proxy",
+    default=None,
+    type=str,
+    help="Address of reverse proxy.",
+)
+@click.option(
+    "--headless",
+    is_flag=True,
+    default=False,
+    type=bool,
+    help="Don't launch a browser.",
+)
+@click.option(
+    "--token/--no-token",
+    default=False,
+    type=bool,
+    help=token_message,
+)
+@click.option(
+    "--token-password",
+    default=None,
+    type=str,
+    help=token_password_message,
+)
+@click.option(
+    "--token-password-file",
+    default=None,
+    type=str,
+    help="Path to file containing token password, or '-' for stdin. Mutually exclusive with --token-password.",
+)
+@click.option(
+    "--include-code",
+    is_flag=True,
+    default=False,
+    type=bool,
+    help="Include notebook code in the app.",
+)
+@click.option(
+    "--session-ttl",
+    default=120,
+    type=int,
+    help=("Seconds to wait before closing a session on websocket disconnect."),
+)
+@click.option(
+    "--watch",
+    is_flag=True,
+    default=False,
+    type=bool,
+    help=(
+        "Watch the file for changes and reload the app. "
+        "If watchdog is installed, it will be used to watch the file. "
+        "Otherwise, file watcher will poll the file every 1s."
+    ),
+)
+@click.option(
+    "--skew-protection/--no-skew-protection",
+    is_flag=True,
+    default=True,
+    type=bool,
+    help="Enable skew protection middleware to prevent version mismatch issues.",
+)
+@click.option(
+    "--base-url",
+    default="",
+    type=str,
+    help="Base URL for the server. Should start with a /.",
+    callback=validators.base_url,
+)
+@click.option(
+    "--allow-origins",
+    default=None,
+    multiple=True,
+    help="Allowed origins for CORS. Can be repeated.",
+)
+@click.option(
+    "--redirect-console-to-browser",
+    is_flag=True,
+    default=False,
+    type=bool,
+    help="Redirect console logs to the browser console.",
+)
+@click.option(
+    "--sandbox/--no-sandbox",
+    is_flag=True,
+    default=None,
+    type=bool,
+    help=sandbox_message,
+)
+@click.option(
+    "--check/--no-check",
+    is_flag=True,
+    default=True,
+    type=bool,
+    help=check_message,
+)
+@click.option(
+    "--trusted/--untrusted",
+    is_flag=True,
+    default=None,
+    type=bool,
+    help="Run notebooks hosted remotely on the host machine; if --untrusted, runs sp in a Docker container.",
+)
+@click.option(
+    "--server-startup-command",
+    default=None,
+    type=str,
+    hidden=True,
+    help="Command to run on server startup.",
+)
+@click.option(
+    "--asset-url",
+    default=None,
+    type=str,
+    hidden=True,
+    help="Custom asset URL for loading static resources. Can include {version} placeholder.",
+)
+@click.option(
+    "--show-tracebacks/--no-show-tracebacks",
+    is_flag=True,
+    default=None,
+    type=bool,
+    help="Show detailed error tracebacks in a modal when exceptions occur.",
+)
+@click.pass_context
+@click.argument(
+    "name",
+    required=True,
+    type=click.Path(),
+)
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+def run(
+    ctx: click.Context,
+    port: int | None,
+    host: str,
+    proxy: str | None,
+    headless: bool,
+    token: bool,
+    token_password: str | None,
+    token_password_file: str | None,
+    include_code: bool,
+    session_ttl: int,
+    watch: bool,
+    skew_protection: bool,
+    base_url: str,
+    allow_origins: tuple[str, ...],
+    redirect_console_to_browser: bool,
+    sandbox: bool | None,
+    check: bool,
+    trusted: bool | None,
+    server_startup_command: str | None,
+    asset_url: str | None,
+    show_tracebacks: bool | None,
+    name: str,
+    args: tuple[str, ...],
+) -> None:
+    from signalpilot._cli.sandbox import (
+        SandboxMode,
+        resolve_sandbox_mode,
+        run_in_sandbox,
+    )
+
+    paths, notebook_args = _split_run_paths_and_args(name, args)
+
+    if len(paths) == 1 and prompt_run_in_docker_container(
+        paths[0], trusted=trusted
+    ):
+        from signalpilot._cli.run_docker import run_in_docker
+
+        run_in_docker(
+            paths[0],
+            "run",
+            port=port,
+            debug=GLOBAL_SETTINGS.DEVELOPMENT_MODE,
+        )
+        return
+
+    # Validate name, or download from URL
+    # The second return value is an optional temporary directory. It is unused,
+    # but must be kept around because its lifetime on disk is bound to the life
+    # of the Python object
+    validated_paths: list[str] = []
+    temp_dirs: list[tempfile.TemporaryDirectory[str]] = []
+    for path in paths:
+        validated_path, temp_dir = validate_name(
+            path, allow_new_file=False, allow_directory=True
+        )
+        if temp_dir is not None:
+            temp_dirs.append(temp_dir)
+        validated_paths.append(validated_path)
+
+    has_directory = any(Path(path).is_dir() for path in validated_paths)
+    is_multi = has_directory or len(validated_paths) > 1
+
+    check_source = ctx.get_parameter_source("check")
+    check_explicit = check_source not in (
+        ParameterSource.DEFAULT,
+        ParameterSource.DEFAULT_MAP,
+    )
+
+    if is_multi and check and check_explicit:
+        raise click.UsageError(
+            "--check is only supported when running a single notebook file."
+        )
+
+    # correctness check - don't start the server if we can't import the module
+    for path in validated_paths:
+        if Path(path).is_file():
+            check_app_correctness(path)
+            if check and not has_directory:
+                from signalpilot._lint import collect_messages
+
+                file = SpPath(path)
+                linter, message = collect_messages(file.absolute_name)
+                if linter.errored:
+                    raise click.ClickException(
+                        red("Failure")
+                        + ": The notebook has errors, fix them before running.\n"
+                        + message.strip()
+                    )
+
+    # We check this after name validation, because this will convert
+    # URLs into local file paths
+    if is_multi:
+        # Gallery mode: use MULTI sandbox (IPC kernels) or None
+        sandbox_mode = SandboxMode.MULTI if sandbox else None
+    else:
+        sandbox_mode = resolve_sandbox_mode(
+            sandbox=sandbox, name=validated_paths[0]
+        )
+        if sandbox_mode is SandboxMode.SINGLE:
+            run_in_sandbox(sys.argv[1:], name=validated_paths[0])
+            return
+
+    # Multi-file sandbox: use IPC kernels with per-notebook sandboxed venvs
+    if sandbox_mode is SandboxMode.MULTI:
+        # Check for pyzmq dependency
+        from signalpilot._dependencies.dependencies import DependencyManager
+
+        if not DependencyManager.zmq.has():
+            raise SpCLIMissingDependencyError(
+                "pyzmq is required when running a gallery with --sandbox.",
+                "sp[sandbox]",
+            )
+    elif is_multi:
+        from signalpilot._dependencies.dependencies import DependencyManager
+
+        if not DependencyManager.zmq.has():
+            raise SpCLIMissingDependencyError(
+                "pyzmq is required for running multiple notebooks.",
+                "pyzmq",
+            )
+
+    workspace = _create_run_workspace(validated_paths, watch=watch)
+
+    base_url = validators.check_proxy_base_url(proxy, base_url)
+
+    start(
+        workspace=workspace,
+        development_mode=GLOBAL_SETTINGS.DEVELOPMENT_MODE,
+        quiet=GLOBAL_SETTINGS.QUIET,
+        host=host,
+        port=port,
+        proxy=proxy,
+        headless=headless,
+        mode=SessionMode.RUN,
+        include_code=include_code,
+        ttl_seconds=session_ttl,
+        watch=watch,
+        skew_protection=skew_protection,
+        base_url=base_url,
+        allow_origins=allow_origins,
+        cli_args=parse_args(notebook_args),
+        argv=list(notebook_args),
+        auth_token=resolve_token(
+            token,
+            token_password=token_password,
+            token_password_file=token_password_file,
+        ),
+        redirect_console_to_browser=redirect_console_to_browser,
+        server_startup_command=server_startup_command,
+        asset_url=asset_url,
+        sandbox_mode=sandbox_mode,
+        startup_tip=choose_startup_tip(click.get_current_context()),
+        show_tracebacks=show_tracebacks,
+    )
+
+
+@main.command(help="Recover a sp notebook from JSON.")
+@click.argument(
+    "name",
+    required=True,
+    type=click.Path(
+        exists=True, file_okay=True, dir_okay=False, path_type=Path
+    ),
+)
+def recover(name: Path) -> None:
+    click.echo(codegen.recover(name))
+
+
+@main.command(
+    help="""Open a tutorial.
+
+sp is a powerful library for making reactive notebooks
+and apps. To get the most out of sp, get started with a few
+tutorials, starting with the intro:
+
+    \b
+    sp tutorial intro
+
+Recommended sequence:
+
+    \b
+"""
+    + "\n".join(f"    - {name}" for name in tutorial_order)
+)
+@click.option(
+    "-p",
+    "--port",
+    default=None,
+    type=int,
+    help="Port to attach to.",
+)
+@click.option(
+    "--host",
+    default="127.0.0.1",
+    type=str,
+    help="Host to attach to.",
+)
+@click.option(
+    "--proxy",
+    default=None,
+    type=str,
+    help="Address of reverse proxy.",
+)
+@click.option(
+    "--headless",
+    is_flag=True,
+    default=False,
+    type=bool,
+    help="Don't launch a browser.",
+)
+@click.option(
+    "--token/--no-token",
+    default=True,
+    type=bool,
+    help=token_message,
+)
+@click.option(
+    "--token-password",
+    default=None,
+    type=str,
+    help=token_password_message,
+)
+@click.option(
+    "--token-password-file",
+    default=None,
+    type=str,
+    help="Path to file containing token password, or '-' for stdin. Mutually exclusive with --token-password.",
+)
+@click.option(
+    "--skew-protection/--no-skew-protection",
+    is_flag=True,
+    default=True,
+    type=bool,
+    help="Enable skew protection middleware to prevent version mismatch issues.",
+)
+@click.argument(
+    "name",
+    required=True,
+    type=click.Choice(tutorial_order),
+)
+def tutorial(
+    port: int | None,
+    host: str,
+    proxy: str | None,
+    headless: bool,
+    token: bool,
+    token_password: str | None,
+    token_password_file: str | None,
+    skew_protection: bool,
+    name: Tutorial,
+) -> None:
+    temp_dir = tempfile.TemporaryDirectory()
+    path = create_temp_tutorial_file(name, temp_dir)
+
+    base_url = validators.check_proxy_base_url(proxy, "")
+
+    start(
+        workspace=SingleFileWorkspace.from_path(path),
+        development_mode=GLOBAL_SETTINGS.DEVELOPMENT_MODE,
+        quiet=GLOBAL_SETTINGS.QUIET,
+        host=host,
+        port=port,
+        proxy=proxy,
+        mode=SessionMode.EDIT,
+        include_code=True,
+        headless=headless,
+        watch=False,
+        skew_protection=skew_protection,
+        cli_args={},
+        argv=[],
+        auth_token=resolve_token(
+            token,
+            token_password=token_password,
+            token_password_file=token_password_file,
+        ),
+        base_url=base_url,
+        redirect_console_to_browser=False,
+        ttl_seconds=None,
+        startup_tip=choose_startup_tip(click.get_current_context()),
+    )
+
+
+@main.command()
+def env() -> None:
+    """Print out environment information for debugging purposes."""
+    click.echo(json.dumps(get_system_info(), indent=2))
+
+
+@main.command(
+    help="Install shell completions for sp. Supports bash, zsh, and fish."
+)
+def shell_completion() -> None:
+    shell = os.environ.get("SHELL", "")
+    if not shell:
+        raise SpCLIRuntimeError(
+            "Could not determine shell. Please set $SHELL environment variable.",
+        )
+
+    # in case we're on a windows system, use .stem to remove extension
+    shell_name = Path(shell).stem
+
+    # N.B. change the help message above when changing supported shells
+    commands = {
+        "bash": (
+            'eval "$(_SIGNALPILOT_COMPLETE=bash_source sp)"',
+            ".bashrc",
+        ),
+        "zsh": (
+            'eval "$(_SIGNALPILOT_COMPLETE=zsh_source sp)"',
+            ".zshrc",
+        ),
+        "fish": (
+            "_SIGNALPILOT_COMPLETE=fish_source sp | source",
+            ".config/fish/completions/signalpilot.fish",
+        ),
+    }
+
+    if shell_name not in commands:
+        supported = ", ".join(commands.keys())
+        raise SpCLIRuntimeError(
+            f"Unsupported shell: {shell_name} (from $SHELL). Supported shells: {supported}",
+        )
+
+    cmd, rc_file = commands[shell_name]
+    click.secho("Run this command to enable completions:", fg="green")
+    click.secho(f"\n    echo '{cmd}' >> ~/{rc_file}\n", fg="yellow")
+    click.secho(
+        "\nThen restart your shell or run 'source ~/"
+        + rc_file
+        + "' to enable completions",
+        fg="green",
+    )
+
+
+@main.command(help="""Check and format sp files.""")
+@click.option(
+    "--fix",
+    is_flag=True,
+    default=False,
+    type=bool,
+    help="Whether to in place update files.",
+)
+@click.option(
+    "--strict",
+    is_flag=True,
+    default=False,
+    type=bool,
+    help="Whether warnings return a non-zero exit code.",
+)
+@click.option(
+    "-v/-q",
+    "--verbose/--quiet",
+    is_flag=True,
+    default=True,
+    type=bool,
+    help="Whether to print detailed messages.",
+)
+@click.option(
+    "--unsafe-fixes",
+    is_flag=True,
+    default=False,
+    type=bool,
+    help="Enable fixes that may change code behavior (e.g., removing empty cells).",
+)
+@click.option(
+    "--ignore-scripts",
+    is_flag=True,
+    default=False,
+    type=bool,
+    help="Ignore files that are not recognizable as sp notebooks.",
+)
+@click.option(
+    "--format",
+    "formatter",
+    default="full",
+    type=click.Choice(["full", "json"], case_sensitive=False),
+    help="Output format for diagnostics.",
+)
+@click.option(
+    "--select",
+    "select_rules",
+    default=None,
+    type=str,
+    help=(
+        "Comma-separated rule codes/prefixes to enable, replacing config. "
+        "e.g. --select MB,MR001"
+    ),
+)
+@click.option(
+    "--ignore",
+    "ignore_rules",
+    default=None,
+    type=str,
+    help=(
+        "Comma-separated rule codes/prefixes to ignore. "
+        "e.g. --ignore MF004,MF007"
+    ),
+)
+@click.argument("files", nargs=-1, type=click.UNPROCESSED)
+def check(
+    fix: bool,
+    strict: bool,
+    verbose: bool,
+    unsafe_fixes: bool,
+    ignore_scripts: bool,
+    formatter: str,
+    select_rules: str | None,
+    ignore_rules: str | None,
+    files: tuple[str, ...],
+) -> None:
+    if not files:
+        # If no files are provided, we lint the current directory
+        files = ("**/*.py", "**/*.md", "**/*.qmd")
+
+    from signalpilot._lint import resolve_lint_config
+
+    lint_config = resolve_lint_config(select_rules, ignore_rules)
+
+    # Pass click.echo directly as pipe for streaming output, or None for JSON
+    pipe = click.echo if verbose and formatter != "json" else None
+    linter = run_check(
+        files,
+        pipe=pipe,
+        fix=fix,
+        unsafe_fixes=unsafe_fixes,
+        ignore_scripts=ignore_scripts,
+        formatter=formatter,
+        lint_config=lint_config,
+    )
+
+    if formatter == "json":
+        # JSON output - let linter handle the collection and formatting
+        result = linter.get_json_result()
+        # Always output to stdout for JSON, regardless of errors
+        click.echo(json.dumps(result), err=False)
+    else:
+        # Get counts from linter (fix happens automatically during streaming)
+        fixed = linter.fixed_count
+        total_issues = linter.issues_count
+
+        # Final summary
+        if fixed > 0:
+            click.echo(f"Updated {fixed} file{'s' if fixed > 1 else ''}.")
+        if total_issues > 0:
+            click.echo(
+                f"Found {total_issues} issue{'s' if total_issues > 1 else ''}."
+            )
+
+    if linter.errored or (strict and (fixed > 0 or total_issues > 0)):
+        sys.exit(1)
+
+
+main.command()(convert)
+main.add_command(export)
+main.add_command(config)
+main.add_command(development)
+main.add_command(pair)

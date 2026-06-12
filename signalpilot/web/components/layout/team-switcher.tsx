@@ -16,8 +16,8 @@ import { useRef, useState, useEffect, useCallback } from "react";
 import { useClerk, useUser, useOrganization, useOrganizationList } from "@clerk/nextjs";
 import { Component, type ReactNode } from "react";
 import { LogOut, ChevronDown, Check, Plus } from "lucide-react";
-import { useCreateTeam } from "@/lib/use-create-team";
-import { PendingButton } from "@/components/ui/pending-button";
+import { useCreateTeam } from "~/lib/use-create-team";
+import { PendingButton } from "~/components/ui/pending-button";
 
 const LIST_MSG_CLASS = "px-3 py-2 text-[10px] text-[var(--color-text-dim)] tracking-wider font-mono";
 
@@ -150,7 +150,7 @@ function TeamSwitcherInner({ displayName }: { displayName: string }) {
   async function handleSignOut() {
     setOpen(false);
     // Clear all app state before Clerk sign-out redirects
-    const { clearAppState } = await import("@/lib/hooks/use-gateway-data");
+    const { clearAppState } = await import("~/lib/hooks/use-gateway-data");
     clearAppState();
     await signOut();
   }

@@ -1,0 +1,49 @@
+FROM python:3.13-slim
+
+RUN groupadd -g 10001 notebook && \
+    useradd -r -u 10001 -g notebook notebook && \
+    mkdir -p /workspace /home/notebook/.sp && \
+    apt-get update && apt-get install -y git curl && rm -rf /var/lib/apt/lists/* && \
+    pip install --no-cache-dir uv
+
+WORKDIR /opt/sp-notebook
+
+# Copy local notebook-server source
+COPY signalpilot/notebook-server/pyproject.toml signalpilot/notebook-server/uv.lock ./
+COPY signalpilot/notebook-server/MANIFEST.in signalpilot/notebook-server/.python-version ./
+COPY signalpilot/notebook-server/README.md signalpilot/notebook-server/LICENSE ./
+COPY signalpilot/notebook-server/signalpilot/ signalpilot/
+
+# Install via uv + additional production dependencies
+RUN uv sync --frozen --no-dev && \
+    uv pip install --no-cache \
+      requests httpx starlette uvicorn msgspec \
+      pydantic pydantic-settings websockets sse-starlette pyjwt \
+      dbt-core dbt-duckdb duckdb polars pandas pyarrow numpy \
+      sqlglot altair matplotlib plotly pyyaml jinja2 python-dotenv \
+      seaborn scikit-learn scipy \
+      anthropic openai tiktoken \
+      dbt-postgres dbt-snowflake && \
+    # Bake in-tree .pyc for BOTH the app and the whole venv (12k+ dep files).
+    # The kernel runs on a read-only root (F-7) so it can never write .pyc at
+    # runtime — without this every interpreter start (entrypoint + sync_boot +
+    # `sp edit` + each kernel) recompiles every dependency from source. Compiling
+    # at build time means runtime imports read the cached .pyc with zero compile
+    # cost. -j 0 = all cores; ignore failures on optional/py2 files.
+    python -m compileall -q -j 0 /opt/sp-notebook/signalpilot /opt/sp-notebook/.venv/lib 2>/dev/null || true && \
+    chown -R notebook:notebook /opt/sp-notebook /workspace /home/notebook
+
+ENV PATH="/opt/sp-notebook/.venv/bin:$PATH"
+
+USER notebook
+WORKDIR /workspace
+EXPOSE 2718
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s \
+    CMD curl -sf http://localhost:2718/health || exit 1
+
+ENV SP_GATEWAY_URL=""
+ENV SP_API_KEY=""
+ENV SP_LOG_LEVEL="10"
+
+CMD ["python", "-m", "signalpilot._server.entrypoint", "--host", "0.0.0.0", "--port", "2718", "--headless", "--no-token", "--no-skew-protection", "/workspace"]

@@ -4,112 +4,40 @@ sidebar_position: 3
 
 # Skills Reference
 
-Per-skill detail for all 9 SignalPilot plugin skills. Each skill is a markdown knowledge file that auto-loads into Claude Code's context.
+Complete reference for all 23 SignalPilot plugin skills plus the 2 verifier agents. Each skill is a markdown knowledge file whose frontmatter `description` is its load trigger. Skills run on both the Claude Code plugin and the Codex plugin.
 
----
+## Skills
 
-## dbt-workflow
+| Skill | When it loads | What it covers |
+|-------|---------------|----------------|
+| `signalpilot` | FIRST tool call when a message mentions dbt, SQL, database, or data pipeline (blocking requirement). | The SignalPilot MCP tools, the available skills, and the governed workflow for dbt projects, SQL queries, schema discovery, and database access. |
+| `dbt-workflow` | FIRST, before any dbt project work. | The full 8-step dbt workflow: project scanning, skill loading, validation, macro discovery, research, technical spec, SQL writing, verification. Plus output-shape inference, incremental model handling, and what to trust in YML. |
+| `dbt-write` | Step 2 of the workflow (always). | Column naming, type preservation, JOIN defaults, lookup joins, sibling models, materialization, packages, and filtering rules. |
+| `dbt-debugging` | When `dbt run` or `dbt parse` fails. | YML duplicate patches, ref errors, passthrough model warnings, `current_date` fixes, DuckDB error messages, and zero-row diagnosis. |
+| `dbt-testing` | When the task mentions tests/unit tests, or the scan finds `unit_tests:` in YML. | `unit_tests` YAML format, given/expect blocks, edge-case coverage, and the difference between unit tests and schema tests. |
+| `dbt-snapshots` | When the task involves snapshots, SCD Type 2, or change tracking, or a `snapshots/` dir exists. | Strategy selection, column casing, verification, and common pitfalls. |
+| `dbt-versioning` | When the task involves versioning / v2 / backward-compatible changes, or YML has `versions:`. | `versions` YAML config, `defined_in`, `latest_version`, and `ref()` with version pins. |
+| `dbt-knowledgebase` | When populating the knowledge base from dbt project research. | Proposes entries across all 6 categories at org, project, and connection scopes. |
+| `knowledge-base` | Step 6 of the workflow. | Writing the per-task `technical_spec.md`: distills research into structured decisions. Retries read the existing spec instead of re-researching. |
+| `duckdb-sql` | When hitting DuckDB syntax errors or writing DuckDB SQL. | DuckDB gotchas that differ from PostgreSQL/MySQL. |
+| `snowflake-sql` | When writing Snowflake SQL or hitting Snowflake errors. | `QUALIFY`, `LATERAL FLATTEN`, semi-structured `VARIANT`, `ILIKE`, date functions, and time travel. |
+| `bigquery-sql` | When writing BigQuery SQL. | `UNNEST`, `STRUCT`, `ARRAY_AGG`, `DATE_DIFF`/`DATE_ADD`, backtick-quoted refs, `EXCEPT`/`REPLACE` in `SELECT`, approximate aggregation, partitioned/wildcard tables. |
+| `sqlite-sql` | When writing SQLite SQL. | `substr`/`instr`, `||` concatenation, `LIKE` (no `ILIKE`), `date()`/`strftime()`, `CAST`, no `FULL OUTER JOIN`, `GROUP_CONCAT`, `typeof()`, `COALESCE`/`IFNULL`, `printf()`. |
+| `domain-ecommerce` | Step 2, for orders/products/discounts/returns/charges/spend tasks. | Transaction lifecycle, driving tables, status filtering. |
+| `domain-financial` | Step 2, for revenue/invoices/ledgers/fiscal tasks. | Grain consistency, balance sheets, double-entry ledgers, fiscal-year boundaries, period-over-period calculations. |
+| `domain-healthcare` | Step 2, for clinical/patients/encounters/diagnoses/costs tasks. | Encounter-based grain, clinical coding hierarchies, cost allocation, NULL semantics in clinical data. |
+| `domain-hr` | Step 2, for employees/hiring/issues/SCD/tickets tasks. | SCD current-record filtering, issue-resolution metrics. |
+| `domain-marketing` | Step 2, for campaigns/clicks/email/SMS/attribution tasks. | Attribution models, engagement funnel order. |
+| `domain-media` | Step 2, for movies/sports/credits/rankings/content tasks. | Content catalogs, participation tables, ranking determinism. |
+| `domain-product` | Step 2, for events/sessions/features/guides/analytics tasks. | Calendar spine cross-joins, date boundary caps, event-type pivoting, first-run NULL behavior. |
+| `sql-workflow` | Before writing any standalone (non-dbt) SQL query. | Output-shape inference, efficient schema exploration, iterative CTE building, a structured verification loop (row count, NULL audit, fan-out, sample inspection), error recovery, saving to `result.sql`/`result.csv`, turn budget, and common benchmark traps. |
+| `write-report` | Only when explicitly requested (model invocation disabled). | Generates an HTML report of dbt project work: decisions, SQL, queries, verifier results, and visual charts. |
 
-**When it loads:** Step 1 — before exploring any dbt project.
+## Agents
 
-**What it covers:** Output shape inference from YML descriptions (cardinality clues: entity, qualifier, rank constraint, temporal scope), incremental model handling, and what to trust in YML vs. the database. Teaches Claude to read the `description:` field before writing any SQL to understand the expected output shape.
+Both agents are dispatched in parallel in Step 8 of `dbt-workflow`. Both are strictly read-only: they return reports and fix nothing.
 
-**Example prompt that activates it:**
-
-> "Build the `shopify__daily_shop` dbt model — orders, abandoned checkouts, fulfillment counts by day."
-
----
-
-## dbt-write
-
-**When it loads:** Step 4 — when writing SQL model files.
-
-**What it covers:** Column naming rules (aliases must match YML exactly, case-sensitive), type preservation from reference tables, JOIN defaults (use LEFT JOIN unless the YML description implies INNER), lookup join patterns, sibling model handling, and filtering rules. Prevents the most common dbt evaluation failures.
-
-**Example prompt that activates it:**
-
-> "Write the SQL for the `orders` model based on the YML spec."
-
----
-
-## dbt-debugging
-
-**When it loads:** When `dbt run` or `dbt parse` fails.
-
-**What it covers:** Duplicate YML patch resolution (the most common failure), ref-not-found errors, passthrough model warnings, `current_date` hazards, DuckDB-specific error messages, and zero-row diagnosis. Provides a structured fix protocol for each error type.
-
-**Example prompt that activates it:**
-
-> "dbt run failed with 'Duplicate patch for model orders'. How do I fix it?"
-
----
-
-## dbt-date-spines
-
-**When it loads:** When `dbt_project_map` reports date hazards or a date-spine model produces unexpected row counts.
-
-**What it covers:** Fixing `current_date`, `current_timestamp`, and `now()` in model SQL files by replacing them with data-driven endpoints (a subquery from the primary fact table). Covers both DuckDB and other dialects.
-
-**Example prompt that activates it:**
-
-> "The date spine model is generating too many rows. Fix the current_date hazard."
-
----
-
-## sql-workflow
-
-**When it loads:** Before writing any SQL query (benchmark or ad-hoc).
-
-**What it covers:** Schema exploration order (read local schema files first, then MCP tools), CTE-based iterative query building, a structured verification loop (row count, NULL audit, fan-out check, sample inspection), error recovery protocol, turn budget management, and common benchmark traps.
-
-**Example prompt that activates it:**
-
-> "Write a SQL query to find the top 10 customers by revenue in the last 30 days."
-
----
-
-## duckdb-sql
-
-**When it loads:** When hitting DuckDB-specific syntax errors or writing DuckDB SQL.
-
-**What it covers:** Integer division truncation (`5/2 = 2` — use `CAST`), `DATE_TRUNC` returning TIMESTAMP, `INTERVAL` syntax (must be quoted: `INTERVAL '1' DAY`), no `DATEADD`/`DATEDIFF`, `SUM(NULL) = NULL` behavior, and avoiding `CURRENT_DATE` in historical models.
-
-**Example prompt that activates it:**
-
-> "I'm getting a type error on the date truncation in my DuckDB model."
-
----
-
-## snowflake-sql
-
-**When it loads:** When writing Snowflake SQL or hitting Snowflake-specific errors.
-
-**What it covers:** `QUALIFY` for window function filtering (avoids subquery wrapping), `LATERAL FLATTEN` for array/VARIANT expansion, semi-structured `VARIANT` data access, `ILIKE` for case-insensitive matching, Snowflake date functions, and time travel queries.
-
-**Example prompt that activates it:**
-
-> "Write a Snowflake query to get the latest record per customer using window functions."
-
----
-
-## bigquery-sql
-
-**When it loads:** When writing BigQuery SQL.
-
-**What it covers:** `UNNEST` for array expansion, `STRUCT` and `ARRAY_AGG`, `DATE_DIFF`/`DATE_ADD`, backtick-quoted table references (`` `project.dataset.table` ``), `EXCEPT`/`REPLACE` in `SELECT *`, approximate aggregation functions, and partitioned/wildcard table patterns.
-
-**Example prompt that activates it:**
-
-> "Write a BigQuery query to unnest the order items array and aggregate by product."
-
----
-
-## sqlite-sql
-
-**When it loads:** When writing SQLite SQL.
-
-**What it covers:** `substr()` and `instr()` for string operations (no `POSITION()` or `SPLIT_PART()`), `||` for string concatenation, `LIKE` only (no `ILIKE`), `date()`/`strftime()` for date functions, `CAST` for type coercion, no `FULL OUTER JOIN`, `GROUP_CONCAT`, `typeof()`, `COALESCE`/`IFNULL`, and `printf()` formatting.
-
-**Example prompt that activates it:**
-
-> "Write a SQLite query to extract the domain from an email column."
+| Agent | Role | Checks |
+|-------|------|--------|
+| `verifier` | Structure verification (read-only). | CHECK 1 table existence; CHECK 2 column completeness via `map-columns` + `check_model_schema`; CHECK 3 row count, fan-out, and cardinality via `audit_model_sources`; CHECK 4 non-deterministic SQL (`ORDER BY NULL`, ROW_NUMBER/RANK without ORDER BY); CHECK 5 source-table preservation for modified models. |
+| `value-verifier` | Aggregate value verification (read-only). | CHECK 1 sample value spot-check vs siblings; CHECK 2 aggregate cross-validation via `verify_model_values` (COUNT(*) vs COUNT(DISTINCT) aligned to the column name); CHECK 3 status-column filtering (returns/cancellations/refunds excluded per the domain skill). Prescribes exact `CHANGE:` fixes on FAIL but never edits files. |

@@ -9,6 +9,44 @@ export interface GatewaySettings {
   blocked_tables: string[];
   gateway_url: string;
   api_key: string | null;
+  knowledge_history_versions_override: number | null;
+}
+
+export interface KnowledgeDoc {
+  id: string;
+  org_id: string;
+  scope: "org" | "project" | "connection";
+  scope_ref: string | null;
+  category: "understanding" | "conventions" | "decisions" | "domain-rules" | "debugging" | "quirks";
+  title: string;
+  body: string | null;
+  status: "active" | "pending" | "archived";
+  bytes: number;
+  view_count: number;
+  created_at: number;
+  updated_at: number;
+  created_by: string | null;
+  updated_by: string | null;
+  proposed_by_agent: string | null;
+}
+
+export interface KnowledgeEdit {
+  id: string;
+  doc_id: string;
+  org_id: string;
+  body_before: string;
+  bytes_before: number;
+  edited_at: number;
+  edited_by: string | null;
+  edit_kind: string;
+}
+
+export interface KnowledgeUsage {
+  org_id: string;
+  active_docs: number;
+  active_bytes: number;
+  storage_limit_bytes: number;
+  storage_limit_mb: number;
 }
 
 export type DBType =
@@ -103,6 +141,46 @@ export interface ProjectInfo {
   tags: string[];
 }
 
+export interface WorkspaceProjectInfo {
+  id: string;
+  org_id: string;
+  name: string;
+  display_name: string;
+  description: string | null;
+  source: "managed" | "github" | "dbt-cloud";
+  connection_name: string | null;
+  status: "active" | "archived";
+  tags: string[] | null;
+  settings: Record<string, unknown> | null;
+  file_count: number;
+  total_bytes: number;
+  created_by: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface WorkspaceFileInfo {
+  key: string;
+  size: number;
+  last_modified: number;
+}
+
+export interface WorkspaceBranchInfo {
+  id: string;
+  project_id: string;
+  org_id: string;
+  name: string;
+  created_from: string | null;
+  is_protected: boolean;
+  is_default: boolean;
+  status: "active" | "deleted";
+  file_count: number;
+  total_bytes: number;
+  created_by: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
 export interface SandboxInfo {
   id: string;
   vm_id: string | null;
@@ -181,4 +259,48 @@ export interface MetricsSnapshot {
     misses: number;
     hit_rate: number;
   };
+}
+
+// GitHub App
+export interface GitHubInstallation {
+  id: string;
+  org_id: string;
+  github_installation_id: number;
+  github_account_login: string;
+  github_account_type: string;
+  permissions: Record<string, string> | null;
+  status: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface GitHubRepo {
+  id: number;
+  full_name: string;
+  name: string;
+  private: boolean;
+  default_branch: string;
+  description: string | null;
+  html_url: string;
+}
+
+export interface GitHubRepoLink {
+  id: string;
+  org_id: string;
+  project_id: string;
+  installation_id: string;
+  repo_full_name: string;
+  repo_id: number;
+  default_branch: string;
+  status: string;
+  last_sync_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface GitCredentials {
+  source: string;
+  clone_url: string | null;
+  default_branch: string;
+  expires_at: number | null;
 }

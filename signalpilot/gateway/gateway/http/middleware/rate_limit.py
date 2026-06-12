@@ -9,8 +9,10 @@ from collections import defaultdict
 
 from fastapi import HTTPException, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp
 
+from ...common.ip import client_ip as _common_client_ip
 from ...config import get_network_settings
 
 
@@ -32,6 +34,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         {
             "/api/query",
             "/api/sandboxes",
+            "/api/dbt-cloud/projects",
         }
     )
 
@@ -74,12 +77,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 del store_dict[ip]
 
     def _client_ip(self, request: Request) -> str:
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            # Use rightmost IP (added by the closest trusted proxy) to prevent
-            # spoofing via attacker-controlled leftmost values.
-            return forwarded.split(",")[-1].strip()
-        return request.client.host if request.client else "unknown"
+        # Delegate to the shared helper so audit metadata and rate-limit bucket
+        # keys always use the same IP derivation (rightmost trusted XFF hop,
+        # then request.client.host).  Empty XFF entries are now skipped — this
+        # aligns the middleware with the helper's filtering and preserves parity.
+        # The "unknown" sentinel is rate-limit-internal and stays here only.
+        return _common_client_ip(request) or "unknown"
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if request.method == "OPTIONS":
@@ -158,11 +161,20 @@ def check_principal_rate_limit(key_id: str | None, org_id: str | None) -> str | 
     return None
 
 
-async def enforce_principal_rate_limit(request: Request) -> None:
-    """FastAPI dependency — runs after auth middleware has set request.state.auth."""
+async def enforce_principal_rate_limit(request: HTTPConnection) -> None:
+    """FastAPI dependency — runs after auth middleware has set request.state.auth.
+
+    Accepts HTTPConnection (not Request) so it works for both HTTP and WebSocket routes.
+    WebSocket is a subclass of HTTPConnection but not of Request.
+    """
+    import logging
+    _rl_log = logging.getLogger("rate_limit.enforce")
+    scope_type = getattr(request, "scope", {}).get("type", "?")
+    _rl_log.debug("enforce_principal_rate_limit scope=%s", scope_type)
     auth = getattr(request.state, "auth", None) or {}
     key_id = auth.get("key_id")
     org_id = auth.get("org_id")
     error = check_principal_rate_limit(key_id, org_id)
     if error:
+        _rl_log.warning("rate limit hit: %s", error)
         raise HTTPException(status_code=429, detail=error)

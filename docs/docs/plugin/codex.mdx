@@ -1,0 +1,74 @@
+---
+sidebar_position: 5
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
+# Use with Codex
+
+SignalPilot ships a Codex plugin that mirrors the Claude Code plugin: the same 40 MCP tools, 23 skills, and 2 agents. The plugin marketplace repo is `SignalPilot-Labs/codex-signalpilot-plugin` (distinct from the Claude Code `signalpilot-plugin`).
+
+## Prerequisites
+
+- Codex installed and working
+- SignalPilot MCP server connected (see [Connecting](#connect-the-mcp-server) below)
+
+## Install
+
+<MiniCopyBlock
+  label="install the codex plugin"
+  code={`codex plugin marketplace add SignalPilot-Labs/codex-signalpilot-plugin\ncodex plugin add signalpilot@signalpilot`}
+/>
+
+The first command registers the plugin marketplace source. The second installs the `signalpilot` plugin.
+
+### If install fails on a stale marketplace snapshot
+
+If a broken marketplace snapshot was added, upgrade it before adding the plugin:
+
+<MiniCopyBlock
+  label="upgrade marketplace and add plugin"
+  code={`codex plugin marketplace upgrade signalpilot\ncodex plugin add signalpilot@signalpilot`}
+/>
+
+## What it adds
+
+- **40 MCP tools** — `query_database`, `list_tables`, `dbt_error_parser`, schema discovery, governance, and more.
+- **23 skills** — the full dbt and SQL skill set (`dbt-workflow`, `dbt-write`, `sql-workflow`, dialect skills, domain skills).
+- **2 agents** — `verifier` (post-build 7-check protocol) and `value-verifier` (aggregate value checks).
+
+Skills and agents behave the same as on Claude Code — same loading conditions, same orchestration.
+
+## Connect the MCP server
+
+Connecting the MCP server is identical to Claude Code: `streamable-http` to the gateway.
+
+Local gateway:
+
+<MiniCopyBlock
+  label="local mcp endpoint"
+  plain
+  code="http://localhost:3300/mcp"
+/>
+
+SignalPilot Cloud (bearer auth):
+
+<MiniCopyBlock
+  label="cloud mcp endpoint"
+  plain
+  code={`https://gateway.signalpilot.ai/mcp\nAuthorization: Bearer YOUR_API_KEY`}
+/>
+
+For local self-hosted deployments without API key enforcement, no auth header is required.
+
+## Update
+
+<MiniCopyBlock
+  label="update the codex plugin"
+  code="codex plugin marketplace upgrade signalpilot"
+/>
+
+## See also
+
+- [Plugin overview](/docs/plugin) — skills and agents in detail
+- [Connect Other MCP Clients](/docs/mcp/connect-other-clients) — raw MCP configs

@@ -1,0 +1,63 @@
+---
+sidebar_position: 6
+---
+
+# Connect Notion
+
+SignalPilot can launch notebook-backed data analysis from Notion comments. In SignalPilot Cloud, the Notion integration is available under a paid subscription. If your workspace is on a free plan, upgrade before connecting Notion.
+
+## Before you start
+
+- A SignalPilot subscription with Notion integrations enabled.
+- Access to the Notion workspace and pages where users will create SignalPilot requests.
+- An Anthropic API key for the SignalPilot agent.
+
+## Set up the integration
+
+1. Open SignalPilot Cloud and go to **Integrations**.
+2. Click **Connect Notion**.
+3. Approve the Notion OAuth install and grant SignalPilot access to the workspace pages where requests should be allowed.
+4. Back in SignalPilot, click **Provision workspace**.
+
+Provisioning creates the Notion resources SignalPilot needs:
+
+- A `SignalPilot` page that acts as the mention trigger.
+- A `SignalPilot Requests` database where requests and generated notebook runs are tracked.
+
+## Add your Anthropic key
+
+Open a SignalPilot notebook or Notion request. If the agent panel asks for an API key, paste your Anthropic API key and save it.
+
+SignalPilot stores the key encrypted on the server and uses it to run the analysis agent for your requests.
+
+## Trigger SignalPilot from Notion
+
+Open a Notion page that has SignalPilot added as a connection. If the page does not have the connection yet, use Notion's page menu to add the SignalPilot connection first.
+
+Add a comment on that page and mention the provisioned `SignalPilot` page, then write the analysis request you want SignalPilot to run:
+
+> `@SignalPilot using the production warehouse connection, compare revenue by segment for Q2 and build a notebook with the supporting charts`
+
+Select the `SignalPilot` page mention from Notion's picker. SignalPilot ignores comments that do not mention the provisioned `SignalPilot` page.
+
+The Notion comment is the trigger and prompt. SignalPilot does not inspect or edit the surrounding Notion page content. It runs the analysis through SignalPilot's configured data connections and notebook infrastructure.
+
+When the request is accepted, SignalPilot adds a Notion comment, creates a request record in `SignalPilot Requests`, and runs the notebook-backed analysis. You can open the generated notebook in SignalPilot, share it with teammates, and keep iterating there.
+
+## Troubleshooting
+
+**No response in Notion**
+
+Confirm the page where you commented has SignalPilot added as a connection, and confirm your comment mentions the `SignalPilot` page created during provisioning.
+
+**SignalPilot did not use the surrounding page content**
+
+That is expected. The integration uses Notion as a request surface for SignalPilot analysis. Put the actual analytical question, connection name, tables, metrics, or business context in the comment, then continue the work in the generated SignalPilot notebook.
+
+**Agent asks for a key**
+
+Paste your Anthropic API key in the SignalPilot agent panel. The Notion trigger can create the request, but analysis requires the agent key.
+
+**Integration page is blocked**
+
+In SignalPilot Cloud, Notion integrations are a paid subscription feature. Upgrade the workspace plan, then return to **Integrations**.

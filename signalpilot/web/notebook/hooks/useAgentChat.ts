@@ -65,20 +65,32 @@ async function chatFetch(
     headers: { "Content-Type": "application/json", ...hdrs },
     body: opts?.body ? JSON.stringify(opts.body) : undefined,
   });
-  if (!resp.ok) {return null;}
+  if (!resp.ok) {
+    return null;
+  }
   const text = await resp.text();
   return text ? JSON.parse(text) : null;
 }
 
 function serializeAssistantMsg(msg: AgentMessage): string {
   const meta: Record<string, unknown> = {};
-  if (msg.toolCalls?.length) {meta.toolCalls = msg.toolCalls;}
-  if (msg.thinking) {meta.thinking = msg.thinking;}
+  if (msg.toolCalls?.length) {
+    meta.toolCalls = msg.toolCalls;
+  }
+  if (msg.thinking) {
+    meta.thinking = msg.thinking;
+  }
   return JSON.stringify({ content: msg.content, ...meta });
 }
 
 function deserializeMessages(
-  gwMessages: Array<{ role: string; content: string; metadata_json?: string | null; id: string; created_at: number }>,
+  gwMessages: Array<{
+    role: string;
+    content: string;
+    metadata_json?: string | null;
+    id: string;
+    created_at: number;
+  }>,
 ): AgentMessage[] {
   const result: AgentMessage[] = [];
   const appendMessage = (message: AgentMessage) => {
@@ -104,7 +116,11 @@ function deserializeMessages(
       appendMessage({ id: gm.id, role: "user", content: gm.content });
     } else if (gm.role === "assistant") {
       try {
-        const parsed = JSON.parse(gm.content) as { content?: string; toolCalls?: AgentToolCall[]; thinking?: string };
+        const parsed = JSON.parse(gm.content) as {
+          content?: string;
+          toolCalls?: AgentToolCall[];
+          thinking?: string;
+        };
         appendMessage({
           id: gm.id,
           role: "assistant",
@@ -190,13 +206,18 @@ export function useAgentChat({
         const hdrs = await getHeaders();
         const data = await chatFetch("/conversations", hdrs);
         const convs =
-          (data as { conversations?: Array<Record<string, unknown>> })?.conversations ?? [];
+          (data as { conversations?: Array<Record<string, unknown>> })
+            ?.conversations ?? [];
         const conversations = Array.isArray(convs) ? [...convs] : [];
 
         if (includeNotionConversations) {
-          const notionData = await chatFetch("/conversations?source=notion", hdrs);
+          const notionData = await chatFetch(
+            "/conversations?source=notion",
+            hdrs,
+          );
           const notionConvs =
-            (notionData as { conversations?: Array<Record<string, unknown>> })?.conversations ?? [];
+            (notionData as { conversations?: Array<Record<string, unknown>> })
+              ?.conversations ?? [];
           if (Array.isArray(notionConvs)) {
             mergeConversations(conversations, notionConvs);
           }
@@ -208,10 +229,13 @@ export function useAgentChat({
           attempt < 3 &&
           !cancelled
         ) {
-          retryTimer = setTimeout(() => {
-            retryTimer = null;
-            void loadSessions(attempt + 1);
-          }, 750 * (attempt + 1));
+          retryTimer = setTimeout(
+            () => {
+              retryTimer = null;
+              void loadSessions(attempt + 1);
+            },
+            750 * (attempt + 1),
+          );
           return;
         }
 
@@ -220,10 +244,13 @@ export function useAgentChat({
         }
       } catch {
         if (includeNotionConversations && attempt < 3 && !cancelled) {
-          retryTimer = setTimeout(() => {
-            retryTimer = null;
-            void loadSessions(attempt + 1);
-          }, 750 * (attempt + 1));
+          retryTimer = setTimeout(
+            () => {
+              retryTimer = null;
+              void loadSessions(attempt + 1);
+            },
+            750 * (attempt + 1),
+          );
           return;
         }
       } finally {
@@ -246,23 +273,33 @@ export function useAgentChat({
     (sid: string) => {
       setIsLoadingMessages(true);
       setError(null);
-      getHeaders().then((hdrs) => chatFetch(`/conversations/${sid}`, hdrs)).then((data) => {
-        const detail = data as {
-          conversation?: Record<string, unknown>;
-          messages?: Array<{ role: string; content: string; metadata_json?: string | null; id: string; created_at: number }>;
-        } | null;
-        if (!detail?.messages) {
-          throw new Error(`Could not load chat thread ${sid}`);
-        }
-        const msgs = deserializeMessages(detail.messages);
-        setMessages(msgs);
-        conversationIdRef.current = sid;
-        setActiveSessionId(sid);
-        newChatRef.current = true;
-        instanceIdRef.current = null;
-      }).catch((err) => {
-        setError(err instanceof Error ? err.message : String(err));
-      }).finally(() => setIsLoadingMessages(false));
+      getHeaders()
+        .then((hdrs) => chatFetch(`/conversations/${sid}`, hdrs))
+        .then((data) => {
+          const detail = data as {
+            conversation?: Record<string, unknown>;
+            messages?: Array<{
+              role: string;
+              content: string;
+              metadata_json?: string | null;
+              id: string;
+              created_at: number;
+            }>;
+          } | null;
+          if (!detail?.messages) {
+            throw new Error(`Could not load chat thread ${sid}`);
+          }
+          const msgs = deserializeMessages(detail.messages);
+          setMessages(msgs);
+          conversationIdRef.current = sid;
+          setActiveSessionId(sid);
+          newChatRef.current = true;
+          instanceIdRef.current = null;
+        })
+        .catch((err) => {
+          setError(err instanceof Error ? err.message : String(err));
+        })
+        .finally(() => setIsLoadingMessages(false));
     },
     [getHeaders],
   );
@@ -280,25 +317,27 @@ export function useAgentChat({
 
   const deleteSession = useCallback(
     (sid: string) => {
-      getHeaders().then((hdrs) => chatFetch(`/conversations/${sid}`, hdrs, { method: "DELETE" })).then(() => {
-        setChatSessions((prev) => prev.filter((s) => s.id !== sid));
-        if (conversationIdRef.current === sid) {
-          setMessages([]);
-          conversationIdRef.current = null;
-          setActiveSessionId(null);
-          instanceIdRef.current = null;
-        }
-      }).catch(() => {});
+      getHeaders()
+        .then((hdrs) =>
+          chatFetch(`/conversations/${sid}`, hdrs, { method: "DELETE" }),
+        )
+        .then(() => {
+          setChatSessions((prev) => prev.filter((s) => s.id !== sid));
+          if (conversationIdRef.current === sid) {
+            setMessages([]);
+            conversationIdRef.current = null;
+            setActiveSessionId(null);
+            instanceIdRef.current = null;
+          }
+        })
+        .catch(() => {});
     },
     [headers],
   );
 
-  const renameSession = useCallback(
-    (_sid: string, _newTitle: string) => {
-      // Gateway doesn't support rename yet — no-op
-    },
-    [],
-  );
+  const renameSession = useCallback((_sid: string, _newTitle: string) => {
+    // Gateway doesn't support rename yet — no-op
+  }, []);
 
   const clearMessages = useCallback(() => {
     conversationIdRef.current = null;
@@ -314,22 +353,27 @@ export function useAgentChat({
   function startNewBlock() {
     assistantIdRef.current = nextId();
     lastEventWasTextRef.current = false;
-    setMessages((prev) => [...prev, {
-      id: assistantIdRef.current,
-      role: "assistant" as const,
-      content: "",
-      toolCalls: [],
-    }]);
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: assistantIdRef.current,
+        role: "assistant" as const,
+        content: "",
+        toolCalls: [],
+      },
+    ]);
   }
 
   async function ensureInstance(hdrs: Record<string, string>): Promise<string> {
-    if (instanceIdRef.current) {return instanceIdRef.current;}
+    if (instanceIdRef.current) {
+      return instanceIdRef.current;
+    }
 
     const resp = await fetch(`${baseUrl}/create`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...hdrs },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-6",
       }),
     });
 
@@ -337,30 +381,40 @@ export function useAgentChat({
       throw new Error(`Failed to create agent: HTTP ${resp.status}`);
     }
 
-    const data = await resp.json() as { instanceId: string };
+    const data = (await resp.json()) as { instanceId: string };
     instanceIdRef.current = data.instanceId;
     return data.instanceId;
   }
 
-  async function ensureConversation(hdrs: Record<string, string>, title: string): Promise<string> {
-    if (conversationIdRef.current) {return conversationIdRef.current;}
+  async function ensureConversation(
+    hdrs: Record<string, string>,
+    title: string,
+  ): Promise<string> {
+    if (conversationIdRef.current) {
+      return conversationIdRef.current;
+    }
 
-    const result = await chatFetch("/conversations", hdrs, {
+    const result = (await chatFetch("/conversations", hdrs, {
       method: "POST",
       body: { title },
-    }) as { id?: string } | null;
+    })) as { id?: string } | null;
 
-    if (!result?.id) {throw new Error("Failed to create conversation");}
+    if (!result?.id) {
+      throw new Error("Failed to create conversation");
+    }
     conversationIdRef.current = result.id;
     setActiveSessionId(result.id);
 
-    setChatSessions((prev) => [{
-      id: result.id!,
-      title,
-      messages: [],
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    }, ...prev]);
+    setChatSessions((prev) => [
+      {
+        id: result.id!,
+        title,
+        messages: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      ...prev,
+    ]);
 
     return result.id;
   }
@@ -436,7 +490,9 @@ export function useAgentChat({
         }
 
         const reader = response.body?.getReader();
-        if (!reader) {throw new Error("No response body");}
+        if (!reader) {
+          throw new Error("No response body");
+        }
 
         const decoder = new TextDecoder();
         let buffer = "";
@@ -444,19 +500,27 @@ export function useAgentChat({
         let streamDone = false;
         while (!streamDone) {
           const { done, value } = await reader.read();
-          if (done) {break;}
+          if (done) {
+            break;
+          }
 
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
           buffer = lines.pop() || "";
 
           for (const line of lines) {
-            if (!line.startsWith("data: ")) {continue;}
+            if (!line.startsWith("data: ")) {
+              continue;
+            }
             const jsonStr = line.slice(6).trim();
-            if (!jsonStr) {continue;}
+            if (!jsonStr) {
+              continue;
+            }
 
             try {
-              const event = JSON.parse(jsonStr) as Parameters<typeof handleEvent>[0];
+              const event = JSON.parse(jsonStr) as Parameters<
+                typeof handleEvent
+              >[0];
               if (event.type === "done") {
                 streamDone = true;
                 break;
@@ -472,7 +536,12 @@ export function useAgentChat({
         setMessages((prev) => {
           const lastAssistant = prev.findLast((m) => m.role === "assistant");
           if (lastAssistant && convId) {
-            persistMessage(hdrs, convId, "assistant", serializeAssistantMsg(lastAssistant));
+            persistMessage(
+              hdrs,
+              convId,
+              "assistant",
+              serializeAssistantMsg(lastAssistant),
+            );
           }
           return prev;
         });
@@ -524,9 +593,7 @@ export function useAgentChat({
         lastEventWasTextRef.current = true;
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === assistantId
-              ? { ...m, content: event.content || "" }
-              : m,
+            m.id === assistantId ? { ...m, content: event.content || "" } : m,
           ),
         );
         break;
@@ -544,9 +611,7 @@ export function useAgentChat({
       case "thinking":
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === assistantId
-              ? { ...m, thinking: event.content || "" }
-              : m,
+            m.id === assistantId ? { ...m, thinking: event.content || "" } : m,
           ),
         );
         break;
@@ -575,7 +640,9 @@ export function useAgentChat({
       case "tool_result":
         setMessages((prev) =>
           prev.map((m) => {
-            if (m.id !== assistantId) {return m;}
+            if (m.id !== assistantId) {
+              return m;
+            }
             const toolCalls = [...(m.toolCalls || [])];
             const targetId = event.tool_call_id;
             let matched = false;
@@ -611,20 +678,24 @@ export function useAgentChat({
   }
 
   const stopAgent = useCallback(() => {
-    if (!abortRef.current) {return;}
+    if (!abortRef.current) {
+      return;
+    }
 
     abortRef.current.abort();
     abortRef.current = null;
 
     if (instanceIdRef.current) {
       const instanceId = instanceIdRef.current;
-      getHeaders().then((hdrs) => {
-        fetch(`${baseUrl}/stop`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...hdrs },
-          body: JSON.stringify({ instanceId }),
-        }).catch(() => {});
-      }).catch(() => {});
+      getHeaders()
+        .then((hdrs) => {
+          fetch(`${baseUrl}/stop`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...hdrs },
+            body: JSON.stringify({ instanceId }),
+          }).catch(() => {});
+        })
+        .catch(() => {});
     }
 
     setIsStreaming(false);

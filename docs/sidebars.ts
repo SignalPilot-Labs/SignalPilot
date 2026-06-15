@@ -24,6 +24,7 @@ const sidebars: SidebarsConfig = {
       collapsed: false,
       items: [
         'connect-database',
+        'connect-notion',
         'setup/ssh-tunneling',
         'mcp/connect-claude-code',
         'mcp/connect-other-clients',

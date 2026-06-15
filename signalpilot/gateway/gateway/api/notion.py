@@ -41,6 +41,43 @@ logger = logging.getLogger(__name__)
 _notion_event_tasks: set[asyncio.Task[None]] = set()
 
 
+def _notion_webhook_fields(payload: dict | None) -> dict[str, object | None]:
+    payload = payload or {}
+    return {
+        "event_type": payload.get("type"),
+        "attempt_number": payload.get("attempt_number"),
+        "workspace_id": payload.get("workspace_id"),
+        "page_id": (payload.get("data") or {}).get("page_id"),
+    }
+
+
+def _log_notion_webhook_decision(
+    status: str,
+    *,
+    event_id: str | None,
+    payload: dict | None,
+    reason: str,
+    installation_id: str | None = None,
+    org_id: str | None = None,
+    level: int = logging.INFO,
+) -> None:
+    fields = _notion_webhook_fields(payload)
+    logger.log(
+        level,
+        "Notion webhook %s: event_id=%s type=%s attempt=%s workspace_id=%s page_id=%s "
+        "installation_id=%s org_id=%s reason=%s",
+        status,
+        event_id,
+        fields["event_type"],
+        fields["attempt_number"],
+        fields["workspace_id"],
+        fields["page_id"],
+        installation_id,
+        org_id,
+        reason,
+    )
+
+
 def _notion_oauth_client_id() -> str:
     value = os.getenv("NOTION_OAUTH_CLIENT_ID")
     if not value:
@@ -171,8 +208,23 @@ async def _run_notion_operation_with_refresh(store: Store, installation_id: str,
 async def _process_notion_event_task(event_id: str, installation_id: str, payload: dict) -> None:
     factory = get_session_factory()
     async with factory() as session:
+        _log_notion_webhook_decision(
+            "processing",
+            event_id=event_id,
+            payload=payload,
+            installation_id=installation_id,
+            reason="background_task_started",
+        )
         record = await notion_store.get_installation_record(session, installation_id)
         if record is None:
+            _log_notion_webhook_decision(
+                "failed",
+                event_id=event_id,
+                payload=payload,
+                installation_id=installation_id,
+                reason="installation_missing_before_processing",
+                level=logging.WARNING,
+            )
             await notion_store.record_webhook_delivery(
                 session,
                 event_id,
@@ -184,6 +236,15 @@ async def _process_notion_event_task(event_id: str, installation_id: str, payloa
             return
         installation, config, token = record
         if config is None:
+            _log_notion_webhook_decision(
+                "failed",
+                event_id=event_id,
+                payload=payload,
+                installation_id=installation_id,
+                org_id=installation.org_id,
+                reason="installation_not_provisioned",
+                level=logging.WARNING,
+            )
             await notion_store.record_webhook_delivery(
                 session,
                 event_id,
@@ -197,7 +258,35 @@ async def _process_notion_event_task(event_id: str, installation_id: str, payloa
         routed = notion_webhooks.RoutedNotionInstallation(installation=installation, config=config, access_token=token)
         try:
             result = await notion_analysis.process_routed_comment_event(routed, payload, db=session)
+        except httpx.HTTPStatusError as exc:
+            error = notion_client.http_error_summary(exc)
+            logger.warning(
+                "Notion webhook processing failed: event_id=%s installation_id=%s org_id=%s error=%s",
+                event_id,
+                installation_id,
+                installation.org_id,
+                error,
+                exc_info=True,
+            )
+            await notion_store.record_webhook_delivery(
+                session,
+                event_id,
+                status="failed",
+                installation_id=installation_id,
+                org_id=installation.org_id,
+                error=error[:1000],
+                processed=True,
+            )
+            return
         except Exception as exc:
+            logger.warning(
+                "Notion webhook processing failed: event_id=%s installation_id=%s org_id=%s error=%s",
+                event_id,
+                installation_id,
+                installation.org_id,
+                str(exc)[:500],
+                exc_info=True,
+            )
             await notion_store.record_webhook_delivery(
                 session,
                 event_id,
@@ -209,6 +298,14 @@ async def _process_notion_event_task(event_id: str, installation_id: str, payloa
             )
             return
         if result.status == "ignored":
+            _log_notion_webhook_decision(
+                "ignored",
+                event_id=event_id,
+                payload=payload,
+                installation_id=installation_id,
+                org_id=installation.org_id,
+                reason=result.reason or "processor_ignored",
+            )
             await notion_store.record_webhook_delivery(
                 session,
                 event_id,
@@ -219,6 +316,14 @@ async def _process_notion_event_task(event_id: str, installation_id: str, payloa
                 processed=True,
             )
             return
+        _log_notion_webhook_decision(
+            "processed",
+            event_id=event_id,
+            payload=payload,
+            installation_id=installation_id,
+            org_id=installation.org_id,
+            reason="processor_completed",
+        )
         await notion_store.record_webhook_delivery(
             session,
             event_id,
@@ -338,14 +443,40 @@ async def provision_notion_oauth_installation(
     user's private Notion section. A parent_page_id can still be supplied for
     the older advanced setup path.
     """
+    existing = await store.get_notion_oauth_installation(installation_id)
+    existing_config = existing.config if existing else None
+    existing_is_provisioned = bool(
+        existing_config
+        and existing_config.trigger_page_id
+        and existing_config.requests_data_source_id
+        and existing_config.requests_database_page_id
+    )
 
     async def _operation(token: str):
-        return await notion_client.provision_signalpilot_resources(token, body.parent_page_id)
+        if existing_is_provisioned and existing_config is not None:
+            provisioned = {
+                "parent_page_id": existing_config.parent_page_id,
+                "trigger_page_id": existing_config.trigger_page_id,
+                "requests_data_source_id": existing_config.requests_data_source_id,
+                "requests_database_page_id": existing_config.requests_database_page_id,
+            }
+        else:
+            provisioned = await notion_client.provision_signalpilot_resources(token, body.parent_page_id)
+        await notion_client.list_comments(token, str(provisioned["trigger_page_id"]))
+        return provisioned
 
     try:
         provisioned = await _run_notion_operation_with_refresh(store, installation_id, _operation)
     except httpx.HTTPStatusError as exc:
-        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text[:500]) from exc
+        if notion_client.is_comment_read_capability_error(exc):
+            raise HTTPException(
+                status_code=424,
+                detail=(
+                    "Notion connection is missing Read comments capability. Enable comment capabilities "
+                    "for the public integration in the Notion developer portal, then reconnect Notion."
+                ),
+            ) from exc
+        raise HTTPException(status_code=exc.response.status_code, detail=notion_client.http_error_summary(exc)) from exc
 
     installation = await store.save_notion_oauth_installation_config(
         installation_id,
@@ -468,14 +599,35 @@ async def receive_notion_webhook(
 
     event_id = payload.get("id")
     if not event_id:
+        _log_notion_webhook_decision(
+            "ignored",
+            event_id=None,
+            payload=payload,
+            reason="missing_event_id",
+            level=logging.WARNING,
+        )
         return NotionWebhookResponse(status="ignored")
 
     existing = await notion_store.get_webhook_delivery(db, str(event_id))
     if existing and existing.status in {"queued", "processing", "processed", "ignored"}:
+        _log_notion_webhook_decision(
+            "duplicate",
+            event_id=str(event_id),
+            payload=payload,
+            reason=f"existing_status_{existing.status}",
+            installation_id=existing.installation_id,
+            org_id=existing.org_id,
+        )
         return NotionWebhookResponse(status="duplicate", event_id=str(event_id))
 
     attempt_number = payload.get("attempt_number")
     if payload.get("type") != "comment.created":
+        _log_notion_webhook_decision(
+            "ignored",
+            event_id=str(event_id),
+            payload=payload,
+            reason="unsupported_event_type",
+        )
         await notion_store.record_webhook_delivery(
             db,
             str(event_id),
@@ -486,6 +638,12 @@ async def receive_notion_webhook(
         return NotionWebhookResponse(status="ignored", event_id=str(event_id))
 
     if notion_webhooks.is_bot_authored(payload):
+        _log_notion_webhook_decision(
+            "ignored",
+            event_id=str(event_id),
+            payload=payload,
+            reason="bot_authored",
+        )
         await notion_store.record_webhook_delivery(
             db,
             str(event_id),
@@ -498,6 +656,13 @@ async def receive_notion_webhook(
     try:
         routed = await notion_webhooks.route_comment_event(db, payload)
     except notion_webhooks.AmbiguousNotionInstallation as exc:
+        _log_notion_webhook_decision(
+            "ambiguous",
+            event_id=str(event_id),
+            payload=payload,
+            reason=str(exc),
+            level=logging.WARNING,
+        )
         await notion_store.record_webhook_delivery(
             db,
             str(event_id),
@@ -509,6 +674,12 @@ async def receive_notion_webhook(
         return NotionWebhookResponse(status="ambiguous", event_id=str(event_id))
 
     if routed is None:
+        _log_notion_webhook_decision(
+            "ignored",
+            event_id=str(event_id),
+            payload=payload,
+            reason="no_matching_active_provisioned_installation",
+        )
         await notion_store.record_webhook_delivery(
             db,
             str(event_id),
@@ -525,6 +696,14 @@ async def receive_notion_webhook(
         attempt_number=attempt_number,
         installation_id=routed.installation.id,
         org_id=routed.installation.org_id,
+    )
+    _log_notion_webhook_decision(
+        "queued",
+        event_id=str(event_id),
+        payload=payload,
+        installation_id=routed.installation.id,
+        org_id=routed.installation.org_id,
+        reason="matched_installation",
     )
     _schedule_notion_event_processing(str(event_id), routed.installation.id, payload)
     return NotionWebhookResponse(status="queued", event_id=str(event_id))

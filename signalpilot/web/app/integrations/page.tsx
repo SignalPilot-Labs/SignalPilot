@@ -85,13 +85,61 @@ function IntegrationsContent() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const notion = params.get("notion");
+    const installationId = params.get("installation_id");
     if (!notion) return;
-    toast(notion === "connected" ? "notion connected" : `notion ${notion}`, notion === "connected" ? "success" : "error");
     params.delete("notion");
     params.delete("installation_id");
     const next = params.toString();
     window.history.replaceState(null, "", `${window.location.pathname}${next ? `?${next}` : ""}`);
-  }, [toast]);
+
+    if (notion !== "connected" || !installationId) {
+      toast(notion === "connected" ? "notion connected" : `notion ${notion}`, notion === "connected" ? "success" : "error");
+      return;
+    }
+
+    const oauthInstallationId = installationId;
+    let active = true;
+    async function autoProvisionOAuthInstall() {
+      setProvisioningId(oauthInstallationId);
+      toast("notion connected; provisioning workspace", "info", 5000);
+      try {
+        const installations = await getNotionOAuthInstallations();
+        if (active) {
+          setOauthInstallations(installations);
+          setLoadError(false);
+          setLoading(false);
+        }
+
+        const installation = installations.find((candidate) => candidate.id === oauthInstallationId);
+        if (installation?.config?.enabled) {
+          if (active) toast("notion connected", "success");
+          return;
+        }
+        if (!installation) {
+          if (active) toast("notion connected, but installation was not found", "error");
+          return;
+        }
+
+        await provisionNotionOAuthInstallation(oauthInstallationId);
+        if (active) {
+          toast("notion workspace provisioned", "success");
+          await fetchIntegrations();
+        }
+      } catch (e) {
+        if (active) {
+          setLoading(false);
+          toast(`provision failed: ${e}`, "error", 6000);
+        }
+      } finally {
+        if (active) setProvisioningId(null);
+      }
+    }
+
+    autoProvisionOAuthInstall();
+    return () => {
+      active = false;
+    };
+  }, [fetchIntegrations, toast]);
 
   async function handleConnectNotion() {
     setConnecting(true);

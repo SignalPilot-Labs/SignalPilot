@@ -136,8 +136,12 @@ function resolveRuntimeMode({
   return "notebook";
 }
 
-function hasUsableNotionInstallation(installations: Array<{ status?: string }>): boolean {
-  return installations.some((installation) => installation.status !== "disconnected");
+function hasUsableNotionInstallation(
+  installations: Array<{ status?: string; config?: { enabled?: boolean } | null }>,
+): boolean {
+  return installations.some(
+    (installation) => installation.status !== "disconnected" && installation.config?.enabled === true,
+  );
 }
 
 function hasUsableGitHubInstallation(data: unknown): boolean {

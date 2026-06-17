@@ -41,20 +41,11 @@ jobs:
       - name: Audit blocking Python dependencies
         run: |
           set -euo pipefail
-          for requirements in "$RUNNER_TEMP"/security/gateway.txt "$RUNNER_TEMP"/security/sp-sandbox.txt; do
+          for requirements in "$RUNNER_TEMP"/security/gateway.txt "$RUNNER_TEMP"/security/notebook-server.txt "$RUNNER_TEMP"/security/sp-sandbox.txt; do
             echo "::group::pip-audit $(basename "$requirements")"
             pip-audit -r "$requirements" --progress-spinner off
             echo "::endgroup::"
           done
-
-      - name: Audit notebook-server dependencies
-        run: |
-          set -euo pipefail
-          echo "::group::pip-audit notebook-server.txt"
-          if ! pip-audit -r "$RUNNER_TEMP/security/notebook-server.txt" --progress-spinner off; then
-            echo "::warning::notebook-server dependency audit is informational until its existing vulnerable lockfile entries are remediated."
-          fi
-          echo "::endgroup::"
 
   deps-node:
     name: deps-node
@@ -69,19 +60,11 @@ jobs:
 
       - name: Audit web dependencies
         working-directory: signalpilot/web
-        run: |
-          set -euo pipefail
-          if ! npm audit --audit-level=high; then
-            echo "::warning::web npm audit is informational until existing high/critical findings are remediated."
-          fi
+        run: npm audit
 
       - name: Audit docs dependencies
         working-directory: docs
-        run: |
-          set -euo pipefail
-          if ! npm audit --audit-level=high; then
-            echo "::warning::docs npm audit is informational until existing high/critical findings are remediated."
-          fi
+        run: npm audit
 
   secrets:
     name: secrets

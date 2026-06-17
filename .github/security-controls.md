@@ -5,12 +5,11 @@ This repository uses `.github/workflows/security.yml` to provide PR evidence for
 - CC7: dependency vulnerability scanning, secret scanning, and SAST on every pull request and `main` push.
 - CC8: a single `security-gate` status check that can be required before merging to `main`.
 
-Initial dependency-scan enforcement:
+Dependency-scan enforcement:
 
-- Blocking: gateway Python dependencies, sandbox Python dependencies.
-- Informational until dependency remediation lands: notebook-server Python dependencies and npm dependencies.
-
-The informational scans are still run on every pull request and `main` push. Promote them to blocking after the existing high/critical npm findings are fixed and `signalpilot/notebook-server/uv.lock` can be updated without the missing local `sp_docs` source.
+- Blocking: gateway Python dependencies, notebook-server Python dependencies, sandbox Python dependencies, web npm dependencies, and docs npm dependencies.
+- Python scans export each `uv.lock` to a temporary requirements file and run `pip-audit`.
+- Node scans run `npm audit` in both npm projects, so low, moderate, high, and critical advisories fail the gate.
 
 Initial SAST enforcement:
 

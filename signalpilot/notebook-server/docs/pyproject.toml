@@ -1,0 +1,15 @@
+[build-system]
+requires = ["uv_build>=0.8.3,<0.12.0"]
+build-backend = "uv_build"
+
+[project]
+name = "sp-docs"
+version = "0.1.0"
+dependencies = [
+    "lzstring>=1.0.4",
+]
+requires-python = ">=3.10"
+
+[tool.uv.build-backend]
+module-name = "sp_docs"
+module-root = ""

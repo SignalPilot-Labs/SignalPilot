@@ -1,0 +1,2017 @@
+{
+  "results": [
+    {
+      "code": "37 \n38         public_ip = urllib.request.urlopen(\"https://api.ipify.org\", timeout=5).read().decode().strip()\n39         result[\"public_ip\"] = public_ip\n",
+      "col_offset": 20,
+      "end_col_offset": 78,
+      "filename": "signalpilot/gateway/gateway/api/connections/diagnostics.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 38,
+      "line_range": [
+        38
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "18 def serve(\n19     host: str = typer.Option(\"0.0.0.0\", help=\"Bind host\"),\n20     port: int = typer.Option(3300, help=\"Bind port\"),\n",
+      "col_offset": 29,
+      "end_col_offset": 38,
+      "filename": "signalpilot/gateway/gateway/cli.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 605,
+        "link": "https://cwe.mitre.org/data/definitions/605.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible binding to all interfaces.",
+      "line_number": 19,
+      "line_range": [
+        19
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b104_hardcoded_bind_all_interfaces.html",
+      "test_id": "B104",
+      "test_name": "hardcoded_bind_all_interfaces"
+    },
+    {
+      "code": "360                         cursor.execute(\n361                             f\"SELECT DISTINCT `{safe_col}` FROM {safe_table} WHERE `{safe_col}` IS NOT NULL LIMIT {limit}\"\n362                         )\n",
+      "col_offset": 30,
+      "end_col_offset": 47,
+      "filename": "signalpilot/gateway/gateway/connectors/drivers/mysql.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 361,
+      "line_range": [
+        361
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "460                         cursor.execute(\n461                             f\"SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}\"\n462                         )\n",
+      "col_offset": 30,
+      "end_col_offset": 46,
+      "filename": "signalpilot/gateway/gateway/connectors/drivers/redshift.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 461,
+      "line_range": [
+        461
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "431                     cursor.execute(\n432                         f\"SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}\"\n433                     )\n",
+      "col_offset": 26,
+      "end_col_offset": 42,
+      "filename": "signalpilot/gateway/gateway/connectors/drivers/snowflake.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 432,
+      "line_range": [
+        432
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "181                     cursor = self._conn.execute(\n182                         f\"SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL LIMIT {limit}\"\n183                     )\n",
+      "col_offset": 26,
+      "end_col_offset": 42,
+      "filename": "signalpilot/gateway/gateway/connectors/drivers/sqlite.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 182,
+      "line_range": [
+        182
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "33     re.compile(r\"/opt/[^\\s,;)\\\"']+\"),\n34     re.compile(r\"/tmp/[^\\s,;)\\\"']+\"),\n35     re.compile(r\"/etc/[^\\s,;)\\\"']+\"),\n",
+      "col_offset": 15,
+      "end_col_offset": 35,
+      "filename": "signalpilot/gateway/gateway/errors/mcp.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 377,
+        "link": "https://cwe.mitre.org/data/definitions/377.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Probable insecure usage of temp file/directory.",
+      "line_number": 34,
+      "line_range": [
+        34
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b108_hardcoded_tmp_directory.html",
+      "test_id": "B108",
+      "test_name": "hardcoded_tmp_directory"
+    },
+    {
+      "code": "12 # Allowed hosts for MCP streamable-http transport (DNS rebinding protection)\n13 _allowed_hosts = [\"localhost\", \"127.0.0.1\", \"host.docker.internal\", \"0.0.0.0\"]\n14 _extra_hosts = get_mcp_settings().sp_mcp_allowed_hosts\n",
+      "col_offset": 68,
+      "end_col_offset": 77,
+      "filename": "signalpilot/gateway/gateway/mcp/server.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 605,
+        "link": "https://cwe.mitre.org/data/definitions/605.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible binding to all interfaces.",
+      "line_number": 13,
+      "line_range": [
+        13
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b104_hardcoded_bind_all_interfaces.html",
+      "test_id": "B104",
+      "test_name": "hardcoded_bind_all_interfaces"
+    },
+    {
+      "code": "59         authenticated_app = MCPAuthMiddleware(starlette_app)\n60         uvicorn.run(authenticated_app, host=\"0.0.0.0\", port=port, server_header=False)\n61     else:\n",
+      "col_offset": 44,
+      "end_col_offset": 53,
+      "filename": "signalpilot/gateway/gateway/mcp/server.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 605,
+        "link": "https://cwe.mitre.org/data/definitions/605.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible binding to all interfaces.",
+      "line_number": 60,
+      "line_range": [
+        60
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b104_hardcoded_bind_all_interfaces.html",
+      "test_id": "B104",
+      "test_name": "hardcoded_bind_all_interfaces"
+    },
+    {
+      "code": "134         ) as connector:\n135             count_rows = await connector.execute(f\"SELECT COUNT(*) as total_rows FROM {_quote_table(table_name)}\")\n136     except Exception as e:\n",
+      "col_offset": 51,
+      "end_col_offset": 86,
+      "filename": "signalpilot/gateway/gateway/mcp/tools/model_verify.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 135,
+      "line_range": [
+        135
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "173                         dist_rows = await connector.execute(\n174                             f'SELECT COUNT(DISTINCT \"{safe_key}\") as distinct_count FROM {_quote_table(table_name)}'\n175                         )\n",
+      "col_offset": 30,
+      "end_col_offset": 53,
+      "filename": "signalpilot/gateway/gateway/mcp/tools/model_verify.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 174,
+      "line_range": [
+        174
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "246         ) as connector:\n247             model_rows_result = await connector.execute(f\"SELECT COUNT(*) as row_count FROM {_quote_table(model_name)}\")\n248     except Exception as e:\n",
+      "col_offset": 58,
+      "end_col_offset": 92,
+      "filename": "signalpilot/gateway/gateway/mcp/tools/model_verify.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 247,
+      "line_range": [
+        247
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "261             ) as connector:\n262                 src_result = await connector.execute(f\"SELECT COUNT(*) as row_count FROM {_quote_table(source_table)}\")\n263             source_rows = src_result[0].get(\"row_count\", 0) if src_result else 0\n",
+      "col_offset": 55,
+      "end_col_offset": 89,
+      "filename": "signalpilot/gateway/gateway/mcp/tools/model_verify.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 262,
+      "line_range": [
+        262
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "347         ) as connector:\n348             model_result = await connector.execute(f\"SELECT COUNT(*) as row_count FROM {_quote_table(model_name)}\")\n349     except Exception as e:\n",
+      "col_offset": 53,
+      "end_col_offset": 87,
+      "filename": "signalpilot/gateway/gateway/mcp/tools/model_verify.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 348,
+      "line_range": [
+        348
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "370             ) as connector:\n371                 src_result = await connector.execute(f\"SELECT COUNT(*) as row_count FROM {_quote_table(src)}\")\n372             src_rows: int = src_result[0].get(\"row_count\", 0) if src_result else 0\n",
+      "col_offset": 55,
+      "end_col_offset": 89,
+      "filename": "signalpilot/gateway/gateway/mcp/tools/model_verify.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 371,
+      "line_range": [
+        371
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "429                         col_result = await connector.execute(\n430                             f'SELECT COUNT(*) FILTER (WHERE \"{col}\" IS NULL) as nulls, '\n431                             f'COUNT(DISTINCT \"{col}\") as dist '\n432                             f\"FROM {_quote_table(model_name)}\"\n433                         )\n",
+      "col_offset": 30,
+      "end_col_offset": 61,
+      "filename": "signalpilot/gateway/gateway/mcp/tools/model_verify.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 430,
+      "line_range": [
+        430,
+        431,
+        432
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "472                 sample_result = await connector.execute(\n473                     f\"SELECT * FROM {_quote_table(model_name)} LIMIT 5\"\n474                 )\n",
+      "col_offset": 22,
+      "end_col_offset": 36,
+      "filename": "signalpilot/gateway/gateway/mcp/tools/model_verify.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 473,
+      "line_range": [
+        473
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "519                             val_result = await connector.execute(\n520                                 f'SELECT DISTINCT \"{col}\" as val FROM {_quote_table(model_name)} ORDER BY 1 LIMIT 15'\n521                             )\n",
+      "col_offset": 34,
+      "end_col_offset": 51,
+      "filename": "signalpilot/gateway/gateway/mcp/tools/model_verify.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 520,
+      "line_range": [
+        520
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "118         {\"name\": \"HOME\", \"value\": \"/home/notebook\"},\n119         {\"name\": \"SP_LOG_DIR\", \"value\": \"/tmp/sp-logs\"},\n120     ]\n",
+      "col_offset": 40,
+      "end_col_offset": 54,
+      "filename": "signalpilot/gateway/gateway/orchestrator/kubernetes.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 377,
+        "link": "https://cwe.mitre.org/data/definitions/377.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Probable insecure usage of temp file/directory.",
+      "line_number": 119,
+      "line_range": [
+        119
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b108_hardcoded_tmp_directory.html",
+      "test_id": "B108",
+      "test_name": "hardcoded_tmp_directory"
+    },
+    {
+      "code": "232                     \"args\": [\n233                         \"--host\", \"0.0.0.0\",\n234                         \"--port\", \"2718\",\n235                         \"--headless\",\n236                         \"--no-token\",\n237                         \"--no-skew-protection\",\n238                         \"--allow-origins\", \"http://localhost:3200,http://localhost:3300\",\n239                         \"--base-url\", f\"/notebook/{session_id}\",\n240                         \"/workspace\",\n241                     ],\n242                     \"ports\": [{\"containerPort\": 2718}],\n243                     \"env\": env,\n",
+      "col_offset": 34,
+      "end_col_offset": 43,
+      "filename": "signalpilot/gateway/gateway/orchestrator/kubernetes.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 605,
+        "link": "https://cwe.mitre.org/data/definitions/605.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible binding to all interfaces.",
+      "line_number": 233,
+      "line_range": [
+        232,
+        233,
+        234,
+        235,
+        236,
+        237,
+        238,
+        239,
+        240,
+        241
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b104_hardcoded_bind_all_interfaces.html",
+      "test_id": "B104",
+      "test_name": "hardcoded_bind_all_interfaces"
+    },
+    {
+      "code": "262                     \"volumeMounts\": [\n263                         {\"name\": \"tmp\", \"mountPath\": \"/tmp\"},\n264                         {\"name\": \"home\", \"mountPath\": \"/home/notebook\"},\n",
+      "col_offset": 53,
+      "end_col_offset": 59,
+      "filename": "signalpilot/gateway/gateway/orchestrator/kubernetes.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 377,
+        "link": "https://cwe.mitre.org/data/definitions/377.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Probable insecure usage of temp file/directory.",
+      "line_number": 263,
+      "line_range": [
+        263
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b108_hardcoded_tmp_directory.html",
+      "test_id": "B108",
+      "test_name": "hardcoded_tmp_directory"
+    },
+    {
+      "code": "99     local = {\"stub\": basis, \"Any\": Any}\n100     eval(compile(fn, file, \"exec\"), local)\n101 \n",
+      "col_offset": 4,
+      "end_col_offset": 42,
+      "filename": "signalpilot/notebook-server/signalpilot/_ast/pytest.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of possibly insecure function - consider using safer ast.literal_eval.",
+      "line_number": 100,
+      "line_range": [
+        100
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b307-eval",
+      "test_id": "B307",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "185         fixture_args = [\n186             eval(compile(ast.Expression(arg), file, \"eval\"), local)\n187             for arg in decorator.args\n",
+      "col_offset": 12,
+      "end_col_offset": 67,
+      "filename": "signalpilot/notebook-server/signalpilot/_ast/pytest.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of possibly insecure function - consider using safer ast.literal_eval.",
+      "line_number": 186,
+      "line_range": [
+        186
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b307-eval",
+      "test_id": "B307",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "189         fixture_kwargs = {\n190             kw.arg: eval(\n191                 compile(ast.Expression(kw.value), file, \"eval\"), local\n192             )\n193             for kw in decorator.keywords\n",
+      "col_offset": 20,
+      "end_col_offset": 13,
+      "filename": "signalpilot/notebook-server/signalpilot/_ast/pytest.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of possibly insecure function - consider using safer ast.literal_eval.",
+      "line_number": 190,
+      "line_range": [
+        190,
+        191,
+        192
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b307-eval",
+      "test_id": "B307",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "288                 expr = ast.Expression(decorator)\n289                 hook = eval(compile(expr, file, \"eval\"), local)(hook)\n290     except Exception as e:\n",
+      "col_offset": 23,
+      "end_col_offset": 63,
+      "filename": "signalpilot/notebook-server/signalpilot/_ast/pytest.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of possibly insecure function - consider using safer ast.literal_eval.",
+      "line_number": 289,
+      "line_range": [
+        289
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b307-eval",
+      "test_id": "B307",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "104 \n105     host = \"0.0.0.0\"\n106     if port is None:\n",
+      "col_offset": 11,
+      "end_col_offset": 20,
+      "filename": "signalpilot/notebook-server/signalpilot/_cli/run_docker.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 605,
+        "link": "https://cwe.mitre.org/data/definitions/605.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible binding to all interfaces.",
+      "line_number": 105,
+      "line_range": [
+        105
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b104_hardcoded_bind_all_interfaces.html",
+      "test_id": "B104",
+      "test_name": "hardcoded_bind_all_interfaces"
+    },
+    {
+      "code": "36         try:\n37             with urllib.request.urlopen(req, timeout=30) as resp:\n38                 return json.loads(resp.read().decode())\n",
+      "col_offset": 17,
+      "end_col_offset": 56,
+      "filename": "signalpilot/notebook-server/signalpilot/_gateway/client.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 37,
+      "line_range": [
+        37
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "51         try:\n52             with urllib.request.urlopen(req, timeout=60) as resp:\n53                 return json.loads(resp.read().decode())\n",
+      "col_offset": 17,
+      "end_col_offset": 56,
+      "filename": "signalpilot/notebook-server/signalpilot/_gateway/client.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 52,
+      "line_range": [
+        52
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "369     try:\n370         exec(compile(extracted, notebook_path, \"exec\"), namespace)\n371     except Exception as e:\n",
+      "col_offset": 8,
+      "end_col_offset": 66,
+      "filename": "signalpilot/notebook-server/signalpilot/_metadata/opengraph.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of exec detected.",
+      "line_number": 370,
+      "line_range": [
+        370
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b102_exec_used.html",
+      "test_id": "B102",
+      "test_name": "exec_used"
+    },
+    {
+      "code": "199             else:\n200                 with urlopen(\n201                     TIME_FORMAT_LOCALE_URL.format(locale=locale),\n202                     timeout=FETCH_TIMEOUT,\n203                 ) as response:\n204                     return dict(json.loads(response.read()))\n",
+      "col_offset": 21,
+      "end_col_offset": 17,
+      "filename": "signalpilot/notebook-server/signalpilot/_output/formatters/altair_formatters.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 200,
+      "line_range": [
+        200,
+        201,
+        202,
+        203
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "215             else:\n216                 with urlopen(\n217                     FORMAT_LOCALE_URL.format(locale=locale),\n218                     timeout=FETCH_TIMEOUT,\n219                 ) as response:\n220                     return dict(json.loads(response.read()))\n",
+      "col_offset": 21,
+      "end_col_offset": 17,
+      "filename": "signalpilot/notebook-server/signalpilot/_output/formatters/altair_formatters.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 216,
+      "line_range": [
+        216,
+        217,
+        218,
+        219
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "260         # some libraries like duckdb introspect globals() ...\n261         data_str: str = eval(\"repr(obj)\", glbls, {\"obj\": obj})\n262     except Exception:\n",
+      "col_offset": 24,
+      "end_col_offset": 62,
+      "filename": "signalpilot/notebook-server/signalpilot/_output/formatting.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of possibly insecure function - consider using safer ast.literal_eval.",
+      "line_number": 261,
+      "line_range": [
+        261
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b307-eval",
+      "test_id": "B307",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "405     elif is_url(filename):\n406         with urlopen(filename) as response:\n407             text = response.read().decode(\"utf-8\")\n",
+      "col_offset": 13,
+      "end_col_offset": 30,
+      "filename": "signalpilot/notebook-server/signalpilot/_output/md.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 406,
+      "line_range": [
+        406
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "679                 # polars read_json does not support urls\n680                 with urllib.request.urlopen(chart.data) as response:\n681                     return pl.read_json(response)\n",
+      "col_offset": 21,
+      "end_col_offset": 55,
+      "filename": "signalpilot/notebook-server/signalpilot/_plugins/ui/_impl/altair_chart.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 680,
+      "line_range": [
+        680
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "529 \n530     return eval(\n531         _SQL_CALL_EXPRESSION.format(\n532             original=binding_names.original,\n533             args=binding_names.args,\n534             kwargs=binding_names.kwargs,\n535         ),\n536         eval_globals,\n537         locals_for_eval,\n538     )\n539 \n",
+      "col_offset": 11,
+      "end_col_offset": 5,
+      "filename": "signalpilot/notebook-server/signalpilot/_runtime/_wasm/_duckdb/__init__.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of possibly insecure function - consider using safer ast.literal_eval.",
+      "line_number": 530,
+      "line_range": [
+        530,
+        531,
+        532,
+        533,
+        534,
+        535,
+        536,
+        537,
+        538
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b307-eval",
+      "test_id": "B307",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "37     request = urllib.request.Request(url, **(request_kwargs or {}))\n38     with urllib.request.urlopen(request, **(urlopen_kwargs or {})) as response:\n39         return cast(bytes, response.read())\n",
+      "col_offset": 9,
+      "end_col_offset": 66,
+      "filename": "signalpilot/notebook-server/signalpilot/_runtime/_wasm/_fetch.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 38,
+      "line_range": [
+        38
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "110             if _is_coroutine(cell.body):\n111                 await eval(cell.body, glbls)\n112             else:\n",
+      "col_offset": 22,
+      "end_col_offset": 44,
+      "filename": "signalpilot/notebook-server/signalpilot/_runtime/executor.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of possibly insecure function - consider using safer ast.literal_eval.",
+      "line_number": 111,
+      "line_range": [
+        111
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b307-eval",
+      "test_id": "B307",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "112             else:\n113                 exec(cell.body, glbls)\n114 \n",
+      "col_offset": 16,
+      "end_col_offset": 38,
+      "filename": "signalpilot/notebook-server/signalpilot/_runtime/executor.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of exec detected.",
+      "line_number": 113,
+      "line_range": [
+        113
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b102_exec_used.html",
+      "test_id": "B102",
+      "test_name": "exec_used"
+    },
+    {
+      "code": "115             if _is_coroutine(cell.last_expr):\n116                 return await eval(cell.last_expr, glbls)\n117             else:\n",
+      "col_offset": 29,
+      "end_col_offset": 56,
+      "filename": "signalpilot/notebook-server/signalpilot/_runtime/executor.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of possibly insecure function - consider using safer ast.literal_eval.",
+      "line_number": 116,
+      "line_range": [
+        116
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b307-eval",
+      "test_id": "B307",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "117             else:\n118                 return eval(cell.last_expr, glbls)\n119         except NameError as e:\n",
+      "col_offset": 23,
+      "end_col_offset": 50,
+      "filename": "signalpilot/notebook-server/signalpilot/_runtime/executor.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of possibly insecure function - consider using safer ast.literal_eval.",
+      "line_number": 118,
+      "line_range": [
+        118
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b307-eval",
+      "test_id": "B307",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "136 \n137             exec(cell.body, glbls)\n138             return eval(cell.last_expr, glbls)\n",
+      "col_offset": 12,
+      "end_col_offset": 34,
+      "filename": "signalpilot/notebook-server/signalpilot/_runtime/executor.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of exec detected.",
+      "line_number": 137,
+      "line_range": [
+        137
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b102_exec_used.html",
+      "test_id": "B102",
+      "test_name": "exec_used"
+    },
+    {
+      "code": "137             exec(cell.body, glbls)\n138             return eval(cell.last_expr, glbls)\n139         except NameError as e:\n",
+      "col_offset": 19,
+      "end_col_offset": 46,
+      "filename": "signalpilot/notebook-server/signalpilot/_runtime/executor.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of possibly insecure function - consider using safer ast.literal_eval.",
+      "line_number": 138,
+      "line_range": [
+        138
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b307-eval",
+      "test_id": "B307",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "79     if not had_sys:\n80         exec(\"import sys\", glbls)\n81 \n",
+      "col_offset": 8,
+      "end_col_offset": 33,
+      "filename": "signalpilot/notebook-server/signalpilot/_runtime/patches.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of exec detected.",
+      "line_number": 80,
+      "line_range": [
+        80
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b102_exec_used.html",
+      "test_id": "B102",
+      "test_name": "exec_used"
+    },
+    {
+      "code": "81 \n82     if eval(\n83         \"bool(sys.meta_path and sys.meta_path[-1].__class__.__name__ == '_MicropipFinder')\",\n84         glbls,\n85     ):\n86         if not had_sys:\n",
+      "col_offset": 7,
+      "end_col_offset": 5,
+      "filename": "signalpilot/notebook-server/signalpilot/_runtime/patches.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of possibly insecure function - consider using safer ast.literal_eval.",
+      "line_number": 82,
+      "line_range": [
+        82,
+        83,
+        84,
+        85
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b307-eval",
+      "test_id": "B307",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "152 \n153     exec(definitions, glbls)\n154 \n",
+      "col_offset": 4,
+      "end_col_offset": 28,
+      "filename": "signalpilot/notebook-server/signalpilot/_runtime/patches.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of exec detected.",
+      "line_number": 153,
+      "line_range": [
+        153
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b102_exec_used.html",
+      "test_id": "B102",
+      "test_name": "exec_used"
+    },
+    {
+      "code": "156     # already has a package called micropip\n157     exec(\n158         \"sys.meta_path.append(_MicropipFinder());\",\n159         glbls,\n160     )\n161 \n",
+      "col_offset": 4,
+      "end_col_offset": 5,
+      "filename": "signalpilot/notebook-server/signalpilot/_runtime/patches.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of exec detected.",
+      "line_number": 157,
+      "line_range": [
+        157,
+        158,
+        159,
+        160
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b102_exec_used.html",
+      "test_id": "B102",
+      "test_name": "exec_used"
+    },
+    {
+      "code": "492         # ensures that every cell gets a fresh axis.\n493         exec(\"__sp__._output.mpl.close_figures()\", ctx.glbls)\n494 \n",
+      "col_offset": 8,
+      "end_col_offset": 61,
+      "filename": "signalpilot/notebook-server/signalpilot/_runtime/runner/hooks_post_execution.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of exec detected.",
+      "line_number": 493,
+      "line_range": [
+        493
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b102_exec_used.html",
+      "test_id": "B102",
+      "test_name": "exec_used"
+    },
+    {
+      "code": "649 \n650         exec(\"import signalpilot as __sp__\", self.globals)\n651 \n",
+      "col_offset": 8,
+      "end_col_offset": 58,
+      "filename": "signalpilot/notebook-server/signalpilot/_runtime/runtime.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of exec detected.",
+      "line_number": 650,
+      "line_range": [
+        650
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b102_exec_used.html",
+      "test_id": "B102",
+      "test_name": "exec_used"
+    },
+    {
+      "code": "20         del key\n21         cache = pickle.loads(blob)\n22         if not isinstance(cache, Cache):\n",
+      "col_offset": 16,
+      "end_col_offset": 34,
+      "filename": "signalpilot/notebook-server/signalpilot/_save/loaders/pickle.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 502,
+        "link": "https://cwe.mitre.org/data/definitions/502.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Pickle and modules that wrap it can be unsafe when used to deserialize untrusted data, possible security issue.",
+      "line_number": 21,
+      "line_range": [
+        21
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b301-pickle",
+      "test_id": "B301",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "34         try:\n35             with urllib.request.urlopen(req, context=self.context) as response:\n36                 if response.status == 200:\n",
+      "col_offset": 17,
+      "end_col_offset": 66,
+      "filename": "signalpilot/notebook-server/signalpilot/_save/stores/rest.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 35,
+      "line_range": [
+        35
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "63         try:\n64             with urllib.request.urlopen(req, context=self.context) as response:\n65                 LOGGER.debug(f\"PUT {url} - Status: {response.status}\")\n",
+      "col_offset": 17,
+      "end_col_offset": 66,
+      "filename": "signalpilot/notebook-server/signalpilot/_save/stores/rest.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 64,
+      "line_range": [
+        64
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "79         try:\n80             with urllib.request.urlopen(req) as response:\n81                 LOGGER.debug(f\"HEAD {url} - Status: {response.status}\")\n",
+      "col_offset": 17,
+      "end_col_offset": 44,
+      "filename": "signalpilot/notebook-server/signalpilot/_save/stores/rest.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 80,
+      "line_range": [
+        80
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "36         lcls: dict[str, Any] = {}\n37         exec(code_obj, glbls, lcls)\n38         for value in lcls.values():\n",
+      "col_offset": 8,
+      "end_col_offset": 35,
+      "filename": "signalpilot/notebook-server/signalpilot/_save/stubs/function_stub.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of exec detected.",
+      "line_number": 37,
+      "line_range": [
+        37
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b102_exec_used.html",
+      "test_id": "B102",
+      "test_name": "exec_used"
+    },
+    {
+      "code": "153     del type_hint\n154     return pickle.loads(data)\n155 \n",
+      "col_offset": 11,
+      "end_col_offset": 29,
+      "filename": "signalpilot/notebook-server/signalpilot/_save/stubs/lazy_stub.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 502,
+        "link": "https://cwe.mitre.org/data/definitions/502.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Pickle and modules that wrap it can be unsafe when used to deserialize untrusted data, possible security issue.",
+      "line_number": 154,
+      "line_range": [
+        154
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b301-pickle",
+      "test_id": "B301",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "225             raise ValueError(f\"Reference {self.name} not found in store.\")\n226         return pickle.loads(blob)\n227 \n",
+      "col_offset": 15,
+      "end_col_offset": 33,
+      "filename": "signalpilot/notebook-server/signalpilot/_save/stubs/lazy_stub.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 502,
+        "link": "https://cwe.mitre.org/data/definitions/502.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Pickle and modules that wrap it can be unsafe when used to deserialize untrusted data, possible security issue.",
+      "line_number": 226,
+      "line_range": [
+        226
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b301-pickle",
+      "test_id": "B301",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "46         try:\n47             with urlopen(req, timeout=timeout) as resp:\n48                 raw = resp.read()\n",
+      "col_offset": 17,
+      "end_col_offset": 46,
+      "filename": "signalpilot/notebook-server/signalpilot/_sdk/_client.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 47,
+      "line_range": [
+        47
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "303         \"::1\",\n304         \"0.0.0.0\",\n305         \"gateway\",\n306     }\n307 \n308 \n309 def _get_system_prompt() -> str:\n310     if INSTRUCTIONS_PATH.exists():\n311         return INSTRUCTIONS_PATH.read_text(encoding=\"utf-8\")\n",
+      "col_offset": 8,
+      "end_col_offset": 17,
+      "filename": "signalpilot/notebook-server/signalpilot/_server/ai/claude_agent.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 605,
+        "link": "https://cwe.mitre.org/data/definitions/605.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible binding to all interfaces.",
+      "line_number": 304,
+      "line_range": [
+        300,
+        301,
+        302,
+        303,
+        304,
+        305,
+        306
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b104_hardcoded_bind_all_interfaces.html",
+      "test_id": "B104",
+      "test_name": "hardcoded_bind_all_interfaces"
+    },
+    {
+      "code": "45     host = getattr(state, \"host\", \"127.0.0.1\") or \"127.0.0.1\"\n46     if host in {\"0.0.0.0\", \"::\", \"[::]\"}:\n47         host = \"127.0.0.1\"\n",
+      "col_offset": 16,
+      "end_col_offset": 25,
+      "filename": "signalpilot/notebook-server/signalpilot/_server/ai/notebook_mcp.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 605,
+        "link": "https://cwe.mitre.org/data/definitions/605.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible binding to all interfaces.",
+      "line_number": 46,
+      "line_range": [
+        46
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b104_hardcoded_bind_all_interfaces.html",
+      "test_id": "B104",
+      "test_name": "hardcoded_bind_all_interfaces"
+    },
+    {
+      "code": "101             new=workspace.get_unique_file_key() == NEW_FILE,\n102             network=state.host == \"0.0.0.0\",\n103             startup_tip=state.startup_tip,\n",
+      "col_offset": 34,
+      "end_col_offset": 43,
+      "filename": "signalpilot/notebook-server/signalpilot/_server/api/lifespans.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 605,
+        "link": "https://cwe.mitre.org/data/definitions/605.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible binding to all interfaces.",
+      "line_number": 102,
+      "line_range": [
+        102
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b104_hardcoded_bind_all_interfaces.html",
+      "test_id": "B104",
+      "test_name": "hardcoded_bind_all_interfaces"
+    },
+    {
+      "code": "132             try:\n133                 with urlopen(self.health_url, timeout=1) as response:\n134                     if response.status == 200:\n",
+      "col_offset": 21,
+      "end_col_offset": 56,
+      "filename": "signalpilot/notebook-server/signalpilot/_server/export/_live_notebook_server.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 133,
+      "line_range": [
+        133
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "16 # TODO(akshayka): _IGNORED_FOLDERS doesn't cover Windows\n17 _IGNORED_FOLDERS = (\"/tmp\", \"/var\")\n18 \n",
+      "col_offset": 20,
+      "end_col_offset": 26,
+      "filename": "signalpilot/notebook-server/signalpilot/_server/recents.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 377,
+        "link": "https://cwe.mitre.org/data/definitions/377.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Probable insecure usage of temp file/directory.",
+      "line_number": 17,
+      "line_range": [
+        17
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b108_hardcoded_tmp_directory.html",
+      "test_id": "B108",
+      "test_name": "hardcoded_tmp_directory"
+    },
+    {
+      "code": "103                 command,\n104                 shell=True,\n105                 stdout=subprocess.PIPE,\n106                 stderr=subprocess.STDOUT,  # Stream stderr to stdout\n107                 text=True,\n108                 universal_newlines=True,\n109             )\n110 \n111             # Stream output line by line\n112             if process.stdout:\n",
+      "col_offset": 22,
+      "end_col_offset": 13,
+      "filename": "signalpilot/notebook-server/signalpilot/_server/start.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "HIGH",
+      "issue_text": "subprocess call with shell=True identified, security issue.",
+      "line_number": 104,
+      "line_range": [
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108,
+        109
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b602_subprocess_popen_with_shell_equals_true.html",
+      "test_id": "B602",
+      "test_name": "subprocess_popen_with_shell_equals_true"
+    },
+    {
+      "code": "134                 session_id = frames[0].decode()\n135                 payload = pickle.loads(frames[1])\n136 \n",
+      "col_offset": 26,
+      "end_col_offset": 49,
+      "filename": "signalpilot/notebook-server/signalpilot/_session/app_host/host.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 502,
+        "link": "https://cwe.mitre.org/data/definitions/502.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Pickle and modules that wrap it can be unsafe when used to deserialize untrusted data, possible security issue.",
+      "line_number": 135,
+      "line_range": [
+        135
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b301-pickle",
+      "test_id": "B301",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "102     channel = Channel(frames[1])\n103     payload = pickle.loads(frames[2])\n104 \n",
+      "col_offset": 14,
+      "end_col_offset": 37,
+      "filename": "signalpilot/notebook-server/signalpilot/_session/app_host/main.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 502,
+        "link": "https://cwe.mitre.org/data/definitions/502.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Pickle and modules that wrap it can be unsafe when used to deserialize untrusted data, possible security issue.",
+      "line_number": 103,
+      "line_range": [
+        103
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b301-pickle",
+      "test_id": "B301",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "349             )\n350             row_count = cursor.execute(f\"SELECT COUNT(*) FROM {quoted_name}\")\n351             row = row_count.fetchone()\n",
+      "col_offset": 41,
+      "end_col_offset": 62,
+      "filename": "signalpilot/notebook-server/signalpilot/_sql/engines/redshift.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 350,
+      "line_range": [
+        350
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "102                 # Run in kernel globals so DuckDB replacement scans see user data.\n103                 relation = eval(\n104                     \"connection.sql(query=query)\",\n105                     ctx.globals,\n106                     {\"query\": query, \"connection\": connection},\n107                 )\n108             else:\n",
+      "col_offset": 27,
+      "end_col_offset": 17,
+      "filename": "signalpilot/notebook-server/signalpilot/_sql/utils.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of possibly insecure function - consider using safer ast.literal_eval.",
+      "line_number": 103,
+      "line_range": [
+        103,
+        104,
+        105,
+        106,
+        107
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b307-eval",
+      "test_id": "B307",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "155                 # Run in kernel globals so parameterized SQL can scan user data.\n156                 value = eval(\n157                     \"connection.execute(query, params)\",\n158                     ctx.globals,\n159                     {\n160                         \"query\": query,\n161                         \"params\": params,\n162                         \"connection\": connection,\n163                     },\n164                 )\n165             else:\n",
+      "col_offset": 24,
+      "end_col_offset": 17,
+      "filename": "signalpilot/notebook-server/signalpilot/_sql/utils.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of possibly insecure function - consider using safer ast.literal_eval.",
+      "line_number": 156,
+      "line_range": [
+        156,
+        157,
+        158,
+        159,
+        160,
+        161,
+        162,
+        163,
+        164
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b307-eval",
+      "test_id": "B307",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "144     try:\n145         with urllib.request.urlopen(req, timeout=timeout) as response:\n146             return Response(\n",
+      "col_offset": 13,
+      "end_col_offset": 57,
+      "filename": "signalpilot/notebook-server/signalpilot/_utils/requests.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 145,
+      "line_range": [
+        145
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "256             close_fds=close_fds,\n257             shell=shell,\n258             cwd=cwd,\n259             env=env,\n260             universal_newlines=universal_newlines,\n261             startupinfo=startupinfo,\n262             creationflags=creationflags,\n263             restore_signals=restore_signals,\n264             start_new_session=start_new_session,\n265             pass_fds=pass_fds,\n266             text=text,\n267             encoding=encoding,\n268             errors=errors,\n269             user=user,\n270             group=group,\n271             extra_groups=extra_groups,\n272             umask=umask,\n273             pipesize=pipesize,\n274         )\n275     except Exception as e:\n276         LOGGER.error(\"Failed to create subprocess for command %s: %s\", args, e)\n277         return None\n278 \n279 \n280 _REAP_TASKS: set[asyncio.Task[None]] = set()\n281 \n282 \n283 def _process_finished(process: ProcessLike) -> bool:\n284     \"\"\"Return whether the process has finished without blocking.\"\"\"\n",
+      "col_offset": 15,
+      "end_col_offset": 9,
+      "filename": "signalpilot/notebook-server/signalpilot/_utils/subprocess.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "HIGH",
+      "issue_text": "subprocess call with shell=True identified, security issue.",
+      "line_number": 257,
+      "line_range": [
+        248,
+        249,
+        250,
+        251,
+        252,
+        253,
+        254,
+        255,
+        256,
+        257,
+        258,
+        259,
+        260,
+        261,
+        262,
+        263,
+        264,
+        265,
+        266,
+        267,
+        268,
+        269,
+        270,
+        271,
+        272,
+        273,
+        274
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b602_subprocess_popen_with_shell_equals_true.html",
+      "test_id": "B602",
+      "test_name": "subprocess_popen_with_shell_equals_true"
+    },
+    {
+      "code": "16         # Can't get home directory, so use temp directory\n17         return Path(\"/tmp\")\n18 \n",
+      "col_offset": 20,
+      "end_col_offset": 26,
+      "filename": "signalpilot/notebook-server/signalpilot/_utils/xdg.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 377,
+        "link": "https://cwe.mitre.org/data/definitions/377.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Probable insecure usage of temp file/directory.",
+      "line_number": 17,
+      "line_range": [
+        17
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b108_hardcoded_tmp_directory.html",
+      "test_id": "B108",
+      "test_name": "hardcoded_tmp_directory"
+    },
+    {
+      "code": "169         f_locals.update(vars)\n170         return eval(code, self.f_globals, f_locals)\n171 \n",
+      "col_offset": 15,
+      "end_col_offset": 51,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/_pytest/_code/code.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of possibly insecure function - consider using safer ast.literal_eval.",
+      "line_number": 170,
+      "line_range": [
+        170
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b307-eval",
+      "test_id": "B307",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "1152                     with open(str(self), \"rb\") as f:\n1153                         exec(f.read(), mod.__dict__)\n1154                 except BaseException:\n",
+      "col_offset": 24,
+      "end_col_offset": 52,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/_pytest/_py/path.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of exec detected.",
+      "line_number": 1153,
+      "line_range": [
+        1153
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b102_exec_used.html",
+      "test_id": "B102",
+      "test_name": "exec_used"
+    },
+    {
+      "code": "196             state.trace(f\"found cached rewritten pyc for {fn}\")\n197         exec(co, module.__dict__)\n198 \n",
+      "col_offset": 8,
+      "end_col_offset": 33,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of exec detected.",
+      "line_number": 197,
+      "line_range": [
+        197
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b102_exec_used.html",
+      "test_id": "B102",
+      "test_name": "exec_used"
+    },
+    {
+      "code": "401         try:\n402             co = marshal.load(fp)\n403         except Exception as e:\n",
+      "col_offset": 17,
+      "end_col_offset": 33,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 502,
+        "link": "https://cwe.mitre.org/data/definitions/502.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Deserialization with the marshal module is possibly dangerous.",
+      "line_number": 402,
+      "line_range": [
+        402
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b302-marshal",
+      "test_id": "B302",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "352         \"\"\"\n353         return bool(eval(self._code, {\"__builtins__\": {}}, MatcherAdapter(matcher)))\n",
+      "col_offset": 20,
+      "end_col_offset": 83,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/_pytest/mark/expression.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of possibly insecure function - consider using safer ast.literal_eval.",
+      "line_number": 353,
+      "line_range": [
+        353
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b307-eval",
+      "test_id": "B307",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "86         response: str = (\n87             urlopen(url, data=urlencode(params).encode(\"ascii\")).read().decode(\"utf-8\")\n88         )\n",
+      "col_offset": 12,
+      "end_col_offset": 64,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/_pytest/pastebin.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 87,
+      "line_range": [
+        87
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "294                     print(\"NAMEMATCH\", name, call)\n295                     if eval(check, backlocals, call.__dict__):\n296                         print(\"CHECKERMATCH\", repr(check), \"->\", call)\n",
+      "col_offset": 23,
+      "end_col_offset": 61,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/_pytest/pytester.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of possibly insecure function - consider using safer ast.literal_eval.",
+      "line_number": 295,
+      "line_range": [
+        295
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b307-eval",
+      "test_id": "B307",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "118             condition_code = compile(condition, filename, \"eval\")\n119             result = eval(condition_code, globals_)\n120         except SyntaxError as exc:\n",
+      "col_offset": 21,
+      "end_col_offset": 51,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/_pytest/skipping.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of possibly insecure function - consider using safer ast.literal_eval.",
+      "line_number": 119,
+      "line_range": [
+        119
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b307-eval",
+      "test_id": "B307",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "1131             r_key = resp.headers.get(hdrs.SEC_WEBSOCKET_ACCEPT, \"\")\n1132             match = base64.b64encode(hashlib.sha1(sec_key + WS_KEY).digest()).decode()\n1133             if r_key != match:\n",
+      "col_offset": 37,
+      "end_col_offset": 67,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/aiohttp/client.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 327,
+        "link": "https://cwe.mitre.org/data/definitions/327.html"
+      },
+      "issue_severity": "HIGH",
+      "issue_text": "Use of weak SHA1 hash for security. Consider usedforsecurity=False",
+      "line_number": 1132,
+      "line_range": [
+        1132
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b324_hashlib.html",
+      "test_id": "B324",
+      "test_name": "hashlib"
+    },
+    {
+      "code": "316         # Generate client nonce\n317         cnonce = hashlib.sha1(\n318             b\"\".join(\n319                 [\n320                     str(self._nonce_count).encode(\"utf-8\"),\n321                     nonce_bytes,\n322                     time.ctime().encode(\"utf-8\"),\n323                     os.urandom(8),\n324                 ]\n325             )\n326         ).hexdigest()[:16]\n327         cnonce_bytes = cnonce.encode(\"utf-8\")\n",
+      "col_offset": 17,
+      "end_col_offset": 9,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/aiohttp/client_middleware_digest_auth.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 327,
+        "link": "https://cwe.mitre.org/data/definitions/327.html"
+      },
+      "issue_severity": "HIGH",
+      "issue_text": "Use of weak SHA1 hash for security. Consider usedforsecurity=False",
+      "line_number": 317,
+      "line_range": [
+        317,
+        318,
+        319,
+        320,
+        321,
+        322,
+        323,
+        324,
+        325,
+        326
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b324_hashlib.html",
+      "test_id": "B324",
+      "test_name": "hashlib"
+    },
+    {
+      "code": "132         with file_path.open(mode=\"rb\") as f:\n133             self._cookies = pickle.load(f)\n134 \n",
+      "col_offset": 28,
+      "end_col_offset": 42,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/aiohttp/cookiejar.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 502,
+        "link": "https://cwe.mitre.org/data/definitions/502.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Pickle and modules that wrap it can be unsafe when used to deserialize untrusted data, possible security issue.",
+      "line_number": 133,
+      "line_range": [
+        133
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b301-pickle",
+      "test_id": "B301",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "112         scheme = \"https\" if self._ssl_context else \"http\"\n113         host = \"0.0.0.0\" if not self._host else self._host\n114         return str(URL.build(scheme=scheme, host=host, port=self._port))\n",
+      "col_offset": 15,
+      "end_col_offset": 24,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/aiohttp/web_runner.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 605,
+        "link": "https://cwe.mitre.org/data/definitions/605.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible binding to all interfaces.",
+      "line_number": 113,
+      "line_range": [
+        113
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b104_hardcoded_bind_all_interfaces.html",
+      "test_id": "B104",
+      "test_name": "hardcoded_bind_all_interfaces"
+    },
+    {
+      "code": "274         accept_val = base64.b64encode(\n275             hashlib.sha1(key.encode() + WS_KEY).digest()\n276         ).decode()\n",
+      "col_offset": 12,
+      "end_col_offset": 47,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/aiohttp/web_ws.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 327,
+        "link": "https://cwe.mitre.org/data/definitions/327.html"
+      },
+      "issue_severity": "HIGH",
+      "issue_text": "Use of weak SHA1 hash for security. Consider usedforsecurity=False",
+      "line_number": 275,
+      "line_range": [
+        275
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b324_hashlib.html",
+      "test_id": "B324",
+      "test_name": "hashlib"
+    },
+    {
+      "code": "226     bytecode = compile(script, filename, \"exec\")\n227     eval(bytecode, globs, locs)\n228 \n",
+      "col_offset": 4,
+      "end_col_offset": 31,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/attr/_make.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of possibly insecure function - consider using safer ast.literal_eval.",
+      "line_number": 227,
+      "line_range": [
+        227
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b307-eval",
+      "test_id": "B307",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "102         with open(filename, 'rb') as f:\n103             exec(f.read(), custom_namespace)\n104         # Retrieve the class `formattername` from that namespace\n",
+      "col_offset": 12,
+      "end_col_offset": 44,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/pygments/formatters/__init__.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of exec detected.",
+      "line_number": 103,
+      "line_range": [
+        103
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b102_exec_used.html",
+      "test_id": "B102",
+      "test_name": "exec_used"
+    },
+    {
+      "code": "153         with open(filename, 'rb') as f:\n154             exec(f.read(), custom_namespace)\n155         # Retrieve the class `lexername` from that namespace\n",
+      "col_offset": 12,
+      "end_col_offset": 44,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/pygments/lexers/__init__.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Use of exec detected.",
+      "line_number": 154,
+      "line_range": [
+        154
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b102_exec_used.html",
+      "test_id": "B102",
+      "test_name": "exec_used"
+    },
+    {
+      "code": "224     def get_newest_version():\n225         f = urlopen('http://www.lua.org/manual/')\n226         r = re.compile(r'^<A HREF=\"(\\d\\.\\d)/\">(Lua )?\\1</A>')\n",
+      "col_offset": 12,
+      "end_col_offset": 49,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/pygments/lexers/_lua_builtins.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 225,
+      "line_range": [
+        225
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "232     def get_lua_functions(version):\n233         f = urlopen(f'http://www.lua.org/manual/{version}/')\n234         r = re.compile(r'^<A HREF=\"manual.html#pdf-(?!lua|LUA)([^:]+)\">\\1</A>')\n",
+      "col_offset": 12,
+      "end_col_offset": 60,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/pygments/lexers/_lua_builtins.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 233,
+      "line_range": [
+        233
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "1296         # Pull content from lex.h.\n1297         lex_file = urlopen(LEX_URL).read().decode('utf8', errors='ignore')\n1298         keywords = parse_lex_keywords(lex_file)\n",
+      "col_offset": 19,
+      "end_col_offset": 35,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/pygments/lexers/_mysql_builtins.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 1297,
+      "line_range": [
+        1297
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "1302         # Parse content in item_create.cc.\n1303         item_create_file = urlopen(ITEM_CREATE_URL).read().decode('utf8', errors='ignore')\n1304         functions.update(parse_item_create_functions(item_create_file))\n",
+      "col_offset": 27,
+      "end_col_offset": 51,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/pygments/lexers/_mysql_builtins.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 1303,
+      "line_range": [
+        1303
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "3298     def get_php_references():\n3299         download = urlretrieve(PHP_MANUAL_URL)\n3300         with tarfile.open(download[0]) as tar:\n",
+      "col_offset": 19,
+      "end_col_offset": 46,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/pygments/lexers/_php_builtins.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 3299,
+      "line_range": [
+        3299
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "3303             else:\n3304                 tar.extractall()\n3305         yield from glob.glob(f\"{PHP_MANUAL_DIR}{PHP_REFERENCE_GLOB}\")\n",
+      "col_offset": 16,
+      "end_col_offset": 32,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/pygments/lexers/_php_builtins.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "HIGH",
+      "issue_text": "tarfile.extractall used without any validation. Please check and discard dangerous members.",
+      "line_number": 3304,
+      "line_range": [
+        3304
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b202_tarfile_unsafe_members.html",
+      "test_id": "B202",
+      "test_name": "tarfile_unsafe_members"
+    },
+    {
+      "code": "641     def update_myself():\n642         content = urlopen(DATATYPES_URL).read().decode('utf-8', errors='ignore')\n643         data_file = list(content.splitlines())\n",
+      "col_offset": 18,
+      "end_col_offset": 40,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/pygments/lexers/_postgres_builtins.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 642,
+      "line_range": [
+        642
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "646 \n647         content = urlopen(KEYWORDS_URL).read().decode('utf-8', errors='ignore')\n648         keywords = parse_keywords(content)\n",
+      "col_offset": 18,
+      "end_col_offset": 39,
+      "filename": "sp-sandbox/.venv/lib/python3.14/site-packages/pygments/lexers/_postgres_builtins.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 647,
+      "line_range": [
+        647
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "5 # --- Server ---\n6 HOST = os.environ.get(\"SP_SANDBOX_HOST\", \"0.0.0.0\")\n7 PORT = int(os.environ.get(\"SP_SANDBOX_PORT\", \"8080\"))\n",
+      "col_offset": 41,
+      "end_col_offset": 50,
+      "filename": "sp-sandbox/constants.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 605,
+        "link": "https://cwe.mitre.org/data/definitions/605.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible binding to all interfaces.",
+      "line_number": 6,
+      "line_range": [
+        6
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b104_hardcoded_bind_all_interfaces.html",
+      "test_id": "B104",
+      "test_name": "hardcoded_bind_all_interfaces"
+    },
+    {
+      "code": "95         # Ensure tempfile workdirs land on the tmpfs mount provided by the container\n96         safe_env[\"TMPDIR\"] = \"/tmp\"\n97 \n",
+      "col_offset": 29,
+      "end_col_offset": 35,
+      "filename": "sp-sandbox/executor.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 377,
+        "link": "https://cwe.mitre.org/data/definitions/377.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Probable insecure usage of temp file/directory.",
+      "line_number": 96,
+      "line_range": [
+        96
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b108_hardcoded_tmp_directory.html",
+      "test_id": "B108",
+      "test_name": "hardcoded_tmp_directory"
+    }
+  ]
+}

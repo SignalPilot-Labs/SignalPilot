@@ -62,8 +62,7 @@ services:
       # Sandbox
       SP_SANDBOX_MANAGER_URL: http://sandbox:8080
       SP_SANDBOX_ENABLED: "true"
-      SP_SANDBOX_TOKEN: ${SP_SANDBOX_TOKEN:?Set SP_SANDBOX_TOKEN for gateway-to-sandbox authentication}
-      SP_HOST_DATA_DIR: ${SP_HOST_DATA_DIR:?Set SP_HOST_DATA_DIR to the allowed local data directory}
+      SP_SANDBOX_TOKEN: ${SP_SANDBOX_TOKEN:-signalpilot-local-dev-sandbox-token}
       # Unused in local mode but required by gateway startup
       SP_K8S_HOST: ""
       KUBECONFIG: ""
@@ -158,10 +157,10 @@ services:
     environment:
       SP_GATEWAY_URL: http://gateway:3300
       SP_MAX_VMS: "10"
-      SP_SANDBOX_TOKEN: ${SP_SANDBOX_TOKEN:?Set SP_SANDBOX_TOKEN for gateway-to-sandbox authentication}
+      SP_SANDBOX_TOKEN: ${SP_SANDBOX_TOKEN:-signalpilot-local-dev-sandbox-token}
     volumes:
       # Explicit allowlisted host data directory for sandboxed DuckDB/SQLite files.
-      - ${SP_HOST_DATA_DIR:?Set SP_HOST_DATA_DIR to the allowed local data directory}:/host-data:ro
+      - ${SP_HOST_DATA_DIR:-./.sandbox-data}:/host-data:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -sf -H \"X-Sandbox-Auth: $$SP_SANDBOX_TOKEN\" http://localhost:8080/health"]
       interval: 5s

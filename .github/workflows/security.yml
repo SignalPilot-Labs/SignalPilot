@@ -1,0 +1,228 @@
+name: security
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deps-python:
+    name: deps-python
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install audit tools
+        run: python -m pip install --upgrade pip pip-audit uv
+
+      - name: Export locked requirements
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/security"
+
+          uv export --quiet --directory signalpilot/gateway --frozen --no-dev --format requirements.txt --no-hashes --no-emit-project --output-file "$RUNNER_TEMP/security/gateway.txt"
+          uv export --quiet --directory signalpilot/notebook-server --frozen --no-dev --format requirements.txt --no-hashes --no-emit-project --output-file "$RUNNER_TEMP/security/notebook-server.txt"
+          uv export --quiet --directory sp-sandbox --frozen --no-dev --format requirements.txt --no-hashes --no-emit-project --output-file "$RUNNER_TEMP/security/sp-sandbox.txt"
+
+      - name: Audit blocking Python dependencies
+        run: |
+          set -euo pipefail
+          for requirements in "$RUNNER_TEMP"/security/gateway.txt "$RUNNER_TEMP"/security/sp-sandbox.txt; do
+            echo "::group::pip-audit $(basename "$requirements")"
+            pip-audit -r "$requirements" --progress-spinner off
+            echo "::endgroup::"
+          done
+
+      - name: Audit notebook-server dependencies
+        run: |
+          set -euo pipefail
+          echo "::group::pip-audit notebook-server.txt"
+          if ! pip-audit -r "$RUNNER_TEMP/security/notebook-server.txt" --progress-spinner off; then
+            echo "::warning::notebook-server dependency audit is informational until its existing vulnerable lockfile entries are remediated."
+          fi
+          echo "::endgroup::"
+
+  deps-node:
+    name: deps-node
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Audit web dependencies
+        working-directory: signalpilot/web
+        run: |
+          set -euo pipefail
+          if ! npm audit --audit-level=high; then
+            echo "::warning::web npm audit is informational until existing high/critical findings are remediated."
+          fi
+
+      - name: Audit docs dependencies
+        working-directory: docs
+        run: |
+          set -euo pipefail
+          if ! npm audit --audit-level=high; then
+            echo "::warning::docs npm audit is informational until existing high/critical findings are remediated."
+          fi
+
+  secrets:
+    name: secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan commit range for secrets
+        uses: trufflesecurity/trufflehog@v3.95.5
+        with:
+          path: ./
+          version: 3.95.5
+          extra_args: --results=verified,unknown
+
+  sast-semgrep:
+    name: sast-semgrep
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Semgrep
+        run: python -m pip install --upgrade pip semgrep
+
+      - name: Determine Semgrep baseline
+        id: semgrep-baseline
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          baseline=""
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            baseline="$PR_BASE_SHA"
+          elif [ -n "$PUSH_BEFORE_SHA" ] && [ "$PUSH_BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+            baseline="$PUSH_BEFORE_SHA"
+          fi
+          echo "commit=$baseline" >> "$GITHUB_OUTPUT"
+
+      - name: Run Semgrep
+        env:
+          BASELINE_COMMIT: ${{ steps.semgrep-baseline.outputs.commit }}
+        run: |
+          set -euo pipefail
+          baseline_args=()
+          if [ -n "$BASELINE_COMMIT" ]; then
+            git cat-file -e "$BASELINE_COMMIT^{commit}"
+            baseline_args=(--baseline-commit "$BASELINE_COMMIT")
+          else
+            echo "::warning::No Semgrep baseline commit found; running a full scan."
+          fi
+
+          semgrep scan \
+            --config p/python \
+            --config p/javascript \
+            --config p/typescript \
+            --config p/security-audit \
+            "${baseline_args[@]}" \
+            --error \
+            --metrics=off \
+            --exclude ".venv" \
+            --exclude "docs/node_modules" \
+            --exclude "docs/static/fonts" \
+            --exclude "plugin" \
+            --exclude "signalpilot/web/node_modules" \
+            --exclude "sp-sandbox/.venv" \
+            --exclude "workspaces"
+
+  sast-bandit:
+    name: sast-bandit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Bandit
+        run: python -m pip install --upgrade pip bandit
+
+      - name: Run Bandit
+        run: |
+          set -euo pipefail
+          bandit -r \
+            signalpilot/gateway/gateway \
+            signalpilot/notebook-server/signalpilot \
+            sp-sandbox \
+            -ll \
+            -ii \
+            -b .github/bandit-baseline.json \
+            -x "*/tests/*,*/.venv/*,*/node_modules/*"
+
+  security-gate:
+    name: security-gate
+    runs-on: ubuntu-latest
+    needs:
+      - deps-python
+      - deps-node
+      - secrets
+      - sast-semgrep
+      - sast-bandit
+    if: always()
+    steps:
+      - name: Require all security checks to pass
+        env:
+          DEPS_PYTHON_RESULT: ${{ needs.deps-python.result }}
+          DEPS_NODE_RESULT: ${{ needs.deps-node.result }}
+          SECRETS_RESULT: ${{ needs.secrets.result }}
+          SAST_SEMGREP_RESULT: ${{ needs.sast-semgrep.result }}
+          SAST_BANDIT_RESULT: ${{ needs.sast-bandit.result }}
+        run: |
+          set -euo pipefail
+          failed=0
+
+          check_result() {
+            local name="$1"
+            local result="$2"
+            if [ "$result" = "success" ]; then
+              echo "$name passed"
+            else
+              echo "::error::$name ended with result: $result"
+              failed=1
+            fi
+          }
+
+          check_result deps-python "$DEPS_PYTHON_RESULT"
+          check_result deps-node "$DEPS_NODE_RESULT"
+          check_result secrets "$SECRETS_RESULT"
+          check_result sast-semgrep "$SAST_SEMGREP_RESULT"
+          check_result sast-bandit "$SAST_BANDIT_RESULT"
+
+          exit "$failed"

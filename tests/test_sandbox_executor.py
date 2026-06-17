@@ -13,6 +13,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sp-sandbox"))
 from executor import GVisorExecutor, _strip_gvisor_warnings
 
 
+@pytest.fixture(autouse=True)
+def mock_chown():
+    with patch("executor.os.chown"):
+        yield
+
+
 class TestStripGvisorWarnings:
     """Tests for gVisor warning line removal."""
 
@@ -51,7 +57,7 @@ class TestGVisorExecutorExecute:
         mock_proc.kill = MagicMock()
         mock_proc.wait = AsyncMock()
 
-        with patch("executor.asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch("executor.asyncio.create_subprocess_exec", return_value=mock_proc) as mock_create:
             result = await executor.execute("print('hello world')", "test-vm-1", 10)
 
         assert result.success is True
@@ -59,6 +65,9 @@ class TestGVisorExecutorExecute:
         assert result.error is None
         assert result.vm_id == "test-vm-1"
         assert result.execution_ms > 0
+        cmd = mock_create.call_args.args
+        assert cmd[:4] == ("/usr/local/bin/runsc", "--rootless", "do", "--")
+        assert "/opt/signalpilot/sandbox_exec.sh" in cmd
 
     @pytest.mark.asyncio
     async def test_runtime_error(self, executor):

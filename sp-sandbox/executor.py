@@ -77,6 +77,10 @@ class GVisorExecutor:
         # to nobody (UID 65534) via setpriv before exec'ing the Python process.
         # Do NOT use preexec_fn — it is unsafe in async/threaded contexts.
         cmd = [
+            RUNSC_PATH,
+            "--rootless",
+            "do",
+            "--",
             "/opt/signalpilot/sandbox_exec.sh",
             str(timeout),
             PYTHON_PATH,
@@ -124,8 +128,8 @@ class GVisorExecutor:
             stdout = stdout_bytes[:MAX_OUTPUT_BYTES].decode("utf-8", errors="replace")
             stderr = stderr_bytes[:MAX_OUTPUT_BYTES].decode("utf-8", errors="replace")
 
-            stdout = stdout.strip()
-            stderr = stderr.strip()
+            stdout = _strip_gvisor_warnings(stdout).strip()
+            stderr = _strip_gvisor_warnings(stderr).strip()
 
             success = proc.returncode == 0
             error = stderr.strip() if not success and stderr.strip() else None

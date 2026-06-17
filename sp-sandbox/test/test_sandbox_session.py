@@ -7,6 +7,7 @@ Covers:
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -22,6 +23,9 @@ if str(_SANDBOX_ROOT) not in sys.path:
 
 import sandbox_manager  # noqa: E402 — must follow sys.path manipulation
 
+SANDBOX_TOKEN = "test-sandbox-token"
+AUTH_HEADERS = {"X-Sandbox-Auth": SANDBOX_TOKEN}
+
 
 def _make_app() -> web.Application:
     return sandbox_manager.create_app()
@@ -29,6 +33,7 @@ def _make_app() -> web.Application:
 
 @pytest.fixture()
 def app() -> web.Application:
+    os.environ["SP_SANDBOX_TOKEN"] = SANDBOX_TOKEN
     return _make_app()
 
 
@@ -49,7 +54,7 @@ class TestVmsTokenTruncation:
 
         try:
             async with TestClient(TestServer(app)) as client:
-                resp = await client.get("/vms")
+                resp = await client.get("/vms", headers=AUTH_HEADERS)
                 assert resp.status == 200
                 data = await resp.json()
         finally:
@@ -73,7 +78,7 @@ class TestVmsTokenTruncation:
 
         try:
             async with TestClient(TestServer(app)) as client:
-                resp = await client.get("/vms")
+                resp = await client.get("/vms", headers=AUTH_HEADERS)
                 data = await resp.json()
         finally:
             sandbox_manager.active_sessions = original_sessions
@@ -89,7 +94,7 @@ class TestVmsTokenTruncation:
 
         try:
             async with TestClient(TestServer(app)) as client:
-                resp = await client.get("/vms")
+                resp = await client.get("/vms", headers=AUTH_HEADERS)
                 data = await resp.json()
         finally:
             sandbox_manager.active_sessions = original_sessions
@@ -115,6 +120,7 @@ class TestSessionTokenLengthValidation:
                     "code": "print('hello')",
                     "session_token": oversized_token,
                 },
+                headers=AUTH_HEADERS,
             )
             assert resp.status == 400
             data = await resp.json()
@@ -140,6 +146,7 @@ class TestSessionTokenLengthValidation:
                         "code": "print('hello')",
                         "session_token": token_128,
                     },
+                    headers=AUTH_HEADERS,
                 )
 
         # Must not be rejected due to token length (may fail for other reasons
@@ -159,6 +166,7 @@ class TestSessionTokenLengthValidation:
                         "code": "print('hello')",
                         "session_token": oversized_token,
                     },
+                    headers=AUTH_HEADERS,
                 )
 
         assert resp.status == 400

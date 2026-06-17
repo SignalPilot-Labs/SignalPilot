@@ -38,8 +38,9 @@ class SandboxClient:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         sandbox_token = os.environ.get("SP_SANDBOX_TOKEN", "")
-        if sandbox_token:
-            headers["X-Sandbox-Auth"] = sandbox_token
+        if not sandbox_token:
+            raise ValueError("SP_SANDBOX_TOKEN is required for SandboxClient")
+        headers["X-Sandbox-Auth"] = sandbox_token
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             headers=headers,

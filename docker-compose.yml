@@ -62,6 +62,8 @@ services:
       # Sandbox
       SP_SANDBOX_MANAGER_URL: http://sandbox:8080
       SP_SANDBOX_ENABLED: "true"
+      SP_SANDBOX_TOKEN: ${SP_SANDBOX_TOKEN:?Set SP_SANDBOX_TOKEN for gateway-to-sandbox authentication}
+      SP_HOST_DATA_DIR: ${SP_HOST_DATA_DIR:?Set SP_HOST_DATA_DIR to the allowed local data directory}
       # Unused in local mode but required by gateway startup
       SP_K8S_HOST: ""
       KUBECONFIG: ""
@@ -143,11 +145,9 @@ services:
     build:
       context: ./sp-sandbox
       dockerfile: ../Dockerfile.sandbox
-    cap_add:
-      - SYS_PTRACE
-      - SYS_ADMIN
+    cap_drop:
+      - ALL
     security_opt:
-      - apparmor:unconfined
       - no-new-privileges:true
     read_only: true
     tmpfs:
@@ -158,12 +158,12 @@ services:
     environment:
       SP_GATEWAY_URL: http://gateway:3300
       SP_MAX_VMS: "10"
+      SP_SANDBOX_TOKEN: ${SP_SANDBOX_TOKEN:?Set SP_SANDBOX_TOKEN for gateway-to-sandbox authentication}
     volumes:
-      # Users root (C:\Users, /home, /Users) — sandboxed DuckDB/SQLite translate
-      # host file paths to /host-data/<user>/... (see sandboxed_duckdb.py).
-      - ${SP_HOST_DATA_DIR:-${HOME:-~}/..}:/host-data:ro
+      # Explicit allowlisted host data directory for sandboxed DuckDB/SQLite files.
+      - ${SP_HOST_DATA_DIR:?Set SP_HOST_DATA_DIR to the allowed local data directory}:/host-data:ro
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      test: ["CMD-SHELL", "curl -sf -H \"X-Sandbox-Auth: $$SP_SANDBOX_TOKEN\" http://localhost:8080/health"]
       interval: 5s
       timeout: 3s
       retries: 10

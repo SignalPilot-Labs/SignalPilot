@@ -11,14 +11,14 @@ from pydantic import BaseModel, Field
 from ..common.ip import request_meta
 from ..connectors.health_monitor import health_monitor
 from ..connectors.pool_manager import pool_manager
-from ..engine import inject_limit, validate_sql
+from ..engine import inject_limit, sqlglot_dialect, validate_sql
 from ..errors import query_error_hint
 from ..governance.annotations import load_annotations
 from ..governance.budget import budget_ledger
 from ..governance.plan_limits import check_query_limit, get_org_limits, record_query
 from ..models import AuditEntry
 from ..security.scope_guard import RequireScope
-from .deps import SQLGLOT_DIALECTS, StoreD, sanitize_db_error
+from .deps import StoreD, sanitize_db_error
 
 router = APIRouter(prefix="/api")
 
@@ -52,7 +52,7 @@ async def query_database(req: DirectQueryRequest, store: StoreD, request: Reques
     if settings.blocked_tables:
         blocked_tables.extend(t for t in settings.blocked_tables if t not in blocked_tables)
 
-    dialect = SQLGLOT_DIALECTS.get(info.db_type, "postgres")
+    dialect = sqlglot_dialect(info.db_type)
 
     validation = validate_sql(req.sql, blocked_tables=blocked_tables or None, dialect=dialect)
     if not validation.ok:
@@ -191,7 +191,7 @@ async def explain_query(req: DirectQueryRequest, store: StoreD):
     if not conn_str:
         raise HTTPException(status_code=400, detail="No credentials stored")
 
-    dialect = SQLGLOT_DIALECTS.get(info.db_type, "postgres")
+    dialect = sqlglot_dialect(info.db_type)
     annotations = load_annotations(store.org_id, req.connection_name)
     blocked_tables = list(annotations.blocked_tables)
     settings = await store.load_settings()

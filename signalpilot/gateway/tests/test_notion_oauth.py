@@ -21,8 +21,12 @@ from gateway.notion import webhooks as notion_webhooks
 from gateway.store import notion as notion_store
 
 
-def _json_request(payload: dict) -> Request:
+def _json_request(payload: dict, *, notion_secret: str | None = None) -> Request:
     body = json.dumps(payload).encode()
+    headers: list[tuple[bytes, bytes]] = []
+    if notion_secret:
+        signature = "sha256=" + hmac.new(notion_secret.encode(), body, hashlib.sha256).hexdigest()
+        headers.append((b"x-notion-signature", signature.encode()))
 
     async def receive() -> dict:
         return {"type": "http.request", "body": body, "more_body": False}
@@ -32,7 +36,7 @@ def _json_request(payload: dict) -> Request:
             "type": "http",
             "method": "POST",
             "path": "/api/notion/webhooks/events",
-            "headers": [],
+            "headers": headers,
         },
         receive,
     )
@@ -123,7 +127,7 @@ async def test_webhook_background_task_logs_unhandled_exception(
 
 
 @pytest.mark.asyncio
-async def test_webhook_verification_token_is_logged(
+async def test_webhook_verification_token_is_not_logged(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     with caplog.at_level("WARNING", logger="gateway.api.notion"):
@@ -133,7 +137,40 @@ async def test_webhook_verification_token_is_logged(
         )
 
     assert response.status == "verification_received"
-    assert "NOTION WEBHOOK VERIFICATION TOKEN RECEIVED: verify-secret" in caplog.text
+    assert "verification challenge received" in caplog.text
+    assert "verify-secret" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_webhook_delivery_fails_closed_without_verification_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("NOTION_WEBHOOK_VERIFICATION_TOKEN", raising=False)
+    monkeypatch.delenv("WEBHOOK_VERIFICATION_TOKEN", raising=False)
+
+    with pytest.raises(HTTPException) as exc:
+        await notion_api.receive_notion_webhook(
+            _json_request({"id": "evt-1", "type": "comment.created"}),
+            db=object(),
+        )
+
+    assert exc.value.status_code == 503
+    assert "NOTION_WEBHOOK_VERIFICATION_TOKEN" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_webhook_delivery_rejects_missing_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NOTION_WEBHOOK_VERIFICATION_TOKEN", "secret-test")
+
+    with pytest.raises(HTTPException) as exc:
+        await notion_api.receive_notion_webhook(
+            _json_request({"id": "evt-1", "type": "comment.created"}),
+            db=object(),
+        )
+
+    assert exc.value.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -141,6 +178,8 @@ async def test_webhook_logs_when_comment_event_has_no_route(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    monkeypatch.setenv("NOTION_WEBHOOK_VERIFICATION_TOKEN", "secret-test")
+
     async def no_existing_delivery(*_args, **_kwargs):
         return None
 
@@ -164,7 +203,10 @@ async def test_webhook_logs_when_comment_event_has_no_route(
     }
 
     with caplog.at_level(logging.INFO, logger="gateway.api.notion"):
-        response = await notion_api.receive_notion_webhook(_json_request(payload), db=object())
+        response = await notion_api.receive_notion_webhook(
+            _json_request(payload, notion_secret="secret-test"),
+            db=object(),
+        )
 
     assert response.status == "ignored"
     assert response.event_id == "evt-unrouted"
@@ -403,6 +445,49 @@ async def test_trigger_page_is_part_of_routing_scope(monkeypatch: pytest.MonkeyP
         requests_data_source_id="ds-1",
         requests_database_page_id="db-1",
     )
+
+
+@pytest.mark.asyncio
+async def test_webhook_routing_requires_positive_ownership(monkeypatch: pytest.MonkeyPatch) -> None:
+    install = NotionInstallation(
+        id="install-1",
+        org_id="org-1",
+        user_id="user-1",
+        workspace_id="workspace-1",
+        workspace_name="Workspace",
+        bot_id="bot-1",
+        access_token_enc=b"encrypted",
+        status="active",
+    )
+    config = NotionInstallationConfig(
+        installation_id="install-1",
+        parent_page_id="parent-1",
+        trigger_page_id="trigger-1",
+        requests_data_source_id="ds-1",
+        requests_database_page_id="db-1",
+        enabled=True,
+    )
+
+    async def fake_records(session, workspace_id: str):
+        assert workspace_id == "workspace-1"
+        return [(install, config, "token-1")]
+
+    async def fail_belongs(*args, **kwargs):
+        raise AssertionError("page_belongs_to_scope should not run without positive ownership")
+
+    monkeypatch.setattr(notion_store, "list_active_installation_records_for_workspace", fake_records)
+    monkeypatch.setattr(notion_client, "page_belongs_to_scope", fail_belongs)
+
+    routed = await notion_webhooks.route_comment_event(
+        object(),
+        {
+            "workspace_id": "workspace-1",
+            "type": "comment.created",
+            "data": {"page_id": "page-1", "parent": {"id": "page-1", "type": "page"}},
+        },
+    )
+
+    assert routed is None
 
 
 @pytest.mark.asyncio

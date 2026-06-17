@@ -59,7 +59,7 @@ def _ownership_matches(installation: NotionInstallation, payload: dict) -> bool:
         if owner_id and notion_client.normalize_id(str(owner_id)) == notion_client.normalize_id(installation.bot_id):
             return True
 
-    return not integration_id and not accessible_by
+    return False
 
 
 async def route_comment_event(

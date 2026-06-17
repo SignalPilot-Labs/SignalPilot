@@ -4,7 +4,7 @@ import time
 
 import httpx
 
-from gateway.engine import inject_limit
+from gateway.engine import inject_limit, sqlglot_dialect
 from gateway.engine import validate_sql as engine_validate_sql
 from gateway.errors import query_error_hint
 from gateway.errors.mcp import sanitize_mcp_error, sanitize_proxy_response
@@ -61,15 +61,17 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
         annotations = load_annotations(require_org_id(), connection_name)
         blocked_tables = annotations.blocked_tables
 
+        dialect = sqlglot_dialect(conn_info.db_type)
+
         # Validate SQL (with blocked tables from annotations)
-        validation = engine_validate_sql(sql, blocked_tables=blocked_tables or None)
+        validation = engine_validate_sql(sql, blocked_tables=blocked_tables or None, dialect=dialect)
         if not validation.ok:
             return f"Query blocked: {validation.blocked_reason}"
 
         # Inject LIMIT
         row_limit = min(row_limit, 10_000)
         try:
-            safe_sql = inject_limit(sql, row_limit)
+            safe_sql = inject_limit(sql, row_limit, dialect=dialect)
         except ValueError as exc:
             return f"Query blocked: {exc}"
 

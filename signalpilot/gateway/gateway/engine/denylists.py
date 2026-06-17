@@ -165,6 +165,29 @@ _UNIVERSAL_BLOCKED_FUNCTIONS: frozenset[str] = frozenset(
 )
 
 
+def _dangerous_function_name(node: exp.Expression) -> str:
+    """Return a normalized function/table-function name from a sqlglot AST node."""
+    if isinstance(node, exp.Table):
+        table_expr = getattr(node, "this", None)
+        if isinstance(table_expr, exp.Expression):
+            return _dangerous_function_name(table_expr)
+        return str(getattr(node, "name", "") or table_expr or "")
+
+    if isinstance(node, exp.Anonymous):
+        return str(getattr(node, "name", "") or getattr(node, "this", "") or "")
+
+    if isinstance(node, exp.Func):
+        try:
+            sql_name = node.sql_name()
+        except Exception:
+            sql_name = ""
+        if sql_name and sql_name.upper() not in {"ANONYMOUS", "FUNC"}:
+            return sql_name
+        return str(getattr(node, "name", "") or getattr(node, "this", "") or "")
+
+    return ""
+
+
 def _check_dangerous_functions(parsed: exp.Expression, dialect: str) -> str | None:  # type: ignore[name-defined]
     """Walk AST and reject queries containing dangerous functions.
 
@@ -182,25 +205,13 @@ def _check_dangerous_functions(parsed: exp.Expression, dialect: str) -> str | No
     for node in parsed.walk():
         # Check function calls (both named functions and anonymous/dialect-specific)
         if isinstance(node, (exp.Anonymous, exp.Func)):
-            func_name = ""
-            if hasattr(node, "name"):
-                func_name = node.name
-            elif hasattr(node, "this") and isinstance(node.this, str):
-                func_name = node.this
-            # sqlglot may also store the SQL name on .sql_name()
-            if not func_name and hasattr(node, "sql_name"):
-                try:
-                    func_name = node.sql_name()
-                except Exception:
-                    pass
+            func_name = _dangerous_function_name(node)
             func_name_lower = func_name.lower().strip()
             if func_name_lower in all_blocked:
                 return f"Blocked: function '{func_name}' is not permitted in governed read-only mode"
         # Check table-valued functions (e.g. FROM url(...), FROM read_csv(...))
         if isinstance(node, exp.Table):
-            table_name = ""
-            if hasattr(node, "name"):
-                table_name = node.name
+            table_name = _dangerous_function_name(node)
             table_name_lower = (table_name or "").lower().strip()
             if table_name_lower in all_blocked:
                 return f"Blocked: table function '{table_name}' is not permitted in governed read-only mode"

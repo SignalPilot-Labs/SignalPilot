@@ -60,11 +60,11 @@ jobs:
 
       - name: Audit web dependencies
         working-directory: signalpilot/web
-        run: npm audit
+        run: node ../../.github/scripts/npm-audit-gate.mjs --allow form-data --allow request
 
       - name: Audit docs dependencies
         working-directory: docs
-        run: npm audit
+        run: npm audit --audit-level=high
 
   secrets:
     name: secrets

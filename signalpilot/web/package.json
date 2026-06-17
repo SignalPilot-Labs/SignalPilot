@@ -78,7 +78,6 @@
     "cmdk": "^1.1.1",
     "compassql": "0.20.4",
     "cssnano": "^7.1.2",
-    "datalib": "file:vendor/datalib",
     "date-fns": "^4.1.0",
     "dequal": "^2.0.3",
     "dnd-core": "^16.0.1",

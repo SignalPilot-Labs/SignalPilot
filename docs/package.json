@@ -20,7 +20,6 @@
     "@docusaurus/preset-classic": "3.10.1",
     "@mdx-js/react": "^3.0.0",
     "clsx": "^2.0.0",
-    "gray-matter": "file:vendor/gray-matter",
     "prism-react-renderer": "^2.3.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
@@ -52,7 +51,6 @@
     "@babel/plugin-transform-modules-systemjs": "7.29.7",
     "fast-uri": "4.0.0",
     "joi": "18.2.3",
-    "js-yaml": "4.2.0",
     "launch-editor": "2.14.1",
     "qs": "6.15.2",
     "serialize-javascript": "7.0.5",

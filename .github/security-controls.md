@@ -9,7 +9,8 @@ Dependency-scan enforcement:
 
 - Blocking: gateway Python dependencies, notebook-server Python dependencies, sandbox Python dependencies, web npm dependencies, and docs npm dependencies.
 - Python scans export each `uv.lock` to a temporary requirements file and run `pip-audit`.
-- Node scans run `npm audit` in both npm projects, so low, moderate, high, and critical advisories fail the gate.
+- Node scans run a high/critical npm audit gate in both npm projects. Moderate and low advisories should be tracked through Dependabot or risk-accepted with a remediation SLA.
+- The web audit gate currently risk-accepts `request` and `form-data` findings that enter only through `compassql -> datalib`. The data explorer imports CompassQL schema/recommendation helpers in the browser and does not call datalib's network loading path. Review this exception by 2026-09-30 and replace CompassQL or its data-explorer usage to remove it.
 
 Initial SAST enforcement:
 

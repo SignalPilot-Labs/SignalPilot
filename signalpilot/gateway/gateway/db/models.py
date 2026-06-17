@@ -710,6 +710,7 @@ class GatewayNotebookSession(GatewayBase):
     # the cluster. Distinct from pod_ip which is the legacy NodePort address.
     pod_ip_internal: Mapped[str | None] = mapped_column(Text, nullable=True)
     access_token: Mapped[str | None] = mapped_column(String)
+    access_token_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="creating")
     last_ping: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)

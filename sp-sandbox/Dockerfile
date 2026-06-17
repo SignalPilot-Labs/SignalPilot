@@ -5,7 +5,7 @@
 #   docker build -t signalpilot/sandbox .
 #
 # RUN:
-#   docker run -e SP_SANDBOX_TOKEN=... -p 8080:8080 signalpilot/sandbox
+#   docker run --cap-add SYS_PTRACE --cap-add SYS_ADMIN -p 8080:8080 signalpilot/sandbox
 
 FROM python:3.12-slim
 
@@ -39,6 +39,6 @@ WORKDIR /opt/signalpilot
 EXPOSE 8080
 
 HEALTHCHECK --interval=10s --timeout=3s \
-    CMD curl -f -H "X-Sandbox-Auth: ${SP_SANDBOX_TOKEN}" http://localhost:8080/health || exit 1
+    CMD curl -f http://localhost:8080/health || exit 1
 
 ENTRYPOINT ["python3", "sandbox_manager.py"]

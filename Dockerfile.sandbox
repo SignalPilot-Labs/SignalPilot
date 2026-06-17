@@ -33,6 +33,6 @@ RUN pip3 install --no-cache-dir "aiohttp==3.9.0" duckdb
 EXPOSE 8080
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s \
-    CMD curl -f -H "X-Sandbox-Auth: ${SP_SANDBOX_TOKEN}" http://localhost:8080/health || exit 1
+    CMD curl -f http://localhost:8080/health || exit 1
 
 ENTRYPOINT ["python3", "/opt/signalpilot/sandbox_manager.py"]

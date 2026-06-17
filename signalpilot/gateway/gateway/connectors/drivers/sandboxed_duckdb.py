@@ -116,7 +116,8 @@ class SandboxedDuckDBConnector(BaseConnector):
         """Store the host path. Actual connection happens per-query in the sandbox.
 
         Handles path translation: Windows paths (C:\\Users\\xxx\\...) are mapped
-        to the sandbox's explicit allowlisted host mount at /host-data/...
+        to the sandbox's host mount at /host-data/... The sandbox container mounts
+        the user's home directory at /host-data.
         """
         self._host_path = self._translate_path(connection_string)
         logger.info("SandboxedDuckDB: translated path → %s", self._host_path)
@@ -139,24 +140,7 @@ class SandboxedDuckDBConnector(BaseConnector):
     @staticmethod
     def _translate_path(path: str) -> str:
         """Translate a host path to the sandbox mount path."""
-        import os
         import re
-        from pathlib import Path
-
-        if path.startswith("/host-data"):
-            return path
-
-        host_data_dir = os.environ.get("SP_HOST_DATA_DIR")
-        if host_data_dir:
-            try:
-                host_root = Path(host_data_dir).expanduser().resolve(strict=False)
-                candidate = Path(path).expanduser().resolve(strict=False)
-                if candidate == host_root:
-                    return "/host-data"
-                if candidate.is_relative_to(host_root):
-                    return f"/host-data/{candidate.relative_to(host_root).as_posix()}"
-            except (OSError, ValueError):
-                pass
 
         # Windows path: C:\Users\username\... → /host-data/username/...
         win_match = re.match(r"^[A-Za-z]:[/\\]Users[/\\](.*)", path)

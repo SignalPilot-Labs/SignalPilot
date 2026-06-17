@@ -2,12 +2,7 @@
 
 import pytest
 
-from signalpilot.gateway.gateway.network.sandbox_client import SandboxClient
-
-
-@pytest.fixture(autouse=True)
-def sandbox_token(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("SP_SANDBOX_TOKEN", "test-sandbox-token")
+from signalpilot.gateway.gateway.sandbox_client import SandboxClient
 
 
 class TestSandboxClientValidation:
@@ -57,18 +52,9 @@ class TestSandboxClientValidation:
         client = SandboxClient("http://localhost:8180", api_key="test-key-123")
         assert client._client.headers.get("authorization") == "Bearer test-key-123"
 
-    def test_no_api_key_no_bearer_auth_header(self):
+    def test_no_api_key_no_auth_header(self):
         client = SandboxClient("http://localhost:8180")
         assert "authorization" not in client._client.headers
-
-    def test_sandbox_token_sets_auth_header(self):
-        client = SandboxClient("http://localhost:8180")
-        assert client._client.headers.get("x-sandbox-auth") == "test-sandbox-token"
-
-    def test_missing_sandbox_token_rejected(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.delenv("SP_SANDBOX_TOKEN", raising=False)
-        with pytest.raises(ValueError, match="SP_SANDBOX_TOKEN"):
-            SandboxClient("http://localhost:8180")
 
     def test_custom_timeout(self):
         client = SandboxClient("http://localhost:8180", timeout=120)

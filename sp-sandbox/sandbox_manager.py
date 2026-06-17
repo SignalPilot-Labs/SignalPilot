@@ -19,7 +19,7 @@ import hmac as _hmac
 import logging
 import os
 import uuid
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from aiohttp import web
 
@@ -36,27 +36,21 @@ logger = logging.getLogger("sandbox_manager")
 executor = GVisorExecutor()
 active_sessions: dict[str, str] = {}  # session_token -> vm_id
 
-
-def _sandbox_auth_token() -> str:
-    return os.environ.get("SP_SANDBOX_TOKEN", "")
+SANDBOX_AUTH_TOKEN = os.environ.get("SP_SANDBOX_TOKEN", "")
 
 
 def _check_auth(request: web.Request) -> bool:
     """Verify X-Sandbox-Auth header matches SP_SANDBOX_TOKEN."""
-    auth_token = _sandbox_auth_token()
-    if not auth_token:
-        return False
+    if not SANDBOX_AUTH_TOKEN:
+        # No token configured — allow all connections (dev/docker-compose mode).
+        # In production, always set SP_SANDBOX_TOKEN for defense-in-depth.
+        return True
     provided = request.headers.get("X-Sandbox-Auth", "")
-    return bool(provided) and _hmac.compare_digest(provided, auth_token)
+    return _hmac.compare_digest(provided, SANDBOX_AUTH_TOKEN)
 
 
 def _auth_denied() -> web.Response:
     return web.json_response({"error": "Unauthorized"}, status=401)
-
-
-def _valid_sandbox_path(path: str) -> bool:
-    sandbox_path = PurePosixPath(path)
-    return bool(path) and not sandbox_path.is_absolute() and ".." not in sandbox_path.parts
 
 
 async def health_handler(request: web.Request) -> web.Response:
@@ -159,23 +153,13 @@ async def execute_handler(request: web.Request) -> web.Response:
     # Validate file mounts
     validated_mounts = []
     host_data_root = Path("/host-data")
-    if file_mounts and not host_data_root.exists():
-        return web.json_response(
-            {"success": False, "error": "Host data mount is not configured"},
-            status=400,
-        )
     for mount in file_mounts:
         host_path = mount.get("host_path", "")
         sandbox_name = mount.get("sandbox_path", "")
         if not host_path or not sandbox_name:
             continue
-        if not _valid_sandbox_path(sandbox_name):
-            return web.json_response(
-                {"success": False, "error": "Sandbox path not allowed"},
-                status=400,
-            )
         # If path comes from the file browser (already under /host-data), use as-is.
-        # The deployment must mount only an explicit allowlisted host directory there.
+        # Otherwise, try to map it: the host's home dir is mounted at /host-data
         resolved = Path(host_path).resolve()
         if not resolved.is_relative_to(Path("/host-data").resolve()):
             audit.log_execution(
@@ -195,6 +179,7 @@ async def execute_handler(request: web.Request) -> web.Response:
                 status=400,
             )
         if not resolved.exists() and host_data_root.exists():
+            # Try stripping the host home prefix and mapping to /host-data
             # The file browser returns paths under /host-data already
             pass  # resolved stays as-is, will fail the exists() check below
         if not resolved.exists():
@@ -291,18 +276,13 @@ async def browse_files_handler(request: web.Request) -> web.Response:
     """
     if not _check_auth(request):
         return _auth_denied()
-    host_data_root = Path("/host-data")
-    if not host_data_root.exists():
-        return web.json_response(
-            {"error": "Host data mount is not configured", "files": [], "directories": []},
-            status=503,
-        )
-    default_path = "/host-data"
+    # Default to /host-data (mounted from host) if it exists, else home dir
+    default_path = "/host-data" if Path("/host-data").exists() else str(Path.home())
     search_path = request.query.get("path", default_path)
     pattern = request.query.get("pattern", "*.duckdb")
 
     resolved = Path(search_path).resolve()
-    allowed_root = host_data_root.resolve()
+    allowed_root = Path("/host-data").resolve() if Path("/host-data").exists() else Path.home().resolve()
     if not resolved.is_relative_to(allowed_root):
         return web.json_response({"error": "Access denied"}, status=403)
     if not resolved.exists() or not resolved.is_dir():

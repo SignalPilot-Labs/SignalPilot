@@ -380,9 +380,12 @@ async def _ensure_branch_columns(engine) -> None:
 
 
 async def _ensure_notebook_session_columns(engine) -> None:
-    """Add access_token column to gateway_notebook_sessions if it doesn't exist."""
+    """Add notebook session token columns if they don't exist."""
     async with engine.begin() as conn:
         await conn.execute(text("ALTER TABLE gateway_notebook_sessions ADD COLUMN IF NOT EXISTS access_token VARCHAR"))
+        await conn.execute(
+            text("ALTER TABLE gateway_notebook_sessions ADD COLUMN IF NOT EXISTS access_token_enc BYTEA")
+        )
     logger.info("Ensured notebook session columns")
 
 

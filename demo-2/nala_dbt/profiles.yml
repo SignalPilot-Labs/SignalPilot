@@ -1,0 +1,16 @@
+# Local dbt profile for the isolated NALA warehouse. Point dbt at this dir with
+#   dbt run --profiles-dir .
+nala:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: localhost
+      port: 5602
+      user: nala
+      password: nala_dev_only
+      dbname: nala_warehouse
+      schema: analytics
+      threads: 8
+      sslmode: disable
+      keepalives_idle: 0

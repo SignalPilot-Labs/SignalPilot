@@ -1,0 +1,27 @@
+-- Suspicious Activity Report fact: one row per SAR.
+select
+    sar_id,
+    sar_ref,
+    customer_code,
+    customer_uuid,
+    subject_name,
+    transfer_id,
+    customer_id,
+    transfer_customer_id,
+    activity_type,
+    status,
+    priority,
+    regulator,
+    filing_reference,
+    amount_usd,
+    send_country,
+    receive_country,
+    transfer_status,
+    payout_partner,
+    kyc_tier,
+    account_status,
+    filed_by,
+    filed_at,
+    created_at,
+    updated_at
+from {{ ref('int_sars_enriched') }}

@@ -1,0 +1,89 @@
+version: 2
+
+sources:
+  - name: raw_stripe
+    schema: raw_stripe
+    description: >
+      Stripe API landing tables. Authentic Stripe style: ids like ch_/pi_/cus_,
+      `created` as epoch SECONDS, amounts in MINOR units (cents). Represents how
+      NALA app users fund their transfers via card/debit.
+    tables:
+      - name: customers
+        description: One row per Stripe Customer (a NALA user's card-funding identity).
+        columns:
+          - name: id
+            description: Stripe customer id (cus_...).
+          - name: nala_customer_code
+            description: Cross-source key to canonical NALA customer (CUS_00000123).
+          - name: created
+            description: Creation time as epoch SECONDS.
+          - name: email
+            description: Customer email (PII, dirty casing/format).
+      - name: payment_methods
+        description: Saved payment instruments (card/bank). Card last4/bin/funding are PII.
+        columns:
+          - name: id
+            description: Payment method id (pm_...).
+          - name: customer
+            description: Owning customer (cus_...).
+          - name: card_last4
+            description: Card last 4 (PII).
+          - name: card_bin
+            description: Card BIN / issuer id (PII).
+      - name: payment_intents
+        description: One row per attempt to collect funds for a transfer.
+        loaded_at_field: to_timestamp(created)
+        columns:
+          - name: id
+            description: Payment intent id (pi_...).
+          - name: amount
+            description: Requested amount in MINOR units (cents).
+          - name: status
+            description: PaymentIntent status; includes legacy requires_capture.
+          - name: nala_transfer_id
+            description: UUID of funded transfer (dirty casing, sparse).
+      - name: charges
+        description: One row per card capture attempt; carries denormalized card snapshot.
+        loaded_at_field: to_timestamp(created)
+        columns:
+          - name: id
+            description: Charge id (ch_...).
+          - name: amount
+            description: Amount in MINOR units (cents).
+          - name: status
+            description: succeeded/failed/pending plus legacy 'paid'.
+          - name: card_last4
+            description: Denormalized card last4 (PII).
+      - name: refunds
+        description: Refunds issued against charges (MINOR units).
+        columns:
+          - name: id
+            description: Refund id (re_...).
+      - name: disputes
+        description: Chargebacks raised against charges (MINOR units).
+        columns:
+          - name: id
+            description: Dispute id (dp_...).
+      - name: payouts
+        description: Program-level settlements of NALA's Stripe balance to its bank.
+        loaded_at_field: to_timestamp(created)
+        columns:
+          - name: id
+            description: Payout id (po_...).
+          - name: bank_last4
+            description: Destination bank account last4 (PII).
+      - name: balance_transactions
+        description: Ledger of movements on NALA's Stripe balance (charge/refund/payout/fee).
+        columns:
+          - name: id
+            description: Balance transaction id (txn_...).
+          - name: net
+            description: Amount minus Stripe fee, MINOR units.
+      - name: events
+        description: Stripe webhook event stream (jsonb payload in data).
+        loaded_at_field: to_timestamp(created)
+        columns:
+          - name: id
+            description: Event id (evt_...).
+          - name: type
+            description: Event type e.g. charge.succeeded.

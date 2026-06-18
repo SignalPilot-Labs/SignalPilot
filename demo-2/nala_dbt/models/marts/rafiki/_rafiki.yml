@@ -1,0 +1,48 @@
+version: 2
+
+models:
+  - name: fct_rafiki_settlements
+    description: >
+      B2B settlement fact. One row per Rafiki merchant settlement, with reconciled
+      line-level rollups summed from the underlying collections and payouts.
+    columns:
+      - name: settlement_id
+        description: Settlement id. Primary key.
+        tests:
+          - unique
+          - not_null
+      - name: merchant_id
+        description: Rafiki merchant the settlement belongs to.
+        tests:
+          - not_null
+      - name: settlement_date
+        description: Date the settlement covers.
+      - name: net_amount_usd
+        description: Source-reported net settlement amount in USD.
+      - name: lines_net_usd
+        description: Reconciled net USD summed from settlement lines (collections minus payouts).
+      - name: status
+        description: Settlement status.
+
+  - name: dim_merchants
+    description: >
+      Rafiki merchant dimension. One row per merchant with lifetime collection and
+      payout activity rollups.
+    columns:
+      - name: merchant_id
+        description: Rafiki merchant id. Primary key.
+        tests:
+          - unique
+          - not_null
+      - name: display_name
+        description: Merchant display name.
+      - name: tier
+        description: Merchant tier.
+      - name: status
+        description: Merchant lifecycle status.
+      - name: collected_usd
+        description: Lifetime collected USD.
+      - name: paid_out_usd
+        description: Lifetime paid-out USD.
+      - name: net_flow_usd
+        description: Lifetime net flow (collected minus paid out) in USD.

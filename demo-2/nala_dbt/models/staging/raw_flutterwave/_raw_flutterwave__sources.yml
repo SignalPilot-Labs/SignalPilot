@@ -1,0 +1,83 @@
+version: 2
+
+sources:
+  - name: raw_flutterwave
+    schema: raw_flutterwave
+    description: >
+      Flutterwave v3 API landing tables. Pan-African payout rail (bank +
+      mobile-money) for NALA transfers across NG, GH, UG, RW, SN, CI, CM, GA,
+      CG, ZA (and overlap into KE/TZ). snake_case JSON naming. PII: account
+      number, beneficiary bank details, recipient MSISDN.
+    tables:
+      - name: transfers
+        description: Payout fact — one row per attempted payout to a beneficiary. Terminal status via webhooks.
+        columns:
+          - name: id
+            description: Primary key; Flutterwave transfer id.
+          - name: account_number
+            description: "PII: destination bank account OR MSISDN."
+          - name: status
+            description: NEW/PENDING/SUCCESSFUL/FAILED plus legacy QUEUED.
+          - name: nala_transfer_id
+            description: Soft ref to raw_core_transfers.transfers.
+          - name: created_at
+            description: ISO-Z string.
+
+      - name: transfer_retries
+        description: Retry attempts for failed/pending transfers.
+        columns:
+          - name: id
+            description: Primary key.
+          - name: transfer_id
+            description: Ref transfers.id (soft).
+
+      - name: beneficiaries
+        description: Saved payout destinations (bank acct / mobile money). Heavy PII.
+        columns:
+          - name: id
+            description: Primary key.
+          - name: account_number
+            description: "PII: bank acct or MSISDN."
+          - name: full_name
+            description: "PII: holder name."
+          - name: beneficiary_name
+            description: "PII: dirty near-dup of full_name (uppercased / order-swapped)."
+          - name: is_deleted
+            description: Soft-delete flag.
+
+      - name: banks
+        description: Lookup of supported destination banks / mobile-money operators per country.
+        columns:
+          - name: id
+            description: Primary key; Flutterwave bank id.
+          - name: code
+            description: Bank/operator code.
+          - name: is_mobile_money
+            description: True for mobile-money operators.
+
+      - name: balances
+        description: Periodic treasury float snapshots per currency.
+        loaded_at_field: snapshot_at
+        columns:
+          - name: balance_id
+            description: Synthetic primary key.
+          - name: snapshot_at
+            description: Epoch seconds.
+
+      - name: webhooks
+        description: Raw webhook events. ~3% duplicates; verif_hash_valid flags integrity.
+        columns:
+          - name: webhook_id
+            description: Synthetic primary key.
+          - name: transfer_id
+            description: Ref transfers.id.
+          - name: is_duplicate
+            description: Re-delivered event; dedupe before counting.
+
+      - name: settlements
+        description: Settlement batches paid to NALA's collection account (per currency, weekly).
+        columns:
+          - name: id
+            description: Primary key.
+          - name: net_amount
+            description: gross_amount minus all fees.

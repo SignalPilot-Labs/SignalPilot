@@ -1,0 +1,54 @@
+version: 2
+
+sources:
+  - name: raw_workday
+    schema: raw_workday
+    description: >
+      Workday HCM (HRIS). Departments, employees (staff — NOT customers),
+      effective-dated compensation and time-off. PII heavy: legal name,
+      personal email, phone, national id, DOB, salary. Quirks: string worker
+      ids, effective-dated comp, ISO-string time-off timestamps.
+    tables:
+      - name: departments
+        description: HR department / cost-center dimension (distinct from NetSuite depts).
+        columns:
+          - name: department_id
+            description: "DEPT-* string id (primary key)."
+            data_tests: [unique, not_null]
+      - name: employees
+        description: Worker master. Staff are NOT in customer_master.
+        loaded_at_field: created_at
+        columns:
+          - name: employee_id
+            description: "WD-000123 worker id (primary key)."
+            data_tests: [unique, not_null]
+          - name: work_email
+            description: PII. name@nala.com work email.
+          - name: personal_email
+            description: PII. Personal email (sparse, dirty).
+          - name: national_id
+            description: PII. ssn/NI/passport-style id (stored with national_id_hash).
+          - name: date_of_birth
+            description: PII. Date of birth.
+          - name: department_id
+            description: Joins to departments.department_id.
+      - name: compensation
+        description: Effective-dated compensation rows per employee.
+        columns:
+          - name: compensation_id
+            description: Surrogate id (primary key).
+            data_tests: [unique, not_null]
+          - name: employee_id
+            description: Joins to employees.employee_id.
+          - name: base_pay
+            description: PII. Base salary amount.
+      - name: time_off
+        description: Leave / PTO requests per employee.
+        columns:
+          - name: time_off_id
+            description: Surrogate id (primary key).
+            data_tests: [unique, not_null]
+          - name: employee_id
+            description: Joins to employees.employee_id.
+          - name: requested_at
+            description: ISO string request timestamp.

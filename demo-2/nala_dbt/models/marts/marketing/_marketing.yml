@@ -1,0 +1,66 @@
+version: 2
+
+models:
+  - name: fct_marketing_spend_daily
+    description: >
+      Daily paid-marketing spend fact, one row per report_date x channel x
+      campaign. Unions Google Ads and Meta Ads. Spend is in the campaign's
+      account currency (already converted to major units in staging).
+    columns:
+      - name: marketing_spend_id
+        description: Surrogate key (md5 of report_date | channel | campaign_id).
+        tests:
+          - unique
+          - not_null
+      - name: report_date
+        description: Calendar date of the spend.
+        tests:
+          - not_null
+      - name: channel
+        description: Ad platform — google_ads or meta_ads.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['google_ads', 'meta_ads']
+      - name: campaign_id
+        description: Platform campaign id (text).
+      - name: currency_code
+        description: Account currency of the spend.
+      - name: impressions
+        description: Total ad impressions.
+      - name: clicks
+        description: Total ad clicks.
+      - name: spend
+        description: Total spend in account-currency major units.
+      - name: conversions
+        description: Attributed conversions (Google) or installs+purchases (Meta).
+      - name: ctr
+        description: Click-through rate (clicks / impressions).
+      - name: cost_per_click
+        description: spend / clicks (null when no clicks).
+      - name: cost_per_conversion
+        description: spend / conversions (null when no conversions).
+
+  - name: dim_marketing_channel
+    description: >
+      Marketing channel dimension. Distinct paid channels plus AppsFlyer
+      first-touch media sources, classified into a coarse channel_type.
+    columns:
+      - name: marketing_channel_id
+        description: Surrogate key (md5 of channel_name).
+        tests:
+          - unique
+          - not_null
+      - name: channel_name
+        description: Raw channel / media-source name.
+        tests:
+          - unique
+          - not_null
+      - name: channel_type
+        description: paid_search / paid_social / organic / referral / other.
+        tests:
+          - not_null
+      - name: is_paid
+        description: True for paid acquisition channels.
+        tests:
+          - not_null

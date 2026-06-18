@@ -1,0 +1,51 @@
+version: 2
+
+sources:
+  - name: raw_openexchange
+    description: >
+      Mirror of the Open Exchange Rates API (openexchangerates.org) the fx-engine
+      ingests from. USD-base rate maps, epoch-second timestamps, 'base'/'rates'
+      envelope. No PII. Field names match the vendor's JSON.
+    schema: raw_openexchange
+    tables:
+      - name: currencies
+        description: Lookup of ISO code -> display name (/currencies.json). One row per code.
+        columns:
+          - name: code
+            description: Primary key, ISO-4217 or crypto code.
+          - name: is_crypto
+            description: True for stablecoins (USDC/USDT/PYUSD).
+
+      - name: latest_rates
+        description: >
+          Most-recent USD-base rates (/latest.json), polled ~every 6h over a
+          rolling ~120-day window. One row per (fetch, currency).
+        loaded_at_field: fetched_at
+        columns:
+          - name: id
+            description: Primary key, dense counter.
+          - name: base
+            description: Always 'USD'.
+          - name: currency
+            description: Quote currency code.
+          - name: rate
+            description: Units of `currency` per 1 USD.
+          - name: timestamp
+            description: Epoch SECONDS of the vendor tick (reserved word; quote it).
+          - name: disclaimer
+            description: Vendor boilerplate, usually NULL.
+
+      - name: historical_rates
+        description: Daily USD-base close per currency across the full epoch. One row per (date, currency).
+        loaded_at_field: ingested_at
+        columns:
+          - name: id
+            description: Primary key, dense counter.
+          - name: rate_date
+            description: The historical day.
+          - name: currency
+            description: Quote currency code.
+          - name: rate
+            description: Units of `currency` per 1 USD at close.
+          - name: timestamp
+            description: Epoch SECONDS of the close (reserved word; quote it).

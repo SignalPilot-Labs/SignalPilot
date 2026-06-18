@@ -1,0 +1,37 @@
+version: 2
+
+sources:
+  - name: raw_appsflyer
+    schema: raw_appsflyer
+    description: >
+      AppsFlyer mobile-attribution (MMP) raw-data export. install_time and
+      event_time are naive UTC ISO *strings* (text) — vendor format drift —
+      while attributions.touch_time is a real timestamptz.
+    tables:
+      - name: media_sources
+        description: "Lookup of acquisition channels / ad networks. Join on the raw media_source string (dirty)."
+        columns:
+          - name: media_source
+            description: "Raw media source string, e.g. 'googleadwords_int', 'Organic'."
+      - name: installs
+        description: "One row per install/first-open attributed by AppsFlyer. One row per customer device."
+        loaded_at_field: "to_timestamp(install_time, 'YYYY-MM-DD HH24:MI:SS')"
+        columns:
+          - name: appsflyer_id
+            description: "AppsFlyer device id. Primary key. PII-ish device key."
+          - name: customer_user_id
+            description: "Customer code CUS_... once logged in; NULL pre-login. PII link."
+          - name: install_time
+            description: "Install time as naive UTC ISO string (text). Parse with to_timestamp."
+          - name: media_source
+            description: "Attribution source string (join to media_sources, dirty)."
+          - name: idfa
+            description: "iOS advertising id. PII. NULL when ATT-denied."
+          - name: advertising_id
+            description: "Android GAID. PII."
+          - name: ip
+            description: "Client IP (inet). PII."
+      - name: in_app_events
+        description: "Post-install events for ROI. event_time is a naive UTC ISO string. event_value carries af_* JSON."
+      - name: attributions
+        description: "Attribution decision records (install / reattribution / reengagement). touch_time is a timestamptz."

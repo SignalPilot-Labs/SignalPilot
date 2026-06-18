@@ -1,0 +1,108 @@
+version: 2
+
+sources:
+  - name: raw_ledger
+    schema: raw_ledger
+    description: >
+      NALA internal double-entry general ledger and treasury wallet registry.
+      Loaded by warehouse/generators/gen_raw_ledger.py.
+    tables:
+      - name: account_types
+        description: Lookup of the five accounting categories and their normal balance side.
+        columns:
+          - name: account_type_id
+            description: Primary key.
+          - name: code
+            description: ASSET / LIABILITY / EQUITY / REVENUE / EXPENSE.
+          - name: normal_balance
+            description: DEBIT or CREDIT — the side that increases this type.
+
+      - name: accounts
+        description: Chart of accounts, including per-customer wallet liability accounts.
+        columns:
+          - name: account_id
+            description: Primary key.
+          - name: account_code
+            description: e.g. 1000-CASH-USD, 2000-CUST-CUS_00000123.
+          - name: account_type_id
+            description: FK to account_types.
+          - name: customer_code
+            description: CUS_... when this is a customer wallet account (PII join key).
+          - name: is_deleted
+            description: Soft-delete flag.
+
+      - name: journal_entries
+        description: Posted accounting-event headers. Each groups balanced journal_lines.
+        loaded_at_field: posted_at
+        columns:
+          - name: entry_id
+            description: Primary key.
+          - name: reference_id
+            description: Originating transfer/settlement id (dirty cross-source key).
+          - name: status
+            description: POSTED / posted (legacy) / DRAFT / REVERSED.
+
+      - name: journal_lines
+        description: >
+          Ledger fact table. One debit or credit line per row. Debits equal
+          credits within each entry_id (double-entry invariant).
+        loaded_at_field: posted_at
+        columns:
+          - name: line_id
+            description: Primary key.
+          - name: entry_id
+            description: FK to journal_entries.
+          - name: account_id
+            description: FK to accounts.
+          - name: direction
+            description: DEBIT or CREDIT.
+          - name: amount
+            description: Positive magnitude; direction carries the sign.
+
+      - name: wallets
+        description: Balance-holding wallets (customer + treasury), fiat and stablecoin.
+        columns:
+          - name: wallet_id
+            description: Primary key.
+          - name: customer_code
+            description: CUS_... for customer wallets (PII join key).
+          - name: address
+            description: Crypto wallet address for stablecoin wallets (PII).
+
+      - name: wallet_transactions
+        description: Credit/debit movements against a wallet balance, with running balance.
+        loaded_at_field: occurred_at
+        columns:
+          - name: wallet_txn_id
+            description: Primary key.
+          - name: wallet_id
+            description: FK to wallets.
+          - name: entry_id
+            description: FK to journal_entries (nullable on legacy rows).
+
+      - name: balance_snapshots
+        description: Monthly denormalized GL account balance snapshots.
+        columns:
+          - name: snapshot_id
+            description: Primary key.
+          - name: account_id
+            description: FK to accounts.
+
+      - name: reconciliation_runs
+        description: Ledger-vs-external reconciliation runs (Fireblocks/Circle/bank/internal).
+        loaded_at_field: started_at
+        columns:
+          - name: run_id
+            description: Primary key.
+          - name: recon_type
+            description: FIREBLOCKS / CIRCLE / BANK / INTERNAL.
+
+      - name: reconciliation_breaks
+        description: Discrepancies found in a reconciliation run.
+        columns:
+          - name: break_id
+            description: Primary key.
+          - name: run_id
+            description: FK to reconciliation_runs.
+          - name: break_amount
+            description: ledger_balance - external_balance.

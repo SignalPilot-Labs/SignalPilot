@@ -1,0 +1,38 @@
+version: 2
+
+sources:
+  - name: raw_intercom
+    description: >
+      Intercom in-app conversational support (conversations + parts). Contacts
+      map to NALA customers via contact_external_id (customer code). Timestamps
+      are epoch seconds (waiting_since is epoch ms).
+    schema: raw_intercom
+    tables:
+      - name: conversations
+        description: >
+          Intercom conversation threads. CSAT in rating (1..5). Timestamps epoch
+          seconds except waiting_since (epoch ms).
+        columns:
+          - name: id
+            description: Numeric string id (primary key).
+          - name: contact_external_id
+            description: NALA customer code (cross-source join key).
+          - name: contact_email
+            description: PII. Dirty email, ~7% null.
+          - name: state
+            description: open / closed / snoozed.
+          - name: waiting_since
+            description: Epoch MILLISECONDS (inconsistent vs other epoch-second fields).
+          - name: rating
+            description: CSAT 1..5, sparse.
+          - name: created_at
+            description: Epoch seconds.
+      - name: conversation_parts
+        description: Individual parts (messages/notes/system) within a conversation.
+        columns:
+          - name: id
+            description: Numeric string id (primary key).
+          - name: conversation_id
+            description: FK to conversations.id.
+          - name: created_at
+            description: Epoch seconds.

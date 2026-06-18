@@ -1,0 +1,42 @@
+version: 2
+
+sources:
+  - name: raw_twilio
+    schema: raw_twilio
+    description: >
+      Twilio Programmable Messaging (SMS) and Lookup v2. Outbound OTP /
+      notification / marketing SMS to customers, plus phone-number
+      intelligence lookups. Native Twilio quirks: SID ids, RFC2822-string
+      timestamps, signed string price, epoch-ms lookup timestamps.
+    tables:
+      - name: messages
+        description: One row per SMS message (mostly outbound).
+        loaded_at_field: "to_timestamp(date_created, 'Dy, DD Mon YYYY HH24:MI:SS')"
+        columns:
+          - name: message_sid
+            description: Twilio SM... message SID (primary key).
+            data_tests: [unique, not_null]
+          - name: to_number
+            description: "PII. Recipient phone, dirty E.164 drift (spaces / 00 / no +)."
+          - name: status
+            description: queued / sent / delivered / undelivered / failed.
+          - name: message_type
+            description: otp / notification / marketing.
+          - name: price
+            description: Signed USD cost as a string (e.g. -0.0075); NULL while queued.
+          - name: customer_id
+            description: Resolved canonical customer id (~10% NULL).
+          - name: date_sent
+            description: RFC2822 string; NULL when status is queued.
+      - name: phone_lookups
+        description: One row per Twilio Lookup v2 request (carrier / line type).
+        columns:
+          - name: lookup_sid
+            description: Internal lookup id (primary key).
+            data_tests: [unique, not_null]
+          - name: phone_number
+            description: PII. Queried number in clean E.164.
+          - name: line_type
+            description: mobile / landline / voip / nonFixedVoip.
+          - name: created_epoch_ms
+            description: Lookup timestamp as epoch milliseconds.

@@ -1,0 +1,32 @@
+name: 'nala'
+version: '1.0.0'
+config-version: 2
+
+profile: 'nala'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+snapshot-paths: ["snapshots"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# Materialization mimics a real warehouse build:
+#   staging      -> views   (light, 1:1 with raw sources)
+#   intermediate -> ephemeral/views (reusable building blocks)
+#   marts        -> TABLES  (physically materialized analytics tables)
+models:
+  nala:
+    staging:
+      +materialized: view
+      +schema: staging
+    intermediate:
+      +materialized: view
+      +schema: intermediate
+    marts:
+      +materialized: table
+      +schema: marts

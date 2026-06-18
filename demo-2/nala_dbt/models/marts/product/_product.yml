@@ -1,0 +1,110 @@
+version: 2
+
+models:
+  - name: fct_product_events_daily
+    description: >
+      Daily product-event fact, one row per event_date x event_source x
+      event_name, from unioned Segment + Amplitude events.
+    columns:
+      - name: product_event_daily_id
+        description: Surrogate key (md5 of event_date | event_source | event_name).
+        tests:
+          - unique
+          - not_null
+      - name: event_date
+        description: Calendar date of the events.
+        tests:
+          - not_null
+      - name: event_source
+        description: segment or amplitude.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['segment', 'amplitude']
+      - name: event_name
+        description: Product event name (e.g. App Opened, Transfer Completed).
+        tests:
+          - not_null
+      - name: event_count
+        description: Number of events that day.
+      - name: distinct_users
+        description: Distinct identified users (customer_code) firing the event.
+
+  - name: fct_acquisition_funnel
+    description: >
+      Acquisition funnel fact, one row per user (customer_code) with funnel-step
+      timestamps (install -> signup -> kyc -> first transfer), step flags, the
+      converted flag, and first-touch attribution.
+    columns:
+      - name: customer_code
+        description: Canonical user code (CUS_xxxxxxxx).
+        tests:
+          - unique
+          - not_null
+      - name: installed_at
+        description: Earliest AppsFlyer install timestamp.
+      - name: signed_up_at
+        description: Earliest 'Signup Completed' event timestamp.
+      - name: kyc_at
+        description: Earliest KYC Approved (else KYC Submitted) event timestamp.
+      - name: first_transfer_at
+        description: Earliest completed core transfer timestamp.
+      - name: did_install
+        description: True if an install was observed.
+        tests:
+          - not_null
+      - name: did_signup
+        description: True if a signup was observed.
+      - name: did_kyc
+        description: True if a KYC event was observed.
+      - name: did_first_transfer
+        description: True if a completed transfer was observed.
+      - name: converted
+        description: True if the user reached the first-transfer step.
+        tests:
+          - not_null
+      - name: first_touch_media_source
+        description: First-touch AppsFlyer media source.
+
+  - name: fct_app_reviews
+    description: >
+      App store reviews fact, one row per review (Apple + Google Play unioned).
+    columns:
+      - name: review_id
+        description: Review UUID, unique across both stores.
+        tests:
+          - unique
+          - not_null
+      - name: store
+        description: apple or google_play.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['apple', 'google_play']
+      - name: star_rating
+        description: 1-5 star rating.
+      - name: submitted_at
+        description: Review submission timestamp.
+      - name: is_positive
+        description: True when star_rating >= 4.
+      - name: is_negative
+        description: True when star_rating <= 2.
+
+  - name: fct_user_engagement_daily
+    description: >
+      Daily engagement fact, one row per activity_date, combining product DAU
+      with outbound messaging volume (Braze + SendGrid + Twilio).
+    columns:
+      - name: activity_date
+        description: Calendar date.
+        tests:
+          - unique
+          - not_null
+      - name: active_users
+        description: Distinct identified active users (DAU) that day.
+        tests:
+          - not_null
+      - name: total_messages_sent
+        description: Braze + SendGrid + Twilio sends that day.
+        tests:
+          - not_null

@@ -1,0 +1,41 @@
+version: 2
+
+sources:
+  - name: raw_sendgrid
+    schema: raw_sendgrid
+    description: >
+      Twilio SendGrid v3 email. Transactional + marketing sends (messages)
+      and the Event Webhook fan-out (events). Quirks: ISO-Z send timestamps,
+      epoch-SECOND event timestamps, sparse engagement fields.
+    tables:
+      - name: messages
+        description: One row per email send with denormalized engagement rollups.
+        loaded_at_field: sent_at::timestamptz
+        columns:
+          - name: sg_message_id
+            description: SendGrid message id (primary key).
+            data_tests: [unique, not_null]
+          - name: to_email
+            description: "PII. Recipient email, dirty casing/dot/space drift."
+          - name: category
+            description: otp / receipt / kyc / notification / marketing.
+          - name: msg_status
+            description: processed / delivered / bounce / dropped.
+          - name: customer_id
+            description: Resolved canonical customer id (~10% NULL).
+          - name: sent_at
+            description: ISO-8601 Z send timestamp string.
+      - name: events
+        description: One row per delivery / engagement event (fanned from a message).
+        columns:
+          - name: event_id
+            description: SendGrid event id (primary key).
+            data_tests: [unique, not_null]
+          - name: sg_message_id
+            description: Joins to messages.sg_message_id.
+          - name: event
+            description: processed / delivered / open / click / bounce / spamreport / dropped / unsubscribe.
+          - name: timestamp
+            description: Event time as epoch SECONDS (SendGrid native).
+          - name: email
+            description: PII. Recipient email at event time (re-dirtied).

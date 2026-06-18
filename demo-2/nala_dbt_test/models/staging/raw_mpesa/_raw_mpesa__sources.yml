@@ -1,0 +1,91 @@
+version: 2
+
+sources:
+  - name: raw_mpesa
+    schema: raw_mpesa
+    description: >
+      Safaricom M-PESA Daraja API landing tables. Authentic CamelCase Daraja
+      field naming (TransactionID, MSISDN, TransAmount, BusinessShortCode,
+      ResultCode). Collection (STK/C2B) and payout (B2C) legs for NALA transfers
+      into Kenya and Tanzania. PII: MSISDN.
+    tables:
+      - name: b2c_requests
+        description: B2C payout requests — NALA crediting recipient M-PESA wallets. Final ResultCode arrives via callbacks.
+        columns:
+          - name: OriginatorConversationID
+            description: Primary key; our idempotency id.
+          - name: PartyB
+            description: "PII: recipient MSISDN (dirty format)."
+          - name: ResultCode
+            description: Final result; NULL until callback lands.
+          - name: nala_transfer_id
+            description: Soft ref to raw_core_transfers.transfers.
+          - name: TransactionCompletedDateTime
+            description: "dd.MM.yyyy HH:mm:ss string; NULL unless success."
+
+      - name: stk_push_requests
+        description: STK Push (Lipa na M-PESA Online) collection initiation requests.
+        columns:
+          - name: MerchantRequestID
+            description: Primary key.
+          - name: PhoneNumber
+            description: "PII: payer MSISDN."
+          - name: TransactionDate
+            description: yyyyMMddHHmmss string.
+          - name: ResultCode
+            description: Final result; NULL until callback.
+
+      - name: c2b_payments
+        description: C2B Paybill/Buy-Goods payment confirmations.
+        loaded_at_field: ingested_at
+        columns:
+          - name: TransID
+            description: Primary key; M-PESA receipt.
+          - name: MSISDN
+            description: "PII: payer mobile number."
+          - name: TransTime
+            description: yyyyMMddHHmmss string.
+          - name: ingested_at
+            description: Epoch milliseconds ingest time.
+
+      - name: callbacks
+        description: Async Daraja result callbacks (polymorphic STK/B2C). ~2% duplicates.
+        columns:
+          - name: callback_id
+            description: Synthetic primary key.
+          - name: callback_type
+            description: stk / b2c / status / balance discriminator.
+          - name: ResultCode
+            description: 0 = success.
+          - name: received_at_ms
+            description: Epoch milliseconds.
+          - name: is_duplicate
+            description: True for re-posted callbacks; dedupe before counting.
+
+      - name: transaction_status_queries
+        description: Reconciliation status polls for stuck B2C payouts.
+        columns:
+          - name: OriginatorConversationID
+            description: Primary key.
+          - name: TransactionStatus
+            description: Completed / Failed / legacy PENDING_OLD.
+
+      - name: account_balance_queries
+        description: Periodic treasury polls of the M-PESA shortcode float.
+        columns:
+          - name: OriginatorConversationID
+            description: Primary key.
+          - name: WorkingAccountBalance
+            description: Main float balance.
+
+      - name: statements
+        description: Daily reconciliation statement lines on the shortcode ledger.
+        columns:
+          - name: statement_line_id
+            description: Synthetic primary key.
+          - name: Paidin
+            description: Credit amount (NULL if debit).
+          - name: Withdrawn
+            description: Debit amount (NULL if credit).
+          - name: is_deleted
+            description: Soft-delete flag.

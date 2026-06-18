@@ -23,6 +23,7 @@ dependencies = [
     "pyyaml>=6.0.0",
     "PyJWT>=2.8.0",
     "sqlalchemy[asyncio]>=2.0.0",
+    "websockets>=16.0",
     # Database connectors
     "pymysql>=1.1.0",
     "pymssql>=2.3.0",
@@ -57,6 +58,7 @@ all-connectors = [
 [project.scripts]
 sp = "gateway.cli:app"
 signalpilot-mcp = "gateway.mcp:main"
+signalpilot-slack-poc = "gateway.slack_poc.worker:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["gateway"]

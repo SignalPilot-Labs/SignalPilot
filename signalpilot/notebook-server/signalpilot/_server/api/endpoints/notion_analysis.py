@@ -12,9 +12,10 @@ import os
 import re
 import struct
 from dataclasses import asdict, dataclass
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
-from urllib.parse import unquote, urlparse, urlunparse
+from urllib.parse import unquote, unquote_to_bytes, urlparse
 from uuid import NAMESPACE_URL, uuid5
 
 import msgspec
@@ -24,11 +25,11 @@ from starlette.responses import FileResponse, JSONResponse
 from signalpilot import _loggers
 from signalpilot._messaging.cell_output import CellOutput
 from signalpilot._runtime.commands import SerializedQueryParams
+from signalpilot._runtime.virtual_file import read_virtual_file
 from signalpilot._server.api.deps import AppState
 from signalpilot._server.api.endpoints.notion_urls import (
-    notebooks_base_url as _notebooks_base_url,
+    trail_url as _trail_url,
 )
-from signalpilot._server.api.endpoints.notion_urls import trail_url as _trail_url
 from signalpilot._server.api.utils import parse_request
 from signalpilot._server.export._session_cache import (
     persist_session_view_to_cache,
@@ -97,6 +98,14 @@ class AnalysisRecord:
     notion_request_page_id: str | None = None
     error: str | None = None
     result: AnalysisResult | None = None
+
+
+@dataclass
+class _ImageChartCandidate:
+    cell_id: str
+    title: str
+    content_type: str
+    content: bytes
 
 
 class _DetachedConsumer(SessionConsumer):
@@ -683,14 +692,25 @@ def _chart_url(record: AnalysisRecord, filename: str) -> str:
     return f"/api/notion-analysis/chart/{record.request_id}/{filename}"
 
 
+def _chart_filename_extension(content_type: str) -> str:
+    normalized = content_type.lower().split(";", 1)[0].strip()
+    if normalized == "image/jpeg":
+        return "jpg"
+    if normalized == "image/svg+xml":
+        return "svg"
+    if normalized == "image/gif":
+        return "gif"
+    if normalized == "image/webp":
+        return "webp"
+    return "png"
+
+
 def _chart_url_path(url: str) -> str:
     return unquote(urlparse(url).path or url.split("?", 1)[0])
 
 
-def _workspace_chart_file(
-    app_state: AppState, chart: AnalysisChart
-) -> Path | None:
-    url_path = _chart_url_path(chart.url)
+def _workspace_file_from_url(app_state: AppState, url: str) -> Path | None:
+    url_path = _chart_url_path(url)
     workspace_root = app_state.session_manager.workspace.directory
     if workspace_root is None:
         workspace = Path.cwd().resolve()
@@ -702,7 +722,7 @@ def _workspace_chart_file(
         candidates.append(workspace / url_path.removeprefix("/files/"))
     elif url_path.startswith("/@file/"):
         candidates.append(workspace / url_path.removeprefix("/@file/"))
-    elif not urlparse(chart.url).scheme:
+    elif not urlparse(url).scheme:
         if url_path.startswith("/"):
             candidates.append(Path(url_path))
             candidates.append(workspace / url_path.lstrip("/"))
@@ -731,6 +751,12 @@ def _workspace_chart_file(
             continue
         return resolved
     return None
+
+
+def _workspace_chart_file(
+    app_state: AppState, chart: AnalysisChart
+) -> Path | None:
+    return _workspace_file_from_url(app_state, chart.url)
 
 
 def _backend_chart_file_exists(
@@ -783,6 +809,224 @@ def _materialize_existing_chart_artifacts(
         )
 
     return materialized[:2]
+
+
+class _ImageTagParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.images: list[dict[str, str]] = []
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        if tag.lower() != "img":
+            return
+        image_attrs = {
+            name.lower(): value or ""
+            for name, value in attrs
+            if isinstance(name, str)
+        }
+        if image_attrs.get("src"):
+            self.images.append(image_attrs)
+
+
+def _image_sources_from_html(raw_html: str) -> list[dict[str, str]]:
+    parser = _ImageTagParser()
+    try:
+        parser.feed(raw_html)
+    except Exception:
+        LOGGER.debug("Could not parse notebook HTML image output", exc_info=True)
+        return []
+    return parser.images
+
+
+def _image_title(attrs: dict[str, str], fallback_index: int) -> str:
+    for key in ("alt", "title"):
+        value = attrs.get(key, "").strip()
+        if value:
+            return value
+    src = attrs.get("src", "").strip()
+    name = Path(_chart_url_path(src)).name
+    if name:
+        stem = re.sub(r"^\d+-", "", Path(name).stem).replace("-", " ").replace("_", " ")
+        if stem:
+            return stem[:80]
+    return f"Notebook image {fallback_index}"
+
+
+def _decode_image_data_url(value: str) -> tuple[bytes, str] | None:
+    if not value.startswith("data:") or "," not in value:
+        return None
+    header, payload = value.split(",", 1)
+    metadata = header.removeprefix("data:")
+    content_type = metadata.split(";", 1)[0] or "image/png"
+    if not content_type.startswith("image/"):
+        return None
+    try:
+        if ";base64" in metadata.lower():
+            return base64.b64decode(payload), content_type
+        return unquote_to_bytes(payload), content_type
+    except Exception:
+        LOGGER.debug("Could not decode notebook image data URL", exc_info=True)
+        return None
+
+
+def _virtual_file_parts(src: str) -> tuple[str, int] | None:
+    path = _chart_url_path(src).removeprefix("./").lstrip("/")
+    if not path.startswith("@file/"):
+        return None
+    remainder = path.removeprefix("@file/")
+    if "-" not in remainder:
+        return None
+    byte_length_raw, filename = remainder.split("-", 1)
+    try:
+        byte_length = int(byte_length_raw)
+    except ValueError:
+        return None
+    filename = unquote(filename)
+    if not filename or byte_length <= 0:
+        return None
+    return filename, byte_length
+
+
+def _image_bytes_from_src(
+    app_state: AppState, src: str
+) -> tuple[bytes, str] | None:
+    src = html.unescape(src).strip()
+    if not src:
+        return None
+
+    decoded = _decode_image_data_url(src)
+    if decoded is not None:
+        return decoded
+
+    virtual_file = _virtual_file_parts(src)
+    if virtual_file is not None:
+        filename, byte_length = virtual_file
+        try:
+            content = read_virtual_file(filename, byte_length)
+        except Exception:
+            LOGGER.debug(
+                "Could not read notebook virtual image file %s",
+                filename,
+                exc_info=True,
+            )
+            return None
+        content_type = mimetypes.guess_type(filename)[0] or "image/png"
+        if not content_type.startswith("image/"):
+            return None
+        return content, content_type
+
+    source_file = _workspace_file_from_url(app_state, src)
+    if source_file is None:
+        return None
+    content_type = mimetypes.guess_type(source_file.name)[0] or "image/png"
+    if not content_type.startswith("image/"):
+        return None
+    try:
+        return source_file.read_bytes(), content_type
+    except OSError:
+        LOGGER.debug(
+            "Could not read notebook workspace image file %s",
+            source_file,
+            exc_info=True,
+        )
+        return None
+
+
+def _image_candidates_from_output_data(
+    app_state: AppState,
+    cell_id: str,
+    data: dict[str, Any],
+) -> list[_ImageChartCandidate]:
+    candidates: list[_ImageChartCandidate] = []
+    for mimetype, value in data.items():
+        if not isinstance(mimetype, str):
+            continue
+        if mimetype.startswith("image/"):
+            if isinstance(value, bytes):
+                candidates.append(
+                    _ImageChartCandidate(
+                        cell_id=cell_id,
+                        title=f"Notebook image {len(candidates) + 1}",
+                        content_type=mimetype,
+                        content=value,
+                    )
+                )
+            elif isinstance(value, str):
+                decoded = _decode_image_data_url(value)
+                if decoded is not None:
+                    content, content_type = decoded
+                else:
+                    try:
+                        content = base64.b64decode(value)
+                    except Exception:
+                        continue
+                    content_type = mimetype
+                candidates.append(
+                    _ImageChartCandidate(
+                        cell_id=cell_id,
+                        title=f"Notebook image {len(candidates) + 1}",
+                        content_type=content_type,
+                        content=content,
+                    )
+                )
+            continue
+
+        if mimetype != "text/html" or not isinstance(value, str):
+            continue
+        for attrs in _image_sources_from_html(value):
+            resolved = _image_bytes_from_src(app_state, attrs.get("src", ""))
+            if resolved is None:
+                continue
+            content, content_type = resolved
+            candidates.append(
+                _ImageChartCandidate(
+                    cell_id=cell_id,
+                    title=_image_title(attrs, len(candidates) + 1),
+                    content_type=content_type,
+                    content=content,
+                )
+            )
+    return candidates
+
+
+def _safe_chart_cell_id(cell_id: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", cell_id).strip("-")
+    return cleaned[:64] or "cell"
+
+
+def _write_image_chart_artifacts(
+    app_state: AppState,
+    record: AnalysisRecord,
+    output_data: list[tuple[str, dict[str, Any]]],
+) -> list[AnalysisChart]:
+    chart_dir = _chart_dir(app_state, record)
+    charts: list[AnalysisChart] = []
+    for cell_id, data in output_data:
+        for candidate in _image_candidates_from_output_data(
+            app_state, cell_id, data
+        ):
+            extension = _chart_filename_extension(candidate.content_type)
+            filename = (
+                f"{record.request_id}-{_safe_chart_cell_id(candidate.cell_id)}"
+                f"-image-{len(charts) + 1}.{extension}"
+            )
+            (chart_dir / filename).write_bytes(candidate.content)
+            title = candidate.title or f"Notebook image {len(charts) + 1}"
+            charts.append(
+                AnalysisChart(
+                    title=title,
+                    url=_chart_url(record, filename),
+                    caption=title,
+                    alt_text=title,
+                    include_in_comment=True,
+                    include_on_page=True,
+                )
+            )
+            if len(charts) >= 2:
+                return charts
+    return charts
 
 
 _PLOTLY_FIGURE_ATTR_RE = re.compile(
@@ -1693,6 +1937,17 @@ def _write_result_fallback_chart_artifacts(
     return charts[:2]
 
 
+def _html_outputs_from_output_data(
+    output_data: list[tuple[str, dict[str, Any]]],
+) -> list[tuple[str, str]]:
+    html_outputs: list[tuple[str, str]] = []
+    for cell_id, data in output_data:
+        raw_html = data.get("text/html")
+        if isinstance(raw_html, str):
+            html_outputs.append((cell_id, raw_html))
+    return html_outputs
+
+
 def _fallback_chart_artifacts_from_session_cache(
     app_state: AppState, record: AnalysisRecord
 ) -> list[AnalysisChart]:
@@ -1706,7 +1961,7 @@ def _fallback_chart_artifacts_from_session_cache(
     except (OSError, json.JSONDecodeError):
         return []
 
-    html_outputs: list[tuple[str, str]] = []
+    output_data: list[tuple[str, dict[str, Any]]] = []
     cells = snapshot.get("cells", [])
     if not isinstance(cells, list):
         return []
@@ -1723,10 +1978,13 @@ def _fallback_chart_artifacts_from_session_cache(
             data = output.get("data")
             if not isinstance(data, dict):
                 continue
-            raw_html = data.get("text/html")
-            if isinstance(raw_html, str):
-                html_outputs.append((cell_id, raw_html))
-    return _write_plotly_chart_artifacts(app_state, record, html_outputs)
+            output_data.append((cell_id, data))
+    charts = _write_plotly_chart_artifacts(
+        app_state, record, _html_outputs_from_output_data(output_data)
+    )
+    if charts:
+        return charts
+    return _write_image_chart_artifacts(app_state, record, output_data)
 
 
 def _fallback_chart_artifacts_from_session(
@@ -1738,16 +1996,19 @@ def _fallback_chart_artifacts_from_session(
     if session is None:
         return _fallback_chart_artifacts_from_session_cache(app_state, record)
 
-    html_outputs: list[tuple[str, str]] = []
+    output_data: list[tuple[str, dict[str, Any]]] = []
     for cell_id in session.document.cell_ids:
         notification = session.session_view.cell_notifications.get(cell_id)
         output = notification.output if notification is not None else None
         if not isinstance(output, CellOutput):
             continue
-        if output.mimetype != "text/html" or not isinstance(output.data, str):
-            continue
-        html_outputs.append((str(cell_id), output.data))
-    charts = _write_plotly_chart_artifacts(app_state, record, html_outputs)
+        output_data.append((str(cell_id), {output.mimetype: output.data}))
+    charts = _write_plotly_chart_artifacts(
+        app_state, record, _html_outputs_from_output_data(output_data)
+    )
+    if charts:
+        return charts
+    charts = _write_image_chart_artifacts(app_state, record, output_data)
     if charts:
         return charts
     return _fallback_chart_artifacts_from_session_cache(app_state, record)

@@ -195,14 +195,25 @@ def _analysis_source(value: str | None) -> str:
 def _project_root(app_state: AppState) -> Path:
     project_id = app_state.request.headers.get("x-gateway-project-id")
     if project_id:
+        branch = app_state.request.headers.get("x-gateway-branch-id", "main").strip() or "main"
         try:
-            from signalpilot._server.files.project_sync import local_project_dir
+            from signalpilot._server.files.project_sync import local_project_dir, sync_down
 
-            local_dir = local_project_dir(project_id)
-            if local_dir.exists():
+            local_dir = local_project_dir(project_id, branch)
+            if (local_dir / ".git").exists():
                 return local_dir
+
+            result = sync_down(project_id, branch)
+            if result.get("error"):
+                raise RuntimeError(result["error"])
+            synced_dir = Path(str(result.get("local_dir") or local_dir))
+            if (synced_dir / ".git").exists():
+                return synced_dir
+            raise RuntimeError(f"Synced project checkout missing .git: {synced_dir}")
         except Exception as e:
-            LOGGER.warning("Could not resolve project root for analysis: %s", e)
+            message = f"Could not resolve project root for analysis project {project_id}: {e}"
+            LOGGER.error(message)
+            raise RuntimeError(message) from e
 
     root = app_state.session_manager.workspace.directory
     if root is None:

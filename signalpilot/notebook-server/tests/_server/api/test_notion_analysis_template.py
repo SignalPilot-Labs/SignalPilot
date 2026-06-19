@@ -6,6 +6,8 @@ import json
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 _stubbed_signalpilot = sys.modules.get("signalpilot")
 if getattr(_stubbed_signalpilot, "__spec__", None) is None:
     del sys.modules["signalpilot"]
@@ -85,6 +87,82 @@ def test_analysis_registry_omits_latest_commit_sha(tmp_path, monkeypatch) -> Non
     finally:
         notion_analysis._records_by_request_id.clear()
         notion_analysis._records_by_request_id.update(old_records)
+
+
+def test_project_root_uses_existing_project_checkout(tmp_path, monkeypatch) -> None:
+    from signalpilot._server.files import project_sync
+
+    project_root = tmp_path / "projects" / "project-1"
+    (project_root / ".git").mkdir(parents=True)
+    app_state = SimpleNamespace(
+        request=SimpleNamespace(
+            headers={
+                "x-gateway-project-id": "project-1",
+                "x-gateway-branch-id": "analysis/slack/test",
+            }
+        ),
+        session_manager=SimpleNamespace(
+            workspace=SimpleNamespace(directory=str(tmp_path / "workspace"))
+        ),
+    )
+
+    monkeypatch.setattr(project_sync, "local_project_dir", lambda _project_id, _branch="": project_root)
+    monkeypatch.setattr(
+        project_sync,
+        "sync_down",
+        lambda *_args, **_kwargs: pytest.fail("sync_down should not run for existing checkout"),
+    )
+
+    assert notion_analysis._project_root(app_state) == project_root
+
+
+def test_project_root_syncs_project_checkout_before_workspace_fallback(tmp_path, monkeypatch) -> None:
+    from signalpilot._server.files import project_sync
+
+    project_root = tmp_path / "projects" / "project-1"
+    app_state = SimpleNamespace(
+        request=SimpleNamespace(
+            headers={
+                "x-gateway-project-id": "project-1",
+                "x-gateway-branch-id": "analysis/slack/test",
+            }
+        ),
+        session_manager=SimpleNamespace(
+            workspace=SimpleNamespace(directory=str(tmp_path / "workspace"))
+        ),
+    )
+
+    def sync_down(_project_id: str, _branch: str) -> dict[str, str]:
+        (project_root / ".git").mkdir(parents=True)
+        return {"local_dir": str(project_root)}
+
+    monkeypatch.setattr(project_sync, "local_project_dir", lambda _project_id, _branch="": project_root)
+    monkeypatch.setattr(project_sync, "sync_down", sync_down)
+
+    assert notion_analysis._project_root(app_state) == project_root
+
+
+def test_project_root_does_not_fallback_to_workspace_when_project_sync_fails(tmp_path, monkeypatch) -> None:
+    from signalpilot._server.files import project_sync
+
+    project_root = tmp_path / "projects" / "project-1"
+    app_state = SimpleNamespace(
+        request=SimpleNamespace(
+            headers={
+                "x-gateway-project-id": "project-1",
+                "x-gateway-branch-id": "analysis/slack/test",
+            }
+        ),
+        session_manager=SimpleNamespace(
+            workspace=SimpleNamespace(directory=str(tmp_path / "workspace"))
+        ),
+    )
+
+    monkeypatch.setattr(project_sync, "local_project_dir", lambda _project_id, _branch="": project_root)
+    monkeypatch.setattr(project_sync, "sync_down", lambda _project_id, _branch: {"error": "clone failed"})
+
+    with pytest.raises(RuntimeError, match="Could not resolve project root"):
+        notion_analysis._project_root(app_state)
 
 
 def test_analysis_agent_runs_from_project_root(tmp_path, monkeypatch) -> None:

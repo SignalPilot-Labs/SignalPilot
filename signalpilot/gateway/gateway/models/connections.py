@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import re
 import time
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ._helpers import _validate_string_list
+
+_XATA_REGION_RE = re.compile(r"^[a-z0-9-]{1,32}$")
+_XATA_BRANCH_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+_XATA_WORKSPACE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 class DBType(str, Enum):  # noqa: UP042 — (str,Enum) keeps str(X.A)=='X.A'; StrEnum returns 'A' and breaks f-string/log output
@@ -106,6 +111,8 @@ class ConnectionCreate(BaseModel):
     xata_token_url: str | None = Field(default=None, max_length=512)  # OIDC token endpoint (self-hosted)
     xata_client_id: str | None = Field(default=None, max_length=128)
     xata_client_secret: str | None = Field(default=None, max_length=1024)
+    xata_username: str | None = Field(default=None, max_length=128)   # OIDC user
+    xata_password: str | None = Field(default=None, max_length=1024)  # OIDC password (NOT the data-plane API key)
     # ─── Snowflake key-pair auth ───────────────────────────────────
     private_key: str | None = Field(default=None, max_length=16384)  # PEM-encoded private key
     private_key_passphrase: str | None = Field(default=None, max_length=1024)
@@ -174,6 +181,71 @@ class ConnectionCreate(BaseModel):
     # ─── BYOK ───────────────────────────────────────────────────────────
     org_id: str | None = Field(default=None, max_length=100)
     byok_key_alias: str | None = Field(default=None, max_length=200, pattern=r"^[a-zA-Z0-9_-]+$")
+
+    @model_validator(mode="after")
+    def validate_xata_fields(self) -> ConnectionCreate:
+        if self.db_type != DBType.xata:
+            return self
+        from gateway.network.validation import validate_xata_control_url
+
+        # region and database are required
+        if not self.region or not self.region.strip():
+            raise ValueError("Xata connections require both 'region' and 'database'")
+        if not self.database or not self.database.strip():
+            raise ValueError("Xata connections require both 'region' and 'database'")
+
+        # Validate region format (lands in hostname)
+        if not _XATA_REGION_RE.match(self.region):
+            raise ValueError("Xata 'region' must match ^[a-z0-9-]{1,32}$")
+
+        # Validate branch format if provided
+        if self.branch and not _XATA_BRANCH_RE.match(self.branch):
+            raise ValueError("Xata 'branch' must match ^[A-Za-z0-9_.-]{1,64}$")
+
+        # Validate workspace format if provided
+        if self.workspace and not _XATA_WORKSPACE_RE.match(self.workspace):
+            raise ValueError("Xata 'workspace' must match ^[A-Za-z0-9_-]{1,64}$")
+
+        # OIDC / control-plane consistency
+        if self.xata_token_url:
+            missing = [
+                f for f, v in [
+                    ("xata_client_id", self.xata_client_id),
+                    ("xata_client_secret", self.xata_client_secret),
+                    ("xata_username", self.xata_username),
+                    ("xata_password", self.xata_password),
+                ]
+                if not v
+            ]
+            if missing:
+                raise ValueError(
+                    f"xata_token_url is set but the following OIDC fields are missing: {', '.join(missing)}"
+                )
+        else:
+            oidc_only = [
+                f for f, v in [
+                    ("xata_client_id", self.xata_client_id),
+                    ("xata_client_secret", self.xata_client_secret),
+                    ("xata_username", self.xata_username),
+                    ("xata_password", self.xata_password),
+                ]
+                if v
+            ]
+            if oidc_only:
+                raise ValueError(
+                    f"OIDC fields {', '.join(oidc_only)} are set but xata_token_url is not"
+                )
+
+        # Validate control-plane URLs (SSRF + https)
+        if self.xata_api_url:
+            validate_xata_control_url(self.xata_api_url)
+        if self.xata_token_url:
+            validate_xata_control_url(self.xata_token_url)
+
+        # TODO: ConnectionUpdate does not re-run this validation — partial updates
+        # of xata_api_url / xata_token_url bypass these checks until that path is
+        # extended (tracked as a follow-up).
+        return self
 
 
 class ConnectionUpdate(BaseModel):

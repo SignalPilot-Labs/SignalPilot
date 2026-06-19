@@ -25,9 +25,9 @@ def _build_connection_string(conn: ConnectionCreate) -> str:
         # the database name as `database:branch`. TLS is mandatory.
         ws = url_quote(conn.workspace or conn.username or "", safe="")
         key = f":{url_quote(conn.password or '', safe='')}" if conn.password else ""
-        region = conn.region or "us-east-1"
-        db = conn.database or ""
-        branch = conn.branch or "main"
+        region = conn.region            # validated non-empty
+        db = conn.database              # validated non-empty
+        branch = conn.branch or "main"  # main is a documented Xata default — keep
         return f"postgresql://{ws}{key}@{region}.sql.xata.sh:5432/{db}:{branch}?sslmode=require"
     if conn.db_type == DBType.mysql:
         user = url_quote(conn.username or "", safe="")
@@ -147,7 +147,8 @@ def _extract_credential_extras(conn: ConnectionCreate) -> dict:
                 extras[f"xata_{attr}"] = val
         # Control-plane config (branch lifecycle). Stored in encrypted extras.
         for attr in ("xata_api_url", "xata_org", "xata_token_url",
-                     "xata_client_id", "xata_client_secret"):
+                     "xata_client_id", "xata_client_secret",
+                     "xata_username", "xata_password"):
             val = getattr(conn, attr, None)
             if val is not None:
                 extras[attr] = val

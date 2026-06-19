@@ -339,7 +339,12 @@ async def _profile_exact(connector, schema, key, columns, sample_rows: int | Non
         selects.append(f"COUNT({qc(c)}) AS nn{i}")
         selects.append(f"COUNT(DISTINCT {qc(c)}) AS d{i}")
     try:
-        res = await connector.execute(f"SELECT {', '.join(selects)} FROM {src}")
+        # nosec B608 — no untrusted free-text in this query. Every interpolated
+        # token is either a dialect-quoted identifier (src/qt via _quote_table,
+        # columns via _quote_identifier — both escape embedded quotes), a
+        # generated alias (nn{i}/d{i}), or an internal int (sample_rows).
+        # Identifiers and COUNT(DISTINCT col) aggregates cannot be bind-parameterized.
+        res = await connector.execute(f"SELECT {', '.join(selects)} FROM {src}")  # nosec B608
         row = res[0]
     except Exception:
         return {}

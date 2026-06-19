@@ -46,12 +46,24 @@ NOTEBOOK_IMAGE_URI="${ECR_REGISTRY}/${NOTEBOOK_ECR_REPO}:${NOTEBOOK_IMAGE_TAG}"
 PLATFORM="${PLATFORM:-linux/amd64}"
 
 GATEWAY_DEPLOY_SCRIPT="${GATEWAY_DEPLOY_SCRIPT:-${ROOT_DIR}/../deploy-gateway-eks.sh}"
+GATEWAY_IMAGE="${GATEWAY_IMAGE:-signalpilot-gateway}"
 NOTEBOOK_NAMESPACE_PREFIX="${SP_NOTEBOOK_NAMESPACE_PREFIX:-sp-nb}"
 GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-signalpilot}"
 GATEWAY_DEPLOYMENT="${GATEWAY_DEPLOYMENT:-signalpilot-gateway}"
 
+[[ -f Dockerfile.gateway ]] || die "run from the SignalPilot repo; Dockerfile.gateway not found"
 [[ -f Dockerfile.notebook ]] || die "run from the SignalPilot repo; Dockerfile.notebook not found"
 [[ -f "$GATEWAY_DEPLOY_SCRIPT" ]] || die "gateway deploy script not found: $GATEWAY_DEPLOY_SCRIPT"
+
+if [[ "${SKIP_GATEWAY_IMAGE_BUILD:-0}" != "1" ]]; then
+  log "Building gateway image: ${GATEWAY_IMAGE}"
+  run docker build \
+    -f Dockerfile.gateway \
+    -t "$GATEWAY_IMAGE" \
+    signalpilot/gateway
+else
+  log "Skipping gateway image build because SKIP_GATEWAY_IMAGE_BUILD=1"
+fi
 
 log "Ensuring ECR repository exists: ${NOTEBOOK_ECR_REPO}"
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
@@ -107,7 +119,7 @@ GATEWAY_DEPLOY_DIR="$(cd "$(dirname "$GATEWAY_DEPLOY_SCRIPT")" && pwd)"
 GATEWAY_DEPLOY_FILE="$(basename "$GATEWAY_DEPLOY_SCRIPT")"
 (
   cd "$GATEWAY_DEPLOY_DIR"
-  run env SP_NOTEBOOK_IMAGE="$SP_NOTEBOOK_IMAGE" "./$GATEWAY_DEPLOY_FILE"
+  run env GATEWAY_IMAGE="$GATEWAY_IMAGE" SP_NOTEBOOK_IMAGE="$SP_NOTEBOOK_IMAGE" "./$GATEWAY_DEPLOY_FILE"
 )
 
 if [[ "${SKIP_GATEWAY_ROLLOUT_WAIT:-0}" != "1" ]]; then

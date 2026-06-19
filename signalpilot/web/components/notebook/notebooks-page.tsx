@@ -23,6 +23,8 @@ import {
   pingNotebookSession,
   getGatewayAuthToken,
   getWorkspaceProjects,
+  resolveAnalysisTrail,
+  type AnalysisTrail,
   type NotebookSession,
 } from "~/lib/api";
 import { StatusDot } from "~/components/ui/data-viz";
@@ -103,6 +105,8 @@ type ChatTraceThread = {
   updated_at?: number;
 };
 
+type ResolvedTrail = Pick<AnalysisTrail, "project_id" | "branch" | "thread_id" | "notebook_path">;
+
 type RuntimeMode = "project" | "notion-trail" | "notebook";
 type RuntimeProduct = "projects" | "notebooks";
 
@@ -153,6 +157,13 @@ function hasUsableGitHubInstallation(data: unknown): boolean {
       installation !== null &&
       typeof installation === "object" &&
       (installation as { status?: string }).status !== "disconnected",
+  );
+}
+
+function isTrailSessionId(sessionId?: string): sessionId is string {
+  return Boolean(
+    sessionId?.startsWith("session-notion-") ||
+      sessionId?.startsWith("session-slack-"),
   );
 }
 
@@ -306,8 +317,8 @@ export default function NotebooksPage() {
 
   function primeNotionTrailEditorState(kernelSessionId?: string) {
     if (
-      !kernelSessionId?.startsWith("session-notion-") ||
-      !urlFile.startsWith("signalpilot-notion-analyses/") ||
+      !isTrailSessionId(kernelSessionId) ||
+      !isNotionTrail(urlFile, kernelSessionId) ||
       typeof window === "undefined"
     ) {
       return;
@@ -340,7 +351,7 @@ export default function NotebooksPage() {
 
   function preserveResolvedNotionSessionInUrl(kernelSessionId?: string) {
     if (
-      !kernelSessionId?.startsWith("session-notion-") ||
+      !isTrailSessionId(kernelSessionId) ||
       urlSessionId ||
       typeof window === "undefined"
     ) {
@@ -354,7 +365,7 @@ export default function NotebooksPage() {
 
   function getRememberedNotionThreadId(file: string): string | undefined {
     if (
-      !file.startsWith("signalpilot-notion-analyses/") ||
+      !isNotionTrailParams({ file, sessionId: null }) ||
       typeof window === "undefined"
     ) {
       return undefined;
@@ -365,7 +376,7 @@ export default function NotebooksPage() {
       win.__signalPilotNotionThreadByFile?.[file] ??
       window.localStorage.getItem(`${NOTION_THREAD_STORAGE_PREFIX}${file}`) ??
       undefined;
-    return remembered?.startsWith("session-notion-") ? remembered : undefined;
+    return isTrailSessionId(remembered) ? remembered : undefined;
   }
 
   function restoreMissingNotionSessionInUrl() {
@@ -385,8 +396,8 @@ export default function NotebooksPage() {
 
   function rememberResolvedNotionThread(kernelSessionId?: string) {
     if (
-      !kernelSessionId?.startsWith("session-notion-") ||
-      !urlFile.startsWith("signalpilot-notion-analyses/") ||
+      !isTrailSessionId(kernelSessionId) ||
+      !isNotionTrail(urlFile, kernelSessionId) ||
       typeof window === "undefined"
     ) {
       return;
@@ -439,7 +450,7 @@ export default function NotebooksPage() {
     const headers: Record<string, string> = {};
     if (token) headers.Authorization = `Bearer ${token}`;
 
-    return fetch(`${GATEWAY_URL}/api/chat/traces/threads?source=notion`, {
+    return fetch(`${GATEWAY_URL}/api/chat/traces/threads`, {
       headers,
     });
   }
@@ -447,10 +458,10 @@ export default function NotebooksPage() {
   async function resolveNotionThreadId(
     notionConnected = overview.notionConnected,
   ): Promise<string | undefined> {
-    if (urlSessionId.startsWith("session-notion-")) {
+    if (isTrailSessionId(urlSessionId)) {
       return urlSessionId;
     }
-    if (!urlFile.startsWith("signalpilot-notion-analyses/")) {
+    if (!isNotionTrailParams({ file: urlFile, sessionId: null })) {
       return undefined;
     }
     const remembered = getRememberedNotionThreadId(urlFile);
@@ -475,11 +486,33 @@ export default function NotebooksPage() {
           urlFile.endsWith(notebookPath)
         );
       });
-      return match?.thread_id?.startsWith("session-notion-")
-        ? match.thread_id
+      const matchThreadId = match?.thread_id;
+      return isTrailSessionId(matchThreadId)
+        ? matchThreadId
         : undefined;
     } catch (err) {
       console.warn("Failed to resolve Notion thread for notebook file:", err);
+      return undefined;
+    }
+  }
+
+  async function resolveTrailMetadata(): Promise<ResolvedTrail | undefined> {
+    if (!isNotionTrail(urlFile, urlSessionId)) {
+      return undefined;
+    }
+    try {
+      const trail = await resolveAnalysisTrail({
+        session_id: urlSessionId || undefined,
+        file: urlFile || undefined,
+      });
+      return {
+        project_id: trail.project_id,
+        branch: trail.branch || trail.default_branch || "main",
+        thread_id: trail.thread_id,
+        notebook_path: trail.notebook_path,
+      };
+    } catch (err) {
+      console.warn("Failed to resolve durable analysis trail:", err);
       return undefined;
     }
   }
@@ -488,6 +521,7 @@ export default function NotebooksPage() {
     sessionId: string,
     apiKey?: string,
     product: RuntimeProduct = runtimeMode === "project" ? "projects" : "notebooks",
+    trail?: ResolvedTrail,
   ): Promise<NotebookConfig> {
     if (product === "projects") {
       return {
@@ -504,8 +538,10 @@ export default function NotebooksPage() {
       };
     }
 
-    const kernelSessionId = await resolveNotionThreadId(overview.notionConnected);
-    if (isNotionTrail(urlFile, kernelSessionId || urlSessionId)) {
+    const resolvedTrail = trail ?? await resolveTrailMetadata();
+    const kernelSessionId = resolvedTrail?.thread_id ?? await resolveNotionThreadId(overview.notionConnected);
+    const trailFile = resolvedTrail?.notebook_path || urlFile;
+    if (isNotionTrail(trailFile, kernelSessionId || urlSessionId)) {
       clearNotionTrailProjectState();
     }
     rememberResolvedNotionThread(kernelSessionId);
@@ -520,7 +556,9 @@ export default function NotebooksPage() {
       getToken: getGatewayAuthToken,
       kernelSessionId,
       apiKey,
-      file: urlFile || undefined,
+      project: resolvedTrail?.project_id,
+      branch: resolvedTrail?.branch,
+      file: trailFile || undefined,
       notionConnected: overview.notionConnected,
     };
   }
@@ -547,7 +585,7 @@ export default function NotebooksPage() {
         (data.threads ?? []).map(toNotionConversation).filter(
           (conversation) =>
             conversation.source === "notion" ||
-            conversation.id.startsWith("session-notion-"),
+            isTrailSessionId(conversation.id),
         ),
       );
     } catch (err) {
@@ -638,6 +676,20 @@ export default function NotebooksPage() {
               startPing();
               return;
             }
+          } else if (runtimeMode === "notion-trail") {
+            const trail = await resolveTrailMetadata();
+            if (
+              trail &&
+              sessionProject === trail.project_id &&
+              sessionBranch === (trail.branch || "main")
+            ) {
+              const config = await buildConfig(session.id, apiKey, "notebooks", trail);
+              setNotebookConfig(config);
+              setState("booting");
+              startPing();
+              return;
+            }
+            await deleteNotebookSession().catch(() => {});
           } else if (sessionProject) {
             console.log("[projects] Project session mismatch — deleting stale session");
             await deleteNotebookSession().catch(() => {});
@@ -680,7 +732,7 @@ export default function NotebooksPage() {
           ? "notebooks"
           : notebookConfig.product ?? "notebooks";
       const newFile = urlFile || undefined;
-      const newKernelSessionId = nextProduct === "notebooks" && urlSessionId.startsWith("session-notion-")
+      const newKernelSessionId = nextProduct === "notebooks" && isTrailSessionId(urlSessionId)
         ? urlSessionId
         : notebookConfig.kernelSessionId;
       const newProject = nextProduct === "projects" ? urlProject || undefined : undefined;
@@ -711,13 +763,14 @@ export default function NotebooksPage() {
   }, [urlProject, urlBranch, urlFile, urlSessionId, state, overview.notionConnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!notebookConfig?.kernelSessionId?.startsWith("session-notion-")) {
+    const kernelSessionId = notebookConfig?.kernelSessionId;
+    if (!isTrailSessionId(kernelSessionId)) {
       return;
     }
-    rememberResolvedNotionThread(notebookConfig.kernelSessionId);
-    preserveResolvedNotionSessionInUrl(notebookConfig.kernelSessionId);
-    primeNotionTrailChrome(notebookConfig.kernelSessionId);
-    primeNotionTrailEditorState(notebookConfig.kernelSessionId);
+    rememberResolvedNotionThread(kernelSessionId);
+    preserveResolvedNotionSessionInUrl(kernelSessionId);
+    primeNotionTrailChrome(kernelSessionId);
+    primeNotionTrailEditorState(kernelSessionId);
   }, [notebookConfig?.kernelSessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function launch(
@@ -738,8 +791,13 @@ export default function NotebooksPage() {
         }
       }
 
+      const trail = product === "notebooks" && runtimeMode === "notion-trail"
+        ? await resolveTrailMetadata()
+        : undefined;
       const session = await createNotebookSession(
-        product === "projects" && urlProject
+        trail
+          ? { project_id: trail.project_id, branch: trail.branch || "main" }
+          : product === "projects" && urlProject
           ? { project_id: urlProject, branch: activeBranch }
           : { project_id: null },
       );
@@ -750,7 +808,7 @@ export default function NotebooksPage() {
         return;
       }
       setLaunchStatus("waiting for pod...");
-      const config = await buildConfig(session.id, apiKey, product);
+      const config = await buildConfig(session.id, apiKey, product, trail);
 
       setNotebookConfig(config);
       setState("booting");
@@ -780,12 +838,11 @@ export default function NotebooksPage() {
       return config;
     }
 
-    const kernelSessionId = urlSessionId.startsWith("session-notion-")
+    const kernelSessionId = isTrailSessionId(urlSessionId)
       ? urlSessionId
       : config.kernelSessionId;
-    const { project: _project, branch: _branch, ...isolatedConfig } = config;
     return {
-      ...isolatedConfig,
+      ...config,
       file: urlFile || config.file,
       kernelSessionId,
     };

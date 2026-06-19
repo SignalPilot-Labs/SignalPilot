@@ -12,7 +12,7 @@ import re
 import signal
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -26,7 +26,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from gateway.db.engine import close_db, get_session_factory, init_db
-from gateway.notebooks.session_service import NotebookRuntime, ensure_notion_notebook_session
+from gateway.notebooks.session_service import NotebookRuntime, ensure_analysis_notebook_session
 from gateway.notion import analysis as notebook_analysis
 
 LOGGER = logging.getLogger(__name__)
@@ -50,6 +50,13 @@ def _slack_api_error(method: str, data: dict[str, Any]) -> SlackApiError:
 
 
 @dataclass(frozen=True)
+class SlackAnalysisDefaults:
+    default_project_id: str | None = None
+    default_branch: str = "main"
+    analysis_branch_mode: str = "per_request"
+
+
+@dataclass(frozen=True)
 class SlackPoCConfig:
     bot_token: str
     app_token: str
@@ -57,6 +64,10 @@ class SlackPoCConfig:
     bot_user_id: str | None = None
     org_id: str = "slack-poc"
     user_id: str | None = None
+    default_project_id: str | None = None
+    default_branch: str = "main"
+    analysis_branch_mode: str = "per_request"
+    channel_defaults: dict[str, SlackAnalysisDefaults] = field(default_factory=dict)
     allowed_channel_ids: frozenset[str] = frozenset()
     ack_text: str = "I'm on it and will post the answer back here soon."
 
@@ -269,21 +280,62 @@ class SlackPoCWorker:
 
     async def _process_request(self, request: SlackRequest) -> None:
         trail_url: str | None = None
+        route: notebook_analysis.AnalysisRoute | None = None
         await self.slack.post_message(channel=request.channel_id, thread_ts=request.thread_ts, text=self.config.ack_text)
         try:
             previous_messages = await self._previous_thread_messages(request)
             async with self.session_factory() as db:
                 analysis_user_id = await self._analysis_user_id(db)
-                runtime = await ensure_notion_notebook_session(db, self.config.org_id, analysis_user_id)
+                discussion_id = _discussion_id(request)
+                request_id = notebook_analysis._analysis_request_id("slack", discussion_id)
+                defaults = self._analysis_defaults(request)
+                route = await notebook_analysis.resolve_analysis_route_for_defaults(
+                    db,
+                    org_id=self.config.org_id,
+                    source="slack",
+                    request_id=request_id,
+                    headline=notebook_analysis._headline_from_prompt(request.text),
+                    default_project_id=defaults.default_project_id,
+                    default_branch=defaults.default_branch,
+                    analysis_branch_mode=defaults.analysis_branch_mode,
+                )
+                runtime = await ensure_analysis_notebook_session(
+                    db,
+                    org_id=self.config.org_id,
+                    source=route.source,
+                    request_id=route.request_id,
+                    project_id=route.project_id,
+                    branch=route.branch,
+                    credential_user_id=analysis_user_id,
+                )
 
-            start = await self._start_analysis(runtime, request, previous_messages, analysis_user_id)
+            start = await self._start_analysis(runtime, request, previous_messages, analysis_user_id, route)
             trail_url = notebook_analysis._public_signalpilot_url(_string(start.get("trailUrl")), runtime)
+            async with self.session_factory() as db:
+                await notebook_analysis.upsert_analysis_trail_from_status(
+                    db,
+                    org_id=self.config.org_id,
+                    route=route,
+                    runtime=runtime,
+                    status=start,
+                    source_url=request.source_url,
+                    source_thread_id=discussion_id,
+                    source_request_id=request.event_id,
+                    analysis_user_id=analysis_user_id,
+                )
             status = await notebook_analysis._poll_analysis(
                 _string(start["requestId"]),
                 runtime,
                 self.config.org_id,
                 analysis_user_id,
             )
+            async with self.session_factory() as db:
+                await notebook_analysis.update_analysis_trail_from_status(
+                    db,
+                    org_id=self.config.org_id,
+                    route=route,
+                    status=status,
+                )
             slack_status = notebook_analysis._with_public_chart_urls(status, runtime)
             await self.slack.post_message(
                 channel=request.channel_id,
@@ -293,6 +345,21 @@ class SlackPoCWorker:
             await self._post_chart_attachments(request, status, runtime)
         except Exception as exc:
             LOGGER.warning("Slack PoC request failed: event_id=%s error=%s", request.event_id, exc, exc_info=True)
+            if route is not None:
+                try:
+                    async with self.session_factory() as db:
+                        from gateway.models.analysis_trails import AnalysisTrailUpdate
+                        from gateway.store import analysis_trails
+
+                        await analysis_trails.update_trail(
+                            db,
+                            org_id=self.config.org_id,
+                            source=route.source,
+                            request_id=route.request_id,
+                            update=AnalysisTrailUpdate(status="failed"),
+                        )
+                except Exception:
+                    LOGGER.debug("Could not mark Slack analysis trail failed", exc_info=True)
             await self.slack.post_message(
                 channel=request.channel_id,
                 thread_ts=request.thread_ts,
@@ -309,6 +376,21 @@ class SlackPoCWorker:
             "SLACK_POC_USER_ID is unset and no connected Notion installation user_id "
             f"was found for org {self.config.org_id!r}."
         )
+
+    def _analysis_defaults(self, request: SlackRequest) -> SlackAnalysisDefaults:
+        defaults = self.config.channel_defaults.get(request.channel_id)
+        if defaults is None:
+            defaults = SlackAnalysisDefaults(
+                default_project_id=self.config.default_project_id,
+                default_branch=self.config.default_branch,
+                analysis_branch_mode=self.config.analysis_branch_mode,
+            )
+        if not defaults.default_project_id:
+            raise RuntimeError(
+                "SignalPilot needs a default dbt project before it can run Slack analysis. "
+                "Set SLACK_POC_DEFAULT_PROJECT_ID or configure a default for this channel."
+            )
+        return defaults
 
     async def _post_chart_attachments(
         self,
@@ -390,8 +472,9 @@ class SlackPoCWorker:
         request: SlackRequest,
         previous_messages: list[str],
         user_id: str,
+        route: notebook_analysis.AnalysisRoute,
     ) -> dict[str, Any]:
-        discussion_id = f"slack:{request.team_id}:{request.channel_id}:{request.thread_ts}"
+        discussion_id = _discussion_id(request)
         created_at = datetime.now(UTC).isoformat()
         return await notebook_analysis._call_notebook(
             runtime,
@@ -401,6 +484,7 @@ class SlackPoCWorker:
             {
                 "method": "POST",
                 "json": {
+                    "source": "slack",
                     "discussionId": discussion_id,
                     "sourceUrl": request.source_url,
                     "requester": [request.user_id],
@@ -408,6 +492,10 @@ class SlackPoCWorker:
                     "prompt": request.text,
                     "previousMessages": previous_messages,
                     "createdAt": created_at,
+                },
+                "headers": {
+                    "X-Gateway-Project-Id": route.project_id,
+                    "X-Gateway-Branch-Id": route.branch,
                 },
             },
         )
@@ -429,6 +517,10 @@ async def run_worker(config: SlackPoCConfig) -> None:
             bot_user_id=bot_user_id,
             org_id=config.org_id,
             user_id=config.user_id,
+            default_project_id=config.default_project_id,
+            default_branch=config.default_branch,
+            analysis_branch_mode=config.analysis_branch_mode,
+            channel_defaults=config.channel_defaults,
             allowed_channel_ids=config.allowed_channel_ids,
             ack_text=config.ack_text,
         )
@@ -493,6 +585,10 @@ def register_http_routes(
                     bot_user_id=bot_user_id,
                     org_id=config.org_id,
                     user_id=config.user_id,
+                    default_project_id=config.default_project_id,
+                    default_branch=config.default_branch,
+                    analysis_branch_mode=config.analysis_branch_mode,
+                    channel_defaults=config.channel_defaults,
                     allowed_channel_ids=config.allowed_channel_ids,
                     ack_text=config.ack_text,
                 )
@@ -646,6 +742,10 @@ def load_config_from_env() -> SlackPoCConfig:
         bot_user_id=os.getenv("SLACK_BOT_USER_ID") or None,
         org_id=os.getenv("SLACK_POC_ORG_ID") or os.getenv("SIGNALPILOT_SLACK_ORG_ID") or "slack-poc",
         user_id=os.getenv("SLACK_POC_USER_ID") or os.getenv("SIGNALPILOT_SLACK_USER_ID") or None,
+        default_project_id=os.getenv("SLACK_POC_DEFAULT_PROJECT_ID") or os.getenv("SIGNALPILOT_SLACK_DEFAULT_PROJECT_ID") or None,
+        default_branch=os.getenv("SLACK_POC_DEFAULT_BRANCH") or "main",
+        analysis_branch_mode=os.getenv("SLACK_POC_ANALYSIS_BRANCH_MODE") or "per_request",
+        channel_defaults=_channel_defaults_from_env(),
         allowed_channel_ids=frozenset(_csv_env("SLACK_ALLOWED_CHANNEL_IDS") or _csv_env("SLACK_TEST_CHANNEL_ID")),
         ack_text=os.getenv("SLACK_POC_ACK_TEXT") or "I'm on it and will post the answer back here soon.",
     )
@@ -683,6 +783,29 @@ def _csv_env(name: str) -> list[str]:
     return [part.strip() for part in (os.getenv(name) or "").split(",") if part.strip()]
 
 
+def _channel_defaults_from_env() -> dict[str, SlackAnalysisDefaults]:
+    raw = os.getenv("SLACK_POC_CHANNEL_DEFAULTS") or ""
+    if not raw.strip():
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("SLACK_POC_CHANNEL_DEFAULTS must be JSON") from exc
+    if not isinstance(data, dict):
+        raise RuntimeError("SLACK_POC_CHANNEL_DEFAULTS must be a JSON object")
+
+    defaults: dict[str, SlackAnalysisDefaults] = {}
+    for channel_id, value in data.items():
+        if not isinstance(channel_id, str) or not isinstance(value, dict):
+            continue
+        defaults[channel_id] = SlackAnalysisDefaults(
+            default_project_id=_string(value.get("default_project_id") or value.get("project_id")) or None,
+            default_branch=_string(value.get("default_branch")) or "main",
+            analysis_branch_mode=_string(value.get("analysis_branch_mode")) or "per_request",
+        )
+    return defaults
+
+
 def _string(value: Any) -> str:
     return value if isinstance(value, str) else ""
 
@@ -712,6 +835,10 @@ def _clip_text(text: str) -> str:
 def _status_charts(status: dict[str, Any]) -> list[dict[str, Any]]:
     charts = status.get("notionCharts", status.get("notion_charts", []))
     return [chart for chart in charts if isinstance(chart, dict)] if isinstance(charts, list) else []
+
+
+def _discussion_id(request: SlackRequest) -> str:
+    return f"slack:{request.team_id}:{request.channel_id}:{request.thread_ts}"
 
 
 def _chart_value(chart: dict[str, Any], *keys: str) -> str:

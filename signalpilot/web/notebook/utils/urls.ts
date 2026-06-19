@@ -1,4 +1,5 @@
 import { generateSessionId } from "@/core/kernel/session";
+import { isNotionTrailParams } from "@/core/notion/trail";
 import { asURL } from "./url";
 
 export function updateQueryParams(updater: (params: URLSearchParams) => void) {
@@ -8,8 +9,7 @@ export function updateQueryParams(updater: (params: URLSearchParams) => void) {
   updater(url.searchParams);
   const updatedFile = url.searchParams.get("file") ?? notionFile;
   if (
-    notionSessionId.startsWith("session-notion-") &&
-    updatedFile.startsWith("signalpilot-notion-analyses/") &&
+    isNotionTrailParams({ file: updatedFile, sessionId: notionSessionId }) &&
     !url.searchParams.has("session_id")
   ) {
     url.searchParams.set("session_id", notionSessionId);

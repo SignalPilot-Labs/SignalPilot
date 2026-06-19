@@ -209,6 +209,7 @@ async def ensure_notebook_session(
     user_id: str,
     project_id: str | None,
     branch: str,
+    credential_user_id: str | None = None,
     extra_env: dict[str, str] | None = None,
     get_orchestrator: OrchestratorFactory | None = None,
 ) -> NotebookSessionInfo:
@@ -295,11 +296,11 @@ async def ensure_notebook_session(
     pod_extra_env = await _pod_extra_env(
         session,
         org_id=org_id,
-        user_id=user_id,
+        user_id=credential_user_id or user_id,
         extra_env=extra_env,
     )
     session_jwt = mint_session_jwt(
-        user_id=user_id,
+        user_id=credential_user_id or user_id,
         org_id=org_id,
         session_id=session_info.id,
         project_id=project_id,
@@ -391,5 +392,31 @@ async def ensure_notion_notebook_session(
         user_id=user_id or "notion-webhook",
         project_id=None,
         branch="main",
+    )
+    return await runtime_for_session(session, session_info)
+
+
+async def ensure_analysis_notebook_session(
+    session: AsyncSession,
+    *,
+    org_id: str,
+    source: str,
+    request_id: str,
+    project_id: str,
+    branch: str,
+    credential_user_id: str | None = None,
+) -> NotebookRuntime:
+    analysis_user_id = f"analysis:{source}:{request_id}"
+    session_info = await ensure_notebook_session(
+        session,
+        org_id=org_id,
+        user_id=analysis_user_id,
+        project_id=project_id,
+        branch=branch,
+        credential_user_id=credential_user_id,
+        extra_env={
+            "SP_ANALYSIS_SOURCE": source,
+            "SP_ANALYSIS_REQUEST_ID": request_id,
+        },
     )
     return await runtime_for_session(session, session_info)

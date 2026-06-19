@@ -166,6 +166,71 @@ async def test_ensure_notion_session_spawns_without_static_notebook_url(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_analysis_session_owner_is_synthetic_but_jwt_uses_credential_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SP_NOTEBOOK_DIRECT_URL", raising=False)
+    monkeypatch.setenv("SP_WEB_URL", "https://app.test")
+
+    created = _info(
+        user_id="analysis:notion:notion-req-1",
+        project_id="project-1",
+        branch="analysis/notion/notion-req-1-revenue",
+    )
+    create_pod_calls: list[dict] = []
+    jwt_calls: list[dict] = []
+
+    orch = AsyncMock()
+    orch._core_api = object()
+    orch._ensure_client = AsyncMock()
+    orch.ensure_namespace.return_value = "sp-nb-org-1"
+    orch.wait_for_running.return_value = PodInfo(name="nb-test", ip="10.2.3.4", status="running", internal_ip="10.2.3.4")
+    orch.wait_for_ready.return_value = PodInfo(name="nb-test", ip="10.2.3.4", status="running", internal_ip="10.2.3.4")
+
+    async def create_pod(**kwargs):
+        create_pod_calls.append(kwargs)
+        return PodInfo(name=kwargs["pod_name"], ip=None, status="pending")
+
+    orch.create_pod = create_pod
+
+    async def create_secret(*args, create_pod_fn, **kwargs):
+        return await create_pod_fn()
+
+    def mint_session_jwt(**kwargs):
+        jwt_calls.append(kwargs)
+        return "jwt-1"
+
+    get_user_anthropic_key = AsyncMock(return_value="sk-ant-user")
+
+    monkeypatch.setattr(session_service.ns, "get_active_session", AsyncMock(return_value=None))
+    monkeypatch.setattr(session_service.ns, "delete_stopped", AsyncMock())
+    monkeypatch.setattr(session_service.ns, "create_session", AsyncMock(return_value=created))
+    monkeypatch.setattr(session_service.ns, "update_session_status", AsyncMock())
+    monkeypatch.setattr(session_service.ns, "get_session_internal", AsyncMock(return_value=_internal(user_id=created.user_id)))
+    monkeypatch.setattr(session_service.user_secrets_store, "get_user_anthropic_key", get_user_anthropic_key)
+    monkeypatch.setattr(session_service, "_get_orchestrator", AsyncMock(return_value=orch))
+    monkeypatch.setattr(session_service, "get_k8s_settings", lambda: _settings())
+    monkeypatch.setattr(session_service, "mint_session_jwt", mint_session_jwt)
+    monkeypatch.setattr(session_service, "create_jwt_secret_with_owner_ref", create_secret)
+
+    runtime = await session_service.ensure_analysis_notebook_session(
+        AsyncMock(),
+        org_id="org-1",
+        source="notion",
+        request_id="notion-req-1",
+        project_id="project-1",
+        branch="analysis/notion/notion-req-1-revenue",
+        credential_user_id="user-real",
+    )
+
+    assert runtime.session_id == "session-1"
+    assert session_service.ns.create_session.await_args.kwargs["user_id"] == "analysis:notion:notion-req-1"
+    assert jwt_calls[0]["user_id"] == "user-real"
+    get_user_anthropic_key.assert_awaited_once_with(ANY, "org-1", "user-real")
+    assert create_pod_calls[0]["extra_env"]["ANTHROPIC_API_KEY"] == "sk-ant-user"
+
+
+@pytest.mark.asyncio
 async def test_ensure_notion_session_reuses_matching_running_session(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SP_NOTEBOOK_DIRECT_URL", raising=False)
     monkeypatch.setenv("SP_WEB_URL", "https://app.test")

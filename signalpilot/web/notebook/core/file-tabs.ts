@@ -2,6 +2,7 @@ import { atom, useAtomValue } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 import { init } from "@paralleldrive/cuid2";
 import { classifyFile } from "./active-file";
+import { isNotionTrailParams, notionRequestIdFromSessionId } from "./notion/trail";
 import type { SessionId } from "./kernel/session";
 import { store } from "./state/jotai";
 
@@ -73,18 +74,18 @@ function getNotionSessionIdForPath(path: string): SessionId | null {
 
   const params = new URLSearchParams(window.location.search);
   const trailFile = params.get("file") ?? "";
-  if (!trailFile.startsWith("signalpilot-notion-analyses/") || !isSameNotionPath(path, trailFile)) {
+  const urlSessionId = params.get("session_id");
+  if (!isNotionTrailParams({ file: trailFile, sessionId: urlSessionId }) || !isSameNotionPath(path, trailFile)) {
     return null;
   }
 
-  const urlSessionId = params.get("session_id");
-  if (urlSessionId?.startsWith("session-notion-")) {
+  if (notionRequestIdFromSessionId(urlSessionId)) {
     return urlSessionId as SessionId;
   }
 
   try {
     const storedSessionId = window.localStorage.getItem(`${NOTION_THREAD_STORAGE_PREFIX}${trailFile}`);
-    return storedSessionId?.startsWith("session-notion-")
+    return notionRequestIdFromSessionId(storedSessionId)
       ? (storedSessionId as SessionId)
       : null;
   } catch {

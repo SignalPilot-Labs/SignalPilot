@@ -58,6 +58,7 @@ class StartNotionAnalysisRequest(msgspec.Struct, rename="camel"):
     headline: str
     prompt: str
     created_at: str
+    source: str = "notion"
     notion_request_page_id: str | None = None
     requester: list[str] = msgspec.field(default_factory=list)
     previous_messages: list[str] = msgspec.field(default_factory=list)
@@ -95,7 +96,9 @@ class AnalysisRecord:
     headline: str
     source_url: str
     created_at: str
+    source: str = "notion"
     notion_request_page_id: str | None = None
+    latest_commit_sha: str | None = None
     error: str | None = None
     result: AnalysisResult | None = None
 
@@ -184,25 +187,46 @@ def _analysis_result_from_dict(value: dict[str, Any]) -> AnalysisResult:
     return AnalysisResult(**result)
 
 
-def _records_dir(app_state: AppState) -> Path:
+def _analysis_source(value: str | None) -> str:
+    source = re.sub(r"[^a-zA-Z0-9_-]+", "-", (value or "notion").strip().lower()).strip("-")
+    return source or "notion"
+
+
+def _project_root(app_state: AppState) -> Path:
+    project_id = app_state.request.headers.get("x-gateway-project-id")
+    if project_id:
+        try:
+            from signalpilot._server.files.project_sync import local_project_dir
+
+            local_dir = local_project_dir(project_id)
+            if local_dir.exists():
+                return local_dir
+        except Exception as e:
+            LOGGER.warning("Could not resolve project root for analysis: %s", e)
+
     root = app_state.session_manager.workspace.directory
     if root is None:
-        root = str(Path.cwd())
-    path = Path(root) / "signalpilot-notion-analyses"
+        return Path.cwd()
+    return Path(root)
+
+
+def _records_dir(app_state: AppState, source: str = "notion") -> Path:
+    path = _project_root(app_state) / "notebooks" / _analysis_source(source)
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
 def _registry_path(app_state: AppState) -> Path:
-    return _records_dir(app_state) / "registry.json"
+    path = _project_root(app_state) / "notebooks" / ".signalpilot-analysis-registry.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def _resolve_notebook_path(app_state: AppState, notebook_path: str) -> Path:
     path = Path(notebook_path)
     if path.is_absolute():
         return path
-    root = app_state.session_manager.workspace.directory
-    return (Path(root) / path) if root else (Path.cwd() / path)
+    return _project_root(app_state) / path
 
 
 def _load_registry(app_state: AppState) -> None:
@@ -227,7 +251,9 @@ def _load_registry(app_state: AppState) -> None:
             headline=item["headline"],
             source_url=item["source_url"],
             created_at=item["created_at"],
+            source=item.get("source", "notion"),
             notion_request_page_id=item.get("notion_request_page_id"),
+            latest_commit_sha=item.get("latest_commit_sha"),
             error=item.get("error"),
             result=_analysis_result_from_dict(result) if result else None,
         )
@@ -240,7 +266,14 @@ def _load_registry(app_state: AppState) -> None:
 
 def _save_registry(app_state: AppState) -> None:
     path = _registry_path(app_state)
-    records = [asdict(record) for record in _records_by_request_id.values()]
+    records = []
+    for record in _records_by_request_id.values():
+        item = asdict(record)
+        # The gateway DB stores the authoritative latest commit SHA. Persisting
+        # it inside the committed registry would make the registry dirty after
+        # every commit because the commit SHA changes when the registry changes.
+        item.pop("latest_commit_sha", None)
+        records.append(item)
     path.write_text(
         json.dumps({"records": records}, indent=2, sort_keys=True),
         encoding="utf-8",
@@ -252,8 +285,8 @@ def _slugify(value: str) -> str:
     return slug[:80] or "analysis-request"
 
 
-def _request_id(discussion_id: str) -> str:
-    return f"notion-{uuid5(NAMESPACE_URL, discussion_id).hex[:16]}"
+def _request_id(discussion_id: str, source: str = "notion") -> str:
+    return f"{_analysis_source(source)}-{uuid5(NAMESPACE_URL, discussion_id).hex[:16]}"
 
 
 def _session_id(request_id: str) -> SessionId:
@@ -357,6 +390,77 @@ def _(sp):
     path.write_text(text, encoding="utf-8")
 
 
+def _analysis_project_context(app_state: AppState) -> tuple[str, str] | None:
+    project_id = app_state.request.headers.get("x-gateway-project-id", "").strip()
+    if not project_id:
+        return None
+    branch = app_state.request.headers.get("x-gateway-branch-id", "main").strip() or "main"
+    return project_id, branch
+
+
+def _checkpoint_analysis_files(
+    app_state: AppState,
+    record: AnalysisRecord,
+    message: str,
+    *,
+    include_parent_dir: bool = False,
+) -> str | None:
+    context = _analysis_project_context(app_state)
+    if context is None:
+        return None
+    project_id, branch = context
+    try:
+        from signalpilot._server.files.git_auth import run_git
+        from signalpilot._server.files.project_sync import local_project_dir, sync_up
+
+        repo = local_project_dir(project_id)
+        if not (repo / ".git").exists():
+            return None
+
+        notebook_path = _resolve_notebook_path(app_state, record.notebook_path)
+        targets = [
+            notebook_path.parent if include_parent_dir else notebook_path,
+            _registry_path(app_state),
+        ]
+        rel_targets: list[str] = []
+        for target in targets:
+            try:
+                resolved = target.resolve(strict=False)
+                resolved.relative_to(repo.resolve())
+            except (OSError, ValueError):
+                continue
+            rel_targets.append(str(resolved.relative_to(repo.resolve())))
+        if not rel_targets:
+            return None
+
+        code, _, err = run_git(repo, "add", "--", *rel_targets)
+        if code != 0:
+            LOGGER.warning("Could not stage analysis files: %s", err.strip())
+            return None
+
+        diff_code, _, _ = run_git(repo, "diff", "--cached", "--quiet")
+        if diff_code == 1:
+            code, out, err = run_git(repo, "commit", "-m", message, timeout=120)
+            if code != 0:
+                LOGGER.warning("Could not commit analysis files: %s", (err or out).strip())
+                return None
+            sync_result = sync_up(project_id, branch)
+            if sync_result.get("error"):
+                LOGGER.warning("Could not push analysis checkpoint: %s", sync_result["error"])
+        elif diff_code != 0:
+            LOGGER.warning("Could not inspect staged analysis diff")
+            return None
+
+        code, out, _ = run_git(repo, "rev-parse", "HEAD")
+        if code == 0 and out.strip():
+            record.latest_commit_sha = out.strip()
+            _save_registry(app_state)
+            return record.latest_commit_sha
+    except Exception as e:
+        LOGGER.warning("Analysis git checkpoint failed for %s: %s", record.request_id, e)
+    return None
+
+
 def _ensure_record(
     app_state: AppState,
     body: StartNotionAnalysisRequest,
@@ -369,17 +473,19 @@ def _ensure_record(
         _refresh_trail_url(app_state, record, request_base_url)
         if record.status != "Analyzing":
             _append_followup_to_notebook(app_state, record, body)
+            _checkpoint_analysis_files(app_state, record, f"Append {record.source} analysis follow-up")
         return record
 
-    request_id = _request_id(body.discussion_id)
+    source = _analysis_source(body.source)
+    request_id = _request_id(body.discussion_id, source)
     filename = f"{_slugify(body.headline)}-{request_id[-6:]}.py"
-    notebook_path = _records_dir(app_state) / filename
+    notebook_path = _records_dir(app_state, source) / filename
     notebook_path.write_text(_notebook_template(body), encoding="utf-8")
 
-    root = app_state.session_manager.workspace.directory
+    root = _project_root(app_state)
     file_key = (
         str(notebook_path.relative_to(root))
-        if root and notebook_path.is_relative_to(Path(root))
+        if notebook_path.is_relative_to(root)
         else str(notebook_path)
     )
     session_id = str(_session_id(request_id))
@@ -395,11 +501,13 @@ def _ensure_record(
         headline=body.headline,
         source_url=body.source_url,
         created_at=body.created_at,
+        source=source,
         notion_request_page_id=body.notion_request_page_id,
     )
     _records_by_request_id[record.request_id] = record
     _records_by_discussion_id[record.discussion_id] = record.request_id
     _save_registry(app_state)
+    _checkpoint_analysis_files(app_state, record, f"Create {source} analysis notebook")
     return record
 
 
@@ -1989,6 +2097,14 @@ def _persist_record_completion_artifacts(
             e,
         )
 
+    _save_registry(app_state)
+    _checkpoint_analysis_files(
+        app_state,
+        record,
+        f"Checkpoint {record.source} analysis {record.request_id}",
+        include_parent_dir=True,
+    )
+
 
 def _analysis_prompt(
     record: AnalysisRecord, body: StartNotionAnalysisRequest
@@ -2303,11 +2419,14 @@ async def _run_analysis(
     record.error = None
     _save_registry(app_state)
     _ensure_session(app_state, record)
+    agent_cwd = str(_project_root(app_state))
     LOGGER.info(
-        "Starting Notion analysis %s session=%s notebook=%s",
+        "Starting %s analysis %s session=%s notebook=%s cwd=%s",
+        record.source,
         record.request_id,
         record.session_id,
         record.notebook_path,
+        agent_cwd,
     )
 
     prompt = _analysis_prompt(record, body)
@@ -2326,7 +2445,7 @@ async def _run_analysis(
         ChatThread(
             thread_id=record.session_id,
             session_id=record.session_id,
-            source="notion",
+            source=record.source,
             title=record.headline,
             status="active",
             notebook_path=record.notebook_path,
@@ -2368,6 +2487,7 @@ async def _run_analysis(
                     new_chat=new_chat,
                     thread_id=record.session_id,
                     notebook_mcp_app=app_state.request.app,
+                    cwd=agent_cwd,
                     disallow_file_edits=True,
                 ):
                     event_data = {
@@ -2415,7 +2535,7 @@ async def _run_analysis(
                 ChatThread(
                     thread_id=record.session_id,
                     session_id=record.session_id,
-                    source="notion",
+                    source=record.source,
                     title=record.headline,
                     status="done",
                     notebook_path=record.notebook_path,
@@ -2472,6 +2592,7 @@ async def _run_analysis(
                         max_turns=3,
                         thread_id=record.session_id,
                         notebook_mcp_app=app_state.request.app,
+                        cwd=agent_cwd,
                         disallow_file_edits=True,
                     ):
                         event_data = {
@@ -2495,14 +2616,14 @@ async def _run_analysis(
                 record.result = _parse_result("".join(repair_parts))
             except Exception as repair_error:
                 raise parse_error from repair_error
-        _persist_record_completion_artifacts(app_state, record)
         record.status = "Done"
         record.error = None
+        _persist_record_completion_artifacts(app_state, record)
         await store.upsert_thread(
             ChatThread(
                 thread_id=record.session_id,
                 session_id=record.session_id,
-                source="notion",
+                source=record.source,
                 title=record.headline,
                 status="done",
                 notebook_path=record.notebook_path,
@@ -2551,7 +2672,7 @@ async def _run_analysis(
                 ChatThread(
                     thread_id=record.session_id,
                     session_id=record.session_id,
-                    source="notion",
+                    source=record.source,
                     title=record.headline,
                     status="failed",
                     notebook_path=record.notebook_path,
@@ -2580,7 +2701,7 @@ async def _run_analysis(
                 ChatThread(
                     thread_id=record.session_id,
                     session_id=record.session_id,
-                    source="notion",
+                    source=record.source,
                     title=record.headline,
                     status="done",
                     notebook_path=record.notebook_path,
@@ -2616,10 +2737,12 @@ def _record_response(record: AnalysisRecord) -> dict[str, Any]:
     result = record.result or AnalysisResult()
     return {
         "requestId": record.request_id,
+        "source": record.source,
         "sessionId": record.session_id,
         "notebookPath": record.notebook_path,
         "trailUrl": record.trail_url,
         "status": record.status,
+        "latestCommitSha": record.latest_commit_sha,
         "summary": result.summary,
         "confidenceScore": result.confidence_score,
         "finalAnswer": result.final_answer,
@@ -2654,6 +2777,12 @@ def _mark_stale_analysis_failed(
     record.status = "Failed"
     record.error = "Analysis was interrupted before completion."
     _save_registry(app_state)
+    _checkpoint_analysis_files(
+        app_state,
+        record,
+        f"Checkpoint {record.source} analysis {record.request_id}",
+        include_parent_dir=True,
+    )
 
 
 @router.post("/start")

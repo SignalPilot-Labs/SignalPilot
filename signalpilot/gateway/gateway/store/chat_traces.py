@@ -19,18 +19,16 @@ from ..models.workspace import (
 )
 
 
-def _thread_scope(org_id: str, user_id: str, thread_id: str):
+def _thread_scope(org_id: str, thread_id: str):
     return (
         GatewayChatTraceThread.org_id == org_id,
-        GatewayChatTraceThread.user_id == user_id,
         GatewayChatTraceThread.thread_id == thread_id,
     )
 
 
-def _event_scope(org_id: str, user_id: str, thread_id: str):
+def _event_scope(org_id: str, thread_id: str):
     return (
         GatewayChatTraceEvent.org_id == org_id,
-        GatewayChatTraceEvent.user_id == user_id,
         GatewayChatTraceEvent.thread_id == thread_id,
     )
 
@@ -45,9 +43,10 @@ async def upsert_thread(
     now = time.time()
     row = (
         await session.execute(
-            select(GatewayChatTraceThread).where(
-                *_thread_scope(org_id, user_id, thread.thread_id)
-            )
+            select(GatewayChatTraceThread)
+            .where(*_thread_scope(org_id, thread.thread_id))
+            .order_by(GatewayChatTraceThread.updated_at.desc())
+            .limit(1)
         )
     ).scalar_one_or_none()
 
@@ -98,9 +97,10 @@ async def clear_events(
 ) -> bool:
     row = (
         await session.execute(
-            select(GatewayChatTraceThread).where(
-                *_thread_scope(org_id, user_id, thread_id)
-            )
+            select(GatewayChatTraceThread)
+            .where(*_thread_scope(org_id, thread_id))
+            .order_by(GatewayChatTraceThread.updated_at.desc())
+            .limit(1)
         )
     ).scalar_one_or_none()
     if row is None:
@@ -108,7 +108,7 @@ async def clear_events(
 
     await session.execute(
         sa_delete(GatewayChatTraceEvent).where(
-            *_event_scope(org_id, user_id, thread_id)
+            *_event_scope(org_id, thread_id)
         )
     )
     row.updated_at = time.time()
@@ -127,7 +127,9 @@ async def append_event(
     thread = (
         await session.execute(
             select(GatewayChatTraceThread)
-            .where(*_thread_scope(org_id, user_id, thread_id))
+            .where(*_thread_scope(org_id, thread_id))
+            .order_by(GatewayChatTraceThread.updated_at.desc())
+            .limit(1)
             .with_for_update()
         )
     ).scalar_one_or_none()
@@ -137,7 +139,7 @@ async def append_event(
     next_idx = (
         await session.execute(
             select(sa_func.coalesce(sa_func.max(GatewayChatTraceEvent.idx), -1) + 1).where(
-                *_event_scope(org_id, user_id, thread_id)
+                *_event_scope(org_id, thread_id)
             )
         )
     ).scalar_one()
@@ -178,7 +180,6 @@ async def list_threads(
 ) -> list[ChatTraceThreadInfo]:
     q = select(GatewayChatTraceThread).where(
         GatewayChatTraceThread.org_id == org_id,
-        GatewayChatTraceThread.user_id == user_id,
     )
     if session_id:
         q = q.where(GatewayChatTraceThread.session_id == session_id)
@@ -198,9 +199,10 @@ async def get_thread(
 ) -> ChatTraceThreadInfo | None:
     row = (
         await session.execute(
-            select(GatewayChatTraceThread).where(
-                *_thread_scope(org_id, user_id, thread_id)
-            )
+            select(GatewayChatTraceThread)
+            .where(*_thread_scope(org_id, thread_id))
+            .order_by(GatewayChatTraceThread.updated_at.desc())
+            .limit(1)
         )
     ).scalar_one_or_none()
     return _thread_info(row) if row else None
@@ -223,7 +225,7 @@ async def get_events(
     result = await session.execute(
         select(GatewayChatTraceEvent)
         .where(
-            *_event_scope(org_id, user_id, thread_id),
+            *_event_scope(org_id, thread_id),
             GatewayChatTraceEvent.idx > after_index,
         )
         .order_by(GatewayChatTraceEvent.idx.asc())

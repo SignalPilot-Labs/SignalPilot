@@ -178,10 +178,34 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
     def session_factory():
         return SessionContext()
 
-    async def ensure_session(db, org_id: str, user_id: str):
+    async def resolve_route(*args, **kwargs):
+        events.append("resolve_route")
+        return worker_module.notebook_analysis.AnalysisRoute(
+            source="slack",
+            request_id="slack-req-1",
+            project_id="project-1",
+            branch="analysis/slack/slack-req-1-analyze-revenue",
+            default_branch="main",
+            analysis_user_id="analysis:slack:slack-req-1",
+        )
+
+    async def ensure_session(
+        db,
+        *,
+        org_id: str,
+        source: str,
+        request_id: str,
+        project_id: str,
+        branch: str,
+        credential_user_id: str,
+    ):
         assert db == "db"
         assert org_id == "org-1"
-        assert user_id == "user-1"
+        assert source == "slack"
+        assert request_id == "slack-req-1"
+        assert project_id == "project-1"
+        assert branch == "analysis/slack/slack-req-1-analyze-revenue"
+        assert credential_user_id == "user-1"
         events.append("ensure_session")
         return worker_module.NotebookRuntime(
             session_id="session-1",
@@ -189,12 +213,21 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
             public_base_url="https://app.test/notebook/session-1",
         )
 
+    async def upsert_trail(*args, **kwargs):
+        events.append("upsert")
+
+    async def update_trail(*args, **kwargs):
+        events.append("update")
+
     async def poll_analysis(*args, **kwargs):
         events.append("poll")
         assert events.index("db_exit") < events.index("start")
         return {"status": "Done", "notionComment": "Done", "confidenceScore": 1.0}
 
-    monkeypatch.setattr(worker_module, "ensure_notion_notebook_session", ensure_session)
+    monkeypatch.setattr(worker_module.notebook_analysis, "resolve_analysis_route_for_defaults", resolve_route)
+    monkeypatch.setattr(worker_module, "ensure_analysis_notebook_session", ensure_session)
+    monkeypatch.setattr(worker_module.notebook_analysis, "upsert_analysis_trail_from_status", upsert_trail)
+    monkeypatch.setattr(worker_module.notebook_analysis, "update_analysis_trail_from_status", update_trail)
     monkeypatch.setattr(worker_module.notebook_analysis, "_poll_analysis", poll_analysis)
     monkeypatch.setattr(worker_module.notebook_analysis, "_public_signalpilot_url", lambda url, runtime: url)
     monkeypatch.setattr(worker_module.notebook_analysis, "_with_public_chart_urls", lambda status, runtime: status)
@@ -207,6 +240,7 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
             app_token="xapp-test",
             org_id="org-1",
             user_id="user-1",
+            default_project_id="project-1",
         ),
         slack,
         session_factory,
@@ -232,7 +266,20 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
         )
     )
 
-    assert events == ["db_enter", "ensure_session", "db_exit", "start", "poll"]
+    assert events == [
+        "db_enter",
+        "resolve_route",
+        "ensure_session",
+        "db_exit",
+        "start",
+        "db_enter",
+        "upsert",
+        "db_exit",
+        "poll",
+        "db_enter",
+        "update",
+        "db_exit",
+    ]
     assert slack.post_message.await_count == 2
 
 

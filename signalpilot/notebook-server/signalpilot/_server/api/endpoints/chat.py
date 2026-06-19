@@ -95,7 +95,8 @@ def _current_session_id(request: Request) -> str:
 
 
 def _is_notion_session(request: Request) -> bool:
-    return _current_session_id(request).startswith("session-notion-")
+    session_id = _current_session_id(request)
+    return session_id.startswith("session-notion-") or session_id.startswith("session-slack-")
 
 
 def _epoch_seconds(value: Any) -> int:

@@ -29,6 +29,10 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { useActiveFile } from "@/core/active-file";
 import { useRuntimeManager } from "@/core/runtime/config";
 import { filenameAtom } from "@/core/saving/file-state";
+import {
+  isNotionTrailParams,
+  notionRequestIdFromSessionId,
+} from "@/core/notion/trail";
 import { cn } from "@/utils/cn";
 import {
   useAgentChat,
@@ -148,7 +152,7 @@ function getRememberedNotionThreadId(file?: string | null) {
     : null;
 
   const threadId = rememberedByFile || rememberedLocal || rememberedGlobal;
-  return threadId?.startsWith("session-notion-") ? threadId : null;
+  return notionRequestIdFromSessionId(threadId) ? threadId : null;
 }
 
 /* ── Main Panel ── */
@@ -202,7 +206,7 @@ const AgentChatPanelInner: React.FC = () => {
   const urlSessionId =
     urlParams?.get("session_id") ?? null;
   const urlFile = urlParams?.get("file") ?? null;
-  const urlNotionThreadId = urlSessionId?.startsWith("session-notion-")
+  const urlNotionThreadId = notionRequestIdFromSessionId(urlSessionId)
     ? urlSessionId
     : null;
   const notionTrailFile = urlFile;
@@ -213,7 +217,7 @@ const AgentChatPanelInner: React.FC = () => {
     urlNotionThreadId ?? rememberedNotionThreadId;
   const includeNotionConversations =
     Boolean(explicitNotionThreadId) ||
-    Boolean(notionTrailFile?.startsWith("signalpilot-notion-analyses/"));
+    isNotionTrailParams({ file: notionTrailFile, sessionId: urlSessionId });
   const notionAutoLoadAttempts = useRef<Record<string, number>>({});
 
   useEffect(() => {
@@ -264,29 +268,33 @@ const AgentChatPanelInner: React.FC = () => {
       const notebookPath = chatSession.notebookPath?.replace(/^\/+/, "");
       if (!notebookPath) {return false;}
       return (
-        chatSession.source === "notion" &&
+        (chatSession.source === "notion" || chatSession.source === "slack") &&
         (notebookPath === trailFile ||
           notebookPath.endsWith(`/${trailFile}`) ||
           trailFile.endsWith(notebookPath))
       );
     });
-    return session?.id?.startsWith("session-notion-") ? session.id : null;
+    const sessionId = session?.id;
+    return notionRequestIdFromSessionId(sessionId) ? sessionId : null;
   }, [chatSessions, explicitNotionThreadId, notionTrailFile]);
 
   const notionThreadId = explicitNotionThreadId ?? matchedNotionThreadId;
 
   useEffect(() => {
+    const trailSessionId = notionRequestIdFromSessionId(notionThreadId)
+      ? notionThreadId
+      : null;
     if (
       urlSessionId ||
-      !notionTrailFile?.startsWith("signalpilot-notion-analyses/") ||
-      !notionThreadId?.startsWith("session-notion-") ||
+      !trailSessionId ||
+      !isNotionTrailParams({ file: notionTrailFile, sessionId: trailSessionId }) ||
       typeof window === "undefined"
     ) {
       return;
     }
 
     const nextUrl = new URL(window.location.href);
-    nextUrl.searchParams.set("session_id", notionThreadId);
+    nextUrl.searchParams.set("session_id", trailSessionId);
     window.history.replaceState(null, "", nextUrl.toString());
   }, [notionThreadId, notionTrailFile, urlSessionId]);
 

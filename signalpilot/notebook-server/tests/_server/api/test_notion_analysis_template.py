@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
+import json
 import sys
+from types import SimpleNamespace
 
 _stubbed_signalpilot = sys.modules.get("signalpilot")
 if getattr(_stubbed_signalpilot, "__spec__", None) is None:
@@ -60,6 +63,95 @@ def test_notebook_template_uses_compact_three_cell_scaffold() -> None:
     assert "## Data discovery" not in template
     assert "## Charts and visual evidence" not in template
     assert "## Evidence Trace" not in template
+
+
+def test_analysis_registry_omits_latest_commit_sha(tmp_path, monkeypatch) -> None:
+    record = _record()
+    record.latest_commit_sha = "abc123"
+    registry_path = tmp_path / "notebooks" / ".signalpilot-analysis-registry.json"
+    registry_path.parent.mkdir(parents=True)
+    monkeypatch.setattr(notion_analysis, "_registry_path", lambda _app_state: registry_path)
+
+    old_records = dict(notion_analysis._records_by_request_id)
+    try:
+        notion_analysis._records_by_request_id.clear()
+        notion_analysis._records_by_request_id[record.request_id] = record
+
+        notion_analysis._save_registry(object())
+
+        raw = json.loads(registry_path.read_text(encoding="utf-8"))
+        assert raw["records"][0]["request_id"] == "notion-test"
+        assert "latest_commit_sha" not in raw["records"][0]
+    finally:
+        notion_analysis._records_by_request_id.clear()
+        notion_analysis._records_by_request_id.update(old_records)
+
+
+def test_analysis_agent_runs_from_project_root(tmp_path, monkeypatch) -> None:
+    from signalpilot._server.ai.claude_agent import AgentEvent
+    from signalpilot._server.ai import chat_store
+    from signalpilot._types.ids import SessionId
+
+    class FakeStore:
+        async def upsert_thread(self, thread) -> None:
+            del thread
+
+        async def clear_events(self, thread_id: str) -> None:
+            del thread_id
+
+        async def append_event(self, thread_id: str, event_data: dict) -> int:
+            del thread_id, event_data
+            return 0
+
+    project_root = tmp_path / "projects" / "project-1"
+    project_root.mkdir(parents=True)
+    app_state = SimpleNamespace(
+        request=SimpleNamespace(app=object(), headers={}),
+        session_manager=SimpleNamespace(
+            workspace=SimpleNamespace(directory=str(tmp_path / "workspace"))
+        ),
+    )
+    record = _record()
+    captured: dict[str, object] = {}
+
+    async def fake_run_notebook_agent(**kwargs):
+        captured.update(kwargs)
+        yield AgentEvent(
+            type="text",
+            content=json.dumps(
+                {
+                    "summary": "Done",
+                    "confidenceScore": 0.9,
+                    "finalAnswer": "Done",
+                }
+            ),
+        )
+
+    monkeypatch.setattr(notion_analysis, "_project_root", lambda _app_state: project_root)
+    monkeypatch.setattr(notion_analysis, "_ensure_session", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(notion_analysis, "_save_registry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        notion_analysis,
+        "_persist_record_completion_artifacts",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(chat_store, "get_gateway_chat_trace_store", lambda: FakeStore())
+    monkeypatch.setattr(
+        "signalpilot._server.ai.claude_agent.run_notebook_agent",
+        fake_run_notebook_agent,
+    )
+
+    asyncio.run(
+        notion_analysis._run_analysis(
+            app_state,
+            record,
+            _body(),
+            new_chat=True,
+        )
+    )
+
+    assert captured["session_id"] == SessionId(record.session_id)
+    assert captured["cwd"] == str(project_root)
 
 
 def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:

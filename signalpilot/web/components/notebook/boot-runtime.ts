@@ -96,8 +96,7 @@ export async function bootRuntime(
       : new URL(window.location.href).searchParams.get("session_id") ?? "";
   const resolvedKernelSessionId =
     config.kernelSessionId ??
-    (config.file?.startsWith("signalpilot-notion-analyses/") &&
-    urlSessionId.startsWith("session-notion-")
+    (isNotionTrailParams({ file: config.file, sessionId: urlSessionId })
       ? urlSessionId
       : undefined);
   const isNotionTrail = isNotionTrailParams({
@@ -118,6 +117,8 @@ export async function bootRuntime(
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(bootToken ? { Authorization: `Bearer ${bootToken}` } : {}),
+    ...(config.project ? { "X-Gateway-Project-Id": config.project } : {}),
+    ...(config.project && config.branch ? { "X-Gateway-Branch-Id": config.branch } : {}),
   };
 
   // ── Phase 1: Wait for runtime healthy ──────────────────────────

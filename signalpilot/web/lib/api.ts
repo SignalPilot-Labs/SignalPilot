@@ -469,6 +469,35 @@ export const deleteNotebookSession = () =>
 export const pingNotebookSession = () =>
   request<void>("/api/notebook-sessions/ping", { method: "POST" });
 
+export type AnalysisTrail = {
+  id: string;
+  org_id: string;
+  source: string;
+  request_id: string;
+  thread_id: string;
+  runtime_session_id: string | null;
+  project_id: string;
+  branch: string;
+  default_branch: string;
+  notebook_path: string;
+  status: string;
+  latest_commit_sha: string | null;
+  source_url: string | null;
+  source_thread_id: string | null;
+  source_request_id: string | null;
+  analysis_user_id: string | null;
+  metadata: Record<string, unknown>;
+  created_at: number;
+  updated_at: number;
+};
+
+export const resolveAnalysisTrail = (params: { session_id?: string; file?: string }) => {
+  const qs = new URLSearchParams();
+  if (params.session_id) qs.set("session_id", params.session_id);
+  if (params.file) qs.set("file", params.file);
+  return request<AnalysisTrail>(`/api/analysis-trails/resolve?${qs.toString()}`);
+};
+
 // GitHub App
 export const getGitHubInstallUrl = () =>
   request<{ install_url: string }>("/api/github/install-url");

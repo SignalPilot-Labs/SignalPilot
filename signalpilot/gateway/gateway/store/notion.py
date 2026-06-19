@@ -181,6 +181,9 @@ def _config_info(config: NotionInstallationConfig | None) -> NotionInstallationC
         requests_data_source_id=config.requests_data_source_id,
         requests_database_page_id=config.requests_database_page_id,
         enabled=bool(config.enabled),
+        default_project_id=config.default_project_id,
+        default_branch=config.default_branch or "main",
+        analysis_branch_mode=config.analysis_branch_mode or "per_request",
     )
 
 
@@ -410,6 +413,9 @@ async def save_oauth_installation_config(
     requests_data_source_id: str,
     requests_database_page_id: str,
     enabled: bool = True,
+    default_project_id: str | None = None,
+    default_branch: str = "main",
+    analysis_branch_mode: str = "per_request",
 ) -> NotionOAuthInstallationInfo | None:
     result = await session.execute(
         select(NotionInstallation).where(
@@ -430,6 +436,9 @@ async def save_oauth_installation_config(
     config.requests_data_source_id = requests_data_source_id
     config.requests_database_page_id = requests_database_page_id
     config.enabled = enabled
+    config.default_project_id = default_project_id
+    config.default_branch = default_branch or "main"
+    config.analysis_branch_mode = analysis_branch_mode or "per_request"
     install.status = "active" if enabled else "needs_setup"
     install.updated_at = datetime.now(UTC)
     await session.commit()

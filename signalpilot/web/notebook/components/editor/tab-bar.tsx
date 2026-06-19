@@ -32,7 +32,7 @@ export const TabBar: React.FC = () => {
   if (tabs.length === 0) {return null;}
 
   return (
-    <div className="flex items-center border-b border-border bg-[#080808] overflow-x-auto shrink-0">
+    <div className="flex items-center border-b border-border bg-card overflow-x-auto shrink-0">
       {tabs.map((tab) => (
         <TabItem
           key={tab.id}
@@ -64,8 +64,8 @@ const TabItem: React.FC<{
       className={cn(
         "flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono cursor-pointer border-r border-border/50 shrink-0 max-w-[200px] group",
         isActive
-          ? "bg-background text-foreground border-b-2 border-b-emerald-500 -mb-px"
-          : "bg-[#060606] text-muted-foreground hover:bg-[#0a0a0a] hover:text-foreground",
+          ? "bg-background text-foreground border-b-2 border-b-primary -mb-px"
+          : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground",
       )}
       onClick={handleClick}
     >

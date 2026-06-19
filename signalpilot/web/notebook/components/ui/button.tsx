@@ -48,9 +48,9 @@ const buttonVariants = cva(
         ),
         outline: cn(
           "border border-border",
-          "hover:bg-[#111111] hover:text-foreground",
-          "hover:border-[#333]",
-          "aria-selected:text-foreground aria-selected:border-[#444]",
+          "hover:bg-muted hover:text-foreground",
+          "hover:border-border",
+          "aria-selected:text-foreground aria-selected:border-border",
           activeCommon,
         ),
         secondary: cn(

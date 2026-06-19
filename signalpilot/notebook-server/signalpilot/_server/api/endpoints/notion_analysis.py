@@ -286,120 +286,38 @@ app = sp.App()
 @app.cell
 def _():
     import signalpilot as sp
-    return (sp,)
 
-
-@app.cell
-def _(sp):
     request_headline = {headline_json}
     source_url = {source_json}
     user_prompt = {prompt_json}
     previous_messages = {previous_json}
-    previous_block = "\\n".join(f"- {{message}}" for message in previous_messages)
-    if not previous_block:
-        previous_block = "- None"
     sp.md(f"""
     # {{request_headline}}
 
-    ## Request and source context
-
-    **Source:** {{source_url}}
+    **Source request:** {{source_url}}
 
     **Requester prompt:**
 
     {{user_prompt}}
-
-    ## Previous Notion Messages
-
-    {{previous_block}}
     """)
-    return previous_messages, request_headline, source_url, user_prompt
+    return previous_messages, request_headline, source_url, sp, user_prompt
 
 
 @app.cell
 def _(sp):
     sp.md("""
-    ## Scouting and context notes
+    ## Executive Summary and Explorations
 
-    Record any brief orientation work here, including MCP scouting if used.
-    MCP output should only identify likely connections, schemas, files, or
-    context to inspect in notebook cells. Do not leave final evidence only in
-    chat or MCP transcripts. Do not paste MCP query results into hardcoded
-    DataFrames.
+    Pending analysis.
     """)
 
 
 @app.cell
 def _(sp):
     sp.md("""
-    ## Setup and connection selection
+    ## Evidence Trace
 
-    Initialize the SignalPilot notebook SDK, list available connections, and
-    choose the governed connection used for the analysis.
-
-    Expected executable pattern:
-    - `available_connections = sp.connections()`
-    - `db = sp.connect("connection_name")`
-    - source data loaded with `db.query(...)` or `sp.query(...)`
-    """)
-
-
-@app.cell
-def _(sp):
-    sp.md("""
-    ## Data discovery
-
-    Inspect relevant databases, schemas, tables, columns, row counts, date
-    ranges, and any filters needed to answer the request. Discovery should be
-    performed in executable notebook cells using the selected SDK connection.
-    """)
-
-
-@app.cell
-def _(sp):
-    sp.md("""
-    ## Analysis steps
-
-    Keep the real queries, transformations, calculations, and comparisons in
-    notebook cells below this section. DataFrames should be derived from
-    notebook-executed SDK query calls, not from manually typed result literals.
-    """)
-
-
-@app.cell
-def _(sp):
-    sp.md("""
-    ## Evidence and results
-
-    Summarize the concrete outputs that support the answer: query results,
-    calculated metrics, record samples, charts, or validation checks.
-    """)
-
-
-@app.cell
-def _(sp):
-    sp.md("""
-    ## Charts and visual evidence
-
-    Create one or more charts when the request involves comparison, ranking,
-    trend, distribution, or contribution analysis. Charts should be generated
-    from notebook-computed DataFrames, include clear titles/captions, and be
-    saved or exposed as shareable chart artifacts when useful for Notion.
-
-    For matplotlib charts, save the PNG/SVG artifact, then make the chart or
-    saved image the final expression in the chart cell. Do not put `print(...)`
-    after the chart display expression; printed "chart saved" messages are only
-    human feedback and will replace the visible chart output.
-    """)
-
-
-@app.cell
-def _(sp):
-    sp.md("""
-    ## Answer, caveats, and confidence rationale
-
-    Write the final answer here before returning JSON to Notion. Include
-    caveats, assumptions, known gaps, and why the confidence score is justified.
+    Pending analysis.
     """)
 
 
@@ -425,16 +343,16 @@ def _append_followup_to_notebook(
 def _(sp):
     _followup_prompt = {prompt_json}
     sp.md(f"""
-    ## Follow-up from Notion
+    ## Follow-up Request
 
     ### New requester prompt
 
     {{_followup_prompt}}
 
-    ### Follow-up analysis notes
+    ### Follow-up Evidence Trace
 
-    Append new scouting, notebook queries, evidence, and revised answer cells
-    below this section without deleting prior analysis work.
+    Append only the new queries, checks, evidence, visuals, and revised answer
+    needed for this follow-up. Do not delete prior analysis work.
     """)
 '''
     text = path.read_text(encoding="utf-8")
@@ -2146,10 +2064,23 @@ Required workflow:
    `pd.DataFrame({{...}})` as the source of truth. DataFrames are fine only when
    they are built from notebook-executed SDK calls, for example
    `pd.DataFrame(db.query("SELECT ..."))`.
-3. Fill the narrative audit sections in the notebook: request/source context,
-   scouting notes, setup/connection selection, data discovery, analysis steps,
-   evidence/results, charts/visual evidence, and answer/caveats/confidence
-   rationale.
+3. Keep the notebook presentation compact and evidence-first:
+   - Preserve the first request context cell.
+   - Replace the "Executive Summary and Explorations" cell with the final
+     answer summary plus a short "Gotchas / Caveats" subsection.
+   - Replace the "Evidence Trace" cell with short branch-style labels for the
+     major claims, then place the supporting code/query cells directly beneath
+     the relevant branch.
+   - Do not front-load long prose sections before the queries. The reader should
+     see each top-line result, then the query/data/checks that support it.
+   For every material claim, build a visible evidence branch:
+   - top-line result;
+   - visible SQL/query code cell with the exact query used;
+   - small preview such as `df.head()`, aggregate output, or joined-table sample;
+   - validation checks such as row counts, date/status filters, nulls, duplicate
+     checks, freshness checks, and reconciliation totals;
+   - chart, compact table, or plain markdown trace when it clarifies a trend,
+     relationship, or workflow.
 4. Add charts when the question involves comparison, ranking, trend,
    distribution, or contribution analysis. Build charts from notebook-computed
    DataFrames only, never from hand-entered MCP output. Prefer 1-3 focused
@@ -2174,12 +2105,18 @@ Required workflow:
 7. Do not base the final answer only on chat-only MCP calls. MCP findings may
    guide where to look, but durable queries, calculations, evidence, and the
    answer must live in the notebook.
+8. Before returning JSON, update the notebook's "Executive Summary and
+   Explorations" cell with the finalAnswer content and the gotchas/caveats
+   bullets. Keep detailed query trace in the "Evidence Trace" branch cells
+   instead of duplicating it all in the summary.
 
 Completion checklist before final JSON:
 - The live notebook contains an SDK setup cell with `sp.connections()` and
   `sp.connect("...")`.
 - The live notebook contains governed query cells that call `db.query(...)` or
   `sp.query(...)` for the actual source data used in the answer.
+- Every material top-line result in the summary has a nearby evidence branch
+  with a visible query, a small data preview, and at least one validation check.
 - The notebook does not use hardcoded `pd.DataFrame({{...}})` literals as a
   substitute for governed source queries.
 - The notebook does not reuse top-level helper variable names across cells.
@@ -2193,6 +2130,9 @@ Completion checklist before final JSON:
   instead of ending with `print(...)` feedback.
 - The final JSON's analysisMethod states that the result came from
   notebook-executed SDK cells, not MCP query outputs.
+- The top of the notebook remains readable: request context, executive summary
+  with caveats, then evidence branches. Queries must not be buried after a long
+  narrative-only audit trail.
 
 User request:
 {body.prompt}
@@ -2200,7 +2140,7 @@ User request:
 Source URL:
 {body.source_url}
 
-Previous Notion discussion messages:
+Previous discussion messages:
 {previous or "- None"}
 
 When the analysis is complete, your final assistant message must be only valid

@@ -73,6 +73,14 @@ def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
     assert "markdown-only cell" in prompt
     assert "Do not add request metadata variables" in prompt
     assert "do not rename this heading" in prompt
+    assert "`### Gotchas / Caveats`" in prompt
+    assert "`### Confidence Score: X`" in prompt
+    assert "assumptions used" in prompt
+    assert "exclusions/not-included items" in prompt
+    assert "known gaps" in prompt
+    assert "sensitivity" in prompt
+    assert "source tables, filters, validation checks" in prompt
+    assert "issues\n       that would lower or raise confidence" in prompt
     assert "repeated finding branch" in prompt
     assert "`### Finding: ...`" in prompt
     assert "1-3 sentences explaining" in prompt
@@ -88,6 +96,7 @@ def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
     assert "\"Evidence Trace\"" not in prompt
     assert "Mermaid" not in prompt
     assert "top-line result" not in prompt
+    assert "Confidence methodology/rationale" in prompt
     assert "Queries must not be buried" in prompt
     assert "Previous discussion messages:" in prompt
     assert "Previous Notion discussion messages:" not in prompt

@@ -2065,8 +2065,16 @@ Required workflow:
      Source prompt. Do not add request metadata variables or executable analysis
      code to this first cell.
    - Replace the "Executive Summary and Explorations" cell with the final
-     answer summary plus a short "Gotchas / Caveats" subsection. Keep it as a
-     code-hidden markdown cell and do not rename this heading.
+     answer summary plus clearly documented confidence and caveats. Keep it as a
+     code-hidden markdown cell and do not rename this heading. Inside this cell,
+     include concise subsections for:
+     - the executive answer bullets;
+     - `### Gotchas / Caveats`, explicitly separating assumptions used,
+       exclusions/not-included items, known gaps, and sensitivity notes when
+       relevant;
+     - `### Confidence Score: X`, with a clear methodology/rationale covering
+       source tables, filters, validation checks that passed, and the issues
+       that would lower or raise confidence.
    - Replace the "Analysis steps" cell with the first branch-style claim, then
      interleave supporting code/query cells directly beneath that branch. Add the
      next branch heading only when its supporting cells immediately follow. Do
@@ -2113,9 +2121,10 @@ Required workflow:
    guide where to look, but durable queries, calculations, evidence, and the
    answer must live in the notebook.
 8. Before returning JSON, update the notebook's "Executive Summary and
-   Explorations" cell with the finalAnswer content and the gotchas/caveats
-   bullets. Keep the exact heading text. Keep detailed query trace in the
-   "Analysis steps" branch cells instead of duplicating it all in the summary.
+   Explorations" cell with the finalAnswer content, the gotchas/caveats
+   bullets, and the confidence score/methodology rationale. Keep the exact
+   heading text. Keep detailed query trace in the "Analysis steps" branch cells
+   instead of duplicating it all in the summary.
 
 Completion checklist before final JSON:
 - The live notebook contains an SDK setup cell with `sp.connections()` and
@@ -2125,6 +2134,11 @@ Completion checklist before final JSON:
 - Every material finding in the summary has a nearby "Analysis steps" branch
   with markdown explanation, a visible query, visible data preview/head, and at
   least one validation/check cell.
+- The "Executive Summary and Explorations" cell contains clearly documented
+  Gotchas / Caveats and Confidence Score sections. Gotchas must name the
+  assumptions used, exclusions/not-included items, known gaps, and meaningful
+  sensitivity risks. Confidence must explain the methodology, source data,
+  filters, validation checks, and what could change the score.
 - The notebook does not use hardcoded `pd.DataFrame({{...}})` literals as a
   substitute for governed source queries.
 - The notebook does not reuse top-level helper variable names across cells.
@@ -2172,6 +2186,8 @@ audiences:
   ## Executive Summary and Explorations
 
   - Short executive answer bullets.
+  - Include gotchas/caveats as explicit bullets that name assumptions,
+    exclusions/not-included items, known gaps, and sensitivity risks.
   - Include a short list of analysis steps actually run, but do not repeat
     metadata already stored in request row properties such as notebook path,
     session id, trail URL, request URL, or connection name unless it is essential
@@ -2183,7 +2199,9 @@ audiences:
 
   ## Confidence Score: X
 
-  Confidence rationale and caveats as bullets.
+  Confidence methodology/rationale as bullets, including source data, filters,
+  validation checks that passed, residual assumptions, and what could lower or
+  raise the score.
 
   The Notion worker will render Detailed Research and Confidence Score as
   accordions, so do not write "accordion" or implementation notes in the text.

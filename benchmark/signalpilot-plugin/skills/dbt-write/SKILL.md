@@ -12,7 +12,7 @@ Your SQL aliases MUST match YML column names EXACTLY (case-sensitive).
 - YML says `total_revenue` → write `AS total_revenue`, NOT `AS revenue_total`
 - YML says `QoQ` → write `AS QoQ`, NOT `AS qoq` (case matters)
 - Every YML column MUST appear in your SELECT. Do NOT invent extra columns.
-- Follow `map-columns` output: include UNMAPPED-INCLUDE columns, skip UNMAPPED-EXCLUDE columns. The tool's exclusion tags are data-driven. For passthrough models without a YML contract, include ALL upstream columns - do NOT apply name-based exclusion when no contract exists.
+- Follow `map_columns` output: include UNMAPPED-INCLUDE columns, skip UNMAPPED-EXCLUDE columns. The tool's exclusion tags are data-driven. For passthrough models without a YML contract, include ALL upstream columns - do NOT apply name-based exclusion when no contract exists.
 
 **Boolean columns**: preserve a passthrough column's source type - a source `'t'`/`'f'` VARCHAR stays VARCHAR even if its name starts with `is_`/`has_` (do NOT convert it). Emit a real BOOLEAN only for a column the YML types `boolean`, or one you DERIVE fresh with boolean meaning (e.g. a new `is_currently_*` column computed from a comparison); in that case convert a source `'t'`/`'f'` with `(col = 't')`.
 

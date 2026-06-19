@@ -18,7 +18,7 @@ from gateway.api.schema._identifiers import _quote_table_name
 from gateway.api.schema._router import router
 from gateway.api.schema._scoring import _fuzzy_match
 from gateway.connectors.pool_manager import pool_manager
-from gateway.connectors.schema_cache import schema_cache
+from gateway.connectors.schema_cache import _compute_schema_diff, schema_cache
 from gateway.schema.utils import _infer_implicit_joins
 from gateway.security.scope_guard import RequireScope
 
@@ -400,6 +400,138 @@ async def get_schema_diff(name: str, store: StoreD):
         "table_count": len(new_schema),
         "fingerprint": schema_cache.get_fingerprint(name),
     }
+
+
+async def _live_schema(store, name: str) -> dict[str, Any]:
+    """Introspect a connection's current live schema (no cache)."""
+    info = await require_connection(store, name)
+    conn_str = await store.get_connection_string(name)
+    if not conn_str:
+        raise HTTPException(status_code=400, detail=f"No credentials stored for '{name}'")
+    extras = await store.get_credential_extras(name)
+    try:
+        async with pool_manager.connection(
+            info.db_type, conn_str, credential_extras=extras, connection_name=name
+        ) as connector:
+            return await connector.get_schema()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=sanitize_db_error(str(e), info.db_type))
+
+
+@router.get("/connections/{base}/schema/diff/{compare}", dependencies=[RequireScope("read")])
+async def get_schema_diff_branches(base: str, compare: str, store: StoreD):
+    """Diff the live schema of two connections (e.g. two Xata branches).
+
+    Unlike /schema/diff (which compares one connection against its own cached
+    snapshot), this compares two distinct connections head-to-head. The primary
+    use case is reviewing an upstream branch before it merges: register the base
+    branch and the feature branch as two connections, then diff them to see every
+    added/removed/retyped column. Uses the same diff engine as the single-connection
+    path (_compute_schema_diff).
+    """
+    base_schema = await _live_schema(store, base)
+    compare_schema = await _live_schema(store, compare)
+    diff = _compute_schema_diff(base_schema, compare_schema)
+    return {
+        "base_connection": base,
+        "compare_connection": compare,
+        "base_table_count": len(base_schema),
+        "compare_table_count": len(compare_schema),
+        "diff": diff,
+    }
+
+
+async def _live_schema_for_conn_str(info, conn_str: str, extras: dict, name: str) -> dict[str, Any]:
+    """Introspect an arbitrary connection string with a connection's db_type/extras."""
+    try:
+        async with pool_manager.connection(
+            info.db_type, conn_str, credential_extras=extras, connection_name=name
+        ) as connector:
+            return await connector.get_schema()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=sanitize_db_error(str(e), info.db_type))
+
+
+@router.get("/connections/{name}/xata/branch-diff", dependencies=[RequireScope("read")])
+async def get_xata_branch_diff(name: str, store: StoreD, base: str, compare: str):
+    """Diff two Xata branches addressed from ONE registered workspace credential.
+
+    The stored connection holds a single scoped API key; this swaps the `:branch`
+    segment to reach `base` and `compare` server-side (the agent never sees a URL or
+    key). Use this for the "one workspace, branch-per-call" model.
+    """
+    from gateway.connectors.drivers.xata import XataConnector
+
+    info = await require_connection(store, name)
+    conn_str = await store.get_connection_string(name)
+    if not conn_str:
+        raise HTTPException(status_code=400, detail="No credentials stored")
+    extras = await store.get_credential_extras(name)
+    base_cs = XataConnector.connection_string_for_branch(conn_str, base)
+    compare_cs = XataConnector.connection_string_for_branch(conn_str, compare)
+    base_schema = await _live_schema_for_conn_str(info, base_cs, extras, name)
+    compare_schema = await _live_schema_for_conn_str(info, compare_cs, extras, name)
+    return {
+        "connection": name,
+        "base_branch": base,
+        "compare_branch": compare,
+        "diff": _compute_schema_diff(base_schema, compare_schema),
+    }
+
+
+def _xata_control_from_extras(conn_str: str | None, extras: dict):
+    """Build a XataControlClient from a connection's stored extras.
+
+    Falls back to using the data-plane API key (the connection-string password) as a
+    Bearer token when no OIDC token endpoint is configured (Xata Cloud).
+    """
+    from urllib.parse import urlparse
+
+    from gateway.connectors.xata_control import XataControlClient, XataControlConfig
+
+    api_url = extras.get("xata_api_url")
+    if not api_url:
+        raise HTTPException(status_code=400, detail="xata_api_url not configured for this connection")
+    bearer = None
+    if not extras.get("xata_token_url") and conn_str:
+        bearer = urlparse(conn_str).password  # data-plane API key as Bearer (cloud)
+    cfg = XataControlConfig(
+        api_url=api_url,
+        org=extras.get("xata_org", "default-org"),
+        bearer_token=bearer,
+        token_url=extras.get("xata_token_url"),
+        client_id=extras.get("xata_client_id"),
+        client_secret=extras.get("xata_client_secret"),
+        username=extras.get("xata_workspace"),
+        password=urlparse(conn_str).password if conn_str else None,
+    )
+    return XataControlClient(cfg)
+
+
+@router.get("/connections/{name}/xata/projects/{project}/branches", dependencies=[RequireScope("read")])
+async def list_xata_branches(name: str, project: str, store: StoreD):
+    """List branches in a Xata project (control plane)."""
+    await require_connection(store, name)
+    conn_str = await store.get_connection_string(name)
+    extras = await store.get_credential_extras(name)
+    client = _xata_control_from_extras(conn_str, extras)
+    try:
+        return {"branches": await client.list_branches(project)}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Xata control plane error: {e}")
+
+
+@router.post("/connections/{name}/xata/projects/{project}/branches", dependencies=[RequireScope("write")])
+async def create_xata_branch(name: str, project: str, store: StoreD, branch_name: str, parent_id: str):
+    """Create an instant copy-on-write branch from a parent (control plane, write scope)."""
+    await require_connection(store, name)
+    conn_str = await store.get_connection_string(name)
+    extras = await store.get_credential_extras(name)
+    client = _xata_control_from_extras(conn_str, extras)
+    try:
+        return await client.create_child_branch(project, branch_name, parent_id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Xata control plane error: {e}")
 
 
 @router.get("/connections/{name}/schema/refresh-status", dependencies=[RequireScope("read")])

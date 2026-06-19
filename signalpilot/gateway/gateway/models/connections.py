@@ -23,6 +23,7 @@ class DBType(str, Enum):  # noqa: UP042 — (str,Enum) keeps str(X.A)=='X.A'; St
     mssql = "mssql"
     trino = "trino"
     sqlite = "sqlite"
+    xata = "xata"
 
 
 class SSHTunnelConfig(BaseModel):
@@ -89,6 +90,22 @@ class ConnectionCreate(BaseModel):
     catalog: str | None = Field(default=None, max_length=128)  # Unity Catalog
     # ─── ClickHouse-specific ──────────────────────────────────────
     protocol: str | None = Field(default=None, pattern=r"^(native|http)$")  # ClickHouse: native TCP or HTTP
+    # ─── Xata-specific ────────────────────────────────────────────
+    # A Xata "connection" is a WORKSPACE, not a single DB. The stored secret is a
+    # scoped Xata API key (carried in `password`); the per-branch Postgres endpoint
+    # is resolved server-side at connect time. Branches are addressed per-call, so
+    # one credential serves every branch in the workspace.
+    workspace: str | None = Field(default=None, max_length=128)  # Xata workspace id (URL user)
+    region: str | None = Field(default=None, max_length=64)  # e.g. us-east-1, eu-central-1
+    branch: str | None = Field(default=None, max_length=128)  # default branch (default: main)
+    # Control-plane (branch lifecycle). Optional: only needed for list/create branch
+    # tools. Auth is either the data-plane API key as a Bearer token (Xata Cloud) or
+    # OIDC password grant (self-hosted dev). Secrets ride in extras_enc (encrypted).
+    xata_api_url: str | None = Field(default=None, max_length=512)  # e.g. https://api.xata.io
+    xata_org: str | None = Field(default=None, max_length=128)  # control-plane org id
+    xata_token_url: str | None = Field(default=None, max_length=512)  # OIDC token endpoint (self-hosted)
+    xata_client_id: str | None = Field(default=None, max_length=128)
+    xata_client_secret: str | None = Field(default=None, max_length=1024)
     # ─── Snowflake key-pair auth ───────────────────────────────────
     private_key: str | None = Field(default=None, max_length=16384)  # PEM-encoded private key
     private_key_passphrase: str | None = Field(default=None, max_length=1024)

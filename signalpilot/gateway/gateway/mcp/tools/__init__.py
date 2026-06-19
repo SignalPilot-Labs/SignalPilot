@@ -18,6 +18,7 @@ from gateway.mcp.tools import connections as connections  # noqa: E402
 from gateway.mcp.tools import dbt_project as dbt_project  # noqa: E402
 from gateway.mcp.tools import knowledge as knowledge  # noqa: E402
 from gateway.mcp.tools import model_verify as model_verify  # noqa: E402
+from gateway.mcp.tools import model_map as model_map  # noqa: E402
 from gateway.mcp.tools import workspace_projects as workspace_projects  # noqa: E402
 from gateway.mcp.tools import query as query  # noqa: E402
 from gateway.mcp.tools import notion as notion  # noqa: E402

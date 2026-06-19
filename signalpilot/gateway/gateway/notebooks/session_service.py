@@ -90,6 +90,21 @@ def _pod_web_url() -> str | None:
     return None
 
 
+def _notebook_start_timeout_seconds() -> int:
+    raw_value = os.getenv("SP_NOTEBOOK_START_TIMEOUT_SECONDS")
+    if raw_value is None:
+        return 90
+    try:
+        timeout = int(raw_value)
+    except ValueError:
+        logger.warning(
+            "Invalid SP_NOTEBOOK_START_TIMEOUT_SECONDS=%r; using default",
+            raw_value,
+        )
+        return 90
+    return max(30, timeout)
+
+
 async def _pod_extra_env(
     session: AsyncSession,
     *,
@@ -295,9 +310,10 @@ async def ensure_notebook_session(
             create_pod_fn=_create_pod_fn,
         )
         logger.info("Waiting for notebook pod %s to be running...", pod)
-        await orch.wait_for_running(pod, org_id=org_id, timeout=90)
+        start_timeout = _notebook_start_timeout_seconds()
+        await orch.wait_for_running(pod, org_id=org_id, timeout=start_timeout)
         logger.info("Notebook pod %s is running; waiting for readiness probe", pod)
-        pod_info = await orch.wait_for_ready(pod, org_id=org_id, timeout=90)
+        pod_info = await orch.wait_for_ready(pod, org_id=org_id, timeout=start_timeout)
         logger.info("Notebook pod %s is ready: ip=%s", pod, pod_info.ip)
         await ns.update_session_status(
             session,

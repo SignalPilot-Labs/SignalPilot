@@ -7,8 +7,7 @@ from unittest.mock import ANY, AsyncMock
 import pytest
 from fastapi import Response
 
-from gateway.models.notebook_sessions import NotebookSessionInfo
-from gateway.models.notebook_sessions import NotebookSessionCreate
+from gateway.models.notebook_sessions import NotebookSessionCreate, NotebookSessionInfo
 from gateway.notebooks import session_service
 from gateway.orchestrator import PodInfo
 from gateway.store.notebook_sessions import NotebookSessionInternal

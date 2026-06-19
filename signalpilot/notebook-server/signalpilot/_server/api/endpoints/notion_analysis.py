@@ -273,7 +273,7 @@ def _refresh_trail_url(
 
 
 def _notebook_template(body: StartNotionAnalysisRequest) -> str:
-    request_context = f"""# {body.prompt}
+    request_context = f"""# SignalPilot analysis
 
 **Source request:** {body.source_url}
 
@@ -308,7 +308,7 @@ def _():
 def _():
     import signalpilot as sp
     sp.md("""
-    ## Evidence Trace
+    ## Analysis steps
 
     Pending analysis.
     """)
@@ -342,7 +342,7 @@ def _(sp):
 
     {{_followup_prompt}}
 
-    ### Follow-up Evidence Trace
+    ### Follow-up Analysis steps
 
     Append only the new queries, checks, evidence, visuals, and revised answer
     needed for this follow-up. Do not delete prior analysis work.
@@ -2059,16 +2059,17 @@ Required workflow:
    `pd.DataFrame(db.query("SELECT ..."))`.
 3. Keep the notebook presentation compact and evidence-first:
    - Preserve the first request context cell as a code-hidden markdown-only cell.
-     Its H1 title must be the full user request, not the shortened `headline`.
-     Do not add request metadata variables or executable analysis code to this
-     first cell.
+     Replace its H1 with a concise AI-generated analysis title, not the raw user
+     prompt and not the shortened `headline`. Keep the source request link and
+     requester prompt underneath the title. Do not add request metadata variables
+     or executable analysis code to this first cell.
    - Replace the "Executive Summary and Explorations" cell with the final
      answer summary plus a short "Gotchas / Caveats" subsection. Keep it as a
      code-hidden markdown cell and do not rename this heading.
-   - Replace the "Evidence Trace" cell with the first branch-style claim, then
+   - Replace the "Analysis steps" cell with the first branch-style claim, then
      interleave supporting code/query cells directly beneath that branch. Add the
      next branch heading only when its supporting cells immediately follow. Do
-     not leave "Evidence Trace" as a table of contents with all branches listed
+     not leave "Analysis steps" as a table of contents with all branches listed
      before the evidence.
    - Do not front-load long prose sections before the queries. The reader should
      see each top-line result, then the query/data/checks that support it.
@@ -2107,7 +2108,7 @@ Required workflow:
 8. Before returning JSON, update the notebook's "Executive Summary and
    Explorations" cell with the finalAnswer content and the gotchas/caveats
    bullets. Keep the exact heading text. Keep detailed query trace in the
-   "Evidence Trace" branch cells instead of duplicating it all in the summary.
+   "Analysis steps" branch cells instead of duplicating it all in the summary.
 
 Completion checklist before final JSON:
 - The live notebook contains an SDK setup cell with `sp.connections()` and
@@ -2130,9 +2131,9 @@ Completion checklist before final JSON:
 - The final JSON's analysisMethod states that the result came from
   notebook-executed SDK cells, not MCP query outputs.
 - The top of the notebook remains readable: request context, executive summary
-  with caveats, then evidence branches. Queries must not be buried after a long
+  with caveats, then analysis branches. Queries must not be buried after a long
   narrative-only audit trail.
-- The "Evidence Trace" section is not just a branch list. Each branch appears as
+- The "Analysis steps" section is not just a branch list. Each branch appears as
   close as possible to the exact query, preview, validation output, or chart that
   supports it.
 

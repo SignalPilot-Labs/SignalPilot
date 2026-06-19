@@ -42,25 +42,29 @@ def test_notebook_template_uses_compact_three_cell_scaffold() -> None:
 
     assert template.count("@app.cell") == 3
     assert template.count("@app.cell(hide_code=True)") == 3
-    assert "# can you do an analysis of our dev db?" in template
+    assert "# SignalPilot analysis" in template
     assert "**Source request:** https://slack.test/archives/C/p123" in template
+    assert "can you do an analysis of our dev db?" in template
     assert "request_headline =" not in template
     assert "source_url =" not in template
     assert "user_prompt =" not in template
     assert "previous_messages =" not in template
     assert "request_title =" not in template
     assert "## Executive Summary and Explorations" in template
-    assert "## Evidence Trace" in template
+    assert "## Analysis steps" in template
     assert "## Scouting and context notes" not in template
     assert "## Setup and connection selection" not in template
     assert "## Data discovery" not in template
     assert "## Charts and visual evidence" not in template
+    assert "## Evidence Trace" not in template
 
 
 def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
     prompt = notion_analysis._analysis_prompt(_record(), _body())
 
     assert "evidence-first" in prompt
+    assert "AI-generated analysis title" in prompt
+    assert "not the raw user" in prompt
     assert "not the shortened `headline`" in prompt
     assert "markdown-only cell" in prompt
     assert "Do not add request metadata variables" in prompt
@@ -70,6 +74,8 @@ def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
     assert "validation checks" in prompt
     assert "plain markdown trace" in prompt
     assert "not just a branch list" in prompt
+    assert "\"Analysis steps\"" in prompt
+    assert "\"Evidence Trace\"" not in prompt
     assert "Mermaid" not in prompt
     assert "Queries must not be buried" in prompt
     assert "Previous discussion messages:" in prompt

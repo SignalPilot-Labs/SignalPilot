@@ -447,31 +447,28 @@ async def run_http_server(config: SlackPoCConfig) -> None:
     await server.serve()
 
 
-def create_http_app(config: SlackPoCConfig, slack: SlackApiClient | None = None) -> FastAPI:
+def register_http_routes(
+    app: FastAPI,
+    config: SlackPoCConfig,
+    *,
+    slack: SlackApiClient | None = None,
+    initialize_db_on_first_request: bool = False,
+) -> None:
     if not config.signing_secret:
         raise RuntimeError("SLACK_SIGNING_SECRET is required for HTTP Events mode")
 
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        yield
-        worker = app.state.worker
-        if worker is not None:
-            await worker.drain()
-        await app.state.slack.aclose()
-        await close_db()
-
-    app = FastAPI(title="SignalPilot Slack PoC", lifespan=lifespan)
-    app.state.slack = slack or SlackApiClient(config.bot_token, config.app_token)
-    app.state.worker = None
-    app.state.worker_lock = asyncio.Lock()
+    app.state.slack_poc_client = slack or SlackApiClient(config.bot_token, config.app_token)
+    app.state.slack_poc_worker = None
+    app.state.slack_poc_worker_lock = asyncio.Lock()
 
     async def ensure_worker() -> SlackPoCWorker:
-        if app.state.worker is not None:
-            return app.state.worker
-        async with app.state.worker_lock:
-            if app.state.worker is None:
-                await init_db()
-                auth = await app.state.slack.auth_test()
+        if app.state.slack_poc_worker is not None:
+            return app.state.slack_poc_worker
+        async with app.state.slack_poc_worker_lock:
+            if app.state.slack_poc_worker is None:
+                if initialize_db_on_first_request:
+                    await init_db()
+                auth = await app.state.slack_poc_client.auth_test()
                 bot_user_id = config.bot_user_id or _string(auth.get("user_id"))
                 if not bot_user_id:
                     raise SlackApiError("Slack auth.test did not return bot user_id; set SLACK_BOT_USER_ID")
@@ -485,8 +482,12 @@ def create_http_app(config: SlackPoCConfig, slack: SlackApiClient | None = None)
                     allowed_channel_ids=config.allowed_channel_ids,
                     ack_text=config.ack_text,
                 )
-                app.state.worker = SlackPoCWorker(resolved_config, app.state.slack, get_session_factory())
-        return app.state.worker
+                app.state.slack_poc_worker = SlackPoCWorker(
+                    resolved_config,
+                    app.state.slack_poc_client,
+                    get_session_factory(),
+                )
+        return app.state.slack_poc_worker
 
     async def dispatch(payload: dict[str, Any]) -> None:
         try:
@@ -521,6 +522,19 @@ def create_http_app(config: SlackPoCConfig, slack: SlackApiClient | None = None)
 
         return JSONResponse({"ok": True, "ignored": True})
 
+
+def create_http_app(config: SlackPoCConfig, slack: SlackApiClient | None = None) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        yield
+        worker = app.state.slack_poc_worker
+        if worker is not None:
+            await worker.drain()
+        await app.state.slack_poc_client.aclose()
+        await close_db()
+
+    app = FastAPI(title="SignalPilot Slack PoC", lifespan=lifespan)
+    register_http_routes(app, config, slack=slack, initialize_db_on_first_request=True)
     return app
 
 

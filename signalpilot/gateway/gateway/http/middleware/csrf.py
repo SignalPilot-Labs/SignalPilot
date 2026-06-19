@@ -27,6 +27,7 @@ _EXEMPT_PREFIXES: tuple[str, ...] = (
     "/git/",            # Basic Auth, no cookie
     "/notebook/",       # sp_nb_<sid> cookie, not __session
     "/api/webhooks/",   # Reserved for future signed-body webhooks (Stripe/Clerk etc.)
+    "/slack/events",    # Slack signed-body webhook
 )
 
 _FORBIDDEN_BODY = '{"detail":"Forbidden."}'

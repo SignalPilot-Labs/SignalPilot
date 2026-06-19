@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.db.models import GatewayAnalysisTrail
@@ -152,12 +152,14 @@ async def resolve_trail(
     notebook_path: str | None = None,
 ) -> AnalysisTrailInfo | None:
     q = select(GatewayAnalysisTrail).where(GatewayAnalysisTrail.org_id == org_id)
-    if thread_id:
-        q = q.where(GatewayAnalysisTrail.thread_id == thread_id)
-    if notebook_path:
-        q = q.where(GatewayAnalysisTrail.notebook_path == notebook_path)
     if not thread_id and not notebook_path:
         return None
+    conditions = []
+    if thread_id:
+        conditions.append(GatewayAnalysisTrail.thread_id == thread_id)
+    if notebook_path:
+        conditions.append(GatewayAnalysisTrail.notebook_path == notebook_path)
+    q = q.where(or_(*conditions))
     q = q.order_by(GatewayAnalysisTrail.updated_at.desc()).limit(1)
     row = (await session.execute(q)).scalar_one_or_none()
     return _to_info(row) if row else None

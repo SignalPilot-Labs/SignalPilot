@@ -97,6 +97,9 @@ async def test_start_comment_is_posted_before_notebook_call_failure(monkeypatch:
             public_base_url="https://app.test/notebook/session-1",
         )
 
+    async def seed_trail(*args, **kwargs):
+        calls.append("seed_trail")
+
     monkeypatch.setattr(notion_client, "list_comments", list_comments)
     monkeypatch.setattr(notion_client, "query_request_page_by_source", query_request_page_by_source)
     monkeypatch.setattr(notion_client, "create_request_page", create_request_page)
@@ -108,6 +111,7 @@ async def test_start_comment_is_posted_before_notebook_call_failure(monkeypatch:
     monkeypatch.setattr(notion_client, "extract_comment_text", lambda _comment: "Hello")
     monkeypatch.setattr(notion_analysis, "resolve_configured_analysis_route", resolve_route)
     monkeypatch.setattr(notion_analysis, "ensure_analysis_notebook_session", ensure_runtime)
+    monkeypatch.setattr(notion_analysis, "upsert_analysis_trail_seed", seed_trail)
     monkeypatch.setattr(notion_analysis, "_call_notebook", call_notebook)
 
     with pytest.raises(RuntimeError, match="notebook unavailable"):

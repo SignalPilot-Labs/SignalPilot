@@ -308,6 +308,17 @@ class SlackPoCWorker:
                     branch=route.branch,
                     credential_user_id=analysis_user_id,
                 )
+                await notebook_analysis.upsert_analysis_trail_seed(
+                    db,
+                    org_id=self.config.org_id,
+                    route=route,
+                    runtime=runtime,
+                    headline=notebook_analysis._headline_from_prompt(request.text),
+                    source_url=request.source_url,
+                    source_thread_id=discussion_id,
+                    source_request_id=request.event_id,
+                    analysis_user_id=analysis_user_id,
+                )
 
             start = await self._start_analysis(runtime, request, previous_messages, analysis_user_id, route)
             trail_url = notebook_analysis._public_signalpilot_url(_string(start.get("trailUrl")), runtime)

@@ -326,6 +326,46 @@ def _headline_from_prompt(prompt: str) -> str:
     return first_line[:87] + "..." if len(first_line) > 90 else first_line
 
 
+def _analysis_notebook_path(source: str, headline: str, request_id: str) -> str:
+    source_path = re.sub(r"[^a-zA-Z0-9_-]+", "-", source.strip().lower()).strip("-") or "analysis"
+    filename_slug = re.sub(r"[^a-zA-Z0-9]+", "-", headline.strip().lower()).strip("-")[:80] or "analysis-request"
+    return f"notebooks/{source_path}/{filename_slug}-{request_id[-6:]}.py"
+
+
+async def upsert_analysis_trail_seed(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    route: AnalysisRoute,
+    runtime: NotebookRuntime,
+    headline: str,
+    source_url: str,
+    source_thread_id: str,
+    source_request_id: str | None = None,
+    analysis_user_id: str | None = None,
+) -> None:
+    """Create durable trail metadata before the notebook runtime starts work."""
+    await analysis_trails.upsert_trail(
+        db,
+        org_id=org_id,
+        trail=AnalysisTrailUpsert(
+            source=route.source,
+            request_id=route.request_id,
+            thread_id=f"session-{route.request_id}",
+            runtime_session_id=runtime.session_id,
+            project_id=route.project_id,
+            branch=route.branch,
+            default_branch=route.default_branch,
+            notebook_path=_analysis_notebook_path(route.source, headline, route.request_id),
+            status="active",
+            source_url=source_url,
+            source_thread_id=source_thread_id,
+            source_request_id=source_request_id,
+            analysis_user_id=analysis_user_id or route.analysis_user_id,
+        ),
+    )
+
+
 def _request_page_url(page_id: str) -> str:
     return f"https://www.notion.so/{notion_client.normalize_id(page_id)}"
 
@@ -870,6 +910,17 @@ async def process_routed_comment_event(
             project_id=route.project_id,
             branch=route.branch,
             credential_user_id=routed.installation.user_id,
+        )
+        await upsert_analysis_trail_seed(
+            db,
+            org_id=routed.installation.org_id,
+            route=route,
+            runtime=runtime,
+            headline=headline,
+            source_url=source_url,
+            source_thread_id=discussion_id,
+            source_request_id=request_page_id,
+            analysis_user_id=routed.installation.user_id,
         )
         start = await _call_notebook(
             runtime,

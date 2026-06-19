@@ -85,3 +85,40 @@ async def test_analysis_trail_upsert_update_and_resolve(db_session) -> None:
     assert by_path is not None
     assert by_path.id == created.id
     assert cross_org is None
+
+
+@pytest.mark.asyncio
+async def test_analysis_trail_resolve_uses_session_or_file_when_both_present(db_session) -> None:
+    created = await upsert_trail(
+        db_session,
+        org_id="org-a",
+        trail=AnalysisTrailUpsert(
+            source="slack",
+            request_id="slack-req-2",
+            thread_id="session-slack-req-2",
+            runtime_session_id="runtime-2",
+            project_id="project-1",
+            branch="analysis/slack/slack-req-2-hello",
+            default_branch="main",
+            notebook_path="notebooks/slack/hello-f256fe.py",
+            source_url="https://slack.test/archives/C1/p20",
+        ),
+    )
+
+    by_thread_even_with_stale_path = await resolve_trail(
+        db_session,
+        org_id="org-a",
+        thread_id="session-slack-req-2",
+        notebook_path="notebooks/slack/stale-path.py",
+    )
+    by_path_even_with_stale_thread = await resolve_trail(
+        db_session,
+        org_id="org-a",
+        thread_id="session-slack-stale",
+        notebook_path="notebooks/slack/hello-f256fe.py",
+    )
+
+    assert by_thread_even_with_stale_path is not None
+    assert by_thread_even_with_stale_path.id == created.id
+    assert by_path_even_with_stale_thread is not None
+    assert by_path_even_with_stale_thread.id == created.id

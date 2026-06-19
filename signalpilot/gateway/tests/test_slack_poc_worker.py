@@ -216,6 +216,9 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
     async def upsert_trail(*args, **kwargs):
         events.append("upsert")
 
+    async def seed_trail(*args, **kwargs):
+        events.append("seed")
+
     async def update_trail(*args, **kwargs):
         events.append("update")
 
@@ -226,6 +229,7 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
 
     monkeypatch.setattr(worker_module.notebook_analysis, "resolve_analysis_route_for_defaults", resolve_route)
     monkeypatch.setattr(worker_module, "ensure_analysis_notebook_session", ensure_session)
+    monkeypatch.setattr(worker_module.notebook_analysis, "upsert_analysis_trail_seed", seed_trail)
     monkeypatch.setattr(worker_module.notebook_analysis, "upsert_analysis_trail_from_status", upsert_trail)
     monkeypatch.setattr(worker_module.notebook_analysis, "update_analysis_trail_from_status", update_trail)
     monkeypatch.setattr(worker_module.notebook_analysis, "_poll_analysis", poll_analysis)
@@ -270,6 +274,7 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
         "db_enter",
         "resolve_route",
         "ensure_session",
+        "seed",
         "db_exit",
         "start",
         "db_enter",

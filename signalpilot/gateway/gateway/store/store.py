@@ -361,6 +361,16 @@ class Store:
                 "xata_client_secret",
                 "xata_username",
                 "xata_password",
+                # Extras-only credential fields — PATCH-only changes must still rewrite extras_enc
+                "private_key",
+                "private_key_passphrase",
+                "motherduck_token",
+                "connection_timeout",
+                "query_timeout",
+                "keepalive_interval",
+                "dataset",
+                "location",
+                "maximum_bytes_billed",
             )
         )
         if needs_cred_rebuild:
@@ -386,7 +396,9 @@ class Store:
                 "status",
                 "last_schema_refresh",
                 "endorsements",
-                "location",
+                # NOTE: do NOT add 'location' here — it IS a valid ConnectionCreate kwarg;
+                # popping it wiped BQ location on every cred-rebuild PATCH after round-3
+                # from_extras backfill (round 4).
             ):
                 merged.pop(rm_key, None)
             try:

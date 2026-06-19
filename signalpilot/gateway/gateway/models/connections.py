@@ -62,6 +62,7 @@ def _validate_xata_field_shapes(
     region: str | None,
     branch: str | None,
     workspace: str | None,
+    xata_org: str | None,
     username: str | None,
     xata_api_url: str | None,
     xata_token_url: str | None,
@@ -84,6 +85,8 @@ def _validate_xata_field_shapes(
         raise ValueError("Xata 'branch' must match ^[A-Za-z0-9_.-]{1,64}$")
     if workspace is not None and not _XATA_WORKSPACE_RE.match(workspace):
         raise ValueError("Xata 'workspace' must match ^[A-Za-z0-9_-]{1,64}$")
+    if xata_org is not None and not _XATA_WORKSPACE_RE.match(xata_org):
+        raise ValueError("Xata 'xata_org' must match ^[A-Za-z0-9_-]{1,64}$")
     # username: no regex today — see docstring TODO above.
     if xata_api_url is not None:
         validate_xata_control_url(xata_api_url)
@@ -141,7 +144,7 @@ class ConnectionCreate(BaseModel):
     # tools. Auth is either the data-plane API key as a Bearer token (Xata Cloud) or
     # OIDC password grant (self-hosted dev). Secrets ride in extras_enc (encrypted).
     xata_api_url: str | None = Field(default=None, max_length=512)  # e.g. https://api.xata.io
-    xata_org: str | None = Field(default=None, max_length=128)  # control-plane org id
+    xata_org: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")  # control-plane org id
     xata_token_url: str | None = Field(default=None, max_length=512)  # OIDC token endpoint (self-hosted)
     xata_client_id: str | None = Field(default=None, max_length=128)
     xata_client_secret: str | None = Field(default=None, max_length=1024)
@@ -232,6 +235,7 @@ class ConnectionCreate(BaseModel):
             region=self.region,
             branch=self.branch,
             workspace=self.workspace,
+            xata_org=self.xata_org,
             username=None,  # no regex on xata_username today — see helper docstring
             xata_api_url=self.xata_api_url,
             xata_token_url=self.xata_token_url,
@@ -306,7 +310,7 @@ class ConnectionUpdate(BaseModel):
     region: str | None = Field(default=None, max_length=64)
     branch: str | None = Field(default=None, max_length=128)
     xata_api_url: str | None = Field(default=None, max_length=512)
-    xata_org: str | None = Field(default=None, max_length=128)
+    xata_org: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
     xata_token_url: str | None = Field(default=None, max_length=512)
     xata_client_id: str | None = Field(default=None, max_length=128)
     xata_client_secret: str | None = Field(default=None, max_length=1024)
@@ -337,6 +341,7 @@ class ConnectionUpdate(BaseModel):
             region=self.region,
             branch=self.branch,
             workspace=self.workspace,
+            xata_org=self.xata_org,
             username=None,  # no regex on xata_username today — see helper docstring
             xata_api_url=self.xata_api_url,
             xata_token_url=self.xata_token_url,

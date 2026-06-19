@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote as _url_quote
 
 import httpx
 
@@ -109,32 +110,32 @@ class XataControlClient:
 
     # ---- projects ----------------------------------------------------------
     async def list_projects(self) -> list[dict]:
-        data = await self._request("GET", f"/organizations/{self._cfg.org}/projects")
+        data = await self._request("GET", f"/organizations/{_url_quote(self._cfg.org, safe='')}/projects")
         return data.get("projects", [])
 
     async def create_project(self, name: str) -> dict:
         return await self._request(
-            "POST", f"/organizations/{self._cfg.org}/projects", json={"name": name}
+            "POST", f"/organizations/{_url_quote(self._cfg.org, safe='')}/projects", json={"name": name}
         )
 
     # ---- branches ----------------------------------------------------------
     async def list_branches(self, project_id: str) -> list[dict]:
         data = await self._request(
-            "GET", f"/organizations/{self._cfg.org}/projects/{project_id}/branches"
+            "GET", f"/organizations/{_url_quote(self._cfg.org, safe='')}/projects/{project_id}/branches"
         )
         return data.get("branches", [])
 
     async def get_branch(self, project_id: str, branch_id: str) -> dict:
         return await self._request(
             "GET",
-            f"/organizations/{self._cfg.org}/projects/{project_id}/branches/{branch_id}",
+            f"/organizations/{_url_quote(self._cfg.org, safe='')}/projects/{project_id}/branches/{branch_id}",
         )
 
     async def create_child_branch(self, project_id: str, name: str, parent_id: str) -> dict:
         """Instant copy-on-write branch from a parent."""
         return await self._request(
             "POST",
-            f"/organizations/{self._cfg.org}/projects/{project_id}/branches",
+            f"/organizations/{_url_quote(self._cfg.org, safe='')}/projects/{project_id}/branches",
             json={"name": name, "mode": "inherit", "parentID": parent_id},
         )
 
@@ -150,7 +151,7 @@ class XataControlClient:
     ) -> dict:
         return await self._request(
             "POST",
-            f"/organizations/{self._cfg.org}/projects/{project_id}/branches",
+            f"/organizations/{_url_quote(self._cfg.org, safe='')}/projects/{project_id}/branches",
             json={
                 "name": name,
                 "mode": "custom",
@@ -166,7 +167,7 @@ class XataControlClient:
     async def delete_branch(self, project_id: str, branch_id: str) -> None:
         await self._request(
             "DELETE",
-            f"/organizations/{self._cfg.org}/projects/{project_id}/branches/{branch_id}",
+            f"/organizations/{_url_quote(self._cfg.org, safe='')}/projects/{project_id}/branches/{branch_id}",
         )
 
     async def branch_connection_string(self, project_id: str, branch_id: str) -> str | None:

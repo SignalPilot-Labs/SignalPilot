@@ -48,7 +48,7 @@ export const DbtConsolePanel: React.FC<DbtConsolePanelProps> = ({
   ];
 
   return (
-    <div className="flex flex-col h-full bg-[#050505]">
+    <div className="flex flex-col h-full bg-background">
       {/* Tab bar */}
       <div className="flex items-center border-b border-border px-2 shrink-0">
         {tabs.map((tab) => (

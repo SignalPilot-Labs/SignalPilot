@@ -774,7 +774,7 @@ const SpFileComponent = ({ file }: { file: SpFile }) => {
 
   return (
     <a
-      className="py-1.5 px-4 hover:bg-[#111111] transition-all duration-200 cursor-pointer group relative flex gap-4 items-center"
+      className="py-1.5 px-4 hover:bg-muted transition-all duration-200 cursor-pointer group relative flex gap-4 items-center"
       key={file.path}
       href={href.toString()}
       target="_self"

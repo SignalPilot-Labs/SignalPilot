@@ -38,17 +38,17 @@ table.dataframe thead {
 
 .markdown table tbody tr:nth-child(odd),
 table.dataframe tbody tr:nth-child(odd) {
-  background: #0a0a0a;
+  background: var(--lime-2);
 }
 
 .markdown table tbody tr:nth-child(even),
 table.dataframe tbody tr:nth-child(even) {
-  background: #050505;
+  @apply bg-card;
 }
 
 .markdown table tbody tr:hover,
 table.dataframe tbody tr:hover {
-  background: #111111;
+  background: var(--yellow-4);
 }
 
 .markdown table tr,

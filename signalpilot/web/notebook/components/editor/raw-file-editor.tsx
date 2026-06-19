@@ -364,8 +364,8 @@ export const RawFileEditor: React.FC<RawFileEditorProps> = ({ filePath }) => {
               </Suspense>
             </div>
           </Panel>
-          <PanelResizeHandle className="group relative h-3 flex items-center justify-center cursor-row-resize bg-[#080808] hover:bg-[#111111] transition-colors border-y border-border">
-            <div className="w-12 h-1 rounded-full bg-[#333333] group-hover:bg-[#555555] group-active:bg-emerald-500/50 transition-colors" />
+          <PanelResizeHandle className="group relative h-3 flex items-center justify-center cursor-row-resize bg-background hover:bg-muted transition-colors border-y border-border">
+            <div className="w-12 h-1 rounded-full bg-muted-foreground/40 group-hover:bg-muted-foreground/60 group-active:bg-emerald-500/50 transition-colors" />
           </PanelResizeHandle>
           <Panel defaultSize={40} minSize={10}>
             <DbtConsolePanel
@@ -414,7 +414,7 @@ export const RawFileEditor: React.FC<RawFileEditorProps> = ({ filePath }) => {
         </div>
       </div>
       {isMarkdown && (
-        <div className="flex items-center gap-0 border-b border-border shrink-0 bg-[#080808] px-4">
+        <div className="flex items-center gap-0 border-b border-border shrink-0 bg-background px-4">
           <button
             type="button"
             className={cn(

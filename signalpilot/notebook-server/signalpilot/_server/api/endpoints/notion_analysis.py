@@ -273,38 +273,30 @@ def _refresh_trail_url(
 
 
 def _notebook_template(body: StartNotionAnalysisRequest) -> str:
-    prompt_json = json.dumps(body.prompt)
-    headline_json = json.dumps(body.headline)
-    source_json = json.dumps(body.source_url)
-    previous_json = json.dumps(body.previous_messages)
+    request_context = f"""# {body.prompt}
+
+**Source request:** {body.source_url}
+
+**Requester prompt:**
+
+{body.prompt}
+"""
+    request_context_json = json.dumps(request_context)
     return f'''import signalpilot as sp
 
 __generated_with = "0.1.0"
 app = sp.App()
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _():
     import signalpilot as sp
-
-    request_headline = {headline_json}
-    source_url = {source_json}
-    user_prompt = {prompt_json}
-    previous_messages = {previous_json}
-    sp.md(f"""
-    # {{request_headline}}
-
-    **Source request:** {{source_url}}
-
-    **Requester prompt:**
-
-    {{user_prompt}}
-    """)
-    return previous_messages, request_headline, source_url, sp, user_prompt
+    sp.md({request_context_json})
 
 
-@app.cell
-def _(sp):
+@app.cell(hide_code=True)
+def _():
+    import signalpilot as sp
     sp.md("""
     ## Executive Summary and Explorations
 
@@ -312,8 +304,9 @@ def _(sp):
     """)
 
 
-@app.cell
-def _(sp):
+@app.cell(hide_code=True)
+def _():
+    import signalpilot as sp
     sp.md("""
     ## Evidence Trace
 
@@ -2065,12 +2058,18 @@ Required workflow:
    they are built from notebook-executed SDK calls, for example
    `pd.DataFrame(db.query("SELECT ..."))`.
 3. Keep the notebook presentation compact and evidence-first:
-   - Preserve the first request context cell.
+   - Preserve the first request context cell as a code-hidden markdown-only cell.
+     Its H1 title must be the full user request, not the shortened `headline`.
+     Do not add request metadata variables or executable analysis code to this
+     first cell.
    - Replace the "Executive Summary and Explorations" cell with the final
-     answer summary plus a short "Gotchas / Caveats" subsection.
-   - Replace the "Evidence Trace" cell with short branch-style labels for the
-     major claims, then place the supporting code/query cells directly beneath
-     the relevant branch.
+     answer summary plus a short "Gotchas / Caveats" subsection. Keep it as a
+     code-hidden markdown cell and do not rename this heading.
+   - Replace the "Evidence Trace" cell with the first branch-style claim, then
+     interleave supporting code/query cells directly beneath that branch. Add the
+     next branch heading only when its supporting cells immediately follow. Do
+     not leave "Evidence Trace" as a table of contents with all branches listed
+     before the evidence.
    - Do not front-load long prose sections before the queries. The reader should
      see each top-line result, then the query/data/checks that support it.
    For every material claim, build a visible evidence branch:
@@ -2107,8 +2106,8 @@ Required workflow:
    answer must live in the notebook.
 8. Before returning JSON, update the notebook's "Executive Summary and
    Explorations" cell with the finalAnswer content and the gotchas/caveats
-   bullets. Keep detailed query trace in the "Evidence Trace" branch cells
-   instead of duplicating it all in the summary.
+   bullets. Keep the exact heading text. Keep detailed query trace in the
+   "Evidence Trace" branch cells instead of duplicating it all in the summary.
 
 Completion checklist before final JSON:
 - The live notebook contains an SDK setup cell with `sp.connections()` and
@@ -2133,6 +2132,9 @@ Completion checklist before final JSON:
 - The top of the notebook remains readable: request context, executive summary
   with caveats, then evidence branches. Queries must not be buried after a long
   narrative-only audit trail.
+- The "Evidence Trace" section is not just a branch list. Each branch appears as
+  close as possible to the exact query, preview, validation output, or chart that
+  supports it.
 
 User request:
 {body.prompt}

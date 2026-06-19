@@ -41,8 +41,14 @@ def test_notebook_template_uses_compact_three_cell_scaffold() -> None:
     template = notion_analysis._notebook_template(_body())
 
     assert template.count("@app.cell") == 3
-    assert "**Source request:** {source_url}" in template
-    assert "return previous_messages, request_headline, source_url, sp, user_prompt" in template
+    assert template.count("@app.cell(hide_code=True)") == 3
+    assert "# can you do an analysis of our dev db?" in template
+    assert "**Source request:** https://slack.test/archives/C/p123" in template
+    assert "request_headline =" not in template
+    assert "source_url =" not in template
+    assert "user_prompt =" not in template
+    assert "previous_messages =" not in template
+    assert "request_title =" not in template
     assert "## Executive Summary and Explorations" in template
     assert "## Evidence Trace" in template
     assert "## Scouting and context notes" not in template
@@ -55,10 +61,15 @@ def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
     prompt = notion_analysis._analysis_prompt(_record(), _body())
 
     assert "evidence-first" in prompt
+    assert "not the shortened `headline`" in prompt
+    assert "markdown-only cell" in prompt
+    assert "Do not add request metadata variables" in prompt
+    assert "do not rename this heading" in prompt
     assert "visible SQL/query code cell" in prompt
     assert "df.head()" in prompt
     assert "validation checks" in prompt
     assert "plain markdown trace" in prompt
+    assert "not just a branch list" in prompt
     assert "Mermaid" not in prompt
     assert "Queries must not be buried" in prompt
     assert "Previous discussion messages:" in prompt

@@ -163,6 +163,80 @@ async def test_worker_uses_notion_installation_user_when_user_id_unset(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+
+    class SessionContext:
+        async def __aenter__(self):
+            events.append("db_enter")
+            return "db"
+
+        async def __aexit__(self, exc_type, exc, tb):
+            events.append("db_exit")
+            return False
+
+    def session_factory():
+        return SessionContext()
+
+    async def ensure_session(db, org_id: str, user_id: str):
+        assert db == "db"
+        assert org_id == "org-1"
+        assert user_id == "user-1"
+        events.append("ensure_session")
+        return worker_module.NotebookRuntime(
+            session_id="session-1",
+            internal_base_url="http://notebook.internal",
+            public_base_url="https://app.test/notebook/session-1",
+        )
+
+    async def poll_analysis(*args, **kwargs):
+        events.append("poll")
+        assert events.index("db_exit") < events.index("start")
+        return {"status": "Done", "notionComment": "Done", "confidenceScore": 1.0}
+
+    monkeypatch.setattr(worker_module, "ensure_notion_notebook_session", ensure_session)
+    monkeypatch.setattr(worker_module.notebook_analysis, "_poll_analysis", poll_analysis)
+    monkeypatch.setattr(worker_module.notebook_analysis, "_public_signalpilot_url", lambda url, runtime: url)
+    monkeypatch.setattr(worker_module.notebook_analysis, "_with_public_chart_urls", lambda status, runtime: status)
+
+    slack = AsyncMock(spec=SlackApiClient)
+    slack.thread_messages.return_value = []
+    worker = SlackPoCWorker(
+        SlackPoCConfig(
+            bot_token="xoxb-test",
+            app_token="xapp-test",
+            org_id="org-1",
+            user_id="user-1",
+        ),
+        slack,
+        session_factory,
+    )
+
+    async def start_analysis(*args, **kwargs):
+        events.append("start")
+        assert events[-2] == "db_exit"
+        return {"requestId": "req-1", "trailUrl": "https://app.test/notebook/session-1"}
+
+    monkeypatch.setattr(worker, "_start_analysis", start_analysis)
+
+    await worker._process_request(
+        SlackRequest(
+            event_id="Ev1",
+            team_id="T1",
+            channel_id="C1",
+            user_id="U1",
+            text="analyze revenue",
+            event_ts="1.0",
+            thread_ts="1.0",
+            source_url="https://slack.test/archives/C1/p10",
+        )
+    )
+
+    assert events == ["db_enter", "ensure_session", "db_exit", "start", "poll"]
+    assert slack.post_message.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_worker_uploads_chart_images_as_slack_thread_files(monkeypatch: pytest.MonkeyPatch) -> None:
     slack = AsyncMock(spec=SlackApiClient)
     slack.fetch_bytes.return_value = (b"png-bytes", "image/png")

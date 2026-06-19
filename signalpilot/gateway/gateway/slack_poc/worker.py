@@ -275,15 +275,16 @@ class SlackPoCWorker:
             async with self.session_factory() as db:
                 analysis_user_id = await self._analysis_user_id(db)
                 runtime = await ensure_notion_notebook_session(db, self.config.org_id, analysis_user_id)
-                start = await self._start_analysis(runtime, request, previous_messages, analysis_user_id)
-                trail_url = notebook_analysis._public_signalpilot_url(_string(start.get("trailUrl")), runtime)
-                status = await notebook_analysis._poll_analysis(
-                    _string(start["requestId"]),
-                    runtime,
-                    self.config.org_id,
-                    analysis_user_id,
-                )
-                slack_status = notebook_analysis._with_public_chart_urls(status, runtime)
+
+            start = await self._start_analysis(runtime, request, previous_messages, analysis_user_id)
+            trail_url = notebook_analysis._public_signalpilot_url(_string(start.get("trailUrl")), runtime)
+            status = await notebook_analysis._poll_analysis(
+                _string(start["requestId"]),
+                runtime,
+                self.config.org_id,
+                analysis_user_id,
+            )
+            slack_status = notebook_analysis._with_public_chart_urls(status, runtime)
             await self.slack.post_message(
                 channel=request.channel_id,
                 thread_ts=request.thread_ts,

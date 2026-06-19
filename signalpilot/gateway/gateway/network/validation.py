@@ -306,6 +306,25 @@ def validate_connection_params(
     validate_connection_host(target_host)
 
 
+def validate_xata_control_url(url: str) -> None:
+    """Reject non-https or SSRF-risky xata_api_url / xata_token_url.
+
+    https scheme + non-empty hostname are enforced in any mode. The SSRF
+    deny-list (loopback / link-local / private / IMDS) is applied in cloud
+    mode only, matching validate_connection_host's cloud-mode gating.
+    """
+    from gateway.runtime.mode import is_cloud_mode
+
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        raise ValueError("xata_api_url/xata_token_url must use https://")
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("xata_api_url/xata_token_url must include a valid hostname")
+    if is_cloud_mode():
+        validate_connection_host(hostname)
+
+
 def log_startup_warning() -> None:
     """Log a warning at startup if SP_ALLOW_PRIVATE_CONNECTIONS is set."""
     if _allow_private_connections():

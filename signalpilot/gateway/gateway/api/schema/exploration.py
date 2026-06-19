@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import HTTPException, Query
+from fastapi import HTTPException, Path, Query
+from pydantic import BaseModel, Field
 
 from gateway.api.deps import (
     StoreD,
@@ -23,6 +24,11 @@ from gateway.schema.utils import _infer_implicit_joins
 from gateway.security.scope_guard import RequireScope
 
 logger = logging.getLogger(__name__)
+
+
+class XataBranchCreate(BaseModel):
+    branch_name: str = Field(..., pattern=r"^[A-Za-z0-9_.-]{1,64}$")
+    parent_id: str = Field(..., pattern=r"^[A-Za-z0-9_-]{1,64}$")
 
 
 @router.get("/connections/{name}/schema/explore-table", dependencies=[RequireScope("read")])
@@ -453,7 +459,12 @@ async def _live_schema_for_conn_str(info, conn_str: str, extras: dict, name: str
 
 
 @router.get("/connections/{name}/xata/branch-diff", dependencies=[RequireScope("read")])
-async def get_xata_branch_diff(name: str, store: StoreD, base: str, compare: str):
+async def get_xata_branch_diff(
+    name: str,
+    store: StoreD,
+    base: str = Query(..., pattern=r"^[A-Za-z0-9_.-]{1,64}$"),
+    compare: str = Query(..., pattern=r"^[A-Za-z0-9_.-]{1,64}$"),
+):
     """Diff two Xata branches addressed from ONE registered workspace credential.
 
     The stored connection holds a single scoped API key; this swaps the `:branch`
@@ -479,11 +490,15 @@ async def get_xata_branch_diff(name: str, store: StoreD, base: str, compare: str
     }
 
 
-def _xata_control_from_extras(conn_str: str | None, extras: dict):
+def _xata_control_from_extras(conn_str: str | None, extras: dict) -> Any:
     """Build a XataControlClient from a connection's stored extras.
 
-    Falls back to using the data-plane API key (the connection-string password) as a
-    Bearer token when no OIDC token endpoint is configured (Xata Cloud).
+    OIDC mode: uses xata_token_url + dedicated OIDC credentials (xata_client_id,
+    xata_client_secret, xata_username, xata_password). The data-plane API key is
+    NOT used as the OIDC password.
+
+    Bearer mode: uses the data-plane API key (connection-string password) as the
+    Bearer token (Xata Cloud).
     """
     from urllib.parse import urlparse
 
@@ -492,46 +507,82 @@ def _xata_control_from_extras(conn_str: str | None, extras: dict):
     api_url = extras.get("xata_api_url")
     if not api_url:
         raise HTTPException(status_code=400, detail="xata_api_url not configured for this connection")
-    bearer = None
-    if not extras.get("xata_token_url") and conn_str:
-        bearer = urlparse(conn_str).password  # data-plane API key as Bearer (cloud)
-    cfg = XataControlConfig(
-        api_url=api_url,
-        org=extras.get("xata_org", "default-org"),
-        bearer_token=bearer,
-        token_url=extras.get("xata_token_url"),
-        client_id=extras.get("xata_client_id"),
-        client_secret=extras.get("xata_client_secret"),
-        username=extras.get("xata_workspace"),
-        password=urlparse(conn_str).password if conn_str else None,
-    )
+
+    token_url = extras.get("xata_token_url")
+    if token_url:
+        # OIDC mode — use dedicated OIDC credentials; do NOT use the data-plane key
+        client_id = extras.get("xata_client_id")
+        client_secret = extras.get("xata_client_secret")
+        username = extras.get("xata_username")
+        password = extras.get("xata_password")
+        if not (client_id and client_secret and username and password):
+            raise HTTPException(
+                status_code=400,
+                detail="xata_token_url is set but OIDC client_id/client_secret/username/password are not configured",
+            )
+        cfg = XataControlConfig(
+            api_url=api_url,
+            org=extras.get("xata_org", "default-org"),
+            bearer_token=None,
+            token_url=token_url,
+            client_id=client_id,
+            client_secret=client_secret,
+            username=username,
+            password=password,
+        )
+    else:
+        # Bearer mode — data-plane API key as Bearer token (Xata Cloud)
+        bearer = urlparse(conn_str).password if conn_str else None
+        cfg = XataControlConfig(
+            api_url=api_url,
+            org=extras.get("xata_org", "default-org"),
+            bearer_token=bearer,
+            token_url=None,
+            client_id=None,
+            client_secret=None,
+            username=None,
+            password=None,
+        )
     return XataControlClient(cfg)
 
 
 @router.get("/connections/{name}/xata/projects/{project}/branches", dependencies=[RequireScope("read")])
-async def list_xata_branches(name: str, project: str, store: StoreD):
+async def list_xata_branches(
+    name: str,
+    store: StoreD,
+    project: str = Path(..., pattern=r"^[A-Za-z0-9_-]{1,64}$"),
+):
     """List branches in a Xata project (control plane)."""
-    await require_connection(store, name)
+    info = await require_connection(store, name)
     conn_str = await store.get_connection_string(name)
     extras = await store.get_credential_extras(name)
-    client = _xata_control_from_extras(conn_str, extras)
     try:
-        return {"branches": await client.list_branches(project)}
+        async with _xata_control_from_extras(conn_str, extras) as client:
+            return {"branches": await client.list_branches(project)}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Xata control plane error: {e}")
+        raise HTTPException(status_code=502, detail=sanitize_db_error(str(e), info.db_type))
 
 
 @router.post("/connections/{name}/xata/projects/{project}/branches", dependencies=[RequireScope("write")])
-async def create_xata_branch(name: str, project: str, store: StoreD, branch_name: str, parent_id: str):
+async def create_xata_branch(
+    name: str,
+    store: StoreD,
+    body: XataBranchCreate,
+    project: str = Path(..., pattern=r"^[A-Za-z0-9_-]{1,64}$"),
+):
     """Create an instant copy-on-write branch from a parent (control plane, write scope)."""
-    await require_connection(store, name)
+    info = await require_connection(store, name)
     conn_str = await store.get_connection_string(name)
     extras = await store.get_credential_extras(name)
-    client = _xata_control_from_extras(conn_str, extras)
     try:
-        return await client.create_child_branch(project, branch_name, parent_id)
+        async with _xata_control_from_extras(conn_str, extras) as client:
+            return await client.create_child_branch(project, body.branch_name, body.parent_id)
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Xata control plane error: {e}")
+        raise HTTPException(status_code=502, detail=sanitize_db_error(str(e), info.db_type))
 
 
 @router.get("/connections/{name}/schema/refresh-status", dependencies=[RequireScope("read")])

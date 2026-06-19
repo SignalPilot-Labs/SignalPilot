@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import re
 import time
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ._helpers import _validate_string_list
+
+_XATA_REGION_RE = re.compile(r"^[a-z0-9-]{1,32}$")
+_XATA_BRANCH_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+_XATA_WORKSPACE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 class DBType(str, Enum):  # noqa: UP042 — (str,Enum) keeps str(X.A)=='X.A'; StrEnum returns 'A' and breaks f-string/log output
@@ -50,6 +55,43 @@ class SSLConfig(BaseModel):
     ca_cert: str | None = Field(default=None, max_length=32768)  # PEM-encoded CA certificate
     client_cert: str | None = Field(default=None, max_length=32768)  # PEM-encoded client certificate
     client_key: str | None = Field(default=None, max_length=32768)  # PEM-encoded client private key
+
+
+def _validate_xata_field_shapes(
+    *,
+    region: str | None,
+    branch: str | None,
+    workspace: str | None,
+    xata_org: str | None,
+    username: str | None,
+    xata_api_url: str | None,
+    xata_token_url: str | None,
+) -> None:
+    """Validate per-field shape rules (regex + SSRF). Raises ValueError.
+
+    Only checks fields that are not None. Does NOT enforce required-field
+    or cross-field (OIDC consistency) rules — those depend on the merged
+    record and live in the model_validator (Create) or route (Update).
+
+    NOTE: username has no regex validation today; add a pattern and re-enable
+    when a suitable constraint is agreed on.
+    """
+    # Lazy import to preserve existing import-cycle avoidance pattern.
+    from gateway.network.validation import validate_xata_control_url
+
+    if region is not None and not _XATA_REGION_RE.match(region):
+        raise ValueError("Xata 'region' must match ^[a-z0-9-]{1,32}$")
+    if branch is not None and not _XATA_BRANCH_RE.match(branch):
+        raise ValueError("Xata 'branch' must match ^[A-Za-z0-9_.-]{1,64}$")
+    if workspace is not None and not _XATA_WORKSPACE_RE.match(workspace):
+        raise ValueError("Xata 'workspace' must match ^[A-Za-z0-9_-]{1,64}$")
+    if xata_org is not None and not _XATA_WORKSPACE_RE.match(xata_org):
+        raise ValueError("Xata 'xata_org' must match ^[A-Za-z0-9_-]{1,64}$")
+    # username: no regex today — see docstring TODO above.
+    if xata_api_url is not None:
+        validate_xata_control_url(xata_api_url)
+    if xata_token_url is not None:
+        validate_xata_control_url(xata_token_url)
 
 
 class ConnectionCreate(BaseModel):
@@ -102,10 +144,12 @@ class ConnectionCreate(BaseModel):
     # tools. Auth is either the data-plane API key as a Bearer token (Xata Cloud) or
     # OIDC password grant (self-hosted dev). Secrets ride in extras_enc (encrypted).
     xata_api_url: str | None = Field(default=None, max_length=512)  # e.g. https://api.xata.io
-    xata_org: str | None = Field(default=None, max_length=128)  # control-plane org id
+    xata_org: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")  # control-plane org id
     xata_token_url: str | None = Field(default=None, max_length=512)  # OIDC token endpoint (self-hosted)
     xata_client_id: str | None = Field(default=None, max_length=128)
     xata_client_secret: str | None = Field(default=None, max_length=1024)
+    xata_username: str | None = Field(default=None, max_length=128)   # OIDC user
+    xata_password: str | None = Field(default=None, max_length=1024)  # OIDC password (NOT the data-plane API key)
     # ─── Snowflake key-pair auth ───────────────────────────────────
     private_key: str | None = Field(default=None, max_length=16384)  # PEM-encoded private key
     private_key_passphrase: str | None = Field(default=None, max_length=1024)
@@ -175,6 +219,60 @@ class ConnectionCreate(BaseModel):
     org_id: str | None = Field(default=None, max_length=100)
     byok_key_alias: str | None = Field(default=None, max_length=200, pattern=r"^[a-zA-Z0-9_-]+$")
 
+    @model_validator(mode="after")
+    def validate_xata_fields(self) -> ConnectionCreate:
+        if self.db_type != DBType.xata:
+            return self
+
+        # region and database are required
+        if not self.region or not self.region.strip():
+            raise ValueError("Xata connections require both 'region' and 'database'")
+        if not self.database or not self.database.strip():
+            raise ValueError("Xata connections require both 'region' and 'database'")
+
+        # Per-field shape checks (regex + SSRF).
+        _validate_xata_field_shapes(
+            region=self.region,
+            branch=self.branch,
+            workspace=self.workspace,
+            xata_org=self.xata_org,
+            username=None,  # no regex on xata_username today — see helper docstring
+            xata_api_url=self.xata_api_url,
+            xata_token_url=self.xata_token_url,
+        )
+
+        # OIDC / control-plane consistency (cross-field; full record is known here).
+        if self.xata_token_url:
+            missing = [
+                f for f, v in [
+                    ("xata_client_id", self.xata_client_id),
+                    ("xata_client_secret", self.xata_client_secret),
+                    ("xata_username", self.xata_username),
+                    ("xata_password", self.xata_password),
+                ]
+                if not v
+            ]
+            if missing:
+                raise ValueError(
+                    f"xata_token_url is set but the following OIDC fields are missing: {', '.join(missing)}"
+                )
+        else:
+            oidc_only = [
+                f for f, v in [
+                    ("xata_client_id", self.xata_client_id),
+                    ("xata_client_secret", self.xata_client_secret),
+                    ("xata_username", self.xata_username),
+                    ("xata_password", self.xata_password),
+                ]
+                if v
+            ]
+            if oidc_only:
+                raise ValueError(
+                    f"OIDC fields {', '.join(oidc_only)} are set but xata_token_url is not"
+                )
+
+        return self
+
 
 class ConnectionUpdate(BaseModel):
     """Partial update for an existing connection. Only provided fields are changed."""
@@ -207,6 +305,17 @@ class ConnectionUpdate(BaseModel):
     tags: list[str] | None = Field(default=None, max_length=50)
     schema_filter_include: list[str] | None = Field(default=None, max_length=100)
     schema_filter_exclude: list[str] | None = Field(default=None, max_length=100)
+    # ─── Xata-specific ────────────────────────────────────────────────
+    workspace: str | None = Field(default=None, max_length=128)
+    region: str | None = Field(default=None, max_length=64)
+    branch: str | None = Field(default=None, max_length=128)
+    xata_api_url: str | None = Field(default=None, max_length=512)
+    xata_org: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    xata_token_url: str | None = Field(default=None, max_length=512)
+    xata_client_id: str | None = Field(default=None, max_length=128)
+    xata_client_secret: str | None = Field(default=None, max_length=1024)
+    xata_username: str | None = Field(default=None, max_length=128)
+    xata_password: str | None = Field(default=None, max_length=1024)
 
     @field_validator("tags")
     @classmethod
@@ -221,6 +330,23 @@ class ConnectionUpdate(BaseModel):
         if v is None:
             return v
         return _validate_string_list(v, 256, "schema_filter")
+
+    @model_validator(mode="after")
+    def validate_xata_field_shapes(self) -> ConnectionUpdate:
+        # Per-field shape checks run whenever a Xata field is supplied, regardless
+        # of db_type (defense in depth: db_type may be omitted from the patch).
+        # OIDC consistency + required-field checks are enforced at the route layer
+        # against the merged record, where the existing DB row is available.
+        _validate_xata_field_shapes(
+            region=self.region,
+            branch=self.branch,
+            workspace=self.workspace,
+            xata_org=self.xata_org,
+            username=None,  # no regex on xata_username today — see helper docstring
+            xata_api_url=self.xata_api_url,
+            xata_token_url=self.xata_token_url,
+        )
+        return self
 
     schema_refresh_interval: int | None = Field(default=None, ge=60, le=86400)
     last_schema_refresh: float | None = None  # internal — set by scheduler

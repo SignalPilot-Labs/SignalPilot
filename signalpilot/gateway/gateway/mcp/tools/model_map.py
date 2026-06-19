@@ -13,7 +13,6 @@ generate_model_blueprint tool used.
 from __future__ import annotations
 
 import re
-from collections import Counter
 from pathlib import Path
 
 from gateway.errors.mcp import sanitize_mcp_error
@@ -180,7 +179,7 @@ def _classify_column(col_name, col_type, profile, exclude_set, has_yml_contract,
         else:
             warning = "all_null"
     if col_type.upper() == "VARCHAR" and not warning:
-        if cl.endswith("_date") or cl.endswith("_on") or cl.endswith("_at"):
+        if cl.endswith(("_date", "_on", "_at")):
             if any(w in cl for w in ("modified", "updated", "changed")):
                 warning = "varchar_audit_timestamp→keep_as_VARCHAR"
             elif any(w in cl for w in ("created", "order", "ship", "paid")):
@@ -291,15 +290,15 @@ async def _profile_pg_stats(connector, schema, key, columns, rows) -> dict[str, 
     """Postgres/Redshift: read null_frac + n_distinct from the catalog (no scan)."""
     sch, tbl = key.split(".", 1) if "." in key else ("public", key)
 
-    def lit(s):
-        return "'" + s.replace("'", "''") + "'"
-
     stats: dict[str, tuple] = {}
     try:
-        for r in await _q(connector,
-                          f"SELECT attname, null_frac, n_distinct FROM pg_stats "
-                          f"WHERE schemaname = {lit(sch)} AND tablename = {lit(tbl)}"):
-            stats[r[0]] = (r[1], r[2])
+        rows_res = await connector.execute(
+            "SELECT attname, null_frac, n_distinct FROM pg_stats "
+            "WHERE schemaname = $1 AND tablename = $2",
+            [sch, tbl],
+        )
+        for r in rows_res:
+            stats[r["attname"]] = (r["null_frac"], r["n_distinct"])
     except Exception:
         stats = {}
     out: dict[str, dict] = {}
@@ -324,8 +323,10 @@ async def _profile_exact(connector, schema, key, columns, sample_rows: int | Non
     Identifier quoting uses the connector's own dialect rules (double-quote /
     backtick / brackets), so this is correct on every supported database.
     """
-    qt = connector._quote_table(key)
-    qc = connector._quote_identifier
+    if sample_rows is not None:
+        sample_rows = int(sample_rows)
+    qt = connector.quote_table(key)
+    qc = connector.quote_identifier
     src = qt
     if sample_rows:
         cols_sel = ", ".join(qc(c) for c, _ in columns)
@@ -338,14 +339,20 @@ async def _profile_exact(connector, schema, key, columns, sample_rows: int | Non
         selects.append(f"COUNT({qc(c)}) AS nn{i}")
         selects.append(f"COUNT(DISTINCT {qc(c)}) AS d{i}")
     try:
-        row = (await _q(connector, f"SELECT {', '.join(selects)} FROM {src}"))[0]
+        # nosec B608 — no untrusted free-text in this query. Every interpolated
+        # token is either a dialect-quoted identifier (src/qt via _quote_table,
+        # columns via _quote_identifier — both escape embedded quotes), a
+        # generated alias (nn{i}/d{i}), or an internal int (sample_rows).
+        # Identifiers and COUNT(DISTINCT col) aggregates cannot be bind-parameterized.
+        res = await connector.execute(f"SELECT {', '.join(selects)} FROM {src}")  # nosec B608
+        row = res[0]
     except Exception:
         return {}
-    total = row[0]
+    total = row["total"]
     out: dict[str, dict] = {}
     for i, (c, _) in enumerate(columns):
-        nn = row[1 + i * 2] or 0
-        out[c] = {"null_count": total - nn, "distinct_count": row[2 + i * 2] or 0, "total": total}
+        nn = row[f"nn{i}"] or 0
+        out[c] = {"null_count": total - nn, "distinct_count": row[f"d{i}"] or 0, "total": total}
     return out
 
 
@@ -369,7 +376,7 @@ async def _profile_columns(connector, schema: _Schema, table_name: str,
     return await _profile_exact(connector, schema, key, columns, sample_rows=sample)
 
 
-async def _detect_lookups(connector, schema: _Schema) -> dict[str, tuple[str, str, str]]:
+def _detect_lookups(connector, schema: _Schema) -> dict[str, tuple[str, str, str]]:
     result: dict[str, tuple[str, str, str]] = {}
     all_tables = set(schema.tables())
     for tbl in sorted(all_tables):
@@ -398,9 +405,8 @@ async def _detect_lookups(connector, schema: _Schema) -> dict[str, tuple[str, st
 
 
 async def _detect_system_columns(connector, schema: _Schema) -> dict[str, dict]:
-    MODEL_PREFIXES = ("stg_", "dim_", "fact_", "int_", "obt_", "fct_", "solution__", "mart_", "auto_")
     col_stats: dict[str, dict] = {}
-    raw_tables = [t for t in schema.tables() if not any(t.lower().startswith(p) for p in MODEL_PREFIXES)]
+    raw_tables = [t for t in schema.tables() if not any(t.lower().startswith(p) for p in _MODEL_PREFIXES)]
     for tbl in raw_tables:
         cols = schema.columns(tbl)
         if not cols:
@@ -439,7 +445,7 @@ async def _map_model(connector, schema, work_dir, model_name, exclude_set) -> li
     refs = _extract_refs(sql_text)
     sources = _extract_sources(sql_text)
     driving_ref = _find_driving_ref(sql_text) if is_obt else None
-    lookups = await _detect_lookups(connector, schema)
+    lookups = _detect_lookups(connector, schema)
 
     out.append(f"## Column Map: {model_name}")
     out.append(f"YML contract: {len(yml_columns)} columns" if yml_columns
@@ -455,7 +461,7 @@ async def _map_model(connector, schema, work_dir, model_name, exclude_set) -> li
             if model_entity.startswith(pfx):
                 model_entity = model_entity[len(pfx):]
                 break
-        for lk_col, (lk_tbl, lk_key, lk_alias) in lookups.items():
+        for _lk_col, (lk_tbl, _lk_key, lk_alias) in lookups.items():
             for ref_name in refs:
                 ref_lower = ref_name.lower()
                 if ref_lower in (lk_tbl.lower(), f"stg_{lk_tbl.lower()}"):
@@ -737,7 +743,7 @@ async def analyze_project_db(connection_name: str) -> str:
             conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name
         ) as connector:
             schema = _Schema(await connector.get_schema(), conn_info.db_type)
-            lookups = await _detect_lookups(connector, schema)
+            lookups = _detect_lookups(connector, schema)
             staging = await _staging_gaps(schema)
             driving = await _driving_table_gaps(connector, schema)
     except Exception as e:

@@ -14,30 +14,30 @@ so this subclasses PostgresConnector. We only differ in:
 
 from __future__ import annotations
 
-from urllib.parse import urlparse, urlunparse
+import re
+from urllib.parse import quote, urlparse, urlunparse
 
 from .postgres import PostgresConnector
+
+_BRANCH_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 
 
 class XataConnector(PostgresConnector):
     def __init__(self):
         super().__init__()
-        self._xata_workspace: str | None = None
-        self._xata_region: str | None = None
-        self._xata_database: str | None = None
-        self._xata_branch: str | None = None
-
-    def _set_connector_specific_extras(self, extras: dict) -> None:
-        super()._set_connector_specific_extras(extras)
-        self._xata_workspace = extras.get("xata_workspace")
-        self._xata_region = extras.get("xata_region")
-        self._xata_database = extras.get("xata_database")
-        self._xata_branch = extras.get("xata_branch")
 
     async def connect(self, connection_string: str) -> None:
-        # Xata always requires TLS — force it even if the stored config omitted it.
+        """Connect to a Xata branch.
+
+        Xata uses a public CA chain; default to verify-full. Operators may
+        explicitly set mode = 'require' in ssl_config to opt into weaker
+        verification — but only if they set it on purpose, not by omission.
+        """
         if not self._ssl_config or not self._ssl_config.get("enabled"):
-            self._ssl_config = {"enabled": True, "mode": "require"}
+            self._ssl_config = {"enabled": True, "mode": "verify-full"}
+        elif self._ssl_config.get("mode") in (None, "require", "prefer", "allow"):
+            # Operator left TLS on but did not explicitly opt out of verification.
+            self._ssl_config["mode"] = "verify-full"
         await super().connect(connection_string)
 
     @staticmethod
@@ -49,6 +49,8 @@ class XataConnector(PostgresConnector):
         path's `:branch` segment is rewritten; the netloc (and the API key in it)
         is left untouched.
         """
+        if not _BRANCH_RE.match(branch):
+            raise ValueError("Invalid branch")
         parsed = urlparse(connection_string)
         db = parsed.path.rsplit(":", 1)[0] if ":" in parsed.path.lstrip("/") else parsed.path
-        return urlunparse(parsed._replace(path=f"{db}:{branch}"))
+        return urlunparse(parsed._replace(path=f"{db}:{quote(branch, safe='')}"))

@@ -174,13 +174,13 @@ class SlackApiClient:
         )
 
     async def thread_messages(self, *, channel: str, thread_ts: str) -> list[dict[str, Any]]:
-        data = await self._api("conversations.replies", {"channel": channel, "ts": thread_ts, "limit": 20})
+        data = await self._api_form("conversations.replies", {"channel": channel, "ts": thread_ts, "limit": "20"})
         messages = data.get("messages")
         return messages if isinstance(messages, list) else []
 
     async def permalink(self, *, channel: str, message_ts: str) -> str:
         try:
-            data = await self._api("chat.getPermalink", {"channel": channel, "message_ts": message_ts})
+            data = await self._api_form("chat.getPermalink", {"channel": channel, "message_ts": message_ts})
         except Exception as exc:
             LOGGER.info("Could not fetch Slack permalink for channel=%s ts=%s: %s", channel, message_ts, exc)
             return f"slack://channel/{channel}/p{message_ts.replace('.', '')}"
@@ -605,6 +605,8 @@ def load_config_from_env() -> SlackPoCConfig:
 
 
 def _apply_local_runtime_defaults() -> None:
+    if os.getenv("SP_DEPLOYMENT_MODE", "").lower() == "cloud":
+        return
     os.environ.setdefault("SP_DEPLOYMENT_MODE", "local")
     os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://signalpilot:changeme_dev_only@localhost:5601/signalpilot")
     os.environ.setdefault("SP_NOTEBOOK_DIRECT_URL", "http://localhost:2718")

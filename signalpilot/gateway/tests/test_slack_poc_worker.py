@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import time
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs
@@ -16,6 +17,7 @@ from gateway.slack_poc.worker import (
     SlackPoCConfig,
     SlackPoCWorker,
     SlackRequest,
+    _apply_local_runtime_defaults,
     _final_slack_text,
     _remove_bot_mention,
     create_http_app,
@@ -96,6 +98,39 @@ async def test_slack_upload_file_uses_form_encoded_external_upload_flow() -> Non
         "/chart",
         "/api/files.completeUploadExternal",
     ]
+
+
+@pytest.mark.asyncio
+async def test_slack_read_methods_use_form_encoded_payloads() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = parse_qs(request.content.decode("utf-8"))
+        if request.url.path.endswith("/chat.getPermalink"):
+            assert body["channel"] == ["C1"]
+            assert body["message_ts"] == ["1.0"]
+            return httpx.Response(200, json={"ok": True, "permalink": "https://slack.test/p1"})
+        if request.url.path.endswith("/conversations.replies"):
+            assert body["channel"] == ["C1"]
+            assert body["ts"] == ["1.0"]
+            assert body["limit"] == ["20"]
+            return httpx.Response(200, json={"ok": True, "messages": [{"text": "hello"}]})
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    slack = SlackApiClient("xoxb-test", "xapp-test", http_client=client)
+    try:
+        assert await slack.permalink(channel="C1", message_ts="1.0") == "https://slack.test/p1"
+        assert await slack.thread_messages(channel="C1", thread_ts="1.0") == [{"text": "hello"}]
+    finally:
+        await slack.aclose()
+
+
+def test_cloud_mode_does_not_apply_local_notebook_direct_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
+    monkeypatch.delenv("SP_NOTEBOOK_DIRECT_URL", raising=False)
+
+    _apply_local_runtime_defaults()
+
+    assert "SP_NOTEBOOK_DIRECT_URL" not in os.environ
 
 
 @pytest.mark.asyncio

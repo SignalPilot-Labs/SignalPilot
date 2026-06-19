@@ -89,6 +89,11 @@ def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
     assert "visible checks cell" in prompt
     assert "Do not write generic \"what I did\" sections" in prompt
     assert "Do not separate a finding from" in prompt
+    assert "Example branch shape to imitate" in prompt
+    assert "Completed GBP transfer revenue was concentrated in FX margin" in prompt
+    assert "q1_gbp_revenue_df = pd.DataFrame(db.query" in prompt
+    assert "q1_gbp_revenue_df.head(10)" in prompt
+    assert "monthly_revenue_chart" in prompt
     assert "head of\n     the joined table/query result" in prompt
     assert "not just a branch list" in prompt
     assert "finding explanation, exact query, data head/preview" in prompt

@@ -2096,6 +2096,26 @@ Required workflow:
      duplicates, freshness checks, and reconciliation totals.
    Do not write generic "what I did" sections. Do not separate a finding from
    the query and data head that support it.
+
+   Example branch shape to imitate:
+   - hidden-code markdown cell:
+     `### Finding: Completed GBP transfer revenue was concentrated in FX margin`
+     `Revenue came mostly from FX margin rather than explicit transfer fees for
+     completed Q1 transfers. The next query joins transfers to customers,
+     applies the status/date/customer-currency filters, and calculates both
+     components.`
+   - visible query cell:
+     `q1_gbp_revenue_df = pd.DataFrame(db.query("SELECT ... FROM ... JOIN ...
+     WHERE c.currency = 'GBP' AND t.status = 'COMPLETED' AND t.created_at >=
+     '2026-01-01' AND t.created_at < '2026-04-01'"))`
+   - visible data preview cell:
+     `q1_gbp_revenue_df.head(10)`
+   - visible visual cell when useful:
+     `monthly_revenue_chart`
+   - visible checks cell:
+     `print("rows", len(q1_gbp_revenue_df)); print("date range",
+     q1_gbp_revenue_df["created_at"].min(),
+     q1_gbp_revenue_df["created_at"].max())`
 4. Add charts when the question involves comparison, ranking, trend,
    distribution, or contribution analysis. Build charts from notebook-computed
    DataFrames only, never from hand-entered MCP output. Prefer 1-3 focused

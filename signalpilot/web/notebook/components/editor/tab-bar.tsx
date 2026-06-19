@@ -32,7 +32,7 @@ export const TabBar: React.FC = () => {
   if (tabs.length === 0) {return null;}
 
   return (
-    <div className="flex items-center border-b border-border bg-[#080808] overflow-x-auto shrink-0">
+    <div className="flex items-center border-b border-border bg-card overflow-x-auto shrink-0">
       {tabs.map((tab) => (
         <TabItem
           key={tab.id}

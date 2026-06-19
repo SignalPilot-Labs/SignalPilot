@@ -888,7 +888,7 @@ export const CreateNewNotebook: React.FC = () => {
   const url = newNotebookURL();
   return (
     <a
-      className="relative p-5 group border border-border hover:border-[#333] bg-card transition-all duration-200 cursor-pointer"
+      className="relative p-5 group border border-border hover:border-muted-foreground bg-card transition-all duration-200 cursor-pointer"
       href={url}
       target="_blank"
       rel="noreferrer"

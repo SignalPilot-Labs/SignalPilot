@@ -339,7 +339,7 @@ export const RawFileEditor: React.FC<RawFileEditorProps> = ({ filePath }) => {
             <span className="text-sm font-mono font-medium truncate max-w-lg">
               {relativePath}
             </span>
-            <span className="text-[10px] font-bold uppercase tracking-widest text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded">
+            <span className="text-[10px] font-bold uppercase tracking-widest text-primary bg-primary/10 px-2 py-0.5 rounded">
               MODEL
             </span>
             {isDirty && (
@@ -365,7 +365,7 @@ export const RawFileEditor: React.FC<RawFileEditorProps> = ({ filePath }) => {
             </div>
           </Panel>
           <PanelResizeHandle className="group relative h-3 flex items-center justify-center cursor-row-resize bg-background hover:bg-muted transition-colors border-y border-border">
-            <div className="w-12 h-1 rounded-full bg-muted-foreground/40 group-hover:bg-muted-foreground/60 group-active:bg-emerald-500/50 transition-colors" />
+            <div className="w-12 h-1 rounded-full bg-muted-foreground/40 group-hover:bg-muted-foreground/60 group-active:bg-primary/50 transition-colors" />
           </PanelResizeHandle>
           <Panel defaultSize={40} minSize={10}>
             <DbtConsolePanel
@@ -420,7 +420,7 @@ export const RawFileEditor: React.FC<RawFileEditorProps> = ({ filePath }) => {
             className={cn(
               "flex items-center gap-1.5 px-3 py-2 text-xs font-semibold uppercase tracking-wider transition-colors border-b-2 -mb-px",
               mdViewMode === "rendered"
-                ? "text-foreground border-emerald-500"
+                ? "text-foreground border-primary"
                 : "text-muted-foreground border-transparent hover:text-foreground",
             )}
             onClick={() => setMdViewMode("rendered")}
@@ -433,7 +433,7 @@ export const RawFileEditor: React.FC<RawFileEditorProps> = ({ filePath }) => {
             className={cn(
               "flex items-center gap-1.5 px-3 py-2 text-xs font-semibold uppercase tracking-wider transition-colors border-b-2 -mb-px",
               mdViewMode === "raw"
-                ? "text-foreground border-emerald-500"
+                ? "text-foreground border-primary"
                 : "text-muted-foreground border-transparent hover:text-foreground",
             )}
             onClick={() => setMdViewMode("raw")}

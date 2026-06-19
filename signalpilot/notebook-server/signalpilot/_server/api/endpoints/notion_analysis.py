@@ -2073,15 +2073,21 @@ Required workflow:
      not leave "Analysis steps" as a table of contents with all branches listed
      before the evidence.
    - Do not front-load long prose sections before the queries. The reader should
-     see each top-line result, then the query/data/checks that support it.
-   For every material claim, build this tree-branch sequence in order:
-   - markdown branch heading with the top-line result;
-   - visible SQL/query code cell with the exact query used;
-   - visible preview cell showing `df.head()`, aggregate output, or the head of
-     the joined table/query result used for the claim;
-   - visual cell when a chart or compact table makes the claim easier to inspect;
-   - validation/check cell showing traces such as row counts, date/status
-     filters, nulls, duplicates, freshness checks, and reconciliation totals.
+     see each finding/result, then the query/data/checks that support it.
+   Every section under "Analysis steps" must be a repeated finding branch with
+   this exact visible shape:
+   - hidden-code markdown cell: `### Finding: ...` plus 1-3 sentences explaining
+     the finding/result in plain English;
+   - visible query cell: the exact `db.query(...)` / `sp.query(...)` SQL used for
+     that finding, assigned to a clearly named DataFrame;
+   - visible data preview cell: `df.head(...)`, aggregate output, or the head of
+     the joined table/query result used for that finding;
+   - visible visual cell when useful: chart or compact table built from that
+     branch's DataFrame;
+   - visible checks cell: traces such as row counts, date/status filters, nulls,
+     duplicates, freshness checks, and reconciliation totals.
+   Do not write generic "what I did" sections. Do not separate a finding from
+   the query and data head that support it.
 4. Add charts when the question involves comparison, ranking, trend,
    distribution, or contribution analysis. Build charts from notebook-computed
    DataFrames only, never from hand-entered MCP output. Prefer 1-3 focused
@@ -2116,8 +2122,9 @@ Completion checklist before final JSON:
   `sp.connect("...")`.
 - The live notebook contains governed query cells that call `db.query(...)` or
   `sp.query(...)` for the actual source data used in the answer.
-- Every material top-line result in the summary has a nearby evidence branch
-  with a visible query, a small data preview, and at least one validation check.
+- Every material finding in the summary has a nearby "Analysis steps" branch
+  with markdown explanation, a visible query, visible data preview/head, and at
+  least one validation/check cell.
 - The notebook does not use hardcoded `pd.DataFrame({{...}})` literals as a
   substitute for governed source queries.
 - The notebook does not reuse top-level helper variable names across cells.
@@ -2134,9 +2141,9 @@ Completion checklist before final JSON:
 - The top of the notebook remains readable: request context, executive summary
   with caveats, then analysis branches. Queries must not be buried after a long
   narrative-only audit trail.
-- The "Analysis steps" section is not just a branch list. Each branch appears as
-  close as possible to the exact query, preview, validation output, or chart that
-  supports it.
+- The "Analysis steps" section is not just a branch list. Each branch is a full
+  finding section with the finding explanation, exact query, data head/preview,
+  optional visual, and check trace adjacent to each other.
 
 User request:
 {body.prompt}

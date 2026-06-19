@@ -73,15 +73,21 @@ def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
     assert "markdown-only cell" in prompt
     assert "Do not add request metadata variables" in prompt
     assert "do not rename this heading" in prompt
-    assert "visible SQL/query code cell" in prompt
-    assert "df.head()" in prompt
-    assert "validation/check cell" in prompt
-    assert "tree-branch sequence" in prompt
+    assert "repeated finding branch" in prompt
+    assert "`### Finding: ...`" in prompt
+    assert "1-3 sentences explaining" in prompt
+    assert "visible query cell" in prompt
+    assert "visible data preview cell" in prompt
+    assert "visible checks cell" in prompt
+    assert "Do not write generic \"what I did\" sections" in prompt
+    assert "Do not separate a finding from" in prompt
     assert "head of\n     the joined table/query result" in prompt
     assert "not just a branch list" in prompt
+    assert "finding explanation, exact query, data head/preview" in prompt
     assert "\"Analysis steps\"" in prompt
     assert "\"Evidence Trace\"" not in prompt
     assert "Mermaid" not in prompt
+    assert "top-line result" not in prompt
     assert "Queries must not be buried" in prompt
     assert "Previous discussion messages:" in prompt
     assert "Previous Notion discussion messages:" not in prompt

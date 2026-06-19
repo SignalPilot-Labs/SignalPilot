@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from typing import Any
 
 from . import NotebookOrchestrator, PodInfo
 from .namespaces import ensure_org_namespace, namespace_for_org
@@ -322,6 +323,116 @@ def _parse_pod_ip(pod: dict) -> str | None:
     return status.get("pod_ip") or status.get("podIP")
 
 
+def _object_to_dict(value: Any) -> dict:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if hasattr(value, "to_dict"):
+        return value.to_dict()
+    return {}
+
+
+def _clean_message(value: Any, *, limit: int = 500) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) > limit:
+        return f"{text[:limit - 3]}..."
+    return text
+
+
+def _pod_status_diagnostics(pod: dict) -> list[str]:
+    status = pod.get("status") or {}
+    lines: list[str] = []
+
+    phase = status.get("phase") or status.get("Phase") or "unknown"
+    reason = status.get("reason")
+    message = status.get("message")
+    phase_line = f"phase={phase}"
+    if reason:
+        phase_line += f" reason={reason}"
+    if message:
+        phase_line += f" message={_clean_message(message)}"
+    lines.append(phase_line)
+
+    for condition in status.get("conditions") or []:
+        cond_type = condition.get("type") or "condition"
+        cond_status = condition.get("status")
+        if cond_status in (True, "True"):
+            continue
+        detail = f"condition {cond_type}={cond_status}"
+        if condition.get("reason"):
+            detail += f" reason={condition['reason']}"
+        if condition.get("message"):
+            detail += f" message={_clean_message(condition['message'])}"
+        lines.append(detail)
+
+    for status_key, label in (
+        ("init_container_statuses", "initContainer"),
+        ("container_statuses", "container"),
+    ):
+        for container in status.get(status_key) or []:
+            name = container.get("name") or "unknown"
+            state = container.get("state") or {}
+            waiting = state.get("waiting")
+            terminated = state.get("terminated")
+            if waiting:
+                detail = f"{label} {name} waiting"
+                if waiting.get("reason"):
+                    detail += f" reason={waiting['reason']}"
+                if waiting.get("message"):
+                    detail += f" message={_clean_message(waiting['message'])}"
+                lines.append(detail)
+            elif terminated:
+                detail = f"{label} {name} terminated"
+                if terminated.get("reason"):
+                    detail += f" reason={terminated['reason']}"
+                if terminated.get("exit_code") is not None:
+                    detail += f" exit_code={terminated['exit_code']}"
+                if terminated.get("message"):
+                    detail += f" message={_clean_message(terminated['message'])}"
+                lines.append(detail)
+            elif not container.get("ready", False):
+                lines.append(f"{label} {name} not ready restart_count={container.get('restart_count', 0)}")
+
+    return lines
+
+
+async def _pod_event_diagnostics(core_api: Any, namespace: str, pod_name: str) -> list[str]:
+    try:
+        response = await core_api.list_namespaced_event(
+            namespace=namespace,
+            field_selector=f"involvedObject.name={pod_name}",
+        )
+    except Exception as exc:
+        return [f"events unavailable: {_clean_message(exc, limit=300)}"]
+
+    data = _object_to_dict(response)
+    items = data.get("items") or []
+    lines: list[str] = []
+    for item in items[-8:]:
+        event_type = item.get("type") or "Event"
+        reason = item.get("reason") or "Unknown"
+        message = _clean_message(item.get("message"))
+        lines.append(f"event {event_type} {reason}: {message}")
+    return lines
+
+
+async def _pod_diagnostics(core_api: Any, namespace: str, pod_name: str) -> str:
+    lines: list[str] = []
+    try:
+        pod_response = await core_api.read_namespaced_pod(name=pod_name, namespace=namespace)
+        pod = _object_to_dict(pod_response)
+        lines.extend(_pod_status_diagnostics(pod))
+    except Exception as exc:
+        lines.append(f"pod unavailable: {_clean_message(exc, limit=300)}")
+
+    lines.extend(await _pod_event_diagnostics(core_api, namespace, pod_name))
+    diagnostic = "; ".join(line for line in lines if line)
+    if len(diagnostic) > 1800:
+        diagnostic = f"{diagnostic[:1797]}..."
+    return diagnostic or "no pod diagnostics available"
+
+
 class KubernetesOrchestrator(NotebookOrchestrator):
     """Manages notebook pods via the Kubernetes API.
 
@@ -572,6 +683,7 @@ class KubernetesOrchestrator(NotebookOrchestrator):
             raise RuntimeError("K8s orchestrator not available")
 
         deadline = asyncio.get_event_loop().time() + timeout
+        ns = self._resolve_namespace(org_id)
         while asyncio.get_event_loop().time() < deadline:
             pod = await self.get_pod(pod_name, org_id=org_id)
             if pod and pod.status == "running":
@@ -582,9 +694,15 @@ class KubernetesOrchestrator(NotebookOrchestrator):
                     internal_ip=pod.ip,
                 )
             if pod and pod.status in ("failed", "succeeded"):
-                raise RuntimeError(f"Pod {pod_name} entered terminal state: {pod.status}")
+                diagnostics = await _pod_diagnostics(self._core_api, ns, pod_name)
+                logger.warning("Pod %s entered terminal state before running: %s", pod_name, diagnostics)
+                raise RuntimeError(
+                    f"Pod {pod_name} entered terminal state: {pod.status}. Diagnostics: {diagnostics}"
+                )
             await asyncio.sleep(0.5)
-        raise TimeoutError(f"Pod {pod_name} not in Running state after {timeout}s")
+        diagnostics = await _pod_diagnostics(self._core_api, ns, pod_name)
+        logger.warning("Pod %s did not reach Running after %ss: %s", pod_name, timeout, diagnostics)
+        raise TimeoutError(f"Pod {pod_name} not in Running state after {timeout}s. Diagnostics: {diagnostics}")
 
     async def _is_pod_container_ready(self, pod_name: str, *, ns: str) -> tuple[bool, str | None]:
         """Return (all_containers_ready, pod_ip) by inspecting containerStatuses[*].ready.
@@ -643,9 +761,15 @@ class KubernetesOrchestrator(NotebookOrchestrator):
             # Check for terminal state to avoid polling until timeout.
             pod = await self.get_pod(pod_name, org_id=org_id)
             if pod and pod.status in ("failed", "succeeded"):
-                raise RuntimeError(f"Pod {pod_name} entered terminal state: {pod.status}")
+                diagnostics = await _pod_diagnostics(self._core_api, ns, pod_name)
+                logger.warning("Pod %s entered terminal state before ready: %s", pod_name, diagnostics)
+                raise RuntimeError(
+                    f"Pod {pod_name} entered terminal state: {pod.status}. Diagnostics: {diagnostics}"
+                )
             await asyncio.sleep(0.5)
-        raise TimeoutError(f"Pod {pod_name} not ready after {timeout}s")
+        diagnostics = await _pod_diagnostics(self._core_api, ns, pod_name)
+        logger.warning("Pod %s did not become ready after %ss: %s", pod_name, timeout, diagnostics)
+        raise TimeoutError(f"Pod {pod_name} not ready after {timeout}s. Diagnostics: {diagnostics}")
 
     async def exec_in_pod(
         self, pod_name: str, *, org_id: str, argv: list[str],

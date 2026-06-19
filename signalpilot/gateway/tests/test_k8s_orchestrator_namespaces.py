@@ -29,6 +29,66 @@ def _make_orchestrator(monkeypatch) -> object:
     return k8s_mod.KubernetesOrchestrator()
 
 
+class _K8sObject:
+    def __init__(self, data: dict):
+        self._data = data
+
+    def to_dict(self) -> dict:
+        return self._data
+
+
+class TestPodDiagnostics:
+    @pytest.mark.asyncio
+    async def test_wait_for_running_timeout_includes_pod_event_reason(self, monkeypatch):
+        orch = _make_orchestrator(monkeypatch)
+        orch._client = object()
+        orch._namespace_prefix = "sp-nb"
+
+        mock_core = MagicMock()
+        mock_core.read_namespaced_pod = AsyncMock(
+            return_value=_K8sObject(
+                {
+                    "status": {
+                        "phase": "Pending",
+                        "conditions": [
+                            {
+                                "type": "PodScheduled",
+                                "status": "False",
+                                "reason": "Unschedulable",
+                                "message": "0/2 nodes are available: node selector mismatch.",
+                            }
+                        ],
+                        "container_statuses": [
+                            {
+                                "name": "notebook",
+                                "ready": False,
+                                "state": {"waiting": {"reason": "ContainerCreating"}},
+                                "restart_count": 0,
+                            }
+                        ],
+                    }
+                }
+            )
+        )
+        mock_core.list_namespaced_event = AsyncMock(
+            return_value=_K8sObject(
+                {
+                    "items": [
+                        {
+                            "type": "Warning",
+                            "reason": "FailedScheduling",
+                            "message": "0/2 nodes are available: node selector mismatch.",
+                        }
+                    ]
+                }
+            )
+        )
+        orch._core_api = mock_core
+
+        with pytest.raises(TimeoutError, match="FailedScheduling"):
+            await orch.wait_for_running("nb-test", org_id="org-1", timeout=0)
+
+
 class TestOrchestratorRefusesNonPodIpMode:
     def test_orchestrator_refuses_non_pod_ip_mode(self, monkeypatch):
         """Constructing KubernetesOrchestrator with SP_NOTEBOOK_UPSTREAM_MODE=nodeport raises."""

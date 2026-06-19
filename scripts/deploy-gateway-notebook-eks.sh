@@ -32,7 +32,7 @@ need docker
 need git
 need kubectl
 
-AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
+AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-2}}"
 if [[ -z "${AWS_ACCOUNT_ID:-}" && -z "${ECR_REGISTRY:-}" && "${DRY_RUN:-0}" == "1" ]]; then
   AWS_ACCOUNT_ID="000000000000"
 else
@@ -65,15 +65,25 @@ else
   log "Skipping gateway image build because SKIP_GATEWAY_IMAGE_BUILD=1"
 fi
 
-log "Ensuring ECR repository exists: ${NOTEBOOK_ECR_REPO}"
+log "Verifying ECR repository exists: ${NOTEBOOK_ECR_REPO} in ${AWS_REGION}"
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
-  log "DRY_RUN=1: would verify/create ECR repository ${NOTEBOOK_ECR_REPO}"
-elif ! aws ecr describe-repositories \
+  log "DRY_RUN=1: would verify ECR repository ${NOTEBOOK_ECR_REPO}"
+else
+  ECR_DESCRIBE_ERROR="$(mktemp)"
+  if aws ecr describe-repositories \
   --region "$AWS_REGION" \
-  --repository-names "$NOTEBOOK_ECR_REPO" >/dev/null 2>&1; then
-  aws ecr create-repository \
-    --region "$AWS_REGION" \
-    --repository-name "$NOTEBOOK_ECR_REPO" >/dev/null
+  --repository-names "$NOTEBOOK_ECR_REPO" >/dev/null 2>"$ECR_DESCRIBE_ERROR"; then
+    rm -f "$ECR_DESCRIBE_ERROR"
+  elif [[ "${CREATE_ECR_REPOSITORY:-0}" == "1" ]]; then
+    rm -f "$ECR_DESCRIBE_ERROR"
+    run aws ecr create-repository \
+      --region "$AWS_REGION" \
+      --repository-name "$NOTEBOOK_ECR_REPO" >/dev/null
+  else
+    ECR_ERROR="$(cat "$ECR_DESCRIBE_ERROR")"
+    rm -f "$ECR_DESCRIBE_ERROR"
+    die "ECR repository ${NOTEBOOK_ECR_REPO} is not visible in ${AWS_REGION}. Set AWS_REGION to the region where the repo already exists, or set CREATE_ECR_REPOSITORY=1. AWS error: ${ECR_ERROR}"
+  fi
 fi
 
 log "Logging in to ECR: ${ECR_REGISTRY}"

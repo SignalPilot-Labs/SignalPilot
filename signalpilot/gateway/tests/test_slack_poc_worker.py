@@ -12,6 +12,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from gateway.slack_poc import worker as worker_module
 from gateway.slack_poc.worker import (
     SlackApiClient,
     SlackPoCConfig,
@@ -131,6 +132,34 @@ def test_cloud_mode_does_not_apply_local_notebook_direct_url(monkeypatch: pytest
     _apply_local_runtime_defaults()
 
     assert "SP_NOTEBOOK_DIRECT_URL" not in os.environ
+
+
+@pytest.mark.asyncio
+async def test_worker_uses_explicit_config_user_id_before_notion_installation() -> None:
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", user_id="user-explicit"),
+        AsyncMock(spec=SlackApiClient),
+        AsyncMock(),
+    )
+
+    assert await worker._analysis_user_id(AsyncMock()) == "user-explicit"
+
+
+@pytest.mark.asyncio
+async def test_worker_uses_notion_installation_user_when_user_id_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def latest_notion_user_id(db, org_id: str) -> str:
+        assert db == "db"
+        assert org_id == "org-1"
+        return "user-from-notion"
+
+    monkeypatch.setattr(worker_module, "_latest_notion_installation_user_id", latest_notion_user_id)
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", org_id="org-1"),
+        AsyncMock(spec=SlackApiClient),
+        AsyncMock(),
+    )
+
+    assert await worker._analysis_user_id("db") == "user-from-notion"
 
 
 @pytest.mark.asyncio

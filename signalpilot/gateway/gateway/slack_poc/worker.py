@@ -56,7 +56,7 @@ class SlackPoCConfig:
     signing_secret: str | None = None
     bot_user_id: str | None = None
     org_id: str = "slack-poc"
-    user_id: str = "slack-poc-worker"
+    user_id: str | None = None
     allowed_channel_ids: frozenset[str] = frozenset()
     ack_text: str = "I'm on it and will post the answer back here soon."
 
@@ -273,14 +273,15 @@ class SlackPoCWorker:
         try:
             previous_messages = await self._previous_thread_messages(request)
             async with self.session_factory() as db:
-                runtime = await ensure_notion_notebook_session(db, self.config.org_id, self.config.user_id)
-                start = await self._start_analysis(runtime, request, previous_messages)
+                analysis_user_id = await self._analysis_user_id(db)
+                runtime = await ensure_notion_notebook_session(db, self.config.org_id, analysis_user_id)
+                start = await self._start_analysis(runtime, request, previous_messages, analysis_user_id)
                 trail_url = notebook_analysis._public_signalpilot_url(_string(start.get("trailUrl")), runtime)
                 status = await notebook_analysis._poll_analysis(
                     _string(start["requestId"]),
                     runtime,
                     self.config.org_id,
-                    self.config.user_id,
+                    analysis_user_id,
                 )
                 slack_status = notebook_analysis._with_public_chart_urls(status, runtime)
             await self.slack.post_message(
@@ -296,6 +297,17 @@ class SlackPoCWorker:
                 thread_ts=request.thread_ts,
                 text=_failure_slack_text(str(exc), trail_url),
             )
+
+    async def _analysis_user_id(self, db: AsyncSession) -> str:
+        if self.config.user_id:
+            return self.config.user_id
+        user_id = await _latest_notion_installation_user_id(db, self.config.org_id)
+        if user_id:
+            return user_id
+        raise RuntimeError(
+            "SLACK_POC_USER_ID is unset and no connected Notion installation user_id "
+            f"was found for org {self.config.org_id!r}."
+        )
 
     async def _post_chart_attachments(
         self,
@@ -376,6 +388,7 @@ class SlackPoCWorker:
         runtime: NotebookRuntime,
         request: SlackRequest,
         previous_messages: list[str],
+        user_id: str,
     ) -> dict[str, Any]:
         discussion_id = f"slack:{request.team_id}:{request.channel_id}:{request.thread_ts}"
         created_at = datetime.now(UTC).isoformat()
@@ -383,7 +396,7 @@ class SlackPoCWorker:
             runtime,
             "/api/notion-analysis/start",
             self.config.org_id,
-            self.config.user_id,
+            user_id,
             {
                 "method": "POST",
                 "json": {
@@ -602,6 +615,25 @@ async def _handle_socket_message(raw: str | bytes, ws: Any, worker: SlackPoCWork
         await worker.handle_events_api_payload(payload)
 
 
+async def _latest_notion_installation_user_id(db: AsyncSession, org_id: str) -> str | None:
+    from sqlalchemy import select
+
+    from gateway.db.models import NotionInstallation
+
+    result = await db.execute(
+        select(NotionInstallation.user_id)
+        .where(
+            NotionInstallation.org_id == org_id,
+            NotionInstallation.status == "connected",
+            NotionInstallation.user_id.is_not(None),
+        )
+        .order_by(NotionInstallation.updated_at.desc())
+        .limit(1)
+    )
+    value = result.scalar_one_or_none()
+    return str(value) if value else None
+
+
 def load_config_from_env() -> SlackPoCConfig:
     _load_local_env()
     bot_token = _required_env("SLACK_BOT_TOKEN")
@@ -612,7 +644,7 @@ def load_config_from_env() -> SlackPoCConfig:
         signing_secret=os.getenv("SLACK_SIGNING_SECRET") or None,
         bot_user_id=os.getenv("SLACK_BOT_USER_ID") or None,
         org_id=os.getenv("SLACK_POC_ORG_ID") or os.getenv("SIGNALPILOT_SLACK_ORG_ID") or "slack-poc",
-        user_id=os.getenv("SLACK_POC_USER_ID") or "slack-poc-worker",
+        user_id=os.getenv("SLACK_POC_USER_ID") or os.getenv("SIGNALPILOT_SLACK_USER_ID") or None,
         allowed_channel_ids=frozenset(_csv_env("SLACK_ALLOWED_CHANNEL_IDS") or _csv_env("SLACK_TEST_CHANNEL_ID")),
         ack_text=os.getenv("SLACK_POC_ACK_TEXT") or "I'm on it and will post the answer back here soon.",
     )

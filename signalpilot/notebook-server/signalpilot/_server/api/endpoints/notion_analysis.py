@@ -277,7 +277,7 @@ def _notebook_template(body: StartNotionAnalysisRequest) -> str:
 
 **Source request:** {body.source_url}
 
-**Requester prompt:**
+**Source prompt:**
 
 {body.prompt}
 """
@@ -2059,10 +2059,11 @@ Required workflow:
    `pd.DataFrame(db.query("SELECT ..."))`.
 3. Keep the notebook presentation compact and evidence-first:
    - Preserve the first request context cell as a code-hidden markdown-only cell.
-     Replace its H1 with a concise AI-generated analysis title, not the raw user
-     prompt and not the shortened `headline`. Keep the source request link and
-     requester prompt underneath the title. Do not add request metadata variables
-     or executable analysis code to this first cell.
+     Replace its H1 placeholder with a concise analysis title based on the
+     user's request, not the raw user prompt and not the shortened `headline`.
+     Keep exactly this top-cell shape: request-based title, Source request,
+     Source prompt. Do not add request metadata variables or executable analysis
+     code to this first cell.
    - Replace the "Executive Summary and Explorations" cell with the final
      answer summary plus a short "Gotchas / Caveats" subsection. Keep it as a
      code-hidden markdown cell and do not rename this heading.
@@ -2073,14 +2074,14 @@ Required workflow:
      before the evidence.
    - Do not front-load long prose sections before the queries. The reader should
      see each top-line result, then the query/data/checks that support it.
-   For every material claim, build a visible evidence branch:
-   - top-line result;
+   For every material claim, build this tree-branch sequence in order:
+   - markdown branch heading with the top-line result;
    - visible SQL/query code cell with the exact query used;
-   - small preview such as `df.head()`, aggregate output, or joined-table sample;
-   - validation checks such as row counts, date/status filters, nulls, duplicate
-     checks, freshness checks, and reconciliation totals;
-   - chart, compact table, or plain markdown trace when it clarifies a trend,
-     relationship, or workflow.
+   - visible preview cell showing `df.head()`, aggregate output, or the head of
+     the joined table/query result used for the claim;
+   - visual cell when a chart or compact table makes the claim easier to inspect;
+   - validation/check cell showing traces such as row counts, date/status
+     filters, nulls, duplicates, freshness checks, and reconciliation totals.
 4. Add charts when the question involves comparison, ranking, trend,
    distribution, or contribution analysis. Build charts from notebook-computed
    DataFrames only, never from hand-entered MCP output. Prefer 1-3 focused

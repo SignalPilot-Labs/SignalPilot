@@ -43,7 +43,10 @@ def test_notebook_template_uses_compact_three_cell_scaffold() -> None:
     assert template.count("@app.cell") == 3
     assert template.count("@app.cell(hide_code=True)") == 3
     assert "# SignalPilot analysis" in template
+    assert "AI generated title" not in template
     assert "**Source request:** https://slack.test/archives/C/p123" in template
+    assert "**Source prompt:**" in template
+    assert "**Requester prompt:**" not in template
     assert "can you do an analysis of our dev db?" in template
     assert "request_headline =" not in template
     assert "source_url =" not in template
@@ -63,7 +66,8 @@ def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
     prompt = notion_analysis._analysis_prompt(_record(), _body())
 
     assert "evidence-first" in prompt
-    assert "AI-generated analysis title" in prompt
+    assert "analysis title based on the\n     user's request" in prompt
+    assert "request-based title, Source request,\n     Source prompt" in prompt
     assert "not the raw user" in prompt
     assert "not the shortened `headline`" in prompt
     assert "markdown-only cell" in prompt
@@ -71,8 +75,9 @@ def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
     assert "do not rename this heading" in prompt
     assert "visible SQL/query code cell" in prompt
     assert "df.head()" in prompt
-    assert "validation checks" in prompt
-    assert "plain markdown trace" in prompt
+    assert "validation/check cell" in prompt
+    assert "tree-branch sequence" in prompt
+    assert "head of\n     the joined table/query result" in prompt
     assert "not just a branch list" in prompt
     assert "\"Analysis steps\"" in prompt
     assert "\"Evidence Trace\"" not in prompt

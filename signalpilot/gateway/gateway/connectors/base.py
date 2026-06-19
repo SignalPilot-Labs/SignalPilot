@@ -148,6 +148,14 @@ class BaseConnector(ABC):
         parts = table.split(".")
         return ".".join(self._quote_identifier(p) for p in parts)
 
+    def quote_identifier(self, name: str) -> str:
+        """Public alias for _quote_identifier — use in external callers."""
+        return self._quote_identifier(name)
+
+    def quote_table(self, key: str) -> str:
+        """Public alias for _quote_table — use in external callers."""
+        return self._quote_table(key)
+
     # ─── SSL temp file management ─────────────────────────────────────
 
     def _write_ssl_temp_file(self, content: str, suffix: str = ".pem", chmod: int | None = None) -> str:

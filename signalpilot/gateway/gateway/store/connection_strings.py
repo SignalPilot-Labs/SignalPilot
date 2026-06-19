@@ -19,6 +19,16 @@ def _build_connection_string(conn: ConnectionCreate) -> str:
         )
         ssl_param = f"?sslmode={ssl_mode}" if ssl_mode else ""
         return f"postgresql://{user}{pw}@{host}:{port}/{db}{ssl_param}"
+    if conn.db_type == DBType.xata:
+        # Xata is Postgres wire-compatible. The stored secret is a scoped Xata API
+        # key (conn.password); workspace is the URL user; the branch is appended to
+        # the database name as `database:branch`. TLS is mandatory.
+        ws = url_quote(conn.workspace or conn.username or "", safe="")
+        key = f":{url_quote(conn.password or '', safe='')}" if conn.password else ""
+        region = conn.region            # validated non-empty
+        db = conn.database              # validated non-empty
+        branch = conn.branch or "main"  # main is a documented Xata default — keep
+        return f"postgresql://{ws}{key}@{region}.sql.xata.sh:5432/{db}:{branch}?sslmode=require"
     if conn.db_type == DBType.mysql:
         user = url_quote(conn.username or "", safe="")
         pw = f":{url_quote(conn.password or '', safe='')}" if conn.password else ""
@@ -128,6 +138,20 @@ def _extract_credential_extras(conn: ConnectionCreate) -> dict:
     if conn.db_type == DBType.databricks:
         for attr in ("http_path", "access_token", "catalog", "schema_name"):
             extras[attr] = getattr(conn, attr, None)
+    if conn.db_type == DBType.xata:
+        # Stash workspace/region/database so the connector can mint a sibling
+        # endpoint for ANY branch without re-parsing the encrypted URL.
+        for attr in ("workspace", "region", "database", "branch"):
+            val = getattr(conn, attr, None)
+            if val is not None:
+                extras[f"xata_{attr}"] = val
+        # Control-plane config (branch lifecycle). Stored in encrypted extras.
+        for attr in ("xata_api_url", "xata_org", "xata_token_url",
+                     "xata_client_id", "xata_client_secret",
+                     "xata_username", "xata_password"):
+            val = getattr(conn, attr, None)
+            if val is not None:
+                extras[attr] = val
     if conn.db_type == DBType.duckdb and getattr(conn, "motherduck_token", None):
         extras["motherduck_token"] = conn.motherduck_token
     for attr in ("connection_timeout", "query_timeout", "keepalive_interval"):

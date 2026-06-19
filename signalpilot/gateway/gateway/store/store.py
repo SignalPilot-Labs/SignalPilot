@@ -350,10 +350,45 @@ class Store:
                 "catalog",
                 "ssl",
                 "ssl_config",
+                # Xata-specific fields stored only in encrypted extras
+                "workspace",
+                "region",
+                "branch",
+                "xata_api_url",
+                "xata_org",
+                "xata_token_url",
+                "xata_client_id",
+                "xata_client_secret",
+                "xata_username",
+                "xata_password",
+                # Extras-only credential fields — PATCH-only changes must still rewrite extras_enc
+                "private_key",
+                "private_key_passphrase",
+                "motherduck_token",
+                "connection_timeout",
+                "query_timeout",
+                "keepalive_interval",
+                "dataset",
+                "location",
+                "maximum_bytes_billed",
             )
         )
         if needs_cred_rebuild:
-            merged = {**row.to_info_dict(), **update_fields, "name": name}
+            existing_extras = await self.get_credential_extras(name)
+            # Back-translate stored extras keys into ConnectionCreate kwarg names.
+            # Four Xata fields are stored prefixed; the rest are stored identically.
+            _extras_key_map = {
+                "xata_workspace": "workspace",
+                "xata_region": "region",
+                "xata_database": "database",
+                "xata_branch": "branch",
+            }
+            from_extras: dict = {}
+            for stored_key, val in existing_extras.items():
+                kwarg_name = _extras_key_map.get(stored_key, stored_key)
+                from_extras[kwarg_name] = val
+            # Precedence: existing extras (lowest) < column snapshot < user patch (highest)
+            merged = {**from_extras, **row.to_info_dict(), **update_fields, "name": name}
             for rm_key in (
                 "id",
                 "created_at",
@@ -361,7 +396,9 @@ class Store:
                 "status",
                 "last_schema_refresh",
                 "endorsements",
-                "location",
+                # NOTE: do NOT add 'location' here — it IS a valid ConnectionCreate kwarg;
+                # popping it wiped BQ location on every cred-rebuild PATCH after round-3
+                # from_extras backfill (round 4).
             ):
                 merged.pop(rm_key, None)
             try:

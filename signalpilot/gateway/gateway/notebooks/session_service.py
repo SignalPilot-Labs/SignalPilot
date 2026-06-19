@@ -131,6 +131,33 @@ async def _pod_extra_env(
     return env or None
 
 
+async def _mark_session_status_best_effort(
+    session: AsyncSession,
+    *,
+    session_id: str,
+    org_id: str,
+    status: str,
+) -> None:
+    try:
+        await ns.update_session_status(
+            session,
+            session_id=session_id,
+            org_id=org_id,
+            status=status,
+        )
+    except Exception:
+        logger.warning(
+            "Could not mark notebook session %s as %s after startup failure",
+            session_id,
+            status,
+            exc_info=True,
+        )
+        try:
+            await session.rollback()
+        except Exception:
+            logger.debug("Rollback after notebook session status update failure failed", exc_info=True)
+
+
 def _public_base_url(session_id: str) -> str:
     notebook_public = os.getenv("SIGNALPILOT_NOTEBOOK_PUBLIC_URL")
     if notebook_public:
@@ -328,7 +355,7 @@ async def ensure_notebook_session(
         session_info.notebook_url = f"/notebook/{session_info.id}/"
         return session_info
     except ValueError:
-        await ns.update_session_status(
+        await _mark_session_status_best_effort(
             session,
             session_id=session_info.id,
             org_id=org_id,
@@ -336,7 +363,7 @@ async def ensure_notebook_session(
         )
         raise
     except Exception as exc:
-        await ns.update_session_status(
+        await _mark_session_status_best_effort(
             session,
             session_id=session_info.id,
             org_id=org_id,

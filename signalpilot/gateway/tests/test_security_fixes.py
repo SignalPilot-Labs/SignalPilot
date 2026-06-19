@@ -1062,6 +1062,36 @@ class TestL6SessionMutationsOrgFilter:
         assert "sess-2" in where_str
 
     @pytest.mark.asyncio
+    async def test_update_session_status_retries_once_on_closed_connection(self) -> None:
+        from sqlalchemy.exc import InterfaceError
+
+        from gateway.store.notebook_sessions import update_session_status
+
+        captured: list = []
+
+        async def _fake_execute(stmt, *args, **kwargs):
+            captured.append(stmt)
+            if len(captured) == 1:
+                raise InterfaceError("UPDATE", {}, RuntimeError("connection is closed"))
+            return MagicMock()
+
+        session = AsyncMock(spec=AsyncSession)
+        session.execute.side_effect = _fake_execute
+        session.commit = AsyncMock()
+        session.rollback = AsyncMock()
+
+        await update_session_status(
+            session,
+            session_id="sess-closed",
+            org_id="org-a",
+            status="error",
+        )
+
+        assert len(captured) == 2
+        session.rollback.assert_awaited_once()
+        session.commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_mark_stopped_wrong_org_includes_org_id_in_where(self) -> None:
         from gateway.store.notebook_sessions import mark_stopped
 

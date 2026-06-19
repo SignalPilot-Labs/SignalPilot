@@ -79,6 +79,7 @@ def get_engine():
             pool_size=5,
             max_overflow=10,
             pool_recycle=1800,
+            pool_pre_ping=True,
             connect_args=connect_args,
         )
         _session_factory = async_sessionmaker(_engine, expire_on_commit=False)

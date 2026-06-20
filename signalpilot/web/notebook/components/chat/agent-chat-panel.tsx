@@ -30,6 +30,7 @@ import { useActiveFile } from "@/core/active-file";
 import { useRuntimeManager } from "@/core/runtime/config";
 import { filenameAtom } from "@/core/saving/file-state";
 import {
+  DURABLE_TRAIL_FILE_PREFIXES,
   isNotionTrailParams,
   notionRequestIdFromSessionId,
 } from "@/core/notion/trail";
@@ -138,6 +139,13 @@ function normalizeNotionTrailFile(file?: string | null) {
   return file?.replace(/^\/+/, "") ?? "";
 }
 
+function isDurableAnalysisNotebookFile(file?: string | null) {
+  const trailFile = normalizeNotionTrailFile(file);
+  return DURABLE_TRAIL_FILE_PREFIXES.some((prefix) =>
+    trailFile.startsWith(prefix),
+  );
+}
+
 function getRememberedNotionThreadId(file?: string | null) {
   if (typeof window === "undefined") {return null;}
 
@@ -205,6 +213,7 @@ const AgentChatPanelInner: React.FC = () => {
       : new URLSearchParams(window.location.search);
   const urlSessionId =
     urlParams?.get("session_id") ?? null;
+  const urlProjectId = urlParams?.get("project") ?? null;
   const urlFile = urlParams?.get("file") ?? null;
   const urlNotionThreadId = notionRequestIdFromSessionId(urlSessionId)
     ? urlSessionId
@@ -215,7 +224,10 @@ const AgentChatPanelInner: React.FC = () => {
   );
   const explicitNotionThreadId =
     urlNotionThreadId ?? rememberedNotionThreadId;
+  const isProjectAnalysisNotebook =
+    Boolean(urlProjectId) && isDurableAnalysisNotebookFile(urlFile);
   const includeNotionConversations =
+    isProjectAnalysisNotebook ||
     Boolean(explicitNotionThreadId) ||
     isNotionTrailParams({ file: notionTrailFile, sessionId: urlSessionId });
   const notionAutoLoadAttempts = useRef<Record<string, number>>({});
@@ -285,6 +297,7 @@ const AgentChatPanelInner: React.FC = () => {
       ? notionThreadId
       : null;
     if (
+      urlProjectId ||
       urlSessionId ||
       !trailSessionId ||
       !isNotionTrailParams({ file: notionTrailFile, sessionId: trailSessionId }) ||
@@ -296,7 +309,7 @@ const AgentChatPanelInner: React.FC = () => {
     const nextUrl = new URL(window.location.href);
     nextUrl.searchParams.set("session_id", trailSessionId);
     window.history.replaceState(null, "", nextUrl.toString());
-  }, [notionThreadId, notionTrailFile, urlSessionId]);
+  }, [notionThreadId, notionTrailFile, urlProjectId, urlSessionId]);
 
   useEffect(() => {
     const hasLoadedThread =

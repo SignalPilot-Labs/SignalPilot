@@ -273,6 +273,9 @@ export default function NotebooksPage() {
   }, []);
 
   function isNotionTrail(file = urlFile, sessionId = urlSessionId) {
+    if (urlProject) {
+      return false;
+    }
     return isNotionTrailParams({ file, sessionId });
   }
 

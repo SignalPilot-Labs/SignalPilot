@@ -94,15 +94,18 @@ export async function bootRuntime(
     typeof window === "undefined"
       ? ""
       : new URL(window.location.href).searchParams.get("session_id") ?? "";
+  const isProjectRuntime = Boolean(config.project);
   const resolvedKernelSessionId =
     config.kernelSessionId ??
-    (isNotionTrailParams({ file: config.file, sessionId: urlSessionId })
+    (!isProjectRuntime && isNotionTrailParams({ file: config.file, sessionId: urlSessionId })
       ? urlSessionId
       : undefined);
-  const isNotionTrail = isNotionTrailParams({
-    file: config.file,
-    sessionId: resolvedKernelSessionId ?? urlSessionId,
-  });
+  const isNotionTrail =
+    !isProjectRuntime &&
+    isNotionTrailParams({
+      file: config.file,
+      sessionId: resolvedKernelSessionId ?? urlSessionId,
+    });
   const notionRequestId = isNotionTrail
     ? notionRequestIdFromSessionId(resolvedKernelSessionId ?? urlSessionId)
     : undefined;

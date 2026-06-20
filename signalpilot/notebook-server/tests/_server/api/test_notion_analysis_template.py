@@ -166,6 +166,7 @@ def test_project_root_does_not_fallback_to_workspace_when_project_sync_fails(tmp
 
 
 def test_analysis_agent_runs_from_project_root(tmp_path, monkeypatch) -> None:
+    from signalpilot._server.ai import claude_agent
     from signalpilot._server.ai.claude_agent import AgentEvent
     from signalpilot._server.ai import chat_store
     from signalpilot._types.ids import SessionId
@@ -214,10 +215,7 @@ def test_analysis_agent_runs_from_project_root(tmp_path, monkeypatch) -> None:
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(chat_store, "get_gateway_chat_trace_store", lambda: FakeStore())
-    monkeypatch.setattr(
-        "signalpilot._server.ai.claude_agent.run_notebook_agent",
-        fake_run_notebook_agent,
-    )
+    monkeypatch.setattr(claude_agent, "run_notebook_agent", fake_run_notebook_agent)
 
     asyncio.run(
         notion_analysis._run_analysis(

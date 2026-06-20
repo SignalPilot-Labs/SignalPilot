@@ -19,11 +19,14 @@ export function isNotionTrailParams({
   return Boolean(
     sessionId?.startsWith(NOTION_TRAIL_SESSION_PREFIX) ||
       sessionId?.startsWith(SLACK_TRAIL_SESSION_PREFIX) ||
-      DURABLE_TRAIL_FILE_PREFIXES.some((prefix) => file?.startsWith(prefix)),
+      file?.startsWith(NOTION_TRAIL_FILE_PREFIX),
   );
 }
 
 export function isNotionTrailSearchParams(params: URLSearchParams): boolean {
+  if (params.get(KnownQueryParams.project)) {
+    return false;
+  }
   return isNotionTrailParams({
     file: params.get(KnownQueryParams.filePath),
     sessionId: params.get(KnownQueryParams.sessionId),

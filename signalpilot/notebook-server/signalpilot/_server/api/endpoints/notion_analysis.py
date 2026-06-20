@@ -309,11 +309,33 @@ def _refresh_trail_url(
     record: AnalysisRecord,
     request_base_url: str,
 ) -> None:
-    trail_url = _trail_url(record.notebook_path, record.session_id, request_base_url)
+    trail_url = _record_trail_url(
+        app_state,
+        record.notebook_path,
+        record.session_id,
+        request_base_url,
+    )
     if record.trail_url == trail_url:
         return
     record.trail_url = trail_url
     _save_registry(app_state)
+
+
+def _record_trail_url(
+    app_state: AppState,
+    notebook_path: str,
+    session_id: str,
+    request_base_url: str,
+) -> str:
+    project_id = app_state.request.headers.get("x-gateway-project-id", "").strip()
+    branch = app_state.request.headers.get("x-gateway-branch-id", "").strip()
+    return _trail_url(
+        notebook_path,
+        session_id,
+        request_base_url,
+        project_id=project_id or None,
+        branch=branch or None,
+    )
 
 
 def _notebook_template(body: StartNotionAnalysisRequest) -> str:
@@ -500,7 +522,7 @@ def _ensure_record(
         else str(notebook_path)
     )
     session_id = str(_session_id(request_id))
-    trail_url = _trail_url(file_key, session_id, request_base_url)
+    trail_url = _record_trail_url(app_state, file_key, session_id, request_base_url)
 
     record = AnalysisRecord(
         request_id=request_id,

@@ -2,7 +2,7 @@
 name: dbt-knowledgebase
 description: "Populate the knowledge base from dbt project research. Proposes entries across all 6 categories at org, project, and connection scopes."
 disable-model-invocation: false
-allowed-tools: Bash(dbt *) Bash(python3 *) Bash(map-columns *)
+allowed-tools: Bash(dbt *) Bash(python3 *)
 ---
 
 # dbt Knowledge Base Generator

@@ -779,7 +779,7 @@ const SpFileComponent = ({ file }: { file: SpFile }) => {
 
   return (
     <a
-      className="py-1.5 px-4 hover:bg-[#111111] transition-all duration-200 cursor-pointer group relative flex gap-4 items-center"
+      className="py-1.5 px-4 hover:bg-muted transition-all duration-200 cursor-pointer group relative flex gap-4 items-center"
       key={file.path}
       href={href.toString()}
       target="_self"
@@ -893,7 +893,7 @@ export const CreateNewNotebook: React.FC = () => {
   const url = newNotebookURL();
   return (
     <a
-      className="relative p-5 group border border-border hover:border-[#333] bg-card transition-all duration-200 cursor-pointer"
+      className="relative p-5 group border border-border hover:border-muted-foreground bg-card transition-all duration-200 cursor-pointer"
       href={url}
       target="_blank"
       rel="noreferrer"

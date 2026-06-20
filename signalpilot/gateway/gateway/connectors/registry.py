@@ -17,6 +17,7 @@ from .drivers.redshift import RedshiftConnector
 from .drivers.snowflake import SnowflakeConnector
 from .drivers.sqlite import SQLiteConnector
 from .drivers.trino import TrinoConnector
+from .drivers.xata import XataConnector
 
 # Use sandboxed connectors only when running inside Docker with the sandbox service.
 # SP_SANDBOX_ENABLED=false (or unset) skips sandboxing so file-based DBs open directly.
@@ -47,6 +48,7 @@ _REGISTRY: dict[str, type[BaseConnector]] = {
     DBType.mssql: MSSQLConnector,
     DBType.trino: TrinoConnector,
     DBType.sqlite: _SQLite,
+    DBType.xata: XataConnector,
 }
 
 

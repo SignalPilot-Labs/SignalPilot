@@ -4,8 +4,10 @@
 Used by the dbt-workflow SKILL.md via !`python3 scan_project.py` to inject
 project state into the skill prompt before Claude starts working.
 
-Scans: YML models, SQL stubs, dependencies, required columns, sources,
-macros, current_date hazards, and pre-computed tables (if DuckDB file found).
+Filesystem-only scan: YML models, SQL stubs, dependencies, required columns,
+sources, macros, and current_date hazards. Database-derived hints (lookup joins,
+staging gaps, parent-child driving tables, materialization) come from the
+analyze_project_db / list_tables MCP tools.
 """
 
 from __future__ import annotations
@@ -258,300 +260,6 @@ def scan_current_date(work_dir: Path) -> list[str]:
     return hits
 
 
-def detect_lookup_joins(work_dir: Path) -> list[str]:
-    """Detect _id/_ids columns that have matching lookup tables in the DB."""
-    hints: list[str] = []
-    for db_file in work_dir.glob("*.duckdb"):
-        try:
-            import duckdb
-            conn = duckdb.connect(str(db_file), read_only=True)
-            all_tables = {r[0] for r in conn.execute("SHOW TABLES").fetchall()}
-            for tbl in sorted(all_tables):
-                cols = conn.execute(f'DESCRIBE "{tbl}"').fetchall()
-                for col_name, col_type, *_ in cols:
-                    low = col_name.lower()
-                    if low.endswith("_ids"):
-                        prefix = low[:-4]
-                    elif low.endswith("_id") and low != "id":
-                        prefix = low[:-3]
-                    else:
-                        continue
-                    for candidate in all_tables:
-                        cl = candidate.lower()
-                        if cl in (f"{prefix}s", f"stg_{prefix}s", f"{prefix}",
-                                  f"stg_{prefix}", f"dim_{prefix}s", f"dim_{prefix}"):
-                            if candidate == tbl:
-                                continue
-                            lk_cols = [r[0] for r in conn.execute(f'DESCRIBE "{candidate}"').fetchall()]
-                            name_cols = [c for c in lk_cols if "name" in c.lower() or "company" in c.lower()]
-                            if name_cols:
-                                hints.append(
-                                    f"  {tbl}.{col_name} → JOIN {candidate} → use {name_cols[0]}"
-                                )
-                            break
-            conn.close()
-        except Exception:
-            pass
-        break
-    return hints
-
-
-def detect_parent_child_gaps(work_dir: Path) -> list[str]:
-    """Detect parent-child table pairs where some parents have NO children.
-
-    When aggregating child records by parent ID, the parent table must be
-    the FROM clause to preserve parents with zero children.
-    """
-    hints: list[str] = []
-    try:
-        import duckdb
-    except ImportError:
-        return hints
-
-    for db_file in work_dir.glob("*.duckdb"):
-        try:
-            con = duckdb.connect(str(db_file), read_only=True)
-            all_tables = {r[0] for r in con.execute("SHOW TABLES").fetchall()}
-            table_cols: dict[str, list[str]] = {}
-            for t in all_tables:
-                try:
-                    table_cols[t] = [r[0] for r in con.execute(f'DESCRIBE "{t}"').fetchall()]
-                except Exception:
-                    pass
-
-            # Find parent-child pairs by checking every _id column in every
-            # child table against every parent table's `id` column.
-            # No name-matching heuristics — test actual key overlap in the DB.
-            parents_with_id: dict[str, str] = {}  # table -> id col name
-            for t in all_tables:
-                for c in table_cols.get(t, []):
-                    if c.lower() == "id":
-                        parents_with_id[t] = c
-                        break
-
-            checked: set[tuple[str, str]] = set()
-            for child in all_tables:
-                c_cols = table_cols.get(child, [])
-                fk_cols = [c for c in c_cols if c.lower().endswith("_id")
-                           and c.lower() != "id"]
-                for fk_col in fk_cols:
-                    for parent, p_id in parents_with_id.items():
-                        if parent == child:
-                            continue
-                        pair = (parent, child, fk_col)
-                        if pair in checked:
-                            continue
-                        checked.add(pair)
-                        # Quick entity-name plausibility check: the FK prefix
-                        # should appear somewhere in the parent table name to
-                        # avoid testing every combination (N^2 queries).
-                        fk_prefix = fk_col.lower().replace("_id", "")
-                        if fk_prefix not in parent.lower():
-                            continue
-                        try:
-                            p_count = con.execute(
-                                f'SELECT COUNT(DISTINCT "{p_id}") FROM "{parent}"'
-                            ).fetchone()[0]
-                            if p_count == 0:
-                                continue
-                            overlap = con.execute(
-                                f'SELECT COUNT(*) FROM '
-                                f'(SELECT DISTINCT "{p_id}" FROM "{parent}") p '
-                                f'JOIN (SELECT DISTINCT "{fk_col}" FROM "{child}") c '
-                                f'ON p."{p_id}" = c."{fk_col}"'
-                            ).fetchone()[0]
-                            orphans = p_count - overlap
-                            if orphans > 0:
-                                hints.append(
-                                    f"  {parent}.{p_id} ↔ {child}.{fk_col}: "
-                                    f"{orphans} of {p_count} parent rows have NO children. "
-                                    f"Drive FROM {parent} LEFT JOIN {child} to keep them."
-                                )
-                        except Exception:
-                            pass
-            con.close()
-        except Exception:
-            pass
-        break
-    return hints
-
-
-def detect_staging_gaps(work_dir: Path) -> list[str]:
-    """Detect where staging models filter rows from raw sources."""
-    hints: list[str] = []
-    try:
-        import duckdb
-    except ImportError:
-        return hints
-
-    for db_file in work_dir.glob("*.duckdb"):
-        try:
-            con = duckdb.connect(str(db_file), read_only=True)
-            all_tables = {r[0] for r in con.execute("SHOW TABLES").fetchall()}
-            for tbl in sorted(all_tables):
-                if not tbl.startswith("stg_"):
-                    continue
-                # Find the raw table this staging model wraps
-                raw_name = tbl.replace("stg_", "").rstrip("s")
-                raw_match = None
-                for candidate in all_tables:
-                    if candidate.lower() in (raw_name, raw_name + "s",
-                                              tbl.replace("stg_", "")):
-                        raw_match = candidate
-                        break
-                if not raw_match:
-                    continue
-                try:
-                    stg_count = con.execute(f'SELECT COUNT(*) FROM "{tbl}"').fetchone()[0]
-                    raw_count = con.execute(f'SELECT COUNT(*) FROM "{raw_match}"').fetchone()[0]
-                    if stg_count < raw_count:
-                        diff = raw_count - stg_count
-                        hints.append(
-                            f"  {tbl}: {stg_count} rows (raw {raw_match}: {raw_count} — "
-                            f"staging filters {diff} rows). Use ref('{tbl}') not source()."
-                        )
-                except Exception:
-                    pass
-            con.close()
-        except Exception:
-            pass
-        break
-    return hints
-
-
-# ── DuckDB table detection ───────────────────────────────────────────────
-
-def detect_db_tables(work_dir: Path) -> set[str]:
-    """Find tables in the project's DuckDB file (if any)."""
-    tables: set[str] = set()
-    # Look for .duckdb files in the project directory
-    for db_file in work_dir.glob("*.duckdb"):
-        try:
-            import duckdb
-            conn = duckdb.connect(str(db_file), read_only=True)
-            result = conn.execute("SHOW TABLES").fetchall()
-            tables.update(row[0] for row in result)
-            conn.close()
-        except Exception:
-            pass
-        break  # Only check the first one
-    return tables
-
-
-def detect_aggregation_driving_table(work_dir: Path) -> list[str]:
-    """Detect parent-child source table pairs and emit driving-table hints.
-
-    When a model aggregates a child table (e.g. conversation_parts) by a parent
-    table's primary key (e.g. conversation_id), the correct pattern is:
-      FROM parent LEFT JOIN child ... GROUP BY parent.pk
-    This ensures parent rows with zero children still appear (count = 0).
-
-    Detection: find DB table pairs where table A has column "id" and table B has
-    a foreign key "<entity>_id" pointing to A, and the child table name contains
-    the parent entity (e.g. conversation_part vs conversation).
-
-    Only emits hints for pairs where some parent rows have no matching children,
-    because that is when the driving-table choice affects correctness.
-    """
-    hints: list[str] = []
-    seen_pairs: set[tuple[str, str]] = set()
-
-    for db_file in work_dir.glob("*.duckdb"):
-        try:
-            import duckdb
-            conn = duckdb.connect(str(db_file), read_only=True)
-            all_tables = {r[0] for r in conn.execute("SHOW TABLES").fetchall()}
-
-            # Gather column sets for every DB table
-            table_cols: dict[str, list[str]] = {}
-            for tbl in all_tables:
-                try:
-                    cols = [r[0] for r in conn.execute(f'DESCRIBE "{tbl}"').fetchall()]
-                    table_cols[tbl] = cols
-                except Exception:
-                    pass
-
-            # Find parent-child pairs:
-            # Parent has "id"; child has "<entity>_id" where entity derives from
-            # the parent table name (minus suffixes like _data, _history).
-            for parent_tbl, parent_cols in table_cols.items():
-                p_cols_lower = {c.lower() for c in parent_cols}
-                if "id" not in p_cols_lower:
-                    continue
-
-                # Derive entity name: "conversation_history_data" -> "conversation"
-                p_name = parent_tbl.lower()
-                for suffix in ("_history_data", "_data", "_history"):
-                    if p_name.endswith(suffix):
-                        entity = p_name[: -len(suffix)]
-                        break
-                else:
-                    entity = p_name
-
-                if not entity or len(entity) < 3:
-                    continue
-
-                fk_col = f"{entity}_id"
-
-                for child_tbl, child_cols in table_cols.items():
-                    if child_tbl == parent_tbl:
-                        continue
-                    # Child table name must contain the parent entity to be a
-                    # true parent-child relationship (not just a random FK match)
-                    if entity not in child_tbl.lower():
-                        continue
-                    c_cols_lower = {c.lower() for c in child_cols}
-                    if fk_col not in c_cols_lower:
-                        continue
-
-                    pair_key = (parent_tbl, child_tbl)
-                    if pair_key in seen_pairs:
-                        continue
-                    seen_pairs.add(pair_key)
-
-                    # Only emit hint if some parent rows have no matching children.
-                    # That is when driving FROM parent (LEFT JOIN child) vs
-                    # FROM child produces different row counts.
-                    try:
-                        orphan_count = conn.execute(
-                            f'SELECT COUNT(*) FROM "{parent_tbl}" p '
-                            f'LEFT JOIN "{child_tbl}" c ON p.id = c."{fk_col}" '
-                            f"WHERE c.\"{fk_col}\" IS NULL"
-                        ).fetchone()[0]
-                    except Exception:
-                        orphan_count = 0
-
-                    if orphan_count > 0:
-                        try:
-                            p_count = conn.execute(
-                                f'SELECT COUNT(*) FROM "{parent_tbl}"'
-                            ).fetchone()[0]
-                        except Exception:
-                            p_count = 0
-                        hints.append(
-                            f"  {parent_tbl}.id = {child_tbl}.{fk_col}: "
-                            f"{orphan_count} of {p_count} parent rows have NO children. "
-                            f"Decide the output grain: if childless {parent_tbl} rows "
-                            f"belong in the output, drive FROM {parent_tbl} LEFT JOIN "
-                            f"{child_tbl} (their metrics are 0/NULL). If the model only "
-                            f"covers {parent_tbl} rows that HAVE {child_tbl} activity, "
-                            f"drive FROM {child_tbl} and INNER JOIN {parent_tbl}."
-                        )
-
-            conn.close()
-        except Exception:
-            pass
-        break  # Only check the first one
-
-    # Cap output to avoid overwhelming the agent with low-value hints.
-    # Sort by orphan ratio descending so the most important pairs appear first.
-    if len(hints) > 5:
-        hints = hints[:5]
-        hints.append("  (showing top 5 — run DESCRIBE on source tables to find more)")
-
-    return hints
-
-
 # ── Package scanner ───────────────────────────────────────────────────────
 
 def _find_sibling_patterns(
@@ -653,10 +361,10 @@ def main():
     sql_models = complete_models | stub_models
     missing_models = yml_models - sql_models
 
-    # Database tables
-    db_tables = detect_db_tables(work_dir)
-    materialized = (yml_models & complete_models) & db_tables
-    unmaterialized = (yml_models & complete_models) - db_tables
+    # Complete models = those with a non-stub SQL file. Materialization status
+    # (which exist as tables) and other DB-derived hints come from the
+    # analyze_project_db MCP tool, not this filesystem scanner.
+    complete = yml_models & complete_models
 
     # Dependencies
     deps = _extract_deps_from_sql(work_dir)
@@ -729,26 +437,14 @@ def main():
         except Exception:
             pass
 
-    # Aggregation driving table — print EARLY so agent sees it before writing any SQL
-    agg_patterns = detect_aggregation_driving_table(work_dir)
-    if agg_patterns:
-        print("AGGREGATION DRIVING TABLE (which source table to use as FROM clause):")
-        print("\n".join(agg_patterns))
-        print()
-
     print("STUBS TO REWRITE (SQL file exists but is incomplete):")
     print(f"  {', '.join(sorted(stub_models)) if stub_models else 'none'}")
     print()
 
-    print("EXISTING COMPLETE MODELS (ALREADY DONE — skip to Step 8 for these):")
-    print(f"  {', '.join(sorted(materialized)) if materialized else 'none'}")
-    if materialized:
+    print("COMPLETE MODELS (have a non-stub SQL file — call list_tables to confirm which are materialized):")
+    print(f"  {', '.join(sorted(complete)) if complete else 'none'}")
+    if complete:
         print("  ⚠ These SQL files already exist and compile. Do NOT delete or recreate them.")
-
-    if unmaterialized:
-        print()
-        print("COMPLETE BUT NOT MATERIALIZED (have SQL but no table — run dbt run --select):")
-        print(f"  {', '.join(sorted(unmaterialized))}")
 
     # Orphan SQL files (SQL exists but no YML model)
     orphans = sql_models - yml_models
@@ -847,26 +543,11 @@ def main():
         print("  Load `/signalpilot-dbt:dbt-snapshots` skill. Run DESCRIBE on source tables for exact column casing.")
         print()
 
-    # Parent-child gap detection
-    pc_hints = detect_parent_child_gaps(work_dir)
-    if pc_hints:
-        print("AGGREGATION DRIVING TABLE (parent rows with NO children — drive FROM parent):")
-        print("\n".join(pc_hints))
-        print()
-
-    # Staging vs raw row count gaps
-    staging_hints = detect_staging_gaps(work_dir)
-    if staging_hints:
-        print("STAGING FILTERS (staging models have fewer rows than raw — use ref() not source()):")
-        print("\n".join(staging_hints))
-        print()
-
-    # Lookup join hints (from DB analysis)
-    lookup_hints = detect_lookup_joins(work_dir)
-    if lookup_hints:
-        print("LOOKUP JOINS AVAILABLE (_id columns with matching dimension tables — resolve to display names):")
-        print("\n".join(lookup_hints))
-        print()
+    # Database-derived hints (lookup joins, staging-vs-raw gaps, parent-child
+    # driving tables) come from the analyze_project_db MCP tool — not this scanner.
+    print("DB HINTS: call analyze_project_db(connection_name) for lookup joins, "
+          "staging-vs-raw gaps, and parent-child driving-table hints.")
+    print()
 
     # current_date warnings
     cd_hits = scan_current_date(work_dir)

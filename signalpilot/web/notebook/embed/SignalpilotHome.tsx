@@ -11,8 +11,10 @@ import type { SignalpilotHomeProps } from "./types";
  * `config` prop because `initStore` will receive `mode: "home"` with an
  * otherwise empty blob.
  *
- * The `.sp-root.dark.dark-theme` wrapper scopes all rescoped CSS selectors
- * to this subtree so embed and host page styles don't bleed into each other.
+ * The `.sp-root` wrapper scopes all rescoped CSS selectors to this subtree
+ * so embed and host page styles don't bleed into each other. Theme classes
+ * (`dark`/`light`, `dark-theme`/`light-theme`) are applied reactively by
+ * `ThemeProvider` via `document.body`.
  */
 export function SignalpilotHome({
   client,
@@ -26,8 +28,7 @@ export function SignalpilotHome({
 
   return (
     <div
-      className={`sp-root dark dark-theme${className ? ` ${className}` : ""}`}
-      data-theme="dark"
+      className={`sp-root${className ? ` ${className}` : ""}`}
     >
       <SpEmbedProviders client={client} options={options}>
         <SpApp />

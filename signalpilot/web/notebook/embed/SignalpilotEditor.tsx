@@ -10,8 +10,10 @@ import type { SignalpilotEditorProps } from "./types";
  * `<SpEmbedProviders>`. The `mode` field is injected automatically — do not
  * include it in the `config` prop.
  *
- * The `.sp-root.dark.dark-theme` wrapper scopes all rescoped CSS selectors
- * to this subtree so embed and host page styles don't bleed into each other.
+ * The `.sp-root` wrapper scopes all rescoped CSS selectors to this subtree
+ * so embed and host page styles don't bleed into each other. Theme classes
+ * (`dark`/`light`, `dark-theme`/`light-theme`) are applied reactively by
+ * `ThemeProvider` via `document.body`.
  *
  * Phase E: `SignalpilotEditorProps` will gain a `navigate` prop for host-
  * controlled routing. Today's embed inherits standalone navigation
@@ -26,8 +28,7 @@ export function SignalpilotEditor({
 
   return (
     <div
-      className={`sp-root dark dark-theme${className ? ` ${className}` : ""}`}
-      data-theme="dark"
+      className={`sp-root${className ? ` ${className}` : ""}`}
     >
       <SpEmbedProviders client={client} options={options}>
         <SpApp />

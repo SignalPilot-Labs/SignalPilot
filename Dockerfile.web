@@ -38,7 +38,7 @@ COPY --from=builder /app/signalpilot/web/.next/static ./.next/static
 COPY --from=builder /app/signalpilot/web/public ./public
 
 # Entrypoint: wait for local API key, then start standalone server
-RUN printf '#!/bin/sh\ni=0\nwhile [ ! -f /shared/local_api_key ] && [ "$i" -lt 30 ]; do\n  sleep 1\n  i=$((i+1))\ndone\nif [ -f /shared/local_api_key ]; then\n  export SP_LOCAL_API_KEY="$(cat /shared/local_api_key)"\nfi\nexec node server.js\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+RUN printf '#!/bin/sh\ni=0\nwhile [ ! -f /shared/local_api_key ] && [ "$i" -lt 30 ]; do\n  sleep 1\n  i=$((i+1))\ndone\nif [ -f /shared/local_api_key ]; then\n  export SP_LOCAL_API_KEY="$(cat /shared/local_api_key)"\nfi\nnode server.js &\nSERVER_PID=$!\ntrap "kill -TERM $SERVER_PID 2>/dev/null" TERM INT\nsleep 4\necho ""\necho "  ============================================================"\necho "   SignalPilot is ready!"\necho ""\necho "   Open your dashboard:  http://localhost:3200"\necho ""\necho "   (Ctrl+click the link above, or paste it into your browser)"\necho "  ============================================================"\necho ""\nwait $SERVER_PID\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
 ENV PORT=3200
 ENV HOSTNAME=0.0.0.0

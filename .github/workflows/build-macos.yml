@@ -1,11 +1,11 @@
 name: Build (macOS / arm64 native)
 
-# GitHub's Apple Silicon macOS runners don't support nested virtualization,
-# so Docker (colima/lima) can't run here. Instead we validate the part that
-# actually breaks per-arch: native dependency resolution + the web build from
-# a real arm64 macOS checkout. The Linux Docker image itself is covered by the
-# Windows (WSL) job. This is what catches the lightningcss/sharp/oxide arm64
-# optional-binary class of failures.
+# GitHub's Apple Silicon macOS runners lack nested virtualization, so Docker
+# (colima/lima) can't boot a VM here. Instead we validate the part that breaks
+# per-arch from a real arm64 macOS checkout: native dependency resolution + the
+# web build. This catches the arm64 native-binary class of failures
+# (lightningcss / @tailwindcss/oxide / sharp). The Linux image is covered by
+# build-linux.yml.
 
 on:
   push:
@@ -30,15 +30,3 @@ jobs:
         run: |
           npm ci --legacy-peer-deps
           npm run build
-
-  gateway:
-    runs-on: macos-latest # Apple Silicon (arm64)
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: astral-sh/setup-uv@v5
-
-      - name: Resolve deps from lockfile (native arm64)
-        working-directory: signalpilot/gateway
-        run: uv sync --frozen --no-dev --extra snowflake --extra bigquery --extra clickhouse

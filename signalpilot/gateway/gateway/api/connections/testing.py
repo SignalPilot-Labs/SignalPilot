@@ -105,7 +105,21 @@ async def test_credentials(_: UserID, request: Request):
         try:
             parsed = urlparse(conn_str if "://" in conn_str else f"dummy://{conn_str}")
             host = parsed.hostname or conn.host or "localhost"
-            port = parsed.port or conn.port or 5432
+            # Default TCP port per engine — do NOT fall back to 5432 for everything
+            # (that probed Snowflake's account identifier on the Postgres port).
+            _default_ports = {
+                "postgres": 5432, "mysql": 3306, "mssql": 1433, "redshift": 5439,
+                "snowflake": 443, "databricks": 443, "clickhouse": 9000, "trino": 8080,
+            }
+            port = parsed.port or conn.port or _default_ports.get(db_type, 5432)
+            # Snowflake's "host" in the URL is an account identifier (e.g. org-account),
+            # not a resolvable name. The real endpoint is <account>.snowflakecomputing.com:443.
+            # An explicit host override (PrivateLink / China / gov / VPS) wins verbatim.
+            if db_type == "snowflake":
+                if getattr(conn, "snowflake_host", None):
+                    host = conn.snowflake_host
+                elif host and "snowflakecomputing.com" not in host:
+                    host = f"{host}.snowflakecomputing.com"
 
             # Resolve DNS and validate IPs in one step, then connect to the
             # validated IP directly. This prevents DNS rebinding TOCTOU attacks

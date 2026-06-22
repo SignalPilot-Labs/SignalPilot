@@ -153,6 +153,15 @@ class ConnectionCreate(BaseModel):
     # ─── Snowflake key-pair auth ───────────────────────────────────
     private_key: str | None = Field(default=None, max_length=16384)  # PEM-encoded private key
     private_key_passphrase: str | None = Field(default=None, max_length=1024)
+    # ─── Snowflake auth method + host override (supports all account types) ──
+    # authenticator: password | key_pair | oauth | pat | mfa, OR an Okta URL
+    # (https://<org>.okta.com). Empty = password.
+    authenticator: str | None = Field(default=None, max_length=512)
+    passcode: str | None = Field(default=None, max_length=16)  # MFA passcode (username_password_mfa)
+    # Explicit host override for PrivateLink / China (.cn) / SnowGov / VPS — when the
+    # account identifier alone does not produce the right <host>.snowflakecomputing.com.
+    snowflake_host: str | None = Field(default=None, max_length=255)
+    snowflake_protocol: str | None = Field(default=None, pattern=r"^https?$")  # default https
     # ─── DuckDB / MotherDuck ──────────────────────────────────────
     motherduck_token: str | None = Field(default=None, max_length=2048)  # MotherDuck personal access token
     # ─── Metadata ───────────────────────────────────────────────────
@@ -301,6 +310,11 @@ class ConnectionUpdate(BaseModel):
     catalog: str | None = Field(default=None, max_length=128)
     private_key: str | None = Field(default=None, max_length=16384)
     private_key_passphrase: str | None = Field(default=None, max_length=1024)
+    # Snowflake auth method + host override
+    authenticator: str | None = Field(default=None, max_length=512)
+    passcode: str | None = Field(default=None, max_length=16)
+    snowflake_host: str | None = Field(default=None, max_length=255)
+    snowflake_protocol: str | None = Field(default=None, pattern=r"^https?$")
     description: str | None = Field(default=None, max_length=500)
     tags: list[str] | None = Field(default=None, max_length=50)
     schema_filter_include: list[str] | None = Field(default=None, max_length=100)
@@ -371,6 +385,9 @@ class ConnectionInfo(BaseModel):
     warehouse: str | None = None
     schema_name: str | None = None
     role: str | None = None
+    authenticator: str | None = None  # auth method or Okta URL (non-secret)
+    snowflake_host: str | None = None  # host override (PrivateLink/China/gov/VPS)
+    snowflake_protocol: str | None = None
     # BigQuery
     project: str | None = None
     dataset: str | None = None

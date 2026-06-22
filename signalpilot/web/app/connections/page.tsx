@@ -738,11 +738,17 @@ interface FormState {
   ssh_proxy_enabled: boolean;
   ssh_proxy_host: string;
   ssh_proxy_port: string;
-  // Snowflake auth method (password, key-pair, or OAuth)
-  snowflake_auth_method: "password" | "key_pair" | "oauth";
+  // Snowflake auth method (password, key-pair, OAuth, PAT, Okta SSO, or MFA)
+  snowflake_auth_method: "password" | "key_pair" | "oauth" | "pat" | "okta" | "mfa";
   sf_private_key: string;
   sf_private_key_passphrase: string;
   sf_oauth_token: string;
+  sf_pat: string; // Programmatic access token (sent in password field)
+  sf_passcode: string; // MFA passcode
+  sf_okta_url: string; // Okta SSO URL (sent as authenticator)
+  // Snowflake advanced: explicit host/protocol override (PrivateLink, China, gov, VPS)
+  snowflake_host: string;
+  snowflake_protocol: "https" | "http";
   // AWS IAM auth (PostgreSQL, MySQL on RDS, Redshift)
   iam_auth: boolean;
   aws_region: string;
@@ -802,6 +808,8 @@ const defaultForm: FormState = {
   ssh_password: "", ssh_private_key: "", ssh_key_passphrase: "",
   ssh_proxy_enabled: false, ssh_proxy_host: "", ssh_proxy_port: "3128",
   snowflake_auth_method: "password", sf_private_key: "", sf_private_key_passphrase: "", sf_oauth_token: "",
+  sf_pat: "", sf_passcode: "", sf_okta_url: "",
+  snowflake_host: "", snowflake_protocol: "https",
   iam_auth: false, aws_region: "us-east-1", aws_access_key_id: "", aws_secret_access_key: "",
   redshift_cluster_id: "", redshift_workgroup: "",
   azure_ad_auth: false, azure_tenant_id: "", azure_client_id: "", azure_client_secret: "",
@@ -833,8 +841,20 @@ function buildConnectionPreview(form: FormState): string {
       const chPort = form.port || (form.ch_protocol === "http" ? (form.ssl_enabled ? "8443" : "8123") : (form.ssl_enabled ? "9440" : "9000"));
       return `${chScheme}://${form.username || "default"}:****@${form.host || "host"}:${chPort}/${form.database || "default"}`;
     }
-    case "snowflake":
-      return `snowflake://${form.username || "user"}:****@${form.account || "account"}/${form.database || "db"}/${form.schema_name || "schema"}${form.warehouse ? `?warehouse=${form.warehouse}` : ""}`;
+    case "snowflake": {
+      const sfHost = form.snowflake_host.trim() || form.account || "account";
+      const sfParams: string[] = [];
+      if (form.warehouse) sfParams.push(`warehouse=${form.warehouse}`);
+      if (form.role) sfParams.push(`role=${form.role}`);
+      // Reflect the chosen auth method; secrets stay masked.
+      const sfAuthLabel: Record<FormState["snowflake_auth_method"], string> = {
+        password: "password", key_pair: "key_pair", oauth: "oauth",
+        pat: "pat", okta: "okta", mfa: "mfa",
+      };
+      sfParams.push(`authenticator=${sfAuthLabel[form.snowflake_auth_method]}`);
+      const sfQuery = sfParams.length ? `?${sfParams.join("&")}` : "";
+      return `snowflake://${form.username || "user"}:****@${sfHost}/${form.database || "db"}/${form.schema_name || "schema"}${sfQuery}`;
+    }
     case "bigquery":
       return `bigquery://${form.project || "project"}/${form.dataset || "dataset"}`;
     case "databricks":
@@ -987,6 +1007,23 @@ function validateForm(form: FormState): Record<string, string> {
     }
     if (form.snowflake_auth_method === "oauth" && !form.sf_oauth_token.trim()) {
       errors.sf_oauth_token = "OAuth access token is required";
+    }
+    if (form.snowflake_auth_method === "pat" && !form.sf_pat.trim()) {
+      errors.sf_pat = "programmatic access token is required";
+    }
+    if (form.snowflake_auth_method === "mfa" && !form.password.trim()) {
+      errors.password = "password is required for MFA auth";
+    }
+    if (form.snowflake_auth_method === "okta") {
+      if (!form.sf_okta_url.trim()) {
+        errors.sf_okta_url = "Okta URL is required";
+      } else if (!/^https:\/\/.+\.okta\.com/.test(form.sf_okta_url.trim())) {
+        errors.sf_okta_url = "must be an Okta URL (e.g., https://your-org.okta.com)";
+      }
+      if (!form.password.trim()) errors.password = "password is required for Okta SSO";
+    }
+    if (form.snowflake_protocol === "http" && !form.snowflake_host.trim()) {
+      errors.snowflake_host = "host override is required when protocol is http";
     }
   }
 
@@ -1147,14 +1184,45 @@ function buildCreatePayload(form: FormState): Record<string, unknown> {
     payload.tags = form.tags;
   }
 
-  // Snowflake auth method
+  // Snowflake auth method → maps to the gateway `authenticator` contract.
   if (form.db_type === "snowflake") {
-    payload.auth_method = form.snowflake_auth_method;
-    if (form.snowflake_auth_method === "key_pair") {
-      payload.private_key = form.sf_private_key;
-      if (form.sf_private_key_passphrase) payload.private_key_passphrase = form.sf_private_key_passphrase;
-    } else if (form.snowflake_auth_method === "oauth") {
-      payload.oauth_access_token = form.sf_oauth_token;
+    switch (form.snowflake_auth_method) {
+      case "key_pair":
+        payload.authenticator = "key_pair";
+        payload.private_key = form.sf_private_key;
+        if (form.sf_private_key_passphrase) payload.private_key_passphrase = form.sf_private_key_passphrase;
+        delete payload.password; // key-pair does not use a password
+        break;
+      case "oauth":
+        payload.authenticator = "oauth";
+        payload.access_token = form.sf_oauth_token;
+        delete payload.password; // OAuth does not use a password
+        break;
+      case "pat":
+        // Programmatic access token is supplied in the password field.
+        payload.authenticator = "pat";
+        payload.password = form.sf_pat;
+        break;
+      case "mfa":
+        payload.authenticator = "mfa";
+        payload.password = form.password;
+        if (form.sf_passcode) payload.passcode = form.sf_passcode;
+        break;
+      case "okta":
+        // Okta native SSO: the Okta URL itself is the authenticator value.
+        payload.authenticator = form.sf_okta_url.trim();
+        payload.password = form.password;
+        break;
+      case "password":
+      default:
+        payload.authenticator = "password";
+        payload.password = form.password;
+        break;
+    }
+    // Advanced host/protocol overrides (PrivateLink, China, gov, VPS).
+    if (form.snowflake_host.trim()) payload.snowflake_host = form.snowflake_host.trim();
+    if (form.snowflake_protocol && form.snowflake_protocol !== "https") {
+      payload.snowflake_protocol = form.snowflake_protocol;
     }
   }
 
@@ -1260,6 +1328,7 @@ function ConnectionFieldsForm({
   clearServerError: (key: string) => void;
 }) {
   const config = DB_CONFIGS[form.db_type];
+  const [showSnowflakeAdvanced, setShowSnowflakeAdvanced] = useState(false);
 
   /** Wrap onChange to also clear the server error for this field key. */
   function field(key: keyof FormState, update: (v: string) => void) {
@@ -1345,8 +1414,15 @@ function ConnectionFieldsForm({
         <FormInput label="username" value={form.username} onChange={field("username", (v) => setForm({ ...form, username: v }))} placeholder="ANALYTICS_USER" required {...fieldProps("username", formErrors, fieldRefs)} />
         <div className="col-span-2 mb-1">
           <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">authentication method</label>
-          <div className="flex gap-2">
-            {(["password", "key_pair", "oauth"] as const).map((method) => (
+          <div className="flex flex-wrap gap-2">
+            {([
+              ["password", "password"],
+              ["key_pair", "key pair (RSA)"],
+              ["oauth", "OAuth"],
+              ["pat", "programmatic access token"],
+              ["okta", "Okta SSO"],
+              ["mfa", "username+password+MFA"],
+            ] as const).map(([method, label]) => (
               <button
                 key={method}
                 type="button"
@@ -1357,7 +1433,7 @@ function ConnectionFieldsForm({
                     : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
                 }`}
               >
-                {method === "password" ? "password" : method === "key_pair" ? "key pair (RSA)" : "OAuth"}
+                {label}
               </button>
             ))}
           </div>
@@ -1384,7 +1460,7 @@ function ConnectionFieldsForm({
             />
             <FormInput label="key passphrase" value={form.sf_private_key_passphrase} onChange={(v) => setForm({ ...form, sf_private_key_passphrase: v })} type="password" hint="leave empty if key is unencrypted" className="col-span-2" />
           </>
-        ) : (
+        ) : form.snowflake_auth_method === "oauth" ? (
           <>
             <FormInput label="OAuth access token" value={form.sf_oauth_token} onChange={(v) => setForm({ ...form, sf_oauth_token: v })} type="password" required className="col-span-2" hint="from your identity provider (Okta, Azure AD, etc.)" {...fieldProps("sf_oauth_token", formErrors, fieldRefs)} />
             <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
@@ -1392,11 +1468,76 @@ function ConnectionFieldsForm({
               <div><span className="text-[var(--color-text-muted)]">local dev:</span> Use Snowflake&apos;s built-in SNOWFLAKE$LOCAL_APPLICATION integration for quick setup without admin involvement.</div>
             </div>
           </>
+        ) : form.snowflake_auth_method === "pat" ? (
+          <>
+            <FormInput label="programmatic access token" value={form.sf_pat} onChange={field("sf_pat", (v) => setForm({ ...form, sf_pat: v }))} type="password" required className="col-span-2" hint="Snowflake PAT (Admin → Users → Programmatic Access Tokens)" {...fieldProps("sf_pat", formErrors, fieldRefs)} />
+          </>
+        ) : form.snowflake_auth_method === "mfa" ? (
+          <>
+            <FormInput label="password" value={form.password} onChange={field("password", (v) => setForm({ ...form, password: v }))} type="password" required className="col-span-2" {...fieldProps("password", formErrors, fieldRefs)} />
+            <FormInput label="MFA passcode" value={form.sf_passcode} onChange={(v) => setForm({ ...form, sf_passcode: v })} placeholder="123456" className="col-span-2" hint="optional — TOTP passcode from your authenticator app. leave empty to receive a Duo push." />
+          </>
+        ) : (
+          <>
+            <FormInput label="Okta URL" value={form.sf_okta_url} onChange={field("sf_okta_url", (v) => setForm({ ...form, sf_okta_url: v }))} placeholder="https://your-org.okta.com" required className="col-span-2" hint="your Okta organization URL — sent as the Snowflake authenticator" {...fieldProps("sf_okta_url", formErrors, fieldRefs)} />
+            <FormInput label="password" value={form.password} onChange={field("password", (v) => setForm({ ...form, password: v }))} type="password" required className="col-span-2" {...fieldProps("password", formErrors, fieldRefs)} />
+            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+              <div><span className="text-[var(--color-text-muted)]">native SSO:</span> Snowflake authenticates directly against Okta using your Okta username and password. Requires Snowflake to be federated with this Okta org.</div>
+            </div>
+          </>
         )}
         <FormInput label="warehouse" value={form.warehouse} onChange={(v) => setForm({ ...form, warehouse: v })} placeholder="COMPUTE_WH" hint="optional — default warehouse" />
         <FormInput label="database" value={form.database} onChange={(v) => setForm({ ...form, database: v })} placeholder="PROD_DB" hint="optional — default database" />
         <FormInput label="schema" value={form.schema_name} onChange={(v) => setForm({ ...form, schema_name: v })} placeholder="PUBLIC" hint="optional — default schema" />
         <FormInput label="role" value={form.role} onChange={(v) => setForm({ ...form, role: v })} placeholder="ANALYST_ROLE" hint="optional — Snowflake role" />
+        <div className="col-span-2">
+          <button
+            type="button"
+            onClick={() => setShowSnowflakeAdvanced(!showSnowflakeAdvanced)}
+            className="flex items-center gap-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider mb-2"
+          >
+            {showSnowflakeAdvanced ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            advanced — host override
+            {(form.snowflake_host.trim() !== "" || form.snowflake_protocol !== "https") && (
+              <span className="text-[var(--color-success)] text-[11px] ml-1">
+                {[form.snowflake_host.trim() !== "" && "host", form.snowflake_protocol !== "https" && "http"].filter(Boolean).join(" + ")}
+              </span>
+            )}
+          </button>
+          {showSnowflakeAdvanced && (
+            <div className="animate-fade-in grid grid-cols-2 gap-3">
+              <FormInput
+                label="host override"
+                value={form.snowflake_host}
+                onChange={field("snowflake_host", (v) => setForm({ ...form, snowflake_host: v }))}
+                placeholder="org-account.privatelink.snowflakecomputing.com"
+                hint="explicit host — for PrivateLink, China (.cn), SnowGov, or VPS"
+                className="col-span-2"
+                {...fieldProps("snowflake_host", formErrors, fieldRefs)}
+              />
+              <div className="col-span-2">
+                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">protocol</label>
+                <div className="flex gap-2">
+                  {(["https", "http"] as const).map((proto) => (
+                    <button
+                      key={proto}
+                      type="button"
+                      onClick={() => setForm({ ...form, snowflake_protocol: proto })}
+                      className={`px-2.5 py-1 text-[12px] tracking-wider border transition-all ${
+                        form.snowflake_protocol === proto
+                          ? "border-[var(--color-text)] text-[var(--color-text)]"
+                          : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
+                      }`}
+                    >
+                      {proto}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">defaults to https — leave host override blank unless you need a non-standard endpoint</p>
+              </div>
+            </div>
+          )}
+        </div>
         <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
           <div><span className="text-[var(--color-text-muted)]">network policy:</span> Add this server&apos;s IP to ALLOWED_IP_LIST. Snowflake Admin → Security → Network Policies.</div>
           <div><span className="text-[var(--color-text-muted)]">private link:</span> For AWS PrivateLink or Azure Private Link, use the private account URL (e.g., org-account.privatelink.snowflakecomputing.com).</div>
@@ -2494,6 +2635,19 @@ export default function ConnectionsPage() {
       warehouse: conn.warehouse || "",
       schema_name: conn.schema_name || "",
       role: conn.role || "",
+      // Snowflake auth method — derived from the gateway `authenticator` value.
+      snowflake_auth_method: (() => {
+        const a = String((conn as any).authenticator || "").toLowerCase();
+        if (a.includes("okta.com")) return "okta";
+        if (a === "key_pair" || a === "snowflake_jwt") return "key_pair";
+        if (a === "oauth") return "oauth";
+        if (a === "pat") return "pat";
+        if (a === "mfa" || a === "username_password_mfa") return "mfa";
+        return "password";
+      })(),
+      sf_okta_url: String((conn as any).authenticator || "").includes("okta.com") ? String((conn as any).authenticator) : "",
+      snowflake_host: (conn as any).snowflake_host || "",
+      snowflake_protocol: (conn as any).snowflake_protocol === "http" ? "http" : "https",
       project: conn.project || "",
       dataset: conn.dataset || "",
       bq_location: (conn as any).location || "",

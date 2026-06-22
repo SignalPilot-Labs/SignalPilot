@@ -97,6 +97,11 @@ export interface ConnectionInfo {
   warehouse: string | null;
   schema_name: string | null;
   role: string | null;
+  // Snowflake auth + host/protocol overrides (gateway contract)
+  authenticator: string | null;
+  passcode: string | null;
+  snowflake_host: string | null;
+  snowflake_protocol: "https" | "http" | null;
   // BigQuery
   project: string | null;
   dataset: string | null;

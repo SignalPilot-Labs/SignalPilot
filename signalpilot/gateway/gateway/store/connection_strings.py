@@ -135,6 +135,14 @@ def _extract_credential_extras(conn: ConnectionCreate) -> dict:
             extras["private_key"] = conn.private_key
         if conn.private_key_passphrase:
             extras["private_key_passphrase"] = conn.private_key_passphrase
+        # auth method + host override (all account types). OAuth token rides in
+        # access_token (set above) → mapped to oauth_access_token for the connector.
+        if conn.access_token:
+            extras["oauth_access_token"] = conn.access_token
+        for attr in ("authenticator", "passcode", "snowflake_host", "snowflake_protocol"):
+            val = getattr(conn, attr, None)
+            if val:
+                extras[attr] = val
     if conn.db_type == DBType.databricks:
         for attr in ("http_path", "access_token", "catalog", "schema_name"):
             extras[attr] = getattr(conn, attr, None)

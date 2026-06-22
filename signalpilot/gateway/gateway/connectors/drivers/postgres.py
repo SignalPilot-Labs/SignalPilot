@@ -19,7 +19,7 @@ class PostgresConnector(BaseConnector):
     def __init__(self):
         super().__init__()
         self._pool = None
-        self._command_timeout: int = 30
+        self._command_timeout: int = 150  # was 30 — large-warehouse schema pulls need headroom
         self._pool_min_size: int = 1
         self._pool_max_size: int = 5
         self._iam_auth: bool = False

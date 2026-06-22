@@ -166,9 +166,11 @@ services:
     volumes:
       # Users root (C:\Users, /home, /Users) — sandboxed DuckDB/SQLite translate
       # host file paths to /host-data/<user>/... (see sandboxed_duckdb.py).
-      # Set SP_HOST_DATA_DIR in .env to your OS users-root. No cross-OS default
-      # exists ($HOME/.. is wrong on Windows/macOS), so this is required.
-      - ${SP_HOST_DATA_DIR:?set SP_HOST_DATA_DIR in .env to your users-root (Windows C:/Users, macOS /Users, Linux /home)}:/host-data:ro
+      # Set SP_HOST_DATA_DIR to your OS users-root to enable querying host
+      # DuckDB/SQLite files (Windows C:/Users, macOS /Users, Linux /home).
+      # When unset it falls back to an empty named volume, so the stack builds
+      # and runs with zero config — host-file access is simply disabled.
+      - ${SP_HOST_DATA_DIR:-signalpilot-hostdata-empty}:/host-data:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 5s
@@ -184,3 +186,6 @@ volumes:
   signalpilot-gateway-secrets:
   signalpilot-repos:
   signalpilot-workspace:
+  # Empty fallback for /host-data when SP_HOST_DATA_DIR is unset (host-file
+  # DuckDB/SQLite access disabled).
+  signalpilot-hostdata-empty:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
@@ -27,6 +28,12 @@ router = APIRouter()
 
 
 # ─── OAuth Flow ──────────────────────────────────────────────────────────
+
+
+def _github_settings_redirect(web_url: str, **params: str) -> RedirectResponse:
+    query = urlencode(params)
+    suffix = f"?{query}" if query else ""
+    return RedirectResponse(url=f"{web_url.rstrip('/')}/settings/github{suffix}", status_code=302)
 
 
 @router.get("/api/github/install-url", dependencies=[RequireScope("write")])
@@ -71,20 +78,14 @@ async def github_oauth_callback(
 ):
     settings = get_github_settings()
     if not settings.is_configured:
-        raise HTTPException(status_code=503, detail="GitHub App not configured")
+        return _github_settings_redirect(settings.sp_web_url, error="github_app_not_configured")
 
     if is_cloud_mode():
         if not state:
-            raise HTTPException(
-                status_code=400,
-                detail="OAuth state invalid. Please retry the GitHub install from the SignalPilot UI.",
-            )
+            return _github_settings_redirect(settings.sp_web_url, error="oauth_state_invalid")
         org_id = verify_state(state)
         if org_id is None:
-            raise HTTPException(
-                status_code=400,
-                detail="OAuth state invalid. Please retry the GitHub install from the SignalPilot UI.",
-            )
+            return _github_settings_redirect(settings.sp_web_url, error="oauth_state_invalid")
     else:
         # Local mode: empty state falls back to "local", non-empty state is verified
         if state:
@@ -128,9 +129,8 @@ async def github_oauth_callback(
             permissions=details.get("permissions"),
         )
 
-    redirect_url = f"{settings.sp_web_url}/settings/github?installed=true"
     logger.info("GitHub App installed: installation_id=%s org=%s", installation_id, org_id)
-    return RedirectResponse(url=redirect_url, status_code=302)
+    return _github_settings_redirect(settings.sp_web_url, installed="true")
 
 
 # ─── Installation CRUD ──────────────────────────────────────────────────

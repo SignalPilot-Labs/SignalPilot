@@ -3,14 +3,13 @@
 import { useEffect, useState, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import {
+  AlertTriangle,
   GitBranch,
   Loader2,
   Plug,
   Unplug,
   Link as LinkIcon,
   Unlink,
-  ExternalLink,
-  RefreshCw,
 } from "lucide-react";
 import {
   getGitHubInstallUrl,
@@ -31,9 +30,6 @@ import type {
 import { PageHeader, TerminalBar } from "~/components/ui/page-header";
 import { StatusDot } from "~/components/ui/data-viz";
 import { useToast } from "~/components/ui/toast";
-import Link from "next/link";
-
-const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
 
 export default function GitHubConnectionsPage() {
   const { toast } = useToast();
@@ -49,6 +45,17 @@ export default function GitHubConnectionsPage() {
   const [pickerRepos, setPickerRepos] = useState<GitHubRepo[]>([]);
   const [pickerLoading, setPickerLoading] = useState(false);
   const [linkingProjectId, setLinkingProjectId] = useState<string>("");
+  const [connecting, setConnecting] = useState(false);
+
+  const githubError = searchParams.get("error");
+  const githubErrorMessage =
+    githubError === "oauth_state_invalid"
+      ? "GitHub connection expired. Please try again."
+      : githubError === "github_app_not_configured"
+        ? "GitHub App is not configured for this workspace."
+        : githubError
+          ? "GitHub connection failed. Please try again."
+          : null;
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -72,7 +79,21 @@ export default function GitHubConnectionsPage() {
     if (searchParams.get("installed") === "true") {
       toast("GitHub App connected successfully", "success");
     }
-  }, [refresh, searchParams, toast]);
+    if (githubErrorMessage) {
+      toast(githubErrorMessage, "error");
+    }
+  }, [githubErrorMessage, refresh, searchParams, toast]);
+
+  async function handleConnectGitHub() {
+    setConnecting(true);
+    try {
+      const { install_url } = await getGitHubInstallUrl();
+      window.location.href = install_url;
+    } catch (e) {
+      toast(String(e), "error");
+      setConnecting(false);
+    }
+  }
 
   async function handleDisconnect(id: string) {
     try {
@@ -152,6 +173,33 @@ export default function GitHubConnectionsPage() {
         </div>
       </TerminalBar>
 
+      {githubErrorMessage && (
+        <div className="mb-6 border border-[var(--color-error)] bg-[var(--color-error)]/10 px-5 py-4 flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-4 h-4 mt-0.5 text-[var(--color-error)]" />
+            <div>
+              <p className="text-xs font-bold text-[var(--color-text)] tracking-wider uppercase">
+                GitHub connection failed
+              </p>
+              <p className="mt-1 text-xs text-[var(--color-text-dim)]">
+                {githubErrorMessage}
+              </p>
+            </div>
+          </div>
+          {githubError !== "github_app_not_configured" && (
+            <button
+              type="button"
+              onClick={handleConnectGitHub}
+              disabled={connecting}
+              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text)] bg-[var(--color-bg-input)] border border-[var(--color-border)] hover:border-[var(--color-text-dim)] transition-all tracking-wider uppercase disabled:opacity-50"
+            >
+              {connecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plug className="w-3 h-3" />}
+              retry
+            </button>
+          )}
+        </div>
+      )}
+
       {loading ? (
         <div className="flex items-center gap-2 py-12 text-xs text-[var(--color-text-dim)]">
           <Loader2 className="w-3.5 h-3.5 animate-spin" /> loading...
@@ -165,17 +213,13 @@ export default function GitHubConnectionsPage() {
                 connected accounts
               </span>
               <button
-                onClick={async () => {
-                  try {
-                    const { install_url } = await getGitHubInstallUrl();
-                    window.location.href = install_url;
-                  } catch (e) {
-                    toast(String(e), "error");
-                  }
-                }}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text)] bg-[var(--color-bg-input)] border border-[var(--color-border)] hover:border-[var(--color-text-dim)] transition-all tracking-wider uppercase"
+                type="button"
+                onClick={handleConnectGitHub}
+                disabled={connecting}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text)] bg-[var(--color-bg-input)] border border-[var(--color-border)] hover:border-[var(--color-text-dim)] transition-all tracking-wider uppercase disabled:opacity-50"
               >
-                <Plug className="w-3 h-3" /> connect github
+                {connecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plug className="w-3 h-3" />}
+                connect github
               </button>
             </div>
             {installations.length === 0 ? (

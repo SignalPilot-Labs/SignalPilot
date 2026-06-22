@@ -1,8 +1,11 @@
-name: Build (macOS / arm64)
+name: Build (macOS / arm64 native)
 
-# Proves the Docker images build from a macOS (Apple Silicon) checkout.
-# Uses colima for a native arm64 Docker daemon — no emulation, so uv and other
-# native tooling run cleanly (an amd64 image under QEMU segfaults uv).
+# GitHub's Apple Silicon macOS runners don't support nested virtualization,
+# so Docker (colima/lima) can't run here. Instead we validate the part that
+# actually breaks per-arch: native dependency resolution + the web build from
+# a real arm64 macOS checkout. The Linux Docker image itself is covered by the
+# Windows (WSL) job. This is what catches the lightningcss/sharp/oxide arm64
+# optional-binary class of failures.
 
 on:
   push:
@@ -12,22 +15,30 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  web:
     runs-on: macos-latest # Apple Silicon (arm64)
-    timeout-minutes: 60
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Docker (colima)
-        run: |
-          brew install docker docker-compose colima
-          # Register docker compose v2 as a CLI plugin so `docker compose` works.
-          mkdir -p ~/.docker/cli-plugins
-          ln -sfn "$(brew --prefix)/opt/docker-compose/bin/docker-compose" \
-            ~/.docker/cli-plugins/docker-compose
-          # Native arm64 VM — builds the images for the host arch, no emulation.
-          colima start --cpu 3 --memory 5 --disk 20
-          docker info
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
-      - name: Build images (native arm64)
-        run: docker compose build web gateway
+      - name: Install deps (native arm64) + build
+        working-directory: signalpilot/web
+        run: |
+          npm ci --legacy-peer-deps
+          npm run build
+
+  gateway:
+    runs-on: macos-latest # Apple Silicon (arm64)
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Resolve deps from lockfile (native arm64)
+        working-directory: signalpilot/gateway
+        run: uv sync --frozen --no-dev --extra snowflake --extra bigquery --extra clickhouse

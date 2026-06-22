@@ -59,7 +59,7 @@ export const SqlEditorToolbar: React.FC<SqlEditorToolbarProps> = ({
         <span className="text-sm font-mono font-medium truncate max-w-md">
           {relativePath}
         </span>
-        <span className="text-[10px] font-bold uppercase tracking-widest text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-primary bg-primary/10 px-2 py-0.5 rounded">
           MODEL
         </span>
         {isDirty && (

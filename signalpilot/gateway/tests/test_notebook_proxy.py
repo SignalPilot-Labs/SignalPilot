@@ -23,9 +23,19 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from cryptography.fernet import Fernet
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
+
+
+def _patch_encryption_key(monkeypatch):
+    import gateway.store.crypto as crypto
+
+    monkeypatch.setattr(crypto, "_CACHED_MULTIFERNET", None)
+    monkeypatch.setenv("SP_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.delenv("SP_ENCRYPTION_KEY_OLD", raising=False)
+    monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
 
 
 def _make_session_row(
@@ -144,11 +154,14 @@ class TestNotebookSessionInternal:
     """store/notebook_sessions.py: two read paths off the same row."""
 
     @pytest.mark.asyncio
-    async def test_get_session_internal_returns_real_token(self):
-        from gateway.db.models import GatewayNotebookSession
+    async def test_get_session_internal_returns_decrypted_token(self, monkeypatch):
+        _patch_encryption_key(monkeypatch)
+
+        from gateway.store.crypto import _encrypt
         from gateway.store.notebook_sessions import get_session_internal
 
-        row = _make_session_row()
+        row = _make_session_row(access_token=None)
+        row.access_token_enc = _encrypt("secret-token-abc")
         mock_session = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = row
@@ -160,6 +173,35 @@ class TestNotebookSessionInternal:
         assert result is not None
         assert result.access_token == "secret-token-abc"
         assert result.pod_ip_internal == "10.42.0.5"
+        mock_session.commit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_get_session_internal_migrates_legacy_plaintext_token(self, monkeypatch):
+        _patch_encryption_key(monkeypatch)
+
+        from gateway.store.crypto import _decrypt_with_migration
+        from gateway.store.notebook_sessions import get_session_internal
+
+        row = _make_session_row(access_token="legacy-token")
+        assert row.access_token_enc is None
+        mock_session = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = row
+        mock_session.execute.return_value = mock_result
+
+        result = await get_session_internal(
+            mock_session, session_id="test-sess-123", org_id="org-1"
+        )
+
+        assert result is not None
+        assert result.access_token == "legacy-token"
+        assert row.access_token is None
+        assert row.access_token_enc is not None
+        assert b"legacy-token" not in row.access_token_enc
+        token, needs_migration = _decrypt_with_migration(row.access_token_enc)
+        assert token == "legacy-token"
+        assert needs_migration is False
+        mock_session.commit.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_to_info_hides_access_token(self):
@@ -1018,7 +1060,6 @@ class TestSessionIdValidationOnApiEndpoints:
         with pytest.raises(HTTPException) as exc_info:
             await ns_api_mod.ping_session_by_id("bad,id", store)
         assert exc_info.value.status_code == 404
-
 
 
 

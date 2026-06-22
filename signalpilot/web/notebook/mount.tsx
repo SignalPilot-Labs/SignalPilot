@@ -91,8 +91,7 @@ export async function mount(
 
   // Standalone: #root becomes the .sp-root container so rescoped CSS selectors
   // (body → .sp-root, :root → .sp-root) match without poisoning the host page.
-  (el as HTMLElement).classList.add("sp-root", "dark", "dark-theme");
-  (el as HTMLElement).dataset.theme = "dark";
+  (el as HTMLElement).classList.add("sp-root");
 
   let initResult: InitStoreResult;
 

@@ -76,12 +76,12 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
-    "compassql": "^0.21.2",
+    "compassql": "0.20.4",
     "cssnano": "^7.1.2",
     "date-fns": "^4.1.0",
     "dequal": "^2.0.3",
     "dnd-core": "^16.0.1",
-    "dompurify": "^3.4.1",
+    "dompurify": "^3.4.11",
     "htm": "^3.1.1",
     "html-react-parser": "^5.2.14",
     "html-to-image": "1.11.13",
@@ -90,7 +90,7 @@
     "jotai": "^2.17.0",
     "jotai-family": "^1.0.2",
     "jotai-scope": "^0.11.0",
-    "js-cookie": "^3.0.5",
+    "js-cookie": "^3.0.8",
     "katex": "^0.16.28",
     "lodash-es": "^4.17.22",
     "lucide-react": "^0.563.0",
@@ -98,7 +98,7 @@
     "marked": "^15.0.12",
     "mermaid": "^11.12.3",
     "mitt": "^3.0.1",
-    "next": "^16.2.6",
+    "next": "^16.2.9",
     "node-sql-parser": "^5.3.13",
     "openapi-fetch": "0.9.7",
     "partysocket": "1.1.13",
@@ -164,5 +164,13 @@
     "tailwindcss": "^4.0.0",
     "typescript": "^5"
   },
-  "overrides": {}
+  "overrides": {
+    "@babel/core": "7.29.7",
+    "brace-expansion": "5.0.6",
+    "js-cookie": "$js-cookie",
+    "js-yaml": "4.2.0",
+    "postcss": "8.5.15",
+    "yargs": "17.7.2",
+    "yargs-parser": "21.1.1"
+  }
 }

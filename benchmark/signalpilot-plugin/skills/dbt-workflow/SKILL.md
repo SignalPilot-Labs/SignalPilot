@@ -2,7 +2,7 @@
 name: dbt-workflow
 description: "Load FIRST before any dbt project work. Covers the full 8-step dbt workflow: project scanning, skill loading, validation, macro discovery, research, technical spec, SQL writing, and verification. Also covers output shape inference, incremental model handling, and what to trust in YML."
 disable-model-invocation: false
-allowed-tools: Bash(dbt *) Bash(python3 *) Bash(map-columns *) Bash(verify-values *)
+allowed-tools: Bash(dbt *) Bash(python3 *)
 ---
 
 # dbt Workflow Skill - Full Project Lifecycle
@@ -27,23 +27,20 @@ python3 "${CLAUDE_SKILL_DIR}/validate_project.py" "<project_directory>"
 ```
 Runs `dbt parse` and returns structured errors, warnings, and orphan patches.
 
-### map-columns - Upstream column mapper (Step 7)
-```bash
-# If model SQL exists (stubs): parses refs automatically
-map-columns "<project_directory>" "<model_name>"
+### analyze_project_db - DB hints (MCP tool, Step 1)
+Call `analyze_project_db(connection_name)`. Returns the database-derived hints:
+lookup joins (`_id` columns with matching dimension tables), staging-vs-raw row
+gaps, and parent-child driving-table hints. Run alongside scan_project.py in Step 1.
 
-# If model SQL does not exist yet: pass upstream table names explicitly
-map-columns "<project_directory>" "<model_name>" --upstream table1 table2
-```
-Queries each upstream table's columns from the DuckDB file and maps them
+### map_columns - Upstream column mapper (MCP tool, Step 7)
+Call `map_columns(connection_name, model_name, project_dir)`.
+Queries each upstream table's columns and maps them
 against the YML contract. Outputs every column as MAPPED, UNMAPPED-INCLUDE,
 or UNMAPPED-EXCLUDE with the recommended output alias (including domain prefix).
 Run this BEFORE writing each model's SQL. Include all UNMAPPED-INCLUDE columns; skip UNMAPPED-EXCLUDE columns (see dbt-write §1).
 
-### verify-values - Aggregate cross-validator (Step 8)
-```bash
-verify-values "<project_directory>" "<model_name>"
-```
+### verify_model_values - Aggregate cross-validator (MCP tool, Step 8)
+Call `verify_model_values(connection_name, model_name)`.
 Queries the model output, finds the upstream fact table, picks the largest
 slice, and compares the model's metric values against both COUNT(*) and
 COUNT(DISTINCT <key>) from the raw source. Reports MATCH, MISMATCH, or
@@ -83,11 +80,14 @@ tool. Mark each task `in_progress` when you start it and `completed` when
 you finish it. If skipping Steps 4-7, mark them as `completed` with no work.
 
 ### Step 1 - Map the project
-Run the project scan tool with the dbt project directory:
-```bash
-python3 "${CLAUDE_SKILL_DIR}/scan_project.py" "<project_directory>"
-```
-Read the ENTIRE output. Record:
+Run BOTH scans IN PARALLEL — a single turn with both tool calls. They are independent
+(one reads the project files, the other queries the database), so do NOT wait for one
+before calling the other:
+1. `python3 "${CLAUDE_SKILL_DIR}/scan_project.py" "<project_directory>"` — filesystem scan.
+2. `analyze_project_db(connection_name)` — database hints (lookup joins, staging-vs-raw
+   gaps, parent-child driving tables).
+
+Read the ENTIRE output of BOTH. Record:
 - STUBS TO REWRITE
 - MODELS TO BUILD
 - DEPENDENCIES

@@ -64,6 +64,140 @@ async def schema_diff(connection_name: str) -> str:
 
 
 @audited_tool(mcp)
+async def schema_diff_branches(base_connection: str, compare_connection: str) -> str:
+    """
+    Diff the live schemas of two database connections (e.g. two Xata branches).
+
+    Unlike schema_diff (one connection vs. its own cached snapshot), this compares
+    two distinct connections head-to-head. Use it to review an upstream branch
+    BEFORE it merges: register the base branch and the feature branch as two
+    connections, then diff to see every added/removed/retyped column that could
+    break a dbt model or pipeline.
+
+    Args:
+        base_connection: The base/production branch connection name.
+        compare_connection: The feature/upstream branch connection name.
+    """
+    if not _CONN_NAME_RE.match(base_connection) or not _CONN_NAME_RE.match(compare_connection):
+        return "Error: Invalid connection name"
+
+    gw = _gateway_url()
+    async with httpx.AsyncClient(timeout=120) as client:
+        r = await client.get(
+            f"{gw}/api/connections/{base_connection}/schema/diff/{compare_connection}",
+            headers=_gw_headers(),
+        )
+    if r.status_code != 200:
+        return sanitize_proxy_response(r.status_code, r.text)
+
+    data = r.json()
+    diff = data.get("diff", {})
+    lines = [
+        f"Schema Diff: {base_connection} (base) -> {compare_connection} (compare)",
+        f"  Base tables: {data.get('base_table_count', 0)} | "
+        f"Compare tables: {data.get('compare_table_count', 0)}",
+    ]
+    if not diff.get("has_changes"):
+        lines.append("  No schema differences between the two branches.")
+        return "\n".join(lines)
+
+    if diff.get("added_tables"):
+        lines.append(f"  Added tables: {', '.join(diff['added_tables'][:20])}")
+    if diff.get("removed_tables"):
+        lines.append(f"  Removed tables: {', '.join(diff['removed_tables'][:20])}")
+    for m in diff.get("modified_tables", []):
+        parts = [m["table"]]
+        if m.get("added_columns"):
+            parts.append(f"+cols: {', '.join(m['added_columns'][:10])}")
+        if m.get("removed_columns"):
+            parts.append(f"-cols: {', '.join(m['removed_columns'][:10])}")
+        for tc in m.get("type_changes", []):
+            parts.append(f"{tc['column']}: {tc['old_type']}→{tc['new_type']}")
+        lines.append(f"    {' | '.join(parts)}")
+    return "\n".join(lines)
+
+
+@audited_tool(mcp)
+async def xata_branch_diff(connection_name: str, base_branch: str, compare_branch: str) -> str:
+    """
+    Diff two Xata branches addressed from ONE registered workspace connection.
+
+    Unlike schema_diff_branches (which needs two separate connections), this uses a
+    single Xata workspace credential and swaps the branch per-call — ideal for
+    reviewing an upstream branch before it merges. The gateway resolves both branch
+    endpoints server-side; you only name the branches.
+
+    Args:
+        connection_name: The Xata workspace connection.
+        base_branch: Base branch name (e.g. "main").
+        compare_branch: Feature/upstream branch name to compare against base.
+    """
+    if not _CONN_NAME_RE.match(connection_name):
+        return "Error: Invalid connection name"
+
+    gw = _gateway_url()
+    async with httpx.AsyncClient(timeout=120) as client:
+        r = await client.get(
+            f"{gw}/api/connections/{connection_name}/xata/branch-diff",
+            params={"base": base_branch, "compare": compare_branch},
+            headers=_gw_headers(),
+        )
+    if r.status_code != 200:
+        return sanitize_proxy_response(r.status_code, r.text)
+
+    data = r.json()
+    diff = data.get("diff", {})
+    lines = [f"Xata branch diff: {base_branch} (base) -> {compare_branch} (compare)"]
+    if not diff.get("has_changes"):
+        lines.append("  No schema differences between the two branches.")
+        return "\n".join(lines)
+    if diff.get("added_tables"):
+        lines.append(f"  Added tables: {', '.join(diff['added_tables'][:20])}")
+    if diff.get("removed_tables"):
+        lines.append(f"  Removed tables: {', '.join(diff['removed_tables'][:20])}")
+    for m in diff.get("modified_tables", []):
+        parts = [m["table"]]
+        if m.get("added_columns"):
+            parts.append(f"+cols: {', '.join(m['added_columns'][:10])}")
+        if m.get("removed_columns"):
+            parts.append(f"-cols: {', '.join(m['removed_columns'][:10])}")
+        for tc in m.get("type_changes", []):
+            parts.append(f"{tc['column']}: {tc['old_type']}→{tc['new_type']}")
+        lines.append(f"    {' | '.join(parts)}")
+    return "\n".join(lines)
+
+
+@audited_tool(mcp)
+async def xata_list_branches(connection_name: str, project: str) -> str:
+    """
+    List branches in a Xata project (control plane).
+
+    Args:
+        connection_name: The Xata workspace connection.
+        project: The Xata project id.
+    """
+    if not _CONN_NAME_RE.match(connection_name):
+        return "Error: Invalid connection name"
+
+    gw = _gateway_url()
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.get(
+            f"{gw}/api/connections/{connection_name}/xata/projects/{project}/branches",
+            headers=_gw_headers(),
+        )
+    if r.status_code != 200:
+        return sanitize_proxy_response(r.status_code, r.text)
+    branches = r.json().get("branches", [])
+    if not branches:
+        return f"No branches in project {project}."
+    lines = [f"Branches in {project}:"]
+    for b in branches:
+        parent = b.get("parentID") or "—"
+        lines.append(f"  {b.get('name')}  (id={b.get('id', '')[:12]}, parent={parent})")
+    return "\n".join(lines)
+
+
+@audited_tool(mcp)
 async def schema_ddl(connection_name: str, max_tables: int = 50, compress: bool = False) -> str:
     """
     Get the database schema as CREATE TABLE DDL statements.

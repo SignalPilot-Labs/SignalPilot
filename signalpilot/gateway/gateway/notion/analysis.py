@@ -201,6 +201,48 @@ def _start_comment_rich_text(request_page_url: str) -> list[dict[str, Any]]:
     ]
 
 
+async def _create_start_comment(
+    token: str,
+    *,
+    discussion_id: str,
+    request_page_url: str,
+    event_id: str | None,
+    comment_id: str | None,
+    request_page_id: str,
+) -> None:
+    logger.info(
+        "Posting Notion start comment: event_id=%s comment_id=%s discussion_id=%s request_page_id=%s",
+        event_id,
+        comment_id,
+        discussion_id,
+        request_page_id,
+    )
+    try:
+        await notion_client.create_comment(
+            token,
+            discussion_id=discussion_id,
+            rich_text=_start_comment_rich_text(request_page_url),
+        )
+    except httpx.HTTPStatusError as exc:
+        logger.warning(
+            "Could not post Notion start comment: event_id=%s comment_id=%s discussion_id=%s request_page_id=%s error=%s",
+            event_id,
+            comment_id,
+            discussion_id,
+            request_page_id,
+            notion_client.http_error_summary(exc),
+            exc_info=True,
+        )
+        raise
+    logger.info(
+        "Posted Notion start comment: event_id=%s comment_id=%s discussion_id=%s request_page_id=%s",
+        event_id,
+        comment_id,
+        discussion_id,
+        request_page_id,
+    )
+
+
 def _final_comment_rich_text(status: dict[str, Any], request_page_url: str) -> list[dict[str, Any]]:
     raw_answer = (
         (status.get("notionComment") or "").strip()
@@ -251,12 +293,7 @@ def _public_web_base_url(runtime: NotebookRuntime) -> str:
 
 def _is_notebooks_path(path: str) -> bool:
     normalized = f"/{path.lstrip('/')}".rstrip("/") or "/"
-    return (
-        normalized == "/notebooks"
-        or normalized.startswith("/notebooks/")
-        or normalized == "/projects"
-        or normalized.startswith("/projects/")
-    )
+    return normalized in {"/notebooks", "/projects"} or normalized.startswith(("/notebooks/", "/projects/"))
 
 
 def _path_query_fragment(parsed: Any) -> str:
@@ -629,7 +666,14 @@ async def process_routed_comment_event(
     request_page_url = request_page.get("url") or _request_page_url(request_page_id)
 
     await notion_client.update_page_properties(token, request_page_id, {"Status": {"rich_text": _rich_text("Analyzing")}})
-    await notion_client.create_comment(token, discussion_id=discussion_id, rich_text=_start_comment_rich_text(request_page_url))
+    await _create_start_comment(
+        token,
+        discussion_id=discussion_id,
+        request_page_url=request_page_url,
+        event_id=payload.get("id"),
+        comment_id=comment_id,
+        request_page_id=request_page_id,
+    )
     try:
         runtime = await ensure_notion_notebook_session(
             db,

@@ -29,6 +29,31 @@ def _headers(api_key: str) -> dict[str, str]:
     }
 
 
+def http_error_summary(exc: httpx.HTTPStatusError) -> str:
+    """Return a sanitized Notion API error summary safe for logs/UI."""
+    response = exc.response
+    request = response.request
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    if isinstance(body, dict):
+        message = str(body.get("message") or body.get("code") or response.text[:500])
+    else:
+        message = response.text[:500]
+    path = request.url.path
+    return f"Notion API {response.status_code} {request.method} {path}: {message[:500]}"
+
+
+def is_comment_read_capability_error(exc: httpx.HTTPStatusError) -> bool:
+    request = exc.response.request
+    return (
+        exc.response.status_code == 403
+        and request.method.upper() == "GET"
+        and request.url.path.rstrip("/") == "/v1/comments"
+    )
+
+
 def _multipart_headers(api_key: str) -> dict[str, str]:
     return {
         "Authorization": f"Bearer {api_key}",

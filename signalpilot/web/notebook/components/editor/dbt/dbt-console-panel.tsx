@@ -48,7 +48,7 @@ export const DbtConsolePanel: React.FC<DbtConsolePanelProps> = ({
   ];
 
   return (
-    <div className="flex flex-col h-full bg-[#050505]">
+    <div className="flex flex-col h-full bg-background">
       {/* Tab bar */}
       <div className="flex items-center border-b border-border px-2 shrink-0">
         {tabs.map((tab) => (
@@ -58,7 +58,7 @@ export const DbtConsolePanel: React.FC<DbtConsolePanelProps> = ({
             className={cn(
               "flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium uppercase tracking-wider transition-colors border-b-2 -mb-px cursor-pointer",
               activeTab === tab.id
-                ? "text-foreground border-emerald-500"
+                ? "text-foreground border-primary"
                 : "text-muted-foreground border-transparent hover:text-foreground hover:border-border",
             )}
             onClick={() => onTabChange(tab.id)}

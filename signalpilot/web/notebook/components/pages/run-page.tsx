@@ -38,7 +38,7 @@ const Watermark = () => {
       <a
         href={Constants.githubPage}
         target="_blank"
-        className="text-[11px] font-bold tracking-[0.15em] uppercase transition-colors bg-card hover:bg-[#111111] border-t border-l border-border px-3 py-1 flex items-center gap-2 text-muted-foreground hover:text-foreground"
+        className="text-[11px] font-bold tracking-[0.15em] uppercase transition-colors bg-card hover:bg-muted border-t border-l border-border px-3 py-1 flex items-center gap-2 text-muted-foreground hover:text-foreground"
       >
         <span>SignalPilot</span>
       </a>

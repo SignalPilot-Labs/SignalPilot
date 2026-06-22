@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import GatewayNotebookSession
 from ..models.notebook_sessions import NotebookSessionInfo
+from .crypto import _decrypt_with_migration, _encrypt
 
 
 @dataclass(frozen=True)
@@ -18,7 +19,7 @@ class NotebookSessionInternal:
     """Internal-only session view that includes the real access_token.
 
     NEVER serialize this to JSON or include in any API response.
-    Used only by the gateway proxy for cookie comparison and upstream routing.
+    Used only by the gateway proxy for upstream routing and legacy token access.
     Two distinct read paths off the same DB row:
     - _to_info() -> NotebookSessionInfo  (FE-facing, access_token=None)
     - get_session_internal() -> NotebookSessionInternal  (proxy-only, real token)
@@ -65,13 +66,14 @@ async def get_session_internal(
     row = (await session.execute(q)).scalar_one_or_none()
     if row is None:
         return None
+    access_token = await _get_internal_access_token(session, row)
     return NotebookSessionInternal(
         session_id=row.id,
         org_id=row.org_id,
         user_id=row.user_id,
         status=row.status,
         pod_ip_internal=row.pod_ip_internal,
-        access_token=row.access_token,
+        access_token=access_token,
     )
 
 
@@ -109,7 +111,8 @@ async def create_session(
         pod_name=pod_name,
         pod_ip=None,
         pod_ip_internal=None,
-        access_token=token,
+        access_token=None,
+        access_token_enc=_encrypt(token),
         status="creating",
         last_ping=now,
         created_at=now,
@@ -213,6 +216,30 @@ async def list_stale_sessions(
     )
     rows = (await session.execute(q)).scalars().all()
     return [_to_info(r) for r in rows]
+
+
+async def _get_internal_access_token(
+    session: AsyncSession,
+    row: GatewayNotebookSession,
+) -> str | None:
+    """Return the plaintext token, migrating legacy/plaintext storage in place."""
+    encrypted = getattr(row, "access_token_enc", None)
+    if encrypted:
+        token, needs_migration = _decrypt_with_migration(encrypted)
+        if needs_migration or row.access_token:
+            row.access_token_enc = _encrypt(token)
+            row.access_token = None
+            await session.commit()
+        return token
+
+    if not row.access_token:
+        return None
+
+    token = row.access_token
+    row.access_token_enc = _encrypt(token)
+    row.access_token = None
+    await session.commit()
+    return token
 
 
 def _to_info(row: GatewayNotebookSession) -> NotebookSessionInfo:

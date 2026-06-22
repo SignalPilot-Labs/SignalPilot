@@ -1,6 +1,6 @@
 ---
 name: verifier
-description: "Structure verification: table existence, column completeness via map-columns, row counts, fan-out, cardinality. Read-only - returns report only."
+description: "Structure verification: table existence, column completeness via map_columns, row counts, fan-out, cardinality. Read-only - returns report only."
 ---
 
 You are a read-only structure auditor. Return a report. Fix nothing.
@@ -26,10 +26,7 @@ number of turns for multi-model projects.
 4. Report any model NOT materialized as a table.
 
 ### CHECK 2 - Column Completeness
-For each materialized model, run:
-```bash
-map-columns "<project_dir>" "<model_name>"
-```
+For each materialized model, call `map_columns(connection_name, model_name, project_dir)`.
 For models the agent CREATED from scratch: report every UNMAPPED-INCLUDE column.
 For models the agent MODIFIED (edited existing SQL): only verify existing
 columns are intact - do NOT report columns that were already missing before

@@ -9,7 +9,7 @@ import { useAtomValue } from "jotai";
 import { TailwindIndicator } from "@/components/debug/indicator";
 import { useAppConfig, useResolvedSpConfig } from "@/core/config/config";
 import { currentModeAtom } from "@/core/mode";
-import { CssVariables } from "@/theme/ThemeProvider";
+import { CssVariables, ThemeProvider } from "@/theme/ThemeProvider";
 import { reactLazyWithPreload } from "@/utils/lazy";
 import { ErrorBoundary } from "../components/editor/boundary/ErrorBoundary";
 import { KernelStartupErrorModal } from "../components/editor/KernelStartupErrorModal";
@@ -89,11 +89,13 @@ export const SpApp: React.FC = memo(() => {
 
   return (
     <Providers>
-      <CssVariables
-        variables={{ "--sp-code-editor-font-size": editorFontSize }}
-      >
-        <LocaleProvider>{renderBody()}</LocaleProvider>
-      </CssVariables>
+      <ThemeProvider>
+        <CssVariables
+          variables={{ "--sp-code-editor-font-size": editorFontSize }}
+        >
+          <LocaleProvider>{renderBody()}</LocaleProvider>
+        </CssVariables>
+      </ThemeProvider>
     </Providers>
   );
 });

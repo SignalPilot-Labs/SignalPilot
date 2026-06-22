@@ -57,23 +57,6 @@ async def require_projects_feature(org_id: OrgID) -> None:
 
 ProjectsGate = Depends(require_projects_feature)
 
-# ─── SQLglot dialect mapping ─────────────────────────────────────────────────
-
-SQLGLOT_DIALECTS: dict[str, str] = {
-    "postgres": "postgres",
-    "mysql": "mysql",
-    "snowflake": "snowflake",
-    "bigquery": "bigquery",
-    "redshift": "redshift",
-    "clickhouse": "clickhouse",
-    "databricks": "databricks",
-    "mssql": "tsql",
-    "trino": "trino",
-    "duckdb": "duckdb",
-    "sqlite": "sqlite",
-}
-
-
 # ─── Error sanitization ──────────────────────────────────────────────────────
 
 _SENSITIVE_PATTERNS = [

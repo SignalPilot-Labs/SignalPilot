@@ -95,6 +95,20 @@ class TestValidateSQL:
         result = validate_sql("TRUNCATE TABLE users")
         assert result.ok is False
 
+    @pytest.mark.parametrize(
+        ("dialect", "sql", "blocked_name"),
+        [
+            ("duckdb", "SELECT * FROM read_csv_auto('/etc/passwd')", "read_csv_auto"),
+            ("duckdb", "SELECT * FROM read_csv('/etc/passwd')", "read_csv"),
+            ("duckdb", "SELECT * FROM read_parquet('http://169.254.169.254/latest/meta-data/')", "read_parquet"),
+            ("mysql", "SELECT load_file('/etc/passwd')", "load_file"),
+        ],
+    )
+    def test_blocks_dialect_specific_file_and_network_functions(self, dialect, sql, blocked_name):
+        result = validate_sql(sql, dialect=dialect)
+        assert result.ok is False
+        assert blocked_name in result.blocked_reason.lower()
+
     # ── Statement stacking detection ──
 
     def test_block_stacked_statements(self):

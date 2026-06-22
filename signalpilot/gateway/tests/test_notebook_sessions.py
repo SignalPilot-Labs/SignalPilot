@@ -23,6 +23,7 @@ import pytest
 import pytest_asyncio
 from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
+from cryptography.fernet import Fernet
 
 from gateway.auth.notebook_jwt import (
     NOTEBOOK_SESSION_AUD,
@@ -39,6 +40,15 @@ _TEST_SECRET = "integration-test-secret-32-bytes!!"
 def _patch_jwt_secret(monkeypatch):
     monkeypatch.setattr("gateway.auth.notebook_jwt.load_session_jwt_secret", lambda: _TEST_SECRET)
     monkeypatch.setattr("gateway.auth.jwt_secret._cached_secret", _TEST_SECRET)
+
+
+def _patch_encryption_key(monkeypatch):
+    import gateway.store.crypto as crypto
+
+    monkeypatch.setattr(crypto, "_CACHED_MULTIFERNET", None)
+    monkeypatch.setenv("SP_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.delenv("SP_ENCRYPTION_KEY_OLD", raising=False)
+    monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
 
 
 def _make_nb_jwt(user_id: str, org_id: str, session_id: str, ttl: int = 3600, scopes: list | None = None) -> str:
@@ -118,6 +128,43 @@ class TestStoreGetSessionByIdCrossOrg:
         assert result is not None
         assert result.id == "sess-abc"
         assert result.org_id == "org-1"
+
+
+class TestStoreNotebookSessionTokenStorage:
+    """Direct store-level notebook session token storage tests."""
+
+    @pytest.mark.asyncio
+    async def test_create_session_encrypts_access_token_without_plaintext(self, monkeypatch):
+        _patch_encryption_key(monkeypatch)
+        monkeypatch.setattr("secrets.token_urlsafe", lambda n: "generated-token")
+
+        from gateway.store.crypto import _decrypt_with_migration
+        from gateway.store.notebook_sessions import create_session
+
+        rows = []
+        mock_session = MagicMock()
+        mock_session.add.side_effect = rows.append
+        mock_session.commit = AsyncMock()
+
+        info = await create_session(
+            mock_session,
+            org_id="org-1",
+            user_id="user-1",
+            project_id="proj-1",
+            branch="main",
+            pod_name="nb-test",
+        )
+
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.access_token is None
+        assert row.access_token_enc is not None
+        assert b"generated-token" not in row.access_token_enc
+        token, needs_migration = _decrypt_with_migration(row.access_token_enc)
+        assert token == "generated-token"
+        assert needs_migration is False
+        assert info.access_token is None
+        mock_session.commit.assert_awaited_once()
 
 
 # ─── JWT dispatch tests ───────────────────────────────────────────────────────

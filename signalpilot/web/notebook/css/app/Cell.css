@@ -12,15 +12,18 @@
   border-radius: 10px;
   max-width: inherit;
   width: 100%;
-  border: 1px solid #222222;
+  border: 1px solid var(--gray-4);
 
-  @apply divide-y divide-border;
+  @apply divide-y divide-(--gray-5);
 
   &:hover {
-    border-color: #333333;
+    border-color: var(--gray-6);
   }
 
   &:focus-visible {
+    /* focus-visible outlines the entire cell body in black, but the cell's
+     * body is an irregular shape because of pseudo-elements that extend
+     * its hit-box / hover area. */
     outline: none;
   }
 
@@ -47,9 +50,10 @@
     .output-area,
     .cm-gutters,
     .cm {
-      background-color: rgba(255, 68, 68, 0.05);
+      background-color: var(--red-2);
     }
 
+    /* Add a red glow to indicate deletion */
     &::before {
       content: "";
       position: absolute;
@@ -57,13 +61,14 @@
       border-radius: 10px;
       pointer-events: none;
       opacity: 0.6;
-      box-shadow: 0px 0px 10px 0px #ff4444;
+      box-shadow: 0px 0px 10px 0px var(--red-9);
       z-index: 1;
     }
 
+    /* Add strikethrough effect to the code */
     .cm-content {
       text-decoration: line-through;
-      text-decoration-color: #ff4444;
+      text-decoration-color: var(--red-9);
       text-decoration-thickness: 1px;
     }
   }
@@ -73,7 +78,7 @@
     .output-area,
     .cm-gutters,
     .cm {
-      background-color: #0a0a0a;
+      background-color: var(--gray-2);
       opacity: 0.55;
     }
   }
@@ -82,6 +87,11 @@
     z-index: 20;
   }
 
+  /* Hover z-index is higher than focus-within z-index
+     * This is because you may hover for tooltip docs while
+     * not focused in another cell.
+     */
+
   &:hover {
     z-index: 30;
   }
@@ -89,11 +99,15 @@
   /* Interactive */
 
   &.interactive {
+    /* Only restrain output length in edit mode. */
+
     .output-area,
     .console-output-area {
       max-height: 610px;
       overflow: auto;
     }
+
+    /* Special case for particular components */
 
     .output-area:has(
       > .output:only-child > sp-ui-element:only-child > sp-table
@@ -102,6 +116,7 @@
       max-height: none;
       overflow: hidden;
 
+      /* Flush table: remove border and configure edge padding via CSS variable */
       --sp-table-edge-padding: 0.75rem;
 
       sp-table::part(table-tabs) {
@@ -159,7 +174,7 @@
     .output-area,
     .cm-gutters,
     .cm {
-      background-color: #0a0a0a;
+      background-color: var(--gray-2);
       opacity: 0.5;
     }
   }
@@ -173,13 +188,13 @@
     .output-area,
     .cm-gutters,
     .cm {
-      background-color: #080808;
+      background-color: var(--gray-1);
       opacity: 0.5;
     }
   }
 
   &.disabled:hover {
-    border-color: #333333;
+    border-color: var(--gray-6);
   }
 
   /* Error styles for Cell, less precedence than needs run */
@@ -199,12 +214,12 @@
   &.error-outline,
   &.error-outline:focus-within {
     box-shadow: 8px 8px 0 0 color-mix(in srgb, var(--error), transparent 80%);
-    background-color: rgba(255, 68, 68, 0.05);
   }
 
   /* Needs Run */
 
   &.needs-run {
+    /* TODO(akshayka): Can give this an outline to make more visible. */
     @apply border-stale border-1 divide-stale outline-1 outline-stale;
 
     &:hover {
@@ -224,12 +239,14 @@
     }
   }
 
-  /* Focus state — SignalPilot green accent */
+  /* Focus state */
 
   &.focus-outline {
     transition: all 0.6s;
-    border-color: #00ff88 !important;
-    @apply shadow-lg shadow-[#00ff88];
+    border-color: var(--blue-8) !important;
+
+    /* custom shadow until our theme overrides can support colored shadow */
+    @apply shadow-lg shadow-[var(--blue-8)];
   }
 
   /* Published - when its just the output */
@@ -239,11 +256,21 @@
     box-shadow: none;
 
     .output-area {
+      /* flow-root interferes with margin collapsing, but appears to be unneeded
+            * when cell outlines are hidden; clear:both is sufficient.
+            *
+            * if developers just use css-grid instead of float, this won't matter.
+            * */
       display: block;
       padding-top: 0;
       padding-bottom: 0;
       border: none;
       box-shadow: none;
+
+      /*
+                do not restrict the dimensions when outlines are hidden，
+                otherwise text with a scrollbar w/o a container looks weird
+            */
       overflow: visible;
     }
 
@@ -265,8 +292,9 @@
       border-bottom: none;
     }
 
-    &:hover {
-      border: 1px solid #222222;
+    /* Apply the original styles */
+    &:focus {
+      border: 1px solid var(--gray-4);
     }
   }
 
@@ -296,7 +324,7 @@
   @apply border-border;
 
   &:hover {
-    border: 1px solid #444444;
+    border: 1px solid var(--gray-9);
   }
 
   &.needs-run:hover {
@@ -314,8 +342,9 @@
       border-bottom: none;
     }
 
+    /* Apply the original styles */
     &:hover {
-      border: 1px solid #222222;
+      border: 1px solid var(--gray-4);
     }
   }
 
@@ -332,10 +361,12 @@
 #cell-setup,
 #cell-setup .cm-editor,
 #cell-setup .cm-gutter {
-  background-color: #080808;
+  background-color: var(--gray-2);
 }
 
 #App.disconnected {
+  /* Background determined by disconnected gradient/noise. */
+
   .sp-cell,
   .console-output-area,
   .cm .cm-gutters,
@@ -344,6 +375,8 @@
   .sp-cell .shoulder-button {
     background-color: transparent;
   }
+
+  /* Hide when disconnected. */
 
   .cell-running-icon,
   .cell-queued-icon,
@@ -362,6 +395,7 @@
   position: relative;
   z-index: 1;
 
+  /* Round the top of the code editor unless there is output above or the AI prompt input is open */
   &[data-has-output-above="false"] .cm-editor {
     border-top-left-radius: 9px;
     border-top-right-radius: 9px;
@@ -406,6 +440,8 @@
 }
 
 :root {
+  /* Set a fixed gutter width to ensure the hover area is always wide enough */
+  /* And make the gutter bigger when the window is super wide */
   --gutter-width: 100px;
 }
 
@@ -422,6 +458,7 @@
   font-size: var(--sp-code-editor-font-size, 0.9rem);
 }
 
+/* .sp-cell is needed to take precedence over codemirror's generated class ... */
 .sp-cell .cm-editor {
   border: 1px solid transparent;
   padding: 3px;
@@ -429,16 +466,18 @@
 
   &.cm-focused {
     .cm-activeLineGutter {
-      background: #0e1e25;
+      background: #e2f2ff;
     }
 
     .cm-activeLine:not(.cm-error-line) {
-      background: hsl(210deg 100% 2% / 20%);
+      background: hsl(210deg 100% 50% / 3%);
     }
   }
 
   .cm-activeLine:not(.cm-error-line) {
     background: transparent;
+
+    /* Soften the corners of the active-line highlight. */
     border-radius: 2px;
   }
 
@@ -452,14 +491,26 @@
   }
 }
 
+.dark .sp-cell .cm-editor.cm-focused .cm-activeLineGutter {
+  background: #0e1e25;
+}
+
+.dark .sp-cell .cm-editor.cm-focused .cm-activeLine {
+  background: hsl(210deg 100% 2% / 20%);
+}
+
 /* ------------------------------ Output Areas ------------------------------ */
 
 .output-area {
   max-width: inherit;
   width: 100%;
   padding: 1rem;
+
+  /* Prevent floated elements from extending out of the output areas and into
+     * the editor. */
   clear: both;
   display: flow-root;
+
   overflow: auto;
 }
 
@@ -483,5 +534,5 @@
 }
 
 .console-output-area {
-  background-color: #080808;
+  background-color: var(--gray-1);
 }

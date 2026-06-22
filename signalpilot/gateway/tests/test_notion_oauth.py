@@ -4,20 +4,29 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
+import httpx
 import pytest
+from fastapi import HTTPException
 from starlette.requests import Request
 
 from gateway.api import notion as notion_api
 from gateway.db.models import NotionInstallation, NotionInstallationConfig
+from gateway.models.notion import NotionProvisionRequest
 from gateway.notion import client as notion_client
 from gateway.notion import webhooks as notion_webhooks
 from gateway.store import notion as notion_store
 
 
-def _json_request(payload: dict) -> Request:
+def _json_request(payload: dict, *, notion_secret: str | None = None) -> Request:
     body = json.dumps(payload).encode()
+    headers: list[tuple[bytes, bytes]] = []
+    if notion_secret:
+        signature = "sha256=" + hmac.new(notion_secret.encode(), body, hashlib.sha256).hexdigest()
+        headers.append((b"x-notion-signature", signature.encode()))
 
     async def receive() -> dict:
         return {"type": "http.request", "body": body, "more_body": False}
@@ -27,10 +36,20 @@ def _json_request(payload: dict) -> Request:
             "type": "http",
             "method": "POST",
             "path": "/api/notion/webhooks/events",
-            "headers": [],
+            "headers": headers,
         },
         receive,
     )
+
+
+def _notion_http_error(status_code: int, method: str = "GET", path: str = "/v1/comments") -> httpx.HTTPStatusError:
+    request = httpx.Request(method, f"https://api.notion.com{path}")
+    response = httpx.Response(
+        status_code,
+        json={"message": "missing comment capability"},
+        request=request,
+    )
+    return httpx.HTTPStatusError("Notion API error", request=request, response=response)
 
 
 def test_authorize_url_includes_state_and_required_oauth_fields() -> None:
@@ -108,7 +127,7 @@ async def test_webhook_background_task_logs_unhandled_exception(
 
 
 @pytest.mark.asyncio
-async def test_webhook_verification_token_is_logged(
+async def test_webhook_verification_token_is_not_logged(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     with caplog.at_level("WARNING", logger="gateway.api.notion"):
@@ -118,7 +137,154 @@ async def test_webhook_verification_token_is_logged(
         )
 
     assert response.status == "verification_received"
-    assert "NOTION WEBHOOK VERIFICATION TOKEN RECEIVED: verify-secret" in caplog.text
+    assert "verification challenge received" in caplog.text
+    assert "verify-secret" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_webhook_delivery_fails_closed_without_verification_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("NOTION_WEBHOOK_VERIFICATION_TOKEN", raising=False)
+    monkeypatch.delenv("WEBHOOK_VERIFICATION_TOKEN", raising=False)
+
+    with pytest.raises(HTTPException) as exc:
+        await notion_api.receive_notion_webhook(
+            _json_request({"id": "evt-1", "type": "comment.created"}),
+            db=object(),
+        )
+
+    assert exc.value.status_code == 503
+    assert "NOTION_WEBHOOK_VERIFICATION_TOKEN" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_webhook_delivery_rejects_missing_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NOTION_WEBHOOK_VERIFICATION_TOKEN", "secret-test")
+
+    with pytest.raises(HTTPException) as exc:
+        await notion_api.receive_notion_webhook(
+            _json_request({"id": "evt-1", "type": "comment.created"}),
+            db=object(),
+        )
+
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_webhook_logs_when_comment_event_has_no_route(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("NOTION_WEBHOOK_VERIFICATION_TOKEN", "secret-test")
+
+    async def no_existing_delivery(*_args, **_kwargs):
+        return None
+
+    async def no_route(*_args, **_kwargs):
+        return None
+
+    async def record_delivery(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(notion_store, "get_webhook_delivery", no_existing_delivery)
+    monkeypatch.setattr(notion_store, "record_webhook_delivery", record_delivery)
+    monkeypatch.setattr(notion_webhooks, "route_comment_event", no_route)
+
+    payload = {
+        "id": "evt-unrouted",
+        "type": "comment.created",
+        "attempt_number": 1,
+        "workspace_id": "workspace-1",
+        "data": {"page_id": "page-1"},
+        "authors": [{"id": "person-1", "type": "person"}],
+    }
+
+    with caplog.at_level(logging.INFO, logger="gateway.api.notion"):
+        response = await notion_api.receive_notion_webhook(
+            _json_request(payload, notion_secret="secret-test"),
+            db=object(),
+        )
+
+    assert response.status == "ignored"
+    assert response.event_id == "evt-unrouted"
+    assert "no_matching_active_provisioned_installation" in caplog.text
+    assert "workspace-1" in caplog.text
+    assert "page-1" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_route_comment_event_logs_unprovisioned_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    install = NotionInstallation(
+        id="install-1",
+        org_id="org-1",
+        user_id="user-1",
+        workspace_id="workspace-1",
+        workspace_name="Workspace",
+        bot_id="bot-1",
+        access_token_enc=b"encrypted",
+        status="connected",
+    )
+
+    async def records(*_args, **_kwargs):
+        return [(install, None, "token-1")]
+
+    monkeypatch.setattr(notion_store, "list_active_installation_records_for_workspace", records)
+
+    payload = {
+        "id": "evt-unprovisioned",
+        "type": "comment.created",
+        "workspace_id": "workspace-1",
+        "integration_id": "bot-1",
+        "data": {"page_id": "page-1"},
+    }
+
+    with caplog.at_level(logging.INFO, logger="gateway.notion.webhooks"):
+        routed = await notion_webhooks.route_comment_event(object(), payload)
+
+    assert routed is None
+    assert "installation_not_provisioned" in caplog.text
+    assert "install-1" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_provisioning_reports_missing_comment_read_capability(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Store:
+        async def get_notion_oauth_installation(self, installation_id: str):
+            assert installation_id == "install-1"
+            return SimpleNamespace(
+                config=SimpleNamespace(
+                    parent_page_id=None,
+                    trigger_page_id="trigger-1",
+                    requests_data_source_id="ds-1",
+                    requests_database_page_id="db-1",
+                )
+            )
+
+        async def get_notion_oauth_installation_token(self, installation_id: str):
+            assert installation_id == "install-1"
+            return "token-1"
+
+    async def list_comments(*_args, **_kwargs):
+        raise _notion_http_error(403)
+
+    monkeypatch.setattr(notion_client, "list_comments", list_comments)
+
+    with pytest.raises(HTTPException) as exc:
+        await notion_api.provision_notion_oauth_installation(
+            "install-1",
+            NotionProvisionRequest(),
+            Store(),
+            object(),
+        )
+
+    assert exc.value.status_code == 424
+    assert "Read comments capability" in exc.value.detail
 
 
 def test_comment_page_mention_matches_trigger_page_id() -> None:
@@ -282,6 +448,49 @@ async def test_trigger_page_is_part_of_routing_scope(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
+async def test_webhook_routing_requires_positive_ownership(monkeypatch: pytest.MonkeyPatch) -> None:
+    install = NotionInstallation(
+        id="install-1",
+        org_id="org-1",
+        user_id="user-1",
+        workspace_id="workspace-1",
+        workspace_name="Workspace",
+        bot_id="bot-1",
+        access_token_enc=b"encrypted",
+        status="active",
+    )
+    config = NotionInstallationConfig(
+        installation_id="install-1",
+        parent_page_id="parent-1",
+        trigger_page_id="trigger-1",
+        requests_data_source_id="ds-1",
+        requests_database_page_id="db-1",
+        enabled=True,
+    )
+
+    async def fake_records(session, workspace_id: str):
+        assert workspace_id == "workspace-1"
+        return [(install, config, "token-1")]
+
+    async def fail_belongs(*args, **kwargs):
+        raise AssertionError("page_belongs_to_scope should not run without positive ownership")
+
+    monkeypatch.setattr(notion_store, "list_active_installation_records_for_workspace", fake_records)
+    monkeypatch.setattr(notion_client, "page_belongs_to_scope", fail_belongs)
+
+    routed = await notion_webhooks.route_comment_event(
+        object(),
+        {
+            "workspace_id": "workspace-1",
+            "type": "comment.created",
+            "data": {"page_id": "page-1", "parent": {"id": "page-1", "type": "page"}},
+        },
+    )
+
+    assert routed is None
+
+
+@pytest.mark.asyncio
 async def test_webhook_routing_rejects_ambiguous_installations(monkeypatch: pytest.MonkeyPatch) -> None:
     install_1 = NotionInstallation(
         id="install-1",
@@ -327,17 +536,102 @@ async def test_webhook_routing_rejects_ambiguous_installations(monkeypatch: pyte
     async def fake_belongs(*args, **kwargs):
         return True
 
+    async def fake_list_comments(*args, **kwargs):
+        return [
+            {
+                "id": "comment-1",
+                "rich_text": [
+                    {"type": "mention", "mention": {"type": "page", "page": {"id": "trigger-1"}}},
+                    {"type": "mention", "mention": {"type": "page", "page": {"id": "trigger-2"}}},
+                ],
+            }
+        ]
+
     monkeypatch.setattr(notion_store, "list_active_installation_records_for_workspace", fake_records)
     monkeypatch.setattr(notion_client, "page_belongs_to_scope", fake_belongs)
+    monkeypatch.setattr(notion_client, "list_comments", fake_list_comments)
 
     payload = {
         "workspace_id": "workspace-1",
         "integration_id": "bot-1",
         "type": "comment.created",
-        "data": {"page_id": "page-1"},
+        "entity": {"id": "comment-1", "type": "comment"},
+        "data": {"page_id": "page-1", "parent": {"id": "page-1", "type": "page"}},
     }
     with pytest.raises(notion_webhooks.AmbiguousNotionInstallation):
         await notion_webhooks.route_comment_event(object(), payload)
+
+
+@pytest.mark.asyncio
+async def test_webhook_routing_uses_trigger_page_mention_to_disambiguate(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_1 = NotionInstallation(
+        id="install-1",
+        org_id="org-1",
+        user_id="user-1",
+        workspace_id="workspace-1",
+        workspace_name="Workspace",
+        bot_id="bot-1",
+        access_token_enc=b"encrypted",
+        status="active",
+    )
+    install_2 = NotionInstallation(
+        id="install-2",
+        org_id="org-2",
+        user_id="user-2",
+        workspace_id="workspace-1",
+        workspace_name="Workspace",
+        bot_id="bot-1",
+        access_token_enc=b"encrypted",
+        status="active",
+    )
+    config_1 = NotionInstallationConfig(
+        installation_id="install-1",
+        parent_page_id=None,
+        trigger_page_id="trigger-1",
+        requests_data_source_id="ds-1",
+        requests_database_page_id="db-1",
+        enabled=True,
+    )
+    config_2 = NotionInstallationConfig(
+        installation_id="install-2",
+        parent_page_id=None,
+        trigger_page_id="trigger-2",
+        requests_data_source_id="ds-2",
+        requests_database_page_id="db-2",
+        enabled=True,
+    )
+
+    async def fake_records(session, workspace_id: str):
+        assert workspace_id == "workspace-1"
+        return [(install_1, config_1, "token-1"), (install_2, config_2, "token-2")]
+
+    async def fake_belongs(*args, **kwargs):
+        return True
+
+    async def fake_list_comments(*args, **kwargs):
+        return [
+            {
+                "id": "comment-1",
+                "rich_text": [{"type": "mention", "mention": {"type": "page", "page": {"id": "trigger-2"}}}],
+            }
+        ]
+
+    monkeypatch.setattr(notion_store, "list_active_installation_records_for_workspace", fake_records)
+    monkeypatch.setattr(notion_client, "page_belongs_to_scope", fake_belongs)
+    monkeypatch.setattr(notion_client, "list_comments", fake_list_comments)
+
+    payload = {
+        "workspace_id": "workspace-1",
+        "integration_id": "bot-1",
+        "type": "comment.created",
+        "entity": {"id": "comment-1", "type": "comment"},
+        "data": {"page_id": "page-1", "parent": {"id": "page-1", "type": "page"}},
+    }
+
+    routed = await notion_webhooks.route_comment_event(object(), payload)
+
+    assert routed is not None
+    assert routed.installation.id == "install-2"
 
 
 def test_bot_authored_comment_events_are_ignored() -> None:

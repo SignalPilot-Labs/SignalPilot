@@ -24,8 +24,8 @@ The ``_NonceStore`` is a process-local in-memory dict.  This is acceptable
 because:
 
 - The gateway runs as a single process per pod for the OAuth callback path.
-- The TTL is short (10 minutes); states do not survive restart.
-- 128-bit nonces over a 10-minute window have negligible accidental collision
+- The TTL is bounded (30 minutes); states do not survive restart.
+- 128-bit nonces over a 30-minute window have negligible accidental collision
   probability.
 - Only states that pass HMAC + expiry checks reach ``reserve``, so an
   unauthenticated attacker cannot stuff the dict.
@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 
-STATE_TTL_SECONDS: int = 600   # 10 minutes — GitHub-recommended OAuth state window
+STATE_TTL_SECONDS: int = 1800  # GitHub App install/update can include login, 2FA, and repo selection
 NONCE_BYTES: int = 16          # 128-bit nonce, hex-encoded → 32 hex chars
 
 # ─── HMAC Key (lazy, cached) ─────────────────────────────────────────────────

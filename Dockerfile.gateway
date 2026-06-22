@@ -1,28 +1,32 @@
 FROM python:3.12-slim
 
+# AWS CLI arch is selected from uname so the image is correct on amd64 and arm64.
 RUN apt-get update && apt-get install -y git curl unzip && \
-    curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip && \
+    case "$(uname -m)" in aarch64|arm64) AWSARCH=aarch64 ;; *) AWSARCH=x86_64 ;; esac && \
+    curl -s "https://awscli.amazonaws.com/awscli-exe-linux-${AWSARCH}.zip" -o /tmp/awscliv2.zip && \
     unzip -q /tmp/awscliv2.zip -d /tmp && /tmp/aws/install && \
     rm -rf /tmp/awscliv2.zip /tmp/aws && \
     apt-get remove -y unzip && apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    pip install --no-cache-dir uv
+
+# Reproducible installs: resolve from uv.lock against the system Python, never
+# download a managed interpreter.
+ENV UV_PYTHON_DOWNLOADS=never \
+    UV_PYTHON_PREFERENCE=only-system \
+    UV_PROJECT_ENVIRONMENT=/app/.venv
 
 WORKDIR /app
 
-COPY pyproject.toml .
+COPY pyproject.toml uv.lock ./
 COPY gateway/ gateway/
 
-# Install core dependencies + commonly used optional connectors
-RUN pip install --no-cache-dir -e . && \
-    pip install --no-cache-dir \
-    duckdb \
-    "clickhouse-driver==0.2.7" \
-    clickhouse-connect \
-    "sshtunnel==0.4.0" \
-    "cryptography==44.0.0" \
-    "snowflake-connector-python>=3.12.0,<4" \
-    "google-cloud-bigquery==3.20.0" \
-    pyarrow
+# Core deps + commonly used optional connectors, pinned by the lockfile.
+RUN uv sync --frozen --no-dev \
+      --extra snowflake --extra bigquery --extra clickhouse
+
+# uv installs into .venv — put it first on PATH so uvicorn/python resolve to it.
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Run as non-root for defense-in-depth
 RUN groupadd -g 10001 appuser && \

@@ -1,0 +1,32 @@
+name: Build (Windows / native)
+
+# Hosted Windows runners can't run Linux Docker reliably (only Windows
+# containers; WSL2 dockerd doesn't come up). Instead we validate the part that
+# actually breaks per-platform from a real Windows checkout: native dependency
+# resolution + the web build. This catches the win32 native-binary class of
+# failures (e.g. lightningcss-win32-x64-msvc). The Linux image is covered by
+# build-linux.yml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  web:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install deps (native win32) + build
+        working-directory: signalpilot/web
+        run: |
+          npm ci --legacy-peer-deps
+          npm run build

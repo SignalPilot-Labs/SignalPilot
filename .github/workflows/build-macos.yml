@@ -1,0 +1,32 @@
+name: Build (macOS / arm64 native)
+
+# GitHub's Apple Silicon macOS runners lack nested virtualization, so Docker
+# (colima/lima) can't boot a VM here. Instead we validate the part that breaks
+# per-arch from a real arm64 macOS checkout: native dependency resolution + the
+# web build. This catches the arm64 native-binary class of failures
+# (lightningcss / @tailwindcss/oxide / sharp). The Linux image is covered by
+# build-linux.yml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  web:
+    runs-on: macos-latest # Apple Silicon (arm64)
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install deps (native arm64) + build
+        working-directory: signalpilot/web
+        run: |
+          npm ci --legacy-peer-deps
+          npm run build

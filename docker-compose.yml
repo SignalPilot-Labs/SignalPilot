@@ -20,7 +20,6 @@ services:
   # ─── Database ──────────────────────────────────────────────────
   db:
     image: postgres:17
-    platform: linux/amd64
     environment:
       POSTGRES_USER: signalpilot
       POSTGRES_PASSWORD: changeme_dev_only
@@ -38,7 +37,6 @@ services:
 
   # ─── Gateway (API + proxy) ────────────────────────────────────
   gateway:
-    platform: linux/amd64
     build:
       context: ./signalpilot/gateway
       dockerfile: ../../Dockerfile.gateway
@@ -89,7 +87,6 @@ services:
 
   # ─── Notebook Server ──────────────────────────────────────────
   notebook:
-    platform: linux/amd64
     build:
       context: ./signalpilot/notebook-server
       dockerfile: Dockerfile
@@ -128,7 +125,6 @@ services:
 
   # ─── Web Frontend ─────────────────────────────────────────────
   web:
-    platform: linux/amd64
     build:
       context: .
       dockerfile: Dockerfile.web
@@ -144,7 +140,6 @@ services:
 
   # ─── Sandbox (gVisor code execution) ──────────────────────────
   sandbox:
-    platform: linux/amd64
     build:
       context: ./sp-sandbox
       dockerfile: ../Dockerfile.sandbox

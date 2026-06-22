@@ -1027,7 +1027,6 @@ export default function NotebooksPage() {
             <DbtProjectActions
               onProjectCreated={refreshProjectsSurface}
               openProjectOnComplete={false}
-              showGitHubImport={false}
             />
           </div>
           <DbtProjectList

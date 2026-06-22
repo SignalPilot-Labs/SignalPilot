@@ -1,0 +1,47 @@
+name: Build (Windows / WSL)
+
+# Proves the Docker images build from a Windows checkout. Hosted Windows runners
+# only run Windows containers, so the Linux images are built inside WSL2 (which
+# provides a real Linux kernel + dockerd). The checkout lives on the Windows
+# filesystem and is reached via the /mnt mount.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up WSL (Ubuntu + Docker)
+        uses: Vampire/setup-wsl@v3
+        with:
+          distribution: Ubuntu-24.04
+          additional-packages: docker.io docker-compose-v2
+
+      - name: Start dockerd
+        shell: wsl-bash {0}
+        run: |
+          sudo service docker start || (sudo dockerd >/tmp/dockerd.log 2>&1 &)
+          # Wait for the daemon socket to come up.
+          for i in $(seq 1 15); do
+            if sudo docker info >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          sudo docker info
+
+      - name: Build images (amd64)
+        shell: wsl-bash {0}
+        run: |
+          # github.workspace is a Windows path (e.g. D:\a\repo\repo); map it to
+          # the WSL /mnt mount (e.g. /mnt/d/a/repo/repo).
+          WIN_WS='${{ github.workspace }}'
+          WSL_WS=$(echo "$WIN_WS" | sed -E 's|\\|/|g; s|^([A-Za-z]):|/mnt/\L\1|')
+          cd "$WSL_WS"
+          sudo docker compose build web gateway

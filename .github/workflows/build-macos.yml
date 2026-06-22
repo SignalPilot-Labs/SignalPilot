@@ -1,0 +1,33 @@
+name: Build (macOS / arm64)
+
+# Proves the Docker images build from a macOS (Apple Silicon) checkout.
+# Uses colima for a native arm64 Docker daemon — no emulation, so uv and other
+# native tooling run cleanly (an amd64 image under QEMU segfaults uv).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest # Apple Silicon (arm64)
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker (colima)
+        run: |
+          brew install docker docker-compose colima
+          # Register docker compose v2 as a CLI plugin so `docker compose` works.
+          mkdir -p ~/.docker/cli-plugins
+          ln -sfn "$(brew --prefix)/opt/docker-compose/bin/docker-compose" \
+            ~/.docker/cli-plugins/docker-compose
+          # Native arm64 VM — builds the images for the host arch, no emulation.
+          colima start --cpu 3 --memory 5 --disk 20
+          docker info
+
+      - name: Build images (native arm64)
+        run: docker compose build web gateway

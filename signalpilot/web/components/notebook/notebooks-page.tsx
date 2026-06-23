@@ -303,6 +303,29 @@ export default function NotebooksPage() {
     }
   }
 
+  function preserveResolvedProjectTrailInUrl(trail: ResolvedTrail) {
+    if (!trail.project_id || typeof window === "undefined") {
+      return;
+    }
+
+    const nextUrl = new URL(window.location.href);
+    const before = nextUrl.toString();
+    nextUrl.searchParams.set(KnownQueryParams.project, trail.project_id);
+    nextUrl.searchParams.set(KnownQueryParams.branch, trail.branch || "main");
+    nextUrl.searchParams.set(KnownQueryParams.filePath, trail.notebook_path || urlFile);
+    nextUrl.searchParams.delete(KnownQueryParams.sessionId);
+
+    store.set(gatewayProjectIdAtom, trail.project_id);
+    store.set(gatewayBranchIdAtom, trail.branch || "main");
+    store.set(persistedGatewayBranchIdAtom, trail.branch || "main");
+    window.localStorage.setItem(GATEWAY_PROJECT_STORAGE_KEY, trail.project_id);
+    window.localStorage.setItem(GATEWAY_BRANCH_STORAGE_KEY, trail.branch || "main");
+
+    if (nextUrl.toString() !== before) {
+      window.history.replaceState(null, "", nextUrl.toString());
+    }
+  }
+
   function primeNotionTrailChrome(kernelSessionId?: string) {
     if (!isNotionTrail(urlFile, kernelSessionId || urlSessionId) || typeof window === "undefined") {
       return;
@@ -508,12 +531,14 @@ export default function NotebooksPage() {
         session_id: urlSessionId || undefined,
         file: urlFile || undefined,
       });
-      return {
+      const resolved = {
         project_id: trail.project_id,
         branch: trail.branch || trail.default_branch || "main",
         thread_id: trail.thread_id,
         notebook_path: trail.notebook_path,
       };
+      preserveResolvedProjectTrailInUrl(resolved);
+      return resolved;
     } catch (err) {
       console.warn("Failed to resolve durable analysis trail:", err);
       return undefined;
@@ -544,17 +569,20 @@ export default function NotebooksPage() {
     const resolvedTrail = trail ?? await resolveTrailMetadata();
     const kernelSessionId = resolvedTrail?.thread_id ?? await resolveNotionThreadId(overview.notionConnected);
     const trailFile = resolvedTrail?.notebook_path || urlFile;
-    if (isNotionTrail(trailFile, kernelSessionId || urlSessionId)) {
+    const isProjectBackedTrail = Boolean(resolvedTrail?.project_id);
+    if (!isProjectBackedTrail && isNotionTrail(trailFile, kernelSessionId || urlSessionId)) {
       clearNotionTrailProjectState();
     }
     rememberResolvedNotionThread(kernelSessionId);
-    preserveResolvedNotionSessionInUrl(kernelSessionId);
-    primeNotionTrailChrome(kernelSessionId);
-    primeNotionTrailEditorState(kernelSessionId);
+    if (!isProjectBackedTrail) {
+      preserveResolvedNotionSessionInUrl(kernelSessionId);
+      primeNotionTrailChrome(kernelSessionId);
+      primeNotionTrailEditorState(kernelSessionId);
+    }
     return {
       gatewayUrl: GATEWAY_URL,
       notebookProxyUrl: NOTEBOOK_PROXY_URL,
-      product: "notebooks",
+      product: isProjectBackedTrail ? "projects" : "notebooks",
       sessionId,
       getToken: getGatewayAuthToken,
       kernelSessionId,
@@ -729,8 +757,14 @@ export default function NotebooksPage() {
 
   useEffect(() => {
     if (notebookConfig && (state === "ready" || state === "booting")) {
+      const isResolvedProjectTrail =
+        !urlProject &&
+        isNotionTrail(urlFile, urlSessionId) &&
+        Boolean(notebookConfig.project);
       const nextProduct: RuntimeProduct = urlProject
         ? "projects"
+        : isResolvedProjectTrail
+          ? notebookConfig.product ?? "notebooks"
         : isNotionTrail(urlFile, urlSessionId)
           ? "notebooks"
           : notebookConfig.product ?? "notebooks";
@@ -738,8 +772,16 @@ export default function NotebooksPage() {
       const newKernelSessionId = nextProduct === "notebooks" && isTrailSessionId(urlSessionId)
         ? urlSessionId
         : notebookConfig.kernelSessionId;
-      const newProject = nextProduct === "projects" ? urlProject || undefined : undefined;
-      const newBranch = nextProduct === "projects" && urlProject ? activeBranch : undefined;
+      const newProject = urlProject
+        ? urlProject
+        : isResolvedProjectTrail
+          ? notebookConfig.project
+          : undefined;
+      const newBranch = urlProject
+        ? activeBranch
+        : isResolvedProjectTrail
+          ? notebookConfig.branch
+          : undefined;
       if (
         nextProduct !== notebookConfig.product ||
         newProject !== notebookConfig.project ||
@@ -873,9 +915,13 @@ export default function NotebooksPage() {
   function notebookPopoutHref(config: NotebookConfig): string {
     const params = new URLSearchParams();
     if (config.product === "projects") {
-      if (urlProject) params.set("project", urlProject);
-      if (urlProject) params.set("branch", activeBranch);
-      if (urlFile) params.set("file", urlFile);
+      const projectId = urlProject || config.project;
+      const branch = urlProject ? activeBranch : config.branch;
+      if (projectId) params.set("project", projectId);
+      if (projectId) params.set("branch", branch || "main");
+      if (urlFile || config.file) {
+        params.set("file", urlFile || config.file || "");
+      }
     } else {
       if (urlFile) params.set("file", urlFile);
       const sessionId = urlSessionId || config.kernelSessionId;

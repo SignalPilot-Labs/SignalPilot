@@ -590,3 +590,53 @@ class TestAgentProposalCloudGating:
             settings=settings,
         )
         assert existing.status == "active"
+
+    @pytest.mark.asyncio
+    async def test_upsert_update_revives_archived_doc(self, monkeypatch):
+        """Editing an archived doc (local mode) revives it to active, not hidden."""
+        monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
+
+        session = AsyncMock()
+        existing = _make_doc_row(status="archived", body="old content")
+
+        call_count = 0
+
+        async def execute_side_effect(stmt, *args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            result = MagicMock()
+            if call_count == 1:
+                result.scalar_one_or_none.return_value = existing
+            elif call_count == 2:
+                result.scalar.return_value = 100
+            else:
+                result.scalar_one_or_none.return_value = existing
+                result.scalar_one.return_value = existing
+            return result
+
+        session.execute = AsyncMock(side_effect=execute_side_effect)
+        session.add = MagicMock()
+        session.flush = AsyncMock()
+        session.commit = AsyncMock()
+
+        payload = KnowledgeDocCreate(
+            scope=KnowledgeScope.org,
+            scope_ref=None,
+            category=KnowledgeCategory.conventions,
+            title=existing.title,
+            body="new content",
+        )
+        limits = _make_limits()
+        settings = _make_settings()
+
+        await upsert_knowledge_doc(
+            session,
+            org_id="test-org",
+            payload=payload,
+            user_id=None,
+            agent="propose_knowledge",
+            limits=limits,
+            settings=settings,
+        )
+        assert existing.status == "active"
+        assert existing.body == "new content"

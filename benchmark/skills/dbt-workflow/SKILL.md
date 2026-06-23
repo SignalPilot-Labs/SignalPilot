@@ -27,7 +27,7 @@ Call ONLY after you have completed work and verified a finding. Use it to record
 - `category="quirks"` (scope=connection) for connector/dialect oddities (auto-accepted).
 - Do NOT propose `understanding` — humans only. Do NOT propose `conventions` or `domain-rules` as part of automated runs unless explicitly asked (these queue for human review).
 - Title must be a slug (`^[a-z0-9-]+$`, ≤120 chars). Body is markdown.
-- On duplicate-title: re-call with `supersedes=<existing_id>` only if the prior doc is genuinely outdated.
+- On duplicate-title: re-call with `overwrite=true` only if the prior doc is genuinely outdated.
 
 ### What NOT to do
 

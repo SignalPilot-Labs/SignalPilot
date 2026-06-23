@@ -1,4 +1,4 @@
-"""Knowledge Base MCP tools: get_knowledge, search_knowledge, propose_knowledge."""
+"""Knowledge Base MCP tools: get_knowledge, search_knowledge, propose_knowledge, archive_knowledge."""
 
 from __future__ import annotations
 
@@ -203,8 +203,19 @@ async def propose_knowledge(
     title: str,
     body: str,
     supersedes: str | None = None,
+    overwrite: bool = False,
 ) -> str:
-    """Propose a new knowledge doc."""
+    """Create a knowledge doc, or edit an existing one in place.
+
+    Set overwrite=True to replace the body of the doc that has the same
+    scope, scope_ref, category, and title. Without overwrite, a doc whose
+    key already exists is rejected as a duplicate.
+
+    supersedes is DEPRECATED — it only ever versioned a same-key doc and
+    silently no-opped otherwise. Passing any value now behaves like
+    overwrite=True. To retire a doc under a different title, call
+    archive_knowledge instead.
+    """
     try:
         # Validate via DTO — raises pydantic.ValidationError on bad input
         payload = KnowledgeDocCreate(
@@ -215,18 +226,32 @@ async def propose_knowledge(
             body=body,
         )
 
+        # supersedes is a deprecated alias for overwrite.
+        overwrite = overwrite or supersedes is not None
+
         async with _store_session() as store:
-            # Supersedes path: archive the old doc then insert
-            if supersedes is not None:
-                old_doc = await store.get_knowledge_doc(supersedes, include_body=False)
-                if (
-                    old_doc is not None
-                    and old_doc.title == title
-                    and old_doc.scope.value == scope
-                    and old_doc.scope_ref == scope_ref
-                    and old_doc.category.value == category
-                ):
-                    await store.archive_knowledge_doc(supersedes)
+            # Overwrite path: update the existing doc (matched by unique key) in
+            # place. upsert_knowledge_doc appends an edit-history row and trims
+            # history; it inserts if no doc with the key exists yet.
+            if overwrite:
+                existing = await store.get_knowledge_doc_by_key(
+                    scope=scope,
+                    scope_ref=scope_ref,
+                    category=category,
+                    title=title,
+                )
+                doc = await store.upsert_knowledge_doc(
+                    payload,
+                    user_id=None,
+                    agent="propose_knowledge",
+                )
+                return json.dumps(
+                    {
+                        "status": "updated" if existing is not None else "created",
+                        "id": doc.id,
+                        "doc_status": doc.status.value,
+                    }
+                )
 
             try:
                 doc = await store.insert_knowledge_doc(
@@ -245,7 +270,7 @@ async def propose_knowledge(
                             "existing_id": existing_id,
                             "message": (
                                 f"Doc '{title}' already exists at {scope}:{scope_ref}. "
-                                "Use REST to edit."
+                                "Call propose_knowledge again with overwrite=true to edit it in place."
                             ),
                         }
                     )
@@ -264,4 +289,54 @@ async def propose_knowledge(
 
         if isinstance(exc, ValidationError):
             return f"Error: invalid input — {exc.error_count()} validation error(s): {str(exc)[:300]}"
+        return f"Error: {sanitize_mcp_error(str(exc))}"
+
+
+@audited_tool(mcp)
+async def archive_knowledge(doc_id: str) -> str:
+    """Archive (soft-delete) a knowledge doc by id. Archived docs are excluded from search and get_knowledge but retained for audit."""
+    try:
+        doc_id = (doc_id or "").strip()
+        if not doc_id:
+            return "Error: doc_id must not be empty"
+
+        async with _store_session() as store:
+            # Fetch first so we can report what was archived and detect already-archived docs.
+            doc = await store.get_knowledge_doc(doc_id, include_body=False)
+            if doc is None:
+                return json.dumps(
+                    {
+                        "status": "not_found",
+                        "id": doc_id,
+                        "message": f"Knowledge doc '{doc_id}' not found.",
+                    }
+                )
+            if doc.status.value == "archived":
+                return json.dumps(
+                    {
+                        "status": "already_archived",
+                        "id": doc_id,
+                        "title": doc.title,
+                    }
+                )
+
+            archived = await store.archive_knowledge_doc(doc_id)
+            if not archived:
+                return json.dumps(
+                    {
+                        "status": "not_found",
+                        "id": doc_id,
+                        "message": f"Knowledge doc '{doc_id}' not found.",
+                    }
+                )
+
+        return json.dumps(
+            {
+                "status": "archived",
+                "id": doc_id,
+                "title": doc.title,
+            }
+        )
+
+    except Exception as exc:
         return f"Error: {sanitize_mcp_error(str(exc))}"

@@ -26,6 +26,7 @@ from .notion import router as notion_router
 from .notion import webhook_router as notion_webhook_router
 from .projects import router as projects_router
 from .query import router as query_router
+from .reports import router as reports_router
 from .sandboxes import router as sandboxes_router
 from .schema import router as schema_router
 from .security import router as security_router
@@ -57,6 +58,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(security_router)
     app.include_router(byok_router)
     app.include_router(knowledge_router)
+    app.include_router(reports_router)
     app.include_router(notion_router)
     app.include_router(notion_webhook_router)
     app.include_router(workspace_projects_router)

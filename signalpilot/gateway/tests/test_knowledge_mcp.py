@@ -58,7 +58,9 @@ def mock_store():
     store.list_knowledge_docs = AsyncMock(return_value=[])
     store.search_knowledge = AsyncMock(return_value=[])
     store.insert_knowledge_doc = AsyncMock()
+    store.upsert_knowledge_doc = AsyncMock()
     store.get_knowledge_doc = AsyncMock(return_value=None)
+    store.get_knowledge_doc_by_key = AsyncMock(return_value=None)
     store.archive_knowledge_doc = AsyncMock(return_value=True)
     return store
 
@@ -279,25 +281,27 @@ class TestProposeKnowledgeTool:
         assert data["existing_id"] == existing_id
 
     @pytest.mark.asyncio
-    async def test_propose_knowledge_supersedes_archives_then_inserts(self, mock_store):
+    async def test_propose_knowledge_supersedes_is_deprecated_alias_for_overwrite(self, mock_store):
+        # supersedes now routes to the in-place upsert path (no archive + insert).
         old_id = str(uuid.uuid4())
-        old_doc = _make_doc(
+        existing = _make_doc(
             doc_id=old_id,
             scope="project",
             scope_ref="my-proj",
             category="decisions",
             title="my-decision",
         )
-        new_doc = _make_doc(
+        updated = _make_doc(
+            doc_id=old_id,
             scope="project",
             scope_ref="my-proj",
             category="decisions",
             title="my-decision",
+            body="Updated decision.",
             status="active",
         )
-        mock_store.get_knowledge_doc = AsyncMock(return_value=old_doc)
-        mock_store.archive_knowledge_doc = AsyncMock(return_value=True)
-        mock_store.insert_knowledge_doc = AsyncMock(return_value=new_doc)
+        mock_store.get_knowledge_doc_by_key = AsyncMock(return_value=existing)
+        mock_store.upsert_knowledge_doc = AsyncMock(return_value=updated)
 
         from gateway.mcp.tools.knowledge import propose_knowledge
 
@@ -313,9 +317,71 @@ class TestProposeKnowledgeTool:
                 supersedes=old_id,
             )
 
-        mock_store.archive_knowledge_doc.assert_awaited_once_with(old_id)
+        mock_store.upsert_knowledge_doc.assert_awaited_once()
+        mock_store.insert_knowledge_doc.assert_not_awaited()
+        mock_store.archive_knowledge_doc.assert_not_awaited()
+        data = json.loads(result)
+        assert data["status"] == "updated"
+        assert data["id"] == old_id
+
+    @pytest.mark.asyncio
+    async def test_propose_knowledge_overwrite_updates_existing_doc(self, mock_store):
+        existing = _make_doc(scope="project", scope_ref="my-proj", category="decisions", title="my-decision")
+        updated = _make_doc(
+            doc_id=existing.id,
+            scope="project",
+            scope_ref="my-proj",
+            category="decisions",
+            title="my-decision",
+            body="Revised decision.",
+            status="active",
+        )
+        mock_store.get_knowledge_doc_by_key = AsyncMock(return_value=existing)
+        mock_store.upsert_knowledge_doc = AsyncMock(return_value=updated)
+
+        from gateway.mcp.tools.knowledge import propose_knowledge
+
+        with patch("gateway.mcp.tools.knowledge._store_session") as mock_ctx:
+            mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_store)
+            mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+            result = await propose_knowledge.__wrapped__(
+                scope="project",
+                scope_ref="my-proj",
+                category="decisions",
+                title="my-decision",
+                body="Revised decision.",
+                overwrite=True,
+            )
+
+        mock_store.upsert_knowledge_doc.assert_awaited_once()
+        mock_store.insert_knowledge_doc.assert_not_awaited()
+        data = json.loads(result)
+        assert data["status"] == "updated"
+        assert data["id"] == existing.id
+
+    @pytest.mark.asyncio
+    async def test_propose_knowledge_overwrite_creates_when_absent(self, mock_store):
+        created = _make_doc(scope="project", scope_ref="my-proj", category="decisions", title="brand-new", status="active")
+        mock_store.get_knowledge_doc_by_key = AsyncMock(return_value=None)
+        mock_store.upsert_knowledge_doc = AsyncMock(return_value=created)
+
+        from gateway.mcp.tools.knowledge import propose_knowledge
+
+        with patch("gateway.mcp.tools.knowledge._store_session") as mock_ctx:
+            mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_store)
+            mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+            result = await propose_knowledge.__wrapped__(
+                scope="project",
+                scope_ref="my-proj",
+                category="decisions",
+                title="brand-new",
+                body="A new decision.",
+                overwrite=True,
+            )
+
         data = json.loads(result)
         assert data["status"] == "created"
+        assert data["id"] == created.id
 
     @pytest.mark.asyncio
     async def test_propose_knowledge_invalid_scope_returns_error(self, mock_store):
@@ -333,3 +399,69 @@ class TestProposeKnowledgeTool:
             )
 
         assert "Error" in result
+
+
+class TestArchiveKnowledgeTool:
+    @pytest.mark.asyncio
+    async def test_archive_knowledge_archives_active_doc(self, mock_store):
+        doc_id = str(uuid.uuid4())
+        doc = _make_doc(doc_id=doc_id, title="stale-doc", status="active")
+        mock_store.get_knowledge_doc = AsyncMock(return_value=doc)
+        mock_store.archive_knowledge_doc = AsyncMock(return_value=True)
+
+        from gateway.mcp.tools.knowledge import archive_knowledge
+
+        with patch("gateway.mcp.tools.knowledge._store_session") as mock_ctx:
+            mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_store)
+            mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+            result = await archive_knowledge.__wrapped__(doc_id=doc_id)
+
+        mock_store.archive_knowledge_doc.assert_awaited_once_with(doc_id)
+        data = json.loads(result)
+        assert data["status"] == "archived"
+        assert data["id"] == doc_id
+        assert data["title"] == "stale-doc"
+
+    @pytest.mark.asyncio
+    async def test_archive_knowledge_empty_id_rejected(self, mock_store):
+        from gateway.mcp.tools.knowledge import archive_knowledge
+
+        with patch("gateway.mcp.tools.knowledge._store_session") as mock_ctx:
+            mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_store)
+            mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+            result = await archive_knowledge.__wrapped__(doc_id="   ")
+
+        assert "Error" in result
+        mock_store.archive_knowledge_doc.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_archive_knowledge_not_found(self, mock_store):
+        mock_store.get_knowledge_doc = AsyncMock(return_value=None)
+
+        from gateway.mcp.tools.knowledge import archive_knowledge
+
+        with patch("gateway.mcp.tools.knowledge._store_session") as mock_ctx:
+            mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_store)
+            mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+            result = await archive_knowledge.__wrapped__(doc_id=str(uuid.uuid4()))
+
+        data = json.loads(result)
+        assert data["status"] == "not_found"
+        mock_store.archive_knowledge_doc.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_archive_knowledge_already_archived(self, mock_store):
+        doc_id = str(uuid.uuid4())
+        doc = _make_doc(doc_id=doc_id, title="old-doc", status="archived")
+        mock_store.get_knowledge_doc = AsyncMock(return_value=doc)
+
+        from gateway.mcp.tools.knowledge import archive_knowledge
+
+        with patch("gateway.mcp.tools.knowledge._store_session") as mock_ctx:
+            mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_store)
+            mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+            result = await archive_knowledge.__wrapped__(doc_id=doc_id)
+
+        data = json.loads(result)
+        assert data["status"] == "already_archived"
+        mock_store.archive_knowledge_doc.assert_not_awaited()

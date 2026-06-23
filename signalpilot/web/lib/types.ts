@@ -49,6 +49,23 @@ export interface KnowledgeUsage {
   storage_limit_mb: number;
 }
 
+export interface ReportSummary {
+  id: string;
+  org_id: string;
+  scope_ref: string | null;
+  title: string;
+  bytes: number;
+  view_count: number;
+  created_at: number;
+  updated_at: number;
+  created_by: string | null;
+  proposed_by_agent: string | null;
+}
+
+export interface Report extends ReportSummary {
+  html: string;
+}
+
 export type DBType =
   | "postgres"
   | "duckdb"

@@ -166,9 +166,8 @@ def test_project_root_does_not_fallback_to_workspace_when_project_sync_fails(tmp
 
 
 def test_analysis_agent_runs_from_project_root(tmp_path, monkeypatch) -> None:
-    from signalpilot._server.ai import claude_agent
+    from signalpilot._server.ai import chat_store, claude_agent
     from signalpilot._server.ai.claude_agent import AgentEvent
-    from signalpilot._server.ai import chat_store
     from signalpilot._types.ids import SessionId
 
     class FakeStore:
@@ -193,7 +192,7 @@ def test_analysis_agent_runs_from_project_root(tmp_path, monkeypatch) -> None:
     record = _record()
     captured: dict[str, object] = {}
 
-    async def fake_run_notebook_agent(**kwargs):
+    async def fake_run_notebook_agent(**kwargs: object):
         captured.update(kwargs)
         yield AgentEvent(
             type="text",
@@ -233,6 +232,15 @@ def test_analysis_agent_runs_from_project_root(tmp_path, monkeypatch) -> None:
 def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
     prompt = notion_analysis._analysis_prompt(_record(), _body())
 
+    assert "`sp.init()`" in prompt
+    assert (
+        "`import signalpilot as sp`, `sp.init()`, `sp.connections()`" in prompt
+    )
+    assert 'then `sp.connect("connection_name")`' in prompt
+    assert "Markdown-only `sp.md(...)` cells" in prompt
+    assert "not require `sp.init()`" in prompt
+    assert "run_stale_cells" not in prompt
+    assert "`run_cells`" in prompt
     assert "evidence-first" in prompt
     assert "analysis title based on the\n     user's request" in prompt
     assert "request-based title, Source request,\n     Source prompt" in prompt

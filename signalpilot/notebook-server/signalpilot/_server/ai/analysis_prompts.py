@@ -16,8 +16,17 @@ class AnalysisPromptBody(Protocol):
     previous_messages: list[str]
 
 
-def analysis_prompt(record: AnalysisPromptRecord, body: AnalysisPromptBody) -> str:
+def analysis_prompt(
+    record: AnalysisPromptRecord,
+    body: AnalysisPromptBody,
+    *,
+    warm_context: str | None = None,
+) -> str:
     previous = "\n".join(f"- {message}" for message in body.previous_messages)
+    warm_context_block = warm_context or (
+        "## Warm Context\n"
+        "- No precomputed schema warm context was available before this run."
+    )
     return f"""
 You are SignalPilot. Answer the user's governed data-analysis request by making
 the current durable marimo notebook the primary audit artifact.
@@ -60,6 +69,17 @@ Progress update rule:
 - Do not leave the user watching only tool calls. Emit normal assistant text
   between tool batches so the live conversation remains readable even without
   opening raw tool traces.
+
+Warm-start context:
+{warm_context_block}
+
+Warm-start rules:
+- Use warm context first for connection and schema orientation.
+- Do not broadly glob or read dbt project files before the first live notebook
+  edit. If more dbt context is needed, read only specific fallback files.
+- If warm context is incomplete or uncertain, write and run a small schema-probe
+  notebook cell instead of guessing.
+- Final evidence must still come from notebook-executed SignalPilot SDK cells.
 
 Required workflow:
 1. Use MCP tools only for quick initial scouting or orientation when helpful,

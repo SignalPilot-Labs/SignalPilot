@@ -15,7 +15,9 @@ from dataclasses import asdict, dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
-from urllib.parse import unquote, unquote_to_bytes, urlparse
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, unquote, unquote_to_bytes, urlencode, urlparse
+from urllib.request import Request as UrlRequest, urlopen
 from uuid import NAMESPACE_URL, uuid5
 
 import msgspec
@@ -136,6 +138,9 @@ _records_by_request_id: dict[str, AnalysisRecord] = {}
 _records_by_discussion_id: dict[str, str] = {}
 _running_tasks: dict[str, asyncio.Task[None]] = {}
 DEFAULT_AGENT_TIMEOUT_SECONDS = 1200.0
+WARM_CONTEXT_MAX_CHARS = 12_000
+WARM_CONTEXT_SCHEMA_MAX_TABLES = 10
+WARM_CONTEXT_GATEWAY_TIMEOUT_SECONDS = 15
 
 
 def _agent_timeout_seconds() -> float:
@@ -151,6 +156,412 @@ def _agent_timeout_seconds() -> float:
         )
         return DEFAULT_AGENT_TIMEOUT_SECONDS
     return max(30.0, timeout)
+
+
+def _clip_warm_context(
+    text: str,
+    *,
+    max_chars: int = WARM_CONTEXT_MAX_CHARS,
+) -> str:
+    if len(text) <= max_chars:
+        return text
+    note = (
+        f"\n\n[Warm context truncated to {max_chars} characters. "
+        "Run notebook schema-probe cells for any missing details.]"
+    )
+    return text[: max(0, max_chars - len(note))].rstrip() + note
+
+
+def _gateway_json_get(
+    path: str,
+    params: dict[str, Any] | None = None,
+    *,
+    timeout_seconds: int = WARM_CONTEXT_GATEWAY_TIMEOUT_SECONDS,
+) -> Any:
+    from signalpilot._server.gateway_client import gateway_headers, gateway_url
+
+    headers = {"Accept": "application/json", **gateway_headers()}
+    url = f"{gateway_url()}{path}"
+    if params:
+        query = urlencode(
+            {key: value for key, value in params.items() if value is not None}
+        )
+        if query:
+            url = f"{url}?{query}"
+    request = UrlRequest(url, headers=headers, method="GET")
+    try:
+        with urlopen(request, timeout=timeout_seconds) as response:
+            body = response.read().decode("utf-8", errors="replace")
+    except HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")[:500]
+        raise RuntimeError(f"Gateway HTTP {e.code}: {body}") from e
+    except URLError as e:
+        raise RuntimeError(f"Gateway unavailable: {e.reason}") from e
+    if not body:
+        return None
+    return json.loads(body)
+
+
+def _connection_label(connection: dict[str, Any]) -> str:
+    name = str(
+        connection.get("name") or connection.get("connection_name") or ""
+    )
+    details = [
+        str(connection.get("db_type") or connection.get("type") or "").strip(),
+        str(
+            connection.get("database") or connection.get("catalog") or ""
+        ).strip(),
+        str(
+            connection.get("schema_name") or connection.get("schema") or ""
+        ).strip(),
+    ]
+    suffix = ", ".join(item for item in details if item)
+    return f"{name} ({suffix})" if suffix else name
+
+
+def _choose_warm_connection(
+    connections: list[dict[str, Any]],
+    question: str,
+) -> tuple[dict[str, Any] | None, str]:
+    if not connections:
+        return None, "no gateway connections were returned"
+    if len(connections) == 1:
+        return connections[0], "only available gateway connection"
+
+    question_lower = question.lower()
+    terms = {
+        term
+        for term in re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", question_lower)
+        if len(term) >= 3
+    }
+
+    def score(connection: dict[str, Any]) -> int:
+        fields = [
+            connection.get("name"),
+            connection.get("connection_name"),
+            connection.get("db_type"),
+            connection.get("database"),
+            connection.get("catalog"),
+            connection.get("schema_name"),
+            connection.get("schema"),
+        ]
+        haystack = " ".join(str(field or "").lower() for field in fields)
+        value = sum(1 for term in terms if term in haystack)
+        name = str(
+            connection.get("name") or connection.get("connection_name") or ""
+        )
+        if name and name.lower() in question_lower:
+            value += 8
+        db_type = str(connection.get("db_type") or "")
+        if db_type and db_type.lower() in question_lower:
+            value += 3
+        return value
+
+    selected = max(connections, key=score)
+    selected_score = score(selected)
+    reason = (
+        f"highest metadata match score ({selected_score})"
+        if selected_score > 0
+        else "first available gateway connection"
+    )
+    return selected, reason
+
+
+def _relation_variants(value: str) -> set[str]:
+    cleaned = re.sub(r"[\"`]", "", value).strip().lower()
+    if not cleaned:
+        return set()
+    parts = [part for part in cleaned.split(".") if part]
+    variants = {cleaned}
+    if parts:
+        variants.add(parts[-1])
+    if len(parts) >= 2:
+        variants.add(".".join(parts[-2:]))
+    return variants
+
+
+def _linked_table_names_from_schema_link(data: dict[str, Any]) -> set[str]:
+    names: set[str] = set()
+    scores = data.get("scores")
+    if isinstance(scores, dict):
+        for key in scores:
+            names.update(_relation_variants(str(key)))
+    tables = data.get("tables")
+    if isinstance(tables, dict):
+        for key, table in tables.items():
+            names.update(_relation_variants(str(key)))
+            if isinstance(table, dict):
+                schema = str(table.get("schema") or "")
+                name = str(table.get("name") or "")
+                if name:
+                    names.update(
+                        _relation_variants(
+                            f"{schema}.{name}" if schema else name
+                        )
+                    )
+    ddl = str(data.get("ddl") or "")
+    for match in re.finditer(
+        r"\bCREATE\s+(?:TABLE|VIEW)\s+([^\s(]+)", ddl, re.IGNORECASE
+    ):
+        names.update(_relation_variants(match.group(1)))
+    schema = str(data.get("schema") or "")
+    for line in schema.splitlines():
+        table_name = line.split(" ", 1)[0].strip()
+        if table_name:
+            names.update(_relation_variants(table_name))
+    return names
+
+
+def _format_schema_link_section(
+    data: dict[str, Any],
+    *,
+    connection_name: str,
+    question: str,
+) -> tuple[str, set[str]]:
+    linked_names = _linked_table_names_from_schema_link(data)
+    lines = [
+        "## Materialized Warehouse Schema Link",
+        f"- Connection: `{connection_name}`",
+        f"- Question used for schema linking: {question}",
+        (
+            f"- Linked tables: {data.get('linked_tables', '?')}/"
+            f"{data.get('total_tables', '?')}"
+        ),
+    ]
+    if data.get("token_estimate") is not None:
+        lines.append(
+            f"- Estimated schema-link tokens: {data.get('token_estimate')}"
+        )
+
+    dialect = data.get("dialect")
+    if dialect:
+        lines.append(
+            f"- Dialect hints: {json.dumps(dialect, default=str)[:600]}"
+        )
+
+    join_hints = data.get("join_hints")
+    if isinstance(join_hints, list) and join_hints:
+        lines.append("- Join hints:")
+        lines.extend(f"  - {hint}" for hint in join_hints[:8])
+
+    query_hints = data.get("query_hints")
+    if isinstance(query_hints, list) and query_hints:
+        lines.append("- Query hints:")
+        lines.extend(f"  - {hint}" for hint in query_hints[:8])
+
+    ddl = str(data.get("ddl") or data.get("schema") or "")
+    if not ddl and isinstance(data.get("tables"), dict):
+        ddl = json.dumps(data["tables"], indent=2, default=str)
+    if ddl:
+        lines.extend(["", "```sql", ddl, "```"])
+    return "\n".join(lines), linked_names
+
+
+def _manifest_node_score(
+    node: dict[str, Any],
+    *,
+    linked_table_names: set[str],
+    question_terms: set[str],
+) -> int:
+    if node.get("resource_type") != "model":
+        return -1
+
+    variants: set[str] = set()
+    for field in ("relation_name", "alias", "name"):
+        value = node.get(field)
+        if isinstance(value, str):
+            variants.update(_relation_variants(value))
+    schema = str(node.get("schema") or "")
+    alias = str(node.get("alias") or node.get("name") or "")
+    if alias:
+        variants.update(
+            _relation_variants(f"{schema}.{alias}" if schema else alias)
+        )
+
+    score = 0
+    if variants & linked_table_names:
+        score += 40
+
+    searchable_parts = [
+        str(node.get("name") or ""),
+        str(node.get("alias") or ""),
+        str(node.get("description") or ""),
+    ]
+    columns = node.get("columns")
+    if isinstance(columns, dict):
+        searchable_parts.extend(str(name) for name in columns)
+    haystack = " ".join(searchable_parts).lower()
+    score += sum(2 for term in question_terms if term in haystack)
+    return score
+
+
+def _dbt_manifest_hints(
+    project_root: Path,
+    *,
+    linked_table_names: set[str],
+    question: str,
+) -> str:
+    manifest_path = project_root / "target" / "manifest.json"
+    if not manifest_path.exists():
+        return ""
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return (
+            "## dbt Manifest Hints\n"
+            f"- `target/manifest.json` exists but could not be parsed: {e}"
+        )
+
+    question_terms = {
+        term
+        for term in re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", question.lower())
+        if len(term) >= 3
+    }
+    nodes = manifest.get("nodes")
+    if not isinstance(nodes, dict):
+        return "## dbt Manifest Hints\n- `target/manifest.json` has no model nodes."
+
+    scored: list[tuple[int, str, dict[str, Any]]] = []
+    for unique_id, node in nodes.items():
+        if not isinstance(node, dict):
+            continue
+        score = _manifest_node_score(
+            node,
+            linked_table_names=linked_table_names,
+            question_terms=question_terms,
+        )
+        if score > 0:
+            scored.append((score, str(unique_id), node))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+
+    if not scored:
+        return (
+            "## dbt Manifest Hints\n"
+            "- `target/manifest.json` exists, but no selected model metadata "
+            "matched the linked warehouse tables or question terms."
+        )
+
+    lines = [
+        "## dbt Manifest Hints",
+        "- Source: `target/manifest.json` only; selected matching models, no dbt file crawl.",
+    ]
+    for score, unique_id, node in scored[:8]:
+        name = str(node.get("name") or unique_id)
+        relation_name = str(
+            node.get("relation_name") or node.get("alias") or name
+        )
+        lines.append(
+            f"- `{unique_id}` -> `{relation_name}` (match score {score})"
+        )
+        description = str(node.get("description") or "").strip()
+        if description:
+            lines.append(f"  - description: {description[:240]}")
+        columns = node.get("columns")
+        if isinstance(columns, dict) and columns:
+            lines.append(
+                "  - columns: "
+                + ", ".join(
+                    str(column_name)
+                    for column_name in list(columns.keys())[:16]
+                )
+            )
+        depends_on = node.get("depends_on")
+        if isinstance(depends_on, dict):
+            dep_nodes = depends_on.get("nodes")
+            if isinstance(dep_nodes, list) and dep_nodes:
+                lines.append(
+                    "  - depends_on: "
+                    + ", ".join(str(dep) for dep in dep_nodes[:8])
+                )
+    return "\n".join(lines)
+
+
+def _build_analysis_warm_context(
+    app_state: AppState,
+    body: StartNotionAnalysisRequest,
+    *,
+    project_root: Path,
+) -> str:
+    del app_state
+
+    question = body.prompt.strip() or body.headline.strip()
+    sections = [
+        "## Warm Context",
+        (
+            "- This bounded context was prepared before the notebook agent run. "
+            "Use it for orientation only; final evidence still must come from "
+            "notebook-executed SDK cells."
+        ),
+    ]
+
+    try:
+        from signalpilot._server.gateway_client import gateway_headers
+
+        if not gateway_headers() and "SP_GATEWAY_URL" not in os.environ:
+            sections.append(
+                "- Gateway REST warm start skipped because no gateway URL or "
+                "auth environment was configured."
+            )
+            return _clip_warm_context("\n".join(sections))
+
+        raw_connections = _gateway_json_get("/api/connections")
+        connections = (
+            raw_connections if isinstance(raw_connections, list) else []
+        )
+        selected, reason = _choose_warm_connection(connections, question)
+
+        sections.append("## Connection Discovery")
+        if connections:
+            sections.append(f"- Available connections: {len(connections)}")
+            for connection in connections[:8]:
+                sections.append(f"  - `{_connection_label(connection)}`")
+            if len(connections) > 8:
+                sections.append(f"  - ... {len(connections) - 8} more")
+        else:
+            sections.append("- Gateway returned no available connections.")
+
+        if selected is None:
+            return _clip_warm_context("\n".join(sections))
+
+        connection_name = str(
+            selected.get("name") or selected.get("connection_name") or ""
+        )
+        sections.append(f"- Likely connection: `{connection_name}` ({reason})")
+
+        if connection_name:
+            schema_link = _gateway_json_get(
+                f"/api/connections/{quote(connection_name, safe='')}/schema/link",
+                {
+                    "question": question,
+                    "format": "ddl",
+                    "max_tables": WARM_CONTEXT_SCHEMA_MAX_TABLES,
+                    "prune_columns": "true",
+                },
+            )
+            if isinstance(schema_link, dict):
+                schema_section, linked_names = _format_schema_link_section(
+                    schema_link,
+                    connection_name=connection_name,
+                    question=question,
+                )
+                sections.append(schema_section)
+                manifest_hints = _dbt_manifest_hints(
+                    project_root,
+                    linked_table_names=linked_names,
+                    question=question,
+                )
+                if manifest_hints:
+                    sections.append(manifest_hints)
+            else:
+                sections.append(
+                    "- Gateway schema link returned no JSON object."
+                )
+    except Exception as e:
+        LOGGER.info("Analysis warm context unavailable: %s", e)
+        sections.append(f"- Warm context unavailable: {e}")
+
+    return _clip_warm_context("\n".join(sections))
 
 
 def _parse_chart_list(value: Any) -> list[AnalysisChart]:
@@ -192,14 +603,18 @@ def _analysis_result_from_dict(value: dict[str, Any]) -> AnalysisResult:
 
 
 def _analysis_source(value: str | None) -> str:
-    source = re.sub(r"[^a-zA-Z0-9_-]+", "-", (value or "notion").strip().lower()).strip("-")
+    source = re.sub(
+        r"[^a-zA-Z0-9_-]+", "-", (value or "notion").strip().lower()
+    ).strip("-")
     return source or "notion"
 
 
 def _project_root(app_state: AppState) -> Path:
-    project_id = app_state.request.headers.get("x-gateway-project-id")
+    request = getattr(app_state, "request", None)
+    headers = getattr(request, "headers", {}) or {}
+    project_id = headers.get("x-gateway-project-id")
     if project_id:
-        branch = app_state.request.headers.get("x-gateway-branch-id", "main").strip() or "main"
+        branch = headers.get("x-gateway-branch-id", "main").strip() or "main"
         try:
             from signalpilot._server.files.project_sync import (
                 local_project_dir,
@@ -216,7 +631,9 @@ def _project_root(app_state: AppState) -> Path:
             synced_dir = Path(str(result.get("local_dir") or local_dir))
             if (synced_dir / ".git").exists():
                 return synced_dir
-            raise RuntimeError(f"Synced project checkout missing .git: {synced_dir}")
+            raise RuntimeError(
+                f"Synced project checkout missing .git: {synced_dir}"
+            )
         except Exception as e:
             message = f"Could not resolve project root for analysis project {project_id}: {e}"
             LOGGER.error(message)
@@ -235,7 +652,11 @@ def _records_dir(app_state: AppState, source: str = "notion") -> Path:
 
 
 def _registry_path(app_state: AppState) -> Path:
-    path = _project_root(app_state) / "notebooks" / ".signalpilot-analysis-registry.json"
+    path = (
+        _project_root(app_state)
+        / "notebooks"
+        / ".signalpilot-analysis-registry.json"
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -334,7 +755,9 @@ def _record_trail_url(
     session_id: str,
     request_base_url: str,
 ) -> str:
-    project_id = app_state.request.headers.get("x-gateway-project-id", "").strip()
+    project_id = app_state.request.headers.get(
+        "x-gateway-project-id", ""
+    ).strip()
     branch = app_state.request.headers.get("x-gateway-branch-id", "").strip()
     return _trail_url(
         notebook_path,
@@ -431,10 +854,15 @@ def _(sp):
 
 
 def _analysis_project_context(app_state: AppState) -> tuple[str, str] | None:
-    project_id = app_state.request.headers.get("x-gateway-project-id", "").strip()
+    project_id = app_state.request.headers.get(
+        "x-gateway-project-id", ""
+    ).strip()
     if not project_id:
         return None
-    branch = app_state.request.headers.get("x-gateway-branch-id", "main").strip() or "main"
+    branch = (
+        app_state.request.headers.get("x-gateway-branch-id", "main").strip()
+        or "main"
+    )
     return project_id, branch
 
 
@@ -483,13 +911,20 @@ def _checkpoint_analysis_files(
 
         diff_code, _, _ = run_git(repo, "diff", "--cached", "--quiet")
         if diff_code == 1:
-            code, out, err = run_git(repo, "commit", "-m", message, timeout=120)
+            code, out, err = run_git(
+                repo, "commit", "-m", message, timeout=120
+            )
             if code != 0:
-                LOGGER.warning("Could not commit analysis files: %s", (err or out).strip())
+                LOGGER.warning(
+                    "Could not commit analysis files: %s", (err or out).strip()
+                )
                 return None
             sync_result = sync_up(project_id, branch)
             if sync_result.get("error"):
-                LOGGER.warning("Could not push analysis checkpoint: %s", sync_result["error"])
+                LOGGER.warning(
+                    "Could not push analysis checkpoint: %s",
+                    sync_result["error"],
+                )
         elif diff_code != 0:
             LOGGER.warning("Could not inspect staged analysis diff")
             return None
@@ -500,7 +935,9 @@ def _checkpoint_analysis_files(
             _save_registry(app_state)
             return record.latest_commit_sha
     except Exception as e:
-        LOGGER.warning("Analysis git checkpoint failed for %s: %s", record.request_id, e)
+        LOGGER.warning(
+            "Analysis git checkpoint failed for %s: %s", record.request_id, e
+        )
     return None
 
 
@@ -516,7 +953,9 @@ def _ensure_record(
         _refresh_trail_url(app_state, record, request_base_url)
         if record.status != "Analyzing":
             _append_followup_to_notebook(app_state, record, body)
-            _checkpoint_analysis_files(app_state, record, f"Append {record.source} analysis follow-up")
+            _checkpoint_analysis_files(
+                app_state, record, f"Append {record.source} analysis follow-up"
+            )
         return record
 
     source = _analysis_source(body.source)
@@ -532,7 +971,9 @@ def _ensure_record(
         else str(notebook_path)
     )
     session_id = str(_session_id(request_id))
-    trail_url = _record_trail_url(app_state, file_key, session_id, request_base_url)
+    trail_url = _record_trail_url(
+        app_state, file_key, session_id, request_base_url
+    )
 
     record = AnalysisRecord(
         request_id=request_id,
@@ -550,7 +991,9 @@ def _ensure_record(
     _records_by_request_id[record.request_id] = record
     _records_by_discussion_id[record.discussion_id] = record.request_id
     _save_registry(app_state)
-    _checkpoint_analysis_files(app_state, record, f"Create {source} analysis notebook")
+    _checkpoint_analysis_files(
+        app_state, record, f"Create {source} analysis notebook"
+    )
     return record
 
 
@@ -897,7 +1340,9 @@ def _image_sources_from_html(raw_html: str) -> list[dict[str, str]]:
     try:
         parser.feed(raw_html)
     except Exception:
-        LOGGER.debug("Could not parse notebook HTML image output", exc_info=True)
+        LOGGER.debug(
+            "Could not parse notebook HTML image output", exc_info=True
+        )
         return []
     return parser.images
 
@@ -910,7 +1355,11 @@ def _image_title(attrs: dict[str, str], fallback_index: int) -> str:
     src = attrs.get("src", "").strip()
     name = Path(_chart_url_path(src)).name
     if name:
-        stem = re.sub(r"^\d+-", "", Path(name).stem).replace("-", " ").replace("_", " ")
+        stem = (
+            re.sub(r"^\d+-", "", Path(name).stem)
+            .replace("-", " ")
+            .replace("_", " ")
+        )
         if stem:
             return stem[:80]
     return f"Notebook image {fallback_index}"
@@ -1807,7 +2256,9 @@ def _is_markdown_table_separator(line: str) -> bool:
     return all(re.fullmatch(r":?-{3,}:?", cell.strip()) for cell in cells)
 
 
-def _markdown_tables(content: str) -> list[tuple[list[str], list[dict[str, str]]]]:
+def _markdown_tables(
+    content: str,
+) -> list[tuple[list[str], list[dict[str, str]]]]:
     lines = content.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     tables: list[tuple[list[str], list[dict[str, str]]]] = []
     index = 0
@@ -1824,7 +2275,9 @@ def _markdown_tables(content: str) -> list[tuple[list[str], list[dict[str, str]]
             if not cells:
                 break
             padded = cells + [""] * (len(headers) - len(cells))
-            rows.append(dict(zip(headers, padded[: len(headers)], strict=False)))
+            rows.append(
+                dict(zip(headers, padded[: len(headers)], strict=False))
+            )
             cursor += 1
         if rows:
             tables.append((headers, rows))
@@ -1849,7 +2302,10 @@ def _normalise(values: list[float]) -> list[float]:
     maximum = max(values)
     if maximum == minimum:
         return [50.0 for _ in values]
-    return [round((value - minimum) / (maximum - minimum) * 100, 1) for value in values]
+    return [
+        round((value - minimum) / (maximum - minimum) * 100, 1)
+        for value in values
+    ]
 
 
 def _find_header(headers: list[str], *keywords: str) -> str | None:
@@ -1883,7 +2339,9 @@ def _write_result_fallback_chart_artifacts(
         return []
     headers, rows = table
     company_header = _find_header(headers, "company")
-    score_header = _find_header(headers, "score") or _find_header(headers, "composite")
+    score_header = _find_header(headers, "score") or _find_header(
+        headers, "composite"
+    )
     if not company_header or not score_header:
         return []
 
@@ -1915,9 +2373,7 @@ def _write_result_fallback_chart_artifacts(
                 },
             }
         ],
-        "layout": {
-            "title": {"text": "Operating momentum composite ranking"}
-        },
+        "layout": {"title": {"text": "Operating momentum composite ranking"}},
     }
     ranking_png = _render_plotly_bar_png(
         ranking_figure, "Operating momentum composite ranking"
@@ -2171,7 +2627,8 @@ async def _run_analysis(
     record.error = None
     _save_registry(app_state)
     _ensure_session(app_state, record)
-    agent_cwd = str(_project_root(app_state))
+    project_root = _project_root(app_state)
+    agent_cwd = str(project_root)
     LOGGER.info(
         "Starting %s analysis %s session=%s notebook=%s cwd=%s",
         record.source,
@@ -2181,7 +2638,12 @@ async def _run_analysis(
         agent_cwd,
     )
 
-    prompt = _analysis_prompt(record, body)
+    warm_context = _build_analysis_warm_context(
+        app_state,
+        body,
+        project_root=project_root,
+    )
+    prompt = _analysis_prompt(record, body, warm_context=warm_context)
     text_parts: list[str] = []
     store = get_gateway_chat_trace_store()
 
@@ -2241,6 +2703,7 @@ async def _run_analysis(
                     notebook_mcp_app=app_state.request.app,
                     cwd=agent_cwd,
                     disallow_file_edits=True,
+                    additional_disallowed_tools=["Agent"],
                 ):
                     event_data = {
                         "type": event.type,
@@ -2334,7 +2797,9 @@ async def _run_analysis(
                 },
             )
             try:
-                async with asyncio.timeout(min(120.0, _agent_timeout_seconds())):
+                async with asyncio.timeout(
+                    min(120.0, _agent_timeout_seconds())
+                ):
                     async for event in run_notebook_agent(
                         message=_json_repair_prompt(
                             body.prompt, "".join(text_parts)
@@ -2346,6 +2811,7 @@ async def _run_analysis(
                         notebook_mcp_app=app_state.request.app,
                         cwd=agent_cwd,
                         disallow_file_edits=True,
+                        additional_disallowed_tools=["Agent"],
                     ):
                         event_data = {
                             "type": event.type,

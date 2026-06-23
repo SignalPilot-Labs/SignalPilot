@@ -67,12 +67,18 @@ def test_notebook_template_uses_compact_three_cell_scaffold() -> None:
     assert "## Evidence Trace" not in template
 
 
-def test_analysis_registry_omits_latest_commit_sha(tmp_path, monkeypatch) -> None:
+def test_analysis_registry_omits_latest_commit_sha(
+    tmp_path, monkeypatch
+) -> None:
     record = _record()
     record.latest_commit_sha = "abc123"
-    registry_path = tmp_path / "notebooks" / ".signalpilot-analysis-registry.json"
+    registry_path = (
+        tmp_path / "notebooks" / ".signalpilot-analysis-registry.json"
+    )
     registry_path.parent.mkdir(parents=True)
-    monkeypatch.setattr(notion_analysis, "_registry_path", lambda _app_state: registry_path)
+    monkeypatch.setattr(
+        notion_analysis, "_registry_path", lambda _app_state: registry_path
+    )
 
     old_records = dict(notion_analysis._records_by_request_id)
     try:
@@ -89,7 +95,9 @@ def test_analysis_registry_omits_latest_commit_sha(tmp_path, monkeypatch) -> Non
         notion_analysis._records_by_request_id.update(old_records)
 
 
-def test_project_root_uses_existing_project_checkout(tmp_path, monkeypatch) -> None:
+def test_project_root_uses_existing_project_checkout(
+    tmp_path, monkeypatch
+) -> None:
     from signalpilot._server.files import project_sync
 
     project_root = tmp_path / "projects" / "project-1"
@@ -106,17 +114,25 @@ def test_project_root_uses_existing_project_checkout(tmp_path, monkeypatch) -> N
         ),
     )
 
-    monkeypatch.setattr(project_sync, "local_project_dir", lambda _project_id, _branch="": project_root)
+    monkeypatch.setattr(
+        project_sync,
+        "local_project_dir",
+        lambda _project_id, _branch="": project_root,
+    )
     monkeypatch.setattr(
         project_sync,
         "sync_down",
-        lambda *_args, **_kwargs: pytest.fail("sync_down should not run for existing checkout"),
+        lambda *_args, **_kwargs: pytest.fail(
+            "sync_down should not run for existing checkout"
+        ),
     )
 
     assert notion_analysis._project_root(app_state) == project_root
 
 
-def test_project_root_syncs_project_checkout_before_workspace_fallback(tmp_path, monkeypatch) -> None:
+def test_project_root_syncs_project_checkout_before_workspace_fallback(
+    tmp_path, monkeypatch
+) -> None:
     from signalpilot._server.files import project_sync
 
     project_root = tmp_path / "projects" / "project-1"
@@ -136,13 +152,19 @@ def test_project_root_syncs_project_checkout_before_workspace_fallback(tmp_path,
         (project_root / ".git").mkdir(parents=True)
         return {"local_dir": str(project_root)}
 
-    monkeypatch.setattr(project_sync, "local_project_dir", lambda _project_id, _branch="": project_root)
+    monkeypatch.setattr(
+        project_sync,
+        "local_project_dir",
+        lambda _project_id, _branch="": project_root,
+    )
     monkeypatch.setattr(project_sync, "sync_down", sync_down)
 
     assert notion_analysis._project_root(app_state) == project_root
 
 
-def test_project_root_does_not_fallback_to_workspace_when_project_sync_fails(tmp_path, monkeypatch) -> None:
+def test_project_root_does_not_fallback_to_workspace_when_project_sync_fails(
+    tmp_path, monkeypatch
+) -> None:
     from signalpilot._server.files import project_sync
 
     project_root = tmp_path / "projects" / "project-1"
@@ -158,8 +180,16 @@ def test_project_root_does_not_fallback_to_workspace_when_project_sync_fails(tmp
         ),
     )
 
-    monkeypatch.setattr(project_sync, "local_project_dir", lambda _project_id, _branch="": project_root)
-    monkeypatch.setattr(project_sync, "sync_down", lambda _project_id, _branch: {"error": "clone failed"})
+    monkeypatch.setattr(
+        project_sync,
+        "local_project_dir",
+        lambda _project_id, _branch="": project_root,
+    )
+    monkeypatch.setattr(
+        project_sync,
+        "sync_down",
+        lambda _project_id, _branch: {"error": "clone failed"},
+    )
 
     with pytest.raises(RuntimeError, match="Could not resolve project root"):
         notion_analysis._project_root(app_state)
@@ -205,16 +235,33 @@ def test_analysis_agent_runs_from_project_root(tmp_path, monkeypatch) -> None:
             ),
         )
 
-    monkeypatch.setattr(notion_analysis, "_project_root", lambda _app_state: project_root)
-    monkeypatch.setattr(notion_analysis, "_ensure_session", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(notion_analysis, "_save_registry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        notion_analysis, "_project_root", lambda _app_state: project_root
+    )
+    monkeypatch.setattr(
+        notion_analysis,
+        "_build_analysis_warm_context",
+        lambda *_args, **_kwargs: (
+            "## Warm Context\n- Likely connection: `dev-db`"
+        ),
+    )
+    monkeypatch.setattr(
+        notion_analysis, "_ensure_session", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        notion_analysis, "_save_registry", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(
         notion_analysis,
         "_persist_record_completion_artifacts",
         lambda *_args, **_kwargs: None,
     )
-    monkeypatch.setattr(chat_store, "get_gateway_chat_trace_store", lambda: FakeStore())
-    monkeypatch.setattr(claude_agent, "run_notebook_agent", fake_run_notebook_agent)
+    monkeypatch.setattr(
+        chat_store, "get_gateway_chat_trace_store", lambda: FakeStore()
+    )
+    monkeypatch.setattr(
+        claude_agent, "run_notebook_agent", fake_run_notebook_agent
+    )
 
     asyncio.run(
         notion_analysis._run_analysis(
@@ -227,6 +274,8 @@ def test_analysis_agent_runs_from_project_root(tmp_path, monkeypatch) -> None:
 
     assert captured["session_id"] == SessionId(record.session_id)
     assert captured["cwd"] == str(project_root)
+    assert captured["additional_disallowed_tools"] == ["Agent"]
+    assert "Likely connection: `dev-db`" in str(captured["message"])
 
 
 def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
@@ -263,21 +312,201 @@ def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
     assert "visible query cell" in prompt
     assert "visible data preview cell" in prompt
     assert "visible checks cell" in prompt
-    assert "Do not write generic \"what I did\" sections" in prompt
+    assert 'Do not write generic "what I did" sections' in prompt
     assert "Do not separate a finding from" in prompt
     assert "Example branch shape to imitate" in prompt
-    assert "Completed GBP transfer revenue was concentrated in FX margin" in prompt
+    assert (
+        "Completed GBP transfer revenue was concentrated in FX margin"
+        in prompt
+    )
     assert "q1_gbp_revenue_df = pd.DataFrame(db.query" in prompt
     assert "q1_gbp_revenue_df.head(10)" in prompt
     assert "monthly_revenue_chart" in prompt
     assert "head of\n     the joined table/query result" in prompt
     assert "not just a branch list" in prompt
     assert "finding explanation, exact query, data head/preview" in prompt
-    assert "\"Analysis steps\"" in prompt
-    assert "\"Evidence Trace\"" not in prompt
+    assert '"Analysis steps"' in prompt
+    assert '"Evidence Trace"' not in prompt
     assert "Mermaid" not in prompt
     assert "top-line result" not in prompt
     assert "Confidence methodology/rationale" in prompt
     assert "Queries must not be buried" in prompt
     assert "Previous discussion messages:" in prompt
     assert "Previous Notion discussion messages:" not in prompt
+    assert "Warm-start context:" in prompt
+    assert "Use warm context first" in prompt
+    assert "Do not broadly glob or read dbt project files" in prompt
+    assert "write and run a small schema-probe\n  notebook cell" in prompt
+    assert (
+        "Final evidence must still come from notebook-executed SignalPilot SDK cells"
+        in prompt
+    )
+
+
+def test_analysis_prompt_injects_warm_context_without_changing_output_contract() -> (
+    None
+):
+    prompt = notion_analysis._analysis_prompt(
+        _record(),
+        _body(),
+        warm_context=(
+            "## Warm Context\n"
+            "- Likely connection: `dev-db`\n"
+            "```sql\nCREATE TABLE public.orders (id INTEGER);\n```"
+        ),
+    )
+
+    assert "Likely connection: `dev-db`" in prompt
+    assert "CREATE TABLE public.orders" in prompt
+    assert (
+        "When the analysis is complete, your final assistant message must be only valid"
+        in prompt
+    )
+    assert '"notionCharts": [' in prompt
+    assert "## Executive Summary and Explorations" in prompt
+
+
+def test_warm_context_truncation_stays_under_cap() -> None:
+    oversized = "x" * (notion_analysis.WARM_CONTEXT_MAX_CHARS + 5000)
+
+    clipped = notion_analysis._clip_warm_context(oversized)
+
+    assert len(clipped) <= notion_analysis.WARM_CONTEXT_MAX_CHARS
+    assert "Warm context truncated" in clipped
+
+
+def test_warm_context_builder_clips_oversized_schema_link(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    def fake_gateway_json_get(
+        path: str,
+        params: dict[str, object] | None = None,
+        **_kwargs: object,
+    ):
+        del params
+        if path == "/api/connections":
+            return [{"name": "dev-db", "db_type": "postgres"}]
+        return {
+            "connection_name": "dev-db",
+            "linked_tables": 10,
+            "total_tables": 10,
+            "ddl": "CREATE TABLE public.large_table (id INTEGER);\n"
+            + ("-- very long schema context\n" * 1000),
+        }
+
+    monkeypatch.setenv("SP_GATEWAY_URL", "http://gateway.test")
+    monkeypatch.setattr(
+        notion_analysis, "_gateway_json_get", fake_gateway_json_get
+    )
+
+    context = notion_analysis._build_analysis_warm_context(
+        object(),
+        _body(),
+        project_root=tmp_path,
+    )
+
+    assert len(context) <= notion_analysis.WARM_CONTEXT_MAX_CHARS
+    assert "Warm context truncated" in context
+
+
+def test_warm_context_uses_gateway_schema_link_and_selected_manifest(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, dict[str, object] | None]] = []
+
+    def fake_gateway_json_get(
+        path: str,
+        params: dict[str, object] | None = None,
+        **_kwargs: object,
+    ):
+        calls.append((path, params))
+        if path == "/api/connections":
+            return [
+                {"name": "other-db", "db_type": "postgres"},
+                {
+                    "name": "dev-db",
+                    "db_type": "postgres",
+                    "database": "warehouse",
+                    "schema_name": "analytics_marts",
+                },
+            ]
+        assert path == "/api/connections/dev-db/schema/link"
+        return {
+            "connection_name": "dev-db",
+            "linked_tables": 1,
+            "total_tables": 42,
+            "token_estimate": 123,
+            "scores": {"analytics_marts.fct_transfers": 9.0},
+            "ddl": (
+                "CREATE TABLE analytics_marts.fct_transfers (\n"
+                "  id INTEGER,\n"
+                "  revenue NUMERIC\n"
+                ");"
+            ),
+            "join_hints": [
+                "analytics_marts.fct_transfers.customer_id -> dim_customers.id"
+            ],
+            "query_hints": [
+                "Use completed transfers only when the question asks for completed revenue."
+            ],
+        }
+
+    manifest_path = tmp_path / "target" / "manifest.json"
+    manifest_path.parent.mkdir()
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "nodes": {
+                    "model.demo.fct_transfers": {
+                        "resource_type": "model",
+                        "name": "fct_transfers",
+                        "alias": "fct_transfers",
+                        "schema": "analytics_marts",
+                        "relation_name": "analytics_marts.fct_transfers",
+                        "description": "Transfer revenue fact table.",
+                        "columns": {
+                            "id": {},
+                            "revenue": {},
+                            "customer_id": {},
+                        },
+                        "depends_on": {"nodes": ["source.demo.raw_transfers"]},
+                    },
+                    "model.demo.dim_unrelated": {
+                        "resource_type": "model",
+                        "name": "dim_unrelated",
+                        "alias": "dim_unrelated",
+                        "schema": "analytics_marts",
+                        "relation_name": "analytics_marts.dim_unrelated",
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("SP_GATEWAY_URL", "http://gateway.test")
+    monkeypatch.setattr(
+        notion_analysis, "_gateway_json_get", fake_gateway_json_get
+    )
+
+    context = notion_analysis._build_analysis_warm_context(
+        object(),
+        _body(),
+        project_root=tmp_path,
+    )
+
+    schema_call = calls[1]
+    assert schema_call[0] == "/api/connections/dev-db/schema/link"
+    assert (
+        schema_call[1]["max_tables"]
+        == notion_analysis.WARM_CONTEXT_SCHEMA_MAX_TABLES
+    )
+    assert notion_analysis.WARM_CONTEXT_SCHEMA_MAX_TABLES <= 12
+    assert "Likely connection: `dev-db`" in context
+    assert "CREATE TABLE analytics_marts.fct_transfers" in context
+    assert "dbt Manifest Hints" in context
+    assert "model.demo.fct_transfers" in context
+    assert "model.demo.dim_unrelated" not in context
+    assert "no dbt file crawl" in context

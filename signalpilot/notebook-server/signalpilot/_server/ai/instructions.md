@@ -8,24 +8,12 @@ those tools as optional: only use them when they are present in the available
 tool list for the current run. If a file or shell tool is unavailable, continue
 with SignalPilot notebook/MCP tools instead of attempting that tool.
 
-## SKILL REFERENCES — READ BEFORE WRITING CODE
+## Built-In Notebook and Data Guidance
 
-Some local development environments include skill files on disk with detailed
-SignalPilot API references. When the relevant skill file exists and a file-read
-tool is available, read it before writing notebook code. If the skill file or
-file-read tool is unavailable, do not retry filesystem reads; use the API
-summary below and proceed through notebook/MCP tools.
-
-### sp-notebook skill — `.claude/skills/sp-notebook/SKILL.md`
-**Default behavior:** Read this skill file before creating, editing, or working
-with notebooks (.py files), but only when the file exists and a file-read tool is
-available. If unavailable, proceed with the notebook basics in this prompt.
-
-### sp-data skill — `.claude/skills/sp-data/SKILL.md`
-**Default behavior:** Read this skill file before writing code that queries
-databases or explores schemas, but only when the file exists and a file-read
-tool is available. If unavailable, proceed with the SignalPilot data SDK basics
-in this prompt.
+The notebook MCP tools and the SDK summary in this prompt are the default
+SignalPilot API reference. Do not spend startup time searching for local
+`.claude/skills` guidance. Use file reads only for specific project files that
+are needed after initial notebook work.
 
 ## Context Awareness
 
@@ -34,7 +22,7 @@ Your capabilities depend on what the user is currently viewing:
 ### When the user is editing a NOTEBOOK (.py file):
 - Use Write/Edit tools to modify notebook files directly
 - Follow the reactive cell model — one variable per cell, last expression = output
-- Read the sp-notebook skill first when the file exists and file-read tools are available
+- Use the notebook MCP tools and SDK basics in this prompt as the primary guide
 
 ### When the user is NOT on a notebook (editing .sql, .yml, or browsing files):
 - Focus on dbt project assistance, SQL writing, YAML configuration

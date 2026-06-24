@@ -77,7 +77,8 @@ export type DBType =
   | "databricks"
   | "mssql"
   | "trino"
-  | "sqlite";
+  | "sqlite"
+  | "xata";
 
 export interface SSHTunnelConfig {
   enabled: boolean;
@@ -127,6 +128,12 @@ export interface ConnectionInfo {
   // Databricks
   http_path: string | null;
   catalog: string | null;
+  // Xata (org/project/branch-scoped; gateway resolves the per-branch Postgres endpoint server-side)
+  branch: string | null;
+  xata_organization: string | null;
+  xata_project: string | null;
+  xata_database: string | null;
+  xata_api_url: string | null;
   // Meta
   description: string;
   tags: string[];

@@ -465,23 +465,23 @@ async def get_xata_branch_diff(
     base: str = Query(..., pattern=r"^[A-Za-z0-9_.-]{1,64}$"),
     compare: str = Query(..., pattern=r"^[A-Za-z0-9_.-]{1,64}$"),
 ):
-    """Diff two Xata branches addressed from ONE registered workspace credential.
+    """Diff two Xata branches addressed from ONE registered Xata connection.
 
-    The stored connection holds a single scoped API key; this swaps the `:branch`
-    segment to reach `base` and `compare` server-side (the agent never sees a URL or
-    key). Use this for the "one workspace, branch-per-call" model.
+    The gateway resolves each branch's Postgres endpoint server-side from the
+    stored control-plane API key (new Xata: <branchID>.<region>.xata.tech) — the
+    agent only names the branches, never a URL or key.
     """
     from gateway.connectors.drivers.xata import XataConnector
 
     info = await require_connection(store, name)
-    conn_str = await store.get_connection_string(name)
-    if not conn_str:
-        raise HTTPException(status_code=400, detail="No credentials stored")
     extras = await store.get_credential_extras(name)
-    base_cs = XataConnector.connection_string_for_branch(conn_str, base)
-    compare_cs = XataConnector.connection_string_for_branch(conn_str, compare)
-    base_schema = await _live_schema_for_conn_str(info, base_cs, extras, name)
-    compare_schema = await _live_schema_for_conn_str(info, compare_cs, extras, name)
+    try:
+        base_cs = await XataConnector._resolve_endpoint({**extras, "branch": base})
+        compare_cs = await XataConnector._resolve_endpoint({**extras, "branch": compare})
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=sanitize_db_error(str(e), info.db_type))
+    base_schema = await _live_schema_for_conn_str(info, base_cs, extras, f"{name}_base")
+    compare_schema = await _live_schema_for_conn_str(info, compare_cs, extras, f"{name}_compare")
     return {
         "connection": name,
         "base_branch": base,
@@ -493,24 +493,26 @@ async def get_xata_branch_diff(
 def _xata_control_from_extras(conn_str: str | None, extras: dict) -> Any:
     """Build a XataControlClient from a connection's stored extras.
 
-    OIDC mode: uses xata_token_url + dedicated OIDC credentials (xata_client_id,
-    xata_client_secret, xata_username, xata_password). The data-plane API key is
-    NOT used as the OIDC password.
-
-    Bearer mode: uses the data-plane API key (connection-string password) as the
-    Bearer token (Xata Cloud).
+    New Xata (xata.tech): control-plane API key (xata_api_key) as Bearer token,
+    with xata_organization. Legacy paths are kept as fallbacks:
+      - OIDC self-hosted (xata_token_url + xata_client_id/secret/username/password)
+      - data-plane key as Bearer (parsed from a real connection string)
     """
     from urllib.parse import urlparse
 
     from gateway.connectors.xata_control import XataControlClient, XataControlConfig
 
-    api_url = extras.get("xata_api_url")
-    if not api_url:
-        raise HTTPException(status_code=400, detail="xata_api_url not configured for this connection")
+    api_url = extras.get("xata_api_url") or "https://api.xata.tech"
+    org = extras.get("xata_organization") or extras.get("xata_org") or "default-org"
 
+    # New Xata: control-plane API key (preferred).
+    api_key = extras.get("xata_api_key")
+    if api_key:
+        return XataControlClient(XataControlConfig(api_url=api_url, org=org, bearer_token=api_key))
+
+    # Legacy self-hosted OIDC password grant.
     token_url = extras.get("xata_token_url")
     if token_url:
-        # OIDC mode — use dedicated OIDC credentials; do NOT use the data-plane key
         client_id = extras.get("xata_client_id")
         client_secret = extras.get("xata_client_secret")
         username = extras.get("xata_username")
@@ -520,30 +522,19 @@ def _xata_control_from_extras(conn_str: str | None, extras: dict) -> Any:
                 status_code=400,
                 detail="xata_token_url is set but OIDC client_id/client_secret/username/password are not configured",
             )
-        cfg = XataControlConfig(
-            api_url=api_url,
-            org=extras.get("xata_org", "default-org"),
-            bearer_token=None,
-            token_url=token_url,
-            client_id=client_id,
-            client_secret=client_secret,
-            username=username,
-            password=password,
+        return XataControlClient(XataControlConfig(
+            api_url=api_url, org=org, bearer_token=None, token_url=token_url,
+            client_id=client_id, client_secret=client_secret, username=username, password=password,
+        ))
+
+    # Legacy bearer: data-plane key parsed from a real connection string.
+    bearer = urlparse(conn_str).password if conn_str and conn_str.startswith("postgres") else None
+    if not bearer:
+        raise HTTPException(
+            status_code=400,
+            detail="No Xata control-plane credentials configured (set xata_api_key)",
         )
-    else:
-        # Bearer mode — data-plane API key as Bearer token (Xata Cloud)
-        bearer = urlparse(conn_str).password if conn_str else None
-        cfg = XataControlConfig(
-            api_url=api_url,
-            org=extras.get("xata_org", "default-org"),
-            bearer_token=bearer,
-            token_url=None,
-            client_id=None,
-            client_secret=None,
-            username=None,
-            password=None,
-        )
-    return XataControlClient(cfg)
+    return XataControlClient(XataControlConfig(api_url=api_url, org=org, bearer_token=bearer))
 
 
 @router.get("/connections/{name}/xata/projects/{project}/branches", dependencies=[RequireScope("read")])

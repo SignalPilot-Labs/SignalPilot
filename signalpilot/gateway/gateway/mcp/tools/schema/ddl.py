@@ -9,6 +9,27 @@ from gateway.mcp.server import mcp
 from gateway.mcp.validation import _CONN_NAME_RE
 
 
+async def _no_xata_db_msg() -> str | None:
+    """Friendly message when no Xata connection is registered, else None.
+
+    The Xata branch tools stay always-listed (the skill layer loads them
+    conditionally), but no-op gracefully with a clear message when there is no
+    Xata database to act on. Fails open on a transient listing error.
+    """
+    gw = _gateway_url()
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(f"{gw}/api/connections", headers=_gw_headers())
+        if r.status_code == 200:
+            body = r.json()
+            conns = body if isinstance(body, list) else body.get("connections", [])
+            if any("xata" in str(c.get("db_type", "")).lower() for c in conns):
+                return None
+    except Exception:
+        return None
+    return "No Xata DB connected. Register a Xata database connection to use branch tools."
+
+
 @audited_tool(mcp)
 async def schema_diff(connection_name: str) -> str:
     """
@@ -132,6 +153,9 @@ async def xata_branch_diff(connection_name: str, base_branch: str, compare_branc
         base_branch: Base branch name (e.g. "main").
         compare_branch: Feature/upstream branch name to compare against base.
     """
+    no_xata = await _no_xata_db_msg()
+    if no_xata:
+        return no_xata
     if not _CONN_NAME_RE.match(connection_name):
         return "Error: Invalid connection name"
 
@@ -176,6 +200,9 @@ async def xata_list_branches(connection_name: str, project: str) -> str:
         connection_name: The Xata workspace connection.
         project: The Xata project id.
     """
+    no_xata = await _no_xata_db_msg()
+    if no_xata:
+        return no_xata
     if not _CONN_NAME_RE.match(connection_name):
         return "Error: Invalid connection name"
 

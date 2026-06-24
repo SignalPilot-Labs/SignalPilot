@@ -150,6 +150,13 @@ class ConnectionCreate(BaseModel):
     xata_client_secret: str | None = Field(default=None, max_length=1024)
     xata_username: str | None = Field(default=None, max_length=128)   # OIDC user
     xata_password: str | None = Field(default=None, max_length=1024)  # OIDC password (NOT the data-plane API key)
+    # ─── New Xata platform (xata.tech): org/project/branch + control-plane API key ──
+    # Preferred model. The gateway resolves each branch's Postgres endpoint
+    # (<branchID>.<region>.xata.tech) server-side from the API key — no raw URL.
+    xata_api_key: str | None = Field(default=None, max_length=512)     # control-plane key (xau_...)
+    xata_organization: str | None = Field(default=None, max_length=64)  # org id, e.g. 0psl2d
+    xata_project: str | None = Field(default=None, max_length=128)      # project id, e.g. prj_...
+    xata_database: str | None = Field(default=None, max_length=128)     # database name (default: xata)
     # ─── Snowflake key-pair auth ───────────────────────────────────
     private_key: str | None = Field(default=None, max_length=16384)  # PEM-encoded private key
     private_key_passphrase: str | None = Field(default=None, max_length=1024)
@@ -233,11 +240,18 @@ class ConnectionCreate(BaseModel):
         if self.db_type != DBType.xata:
             return self
 
-        # region and database are required
-        if not self.region or not self.region.strip():
-            raise ValueError("Xata connections require both 'region' and 'database'")
-        if not self.database or not self.database.strip():
-            raise ValueError("Xata connections require both 'region' and 'database'")
+        # New Xata (xata.tech): API key + org + project; region/database are resolved
+        # server-side. Legacy Xata (xata.sh): require region + database.
+        if self.xata_api_key:
+            if not self.xata_organization or not self.xata_organization.strip():
+                raise ValueError("Xata connections require 'xata_organization' and 'xata_project'")
+            if not self.xata_project or not self.xata_project.strip():
+                raise ValueError("Xata connections require 'xata_organization' and 'xata_project'")
+        else:
+            if not self.region or not self.region.strip():
+                raise ValueError("Xata connections require both 'region' and 'database'")
+            if not self.database or not self.database.strip():
+                raise ValueError("Xata connections require both 'region' and 'database'")
 
         # Per-field shape checks (regex + SSRF).
         _validate_xata_field_shapes(

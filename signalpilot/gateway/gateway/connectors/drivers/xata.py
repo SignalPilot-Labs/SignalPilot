@@ -1,56 +1,71 @@
-"""Xata connector — Postgres-wire-compatible branches with server-side endpoint resolution.
+"""Xata connector — new Xata platform (xata.tech), Postgres-wire with server-side
+branch-endpoint resolution.
 
-A Xata connection is a *workspace*, not a single database. The stored secret is a
-scoped Xata API key (embedded in the encrypted connection string as the password).
-The actual per-branch Postgres endpoint is resolved here, server-side — the agent
-never sees a URL and never holds a credential. Branches are addressed per-call, so
-one registered workspace serves every branch.
+A Xata connection is a *project*, not a single database. The stored secret is a
+scoped Xata API key (control-plane, `xau_...`). Each branch is its own Postgres
+host (`<branchID>.<region>.xata.tech`); the gateway resolves that endpoint and the
+branch's data-plane credentials server-side — the agent never sees a URL or a
+password and can address any branch in the project by name.
 
-The data path (queries, schema introspection, governance) is identical to Postgres,
-so this subclasses PostgresConnector. We only differ in:
-  - TLS is mandatory (Xata requires it),
-  - we can mint a connection string for a *different* branch using the same key.
+The data path (queries, schema introspection, governance) is identical to
+Postgres, so this subclasses PostgresConnector. We differ in:
+  - branch endpoints are resolved via the Xata control-plane API at connect time,
+  - TLS is mandatory (Xata requires it; real cloud cert → verify-full).
 """
 
 from __future__ import annotations
 
-import re
-from urllib.parse import quote, urlparse, urlunparse
-
 from .postgres import PostgresConnector
-
-_BRANCH_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 
 
 class XataConnector(PostgresConnector):
     def __init__(self):
         super().__init__()
+        self._credential_extras: dict = {}
+
+    def set_credential_extras(self, extras: dict) -> None:
+        super().set_credential_extras(extras)
+        self._credential_extras = extras or {}
 
     async def connect(self, connection_string: str) -> None:
         """Connect to a Xata branch.
 
-        Xata uses a public CA chain; default to verify-full. Operators may
-        explicitly set mode = 'require' in ssl_config to opt into weaker
-        verification — but only if they set it on purpose, not by omission.
+        If given a real Postgres URL, connect directly. Otherwise (the normal
+        path — a `xata://org/project/branch` sentinel), resolve the branch's
+        Postgres endpoint via the control plane from the stored API key.
         """
+        cs = connection_string
+        if not cs or not cs.startswith("postgres"):
+            cs = await self._resolve_endpoint(self._credential_extras)
+
+        # Xata uses a public CA chain → verify-full. Operators may explicitly opt
+        # into weaker verification via ssl_config, but never by omission.
         if not self._ssl_config or not self._ssl_config.get("enabled"):
             self._ssl_config = {"enabled": True, "mode": "verify-full"}
         elif self._ssl_config.get("mode") in (None, "require", "prefer", "allow"):
-            # Operator left TLS on but did not explicitly opt out of verification.
             self._ssl_config["mode"] = "verify-full"
-        await super().connect(connection_string)
+        await super().connect(cs)
 
     @staticmethod
-    def connection_string_for_branch(connection_string: str, branch: str) -> str:
-        """Return the same Xata URL pointed at a different branch.
+    async def _resolve_endpoint(extras: dict) -> str:
+        """Resolve a branch (by name) to a Postgres connection string via the API."""
+        api_key = extras.get("xata_api_key")
+        api_url = extras.get("xata_api_url") or "https://api.xata.tech"
+        org = extras.get("xata_organization") or extras.get("xata_org")
+        project = extras.get("xata_project")
+        branch = extras.get("branch") or "main"
+        database = extras.get("xata_database") or "xata"
+        if not (api_key and org and project):
+            raise RuntimeError(
+                "Xata connection requires xata_api_key, xata_organization, and xata_project"
+            )
+        # Lazy import to avoid an import cycle.
+        from gateway.connectors.xata_control import XataControlClient, XataControlConfig
 
-        Lets one stored workspace credential address any branch (e.g. for a
-        head-to-head branch diff) without persisting a second secret. Only the
-        path's `:branch` segment is rewritten; the netloc (and the API key in it)
-        is left untouched.
-        """
-        if not _BRANCH_RE.match(branch):
-            raise ValueError("Invalid branch")
-        parsed = urlparse(connection_string)
-        db = parsed.path.rsplit(":", 1)[0] if ":" in parsed.path.lstrip("/") else parsed.path
-        return urlunparse(parsed._replace(path=f"{db}:{quote(branch, safe='')}"))
+        cfg = XataControlConfig(api_url=api_url, org=org, bearer_token=api_key)
+        async with XataControlClient(cfg) as cc:
+            return await cc.resolve_branch_endpoint(project, branch, database)
+
+    async def branch_endpoint(self, branch_name: str) -> str:
+        """Resolve a *different* branch's connection string (for a branch diff)."""
+        return await self._resolve_endpoint({**self._credential_extras, "branch": branch_name})

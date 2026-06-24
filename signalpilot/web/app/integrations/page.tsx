@@ -13,11 +13,13 @@ import {
 import { useAppAuth } from "~/lib/auth-context";
 import {
   deleteNotionOAuthInstallation,
+  getWorkspaceProjects,
   getNotionOAuthInstallations,
   provisionNotionOAuthInstallation,
   startNotionOAuth,
   type NotionOAuthInstallation,
 } from "~/lib/api";
+import type { WorkspaceProjectInfo } from "~/lib/types";
 import { PageHeader, TerminalBar } from "~/components/ui/page-header";
 import { StatusDot } from "~/components/ui/data-viz";
 import { SectionHeader } from "~/components/ui/section-header";
@@ -46,6 +48,10 @@ function notionPageUrl(id: string | null | undefined): string | null {
   return `https://www.notion.so/${id.replace(/-/g, "")}`;
 }
 
+function projectLabel(project: WorkspaceProjectInfo): string {
+  return project.display_name || project.name || project.id;
+}
+
 export default function IntegrationsPage() {
   const { isLoaded } = useAppAuth();
   const { planTier, isLoaded: subLoaded } = useSubscription();
@@ -62,6 +68,8 @@ function IntegrationsContent() {
   const { toast } = useToast();
 
   const [oauthInstallations, setOauthInstallations] = useState<NotionOAuthInstallation[]>([]);
+  const [workspaceProjects, setWorkspaceProjects] = useState<WorkspaceProjectInfo[]>([]);
+  const [projectSelections, setProjectSelections] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [connecting, setConnecting] = useState(false);
@@ -70,11 +78,32 @@ function IntegrationsContent() {
 
   const fetchIntegrations = useCallback(async () => {
     try {
-      setOauthInstallations(await getNotionOAuthInstallations());
+      const [installations, projectResult] = await Promise.all([
+        getNotionOAuthInstallations(),
+        getWorkspaceProjects("active"),
+      ]);
+      setOauthInstallations(installations);
+      setWorkspaceProjects(projectResult.projects);
+      setProjectSelections((prev) => {
+        const next = { ...prev };
+        const activeInstallationIds = new Set(installations.map((installation) => installation.id));
+        for (const id of Object.keys(next)) {
+          if (!activeInstallationIds.has(id)) delete next[id];
+        }
+        for (const installation of installations) {
+          const configuredProjectId = installation.config?.default_project_id || "";
+          if (configuredProjectId || next[installation.id] === undefined) {
+            next[installation.id] = configuredProjectId;
+          }
+        }
+        return next;
+      });
       setLoadError(false);
+      return installations;
     } catch {
       setLoadError(true);
       toast("failed to load integrations", "error");
+      return null;
     } finally {
       setLoading(false);
     }
@@ -99,16 +128,12 @@ function IntegrationsContent() {
 
     const oauthInstallationId = installationId;
     let active = true;
-    async function autoProvisionOAuthInstall() {
-      setProvisioningId(oauthInstallationId);
-      toast("notion connected; provisioning workspace", "info", 5000);
+    async function refreshOAuthInstall() {
+      setLoading(true);
       try {
-        const installations = await getNotionOAuthInstallations();
-        if (active) {
-          setOauthInstallations(installations);
-          setLoadError(false);
-          setLoading(false);
-        }
+        const installations = await fetchIntegrations();
+
+        if (!installations) return;
 
         const installation = installations.find((candidate) => candidate.id === oauthInstallationId);
         if (installation?.config?.enabled) {
@@ -120,22 +145,16 @@ function IntegrationsContent() {
           return;
         }
 
-        await provisionNotionOAuthInstallation(oauthInstallationId);
-        if (active) {
-          toast("notion workspace provisioned", "success");
-          await fetchIntegrations();
-        }
+        if (active) toast("notion connected; select a project", "success");
       } catch (e) {
         if (active) {
           setLoading(false);
-          toast(`provision failed: ${e}`, "error", 6000);
+          toast(`failed to load notion install: ${e}`, "error", 6000);
         }
-      } finally {
-        if (active) setProvisioningId(null);
       }
     }
 
-    autoProvisionOAuthInstall();
+    refreshOAuthInstall();
     return () => {
       active = false;
     };
@@ -153,10 +172,24 @@ function IntegrationsContent() {
   }
 
   async function handleProvision(installationId: string) {
+    const selectedProjectId = projectSelections[installationId] || "";
+    const selectedProject = workspaceProjects.find((project) => project.id === selectedProjectId);
+    if (!selectedProject) {
+      toast("select a project", "error");
+      return;
+    }
+
+    const installation = oauthInstallations.find((candidate) => candidate.id === installationId);
+    const alreadyProvisioned = Boolean(installation?.config?.enabled);
+
     setProvisioningId(installationId);
     try {
-      await provisionNotionOAuthInstallation(installationId);
-      toast("notion workspace provisioned", "success");
+      await provisionNotionOAuthInstallation(installationId, {
+        default_project_id: selectedProject.id,
+        default_branch: selectedProject.default_branch || "main",
+        analysis_branch_mode: "per_request",
+      });
+      toast(alreadyProvisioned ? "default project saved" : "notion workspace provisioned", "success");
       await fetchIntegrations();
     } catch (e) {
       toast(`provision failed: ${e}`, "error");
@@ -181,6 +214,7 @@ function IntegrationsContent() {
   const visibleInstallations = oauthInstallations.filter((installation) => installation.status !== "disconnected");
   const hasConnectedInstall = visibleInstallations.length > 0;
   const activeOauthCount = visibleInstallations.filter((installation) => installation.config?.enabled).length;
+  const projectsById = new Map(workspaceProjects.map((project) => [project.id, project]));
 
   return (
     <div className="p-8 max-w-3xl animate-fade-in">
@@ -283,6 +317,19 @@ function IntegrationsContent() {
                         </a>
                       )}
                     </p>
+                    <p className="flex items-center gap-1.5">
+                      <span>default project:</span>
+                      <span className="text-[var(--color-text-muted)] font-mono truncate">
+                        {(() => {
+                          const project = installation.config?.default_project_id
+                            ? projectsById.get(installation.config.default_project_id)
+                            : null;
+                          return project
+                            ? projectLabel(project)
+                            : shortenedId(installation.config?.default_project_id);
+                        })()}
+                      </span>
+                    </p>
                   </div>
                 </div>
 
@@ -302,18 +349,58 @@ function IntegrationsContent() {
                 )}
               </div>
 
-              {!installation.config?.enabled && (
-                <div className="flex justify-end">
-                  <button
-                    onClick={() => handleProvision(installation.id)}
-                    disabled={provisioningId === installation.id}
-                    className="flex items-center justify-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
-                  >
-                    {provisioningId === installation.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Database className="w-3 h-3" />}
-                    provision workspace
-                  </button>
-                </div>
-              )}
+              {(() => {
+                const configuredProjectId = installation.config?.default_project_id || "";
+                const selectedProjectId = projectSelections[installation.id] ?? configuredProjectId;
+                const selectedProject = selectedProjectId ? projectsById.get(selectedProjectId) : null;
+                const projectChanged = selectedProjectId !== configuredProjectId;
+                const canSubmitProject =
+                  Boolean(selectedProject) &&
+                  provisioningId !== installation.id &&
+                  (!installation.config?.enabled || projectChanged);
+
+                return (
+                  <div className="border-t border-[var(--color-border)] pt-4">
+                    <label htmlFor={`notion-project-${installation.id}`} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">
+                      default project
+                    </label>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <select
+                        id={`notion-project-${installation.id}`}
+                        value={selectedProjectId}
+                        onChange={(event) => {
+                          setProjectSelections((prev) => ({
+                            ...prev,
+                            [installation.id]: event.target.value,
+                          }));
+                        }}
+                        disabled={workspaceProjects.length === 0 || provisioningId === installation.id}
+                        className="min-w-0 flex-1 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none disabled:opacity-40"
+                      >
+                        <option value="">
+                          {workspaceProjects.length === 0 && !selectedProjectId ? "no active projects" : "select a project..."}
+                        </option>
+                        {selectedProjectId && !selectedProject && (
+                          <option value={selectedProjectId}>configured project unavailable</option>
+                        )}
+                        {workspaceProjects.map((project) => (
+                          <option key={project.id} value={project.id}>
+                            {projectLabel(project)}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={() => handleProvision(installation.id)}
+                        disabled={!canSubmitProject}
+                        className="flex items-center justify-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
+                      >
+                        {provisioningId === installation.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Database className="w-3 h-3" />}
+                        {installation.config?.enabled ? "save project" : "provision workspace"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           );
         })}

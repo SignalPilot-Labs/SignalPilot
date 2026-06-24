@@ -770,6 +770,9 @@ export type NotionOAuthInstallationConfig = {
   requests_data_source_id: string | null;
   requests_database_page_id: string | null;
   enabled: boolean;
+  default_project_id: string | null;
+  default_branch: string;
+  analysis_branch_mode: "per_request" | "default_branch";
 };
 export type NotionOAuthInstallation = {
   id: string;
@@ -803,16 +806,24 @@ export const getNotionOAuthPages = (installationId: string, query?: string) => {
   const qs = query ? `?query=${encodeURIComponent(query)}` : "";
   return request<NotionPageOption[]>(`/api/integrations/notion/oauth/${installationId}/pages${qs}`);
 };
-export const provisionNotionOAuthInstallation = (installationId: string, parentPageId?: string | null) =>
-  request<{
+export type NotionProvisionPayload = {
+  parent_page_id?: string | null;
+  default_project_id?: string | null;
+  default_branch?: string;
+  analysis_branch_mode?: "per_request" | "default_branch";
+};
+export const provisionNotionOAuthInstallation = (installationId: string, payload: NotionProvisionPayload | string | null = {}) => {
+  const body = typeof payload === "string" ? { parent_page_id: payload } : payload ?? {};
+  return request<{
     installation: NotionOAuthInstallation;
     trigger_page_id: string;
     requests_data_source_id: string;
     requests_database_page_id: string;
   }>(`/api/integrations/notion/oauth/${installationId}/provision`, {
     method: "POST",
-    body: JSON.stringify(parentPageId ? { parent_page_id: parentPageId } : {}),
+    body: JSON.stringify(body),
   });
+};
 export const deleteNotionOAuthInstallation = (installationId: string) =>
   request<void>(`/api/integrations/notion/oauth/${installationId}`, { method: "DELETE" });
 

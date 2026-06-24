@@ -4,6 +4,7 @@ import { Logger } from "@/utils/Logger";
 import type { TypedString } from "@/utils/typed";
 import { updateQueryParams } from "@/utils/urls";
 import { KnownQueryParams } from "../constants";
+import { notionRequestIdFromSessionId } from "../notion/trail";
 import { store } from "../state/jotai";
 
 export type SessionId = TypedString<"SessionId">;
@@ -67,7 +68,7 @@ function computeInitialSessionId(): SessionId {
         url.pathname.startsWith("/notebook")) &&
       !url.searchParams.has(KnownQueryParams.project);
     const shouldPreserveSessionId =
-      id.startsWith("session-notion-") || isNotebookSurfaceWithoutProject;
+      Boolean(notionRequestIdFromSessionId(id)) || isNotebookSurfaceWithoutProject;
     if (!shouldPreserveSessionId) {
       updateQueryParams((params) => {
         if (params.has(KnownQueryParams.kiosk)) {

@@ -191,7 +191,7 @@ export const DbtProjectList: React.FC<Props> = ({ onRefresh }) => {
           <CloudIcon size={24} className="mx-auto mb-2 opacity-40" />
           <p>No projects found.</p>
           <p className="text-xs mt-1">
-            Click <FolderPlusIcon size={12} className="inline" /> to import a local project.
+            Create a project or import one from GitHub to get started.
           </p>
         </div>
       ) : (

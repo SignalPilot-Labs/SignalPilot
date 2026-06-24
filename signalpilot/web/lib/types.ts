@@ -159,6 +159,7 @@ export interface WorkspaceProjectInfo {
   settings: Record<string, unknown> | null;
   file_count: number;
   total_bytes: number;
+  default_branch: string;
   created_by: string | null;
   created_at: number;
   updated_at: number;

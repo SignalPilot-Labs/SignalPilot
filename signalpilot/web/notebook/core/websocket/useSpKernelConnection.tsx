@@ -62,6 +62,7 @@ import { kioskModeAtom } from "../mode";
 import { connectionAtom } from "../network/connection";
 import type { RequestId } from "../network/DeferredRequestRegistry";
 import { useRuntimeManager } from "../runtime/config";
+import { notionRequestIdFromSessionId } from "../notion/trail";
 import { SECRETS_REGISTRY } from "../secrets/request-registry";
 import { isStaticNotebook } from "../static/static-state";
 import { rawFallbackAtom } from "../meta/state";
@@ -198,7 +199,7 @@ export function useSpKernelConnection(opts: {
   };
   const resetSessionForRetry = () => {
     const urlSessionId = getUrlSessionId();
-    if (urlSessionId?.startsWith("session-notion-")) {
+    if (notionRequestIdFromSessionId(urlSessionId)) {
       return;
     }
     regenerateSessionId();

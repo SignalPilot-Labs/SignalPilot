@@ -384,6 +384,12 @@ async def lifespan(app: FastAPI):
         if mcp_ctx is not None:
             await mcp_ctx.__aexit__(None, None, None)
         await dbt_proxy_ctx.__aexit__(None, None, None)
+        slack_poc_worker = getattr(app.state, "slack_poc_worker", None)
+        if slack_poc_worker is not None:
+            await slack_poc_worker.drain()
+        slack_poc_client = getattr(app.state, "slack_poc_client", None)
+        if slack_poc_client is not None:
+            await slack_poc_client.aclose()
         # Flush any remaining health events before shutdown
         await health_monitor.flush_to_db()
         health_flush_task.cancel()
@@ -499,6 +505,16 @@ async def _global_exception_handler(request: Request, exc: Exception) -> JSONRes
 
 # Register all API routers
 register_routers(app)
+
+if (os.getenv("SLACK_DELIVERY_MODE") or "").lower() == "http":
+    try:
+        from .slack_poc.worker import load_config_from_env, register_http_routes
+
+        register_http_routes(app, load_config_from_env())
+        logger.info("Slack PoC HTTP endpoint mounted at /slack/events")
+    except Exception:
+        logger.exception("Failed to mount Slack PoC HTTP endpoint")
+        raise
 
 # Mount the MCP server at /mcp for streamable-http transport (used by Claude Code plugin)
 _mcp_session_manager = None

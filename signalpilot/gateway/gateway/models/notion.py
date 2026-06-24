@@ -52,6 +52,9 @@ class NotionInstallationConfigInfo(BaseModel):
     requests_data_source_id: str | None = None
     requests_database_page_id: str | None = None
     enabled: bool = False
+    default_project_id: str | None = None
+    default_branch: str = "main"
+    analysis_branch_mode: str = "per_request"
 
 
 class NotionOAuthInstallationInfo(BaseModel):
@@ -85,6 +88,9 @@ class NotionProvisionRequest(BaseModel):
     """
 
     parent_page_id: str | None = Field(default=None, min_length=1, max_length=100)
+    default_project_id: str | None = Field(default=None, min_length=1, max_length=200)
+    default_branch: str = Field(default="main", min_length=1, max_length=100)
+    analysis_branch_mode: str = Field(default="per_request", pattern=r"^(per_request|default_branch)$")
 
 
 class NotionProvisionResponse(BaseModel):

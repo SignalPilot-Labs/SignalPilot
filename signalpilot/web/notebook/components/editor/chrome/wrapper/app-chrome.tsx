@@ -44,6 +44,7 @@ import { LspStatus } from "./footer-items/lsp-status";
 import { PanelsWrapper } from "./panels";
 import { useDependencyPanelTab } from "./useDependencyPanelTab";
 import { handleDragging } from "./utils";
+import { notionRequestIdFromSessionId } from "@/core/notion/trail";
 import { useOptionalNotebookConfig } from "~/components/notebook/notebook-context";
 import type { NotebookProduct } from "../types";
 
@@ -116,7 +117,7 @@ export const AppChrome: React.FC<PropsWithChildren> = ({ children }) => {
     if (
       didAutoOpenNotionAgent.current ||
       product !== "notebooks" ||
-      !kernelSessionId?.startsWith("session-notion-")
+      !notionRequestIdFromSessionId(kernelSessionId)
     ) {
       return;
     }

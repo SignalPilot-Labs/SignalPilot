@@ -12,9 +12,12 @@ import os
 import re
 import struct
 from dataclasses import asdict, dataclass
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
-from urllib.parse import unquote, urlparse, urlunparse
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, unquote, unquote_to_bytes, urlencode, urlparse
+from urllib.request import Request as UrlRequest, urlopen
 from uuid import NAMESPACE_URL, uuid5
 
 import msgspec
@@ -24,11 +27,15 @@ from starlette.responses import FileResponse, JSONResponse
 from signalpilot import _loggers
 from signalpilot._messaging.cell_output import CellOutput
 from signalpilot._runtime.commands import SerializedQueryParams
+from signalpilot._runtime.virtual_file import read_virtual_file
+from signalpilot._server.ai.analysis_prompts import (
+    analysis_prompt as _analysis_prompt,
+    json_repair_prompt as _json_repair_prompt,
+)
 from signalpilot._server.api.deps import AppState
 from signalpilot._server.api.endpoints.notion_urls import (
-    notebooks_base_url as _notebooks_base_url,
+    trail_url as _trail_url,
 )
-from signalpilot._server.api.endpoints.notion_urls import trail_url as _trail_url
 from signalpilot._server.api.utils import parse_request
 from signalpilot._server.export._session_cache import (
     persist_session_view_to_cache,
@@ -57,6 +64,7 @@ class StartNotionAnalysisRequest(msgspec.Struct, rename="camel"):
     headline: str
     prompt: str
     created_at: str
+    source: str = "notion"
     notion_request_page_id: str | None = None
     requester: list[str] = msgspec.field(default_factory=list)
     previous_messages: list[str] = msgspec.field(default_factory=list)
@@ -94,9 +102,19 @@ class AnalysisRecord:
     headline: str
     source_url: str
     created_at: str
+    source: str = "notion"
     notion_request_page_id: str | None = None
+    latest_commit_sha: str | None = None
     error: str | None = None
     result: AnalysisResult | None = None
+
+
+@dataclass
+class _ImageChartCandidate:
+    cell_id: str
+    title: str
+    content_type: str
+    content: bytes
 
 
 class _DetachedConsumer(SessionConsumer):
@@ -120,6 +138,9 @@ _records_by_request_id: dict[str, AnalysisRecord] = {}
 _records_by_discussion_id: dict[str, str] = {}
 _running_tasks: dict[str, asyncio.Task[None]] = {}
 DEFAULT_AGENT_TIMEOUT_SECONDS = 1200.0
+WARM_CONTEXT_MAX_CHARS = 12_000
+WARM_CONTEXT_SCHEMA_MAX_TABLES = 10
+WARM_CONTEXT_GATEWAY_TIMEOUT_SECONDS = 15
 
 
 def _agent_timeout_seconds() -> float:
@@ -135,6 +156,412 @@ def _agent_timeout_seconds() -> float:
         )
         return DEFAULT_AGENT_TIMEOUT_SECONDS
     return max(30.0, timeout)
+
+
+def _clip_warm_context(
+    text: str,
+    *,
+    max_chars: int = WARM_CONTEXT_MAX_CHARS,
+) -> str:
+    if len(text) <= max_chars:
+        return text
+    note = (
+        f"\n\n[Warm context truncated to {max_chars} characters. "
+        "Run notebook schema-probe cells for any missing details.]"
+    )
+    return text[: max(0, max_chars - len(note))].rstrip() + note
+
+
+def _gateway_json_get(
+    path: str,
+    params: dict[str, Any] | None = None,
+    *,
+    timeout_seconds: int = WARM_CONTEXT_GATEWAY_TIMEOUT_SECONDS,
+) -> Any:
+    from signalpilot._server.gateway_client import gateway_headers, gateway_url
+
+    headers = {"Accept": "application/json", **gateway_headers()}
+    url = f"{gateway_url()}{path}"
+    if params:
+        query = urlencode(
+            {key: value for key, value in params.items() if value is not None}
+        )
+        if query:
+            url = f"{url}?{query}"
+    request = UrlRequest(url, headers=headers, method="GET")
+    try:
+        with urlopen(request, timeout=timeout_seconds) as response:
+            body = response.read().decode("utf-8", errors="replace")
+    except HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")[:500]
+        raise RuntimeError(f"Gateway HTTP {e.code}: {body}") from e
+    except URLError as e:
+        raise RuntimeError(f"Gateway unavailable: {e.reason}") from e
+    if not body:
+        return None
+    return json.loads(body)
+
+
+def _connection_label(connection: dict[str, Any]) -> str:
+    name = str(
+        connection.get("name") or connection.get("connection_name") or ""
+    )
+    details = [
+        str(connection.get("db_type") or connection.get("type") or "").strip(),
+        str(
+            connection.get("database") or connection.get("catalog") or ""
+        ).strip(),
+        str(
+            connection.get("schema_name") or connection.get("schema") or ""
+        ).strip(),
+    ]
+    suffix = ", ".join(item for item in details if item)
+    return f"{name} ({suffix})" if suffix else name
+
+
+def _choose_warm_connection(
+    connections: list[dict[str, Any]],
+    question: str,
+) -> tuple[dict[str, Any] | None, str]:
+    if not connections:
+        return None, "no gateway connections were returned"
+    if len(connections) == 1:
+        return connections[0], "only available gateway connection"
+
+    question_lower = question.lower()
+    terms = {
+        term
+        for term in re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", question_lower)
+        if len(term) >= 3
+    }
+
+    def score(connection: dict[str, Any]) -> int:
+        fields = [
+            connection.get("name"),
+            connection.get("connection_name"),
+            connection.get("db_type"),
+            connection.get("database"),
+            connection.get("catalog"),
+            connection.get("schema_name"),
+            connection.get("schema"),
+        ]
+        haystack = " ".join(str(field or "").lower() for field in fields)
+        value = sum(1 for term in terms if term in haystack)
+        name = str(
+            connection.get("name") or connection.get("connection_name") or ""
+        )
+        if name and name.lower() in question_lower:
+            value += 8
+        db_type = str(connection.get("db_type") or "")
+        if db_type and db_type.lower() in question_lower:
+            value += 3
+        return value
+
+    selected = max(connections, key=score)
+    selected_score = score(selected)
+    reason = (
+        f"highest metadata match score ({selected_score})"
+        if selected_score > 0
+        else "first available gateway connection"
+    )
+    return selected, reason
+
+
+def _relation_variants(value: str) -> set[str]:
+    cleaned = re.sub(r"[\"`]", "", value).strip().lower()
+    if not cleaned:
+        return set()
+    parts = [part for part in cleaned.split(".") if part]
+    variants = {cleaned}
+    if parts:
+        variants.add(parts[-1])
+    if len(parts) >= 2:
+        variants.add(".".join(parts[-2:]))
+    return variants
+
+
+def _linked_table_names_from_schema_link(data: dict[str, Any]) -> set[str]:
+    names: set[str] = set()
+    scores = data.get("scores")
+    if isinstance(scores, dict):
+        for key in scores:
+            names.update(_relation_variants(str(key)))
+    tables = data.get("tables")
+    if isinstance(tables, dict):
+        for key, table in tables.items():
+            names.update(_relation_variants(str(key)))
+            if isinstance(table, dict):
+                schema = str(table.get("schema") or "")
+                name = str(table.get("name") or "")
+                if name:
+                    names.update(
+                        _relation_variants(
+                            f"{schema}.{name}" if schema else name
+                        )
+                    )
+    ddl = str(data.get("ddl") or "")
+    for match in re.finditer(
+        r"\bCREATE\s+(?:TABLE|VIEW)\s+([^\s(]+)", ddl, re.IGNORECASE
+    ):
+        names.update(_relation_variants(match.group(1)))
+    schema = str(data.get("schema") or "")
+    for line in schema.splitlines():
+        table_name = line.split(" ", 1)[0].strip()
+        if table_name:
+            names.update(_relation_variants(table_name))
+    return names
+
+
+def _format_schema_link_section(
+    data: dict[str, Any],
+    *,
+    connection_name: str,
+    question: str,
+) -> tuple[str, set[str]]:
+    linked_names = _linked_table_names_from_schema_link(data)
+    lines = [
+        "## Materialized Warehouse Schema Link",
+        f"- Connection: `{connection_name}`",
+        f"- Question used for schema linking: {question}",
+        (
+            f"- Linked tables: {data.get('linked_tables', '?')}/"
+            f"{data.get('total_tables', '?')}"
+        ),
+    ]
+    if data.get("token_estimate") is not None:
+        lines.append(
+            f"- Estimated schema-link tokens: {data.get('token_estimate')}"
+        )
+
+    dialect = data.get("dialect")
+    if dialect:
+        lines.append(
+            f"- Dialect hints: {json.dumps(dialect, default=str)[:600]}"
+        )
+
+    join_hints = data.get("join_hints")
+    if isinstance(join_hints, list) and join_hints:
+        lines.append("- Join hints:")
+        lines.extend(f"  - {hint}" for hint in join_hints[:8])
+
+    query_hints = data.get("query_hints")
+    if isinstance(query_hints, list) and query_hints:
+        lines.append("- Query hints:")
+        lines.extend(f"  - {hint}" for hint in query_hints[:8])
+
+    ddl = str(data.get("ddl") or data.get("schema") or "")
+    if not ddl and isinstance(data.get("tables"), dict):
+        ddl = json.dumps(data["tables"], indent=2, default=str)
+    if ddl:
+        lines.extend(["", "```sql", ddl, "```"])
+    return "\n".join(lines), linked_names
+
+
+def _manifest_node_score(
+    node: dict[str, Any],
+    *,
+    linked_table_names: set[str],
+    question_terms: set[str],
+) -> int:
+    if node.get("resource_type") != "model":
+        return -1
+
+    variants: set[str] = set()
+    for field in ("relation_name", "alias", "name"):
+        value = node.get(field)
+        if isinstance(value, str):
+            variants.update(_relation_variants(value))
+    schema = str(node.get("schema") or "")
+    alias = str(node.get("alias") or node.get("name") or "")
+    if alias:
+        variants.update(
+            _relation_variants(f"{schema}.{alias}" if schema else alias)
+        )
+
+    score = 0
+    if variants & linked_table_names:
+        score += 40
+
+    searchable_parts = [
+        str(node.get("name") or ""),
+        str(node.get("alias") or ""),
+        str(node.get("description") or ""),
+    ]
+    columns = node.get("columns")
+    if isinstance(columns, dict):
+        searchable_parts.extend(str(name) for name in columns)
+    haystack = " ".join(searchable_parts).lower()
+    score += sum(2 for term in question_terms if term in haystack)
+    return score
+
+
+def _dbt_manifest_hints(
+    project_root: Path,
+    *,
+    linked_table_names: set[str],
+    question: str,
+) -> str:
+    manifest_path = project_root / "target" / "manifest.json"
+    if not manifest_path.exists():
+        return ""
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return (
+            "## dbt Manifest Hints\n"
+            f"- `target/manifest.json` exists but could not be parsed: {e}"
+        )
+
+    question_terms = {
+        term
+        for term in re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", question.lower())
+        if len(term) >= 3
+    }
+    nodes = manifest.get("nodes")
+    if not isinstance(nodes, dict):
+        return "## dbt Manifest Hints\n- `target/manifest.json` has no model nodes."
+
+    scored: list[tuple[int, str, dict[str, Any]]] = []
+    for unique_id, node in nodes.items():
+        if not isinstance(node, dict):
+            continue
+        score = _manifest_node_score(
+            node,
+            linked_table_names=linked_table_names,
+            question_terms=question_terms,
+        )
+        if score > 0:
+            scored.append((score, str(unique_id), node))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+
+    if not scored:
+        return (
+            "## dbt Manifest Hints\n"
+            "- `target/manifest.json` exists, but no selected model metadata "
+            "matched the linked warehouse tables or question terms."
+        )
+
+    lines = [
+        "## dbt Manifest Hints",
+        "- Source: `target/manifest.json` only; selected matching models, no dbt file crawl.",
+    ]
+    for score, unique_id, node in scored[:8]:
+        name = str(node.get("name") or unique_id)
+        relation_name = str(
+            node.get("relation_name") or node.get("alias") or name
+        )
+        lines.append(
+            f"- `{unique_id}` -> `{relation_name}` (match score {score})"
+        )
+        description = str(node.get("description") or "").strip()
+        if description:
+            lines.append(f"  - description: {description[:240]}")
+        columns = node.get("columns")
+        if isinstance(columns, dict) and columns:
+            lines.append(
+                "  - columns: "
+                + ", ".join(
+                    str(column_name)
+                    for column_name in list(columns.keys())[:16]
+                )
+            )
+        depends_on = node.get("depends_on")
+        if isinstance(depends_on, dict):
+            dep_nodes = depends_on.get("nodes")
+            if isinstance(dep_nodes, list) and dep_nodes:
+                lines.append(
+                    "  - depends_on: "
+                    + ", ".join(str(dep) for dep in dep_nodes[:8])
+                )
+    return "\n".join(lines)
+
+
+def _build_analysis_warm_context(
+    app_state: AppState,
+    body: StartNotionAnalysisRequest,
+    *,
+    project_root: Path,
+) -> str:
+    del app_state
+
+    question = body.prompt.strip() or body.headline.strip()
+    sections = [
+        "## Warm Context",
+        (
+            "- This bounded context was prepared before the notebook agent run. "
+            "Use it for orientation only; final evidence still must come from "
+            "notebook-executed SDK cells."
+        ),
+    ]
+
+    try:
+        from signalpilot._server.gateway_client import gateway_headers
+
+        if not gateway_headers() and "SP_GATEWAY_URL" not in os.environ:
+            sections.append(
+                "- Gateway REST warm start skipped because no gateway URL or "
+                "auth environment was configured."
+            )
+            return _clip_warm_context("\n".join(sections))
+
+        raw_connections = _gateway_json_get("/api/connections")
+        connections = (
+            raw_connections if isinstance(raw_connections, list) else []
+        )
+        selected, reason = _choose_warm_connection(connections, question)
+
+        sections.append("## Connection Discovery")
+        if connections:
+            sections.append(f"- Available connections: {len(connections)}")
+            for connection in connections[:8]:
+                sections.append(f"  - `{_connection_label(connection)}`")
+            if len(connections) > 8:
+                sections.append(f"  - ... {len(connections) - 8} more")
+        else:
+            sections.append("- Gateway returned no available connections.")
+
+        if selected is None:
+            return _clip_warm_context("\n".join(sections))
+
+        connection_name = str(
+            selected.get("name") or selected.get("connection_name") or ""
+        )
+        sections.append(f"- Likely connection: `{connection_name}` ({reason})")
+
+        if connection_name:
+            schema_link = _gateway_json_get(
+                f"/api/connections/{quote(connection_name, safe='')}/schema/link",
+                {
+                    "question": question,
+                    "format": "ddl",
+                    "max_tables": WARM_CONTEXT_SCHEMA_MAX_TABLES,
+                    "prune_columns": "true",
+                },
+            )
+            if isinstance(schema_link, dict):
+                schema_section, linked_names = _format_schema_link_section(
+                    schema_link,
+                    connection_name=connection_name,
+                    question=question,
+                )
+                sections.append(schema_section)
+                manifest_hints = _dbt_manifest_hints(
+                    project_root,
+                    linked_table_names=linked_names,
+                    question=question,
+                )
+                if manifest_hints:
+                    sections.append(manifest_hints)
+            else:
+                sections.append(
+                    "- Gateway schema link returned no JSON object."
+                )
+    except Exception as e:
+        LOGGER.info("Analysis warm context unavailable: %s", e)
+        sections.append(f"- Warm context unavailable: {e}")
+
+    return _clip_warm_context("\n".join(sections))
 
 
 def _parse_chart_list(value: Any) -> list[AnalysisChart]:
@@ -175,25 +602,70 @@ def _analysis_result_from_dict(value: dict[str, Any]) -> AnalysisResult:
     return AnalysisResult(**result)
 
 
-def _records_dir(app_state: AppState) -> Path:
+def _analysis_source(value: str | None) -> str:
+    source = re.sub(
+        r"[^a-zA-Z0-9_-]+", "-", (value or "notion").strip().lower()
+    ).strip("-")
+    return source or "notion"
+
+
+def _project_root(app_state: AppState) -> Path:
+    request = getattr(app_state, "request", None)
+    headers = getattr(request, "headers", {}) or {}
+    project_id = headers.get("x-gateway-project-id")
+    if project_id:
+        branch = headers.get("x-gateway-branch-id", "main").strip() or "main"
+        try:
+            from signalpilot._server.files.project_sync import (
+                local_project_dir,
+                sync_down,
+            )
+
+            local_dir = local_project_dir(project_id, branch)
+            if (local_dir / ".git").exists():
+                return local_dir
+
+            result = sync_down(project_id, branch)
+            if result.get("error"):
+                raise RuntimeError(result["error"])
+            synced_dir = Path(str(result.get("local_dir") or local_dir))
+            if (synced_dir / ".git").exists():
+                return synced_dir
+            raise RuntimeError(
+                f"Synced project checkout missing .git: {synced_dir}"
+            )
+        except Exception as e:
+            message = f"Could not resolve project root for analysis project {project_id}: {e}"
+            LOGGER.error(message)
+            raise RuntimeError(message) from e
+
     root = app_state.session_manager.workspace.directory
     if root is None:
-        root = str(Path.cwd())
-    path = Path(root) / "signalpilot-notion-analyses"
+        return Path.cwd()
+    return Path(root)
+
+
+def _records_dir(app_state: AppState, source: str = "notion") -> Path:
+    path = _project_root(app_state) / "notebooks" / _analysis_source(source)
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
 def _registry_path(app_state: AppState) -> Path:
-    return _records_dir(app_state) / "registry.json"
+    path = (
+        _project_root(app_state)
+        / "notebooks"
+        / ".signalpilot-analysis-registry.json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def _resolve_notebook_path(app_state: AppState, notebook_path: str) -> Path:
     path = Path(notebook_path)
     if path.is_absolute():
         return path
-    root = app_state.session_manager.workspace.directory
-    return (Path(root) / path) if root else (Path.cwd() / path)
+    return _project_root(app_state) / path
 
 
 def _load_registry(app_state: AppState) -> None:
@@ -218,7 +690,9 @@ def _load_registry(app_state: AppState) -> None:
             headline=item["headline"],
             source_url=item["source_url"],
             created_at=item["created_at"],
+            source=item.get("source", "notion"),
             notion_request_page_id=item.get("notion_request_page_id"),
+            latest_commit_sha=item.get("latest_commit_sha"),
             error=item.get("error"),
             result=_analysis_result_from_dict(result) if result else None,
         )
@@ -231,7 +705,14 @@ def _load_registry(app_state: AppState) -> None:
 
 def _save_registry(app_state: AppState) -> None:
     path = _registry_path(app_state)
-    records = [asdict(record) for record in _records_by_request_id.values()]
+    records = []
+    for record in _records_by_request_id.values():
+        item = asdict(record)
+        # The gateway DB stores the authoritative latest commit SHA. Persisting
+        # it inside the committed registry would make the registry dirty after
+        # every commit because the commit SHA changes when the registry changes.
+        item.pop("latest_commit_sha", None)
+        records.append(item)
     path.write_text(
         json.dumps({"records": records}, indent=2, sort_keys=True),
         encoding="utf-8",
@@ -243,8 +724,8 @@ def _slugify(value: str) -> str:
     return slug[:80] or "analysis-request"
 
 
-def _request_id(discussion_id: str) -> str:
-    return f"notion-{uuid5(NAMESPACE_URL, discussion_id).hex[:16]}"
+def _request_id(discussion_id: str, source: str = "notion") -> str:
+    return f"{_analysis_source(source)}-{uuid5(NAMESPACE_URL, discussion_id).hex[:16]}"
 
 
 def _session_id(request_id: str) -> SessionId:
@@ -256,141 +737,76 @@ def _refresh_trail_url(
     record: AnalysisRecord,
     request_base_url: str,
 ) -> None:
-    trail_url = _trail_url(record.notebook_path, record.session_id, request_base_url)
+    trail_url = _record_trail_url(
+        app_state,
+        record.notebook_path,
+        record.session_id,
+        request_base_url,
+    )
     if record.trail_url == trail_url:
         return
     record.trail_url = trail_url
     _save_registry(app_state)
 
 
+def _record_trail_url(
+    app_state: AppState,
+    notebook_path: str,
+    session_id: str,
+    request_base_url: str,
+) -> str:
+    project_id = app_state.request.headers.get(
+        "x-gateway-project-id", ""
+    ).strip()
+    branch = app_state.request.headers.get("x-gateway-branch-id", "").strip()
+    return _trail_url(
+        notebook_path,
+        session_id,
+        request_base_url,
+        project_id=project_id or None,
+        branch=branch or None,
+    )
+
+
 def _notebook_template(body: StartNotionAnalysisRequest) -> str:
-    prompt_json = json.dumps(body.prompt)
-    headline_json = json.dumps(body.headline)
-    source_json = json.dumps(body.source_url)
-    previous_json = json.dumps(body.previous_messages)
+    request_context = f"""# SignalPilot analysis
+
+**Source request:** {body.source_url}
+
+**Source prompt:**
+
+{body.prompt}
+"""
+    request_context_json = json.dumps(request_context)
     return f'''import signalpilot as sp
 
 __generated_with = "0.1.0"
 app = sp.App()
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _():
     import signalpilot as sp
-    return (sp,)
+    sp.md({request_context_json})
 
 
-@app.cell
-def _(sp):
-    request_headline = {headline_json}
-    source_url = {source_json}
-    user_prompt = {prompt_json}
-    previous_messages = {previous_json}
-    previous_block = "\\n".join(f"- {{message}}" for message in previous_messages)
-    if not previous_block:
-        previous_block = "- None"
-    sp.md(f"""
-    # {{request_headline}}
-
-    ## Request and source context
-
-    **Source:** {{source_url}}
-
-    **Requester prompt:**
-
-    {{user_prompt}}
-
-    ## Previous Notion Messages
-
-    {{previous_block}}
-    """)
-    return previous_messages, request_headline, source_url, user_prompt
-
-
-@app.cell
-def _(sp):
+@app.cell(hide_code=True)
+def _():
+    import signalpilot as sp
     sp.md("""
-    ## Scouting and context notes
+    ## Executive Summary and Explorations
 
-    Record any brief orientation work here, including MCP scouting if used.
-    MCP output should only identify likely connections, schemas, files, or
-    context to inspect in notebook cells. Do not leave final evidence only in
-    chat or MCP transcripts. Do not paste MCP query results into hardcoded
-    DataFrames.
+    Pending analysis.
     """)
 
 
-@app.cell
-def _(sp):
-    sp.md("""
-    ## Setup and connection selection
-
-    Initialize the SignalPilot notebook SDK, list available connections, and
-    choose the governed connection used for the analysis.
-
-    Expected executable pattern:
-    - `available_connections = sp.connections()`
-    - `db = sp.connect("connection_name")`
-    - source data loaded with `db.query(...)` or `sp.query(...)`
-    """)
-
-
-@app.cell
-def _(sp):
-    sp.md("""
-    ## Data discovery
-
-    Inspect relevant databases, schemas, tables, columns, row counts, date
-    ranges, and any filters needed to answer the request. Discovery should be
-    performed in executable notebook cells using the selected SDK connection.
-    """)
-
-
-@app.cell
-def _(sp):
+@app.cell(hide_code=True)
+def _():
+    import signalpilot as sp
     sp.md("""
     ## Analysis steps
 
-    Keep the real queries, transformations, calculations, and comparisons in
-    notebook cells below this section. DataFrames should be derived from
-    notebook-executed SDK query calls, not from manually typed result literals.
-    """)
-
-
-@app.cell
-def _(sp):
-    sp.md("""
-    ## Evidence and results
-
-    Summarize the concrete outputs that support the answer: query results,
-    calculated metrics, record samples, charts, or validation checks.
-    """)
-
-
-@app.cell
-def _(sp):
-    sp.md("""
-    ## Charts and visual evidence
-
-    Create one or more charts when the request involves comparison, ranking,
-    trend, distribution, or contribution analysis. Charts should be generated
-    from notebook-computed DataFrames, include clear titles/captions, and be
-    saved or exposed as shareable chart artifacts when useful for Notion.
-
-    For matplotlib charts, save the PNG/SVG artifact, then make the chart or
-    saved image the final expression in the chart cell. Do not put `print(...)`
-    after the chart display expression; printed "chart saved" messages are only
-    human feedback and will replace the visible chart output.
-    """)
-
-
-@app.cell
-def _(sp):
-    sp.md("""
-    ## Answer, caveats, and confidence rationale
-
-    Write the final answer here before returning JSON to Notion. Include
-    caveats, assumptions, known gaps, and why the confidence score is justified.
+    Pending analysis.
     """)
 
 
@@ -416,16 +832,16 @@ def _append_followup_to_notebook(
 def _(sp):
     _followup_prompt = {prompt_json}
     sp.md(f"""
-    ## Follow-up from Notion
+    ## Follow-up Request
 
     ### New requester prompt
 
     {{_followup_prompt}}
 
-    ### Follow-up analysis notes
+    ### Follow-up Analysis steps
 
-    Append new scouting, notebook queries, evidence, and revised answer cells
-    below this section without deleting prior analysis work.
+    Append only the new queries, checks, evidence, visuals, and revised answer
+    needed for this follow-up. Do not delete prior analysis work.
     """)
 '''
     text = path.read_text(encoding="utf-8")
@@ -435,6 +851,94 @@ def _(sp):
     else:
         text += followup_cell
     path.write_text(text, encoding="utf-8")
+
+
+def _analysis_project_context(app_state: AppState) -> tuple[str, str] | None:
+    project_id = app_state.request.headers.get(
+        "x-gateway-project-id", ""
+    ).strip()
+    if not project_id:
+        return None
+    branch = (
+        app_state.request.headers.get("x-gateway-branch-id", "main").strip()
+        or "main"
+    )
+    return project_id, branch
+
+
+def _checkpoint_analysis_files(
+    app_state: AppState,
+    record: AnalysisRecord,
+    message: str,
+    *,
+    include_parent_dir: bool = False,
+) -> str | None:
+    context = _analysis_project_context(app_state)
+    if context is None:
+        return None
+    project_id, branch = context
+    try:
+        from signalpilot._server.files.git_auth import run_git
+        from signalpilot._server.files.project_sync import (
+            local_project_dir,
+            sync_up,
+        )
+
+        repo = local_project_dir(project_id)
+        if not (repo / ".git").exists():
+            return None
+
+        notebook_path = _resolve_notebook_path(app_state, record.notebook_path)
+        targets = [
+            notebook_path.parent if include_parent_dir else notebook_path,
+            _registry_path(app_state),
+        ]
+        rel_targets: list[str] = []
+        for target in targets:
+            try:
+                resolved = target.resolve(strict=False)
+                resolved.relative_to(repo.resolve())
+            except (OSError, ValueError):
+                continue
+            rel_targets.append(str(resolved.relative_to(repo.resolve())))
+        if not rel_targets:
+            return None
+
+        code, _, err = run_git(repo, "add", "--", *rel_targets)
+        if code != 0:
+            LOGGER.warning("Could not stage analysis files: %s", err.strip())
+            return None
+
+        diff_code, _, _ = run_git(repo, "diff", "--cached", "--quiet")
+        if diff_code == 1:
+            code, out, err = run_git(
+                repo, "commit", "-m", message, timeout=120
+            )
+            if code != 0:
+                LOGGER.warning(
+                    "Could not commit analysis files: %s", (err or out).strip()
+                )
+                return None
+            sync_result = sync_up(project_id, branch)
+            if sync_result.get("error"):
+                LOGGER.warning(
+                    "Could not push analysis checkpoint: %s",
+                    sync_result["error"],
+                )
+        elif diff_code != 0:
+            LOGGER.warning("Could not inspect staged analysis diff")
+            return None
+
+        code, out, _ = run_git(repo, "rev-parse", "HEAD")
+        if code == 0 and out.strip():
+            record.latest_commit_sha = out.strip()
+            _save_registry(app_state)
+            return record.latest_commit_sha
+    except Exception as e:
+        LOGGER.warning(
+            "Analysis git checkpoint failed for %s: %s", record.request_id, e
+        )
+    return None
 
 
 def _ensure_record(
@@ -449,21 +953,27 @@ def _ensure_record(
         _refresh_trail_url(app_state, record, request_base_url)
         if record.status != "Analyzing":
             _append_followup_to_notebook(app_state, record, body)
+            _checkpoint_analysis_files(
+                app_state, record, f"Append {record.source} analysis follow-up"
+            )
         return record
 
-    request_id = _request_id(body.discussion_id)
+    source = _analysis_source(body.source)
+    request_id = _request_id(body.discussion_id, source)
     filename = f"{_slugify(body.headline)}-{request_id[-6:]}.py"
-    notebook_path = _records_dir(app_state) / filename
+    notebook_path = _records_dir(app_state, source) / filename
     notebook_path.write_text(_notebook_template(body), encoding="utf-8")
 
-    root = app_state.session_manager.workspace.directory
+    root = _project_root(app_state)
     file_key = (
         str(notebook_path.relative_to(root))
-        if root and notebook_path.is_relative_to(Path(root))
+        if notebook_path.is_relative_to(root)
         else str(notebook_path)
     )
     session_id = str(_session_id(request_id))
-    trail_url = _trail_url(file_key, session_id, request_base_url)
+    trail_url = _record_trail_url(
+        app_state, file_key, session_id, request_base_url
+    )
 
     record = AnalysisRecord(
         request_id=request_id,
@@ -475,11 +985,15 @@ def _ensure_record(
         headline=body.headline,
         source_url=body.source_url,
         created_at=body.created_at,
+        source=source,
         notion_request_page_id=body.notion_request_page_id,
     )
     _records_by_request_id[record.request_id] = record
     _records_by_discussion_id[record.discussion_id] = record.request_id
     _save_registry(app_state)
+    _checkpoint_analysis_files(
+        app_state, record, f"Create {source} analysis notebook"
+    )
     return record
 
 
@@ -683,14 +1197,25 @@ def _chart_url(record: AnalysisRecord, filename: str) -> str:
     return f"/api/notion-analysis/chart/{record.request_id}/{filename}"
 
 
+def _chart_filename_extension(content_type: str) -> str:
+    normalized = content_type.lower().split(";", 1)[0].strip()
+    if normalized == "image/jpeg":
+        return "jpg"
+    if normalized == "image/svg+xml":
+        return "svg"
+    if normalized == "image/gif":
+        return "gif"
+    if normalized == "image/webp":
+        return "webp"
+    return "png"
+
+
 def _chart_url_path(url: str) -> str:
     return unquote(urlparse(url).path or url.split("?", 1)[0])
 
 
-def _workspace_chart_file(
-    app_state: AppState, chart: AnalysisChart
-) -> Path | None:
-    url_path = _chart_url_path(chart.url)
+def _workspace_file_from_url(app_state: AppState, url: str) -> Path | None:
+    url_path = _chart_url_path(url)
     workspace_root = app_state.session_manager.workspace.directory
     if workspace_root is None:
         workspace = Path.cwd().resolve()
@@ -702,7 +1227,7 @@ def _workspace_chart_file(
         candidates.append(workspace / url_path.removeprefix("/files/"))
     elif url_path.startswith("/@file/"):
         candidates.append(workspace / url_path.removeprefix("/@file/"))
-    elif not urlparse(chart.url).scheme:
+    elif not urlparse(url).scheme:
         if url_path.startswith("/"):
             candidates.append(Path(url_path))
             candidates.append(workspace / url_path.lstrip("/"))
@@ -731,6 +1256,12 @@ def _workspace_chart_file(
             continue
         return resolved
     return None
+
+
+def _workspace_chart_file(
+    app_state: AppState, chart: AnalysisChart
+) -> Path | None:
+    return _workspace_file_from_url(app_state, chart.url)
 
 
 def _backend_chart_file_exists(
@@ -783,6 +1314,230 @@ def _materialize_existing_chart_artifacts(
         )
 
     return materialized[:2]
+
+
+class _ImageTagParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.images: list[dict[str, str]] = []
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        if tag.lower() != "img":
+            return
+        image_attrs = {
+            name.lower(): value or ""
+            for name, value in attrs
+            if isinstance(name, str)
+        }
+        if image_attrs.get("src"):
+            self.images.append(image_attrs)
+
+
+def _image_sources_from_html(raw_html: str) -> list[dict[str, str]]:
+    parser = _ImageTagParser()
+    try:
+        parser.feed(raw_html)
+    except Exception:
+        LOGGER.debug(
+            "Could not parse notebook HTML image output", exc_info=True
+        )
+        return []
+    return parser.images
+
+
+def _image_title(attrs: dict[str, str], fallback_index: int) -> str:
+    for key in ("alt", "title"):
+        value = attrs.get(key, "").strip()
+        if value:
+            return value
+    src = attrs.get("src", "").strip()
+    name = Path(_chart_url_path(src)).name
+    if name:
+        stem = (
+            re.sub(r"^\d+-", "", Path(name).stem)
+            .replace("-", " ")
+            .replace("_", " ")
+        )
+        if stem:
+            return stem[:80]
+    return f"Notebook image {fallback_index}"
+
+
+def _decode_image_data_url(value: str) -> tuple[bytes, str] | None:
+    if not value.startswith("data:") or "," not in value:
+        return None
+    header, payload = value.split(",", 1)
+    metadata = header.removeprefix("data:")
+    content_type = metadata.split(";", 1)[0] or "image/png"
+    if not content_type.startswith("image/"):
+        return None
+    try:
+        if ";base64" in metadata.lower():
+            return base64.b64decode(payload), content_type
+        return unquote_to_bytes(payload), content_type
+    except Exception:
+        LOGGER.debug("Could not decode notebook image data URL", exc_info=True)
+        return None
+
+
+def _virtual_file_parts(src: str) -> tuple[str, int] | None:
+    path = _chart_url_path(src).removeprefix("./").lstrip("/")
+    if not path.startswith("@file/"):
+        return None
+    remainder = path.removeprefix("@file/")
+    if "-" not in remainder:
+        return None
+    byte_length_raw, filename = remainder.split("-", 1)
+    try:
+        byte_length = int(byte_length_raw)
+    except ValueError:
+        return None
+    filename = unquote(filename)
+    if not filename or byte_length <= 0:
+        return None
+    return filename, byte_length
+
+
+def _image_bytes_from_src(
+    app_state: AppState, src: str
+) -> tuple[bytes, str] | None:
+    src = html.unescape(src).strip()
+    if not src:
+        return None
+
+    decoded = _decode_image_data_url(src)
+    if decoded is not None:
+        return decoded
+
+    virtual_file = _virtual_file_parts(src)
+    if virtual_file is not None:
+        filename, byte_length = virtual_file
+        try:
+            content = read_virtual_file(filename, byte_length)
+        except Exception:
+            LOGGER.debug(
+                "Could not read notebook virtual image file %s",
+                filename,
+                exc_info=True,
+            )
+            return None
+        content_type = mimetypes.guess_type(filename)[0] or "image/png"
+        if not content_type.startswith("image/"):
+            return None
+        return content, content_type
+
+    source_file = _workspace_file_from_url(app_state, src)
+    if source_file is None:
+        return None
+    content_type = mimetypes.guess_type(source_file.name)[0] or "image/png"
+    if not content_type.startswith("image/"):
+        return None
+    try:
+        return source_file.read_bytes(), content_type
+    except OSError:
+        LOGGER.debug(
+            "Could not read notebook workspace image file %s",
+            source_file,
+            exc_info=True,
+        )
+        return None
+
+
+def _image_candidates_from_output_data(
+    app_state: AppState,
+    cell_id: str,
+    data: dict[str, Any],
+) -> list[_ImageChartCandidate]:
+    candidates: list[_ImageChartCandidate] = []
+    for mimetype, value in data.items():
+        if not isinstance(mimetype, str):
+            continue
+        if mimetype.startswith("image/"):
+            if isinstance(value, bytes):
+                candidates.append(
+                    _ImageChartCandidate(
+                        cell_id=cell_id,
+                        title=f"Notebook image {len(candidates) + 1}",
+                        content_type=mimetype,
+                        content=value,
+                    )
+                )
+            elif isinstance(value, str):
+                decoded = _decode_image_data_url(value)
+                if decoded is not None:
+                    content, content_type = decoded
+                else:
+                    try:
+                        content = base64.b64decode(value)
+                    except Exception:
+                        continue
+                    content_type = mimetype
+                candidates.append(
+                    _ImageChartCandidate(
+                        cell_id=cell_id,
+                        title=f"Notebook image {len(candidates) + 1}",
+                        content_type=content_type,
+                        content=content,
+                    )
+                )
+            continue
+
+        if mimetype != "text/html" or not isinstance(value, str):
+            continue
+        for attrs in _image_sources_from_html(value):
+            resolved = _image_bytes_from_src(app_state, attrs.get("src", ""))
+            if resolved is None:
+                continue
+            content, content_type = resolved
+            candidates.append(
+                _ImageChartCandidate(
+                    cell_id=cell_id,
+                    title=_image_title(attrs, len(candidates) + 1),
+                    content_type=content_type,
+                    content=content,
+                )
+            )
+    return candidates
+
+
+def _safe_chart_cell_id(cell_id: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", cell_id).strip("-")
+    return cleaned[:64] or "cell"
+
+
+def _write_image_chart_artifacts(
+    app_state: AppState,
+    record: AnalysisRecord,
+    output_data: list[tuple[str, dict[str, Any]]],
+) -> list[AnalysisChart]:
+    chart_dir = _chart_dir(app_state, record)
+    charts: list[AnalysisChart] = []
+    for cell_id, data in output_data:
+        for candidate in _image_candidates_from_output_data(
+            app_state, cell_id, data
+        ):
+            extension = _chart_filename_extension(candidate.content_type)
+            filename = (
+                f"{record.request_id}-{_safe_chart_cell_id(candidate.cell_id)}"
+                f"-image-{len(charts) + 1}.{extension}"
+            )
+            (chart_dir / filename).write_bytes(candidate.content)
+            title = candidate.title or f"Notebook image {len(charts) + 1}"
+            charts.append(
+                AnalysisChart(
+                    title=title,
+                    url=_chart_url(record, filename),
+                    caption=title,
+                    alt_text=title,
+                    include_in_comment=True,
+                    include_on_page=True,
+                )
+            )
+            if len(charts) >= 2:
+                return charts
+    return charts
 
 
 _PLOTLY_FIGURE_ATTR_RE = re.compile(
@@ -1501,7 +2256,9 @@ def _is_markdown_table_separator(line: str) -> bool:
     return all(re.fullmatch(r":?-{3,}:?", cell.strip()) for cell in cells)
 
 
-def _markdown_tables(content: str) -> list[tuple[list[str], list[dict[str, str]]]]:
+def _markdown_tables(
+    content: str,
+) -> list[tuple[list[str], list[dict[str, str]]]]:
     lines = content.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     tables: list[tuple[list[str], list[dict[str, str]]]] = []
     index = 0
@@ -1518,7 +2275,9 @@ def _markdown_tables(content: str) -> list[tuple[list[str], list[dict[str, str]]
             if not cells:
                 break
             padded = cells + [""] * (len(headers) - len(cells))
-            rows.append(dict(zip(headers, padded[: len(headers)], strict=False)))
+            rows.append(
+                dict(zip(headers, padded[: len(headers)], strict=False))
+            )
             cursor += 1
         if rows:
             tables.append((headers, rows))
@@ -1543,7 +2302,10 @@ def _normalise(values: list[float]) -> list[float]:
     maximum = max(values)
     if maximum == minimum:
         return [50.0 for _ in values]
-    return [round((value - minimum) / (maximum - minimum) * 100, 1) for value in values]
+    return [
+        round((value - minimum) / (maximum - minimum) * 100, 1)
+        for value in values
+    ]
 
 
 def _find_header(headers: list[str], *keywords: str) -> str | None:
@@ -1577,7 +2339,9 @@ def _write_result_fallback_chart_artifacts(
         return []
     headers, rows = table
     company_header = _find_header(headers, "company")
-    score_header = _find_header(headers, "score") or _find_header(headers, "composite")
+    score_header = _find_header(headers, "score") or _find_header(
+        headers, "composite"
+    )
     if not company_header or not score_header:
         return []
 
@@ -1609,9 +2373,7 @@ def _write_result_fallback_chart_artifacts(
                 },
             }
         ],
-        "layout": {
-            "title": {"text": "Operating momentum composite ranking"}
-        },
+        "layout": {"title": {"text": "Operating momentum composite ranking"}},
     }
     ranking_png = _render_plotly_bar_png(
         ranking_figure, "Operating momentum composite ranking"
@@ -1693,6 +2455,17 @@ def _write_result_fallback_chart_artifacts(
     return charts[:2]
 
 
+def _html_outputs_from_output_data(
+    output_data: list[tuple[str, dict[str, Any]]],
+) -> list[tuple[str, str]]:
+    html_outputs: list[tuple[str, str]] = []
+    for cell_id, data in output_data:
+        raw_html = data.get("text/html")
+        if isinstance(raw_html, str):
+            html_outputs.append((cell_id, raw_html))
+    return html_outputs
+
+
 def _fallback_chart_artifacts_from_session_cache(
     app_state: AppState, record: AnalysisRecord
 ) -> list[AnalysisChart]:
@@ -1706,7 +2479,7 @@ def _fallback_chart_artifacts_from_session_cache(
     except (OSError, json.JSONDecodeError):
         return []
 
-    html_outputs: list[tuple[str, str]] = []
+    output_data: list[tuple[str, dict[str, Any]]] = []
     cells = snapshot.get("cells", [])
     if not isinstance(cells, list):
         return []
@@ -1723,10 +2496,13 @@ def _fallback_chart_artifacts_from_session_cache(
             data = output.get("data")
             if not isinstance(data, dict):
                 continue
-            raw_html = data.get("text/html")
-            if isinstance(raw_html, str):
-                html_outputs.append((cell_id, raw_html))
-    return _write_plotly_chart_artifacts(app_state, record, html_outputs)
+            output_data.append((cell_id, data))
+    charts = _write_plotly_chart_artifacts(
+        app_state, record, _html_outputs_from_output_data(output_data)
+    )
+    if charts:
+        return charts
+    return _write_image_chart_artifacts(app_state, record, output_data)
 
 
 def _fallback_chart_artifacts_from_session(
@@ -1738,16 +2514,19 @@ def _fallback_chart_artifacts_from_session(
     if session is None:
         return _fallback_chart_artifacts_from_session_cache(app_state, record)
 
-    html_outputs: list[tuple[str, str]] = []
+    output_data: list[tuple[str, dict[str, Any]]] = []
     for cell_id in session.document.cell_ids:
         notification = session.session_view.cell_notifications.get(cell_id)
         output = notification.output if notification is not None else None
         if not isinstance(output, CellOutput):
             continue
-        if output.mimetype != "text/html" or not isinstance(output.data, str):
-            continue
-        html_outputs.append((str(cell_id), output.data))
-    charts = _write_plotly_chart_artifacts(app_state, record, html_outputs)
+        output_data.append((str(cell_id), {output.mimetype: output.data}))
+    charts = _write_plotly_chart_artifacts(
+        app_state, record, _html_outputs_from_output_data(output_data)
+    )
+    if charts:
+        return charts
+    charts = _write_image_chart_artifacts(app_state, record, output_data)
     if charts:
         return charts
     return _fallback_chart_artifacts_from_session_cache(app_state, record)
@@ -1817,218 +2596,13 @@ def _persist_record_completion_artifacts(
             e,
         )
 
-
-def _analysis_prompt(
-    record: AnalysisRecord, body: StartNotionAnalysisRequest
-) -> str:
-    previous = "\n".join(f"- {message}" for message in body.previous_messages)
-    return f"""
-You are SignalPilot. Answer the user's governed data-analysis request by making
-the current durable marimo notebook the primary audit artifact.
-
-Notebook context:
-- Notebook path: {record.notebook_path}
-- Session ID: {record.session_id}
-- Trail URL: {record.trail_url}
-
-Open and edit the live notebook session above. The notebook must contain the
-real analysis trail before you return the final JSON.
-
-Live-session rule:
-- You MUST edit the notebook through the live notebook MCP tools
-  (`mcp__signalpilot-notebook__edit_notebook` / `edit_notebook`) using
-  Session ID `{record.session_id}`. Confirm the edit tool reports
-  `"persisted": true`; if not, stop and return JSON describing that failure.
-- You MUST run the changed cells through the live notebook MCP run tool
-  (`mcp__signalpilot-notebook__run_stale_cells` / `run_stale_cells`) before
-  answering. Confirm the run tool reports `"status": "success"` and an empty
-  `errorCellIds` list; if not, stop and return JSON describing the notebook run
-  failure.
-- You MUST NOT use Claude Code file-writing tools such as Write, Edit,
-  MultiEdit, or Bash to modify `{record.notebook_path}`. Direct file writes
-  create a stale browser/kernel session and are considered a failed analysis
-  workflow.
-- If live notebook edit or run tools are unavailable, stop and return JSON with
-  status details in gotchas/analysisMethod instead of writing the notebook file
-  directly.
-
-Progress update rule:
-- Before the first tool batch and before each major phase, emit one short
-  user-visible text update explaining what you are checking and why. Cover
-  scouting, notebook editing, cell execution, error fixes, and final
-  verification.
-- After a tool result changes the plan or finds an error, briefly state what
-  changed and what you will do next.
-- Keep updates concise and practical. Do not expose private reasoning or list
-  raw tool mechanics.
-- Do not leave the user watching only tool calls. Emit normal assistant text
-  between tool batches so the live conversation remains readable even without
-  opening raw tool traces.
-
-Required workflow:
-1. Use MCP tools only for quick initial scouting or orientation when helpful,
-   such as identifying the likely database connection, schema, table, or local
-   file to inspect. MCP SQL execution tools such as `query_database` may be
-   used only for scouting checks, not for the actual evidence, calculations, or
-   final answer. After scouting, move into notebook cells.
-2. Do the actual analysis in notebook cells with the SignalPilot notebook SDK:
-   initialize the SDK, select the governed connection, discover the data, run
-   queries, perform calculations, and record evidence/results in the notebook.
-   Use the public notebook SDK helpers that exist in the runtime, especially
-   `sp.connections()`, `sp.connect("connection_name")`, and
-   `db.query("SELECT ...")` (or `sp.query("SELECT ...", connection_name=...)`).
-   Do not pass unsupported keyword arguments such as `connection=` to
-   `sp.sql(...)`. If a live governed connection cannot be established in the
-   kernel, stop and return JSON describing the notebook run failure instead of
-   silently replacing the analysis with chat-only MCP results.
-   Never paste MCP query results or hand-entered sample rows into
-   `pd.DataFrame({{...}})` as the source of truth. DataFrames are fine only when
-   they are built from notebook-executed SDK calls, for example
-   `pd.DataFrame(db.query("SELECT ..."))`.
-3. Fill the narrative audit sections in the notebook: request/source context,
-   scouting notes, setup/connection selection, data discovery, analysis steps,
-   evidence/results, charts/visual evidence, and answer/caveats/confidence
-   rationale.
-4. Add charts when the question involves comparison, ranking, trend,
-   distribution, or contribution analysis. Build charts from notebook-computed
-   DataFrames only, never from hand-entered MCP output. Prefer 1-3 focused
-   charts that make the answer easier to audit, such as a ranked bar chart,
-   trend line, scatter/bubble comparison, or contribution waterfall. Give each
-   chart a clear title, axis labels, and one-sentence interpretation in the
-   notebook. If a chart is useful outside the notebook, save or expose it as a
-   shareable PNG/SVG/HTML artifact and include its absolute or trail-relative
-   URL in `notionCharts`. For matplotlib charts, save the figure and render it
-   in the notebook by leaving the chart object or `sp.image(src=...)` as the
-   cell's final expression. Do not end chart cells with `plt.show()` or
-   `print(...)`; printed "Chart saved" messages are feedback only and should
-   not replace the visible chart output.
-5. Select at most two charts for Notion when they materially clarify the
-   answer. Use `includeInComment: true` only for charts that fit the concise
-   thread answer, and `includeOnPage: true` for charts that should be embedded
-   on the request page. If no chart adds value, return `notionCharts: []` and
-   explain why briefly in analysisMethod or gotchas.
-6. Run the relevant notebook cells in the live session before answering. If a
-   cell cannot be run, state that and explain the residual risk in the notebook
-   and in the JSON gotchas/analysisMethod fields.
-7. Do not base the final answer only on chat-only MCP calls. MCP findings may
-   guide where to look, but durable queries, calculations, evidence, and the
-   answer must live in the notebook.
-
-Completion checklist before final JSON:
-- The live notebook contains an SDK setup cell with `sp.connections()` and
-  `sp.connect("...")`.
-- The live notebook contains governed query cells that call `db.query(...)` or
-  `sp.query(...)` for the actual source data used in the answer.
-- The notebook does not use hardcoded `pd.DataFrame({{...}})` literals as a
-  substitute for governed source queries.
-- The notebook does not reuse top-level helper variable names across cells.
-  In marimo, loop variables such as `row`, `i`, `fig`, or `ax` are notebook
-  globals and can trigger MultipleDefinitionError if reused. Use unique names
-  per cell or wrap chart-building logic in uniquely named functions.
-- The notebook contains chart cells for comparison/ranking/trend-style
-  requests, unless the request is genuinely non-visual or charting would be
-  misleading. Charts are generated from notebook-computed DataFrames, saved as
-  artifacts when useful for Notion, and rendered as visible notebook outputs
-  instead of ending with `print(...)` feedback.
-- The final JSON's analysisMethod states that the result came from
-  notebook-executed SDK cells, not MCP query outputs.
-
-User request:
-{body.prompt}
-
-Source URL:
-{body.source_url}
-
-Previous Notion discussion messages:
-{previous or "- None"}
-
-When the analysis is complete, your final assistant message must be only valid
-JSON with this exact shape. Treat notionComment and finalAnswer as different
-audiences:
-- If you cannot complete the analysis, still return this JSON shape. Put the
-  failure details, attempted steps, and next debugging action in finalAnswer,
-  notionComment, gotchas, and analysisMethod. Do not return plain text.
-- notionComment is the level-1 answer for the original Notion comment thread.
-  It should directly answer the user's question in 3-6 concise bullets. Do not
-  explain the full methodology there. Do not use Markdown headings or tables in
-  notionComment. If one or two chart links are useful, mention them naturally
-  or rely on `notionCharts` instead of pasting large chart data into the
-  comment.
-- finalAnswer is the more detailed answer persisted to the Notion request row
-  page. It must use this Markdown hierarchy exactly:
-
-  ## Executive Summary and Explorations
-
-  - Short executive answer bullets.
-  - Include a short list of analysis steps actually run, but do not repeat
-    metadata already stored in request row properties such as notebook path,
-    session id, trail URL, request URL, or connection name unless it is essential
-    evidence.
-
-  ## Detailed Research
-
-  Full detailed research, calculations, evidence, comparisons, and reasoning.
-
-  ## Confidence Score: X
-
-  Confidence rationale and caveats as bullets.
-
-  The Notion worker will render Detailed Research and Confidence Score as
-  accordions, so do not write "accordion" or implementation notes in the text.
-- notionCharts is optional, but include it whenever the notebook produced
-  shareable chart artifacts that should appear in Notion. Provide at most two
-  charts. URLs must be absolute or trail-relative and should point to durable
-  artifacts produced by notebook cells, not temporary local-only paths.
-- analysisMethod explains how you reached the answer and why the confidence is
-  justified. Keep it brief and avoid repeating notebook path, session id, trail
-  URL, request URL, or connection metadata already present on the row.
-{{
-  "summary": "short Notion-table summary",
-  "confidenceScore": 0.0,
-  "finalAnswer": "Markdown using the exact requested hierarchy",
-  "gotchas": ["hidden assumptions, gaps, or caveats"],
-  "analysisMethod": "brief non-redundant method and confidence rationale",
-  "notionComment": "3-6 concise bullets for the original Notion thread, under 1200 characters",
-  "notionCharts": [
-    {{
-      "title": "short chart title",
-      "url": "https://... or /files/...",
-      "caption": "one-sentence interpretation",
-      "altText": "accessible description",
-      "includeInComment": true,
-      "includeOnPage": true
-    }}
-  ]
-}}
-"""
-
-
-def _json_repair_prompt(user_prompt: str, transcript: str) -> str:
-    transcript_excerpt = transcript.strip()[-12000:]
-    return f"""
-Your previous Notion analysis response did not end with valid JSON.
-
-Do not call tools. Do not continue the analysis. Convert the completed work and
-visible transcript below into one valid JSON object only. If the analysis was
-blocked or incomplete, still return the JSON shape and describe the failure.
-
-Original user request:
-{user_prompt}
-
-Previous transcript excerpt:
-{transcript_excerpt}
-
-Return only this JSON shape:
-{{
-  "summary": "short Notion-table summary",
-  "confidenceScore": 0.0,
-  "finalAnswer": "Markdown using Executive Summary and Explorations, Detailed Research, and Confidence Score sections",
-  "gotchas": ["hidden assumptions, gaps, or caveats"],
-  "analysisMethod": "brief method and confidence rationale",
-  "notionComment": "3-6 concise bullets for the original Notion thread, under 1200 characters",
-  "notionCharts": []
-}}
-"""
+    _save_registry(app_state)
+    _checkpoint_analysis_files(
+        app_state,
+        record,
+        f"Checkpoint {record.source} analysis {record.request_id}",
+        include_parent_dir=True,
+    )
 
 
 async def _run_analysis(
@@ -2053,14 +2627,23 @@ async def _run_analysis(
     record.error = None
     _save_registry(app_state)
     _ensure_session(app_state, record)
+    project_root = _project_root(app_state)
+    agent_cwd = str(project_root)
     LOGGER.info(
-        "Starting Notion analysis %s session=%s notebook=%s",
+        "Starting %s analysis %s session=%s notebook=%s cwd=%s",
+        record.source,
         record.request_id,
         record.session_id,
         record.notebook_path,
+        agent_cwd,
     )
 
-    prompt = _analysis_prompt(record, body)
+    warm_context = _build_analysis_warm_context(
+        app_state,
+        body,
+        project_root=project_root,
+    )
+    prompt = _analysis_prompt(record, body, warm_context=warm_context)
     text_parts: list[str] = []
     store = get_gateway_chat_trace_store()
 
@@ -2076,7 +2659,7 @@ async def _run_analysis(
         ChatThread(
             thread_id=record.session_id,
             session_id=record.session_id,
-            source="notion",
+            source=record.source,
             title=record.headline,
             status="active",
             notebook_path=record.notebook_path,
@@ -2118,7 +2701,9 @@ async def _run_analysis(
                     new_chat=new_chat,
                     thread_id=record.session_id,
                     notebook_mcp_app=app_state.request.app,
+                    cwd=agent_cwd,
                     disallow_file_edits=True,
+                    additional_disallowed_tools=["Agent"],
                 ):
                     event_data = {
                         "type": event.type,
@@ -2165,7 +2750,7 @@ async def _run_analysis(
                 ChatThread(
                     thread_id=record.session_id,
                     session_id=record.session_id,
-                    source="notion",
+                    source=record.source,
                     title=record.headline,
                     status="done",
                     notebook_path=record.notebook_path,
@@ -2212,7 +2797,9 @@ async def _run_analysis(
                 },
             )
             try:
-                async with asyncio.timeout(min(120.0, _agent_timeout_seconds())):
+                async with asyncio.timeout(
+                    min(120.0, _agent_timeout_seconds())
+                ):
                     async for event in run_notebook_agent(
                         message=_json_repair_prompt(
                             body.prompt, "".join(text_parts)
@@ -2222,7 +2809,9 @@ async def _run_analysis(
                         max_turns=3,
                         thread_id=record.session_id,
                         notebook_mcp_app=app_state.request.app,
+                        cwd=agent_cwd,
                         disallow_file_edits=True,
+                        additional_disallowed_tools=["Agent"],
                     ):
                         event_data = {
                             "type": event.type,
@@ -2245,14 +2834,14 @@ async def _run_analysis(
                 record.result = _parse_result("".join(repair_parts))
             except Exception as repair_error:
                 raise parse_error from repair_error
-        _persist_record_completion_artifacts(app_state, record)
         record.status = "Done"
         record.error = None
+        _persist_record_completion_artifacts(app_state, record)
         await store.upsert_thread(
             ChatThread(
                 thread_id=record.session_id,
                 session_id=record.session_id,
-                source="notion",
+                source=record.source,
                 title=record.headline,
                 status="done",
                 notebook_path=record.notebook_path,
@@ -2301,7 +2890,7 @@ async def _run_analysis(
                 ChatThread(
                     thread_id=record.session_id,
                     session_id=record.session_id,
-                    source="notion",
+                    source=record.source,
                     title=record.headline,
                     status="failed",
                     notebook_path=record.notebook_path,
@@ -2330,7 +2919,7 @@ async def _run_analysis(
                 ChatThread(
                     thread_id=record.session_id,
                     session_id=record.session_id,
-                    source="notion",
+                    source=record.source,
                     title=record.headline,
                     status="done",
                     notebook_path=record.notebook_path,
@@ -2366,10 +2955,12 @@ def _record_response(record: AnalysisRecord) -> dict[str, Any]:
     result = record.result or AnalysisResult()
     return {
         "requestId": record.request_id,
+        "source": record.source,
         "sessionId": record.session_id,
         "notebookPath": record.notebook_path,
         "trailUrl": record.trail_url,
         "status": record.status,
+        "latestCommitSha": record.latest_commit_sha,
         "summary": result.summary,
         "confidenceScore": result.confidence_score,
         "finalAnswer": result.final_answer,
@@ -2404,6 +2995,12 @@ def _mark_stale_analysis_failed(
     record.status = "Failed"
     record.error = "Analysis was interrupted before completion."
     _save_registry(app_state)
+    _checkpoint_analysis_files(
+        app_state,
+        record,
+        f"Checkpoint {record.source} analysis {record.request_id}",
+        include_parent_dir=True,
+    )
 
 
 @router.post("/start")

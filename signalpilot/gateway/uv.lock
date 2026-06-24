@@ -2483,6 +2483,7 @@ dependencies = [
     { name = "sshtunnel" },
     { name = "typer" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
 ]
 
 [package.optional-dependencies]
@@ -2568,6 +2569,7 @@ requires-dist = [
     { name = "trino", marker = "extra == 'trino'", specifier = ">=0.330.0" },
     { name = "typer", specifier = ">=0.15.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34.0" },
+    { name = "websockets", specifier = ">=16.0" },
 ]
 provides-extras = ["dev", "aws", "snowflake", "bigquery", "clickhouse", "databricks", "trino", "all-connectors"]
 

@@ -40,6 +40,7 @@ _GATEWAY_URL = os.environ.get("SP_GATEWAY_URL", "http://localhost:3300")
 _SESSION_JWT = load_session_jwt()
 _API_KEY = os.environ.get("SP_API_KEY", "")
 _USE_GATEWAY = "SP_GATEWAY_URL" in os.environ or bool(_SESSION_JWT or _API_KEY)
+_TRACE_SOURCES = {"notion", "slack"}
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -95,7 +96,8 @@ def _current_session_id(request: Request) -> str:
 
 
 def _is_notion_session(request: Request) -> bool:
-    return _current_session_id(request).startswith("session-notion-")
+    session_id = _current_session_id(request)
+    return session_id.startswith(("session-notion-", "session-slack-"))
 
 
 def _epoch_seconds(value: Any) -> int:
@@ -120,10 +122,12 @@ def _conversation_row(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def _trace_conversation_row(thread: dict[str, Any]) -> dict[str, Any]:
+    source = thread.get("source") or "notion"
     return {
         "id": thread["thread_id"],
-        "title": thread.get("title") or "Notion analysis",
-        "source": thread.get("source") or "notion",
+        "title": thread.get("title")
+        or ("Slack analysis" if source == "slack" else "Notion analysis"),
+        "source": source,
         "status": thread.get("status") or "",
         "notebook_path": thread.get("notebook_path") or "",
         "created_at": _epoch_seconds(thread.get("created_at")),
@@ -535,7 +539,13 @@ async def _trace_list_conversations(request: Request) -> dict[str, Any]:
 
 
 async def _trace_list_recent_notion_conversations(request: Request) -> dict[str, Any]:
-    threads = await _trace_store(request).list_threads_by_source("notion")
+    return await _trace_list_recent_source_conversations(request, "notion")
+
+
+async def _trace_list_recent_source_conversations(
+    request: Request, source: str
+) -> dict[str, Any]:
+    threads = await _trace_store(request).list_threads_by_source(source)
     return {"conversations": [_trace_conversation_row(row) for row in threads]}
 
 
@@ -752,8 +762,9 @@ async def create_conversation(request: Request) -> JSONResponse:
 
 @router.get("/conversations")
 async def list_conversations(request: Request) -> JSONResponse:
-    if request.query_params.get("source") == "notion":
-        return JSONResponse(await _trace_list_recent_notion_conversations(request))
+    source = request.query_params.get("source")
+    if source in _TRACE_SOURCES:
+        return JSONResponse(await _trace_list_recent_source_conversations(request, source))
 
     traced = await _trace_list_conversations(request)
     if traced["conversations"]:

@@ -45,6 +45,40 @@ class TestOrchestratorRefusesNonPodIpMode:
 
 
 class TestCreatePodNamespaceBehavior:
+    def test_pod_manifest_sanitizes_analysis_owner_labels(self, monkeypatch):
+        """Synthetic analysis owners contain ':' but Kubernetes label values cannot."""
+        monkeypatch.setenv("SP_NOTEBOOK_UPSTREAM_MODE", "pod_ip")
+
+        import importlib
+
+        import gateway.orchestrator.kubernetes as k8s_mod
+
+        importlib.reload(k8s_mod)
+
+        manifest = k8s_mod._pod_manifest(
+            pod_name="nb-test",
+            namespace="sp-nb-org",
+            image="signalpilot-notebook:latest",
+            user_id="analysis:slack:slack-20ab5adcebd4588c",
+            org_id="org-1",
+            project_id="project-1",
+            branch="analysis/slack/test",
+            gateway_url="https://gateway.signalpilot.ai",
+            session_jwt_secret_name="sp-jwt-nb-test",
+            session_id="session-slack-1",
+            access_token=None,
+        )
+
+        labels = manifest["metadata"]["labels"]
+        env = {
+            item["name"]: item["value"]
+            for item in manifest["spec"]["containers"][0]["env"]
+            if "value" in item
+        }
+        assert labels["signalpilot.ai/user"] == "analysis-slack-slack-20ab5adcebd4588c"
+        assert ":" not in labels["signalpilot.ai/user"]
+        assert env["SP_USER_ID"] == "analysis:slack:slack-20ab5adcebd4588c"
+
     @pytest.mark.asyncio
     async def test_create_pod_creates_namespace_first(self, monkeypatch):
         """create_pod calls ensure_org_namespace before create_namespaced_pod."""
@@ -88,10 +122,11 @@ class TestCreatePodNamespaceBehavior:
                 pod_name="nb-test",
                 user_id="user-1",
                 org_id="org-1",
+                project_id=None,
                 branch="main",
                 image="signalpilot-notebook:latest",
                 gateway_url="http://gateway:3300",
-                session_jwt="jwt",
+                session_jwt_secret_name="sp-jwt-nb-test",
                 session_id="sess-1",
                 access_token=None,
             )
@@ -134,10 +169,11 @@ class TestCreatePodNamespaceBehavior:
                 pod_name="nb-test",
                 user_id="user-1",
                 org_id="org-abc",
+                project_id=None,
                 branch="main",
                 image="signalpilot-notebook:latest",
                 gateway_url="http://gateway:3300",
-                session_jwt="jwt",
+                session_jwt_secret_name="sp-jwt-nb-test",
                 session_id="sess-1",
                 access_token=None,
             )
@@ -212,10 +248,11 @@ class TestCreatePodNamespaceBehavior:
                 pod_name="nb-test",
                 user_id="user-1",
                 org_id="org-1",
+                project_id=None,
                 branch="main",
                 image="signalpilot-notebook:latest",
                 gateway_url="http://gateway:3300",
-                session_jwt="jwt",
+                session_jwt_secret_name="sp-jwt-nb-test",
                 session_id="sess-1",
                 access_token=None,
             )
@@ -254,10 +291,11 @@ class TestCreatePodNamespaceBehavior:
                     pod_name="nb-test",
                     user_id="user-1",
                     org_id="org-1",
+                    project_id=None,
                     branch="main",
                     image="signalpilot-notebook:latest",
                     gateway_url="http://gateway:3300",
-                    session_jwt="jwt",
+                    session_jwt_secret_name="sp-jwt-nb-test",
                     session_id="sess-1",
                     access_token=None,
                 )
@@ -282,10 +320,11 @@ class TestCreatePodNamespaceBehavior:
                 pod_name="nb-test",
                 user_id="user-1",
                 org_id="",
+                project_id=None,
                 branch="main",
                 image="signalpilot-notebook:latest",
                 gateway_url="http://gateway:3300",
-                session_jwt="jwt",
+                session_jwt_secret_name="sp-jwt-nb-test",
                 session_id="sess-1",
                 access_token=None,
             )
@@ -329,10 +368,11 @@ class TestPodSpecHardening:
                 pod_name="nb-test",
                 user_id="user-1",
                 org_id="org-1",
+                project_id=None,
                 branch="main",
                 image="signalpilot-notebook:latest",
                 gateway_url="http://gateway:3300",
-                session_jwt="jwt",
+                session_jwt_secret_name="sp-jwt-nb-test",
                 session_id="sess-1",
                 access_token=None,
             )

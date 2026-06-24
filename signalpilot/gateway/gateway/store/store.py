@@ -758,6 +758,9 @@ class Store:
         requests_data_source_id: str,
         requests_database_page_id: str,
         enabled: bool = True,
+        default_project_id: str | None = None,
+        default_branch: str = "main",
+        analysis_branch_mode: str = "per_request",
     ) -> notion_mod.NotionOAuthInstallationInfo | None:
         """Save provisioned Notion resources for an OAuth installation."""
         oid = self._require_org_id()
@@ -770,6 +773,9 @@ class Store:
             requests_data_source_id=requests_data_source_id,
             requests_database_page_id=requests_database_page_id,
             enabled=enabled,
+            default_project_id=default_project_id,
+            default_branch=default_branch,
+            analysis_branch_mode=analysis_branch_mode,
         )
 
     async def disable_notion_oauth_installation(self, installation_id: str) -> bool:

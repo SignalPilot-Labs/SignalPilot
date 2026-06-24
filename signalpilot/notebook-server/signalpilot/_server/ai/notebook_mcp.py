@@ -11,6 +11,7 @@ Use get_active_notebooks to discover available sessions.
 """
 from __future__ import annotations
 
+import ast
 import json
 import uuid
 from dataclasses import asdict, is_dataclass
@@ -23,6 +24,7 @@ from signalpilot._messaging.notebook.changes import (
     CreateCell,
     DeleteCell,
     SetCode,
+    SetConfig,
     Transaction,
 )
 from signalpilot._messaging.notification import (
@@ -37,6 +39,32 @@ from signalpilot._types.ids import CellId_t
 from signalpilot._utils.dataclass_to_openapi import PythonTypeToOpenAPI
 
 LOGGER = _loggers.sp_logger()
+
+
+def _is_markdown_call(value: ast.AST) -> bool:
+    if not isinstance(value, ast.Call):
+        return False
+    func = value.func
+    if isinstance(func, ast.Attribute) and func.attr == "md":
+        return isinstance(func.value, ast.Name) and func.value.id in {"sp", "mo"}
+    return False
+
+
+def _is_markdown_only_cell(code: str) -> bool:
+    try:
+        parsed = ast.parse(code)
+    except SyntaxError:
+        return False
+
+    has_markdown_call = False
+    for node in parsed.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue
+        if isinstance(node, ast.Expr) and _is_markdown_call(node.value):
+            has_markdown_call = True
+            continue
+        return False
+    return has_markdown_call
 
 
 def _local_server_url(context: ToolContext, path: str = "") -> str:
@@ -247,6 +275,7 @@ def _handle_edit_notebook(
     cell_manager = session.app_file_manager.app.cell_manager
     existing_cells = list(cell_manager.cell_data())
     existing_ids = {str(cd.cell_id) for cd in existing_cells}
+    existing_by_id = {str(cd.cell_id): cd for cd in existing_cells}
     last_cell_id = str(existing_cells[-1].cell_id) if existing_cells else None
 
     LOGGER.info(f"[edit_notebook] session={session_id}, cells={sorted(existing_ids)}, edits={len(edits)}")
@@ -264,17 +293,18 @@ def _handle_edit_notebook(
 
         if op == "add_cell":
             new_id = CellId_t(str(uuid.uuid4()).replace("-", "")[:8])
+            hide_code = _is_markdown_only_cell(code)
             doc_changes.append(CreateCell(
                 cell_id=new_id,
                 code=code,
                 name="_",
-                config=CellConfig(),
+                config=CellConfig(hide_code=hide_code),
                 after=CellId_t(last_cell_id) if last_cell_id else None,
             ))
             execute_ids.append(new_id)
             execute_codes.append(code)
             last_cell_id = str(new_id)
-            results.append({"op": "add_cell", "cell_id": str(new_id), "status": "ok"})
+            results.append({"op": "add_cell", "cell_id": str(new_id), "status": "ok", "hide_code": hide_code})
 
         elif op == "update_cell":
             if not cell_id or cell_id not in existing_ids:
@@ -282,9 +312,18 @@ def _handle_edit_notebook(
                                 "error": f"cell_id not found. Available: {sorted(existing_ids)}"})
                 continue
             doc_changes.append(SetCode(cell_id=CellId_t(cell_id), code=code))
+            if _is_markdown_only_cell(code):
+                existing = existing_by_id[cell_id]
+                if not existing.config.hide_code:
+                    doc_changes.append(SetConfig(
+                        cell_id=CellId_t(cell_id),
+                        column=existing.config.column,
+                        disabled=existing.config.disabled,
+                        hide_code=True,
+                    ))
             execute_ids.append(CellId_t(cell_id))
             execute_codes.append(code)
-            results.append({"op": "update_cell", "cell_id": cell_id, "status": "ok"})
+            results.append({"op": "update_cell", "cell_id": cell_id, "status": "ok", "hide_code": _is_markdown_only_cell(code)})
 
         elif op == "delete_cell":
             if not cell_id or cell_id not in existing_ids:

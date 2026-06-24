@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlparse, urlunparse
+from uuid import NAMESPACE_URL, uuid5
 
 import httpx
 import jwt
@@ -17,10 +18,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.auth.jwt_secret import load_session_jwt_secret
 from gateway.db.models import NotionInstallationConfig
-from gateway.notebooks.session_service import NotebookRuntime, ensure_notion_notebook_session
+from gateway.git.repos import ensure_branch_from
+from gateway.models.analysis_trails import AnalysisTrailUpdate, AnalysisTrailUpsert
+from gateway.notebooks.session_service import NotebookRuntime, ensure_analysis_notebook_session
 from gateway.notion import client as notion_client
 from gateway.notion import formatting as notion_formatting
 from gateway.notion.webhooks import RoutedNotionInstallation
+from gateway.store import analysis_trails
+from gateway.store import workspace_projects
 
 NOTION_RICH_TEXT_MAX_LENGTH = notion_formatting.NOTION_RICH_TEXT_MAX_LENGTH
 logger = logging.getLogger(__name__)
@@ -30,6 +35,20 @@ logger = logging.getLogger(__name__)
 class NotionCommentProcessResult:
     status: str
     reason: str | None = None
+
+
+@dataclass(frozen=True)
+class AnalysisRoute:
+    source: str
+    request_id: str
+    project_id: str
+    branch: str
+    default_branch: str
+    analysis_user_id: str
+
+
+class AnalysisSetupRequiredError(RuntimeError):
+    """Raised when an external analysis source has no configured default project."""
 
 
 def _ignored(reason: str, **context: Any) -> NotionCommentProcessResult:
@@ -155,6 +174,149 @@ def _analysis_detail_blocks(status: dict[str, Any]) -> list[dict[str, Any]]:
     return blocks[: notion_formatting.NOTION_BLOCK_CHILD_LIMIT]
 
 
+def _analysis_request_id(source: str, discussion_id: str) -> str:
+    normalized_source = re.sub(r"[^a-zA-Z0-9]+", "-", source.strip().lower()).strip("-") or "analysis"
+    return f"{normalized_source}-{uuid5(NAMESPACE_URL, discussion_id).hex[:16]}"
+
+
+def _analysis_branch_slug(value: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", value.strip().lower()).strip("-")
+    return (slug[:48] or "analysis-request").strip("-")
+
+
+def _analysis_branch_name(source: str, request_id: str, headline: str) -> str:
+    safe_source = re.sub(r"[^a-zA-Z0-9]+", "-", source.strip().lower()).strip("-") or "analysis"
+    return f"analysis/{safe_source}/{request_id}-{_analysis_branch_slug(headline)}"
+
+
+def _analysis_status(value: str | None) -> str:
+    if value == "Done":
+        return "done"
+    if value == "Failed":
+        return "failed"
+    return "active"
+
+
+async def resolve_configured_analysis_route(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    source: str,
+    request_id: str,
+    headline: str,
+    config: NotionInstallationConfig,
+) -> AnalysisRoute:
+    return await resolve_analysis_route_for_defaults(
+        db,
+        org_id=org_id,
+        source=source,
+        request_id=request_id,
+        headline=headline,
+        default_project_id=config.default_project_id,
+        default_branch=config.default_branch,
+        analysis_branch_mode=config.analysis_branch_mode,
+    )
+
+
+async def resolve_analysis_route_for_defaults(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    source: str,
+    request_id: str,
+    headline: str,
+    default_project_id: str | None,
+    default_branch: str | None = "main",
+    analysis_branch_mode: str | None = "per_request",
+) -> AnalysisRoute:
+    project_id = (default_project_id or "").strip()
+    if not project_id:
+        raise AnalysisSetupRequiredError(
+            f"SignalPilot needs a default dbt project before it can run {source} analysis. "
+            "Open the integration settings and choose a default project."
+        )
+
+    project = await workspace_projects.get_project(db, org_id=org_id, project_id=project_id)
+    if project is None:
+        raise AnalysisSetupRequiredError(
+            "The default dbt project configured for this integration no longer exists. "
+            "Open the integration settings and choose a new default project."
+        )
+
+    default_branch = (default_branch or project.default_branch or "main").strip() or "main"
+    mode = (analysis_branch_mode or "per_request").strip()
+    if mode == "default_branch":
+        branch = default_branch
+    else:
+        branch = _analysis_branch_name(source, request_id, headline)
+        ensure_branch_from(project_id, branch, default_branch)
+
+    return AnalysisRoute(
+        source=source,
+        request_id=request_id,
+        project_id=project_id,
+        branch=branch,
+        default_branch=default_branch,
+        analysis_user_id=f"analysis:{source}:{request_id}",
+    )
+
+
+async def upsert_analysis_trail_from_status(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    route: AnalysisRoute,
+    runtime: NotebookRuntime,
+    status: dict[str, Any],
+    source_url: str,
+    source_thread_id: str,
+    source_request_id: str | None = None,
+    analysis_user_id: str | None = None,
+) -> None:
+    await analysis_trails.upsert_trail(
+        db,
+        org_id=org_id,
+        trail=AnalysisTrailUpsert(
+            source=route.source,
+            request_id=str(status.get("requestId") or route.request_id),
+            thread_id=str(status.get("sessionId") or f"session-{route.request_id}"),
+            runtime_session_id=runtime.session_id,
+            project_id=route.project_id,
+            branch=route.branch,
+            default_branch=route.default_branch,
+            notebook_path=str(status.get("notebookPath") or ""),
+            status=_analysis_status(status.get("status")),
+            latest_commit_sha=status.get("latestCommitSha") or None,
+            source_url=source_url,
+            source_thread_id=source_thread_id,
+            source_request_id=source_request_id,
+            analysis_user_id=analysis_user_id or route.analysis_user_id,
+            metadata={"trail_url": status.get("trailUrl")},
+        ),
+    )
+
+
+async def update_analysis_trail_from_status(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    route: AnalysisRoute,
+    status: dict[str, Any],
+) -> None:
+    await analysis_trails.update_trail(
+        db,
+        org_id=org_id,
+        source=route.source,
+        request_id=str(status.get("requestId") or route.request_id),
+        update=AnalysisTrailUpdate(
+            status=_analysis_status(status.get("status")),
+            latest_commit_sha=status.get("latestCommitSha") or None,
+            notebook_path=status.get("notebookPath") or None,
+            metadata={"trail_url": status.get("trailUrl")} if status.get("trailUrl") else None,
+        ),
+    )
+
+
 def _notion_page_url(page_id: str, discussion_id: str) -> str:
     return f"https://www.notion.so/{notion_client.normalize_id(page_id)}?signalpilotDiscussion={discussion_id}"
 
@@ -162,6 +324,46 @@ def _notion_page_url(page_id: str, discussion_id: str) -> str:
 def _headline_from_prompt(prompt: str) -> str:
     first_line = next((line.strip() for line in prompt.splitlines() if line.strip()), "SignalPilot analysis")
     return first_line[:87] + "..." if len(first_line) > 90 else first_line
+
+
+def _analysis_notebook_path(source: str, headline: str, request_id: str) -> str:
+    source_path = re.sub(r"[^a-zA-Z0-9_-]+", "-", source.strip().lower()).strip("-") or "analysis"
+    filename_slug = re.sub(r"[^a-zA-Z0-9]+", "-", headline.strip().lower()).strip("-")[:80] or "analysis-request"
+    return f"notebooks/{source_path}/{filename_slug}-{request_id[-6:]}.py"
+
+
+async def upsert_analysis_trail_seed(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    route: AnalysisRoute,
+    runtime: NotebookRuntime,
+    headline: str,
+    source_url: str,
+    source_thread_id: str,
+    source_request_id: str | None = None,
+    analysis_user_id: str | None = None,
+) -> None:
+    """Create durable trail metadata before the notebook runtime starts work."""
+    await analysis_trails.upsert_trail(
+        db,
+        org_id=org_id,
+        trail=AnalysisTrailUpsert(
+            source=route.source,
+            request_id=route.request_id,
+            thread_id=f"session-{route.request_id}",
+            runtime_session_id=runtime.session_id,
+            project_id=route.project_id,
+            branch=route.branch,
+            default_branch=route.default_branch,
+            notebook_path=_analysis_notebook_path(route.source, headline, route.request_id),
+            status="active",
+            source_url=source_url,
+            source_thread_id=source_thread_id,
+            source_request_id=source_request_id,
+            analysis_user_id=analysis_user_id or route.analysis_user_id,
+        ),
+    )
 
 
 def _request_page_url(page_id: str) -> str:
@@ -665,6 +867,31 @@ async def process_routed_comment_event(
     request_page_id = request_page["id"]
     request_page_url = request_page.get("url") or _request_page_url(request_page_id)
 
+    request_id = _analysis_request_id("notion", discussion_id)
+    try:
+        route = await resolve_configured_analysis_route(
+            db,
+            org_id=routed.installation.org_id,
+            source="notion",
+            request_id=request_id,
+            headline=headline,
+            config=routed.config,
+        )
+    except AnalysisSetupRequiredError as exc:
+        message = str(exc)
+        await notion_client.update_page_properties(
+            token,
+            request_page_id,
+            {"Status": {"rich_text": _rich_text("Failed")}, "Summary": {"rich_text": _rich_text(message)}},
+        )
+        await notion_client.append_page_blocks(token, request_page_id, _failure_detail_blocks(message))
+        await notion_client.create_comment(
+            token,
+            discussion_id=discussion_id,
+            rich_text=_failure_comment_rich_text(message, request_page_url),
+        )
+        return NotionCommentProcessResult(status="processed")
+
     await notion_client.update_page_properties(token, request_page_id, {"Status": {"rich_text": _rich_text("Analyzing")}})
     await _create_start_comment(
         token,
@@ -675,10 +902,25 @@ async def process_routed_comment_event(
         request_page_id=request_page_id,
     )
     try:
-        runtime = await ensure_notion_notebook_session(
+        runtime = await ensure_analysis_notebook_session(
             db,
-            routed.installation.org_id,
-            routed.installation.user_id,
+            org_id=routed.installation.org_id,
+            source=route.source,
+            request_id=route.request_id,
+            project_id=route.project_id,
+            branch=route.branch,
+            credential_user_id=routed.installation.user_id,
+        )
+        await upsert_analysis_trail_seed(
+            db,
+            org_id=routed.installation.org_id,
+            route=route,
+            runtime=runtime,
+            headline=headline,
+            source_url=source_url,
+            source_thread_id=discussion_id,
+            source_request_id=request_page_id,
+            analysis_user_id=routed.installation.user_id,
         )
         start = await _call_notebook(
             runtime,
@@ -688,6 +930,7 @@ async def process_routed_comment_event(
             {
                 "method": "POST",
                 "json": {
+                    "source": "notion",
                     "discussionId": discussion_id,
                     "notionRequestPageId": request_page_id,
                     "sourceUrl": source_url,
@@ -697,7 +940,22 @@ async def process_routed_comment_event(
                     "previousMessages": previous_messages,
                     "createdAt": created_at,
                 },
+                "headers": {
+                    "X-Gateway-Project-Id": route.project_id,
+                    "X-Gateway-Branch-Id": route.branch,
+                },
             },
+        )
+        await upsert_analysis_trail_from_status(
+            db,
+            org_id=routed.installation.org_id,
+            route=route,
+            runtime=runtime,
+            status=start,
+            source_url=source_url,
+            source_thread_id=discussion_id,
+            source_request_id=request_page_id,
+            analysis_user_id=routed.installation.user_id,
         )
     except Exception as exc:
         message = str(exc)
@@ -724,8 +982,21 @@ async def process_routed_comment_event(
             routed.installation.org_id,
             routed.installation.user_id,
         )
+        await update_analysis_trail_from_status(
+            db,
+            org_id=routed.installation.org_id,
+            route=route,
+            status=final_status,
+        )
     except Exception as exc:
         message = str(exc)
+        await analysis_trails.update_trail(
+            db,
+            org_id=routed.installation.org_id,
+            source=route.source,
+            request_id=route.request_id,
+            update=AnalysisTrailUpdate(status="failed"),
+        )
         await notion_client.update_page_properties(
             token,
             request_page_id,

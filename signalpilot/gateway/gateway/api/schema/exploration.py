@@ -576,6 +576,34 @@ async def create_xata_branch(
         raise HTTPException(status_code=502, detail=sanitize_db_error(str(e), info.db_type))
 
 
+@router.delete(
+    "/connections/{name}/xata/projects/{project}/branches/{branch}",
+    dependencies=[RequireScope("write")],
+)
+async def delete_xata_branch(
+    name: str,
+    store: StoreD,
+    project: str = Path(..., pattern=r"^[A-Za-z0-9_-]{1,64}$"),
+    branch: str = Path(..., pattern=r"^[A-Za-z0-9_.-]{1,64}$"),
+):
+    """Delete a Xata branch by NAME (control plane, write scope). Resolves the
+    branch id server-side, then deletes. Used for post-merge cleanup."""
+    info = await require_connection(store, name)
+    conn_str = await store.get_connection_string(name)
+    extras = await store.get_credential_extras(name)
+    try:
+        async with _xata_control_from_extras(conn_str, extras) as client:
+            b = next((x for x in await client.list_branches(project) if x.get("name") == branch), None)
+            if not b:
+                raise HTTPException(status_code=404, detail=f"branch '{branch}' not found")
+            await client.delete_branch(project, b["id"])
+            return {"status": "deleted", "branch": branch}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=sanitize_db_error(str(e), info.db_type))
+
+
 @router.get("/connections/{name}/schema/refresh-status", dependencies=[RequireScope("read")])
 async def get_schema_refresh_status(name: str, store: StoreD):
     """Get schema refresh schedule status for a connection."""

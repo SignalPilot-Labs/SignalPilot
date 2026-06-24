@@ -34,7 +34,8 @@ const PAID_TIERS = ["pro", "team", "enterprise", "unlimited"];
 
 function oauthStatus(installation: NotionOAuthInstallation): { label: string; tone: "healthy" | "warning" | "error" | "unknown" } {
   if (installation.status === "disconnected") return { label: "disconnected", tone: "error" };
-  if (installation.config?.enabled) return { label: "active", tone: "healthy" };
+  if (installation.config?.enabled && installation.config?.default_project_id) return { label: "active", tone: "healthy" };
+  if (installation.config?.enabled && !installation.config?.default_project_id) return { label: "needs setup", tone: "warning" };
   if (installation.status === "connected") return { label: "needs setup", tone: "warning" };
   return { label: installation.status || "unknown", tone: "unknown" };
 }
@@ -213,7 +214,9 @@ function IntegrationsContent() {
 
   const visibleInstallations = oauthInstallations.filter((installation) => installation.status !== "disconnected");
   const hasConnectedInstall = visibleInstallations.length > 0;
-  const activeOauthCount = visibleInstallations.filter((installation) => installation.config?.enabled).length;
+  const activeOauthCount = visibleInstallations.filter(
+    (installation) => installation.config?.enabled && installation.config?.default_project_id,
+  ).length;
   const projectsById = new Map(workspaceProjects.map((project) => [project.id, project]));
 
   return (
@@ -318,7 +321,12 @@ function IntegrationsContent() {
                       )}
                     </p>
                     <p className="flex items-center gap-1.5">
-                      <span>default project:</span>
+                      <span>
+                        default project:
+                        {!installation.config?.default_project_id && (
+                          <span className="ml-1 text-[var(--color-error)]">*</span>
+                        )}
+                      </span>
                       <span className="text-[var(--color-text-muted)] font-mono truncate">
                         {(() => {
                           const project = installation.config?.default_project_id
@@ -363,6 +371,7 @@ function IntegrationsContent() {
                   <div className="border-t border-[var(--color-border)] pt-4">
                     <label htmlFor={`notion-project-${installation.id}`} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">
                       default project
+                      <span className="ml-1 text-[var(--color-error)]">*</span>
                     </label>
                     <div className="flex flex-col sm:flex-row gap-2">
                       <select

@@ -90,10 +90,15 @@ Required workflow:
 2. Do the actual analysis in notebook cells with the SignalPilot notebook SDK:
    initialize the SDK, select the governed connection, discover the data, run
    queries, perform calculations, and record evidence/results in the notebook.
-   Every SDK setup cell that uses governed data access must initialize first,
-   in this order: `import signalpilot as sp`, `sp.init()`, `sp.connections()`,
-   then `sp.connect("connection_name")`. Markdown-only `sp.md(...)` cells do
-   not require `sp.init()`.
+   Define `sp` in exactly one notebook cell. The seeded notebook defines `sp` in
+   the first hidden request-context cell; later cells must receive `sp` through
+   marimo dependencies and must not repeat `import signalpilot as sp`.
+   In marimo, imported aliases are notebook definitions, so repeating that import
+   across cells causes `MultipleDefinitionError`. If no existing cell defines
+   `sp`, import it once, then initialize governed data access in this order:
+   `sp.init()`, `sp.connections()`, then `sp.connect("connection_name")`.
+   Markdown-only `sp.md(...)` cells do not require `sp.init()` and must not
+   re-import `sp`.
    Use the public notebook SDK helpers that exist in the runtime, especially
    `sp.init()`, `sp.connections()`, `sp.connect("connection_name")`, and
    `db.query("SELECT ...")` (or `sp.query("SELECT ...", connection_name=...)`).
@@ -195,10 +200,13 @@ Required workflow:
    instead of duplicating it all in the summary.
 
 Completion checklist before final JSON:
-- The live notebook contains an SDK setup cell for governed data access with
-  this exact order: `import signalpilot as sp`, `sp.init()`, `sp.connections()`,
-  then `sp.connect("...")`. Markdown-only `sp.md(...)` cells may appear before
-  this and do not require SDK initialization.
+- The live notebook defines `sp` in exactly one notebook cell. It must not repeat
+  `import signalpilot as sp`; later cells should receive `sp` through marimo
+  dependencies.
+- The live notebook contains an SDK setup cell for governed data access using
+  `sp.init()`, `sp.connections()`, then `sp.connect("...")`. Markdown-only
+  `sp.md(...)` cells may appear before this and do not require SDK
+  initialization.
 - The live notebook contains governed query cells that call `db.query(...)` or
   `sp.query(...)` for the actual source data used in the answer.
 - Every material finding in the summary has a nearby "Analysis steps" branch

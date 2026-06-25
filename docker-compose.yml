@@ -109,8 +109,6 @@ services:
       SP_GATEWAY_INTERNAL_URL: http://gateway:3300
       SP_WEB_URL: ${SP_WEB_URL:-http://localhost:3200}
       CLAUDE_CONFIG_DIR: ${CLAUDE_CONFIG_DIR:-/home/notebook/.claude}
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
       - signalpilot-workspace:/workspace
       - signalpilot-shared:/shared:ro

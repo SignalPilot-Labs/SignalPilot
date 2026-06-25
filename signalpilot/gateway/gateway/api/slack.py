@@ -35,6 +35,7 @@ DEFAULT_SLACK_SCOPES = ",".join(
         "groups:history",
         "im:history",
         "mpim:history",
+        "reactions:write",
     ]
 )
 

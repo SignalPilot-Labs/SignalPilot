@@ -47,6 +47,10 @@ def test_notebook_template_uses_compact_three_cell_scaffold() -> None:
 
     assert template.count("@app.cell") == 3
     assert template.count("@app.cell(hide_code=True)") == 3
+    assert template.count("import signalpilot as sp") == 2
+    assert template.count("    import signalpilot as sp") == 1
+    assert template.count("def _(sp):") == 2
+    assert "    return (sp,)" in template
     assert "# SignalPilot analysis" in template
     assert "AI generated title" not in template
     assert "**Source request:** https://slack.test/archives/C/p123" in template
@@ -282,9 +286,10 @@ def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
     prompt = notion_analysis._analysis_prompt(_record(), _body())
 
     assert "`sp.init()`" in prompt
-    assert (
-        "`import signalpilot as sp`, `sp.init()`, `sp.connections()`" in prompt
-    )
+    assert "Define `sp` in exactly one notebook cell" in prompt
+    assert "must not repeat `import signalpilot as sp`" in prompt
+    assert "causes `MultipleDefinitionError`" in prompt
+    assert "`sp.init()`, `sp.connections()`" in prompt
     assert 'then `sp.connect("connection_name")`' in prompt
     assert "Markdown-only `sp.md(...)` cells" in prompt
     assert "not require `sp.init()`" in prompt

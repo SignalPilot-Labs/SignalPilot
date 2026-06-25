@@ -788,11 +788,11 @@ app = sp.App()
 def _():
     import signalpilot as sp
     sp.md({request_context_json})
+    return (sp,)
 
 
 @app.cell(hide_code=True)
-def _():
-    import signalpilot as sp
+def _(sp):
     sp.md("""
     ## Executive Summary and Explorations
 
@@ -801,8 +801,7 @@ def _():
 
 
 @app.cell(hide_code=True)
-def _():
-    import signalpilot as sp
+def _(sp):
     sp.md("""
     ## Analysis steps
 

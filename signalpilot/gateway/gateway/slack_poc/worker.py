@@ -28,12 +28,20 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from gateway.db.engine import close_db, get_session_factory, init_db
 from gateway.notebooks.session_service import NotebookRuntime, ensure_analysis_notebook_session
 from gateway.notion import analysis as notebook_analysis
+from gateway.slack_poc.progress import (
+    COMPLETING_PROGRESS_TEXT,
+    INITIAL_PROGRESS_TEXT,
+    SlackProgressReporter,
+    SlackProgressSummarizer,
+)
 from gateway.store import slack as slack_store
 
 LOGGER = logging.getLogger(__name__)
 SLACK_API_BASE = "https://slack.com/api"
 SLACK_TEXT_LIMIT = 35000
 SLACK_CHART_LIMIT = 3
+SLACK_ACK_REACTION = "eyes"
+SLACK_DONE_REACTION = "white_check_mark"
 
 
 class SlackApiError(RuntimeError):
@@ -71,6 +79,11 @@ class SlackPoCConfig:
     channel_defaults: dict[str, SlackAnalysisDefaults] = field(default_factory=dict)
     allowed_channel_ids: frozenset[str] = frozenset()
     ack_text: str = "I'm on it and will post the answer back here soon."
+    progress_enabled: bool = True
+    progress_interval_seconds: float = 15.0
+    progress_model_provider: str = "anthropic"
+    progress_model: str | None = None
+    progress_model_timeout_seconds: float = 8.0
 
 
 @dataclass(frozen=True)
@@ -151,6 +164,35 @@ class SlackApiClient:
         data = await self._api("chat.postMessage", payload)
         ts = data.get("ts")
         return str(ts) if ts else ""
+
+    async def update_message(self, *, channel: str, ts: str, text: str) -> None:
+        await self._api(
+            "chat.update",
+            {
+                "channel": channel,
+                "ts": ts,
+                "text": _clip_text(text),
+                "mrkdwn": True,
+                "unfurl_links": False,
+                "unfurl_media": False,
+            },
+        )
+
+    async def add_reaction(self, *, channel: str, timestamp: str, name: str) -> None:
+        try:
+            await self._api("reactions.add", {"channel": channel, "timestamp": timestamp, "name": name})
+        except SlackApiError as exc:
+            if "already_reacted" in str(exc):
+                return
+            raise
+
+    async def remove_reaction(self, *, channel: str, timestamp: str, name: str) -> None:
+        try:
+            await self._api("reactions.remove", {"channel": channel, "timestamp": timestamp, "name": name})
+        except SlackApiError as exc:
+            if "no_reaction" in str(exc):
+                return
+            raise
 
     async def upload_file(
         self,
@@ -284,7 +326,18 @@ class SlackPoCWorker:
     async def _process_request(self, request: SlackRequest) -> None:
         trail_url: str | None = None
         route: notebook_analysis.AnalysisRoute | None = None
-        await self.slack.post_message(channel=request.channel_id, thread_ts=request.thread_ts, text=self.config.ack_text)
+        progress_ts = ""
+        progress_stop: asyncio.Event | None = None
+        progress_task: asyncio.Task[None] | None = None
+        await self._add_request_reaction(request, SLACK_ACK_REACTION)
+        try:
+            progress_ts = await self.slack.post_message(
+                channel=request.channel_id,
+                thread_ts=request.thread_ts,
+                text=INITIAL_PROGRESS_TEXT,
+            )
+        except Exception as exc:
+            LOGGER.info("Could not post Slack progress message: %s", exc, exc_info=True)
         try:
             previous_messages = await self._previous_thread_messages(request)
             async with self.session_factory() as db:
@@ -323,6 +376,7 @@ class SlackPoCWorker:
                     analysis_user_id=analysis_user_id,
                 )
 
+            trace_thread_id = f"session-{route.request_id}"
             start = await self._start_analysis(runtime, request, previous_messages, analysis_user_id, route)
             trail_url = notebook_analysis._public_signalpilot_url(_string(start.get("trailUrl")), runtime)
             async with self.session_factory() as db:
@@ -337,12 +391,37 @@ class SlackPoCWorker:
                     source_request_id=request.event_id,
                     analysis_user_id=analysis_user_id,
                 )
-            status = await notebook_analysis._poll_analysis(
-                _string(start["requestId"]),
-                runtime,
-                self.config.org_id,
-                analysis_user_id,
-                route,
+            if self.config.progress_enabled and progress_ts:
+                progress_stop = asyncio.Event()
+                progress_task = asyncio.create_task(
+                    self._run_progress_reporter(
+                        stop_event=progress_stop,
+                        thread_id=trace_thread_id,
+                        source_prompt=request.text,
+                        channel_id=request.channel_id,
+                        message_ts=progress_ts,
+                        user_id=analysis_user_id,
+                    ),
+                    name=f"slack-progress-{request.event_id}",
+                )
+            poll_task = asyncio.create_task(
+                notebook_analysis._poll_analysis(
+                    _string(start["requestId"]),
+                    runtime,
+                    self.config.org_id,
+                    analysis_user_id,
+                    route,
+                ),
+                name=f"slack-analysis-poll-{request.event_id}",
+            )
+            try:
+                status = await poll_task
+            finally:
+                await self._stop_progress_reporter(progress_stop, progress_task)
+            await self._update_progress_message(
+                channel_id=request.channel_id,
+                message_ts=progress_ts,
+                text=COMPLETING_PROGRESS_TEXT,
             )
             async with self.session_factory() as db:
                 await notebook_analysis.update_analysis_trail_from_status(
@@ -352,11 +431,13 @@ class SlackPoCWorker:
                     status=status,
                 )
             slack_status = notebook_analysis._with_public_chart_urls(status, runtime)
-            await self.slack.post_message(
+            await self._update_or_post_result_message(
                 channel=request.channel_id,
                 thread_ts=request.thread_ts,
+                message_ts=progress_ts,
                 text=_final_slack_text(slack_status, trail_url),
             )
+            await self._mark_request_done(request)
             await self._post_chart_attachments(request, status, runtime)
         except Exception as exc:
             LOGGER.warning("Slack PoC request failed: event_id=%s error=%s", request.event_id, exc, exc_info=True)
@@ -375,11 +456,104 @@ class SlackPoCWorker:
                         )
                 except Exception:
                     LOGGER.debug("Could not mark Slack analysis trail failed", exc_info=True)
-            await self.slack.post_message(
+            await self._update_or_post_result_message(
                 channel=request.channel_id,
                 thread_ts=request.thread_ts,
+                message_ts=progress_ts,
                 text=_failure_slack_text(str(exc), trail_url),
             )
+        finally:
+            await self._stop_progress_reporter(progress_stop, progress_task)
+            await self._remove_request_reaction(request, SLACK_ACK_REACTION)
+
+    async def _add_request_reaction(self, request: SlackRequest, name: str) -> None:
+        if not request.event_ts:
+            return
+        try:
+            await self.slack.add_reaction(channel=request.channel_id, timestamp=request.event_ts, name=name)
+        except Exception as exc:
+            LOGGER.info("Could not add Slack reaction=%s event_id=%s: %s", name, request.event_id, exc, exc_info=True)
+
+    async def _remove_request_reaction(self, request: SlackRequest, name: str) -> None:
+        if not request.event_ts:
+            return
+        try:
+            await self.slack.remove_reaction(channel=request.channel_id, timestamp=request.event_ts, name=name)
+        except Exception as exc:
+            LOGGER.info("Could not remove Slack reaction=%s event_id=%s: %s", name, request.event_id, exc, exc_info=True)
+
+    async def _mark_request_done(self, request: SlackRequest) -> None:
+        await self._add_request_reaction(request, SLACK_DONE_REACTION)
+        await self._remove_request_reaction(request, SLACK_ACK_REACTION)
+
+    async def _update_or_post_result_message(
+        self,
+        *,
+        channel: str,
+        thread_ts: str,
+        message_ts: str,
+        text: str,
+    ) -> None:
+        if message_ts:
+            try:
+                await self.slack.update_message(channel=channel, ts=message_ts, text=text)
+                return
+            except Exception as exc:
+                LOGGER.info("Could not update Slack result message: %s", exc, exc_info=True)
+        await self.slack.post_message(channel=channel, thread_ts=thread_ts, text=text)
+
+    async def _run_progress_reporter(
+        self,
+        *,
+        stop_event: asyncio.Event,
+        thread_id: str,
+        source_prompt: str,
+        channel_id: str,
+        message_ts: str,
+        user_id: str,
+    ) -> None:
+        summarizer = SlackProgressSummarizer(
+            provider=self.config.progress_model_provider,
+            model=self.config.progress_model,
+            timeout_seconds=self.config.progress_model_timeout_seconds,
+        )
+        reporter = SlackProgressReporter(
+            slack=self.slack,
+            session_factory=self.session_factory,
+            org_id=self.config.org_id,
+            user_id=user_id,
+            thread_id=thread_id,
+            source_prompt=source_prompt,
+            channel_id=channel_id,
+            message_ts=message_ts,
+            interval_seconds=self.config.progress_interval_seconds,
+            summarizer=summarizer,
+        )
+        await reporter.run(stop_event)
+
+    async def _stop_progress_reporter(
+        self,
+        stop_event: asyncio.Event | None,
+        task: asyncio.Task[None] | None,
+    ) -> None:
+        if stop_event is None or task is None:
+            return
+        stop_event.set()
+        try:
+            await asyncio.wait_for(task, timeout=2)
+        except TimeoutError:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        except Exception as exc:
+            LOGGER.info("Slack progress reporter stopped with error: %s", exc, exc_info=True)
+
+    async def _update_progress_message(self, *, channel_id: str, message_ts: str, text: str) -> None:
+        if not self.config.progress_enabled or not message_ts:
+            return
+        try:
+            await self.slack.update_message(channel=channel_id, ts=message_ts, text=text)
+        except Exception as exc:
+            LOGGER.info("Could not update Slack progress message: %s", exc, exc_info=True)
 
     async def _analysis_user_id(self, db: AsyncSession) -> str:
         if self.config.user_id:
@@ -542,6 +716,11 @@ async def run_worker(config: SlackPoCConfig) -> None:
             channel_defaults=config.channel_defaults,
             allowed_channel_ids=config.allowed_channel_ids,
             ack_text=config.ack_text,
+            progress_enabled=config.progress_enabled,
+            progress_interval_seconds=config.progress_interval_seconds,
+            progress_model_provider=config.progress_model_provider,
+            progress_model=config.progress_model,
+            progress_model_timeout_seconds=config.progress_model_timeout_seconds,
         )
         worker = SlackPoCWorker(config, slack, get_session_factory())
         stop_event = asyncio.Event()
@@ -620,6 +799,11 @@ def register_http_routes(
                     channel_defaults=config.channel_defaults,
                     allowed_channel_ids=config.allowed_channel_ids,
                     ack_text=config.ack_text,
+                    progress_enabled=config.progress_enabled,
+                    progress_interval_seconds=config.progress_interval_seconds,
+                    progress_model_provider=config.progress_model_provider,
+                    progress_model=config.progress_model,
+                    progress_model_timeout_seconds=config.progress_model_timeout_seconds,
                 )
                 app.state.slack_poc_worker = SlackPoCWorker(
                     resolved_config,
@@ -791,6 +975,11 @@ async def _dispatch_self_serve_payload(payload: dict[str, Any], base_config: Sla
         analysis_branch_mode=install_config.analysis_branch_mode or "per_request",
         allowed_channel_ids=frozenset(install_config.allowed_channel_ids or []),
         ack_text=base_config.ack_text,
+        progress_enabled=base_config.progress_enabled,
+        progress_interval_seconds=base_config.progress_interval_seconds,
+        progress_model_provider=base_config.progress_model_provider,
+        progress_model=base_config.progress_model,
+        progress_model_timeout_seconds=base_config.progress_model_timeout_seconds,
     )
     worker = SlackPoCWorker(worker_config, slack, factory)
     try:
@@ -836,6 +1025,11 @@ def load_config_from_env() -> SlackPoCConfig:
         channel_defaults=_channel_defaults_from_env(),
         allowed_channel_ids=frozenset(_csv_env("SLACK_ALLOWED_CHANNEL_IDS") or _csv_env("SLACK_TEST_CHANNEL_ID")),
         ack_text=os.getenv("SLACK_POC_ACK_TEXT") or "I'm on it and will post the answer back here soon.",
+        progress_enabled=_bool_env("SLACK_PROGRESS_ENABLED", True),
+        progress_interval_seconds=_float_env("SLACK_PROGRESS_INTERVAL_SECONDS", 15.0),
+        progress_model_provider=os.getenv("SLACK_PROGRESS_MODEL_PROVIDER") or "anthropic",
+        progress_model=os.getenv("SLACK_PROGRESS_MODEL") or None,
+        progress_model_timeout_seconds=_float_env("SLACK_PROGRESS_MODEL_TIMEOUT_SECONDS", 8.0),
     )
 
 
@@ -854,6 +1048,11 @@ def load_http_config_from_env() -> SlackPoCConfig:
         channel_defaults=_channel_defaults_from_env(),
         allowed_channel_ids=frozenset(_csv_env("SLACK_ALLOWED_CHANNEL_IDS") or _csv_env("SLACK_TEST_CHANNEL_ID")),
         ack_text=os.getenv("SLACK_POC_ACK_TEXT") or "I'm on it and will post the answer back here soon.",
+        progress_enabled=_bool_env("SLACK_PROGRESS_ENABLED", True),
+        progress_interval_seconds=_float_env("SLACK_PROGRESS_INTERVAL_SECONDS", 15.0),
+        progress_model_provider=os.getenv("SLACK_PROGRESS_MODEL_PROVIDER") or "anthropic",
+        progress_model=os.getenv("SLACK_PROGRESS_MODEL") or None,
+        progress_model_timeout_seconds=_float_env("SLACK_PROGRESS_MODEL_TIMEOUT_SECONDS", 8.0),
     )
 
 
@@ -887,6 +1086,23 @@ def _required_env(name: str) -> str:
 
 def _csv_env(name: str) -> list[str]:
     return [part.strip() for part in (os.getenv(name) or "").split(",") if part.strip()]
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a number") from exc
 
 
 def _channel_defaults_from_env() -> dict[str, SlackAnalysisDefaults]:

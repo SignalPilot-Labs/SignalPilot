@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -15,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from gateway.db.models import SlackInstallation, SlackInstallationConfig
 from gateway.slack_poc import worker as worker_module
+from gateway.slack_poc.progress import COMPLETING_PROGRESS_TEXT, INITIAL_PROGRESS_TEXT
 from gateway.slack_poc.worker import (
     SlackApiClient,
     SlackPoCConfig,
@@ -127,6 +129,57 @@ async def test_slack_read_methods_use_form_encoded_payloads() -> None:
         await slack.aclose()
 
 
+@pytest.mark.asyncio
+async def test_slack_update_message_uses_chat_update() -> None:
+    calls: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if request.url.path.endswith("/chat.update"):
+            body = json.loads(request.content.decode("utf-8"))
+            assert body["channel"] == "C1"
+            assert body["ts"] == "2.0"
+            assert body["text"] == "Querying database..."
+            assert body["mrkdwn"] is True
+            return httpx.Response(200, json={"ok": True})
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    slack = SlackApiClient("xoxb-test", "xapp-test", http_client=client)
+    try:
+        await slack.update_message(channel="C1", ts="2.0", text="Querying database...")
+    finally:
+        await slack.aclose()
+
+    assert [call.url.path for call in calls] == ["/api/chat.update"]
+
+
+@pytest.mark.asyncio
+async def test_slack_reactions_use_reactions_api_and_ignore_duplicate_remove_absence() -> None:
+    calls: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        body = json.loads(request.content.decode("utf-8"))
+        if request.url.path.endswith("/reactions.add"):
+            assert body == {"channel": "C1", "timestamp": "1.0", "name": "eyes"}
+            return httpx.Response(200, json={"ok": False, "error": "already_reacted"})
+        if request.url.path.endswith("/reactions.remove"):
+            assert body == {"channel": "C1", "timestamp": "1.0", "name": "eyes"}
+            return httpx.Response(200, json={"ok": False, "error": "no_reaction"})
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    slack = SlackApiClient("xoxb-test", "xapp-test", http_client=client)
+    try:
+        await slack.add_reaction(channel="C1", timestamp="1.0", name="eyes")
+        await slack.remove_reaction(channel="C1", timestamp="1.0", name="eyes")
+    finally:
+        await slack.aclose()
+
+    assert [call.url.path for call in calls] == ["/api/reactions.add", "/api/reactions.remove"]
+
+
 def test_cloud_mode_does_not_apply_local_notebook_direct_url(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
     monkeypatch.delenv("SP_NOTEBOOK_DIRECT_URL", raising=False)
@@ -167,6 +220,8 @@ async def test_worker_uses_notion_installation_user_when_user_id_unset(monkeypat
 @pytest.mark.asyncio
 async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[str] = []
+    progress_seen = asyncio.Event()
+    slack_events: list[tuple[str, str]] = []
 
     class SessionContext:
         async def __aenter__(self):
@@ -227,6 +282,7 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
     async def poll_analysis(*args, **kwargs):
         events.append("poll")
         assert events.index("db_exit") < events.index("start")
+        await asyncio.wait_for(progress_seen.wait(), timeout=1)
         return {"status": "Done", "notionComment": "Done", "confidenceScore": 1.0}
 
     monkeypatch.setattr(worker_module.notebook_analysis, "resolve_analysis_route_for_defaults", resolve_route)
@@ -240,6 +296,21 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
 
     slack = AsyncMock(spec=SlackApiClient)
     slack.thread_messages.return_value = []
+    slack.add_reaction.return_value = None
+    slack.remove_reaction.return_value = None
+
+    async def post_message(**kwargs):
+        text = kwargs["text"]
+        slack_events.append(("post", text))
+        if text == INITIAL_PROGRESS_TEXT:
+            return "progress-ts"
+        return f"ts-{len(slack_events)}"
+
+    async def update_message(**kwargs):
+        slack_events.append(("update", kwargs["text"]))
+
+    slack.post_message.side_effect = post_message
+    slack.update_message.side_effect = update_message
     worker = SlackPoCWorker(
         SlackPoCConfig(
             bot_token="xoxb-test",
@@ -258,6 +329,18 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
         return {"requestId": "req-1", "trailUrl": "https://app.test/notebook/session-1"}
 
     monkeypatch.setattr(worker, "_start_analysis", start_analysis)
+
+    async def run_progress_reporter(*, stop_event, thread_id, source_prompt, channel_id, message_ts, user_id):
+        assert thread_id == "session-slack-req-1"
+        assert source_prompt == "analyze revenue"
+        assert channel_id == "C1"
+        assert message_ts == "progress-ts"
+        assert user_id == "user-1"
+        await slack.update_message(channel=channel_id, ts=message_ts, text="Querying database...")
+        progress_seen.set()
+        await stop_event.wait()
+
+    monkeypatch.setattr(worker, "_run_progress_reporter", run_progress_reporter)
 
     await worker._process_request(
         SlackRequest(
@@ -287,7 +370,15 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
         "update",
         "db_exit",
     ]
-    assert slack.post_message.await_count == 2
+    assert slack_events[0] == ("post", INITIAL_PROGRESS_TEXT)
+    assert ("update", "Querying database...") in slack_events[1:]
+    assert ("update", COMPLETING_PROGRESS_TEXT) in slack_events[1:]
+    assert slack_events[-1][0] == "update"
+    assert "*SignalPilot analysis complete*" in slack_events[-1][1]
+    assert slack.post_message.await_count == 1
+    slack.add_reaction.assert_any_await(channel="C1", timestamp="1.0", name="eyes")
+    slack.add_reaction.assert_any_await(channel="C1", timestamp="1.0", name="white_check_mark")
+    slack.remove_reaction.assert_any_await(channel="C1", timestamp="1.0", name="eyes")
 
 
 @pytest.mark.asyncio

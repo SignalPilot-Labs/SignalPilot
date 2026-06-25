@@ -691,6 +691,18 @@ async def _driving_table_gaps(connector, schema: _Schema, cap: int = 10) -> list
     parents = {t: next((c for c in cols if c.lower() == "id"), None) for t, cols in tables.items()}
     parents = {t: c for t, c in parents.items() if c}
     checked: set[tuple[str, str, str]] = set()
+
+    # Memoize distinct(table, col): a parent's id is otherwise recomputed once per
+    # child that references it (and each is a separate query on MPP engines like
+    # Snowflake). Same values, far fewer round trips.
+    _dcache: dict[tuple[str, str], int | None] = {}
+
+    async def _dist(tbl: str, col: str) -> int | None:
+        k = (tbl, col)
+        if k not in _dcache:
+            _dcache[k] = await _distinct(connector, schema, tbl, col)
+        return _dcache[k]
+
     for child, ccols in tables.items():
         for fk in [c for c in ccols if c.lower().endswith("_id") and c.lower() != "id"]:
             prefix = fk.lower().replace("_id", "")
@@ -700,8 +712,8 @@ async def _driving_table_gaps(connector, schema: _Schema, cap: int = 10) -> list
                 checked.add((parent, child, fk))
                 if prefix not in parent.lower():
                     continue  # plausibility filter (avoids N^2 work)
-                pd = await _distinct(connector, schema, parent, pid)
-                cd = await _distinct(connector, schema, child, fk)
+                pd = await _dist(parent, pid)
+                cd = await _dist(child, fk)
                 if pd is None or cd is None or pd <= cd:
                     continue
                 hints.append(f"  {parent}.{pid} ↔ {child}.{fk}: ~{pd - cd} of {pd} parent keys are not "

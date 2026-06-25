@@ -8,6 +8,10 @@ from gateway.api.schema.linking._data import _STRING_TYPES
 from gateway.connectors.pool_manager import pool_manager
 from gateway.connectors.schema_cache import schema_cache
 
+# Hold strong refs to in-flight proactive sample tasks so the event loop does not
+# garbage-collect them mid-run ("Task was destroyed but it is pending").
+_bg_sample_tasks: set = set()
+
 
 async def maybe_fetch_missing_samples(
     store: Any,
@@ -45,21 +49,51 @@ async def maybe_fetch_missing_samples(
         if sample_cols:
             missing_samples.append((key, t, sample_cols[:10]))
 
-    if missing_samples:
+    if not missing_samples:
+        return
+
+    # This fetch is PURELY PROACTIVE — it populates schema_cache so the NEXT
+    # schema_link call can inline samples. It does NOT affect the current
+    # response, so we must not block on it (sampling a view forces full
+    # execution and can take many seconds). Resolve the store-dependent values
+    # now (the session is alive here), then run the slow sampling as a
+    # fire-and-forget background task with a per-sample timeout.
+    import asyncio
+
+    try:
+        conn_str = await store.get_connection_string(name)
+    except Exception:
+        return
+    if not conn_str:
+        return
+    try:
+        extras = await store.get_credential_extras(name)
+    except Exception:
+        return
+
+    db_type = info.db_type
+    targets = missing_samples[:5]  # cap at 5 tables
+
+    async def _fetch_samples_bg() -> None:
         try:
-            conn_str = await store.get_connection_string(name)
-            if conn_str:
-                extras = await store.get_credential_extras(name)
-                async with pool_manager.connection(
-                    info.db_type, conn_str, credential_extras=extras, connection_name=name
-                ) as connector:
-                    for key, t, sample_cols in missing_samples[:5]:  # Cap at 5 tables
-                        table_name = f"{t.get('schema', '')}.{t['name']}" if t.get("schema") else t["name"]
-                        try:
-                            values = await connector.get_sample_values(table_name, sample_cols, limit=5)
-                            if values:
-                                schema_cache.put_sample_values(name, key, values)
-                        except Exception:
-                            pass
+            async with pool_manager.connection(
+                db_type, conn_str, credential_extras=extras, connection_name=name
+            ) as connector:
+                for key, t, sample_cols in targets:
+                    table_name = f"{t.get('schema', '')}.{t['name']}" if t.get("schema") else t["name"]
+                    try:
+                        values = await asyncio.wait_for(
+                            connector.get_sample_values(table_name, sample_cols, limit=5),
+                            timeout=2.0,  # skip tables (e.g. heavy views) too slow to sample
+                        )
+                        if values:
+                            schema_cache.put_sample_values(name, key, values)
+                    except Exception:
+                        pass  # best-effort per table
         except Exception:
-            pass  # Best-effort — don't fail the schema_link response
+            pass  # best-effort — never affects a response
+
+    # Schedule and return immediately; the task outlives this request on the loop.
+    task = asyncio.create_task(_fetch_samples_bg())
+    _bg_sample_tasks.add(task)
+    task.add_done_callback(_bg_sample_tasks.discard)

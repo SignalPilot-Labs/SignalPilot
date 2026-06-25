@@ -17,3 +17,5 @@ benchmark/fix_starting_dbs.*
 __pycache__
 *.pyc
 node_modules
+.next
+signalpilot/web/.next

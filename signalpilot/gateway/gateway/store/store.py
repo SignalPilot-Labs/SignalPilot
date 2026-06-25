@@ -20,6 +20,7 @@ import gateway.store.notion as notion_mod
 import gateway.store.paths as paths
 import gateway.store.projects as projects
 import gateway.store.settings as settings_mod
+import gateway.store.slack as slack_mod
 from gateway.byok import decrypt_envelope, encrypt_fields_envelope
 from gateway.db.models import (
     GatewayConnection,
@@ -782,6 +783,62 @@ class Store:
         """Disable a Notion OAuth installation for this org."""
         oid = self._require_org_id()
         return await notion_mod.disable_oauth_installation(
+            self.session,
+            org_id=oid,
+            installation_id=installation_id,
+        )
+
+    # ─── Slack Integrations ─────────────────────────────────────────────
+
+    async def create_slack_oauth_state(self, redirect_after: str | None, ttl_seconds: int = 600) -> str:
+        """Create a short-lived Slack OAuth state value."""
+        oid = self._require_org_id()
+        return await slack_mod.create_oauth_state(
+            self.session,
+            org_id=oid,
+            user_id=self.user_id,
+            redirect_after=redirect_after,
+            ttl_seconds=ttl_seconds,
+        )
+
+    async def list_slack_oauth_installations(self) -> list[slack_mod.SlackOAuthInstallationInfo]:
+        """List Slack OAuth installations for this org."""
+        oid = self._require_org_id()
+        return await slack_mod.list_oauth_installations(self.session, org_id=oid)
+
+    async def get_slack_oauth_installation(
+        self, installation_id: str,
+    ) -> slack_mod.SlackOAuthInstallationInfo | None:
+        """Get a Slack OAuth installation for this org."""
+        oid = self._require_org_id()
+        return await slack_mod.get_oauth_installation(self.session, org_id=oid, installation_id=installation_id)
+
+    async def save_slack_oauth_installation_config(
+        self,
+        installation_id: str,
+        enabled: bool = True,
+        default_project_id: str | None = None,
+        default_branch: str = "main",
+        analysis_branch_mode: str = "per_request",
+        allowed_channel_ids: list[str] | None = None,
+    ) -> slack_mod.SlackOAuthInstallationInfo | None:
+        """Save setup defaults for a Slack OAuth installation."""
+        oid = self._require_org_id()
+        return await slack_mod.save_oauth_installation_config(
+            self.session,
+            org_id=oid,
+            installation_id=installation_id,
+            enabled=enabled,
+            default_project_id=default_project_id,
+            default_branch=default_branch,
+            analysis_branch_mode=analysis_branch_mode,
+            allowed_channel_ids=allowed_channel_ids,
+        )
+
+    async def disable_slack_oauth_installation(self, installation_id: str) -> bool:
+        """Disable a Slack OAuth installation for this org."""
+        oid = self._require_org_id()
+        return await slack_mod.disable_oauth_installation(
             self.session,
             org_id=oid,
             installation_id=installation_id,

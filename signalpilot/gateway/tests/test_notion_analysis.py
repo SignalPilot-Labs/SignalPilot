@@ -28,6 +28,52 @@ def _block_rich_text(block: dict) -> list[dict]:
 
 
 @pytest.mark.asyncio
+async def test_poll_analysis_uses_project_route_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict] = []
+    runtime = NotebookRuntime(
+        session_id="session-1",
+        internal_base_url="http://notebook.internal",
+        public_base_url="https://app.test/notebook/session-1",
+    )
+    route = notion_analysis.AnalysisRoute(
+        source="slack",
+        request_id="slack-req-1",
+        project_id="project-1",
+        branch="analysis/slack/slack-req-1-hi",
+        default_branch="main",
+        analysis_user_id="analysis:slack:slack-req-1",
+    )
+
+    async def call_notebook(*args, **kwargs):
+        calls.append({"args": args, "kwargs": kwargs})
+        return {"status": "Done"}
+
+    monkeypatch.setattr(notion_analysis, "_call_notebook", call_notebook)
+
+    result = await notion_analysis._poll_analysis(
+        "slack-req-1",
+        runtime,
+        "org-1",
+        "user-1",
+        route,
+    )
+
+    assert result == {"status": "Done"}
+    assert calls[0]["args"][:4] == (
+        runtime,
+        "/api/notion-analysis/status/slack-req-1",
+        "org-1",
+        "user-1",
+    )
+    assert calls[0]["args"][4] == {
+        "headers": {
+            "X-Gateway-Project-Id": "project-1",
+            "X-Gateway-Branch-Id": "analysis/slack/slack-req-1-hi",
+        }
+    }
+
+
+@pytest.mark.asyncio
 async def test_start_comment_is_posted_before_notebook_call_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 

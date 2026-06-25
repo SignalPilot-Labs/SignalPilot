@@ -21,6 +21,7 @@ PUBLIC_PATHS = frozenset(
         "/docs",
         "/openapi.json",
         "/api/integrations/notion/oauth/callback",
+        "/api/integrations/slack/oauth/callback",
         "/api/notion/webhooks/events",
         "/slack/events",
     }

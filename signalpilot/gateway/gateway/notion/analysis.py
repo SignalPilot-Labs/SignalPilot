@@ -24,8 +24,7 @@ from gateway.notebooks.session_service import NotebookRuntime, ensure_analysis_n
 from gateway.notion import client as notion_client
 from gateway.notion import formatting as notion_formatting
 from gateway.notion.webhooks import RoutedNotionInstallation
-from gateway.store import analysis_trails
-from gateway.store import workspace_projects
+from gateway.store import analysis_trails, workspace_projects
 
 NOTION_RICH_TEXT_MAX_LENGTH = notion_formatting.NOTION_RICH_TEXT_MAX_LENGTH
 logger = logging.getLogger(__name__)
@@ -772,11 +771,31 @@ async def _call_notebook(
         return response.json()
 
 
-async def _poll_analysis(request_id: str, runtime: NotebookRuntime, org_id: str, user_id: str | None) -> dict:
+async def _poll_analysis(
+    request_id: str,
+    runtime: NotebookRuntime,
+    org_id: str,
+    user_id: str | None,
+    route: AnalysisRoute | None = None,
+) -> dict:
     max_polls = int(os.getenv("SIGNALPILOT_MAX_POLLS", "300"))
     interval_ms = int(os.getenv("SIGNALPILOT_POLL_INTERVAL_MS", "5000"))
+    headers = (
+        {
+            "X-Gateway-Project-Id": route.project_id,
+            "X-Gateway-Branch-Id": route.branch,
+        }
+        if route is not None
+        else None
+    )
     for _ in range(max_polls):
-        status = await _call_notebook(runtime, f"/api/notion-analysis/status/{request_id}", org_id, user_id)
+        status = await _call_notebook(
+            runtime,
+            f"/api/notion-analysis/status/{request_id}",
+            org_id,
+            user_id,
+            {"headers": headers} if headers else None,
+        )
         if status.get("status") in ("Done", "Failed"):
             return status
         await asyncio.sleep(interval_ms / 1000)
@@ -981,6 +1000,7 @@ async def process_routed_comment_event(
             runtime,
             routed.installation.org_id,
             routed.installation.user_id,
+            route,
         )
         await update_analysis_trail_from_status(
             db,

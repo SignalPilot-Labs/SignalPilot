@@ -5,6 +5,7 @@ import hmac
 import json
 import os
 import time
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs
 
@@ -12,6 +13,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from gateway.db.models import SlackInstallation, SlackInstallationConfig
 from gateway.slack_poc import worker as worker_module
 from gateway.slack_poc.worker import (
     SlackApiClient,
@@ -392,6 +394,160 @@ def test_http_events_rejects_invalid_signature() -> None:
         )
 
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_self_serve_dispatch_uses_stored_installation(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime.now(UTC)
+    install = SlackInstallation(
+        id="slack-install-1",
+        org_id="org-1",
+        user_id="user-1",
+        team_id="T1",
+        team_name="Demo",
+        app_id="A1",
+        bot_user_id="UBOT",
+        bot_access_token_enc=b"encrypted",
+        scopes=["app_mentions:read", "chat:write"],
+        status="active",
+        created_at=now,
+        updated_at=now,
+    )
+    config = SlackInstallationConfig(
+        installation_id="slack-install-1",
+        enabled=True,
+        default_project_id="project-1",
+        default_branch="main",
+        analysis_branch_mode="per_request",
+        allowed_channel_ids=["C1"],
+    )
+    captured: list[SlackPoCConfig] = []
+
+    class Factory:
+        def __call__(self):
+            return self
+
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    async def records(_db, team_id: str):
+        assert team_id == "T1"
+        return [(install, config, "installed-bot-token")]
+
+    async def handle(self, payload):
+        captured.append(self.config)
+        assert payload["event"]["text"] == "<@UBOT> analyze revenue"
+
+    async def drain(self):
+        return None
+
+    monkeypatch.setattr(worker_module, "get_session_factory", lambda: Factory())
+    monkeypatch.setattr(worker_module.slack_store, "list_active_installation_records_for_team", records)
+    monkeypatch.setattr(SlackPoCWorker, "handle_events_api_payload", handle)
+    monkeypatch.setattr(SlackPoCWorker, "drain", drain)
+
+    await worker_module._dispatch_self_serve_payload(
+        {
+            "event_id": "Ev1",
+            "team_id": "T1",
+            "event": {
+                "type": "app_mention",
+                "team": "T1",
+                "channel": "C1",
+                "user": "U1",
+                "text": "<@UBOT> analyze revenue",
+                "ts": "1.0",
+            },
+        },
+        SlackPoCConfig(signing_secret="secret", ack_text="I'm on it."),
+    )
+
+    assert len(captured) == 1
+    assert captured[0].bot_token == "installed-bot-token"
+    assert captured[0].org_id == "org-1"
+    assert captured[0].user_id == "user-1"
+    assert captured[0].bot_user_id == "UBOT"
+    assert captured[0].default_project_id == "project-1"
+    assert captured[0].allowed_channel_ids == frozenset({"C1"})
+
+
+@pytest.mark.asyncio
+async def test_self_serve_dispatch_rejects_ambiguous_installations(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime.now(UTC)
+    install_1 = SlackInstallation(
+        id="slack-install-1",
+        org_id="org-1",
+        user_id="user-1",
+        team_id="T1",
+        app_id="A1",
+        bot_user_id="UBOT1",
+        bot_access_token_enc=b"encrypted",
+        scopes=[],
+        status="active",
+        created_at=now,
+        updated_at=now,
+    )
+    install_2 = SlackInstallation(
+        id="slack-install-2",
+        org_id="org-2",
+        user_id="user-2",
+        team_id="T1",
+        app_id="A1",
+        bot_user_id="UBOT2",
+        bot_access_token_enc=b"encrypted",
+        scopes=[],
+        status="active",
+        created_at=now,
+        updated_at=now,
+    )
+    config = SlackInstallationConfig(
+        installation_id="slack-install-1",
+        enabled=True,
+        default_project_id="project-1",
+        default_branch="main",
+        analysis_branch_mode="per_request",
+        allowed_channel_ids=[],
+    )
+
+    class Factory:
+        def __call__(self):
+            return self
+
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    async def records(_db, team_id: str):
+        assert team_id == "T1"
+        return [(install_1, config, "bot-token-1"), (install_2, config, "bot-token-2")]
+
+    async def fail_handle(self, payload):
+        raise AssertionError("ambiguous install should not dispatch")
+
+    monkeypatch.setattr(worker_module, "get_session_factory", lambda: Factory())
+    monkeypatch.setattr(worker_module.slack_store, "list_active_installation_records_for_team", records)
+    monkeypatch.setattr(SlackPoCWorker, "handle_events_api_payload", fail_handle)
+
+    await worker_module._dispatch_self_serve_payload(
+        {
+            "event_id": "Ev1",
+            "team_id": "T1",
+            "event": {
+                "type": "app_mention",
+                "team": "T1",
+                "channel": "C1",
+                "user": "U1",
+                "text": "<@UBOT> analyze revenue",
+                "ts": "1.0",
+            },
+        },
+        SlackPoCConfig(signing_secret="secret"),
+    )
 
 
 @pytest.mark.asyncio

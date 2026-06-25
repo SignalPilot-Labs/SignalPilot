@@ -827,6 +827,50 @@ export const provisionNotionOAuthInstallation = (installationId: string, payload
 export const deleteNotionOAuthInstallation = (installationId: string) =>
   request<void>(`/api/integrations/notion/oauth/${installationId}`, { method: "DELETE" });
 
+// Slack Integrations
+export type SlackOAuthInstallationConfig = {
+  enabled: boolean;
+  default_project_id: string | null;
+  default_branch: string;
+  analysis_branch_mode: "per_request" | "default_branch";
+  allowed_channel_ids: string[];
+};
+export type SlackOAuthInstallation = {
+  id: string;
+  team_id: string;
+  team_name: string | null;
+  enterprise_id: string | null;
+  enterprise_name: string | null;
+  app_id: string | null;
+  bot_user_id: string;
+  authed_user_id: string | null;
+  scopes: string[];
+  status: string;
+  created_at: string | null;
+  updated_at: string | null;
+  org_id: string | null;
+  config: SlackOAuthInstallationConfig | null;
+};
+export const startSlackOAuth = (redirectAfter?: string) => {
+  const qs = redirectAfter ? `?redirect_after=${encodeURIComponent(redirectAfter)}` : "";
+  return request<{ authorize_url: string; state: string }>(`/api/integrations/slack/oauth/start${qs}`);
+};
+export const getSlackOAuthInstallations = () =>
+  request<SlackOAuthInstallation[]>("/api/integrations/slack/oauth/installations");
+export type SlackProvisionPayload = {
+  default_project_id: string;
+  default_branch?: string;
+  analysis_branch_mode?: "per_request" | "default_branch";
+  allowed_channel_ids?: string[];
+};
+export const provisionSlackOAuthInstallation = (installationId: string, payload: SlackProvisionPayload) =>
+  request<{ installation: SlackOAuthInstallation }>(`/api/integrations/slack/oauth/${installationId}/provision`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+export const deleteSlackOAuthInstallation = (installationId: string) =>
+  request<void>(`/api/integrations/slack/oauth/${installationId}`, { method: "DELETE" });
+
 // Metrics SSE (uses fetch instead of EventSource so we can send auth headers)
 export function subscribeMetrics(cb: (data: import("./types").MetricsSnapshot) => void): () => void {
   let aborted = false;

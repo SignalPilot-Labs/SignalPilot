@@ -7,7 +7,7 @@ import os
 
 from gateway.errors.mcp import sanitize_mcp_error
 from gateway.mcp.audit import audited_tool
-from gateway.mcp.context import _store_session
+from gateway.mcp.context import _require_mcp_admin_scope, _store_session
 from gateway.mcp.server import mcp
 from gateway.models.reports import ReportCreate
 
@@ -37,6 +37,11 @@ async def manage_report(
     """
     try:
         act = (action or "").strip().lower()
+
+        if act in ("create", "delete"):
+            err = _require_mcp_admin_scope()
+            if err:
+                return err
 
         if act == "create":
             if not title or not html:

@@ -538,11 +538,45 @@ async def get_xata_dbt_profile(
                 f"non-protected (agent-created) branches. Fork a new branch first."
             ),
         )
+    # Defense-in-depth: refuse issuance when the resolved branch was forked from a
+    # protected branch (e.g. an agent fork of `main`). Best-effort — if the control
+    # plane is not configured for this connection, the direct branch-name denylist
+    # above is the only gate.
+    parent: str | None = None
+    try:
+        project = extras.get("xata_project")
+        if project and (extras.get("xata_api_key") or extras.get("xata_token_url")):
+            conn_str_for_parent = await store.get_connection_string(name)
+            async with _xata_control_from_extras(conn_str_for_parent, extras) as client:
+                branches = await client.list_branches(project)
+                match = next((b for b in branches if b.get("name") == branch), None)
+                parent_id = (match or {}).get("parentID")
+                if parent_id:
+                    parent_branch_record = next((b for b in branches if b.get("id") == parent_id), None)
+                    parent = (parent_branch_record or {}).get("name")
+                if parent and parent.lower() in _resolve_protected(extras):
+                    raise HTTPException(
+                        status_code=403,
+                        detail=(
+                            f"Branch '{branch}' was forked from protected branch '{parent}' — "
+                            f"dbt write credentials are only issued for forks of non-protected branches."
+                        ),
+                    )
+    except HTTPException:
+        raise
+    except Exception:
+        # Best-effort: do not block issuance on a control-plane hiccup; the direct
+        # denylist above still applies.
+        parent = None
     try:
         cs = await XataConnector._resolve_endpoint({**extras, "branch": branch})
     except Exception as e:
         raise HTTPException(status_code=502, detail=sanitize_db_error(str(e), info.db_type))
 
+    logger.info(
+        "xata.dbt_profile.issued connection=%s branch=%s parent_branch=%s org=%s",
+        name, branch, parent or "?", getattr(store, "org_id", "?"),
+    )
     u = urlparse(cs)
     tgt = target or branch
     params = {
@@ -559,7 +593,7 @@ async def get_xata_dbt_profile(
         f"        host: {params['host']}\n"
         f"        port: {params['port']}\n"
         f"        user: {params['user']}\n"
-        f"        password: {password}\n"
+        f"        password: <fetched-server-side; see 'output' field>\n"
         f"        dbname: {params['dbname']}\n"
         f"        schema: {params['schema']}\n"
         f"        threads: 4\n"
@@ -583,7 +617,7 @@ async def get_xata_dbt_profile(
         "target": tgt,
         "params": params,  # non-secret connection params (no password)
         "output": output,  # full dbt target incl. password — for direct fetch-to-file
-        "profiles_target_block": block,  # ready-to-paste under <profile>.outputs
+        "profiles_target_block": block,  # template only — password is redacted; fetch via 'output' field for automation
     }
 
 
@@ -600,7 +634,12 @@ def _xata_control_from_extras(conn_str: str | None, extras: dict) -> Any:
     from gateway.connectors.xata_control import XataControlClient, XataControlConfig
 
     api_url = extras.get("xata_api_url") or "https://api.xata.tech"
-    org = extras.get("xata_organization") or extras.get("xata_org") or "default-org"
+    org = extras.get("xata_organization") or extras.get("xata_org")
+    if not org:
+        raise HTTPException(
+            status_code=400,
+            detail="xata_organization not configured for this connection",
+        )
 
     # New Xata: control-plane API key (preferred).
     api_key = extras.get("xata_api_key")
@@ -688,6 +727,13 @@ async def delete_xata_branch(
     info = await require_connection(store, name)
     conn_str = await store.get_connection_string(name)
     extras = await store.get_credential_extras(name)
+    if branch.lower() in _resolve_protected(extras):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Branch '{branch}' is protected — refuse to delete via the agent path."
+            ),
+        )
     try:
         async with _xata_control_from_extras(conn_str, extras) as client:
             b = next((x for x in await client.list_branches(project) if x.get("name") == branch), None)

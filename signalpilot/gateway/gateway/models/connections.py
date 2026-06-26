@@ -153,10 +153,10 @@ class ConnectionCreate(BaseModel):
     # ─── New Xata platform (xata.tech): org/project/branch + control-plane API key ──
     # Preferred model. The gateway resolves each branch's Postgres endpoint
     # (<branchID>.<region>.xata.tech) server-side from the API key — no raw URL.
-    xata_api_key: str | None = Field(default=None, max_length=512)     # control-plane key (xau_...)
-    xata_organization: str | None = Field(default=None, max_length=64)  # org id, e.g. 0psl2d
-    xata_project: str | None = Field(default=None, max_length=128)      # project id, e.g. prj_...
-    xata_database: str | None = Field(default=None, max_length=128)     # database name (default: xata)
+    xata_api_key: str | None = Field(default=None, max_length=512, pattern=r"^[A-Za-z0-9_\-.]+$")  # control-plane key (xau_...)
+    xata_organization: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_-]{1,64}$")  # org id, e.g. 0psl2d
+    xata_project: str | None = Field(default=None, max_length=128, pattern=r"^[A-Za-z0-9_-]{1,128}$")      # project id, e.g. prj_...
+    xata_database: str | None = Field(default=None, max_length=128, pattern=r"^[A-Za-z0-9_-]{1,128}$")     # database name (default: xata)
     # ─── Snowflake key-pair auth ───────────────────────────────────
     private_key: str | None = Field(default=None, max_length=16384)  # PEM-encoded private key
     private_key_passphrase: str | None = Field(default=None, max_length=1024)
@@ -344,6 +344,10 @@ class ConnectionUpdate(BaseModel):
     xata_client_secret: str | None = Field(default=None, max_length=1024)
     xata_username: str | None = Field(default=None, max_length=128)
     xata_password: str | None = Field(default=None, max_length=1024)
+    xata_api_key: str | None = Field(default=None, max_length=512, pattern=r"^[A-Za-z0-9_\-.]+$")
+    xata_organization: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    xata_project: str | None = Field(default=None, max_length=128, pattern=r"^[A-Za-z0-9_-]{1,128}$")
+    xata_database: str | None = Field(default=None, max_length=128, pattern=r"^[A-Za-z0-9_-]{1,128}$")
 
     @field_validator("tags")
     @classmethod

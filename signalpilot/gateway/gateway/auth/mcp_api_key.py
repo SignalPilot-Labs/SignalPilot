@@ -237,7 +237,16 @@ class MCPAuthMiddleware:
                     mcp_user_agent_var.set(_extract_user_agent(scope))
                     if "state" not in scope:
                         scope["state"] = {}
-                    scope["state"]["auth"] = {"user_id": "local", "org_id": "local"}
+                    from ..models import VALID_API_KEY_SCOPES
+
+                    scope["state"]["auth"] = {
+                        "user_id": "local",
+                        "org_id": "local",
+                        "scopes": list(VALID_API_KEY_SCOPES),
+                    }
+                    from ..mcp import mcp_scopes_var
+
+                    mcp_scopes_var.set(list(VALID_API_KEY_SCOPES))
                     await self._app(scope, receive, send)
                     return
 
@@ -277,11 +286,14 @@ class MCPAuthMiddleware:
                     "key_name": matched.name,
                     "user_id": key_user_id,
                     "org_id": key_org_id,
+                    "scopes": list(matched.scopes or []),
                 }
                 # Set user_id and org_id context vars for MCP store access
                 mcp_user_id_var.set(key_user_id)
                 mcp_org_id_var.set(key_org_id)
-                from ..mcp import mcp_client_ip_var, mcp_raw_key_var, mcp_user_agent_var
+                from ..mcp import mcp_client_ip_var, mcp_raw_key_var, mcp_scopes_var, mcp_user_agent_var
+
+                mcp_scopes_var.set(list(matched.scopes or []))
 
                 mcp_raw_key_var.set(raw_key)
                 mcp_client_ip_var.set(_extract_client_ip(scope))

@@ -167,11 +167,11 @@ export function ReportViewer({
         </div>
       </div>
 
-      {/* Sandboxed render — opaque origin (no allow-same-origin) isolates report scripts. */}
+      {/* Sandboxed render — opaque origin + no popups/forms blocks phishing & exfil; scripts run in isolated iframe context only. */}
       <iframe
         title={report.title}
         srcDoc={report.html}
-        sandbox="allow-scripts allow-popups allow-forms"
+        sandbox="allow-scripts"
         className="flex-1 w-full border-0 bg-white"
       />
 

@@ -24,6 +24,7 @@ services:
       SP_GATEWAY_INTERNAL_URL: http://gateway:3300
       SP_WEB_URL: ${SP_WEB_URL:-http://localhost:3200}
       CLAUDE_CONFIG_DIR: ${CLAUDE_CONFIG_DIR:-/home/notebook/.claude}
+      SIGNALPILOT_ANALYSIS_AGENT_MODEL: ${SIGNALPILOT_ANALYSIS_AGENT_MODEL:-claude-sonnet-4-5-20250929}
     volumes:
       - signalpilot-workspace:/workspace
       - signalpilot-shared:/shared:ro
@@ -46,6 +47,7 @@ services:
       SP_NOTEBOOK_DIRECT_URL: http://notebook:2718
       SP_K8S_HOST: ""
       KUBECONFIG: ""
+      SIGNALPILOT_DELIVERY_MODEL: ${SIGNALPILOT_DELIVERY_MODEL:-claude-sonnet-4-5-20250929}
     depends_on:
       db:
         condition: service_healthy

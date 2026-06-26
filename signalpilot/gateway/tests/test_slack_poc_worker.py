@@ -369,16 +369,60 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
         "db_enter",
         "update",
         "db_exit",
+        "db_enter",
+        "db_exit",
     ]
     assert slack_events[0] == ("post", INITIAL_PROGRESS_TEXT)
     assert ("update", "Querying database...") in slack_events[1:]
     assert ("update", COMPLETING_PROGRESS_TEXT) in slack_events[1:]
     assert slack_events[-1][0] == "update"
-    assert "*SignalPilot analysis complete*" in slack_events[-1][1]
+    assert "*Analysis complete*" in slack_events[-1][1]
     assert slack.post_message.await_count == 1
     slack.add_reaction.assert_any_await(channel="C1", timestamp="1.0", name="eyes")
     slack.add_reaction.assert_any_await(channel="C1", timestamp="1.0", name="white_check_mark")
     slack.remove_reaction.assert_any_await(channel="C1", timestamp="1.0", name="eyes")
+    slack.remove_reaction.assert_any_await(channel="C1", timestamp="1.0", name="x")
+
+
+@pytest.mark.asyncio
+async def test_worker_adds_error_reaction_when_analysis_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    slack.post_message.return_value = "progress-ts"
+    slack.add_reaction.return_value = None
+    slack.remove_reaction.return_value = None
+
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", org_id="org-1", user_id="user-1"),
+        slack,
+        AsyncMock(),
+    )
+
+    async def fail_previous_messages(_request):
+        raise RuntimeError("notebook auth missing")
+
+    monkeypatch.setattr(worker, "_previous_thread_messages", fail_previous_messages)
+
+    await worker._process_request(
+        SlackRequest(
+            event_id="Ev1",
+            team_id="T1",
+            channel_id="C1",
+            user_id="U1",
+            text="analyze revenue",
+            event_ts="1.0",
+            thread_ts="1.0",
+            source_url="https://slack.test/archives/C1/p10",
+        )
+    )
+
+    slack.add_reaction.assert_any_await(channel="C1", timestamp="1.0", name="eyes")
+    slack.add_reaction.assert_any_await(channel="C1", timestamp="1.0", name="x")
+    added_reactions = [call.kwargs["name"] for call in slack.add_reaction.await_args_list]
+    assert "white_check_mark" not in added_reactions
+    slack.remove_reaction.assert_any_await(channel="C1", timestamp="1.0", name="eyes")
+    slack.remove_reaction.assert_any_await(channel="C1", timestamp="1.0", name="white_check_mark")
+    slack.update_message.assert_awaited_once()
+    assert "could not complete the analysis" in slack.update_message.call_args.kwargs["text"]
 
 
 @pytest.mark.asyncio
@@ -693,6 +737,74 @@ async def test_worker_posts_empty_prompt_guidance_for_bare_mention() -> None:
 
     slack.post_message.assert_called_once()
     assert "Ask me a data question" in slack.post_message.call_args.kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_worker_preflight_direct_greeting_does_not_spawn_analysis(monkeypatch: pytest.MonkeyPatch) -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    slack.permalink.return_value = "https://slack.test/archives/C1/p1000"
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT"),
+        slack,
+        AsyncMock(),
+    )
+
+    async def fail_process_request(_request):
+        raise AssertionError("greeting should not spawn analysis")
+
+    monkeypatch.setattr(worker, "_process_request", fail_process_request)
+
+    await worker.handle_events_api_payload(
+        {
+            "event_id": "Ev1",
+            "team_id": "T1",
+            "event": {
+                "type": "app_mention",
+                "channel": "C1",
+                "user": "U1",
+                "text": "<@UBOT> hi",
+                "ts": "1.0",
+            },
+        }
+    )
+    await worker.drain()
+
+    slack.post_message.assert_awaited_once()
+    assert "specific data question" in slack.post_message.call_args.kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_worker_preflight_ambiguous_data_prompt_does_not_spawn_analysis(monkeypatch: pytest.MonkeyPatch) -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    slack.permalink.return_value = "https://slack.test/archives/C1/p1000"
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT"),
+        slack,
+        AsyncMock(),
+    )
+
+    async def fail_process_request(_request):
+        raise AssertionError("ambiguous prompt should not spawn analysis")
+
+    monkeypatch.setattr(worker, "_process_request", fail_process_request)
+
+    await worker.handle_events_api_payload(
+        {
+            "event_id": "Ev1",
+            "team_id": "T1",
+            "event": {
+                "type": "app_mention",
+                "channel": "C1",
+                "user": "U1",
+                "text": "<@UBOT> revenue",
+                "ts": "1.0",
+            },
+        }
+    )
+    await worker.drain()
+
+    slack.post_message.assert_awaited_once()
+    assert "fresh, specific analysis request" in slack.post_message.call_args.kwargs["text"]
 
 
 @pytest.mark.asyncio

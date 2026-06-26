@@ -18,7 +18,7 @@ from gateway.store import chat_traces
 
 LOGGER = logging.getLogger(__name__)
 
-INITIAL_PROGRESS_TEXT = "Planning the analysis..."
+INITIAL_PROGRESS_TEXT = "Analyzing your request..."
 COMPLETING_PROGRESS_TEXT = "Generating the final answer..."
 FALLBACK_PROGRESS_TEXT = "Working through the analysis..."
 

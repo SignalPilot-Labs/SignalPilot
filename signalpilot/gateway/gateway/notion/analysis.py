@@ -16,6 +16,15 @@ import httpx
 import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gateway.analysis_delivery import (
+    ANALYSIS_INITIAL_PROGRESS_TEXT,
+    AnalysisPreflightKind,
+    classify_analysis_request,
+    delivery_result_to_status,
+    load_delivery_packet,
+    load_delivery_packet_from_events,
+    render_delivery,
+)
 from gateway.auth.jwt_secret import load_session_jwt_secret
 from gateway.db.models import NotionInstallationConfig
 from gateway.git.repos import ensure_branch_from
@@ -777,6 +786,7 @@ async def _poll_analysis(
     org_id: str,
     user_id: str | None,
     route: AnalysisRoute | None = None,
+    on_tick: Any | None = None,
 ) -> dict:
     max_polls = int(os.getenv("SIGNALPILOT_MAX_POLLS", "300"))
     interval_ms = int(os.getenv("SIGNALPILOT_POLL_INTERVAL_MS", "5000"))
@@ -798,8 +808,77 @@ async def _poll_analysis(
         )
         if status.get("status") in ("Done", "Failed"):
             return status
+        if on_tick is not None:
+            await on_tick(status)
         await asyncio.sleep(interval_ms / 1000)
     raise TimeoutError(f"SignalPilot analysis timed out: {request_id}")
+
+
+class _NotionTraceProgressReporter:
+    def __init__(
+        self,
+        *,
+        token: str,
+        request_page_id: str,
+        db: AsyncSession,
+        org_id: str,
+        user_id: str,
+        thread_id: str,
+        user_request: str,
+    ) -> None:
+        self.token = token
+        self.request_page_id = request_page_id
+        self.db = db
+        self.org_id = org_id
+        self.user_id = user_id
+        self.thread_id = thread_id
+        self.user_request = user_request
+        self._previous_summary = ""
+
+    async def tick(self, _status: dict[str, Any]) -> None:
+        try:
+            packet = await load_delivery_packet(
+                self.db,
+                org_id=self.org_id,
+                user_id=self.user_id,
+                thread_id=self.thread_id,
+                user_request=self.user_request,
+            )
+        except Exception as exc:
+            logger.info("Could not load Notion trace progress: %s", exc, exc_info=True)
+            return
+        summary = _notion_progress_summary(packet)
+        if summary == self._previous_summary:
+            return
+        self._previous_summary = summary
+        properties: dict[str, Any] = {
+            "Status": {"rich_text": _rich_text(_notion_progress_status(packet))},
+            "Summary": {"rich_text": _rich_text(summary)},
+        }
+        try:
+            await notion_client.update_page_properties(self.token, self.request_page_id, properties)
+        except Exception as exc:
+            logger.info("Could not update Notion progress: %s", exc, exc_info=True)
+
+
+def _notion_progress_status(packet: Any) -> str:
+    current = packet.latest_progress.current_step if packet.latest_progress else ""
+    return f"Analyzing: {current}"[:200] if current else "Analyzing"
+
+
+def _notion_progress_summary(packet: Any) -> str:
+    if packet.plan is None:
+        return ANALYSIS_INITIAL_PROGRESS_TEXT
+    completed = set(packet.latest_progress.completed_steps if packet.latest_progress else [])
+    current = packet.latest_progress.current_step if packet.latest_progress else ""
+    lines = []
+    for step in packet.plan.steps:
+        marker = "x" if step in completed else " "
+        suffix = " (current)" if current and step == current and step not in completed else ""
+        lines.append(f"- [{marker}] {step}{suffix}")
+    if packet.latest_progress and packet.latest_progress.status:
+        lines.append(packet.latest_progress.status)
+    return "\n".join(lines)[:1500] or ANALYSIS_INITIAL_PROGRESS_TEXT
 
 
 def _require_config(config: NotionInstallationConfig) -> tuple[str, str]:
@@ -854,6 +933,15 @@ async def process_routed_comment_event(
             comment_id=comment_id,
             discussion_id=discussion_id,
         )
+
+    preflight = classify_analysis_request(prompt)
+    if preflight.kind != AnalysisPreflightKind.ANALYZE:
+        await notion_client.create_comment(
+            token,
+            discussion_id=discussion_id,
+            rich_text=_rich_text(preflight.response or "Send a fresh, specific analysis request to start SignalPilot."),
+        )
+        return NotionCommentProcessResult(status="processed")
 
     previous_messages = [
         notion_client.extract_comment_text(comment)
@@ -995,12 +1083,22 @@ async def process_routed_comment_event(
     await notion_client.update_page_properties(token, request_page_id, {"Trail URL": {"url": start_trail_url or None}})
 
     try:
+        trace_thread_id = f"session-{route.request_id}"
         final_status = await _poll_analysis(
             str(start["requestId"]),
             runtime,
             routed.installation.org_id,
             routed.installation.user_id,
             route,
+            on_tick=_NotionTraceProgressReporter(
+                token=token,
+                request_page_id=request_page_id,
+                db=db,
+                org_id=routed.installation.org_id,
+                user_id=routed.installation.user_id or route.analysis_user_id,
+                thread_id=trace_thread_id,
+                user_request=prompt,
+            ).tick,
         )
         await update_analysis_trail_from_status(
             db,
@@ -1031,7 +1129,30 @@ async def process_routed_comment_event(
         raise
 
     if final_status.get("status") == "Done" and not final_status.get("error"):
-        uploaded_status = await _upload_chart_images_to_notion(token, final_status, runtime)
+        public_status = _with_public_chart_urls(final_status, runtime)
+        public_trail_url = _public_signalpilot_url(public_status.get("trailUrl") or start_trail_url, runtime)
+        try:
+            packet = await load_delivery_packet(
+                db,
+                org_id=routed.installation.org_id,
+                user_id=routed.installation.user_id or route.analysis_user_id,
+                thread_id=f"session-{route.request_id}",
+                user_request=prompt,
+                status_payload=public_status,
+                trail_url=public_trail_url,
+            )
+        except Exception as exc:
+            logger.info("Could not load Notion delivery trace; using status fallback: %s", exc, exc_info=True)
+            packet = load_delivery_packet_from_events(
+                [],
+                user_request=prompt,
+                status_payload=public_status,
+                trail_url=public_trail_url,
+                thread_status="done",
+            )
+        delivery = await render_delivery(packet)
+        rendered_status = delivery_result_to_status(delivery, packet, base_status=public_status)
+        uploaded_status = await _upload_chart_images_to_notion(token, rendered_status, runtime)
         final_status_for_notion = _with_public_chart_urls(uploaded_status, runtime)
         await notion_client.update_page_properties(
             token,

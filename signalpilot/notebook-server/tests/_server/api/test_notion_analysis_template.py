@@ -204,6 +204,9 @@ def test_analysis_agent_runs_from_project_root(tmp_path, monkeypatch) -> None:
     from signalpilot._server.ai.claude_agent import AgentEvent
     from signalpilot._types.ids import SessionId
 
+    monkeypatch.delenv("SIGNALPILOT_ANALYSIS_AGENT_MODEL", raising=False)
+    monkeypatch.delenv("SIGNALPILOT_WORKER_AGENT_MODEL", raising=False)
+
     class FakeStore:
         async def upsert_thread(self, thread) -> None:
             del thread
@@ -230,12 +233,9 @@ def test_analysis_agent_runs_from_project_root(tmp_path, monkeypatch) -> None:
         captured.update(kwargs)
         yield AgentEvent(
             type="text",
-            content=json.dumps(
-                {
-                    "summary": "Done",
-                    "confidenceScore": 0.9,
-                    "finalAnswer": "Done",
-                }
+            content=(
+                'FINAL_STATEMENT: {"statement":"Done","confidenceScore":0.9,'
+                '"caveats":[],"handoffNotes":["Notebook-executed SDK cells."]}'
             ),
         )
 
@@ -277,9 +277,24 @@ def test_analysis_agent_runs_from_project_root(tmp_path, monkeypatch) -> None:
     )
 
     assert captured["session_id"] == SessionId(record.session_id)
+    assert captured["model"] == notion_analysis.DEFAULT_ANALYSIS_AGENT_MODEL
     assert captured["cwd"] == str(project_root)
     assert captured["additional_disallowed_tools"] == ["Agent"]
     assert "Likely connection: `dev-db`" in str(captured["message"])
+
+
+def test_analysis_agent_model_prefers_env_override(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "SIGNALPILOT_ANALYSIS_AGENT_MODEL",
+        "claude-sonnet-analysis-test",
+    )
+    monkeypatch.setenv("SIGNALPILOT_WORKER_AGENT_MODEL", "claude-sonnet-worker-test")
+
+    assert notion_analysis._analysis_agent_model() == "claude-sonnet-analysis-test"
+
+    monkeypatch.delenv("SIGNALPILOT_ANALYSIS_AGENT_MODEL")
+
+    assert notion_analysis._analysis_agent_model() == "claude-sonnet-worker-test"
 
 
 def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
@@ -334,7 +349,7 @@ def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
     assert '"Evidence Trace"' not in prompt
     assert "Mermaid" not in prompt
     assert "top-line result" not in prompt
-    assert "Confidence methodology/rationale" in prompt
+    assert "confidence score/methodology rationale" in prompt
     assert "Queries must not be buried" in prompt
     assert "Previous discussion messages:" in prompt
     assert "Previous Notion discussion messages:" not in prompt
@@ -363,12 +378,16 @@ def test_analysis_prompt_injects_warm_context_without_changing_output_contract()
 
     assert "Likely connection: `dev-db`" in prompt
     assert "CREATE TABLE public.orders" in prompt
-    assert (
-        "When the analysis is complete, your final assistant message must be only valid"
-        in prompt
-    )
-    assert '"notionCharts": [' in prompt
-    assert "## Executive Summary and Explorations" in prompt
+    assert "user-friendly and audit-ready for the notebook chat thread" in prompt
+    assert "Start with a concise bullet-point answer" in prompt
+    assert "PLAN:" in prompt
+    assert "PROGRESS:" in prompt
+    assert "Never use raw machine" in prompt
+    assert 'status enums such as `"in_progress"`' in prompt
+    assert "FINAL_STATEMENT:" in prompt
+    assert "notionCharts" in prompt
+    assert "Do not include slackMessage, notionComment, finalAnswer, notionCharts" in prompt
+    assert '"Executive Summary and Explorations" cell' in prompt
 
 
 def test_warm_context_truncation_stays_under_cap() -> None:

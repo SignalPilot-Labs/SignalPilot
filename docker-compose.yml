@@ -42,6 +42,9 @@ services:
       dockerfile: ../../Dockerfile.gateway
     ports:
       - "3300:3300"
+    env_file:
+      - path: ./.slack.local.env
+        required: false
     environment:
       DATABASE_URL: postgresql+asyncpg://signalpilot:changeme_dev_only@db:5432/signalpilot
       SP_DATA_DIR: /data
@@ -59,6 +62,7 @@ services:
       SP_WEB_URL: http://localhost:3200
       SIGNALPILOT_NOTEBOOK_INTERNAL_URL: http://notebook:2718
       SIGNALPILOT_NOTEBOOK_PUBLIC_URL: http://localhost:3200/notebook
+      SIGNALPILOT_DELIVERY_MODEL: ${SIGNALPILOT_DELIVERY_MODEL:-claude-sonnet-4-5-20250929}
       # Sandbox
       SP_SANDBOX_MANAGER_URL: http://sandbox:8080
       SP_SANDBOX_ENABLED: "true"
@@ -92,6 +96,9 @@ services:
       dockerfile: Dockerfile
     ports:
       - "127.0.0.1:2718:2718"
+    env_file:
+      - path: ./.slack.local.env
+        required: false
     entrypoint:
       - sh
       - -c
@@ -109,6 +116,7 @@ services:
       SP_GATEWAY_INTERNAL_URL: http://gateway:3300
       SP_WEB_URL: ${SP_WEB_URL:-http://localhost:3200}
       CLAUDE_CONFIG_DIR: ${CLAUDE_CONFIG_DIR:-/home/notebook/.claude}
+      SIGNALPILOT_ANALYSIS_AGENT_MODEL: ${SIGNALPILOT_ANALYSIS_AGENT_MODEL:-claude-sonnet-4-5-20250929}
     volumes:
       - signalpilot-workspace:/workspace
       - signalpilot-shared:/shared:ro

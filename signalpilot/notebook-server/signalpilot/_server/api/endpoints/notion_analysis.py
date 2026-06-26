@@ -30,7 +30,6 @@ from signalpilot._runtime.commands import SerializedQueryParams
 from signalpilot._runtime.virtual_file import read_virtual_file
 from signalpilot._server.ai.analysis_prompts import (
     analysis_prompt as _analysis_prompt,
-    json_repair_prompt as _json_repair_prompt,
 )
 from signalpilot._server.api.deps import AppState
 from signalpilot._server.api.endpoints.notion_urls import (
@@ -56,6 +55,19 @@ LOGGER = _loggers.sp_logger()
 router = APIRouter()
 
 AnalysisStatus = Literal["New", "Analyzing", "Done", "Failed"]
+DEFAULT_ANALYSIS_AGENT_MODEL = "claude-sonnet-4-5-20250929"
+_ANALYSIS_AGENT_MODEL_ENV_NAMES = (
+    "SIGNALPILOT_ANALYSIS_AGENT_MODEL",
+    "SIGNALPILOT_WORKER_AGENT_MODEL",
+)
+
+
+def _analysis_agent_model() -> str:
+    for name in _ANALYSIS_AGENT_MODEL_ENV_NAMES:
+        value = (os.getenv(name) or "").strip()
+        if value:
+            return value
+    return DEFAULT_ANALYSIS_AGENT_MODEL
 
 
 class StartNotionAnalysisRequest(msgspec.Struct, rename="camel"):
@@ -1096,6 +1108,47 @@ def _parse_result(text: str) -> AnalysisResult:
     )
 
 
+def _parse_final_statement_result(text: str) -> AnalysisResult:
+    data = _extract_marker_json(text, "FINAL_STATEMENT")
+    statement = str(data.get("statement", "")).strip()
+    if not statement:
+        raise ValueError("Agent did not emit FINAL_STATEMENT.statement")
+    confidence = data.get("confidenceScore", data.get("confidence_score"))
+    if confidence is not None:
+        confidence = float(confidence)
+        confidence = max(0.0, min(1.0, confidence))
+    caveats = data.get("caveats") or []
+    if not isinstance(caveats, list):
+        caveats = [str(caveats)]
+    handoff_notes = data.get("handoffNotes", data.get("handoff_notes", [])) or []
+    if not isinstance(handoff_notes, list):
+        handoff_notes = [str(handoff_notes)]
+    return AnalysisResult(
+        summary=statement[:500],
+        confidence_score=confidence,
+        final_answer=statement,
+        gotchas=[str(item) for item in caveats],
+        analysis_method="; ".join(str(item) for item in handoff_notes),
+        notion_comment=statement[:1200],
+        notion_charts=[],
+    )
+
+
+def _extract_marker_json(text: str, marker: str) -> dict[str, Any]:
+    decoder = json.JSONDecoder()
+    latest: dict[str, Any] | None = None
+    for match in re.finditer(rf"(?m)^\s*{re.escape(marker)}\s*:\s*", text):
+        try:
+            parsed, _ = decoder.raw_decode(text[match.end() :].lstrip())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            latest = parsed
+    if latest is None:
+        raise ValueError(f"Agent did not emit {marker}")
+    return latest
+
+
 def _truncate_comment(text: str, limit: int = 1200) -> str:
     text = text.strip()
     if len(text) <= limit:
@@ -1111,21 +1164,20 @@ def _plain_text_failure_result(text: str, error: Exception) -> AnalysisResult:
         final_answer=(
             "## Executive Summary and Explorations\n\n"
             "- I could not complete the requested analysis.\n"
-            "- The agent returned plain text instead of the required JSON "
-            "response, so SignalPilot preserved the available failure details "
-            "below.\n\n"
+            "- The agent did not emit the required FINAL_STATEMENT marker, so "
+            "SignalPilot preserved the available failure details below.\n\n"
             "## Detailed Research\n\n"
             f"{detail}\n\n"
             "## Confidence Score: 0\n\n"
             "- No completed analysis result was produced."
         ),
         gotchas=[
-            "The agent did not return the required JSON response.",
+            "The agent did not emit the required FINAL_STATEMENT marker.",
             "The analysis should be rerun after inspecting the notebook trail.",
         ],
         analysis_method=(
-            "The agent returned plain text instead of the required JSON object; "
-            "SignalPilot preserved that text as failure detail."
+            "The agent did not emit the required FINAL_STATEMENT marker; "
+            "SignalPilot preserved the available text as failure detail."
         ),
         notion_comment=_truncate_comment(
             f"I could not complete the requested analysis.\n\n{detail}"
@@ -2697,6 +2749,7 @@ async def _run_analysis(
                 async for event in run_notebook_agent(
                     message=prompt,
                     session_id=SessionId(record.session_id),
+                    model=_analysis_agent_model(),
                     new_chat=new_chat,
                     thread_id=record.session_id,
                     notebook_mcp_app=app_state.request.app,
@@ -2776,63 +2829,7 @@ async def _run_analysis(
             )
             return
 
-        try:
-            record.result = _parse_result("".join(text_parts))
-        except Exception as parse_error:
-            repair_parts: list[str] = []
-            await append_trace_event(
-                {
-                    "type": "text",
-                    "content": (
-                        "Formatting the completed analysis into the required "
-                        "Notion JSON response."
-                    ),
-                    "tool_name": "",
-                    "tool_input": None,
-                    "tool_call_id": "",
-                    "is_error": False,
-                    "cost_usd": None,
-                    "turn": 0,
-                },
-            )
-            try:
-                async with asyncio.timeout(
-                    min(120.0, _agent_timeout_seconds())
-                ):
-                    async for event in run_notebook_agent(
-                        message=_json_repair_prompt(
-                            body.prompt, "".join(text_parts)
-                        ),
-                        session_id=SessionId(record.session_id),
-                        new_chat=False,
-                        max_turns=3,
-                        thread_id=record.session_id,
-                        notebook_mcp_app=app_state.request.app,
-                        cwd=agent_cwd,
-                        disallow_file_edits=True,
-                        additional_disallowed_tools=["Agent"],
-                    ):
-                        event_data = {
-                            "type": event.type,
-                            "content": event.content,
-                            "tool_name": event.tool_name,
-                            "tool_input": event.tool_input,
-                            "tool_call_id": event.tool_call_id,
-                            "is_error": event.is_error,
-                            "cost_usd": event.cost_usd,
-                            "turn": event.turn,
-                        }
-                        await append_trace_event(event_data)
-                        if event.type == "text" and event.content:
-                            repair_parts.append(event.content)
-                        if event.type == "error":
-                            raise RuntimeError(
-                                event.content or "Agent JSON repair failed"
-                            )
-                text_parts.extend(repair_parts)
-                record.result = _parse_result("".join(repair_parts))
-            except Exception as repair_error:
-                raise parse_error from repair_error
+        record.result = _parse_final_statement_result("".join(text_parts))
         record.status = "Done"
         record.error = None
         _persist_record_completion_artifacts(app_state, record)
@@ -2869,7 +2866,7 @@ async def _run_analysis(
         LOGGER.exception("Notion analysis %s failed", record.request_id)
         failed = False
         try:
-            record.result = _parse_result("".join(text_parts))
+            record.result = _parse_final_statement_result("".join(text_parts))
             record.status = "Done"
             record.error = None
         except Exception:

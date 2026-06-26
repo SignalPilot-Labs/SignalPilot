@@ -154,7 +154,7 @@ async def test_start_comment_is_posted_before_notebook_call_failure(monkeypatch:
     monkeypatch.setattr(notion_client, "create_comment", create_comment)
     monkeypatch.setattr(notion_client, "is_bot_comment", lambda _comment: False)
     monkeypatch.setattr(notion_client, "comment_has_page_mention", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(notion_client, "extract_comment_text", lambda _comment: "Hello")
+    monkeypatch.setattr(notion_client, "extract_comment_text", lambda _comment: "Analyze revenue by month")
     monkeypatch.setattr(notion_analysis, "resolve_configured_analysis_route", resolve_route)
     monkeypatch.setattr(notion_analysis, "ensure_analysis_notebook_session", ensure_runtime)
     monkeypatch.setattr(notion_analysis, "upsert_analysis_trail_seed", seed_trail)
@@ -228,7 +228,7 @@ async def test_missing_default_project_posts_setup_required_failure(monkeypatch:
     monkeypatch.setattr(notion_client, "create_comment", create_comment)
     monkeypatch.setattr(notion_client, "is_bot_comment", lambda _comment: False)
     monkeypatch.setattr(notion_client, "comment_has_page_mention", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(notion_client, "extract_comment_text", lambda _comment: "Hello")
+    monkeypatch.setattr(notion_client, "extract_comment_text", lambda _comment: "Analyze revenue by month")
     monkeypatch.setattr(notion_analysis, "_call_notebook", call_notebook)
 
     result = await notion_analysis.process_routed_comment_event(routed, payload, db=MagicMock())
@@ -236,6 +236,56 @@ async def test_missing_default_project_posts_setup_required_failure(monkeypatch:
     assert result.status == "processed"
     assert "call_notebook" not in calls
     assert any("default dbt project" in call for call in calls if call.startswith("comment:"))
+
+
+@pytest.mark.asyncio
+async def test_notion_preflight_greeting_posts_direct_reply_without_request_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    install = NotionInstallation(
+        id="install-1",
+        org_id="org-1",
+        user_id="user-1",
+        workspace_id="workspace-1",
+        bot_id="bot-1",
+        access_token_enc=b"encrypted",
+        status="active",
+    )
+    config = NotionInstallationConfig(
+        installation_id="install-1",
+        parent_page_id=None,
+        trigger_page_id="trigger-1",
+        requests_data_source_id="ds-1",
+        requests_database_page_id="db-1",
+        enabled=True,
+    )
+    routed = RoutedNotionInstallation(installation=install, config=config, access_token="token-1")
+    payload = {"entity": {"id": "comment-1"}, "data": {"page_id": "page-1"}}
+    comment = {"id": "comment-1", "discussion_id": "discussion-1", "rich_text": []}
+
+    async def list_comments(*args, **kwargs):
+        return [comment]
+
+    async def create_comment(*args, **kwargs):
+        calls.append(f"comment:{_rich_text_content(kwargs['rich_text'])}")
+
+    async def fail_create_request_page(*args, **kwargs):
+        raise AssertionError("greeting should not create a request page")
+
+    async def fail_call_notebook(*args, **kwargs):
+        raise AssertionError("greeting should not call notebook")
+
+    monkeypatch.setattr(notion_client, "list_comments", list_comments)
+    monkeypatch.setattr(notion_client, "create_comment", create_comment)
+    monkeypatch.setattr(notion_client, "create_request_page", fail_create_request_page)
+    monkeypatch.setattr(notion_client, "is_bot_comment", lambda _comment: False)
+    monkeypatch.setattr(notion_client, "comment_has_page_mention", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(notion_client, "extract_comment_text", lambda _comment: "hi")
+    monkeypatch.setattr(notion_analysis, "_call_notebook", fail_call_notebook)
+
+    result = await notion_analysis.process_routed_comment_event(routed, payload, db=MagicMock())
+
+    assert result.status == "processed"
+    assert calls == ["comment:Hi. Send me a specific data question and I will run it through SignalPilot."]
 
 
 def test_start_comment_links_request_details_without_raw_url() -> None:

@@ -3,7 +3,7 @@
 Usage:
     import signalpilot as sp
 
-    agent = sp.agent(model="claude-sonnet-4-20250514")
+    agent = sp.agent(model="claude-sonnet-4-5-20250929")
 
     # Synchronous — blocks until the agent finishes
     response = agent.run("Analyze the sales data")
@@ -62,7 +62,7 @@ class AgentClient:
     def __init__(
         self,
         server_url: str = "http://localhost:2718",
-        model: str = "claude-sonnet-4-20250514",
+        model: str = "claude-sonnet-4-5-20250929",
         system_prompt: str | None = None,
     ) -> None:
         self._server_url = server_url.rstrip("/")
@@ -277,7 +277,7 @@ class AgentClient:
 
 
 def agent(
-    model: str = "claude-sonnet-4-20250514",
+    model: str = "claude-sonnet-4-5-20250929",
     server_url: str = "http://localhost:2718",
     system_prompt: str | None = None,
 ) -> AgentClient:

@@ -39,7 +39,7 @@ class AgentInstance:
     status: str = "idle"  # idle, running, stopped, error
     created_at: float = 0.0
     message_count: int = 0
-    model: str = "claude-sonnet-4-20250514"
+    model: str = "claude-sonnet-4-5-20250929"
     system_prompt: str = ""
     event_buffer: list[dict[str, Any]] = field(default_factory=list)
     last_error: str | None = None
@@ -55,7 +55,7 @@ class AgentManager:
         self,
         *,
         session_id: str | None = None,
-        model: str = "claude-sonnet-4-20250514",
+        model: str = "claude-sonnet-4-5-20250929",
         system_prompt: str | None = None,
     ) -> AgentInstance:
         """Create a new agent instance."""

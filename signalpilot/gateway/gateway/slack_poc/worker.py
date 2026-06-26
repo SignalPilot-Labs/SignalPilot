@@ -25,14 +25,22 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from gateway.analysis_delivery import (
+    AnalysisPreflightKind,
+    SlackTraceProgressReporter,
+    classify_analysis_request,
+    delivery_result_to_status,
+    load_delivery_packet,
+    load_delivery_packet_from_events,
+    render_delivery,
+    render_slack_final_message,
+)
 from gateway.db.engine import close_db, get_session_factory, init_db
 from gateway.notebooks.session_service import NotebookRuntime, ensure_analysis_notebook_session
 from gateway.notion import analysis as notebook_analysis
 from gateway.slack_poc.progress import (
     COMPLETING_PROGRESS_TEXT,
     INITIAL_PROGRESS_TEXT,
-    SlackProgressReporter,
-    SlackProgressSummarizer,
 )
 from gateway.store import slack as slack_store
 
@@ -42,6 +50,7 @@ SLACK_TEXT_LIMIT = 35000
 SLACK_CHART_LIMIT = 3
 SLACK_ACK_REACTION = "eyes"
 SLACK_DONE_REACTION = "white_check_mark"
+SLACK_ERROR_REACTION = "x"
 
 
 class SlackApiError(RuntimeError):
@@ -265,6 +274,8 @@ class SlackPoCWorker:
             LOGGER.info("Ignoring duplicate Slack event_id=%s", request.event_id)
             return
         self._seen_event_ids.add(request.event_id)
+        if await self._handle_preflight(request):
+            return
         task = asyncio.create_task(self._process_request(request), name=f"slack-poc-{request.event_id}")
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
@@ -322,6 +333,17 @@ class SlackPoCWorker:
             thread_ts=thread_ts,
             source_url=source_url,
         )
+
+    async def _handle_preflight(self, request: SlackRequest) -> bool:
+        decision = classify_analysis_request(request.text)
+        if decision.kind == AnalysisPreflightKind.ANALYZE:
+            return False
+        await self.slack.post_message(
+            channel=request.channel_id,
+            thread_ts=request.thread_ts,
+            text=decision.response or "Send me a specific data question and I will run it through SignalPilot.",
+        )
+        return True
 
     async def _process_request(self, request: SlackRequest) -> None:
         trail_url: str | None = None
@@ -430,15 +452,37 @@ class SlackPoCWorker:
                     route=route,
                     status=status,
                 )
-            slack_status = notebook_analysis._with_public_chart_urls(status, runtime)
+            public_status = notebook_analysis._with_public_chart_urls(status, runtime)
+            try:
+                async with self.session_factory() as db:
+                    packet = await load_delivery_packet(
+                        db,
+                        org_id=self.config.org_id,
+                        user_id=analysis_user_id,
+                        thread_id=trace_thread_id,
+                        user_request=request.text,
+                        status_payload=public_status,
+                        trail_url=trail_url or "",
+                    )
+            except Exception as exc:
+                LOGGER.info("Could not load Slack delivery trace; using status fallback: %s", exc, exc_info=True)
+                packet = load_delivery_packet_from_events(
+                    [],
+                    user_request=request.text,
+                    status_payload=public_status,
+                    trail_url=trail_url or "",
+                    thread_status="done",
+                )
+            delivery = await render_delivery(packet)
+            slack_status = delivery_result_to_status(delivery, packet, base_status=public_status)
             await self._update_or_post_result_message(
                 channel=request.channel_id,
                 thread_ts=request.thread_ts,
                 message_ts=progress_ts,
-                text=_final_slack_text(slack_status, trail_url),
+                text=render_slack_final_message(packet, delivery, trail_url=trail_url),
             )
             await self._mark_request_done(request)
-            await self._post_chart_attachments(request, status, runtime)
+            await self._post_chart_attachments(request, slack_status, runtime)
         except Exception as exc:
             LOGGER.warning("Slack PoC request failed: event_id=%s error=%s", request.event_id, exc, exc_info=True)
             if route is not None:
@@ -462,6 +506,7 @@ class SlackPoCWorker:
                 message_ts=progress_ts,
                 text=_failure_slack_text(str(exc), trail_url),
             )
+            await self._mark_request_failed(request)
         finally:
             await self._stop_progress_reporter(progress_stop, progress_task)
             await self._remove_request_reaction(request, SLACK_ACK_REACTION)
@@ -485,6 +530,12 @@ class SlackPoCWorker:
     async def _mark_request_done(self, request: SlackRequest) -> None:
         await self._add_request_reaction(request, SLACK_DONE_REACTION)
         await self._remove_request_reaction(request, SLACK_ACK_REACTION)
+        await self._remove_request_reaction(request, SLACK_ERROR_REACTION)
+
+    async def _mark_request_failed(self, request: SlackRequest) -> None:
+        await self._add_request_reaction(request, SLACK_ERROR_REACTION)
+        await self._remove_request_reaction(request, SLACK_ACK_REACTION)
+        await self._remove_request_reaction(request, SLACK_DONE_REACTION)
 
     async def _update_or_post_result_message(
         self,
@@ -512,12 +563,7 @@ class SlackPoCWorker:
         message_ts: str,
         user_id: str,
     ) -> None:
-        summarizer = SlackProgressSummarizer(
-            provider=self.config.progress_model_provider,
-            model=self.config.progress_model,
-            timeout_seconds=self.config.progress_model_timeout_seconds,
-        )
-        reporter = SlackProgressReporter(
+        reporter = SlackTraceProgressReporter(
             slack=self.slack,
             session_factory=self.session_factory,
             org_id=self.config.org_id,
@@ -527,7 +573,6 @@ class SlackPoCWorker:
             channel_id=channel_id,
             message_ts=message_ts,
             interval_seconds=self.config.progress_interval_seconds,
-            summarizer=summarizer,
         )
         await reporter.run(stop_event)
 

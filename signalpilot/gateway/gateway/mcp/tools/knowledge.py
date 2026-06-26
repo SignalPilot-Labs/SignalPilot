@@ -7,7 +7,7 @@ import json
 
 from gateway.errors.mcp import sanitize_mcp_error
 from gateway.mcp.audit import audited_tool
-from gateway.mcp.context import _store_session
+from gateway.mcp.context import _require_mcp_admin_scope, _store_session
 from gateway.mcp.server import mcp
 from gateway.models.knowledge import KnowledgeCategory, KnowledgeDoc, KnowledgeDocCreate, KnowledgeScope
 
@@ -217,6 +217,9 @@ async def propose_knowledge(
     archive_knowledge instead.
     """
     try:
+        err = _require_mcp_admin_scope()
+        if err:
+            return err
         # Validate via DTO — raises pydantic.ValidationError on bad input
         payload = KnowledgeDocCreate(
             scope=KnowledgeScope(scope),
@@ -296,6 +299,9 @@ async def propose_knowledge(
 async def archive_knowledge(doc_id: str) -> str:
     """Archive (soft-delete) a knowledge doc by id. Archived docs are excluded from search and get_knowledge but retained for audit."""
     try:
+        err = _require_mcp_admin_scope()
+        if err:
+            return err
         doc_id = (doc_id or "").strip()
         if not doc_id:
             return "Error: doc_id must not be empty"

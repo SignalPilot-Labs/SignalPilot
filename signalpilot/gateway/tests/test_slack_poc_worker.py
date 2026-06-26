@@ -49,6 +49,32 @@ def test_event_deduper_bounds_size_and_expires_old_events() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_http_server_defaults_to_loopback_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeServer:
+        def __init__(self, config):
+            captured["host"] = config.host
+
+        async def serve(self) -> None:
+            captured["served"] = True
+
+    monkeypatch.delenv("SLACK_POC_HTTP_HOST", raising=False)
+    monkeypatch.setattr(worker_module.uvicorn, "Server", FakeServer)
+
+    await worker_module.run_http_server(
+        SlackPoCConfig(
+            bot_token="xoxb-test",
+            app_token="xapp-test",
+            signing_secret="test-secret",
+            bot_user_id="UBOT",
+        )
+    )
+
+    assert captured == {"host": worker_module.SLACK_POC_HTTP_DEFAULT_HOST, "served": True}
+
+
+@pytest.mark.asyncio
 async def test_slack_upload_file_uses_form_encoded_external_upload_flow() -> None:
     calls: list[httpx.Request] = []
 

@@ -54,6 +54,7 @@ SLACK_DONE_REACTION = "white_check_mark"
 SLACK_ERROR_REACTION = "x"
 SLACK_EVENT_DEDUPE_MAX_SIZE = 10_000
 SLACK_EVENT_DEDUPE_TTL_SECONDS = 6 * 60 * 60
+SLACK_POC_HTTP_DEFAULT_HOST = "127.0.0.1"
 _PLACEHOLDER_CHART_TITLE_RE = re.compile(
     r"(?:notebook\s+)?(?:chart|image|figure|visualization)(?:\s+\d+)?",
     flags=re.I,
@@ -833,7 +834,7 @@ async def run_http_server(config: SlackPoCConfig) -> None:
         raise RuntimeError("SLACK_SIGNING_SECRET is required for HTTP Events mode")
     _apply_local_runtime_defaults()
     app = create_http_app(config)
-    host = os.getenv("SLACK_POC_HTTP_HOST") or "0.0.0.0"
+    host = os.getenv("SLACK_POC_HTTP_HOST") or SLACK_POC_HTTP_DEFAULT_HOST
     port = int(os.getenv("SLACK_POC_HTTP_PORT") or "8787")
     server = uvicorn.Server(
         uvicorn.Config(

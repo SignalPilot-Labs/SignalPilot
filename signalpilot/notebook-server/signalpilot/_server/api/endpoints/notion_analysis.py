@@ -15,12 +15,11 @@ from dataclasses import asdict, dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
-from urllib.error import HTTPError, URLError
 from urllib.parse import quote, unquote, unquote_to_bytes, urlencode, urlparse
-from urllib.request import Request as UrlRequest, urlopen
 from uuid import NAMESPACE_URL, uuid5
 
 import msgspec
+import requests
 from starlette.exceptions import HTTPException
 from starlette.responses import FileResponse, JSONResponse
 
@@ -192,7 +191,6 @@ def _gateway_json_get(
 ) -> Any:
     from signalpilot._server.gateway_client import gateway_headers, gateway_url
 
-    headers = {"Accept": "application/json", **gateway_headers()}
     url = f"{gateway_url()}{path}"
     if params:
         query = urlencode(
@@ -200,18 +198,27 @@ def _gateway_json_get(
         )
         if query:
             url = f"{url}?{query}"
-    request = UrlRequest(url, headers=headers, method="GET")
+    _validate_gateway_json_url(url)
+    headers = {"Accept": "application/json", **gateway_headers()}
     try:
-        with urlopen(request, timeout=timeout_seconds) as response:
-            body = response.read().decode("utf-8", errors="replace")
-    except HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")[:500]
-        raise RuntimeError(f"Gateway HTTP {e.code}: {body}") from e
-    except URLError as e:
-        raise RuntimeError(f"Gateway unavailable: {e.reason}") from e
+        response = requests.get(url, headers=headers, timeout=timeout_seconds)
+        response.raise_for_status()
+    except requests.HTTPError as e:
+        body = e.response.text[:500] if e.response is not None else ""
+        status_code = e.response.status_code if e.response is not None else "error"
+        raise RuntimeError(f"Gateway HTTP {status_code}: {body}") from e
+    except requests.RequestException as e:
+        raise RuntimeError(f"Gateway unavailable: {e}") from e
+    body = response.text
     if not body:
         return None
     return json.loads(body)
+
+
+def _validate_gateway_json_url(url: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError("Gateway URL must be an absolute http or https URL")
 
 
 def _connection_label(connection: dict[str, Any]) -> str:

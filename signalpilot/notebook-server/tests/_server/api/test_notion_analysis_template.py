@@ -448,6 +448,13 @@ def test_warm_context_truncation_stays_under_cap() -> None:
     assert "Warm context truncated" in clipped
 
 
+def test_gateway_json_get_rejects_non_http_gateway_url(monkeypatch) -> None:
+    monkeypatch.setenv("SP_GATEWAY_URL", "file:///tmp/signalpilot-gateway")
+
+    with pytest.raises(RuntimeError, match="absolute http or https"):
+        notion_analysis._gateway_json_get("/api/connections")
+
+
 def test_warm_context_builder_clips_oversized_schema_link(
     tmp_path,
     monkeypatch,

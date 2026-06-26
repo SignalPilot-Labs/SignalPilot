@@ -4,7 +4,7 @@ import httpx
 
 from gateway.errors.mcp import sanitize_proxy_response
 from gateway.mcp.audit import audited_tool
-from gateway.mcp.context import _gateway_url, _gw_headers
+from gateway.mcp.context import _gateway_url, _gw_headers, _require_mcp_admin_scope
 from gateway.mcp.server import mcp
 from gateway.mcp.validation import _CONN_NAME_RE
 
@@ -262,6 +262,9 @@ async def xata_branch_diff(
     diff = data.get("diff", {})
 
     if format.lower() == "html":
+        err = _require_mcp_admin_scope()
+        if err:
+            return err
         return await _save_branch_diff_report(base_branch, compare_branch, diff)
 
     lines = [f"Xata branch diff: {base_branch} (base) -> {compare_branch} (compare)"]

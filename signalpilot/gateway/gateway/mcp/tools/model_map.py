@@ -12,6 +12,7 @@ generate_model_blueprint tool used.
 
 from __future__ import annotations
 
+import os as _os
 import re
 from pathlib import Path
 
@@ -23,7 +24,54 @@ from gateway.mcp.validation import _MODEL_NAME_RE, _validate_connection_name
 
 SKIP_DIRS = (".claude", "dbt_packages", "target", "__pycache__")
 BINARY_TYPES = {"BLOB", "BYTEA", "BINARY", "VARBINARY", "IMAGE"}
-_SAFE_DIR_RE = re.compile(r"^[A-Za-z0-9_./\\:-]{1,512}$")
+
+_PROJECT_DIR_MAX_LEN = 512
+
+
+def _resolve_workspace_root() -> Path:
+    """Workspace root that `project_dir` must live under.
+
+    Resolution order:
+      1. $SP_WORKSPACE_ROOT — explicit operator config (cloud + multi-tenant).
+      2. $SP_NOTEBOOK_ROOT — existing local-dev convention if present.
+      3. Path.cwd() — local fallback. Fail-closed for cloud deployments is enforced
+         in the caller by checking SP_DEPLOYMENT_MODE.
+    """
+    raw = _os.environ.get("SP_WORKSPACE_ROOT") or _os.environ.get("SP_NOTEBOOK_ROOT")
+    if raw:
+        return Path(raw).resolve()
+    return Path.cwd().resolve()
+
+
+def _validated_project_dir(project_dir: str) -> tuple[Path | None, str | None]:
+    """Return (resolved_path, None) if safe; (None, error_string) otherwise.
+
+    Rules:
+      - Length cap (defense-in-depth against pathological inputs).
+      - Must resolve under the workspace root after Path.resolve() (follows symlinks).
+      - In cloud mode (SP_DEPLOYMENT_MODE == "cloud"), require an explicit
+        SP_WORKSPACE_ROOT — fail-closed rather than fall back to CWD which is the
+        gateway process dir on cloud.
+      - The resolved path must exist and be a directory.
+    """
+    if not project_dir or len(project_dir) > _PROJECT_DIR_MAX_LEN:
+        return None, f"Error: Invalid project_dir (empty or > {_PROJECT_DIR_MAX_LEN} chars)."
+    if _os.environ.get("SP_DEPLOYMENT_MODE") == "cloud" and not (
+        _os.environ.get("SP_WORKSPACE_ROOT") or _os.environ.get("SP_NOTEBOOK_ROOT")
+    ):
+        return None, "Error: project_dir not permitted — SP_WORKSPACE_ROOT not configured."
+    root = _resolve_workspace_root()
+    try:
+        candidate = Path(project_dir).resolve()
+    except (OSError, RuntimeError):
+        return None, f"Error: Invalid project_dir '{project_dir}'."
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None, f"Error: project_dir '{project_dir}' is outside the workspace root."
+    if not candidate.exists() or not candidate.is_dir():
+        return None, f"Error: project_dir '{project_dir}' does not exist or is not a directory."
+    return candidate, None
 
 
 # ── pure filesystem / parsing helpers (verbatim from the bin script) ────────
@@ -587,11 +635,9 @@ async def map_columns(connection_name: str, model_name: str, project_dir: str,
         return f"Error: {err}"
     if not model_name or not _MODEL_NAME_RE.match(model_name):
         return f"Error: Invalid model name '{model_name}'."
-    if not project_dir or not _SAFE_DIR_RE.match(project_dir):
-        return f"Error: Invalid project_dir '{project_dir}'."
-    work_dir = Path(project_dir)
-    if not work_dir.exists():
-        return f"Error: project_dir '{project_dir}' does not exist."
+    work_dir, err = _validated_project_dir(project_dir)
+    if err:
+        return err
     exclude_set = {c.strip().lower() for c in exclude.split(",") if c.strip()}
 
     async with _store_session() as store:

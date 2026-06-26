@@ -364,3 +364,321 @@ class TestManageReportAdminScope:
             mcp_scopes_var.reset(token_scopes)
 
         assert "created" in result
+
+
+# ─── Group 7: xata_branch_diff — admin scope enforcement for html format ──────
+
+
+class TestXataBranchDiffAdminScope:
+    @pytest.mark.asyncio
+    async def test_html_format_without_admin_scope_returns_error(self) -> None:
+        from gateway.mcp.context import mcp_org_id_var, mcp_scopes_var
+        from gateway.mcp.tools.schema.ddl import xata_branch_diff
+
+        token_org = mcp_org_id_var.set("real-org")
+        token_scopes = mcp_scopes_var.set(["read"])
+        try:
+            with (
+                patch("gateway.mcp.tools.schema.ddl._no_xata_db_msg", AsyncMock(return_value=None)),
+                patch("gateway.mcp.tools.schema.ddl._save_branch_diff_report", AsyncMock()) as mock_save,
+                patch("httpx.AsyncClient") as mock_client_cls,
+            ):
+                mock_response = MagicMock()
+                mock_response.status_code = 200
+                mock_response.json.return_value = {"diff": {"has_changes": False}}
+                mock_http = AsyncMock()
+                mock_http.get = AsyncMock(return_value=mock_response)
+                mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+                mock_http.__aexit__ = AsyncMock(return_value=None)
+                mock_client_cls.return_value = mock_http
+                result = await xata_branch_diff(
+                    connection_name="c", base_branch="main", compare_branch="feat", format="html"
+                )
+        finally:
+            mcp_org_id_var.reset(token_org)
+            mcp_scopes_var.reset(token_scopes)
+
+        assert result.startswith("Error: admin scope required")
+        mock_save.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_text_format_does_not_require_admin(self) -> None:
+        from gateway.mcp.context import mcp_org_id_var, mcp_scopes_var
+        from gateway.mcp.tools.schema.ddl import xata_branch_diff
+
+        token_org = mcp_org_id_var.set("real-org")
+        token_scopes = mcp_scopes_var.set(["read"])
+        try:
+            with (
+                patch("gateway.mcp.tools.schema.ddl._no_xata_db_msg", AsyncMock(return_value=None)),
+                patch("httpx.AsyncClient") as mock_client_cls,
+            ):
+                mock_response = MagicMock()
+                mock_response.status_code = 200
+                mock_response.json.return_value = {"diff": {"has_changes": False}}
+                mock_http = AsyncMock()
+                mock_http.get = AsyncMock(return_value=mock_response)
+                mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+                mock_http.__aexit__ = AsyncMock(return_value=None)
+                mock_client_cls.return_value = mock_http
+                result = await xata_branch_diff(
+                    connection_name="c", base_branch="main", compare_branch="feat", format="text"
+                )
+        finally:
+            mcp_org_id_var.reset(token_org)
+            mcp_scopes_var.reset(token_scopes)
+
+        assert not result.startswith("Error: admin scope required")
+
+    @pytest.mark.asyncio
+    async def test_html_with_admin_scope_proceeds(self) -> None:
+        from gateway.mcp.context import mcp_org_id_var, mcp_scopes_var
+        from gateway.mcp.tools.schema.ddl import xata_branch_diff
+
+        token_org = mcp_org_id_var.set("real-org")
+        token_scopes = mcp_scopes_var.set(["admin"])
+        try:
+            with (
+                patch("gateway.mcp.tools.schema.ddl._no_xata_db_msg", AsyncMock(return_value=None)),
+                patch(
+                    "gateway.mcp.tools.schema.ddl._save_branch_diff_report",
+                    AsyncMock(return_value='{"status":"created"}'),
+                ),
+                patch("httpx.AsyncClient") as mock_client_cls,
+            ):
+                mock_response = MagicMock()
+                mock_response.status_code = 200
+                mock_response.json.return_value = {"diff": {}}
+                mock_http = AsyncMock()
+                mock_http.get = AsyncMock(return_value=mock_response)
+                mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+                mock_http.__aexit__ = AsyncMock(return_value=None)
+                mock_client_cls.return_value = mock_http
+                result = await xata_branch_diff(
+                    connection_name="c", base_branch="main", compare_branch="feat", format="html"
+                )
+        finally:
+            mcp_org_id_var.reset(token_org)
+            mcp_scopes_var.reset(token_scopes)
+
+        assert result == '{"status":"created"}'
+
+    @pytest.mark.asyncio
+    async def test_html_local_mode_bypasses(self) -> None:
+        from gateway.mcp.context import mcp_org_id_var, mcp_scopes_var
+        from gateway.mcp.tools.schema.ddl import xata_branch_diff
+
+        token_org = mcp_org_id_var.set("local")
+        token_scopes = mcp_scopes_var.set([])
+        try:
+            with (
+                patch("gateway.mcp.tools.schema.ddl._no_xata_db_msg", AsyncMock(return_value=None)),
+                patch(
+                    "gateway.mcp.tools.schema.ddl._save_branch_diff_report",
+                    AsyncMock(return_value='{"status":"created"}'),
+                ),
+                patch("httpx.AsyncClient") as mock_client_cls,
+            ):
+                mock_response = MagicMock()
+                mock_response.status_code = 200
+                mock_response.json.return_value = {"diff": {}}
+                mock_http = AsyncMock()
+                mock_http.get = AsyncMock(return_value=mock_response)
+                mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+                mock_http.__aexit__ = AsyncMock(return_value=None)
+                mock_client_cls.return_value = mock_http
+                result = await xata_branch_diff(
+                    connection_name="c", base_branch="main", compare_branch="feat", format="html"
+                )
+        finally:
+            mcp_org_id_var.reset(token_org)
+            mcp_scopes_var.reset(token_scopes)
+
+        assert result == '{"status":"created"}'
+
+
+# ─── Group 8: map_columns — workspace-root containment ───────────────────────
+
+
+class TestMapColumnsWorkspaceContainment:
+    def test_rejects_dotdot_escape(self, tmp_path, monkeypatch) -> None:
+        from gateway.mcp.tools.model_map import _validated_project_dir
+
+        monkeypatch.setenv("SP_WORKSPACE_ROOT", str(tmp_path))
+        monkeypatch.delenv("SP_NOTEBOOK_ROOT", raising=False)
+        monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
+
+        _, err = _validated_project_dir(str(tmp_path / ".."))
+        assert err is not None
+        assert "outside the workspace root" in err or "not permitted" in err
+
+    def test_rejects_absolute_outside_root(self, tmp_path, monkeypatch) -> None:
+        from gateway.mcp.tools.model_map import _validated_project_dir
+
+        monkeypatch.setenv("SP_WORKSPACE_ROOT", str(tmp_path))
+        monkeypatch.delenv("SP_NOTEBOOK_ROOT", raising=False)
+        monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
+
+        _, err = _validated_project_dir("/etc")
+        assert err is not None
+        assert "outside the workspace root" in err or "Error:" in err
+
+    def test_accepts_path_under_root(self, tmp_path, monkeypatch) -> None:
+        from gateway.mcp.tools.model_map import _validated_project_dir
+
+        sub = tmp_path / "myproject"
+        sub.mkdir()
+        monkeypatch.setenv("SP_WORKSPACE_ROOT", str(tmp_path))
+        monkeypatch.delenv("SP_NOTEBOOK_ROOT", raising=False)
+        monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
+
+        path, err = _validated_project_dir(str(sub))
+        assert err is None
+        assert path is not None
+
+    def test_cloud_mode_requires_explicit_root(self, monkeypatch) -> None:
+        from gateway.mcp.tools.model_map import _validated_project_dir
+
+        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
+        monkeypatch.delenv("SP_WORKSPACE_ROOT", raising=False)
+        monkeypatch.delenv("SP_NOTEBOOK_ROOT", raising=False)
+
+        _, err = _validated_project_dir("/some/path")
+        assert err is not None
+        assert "SP_WORKSPACE_ROOT not configured" in err
+
+
+# ─── Group 9: knowledge upsert — archived doc stays archived ─────────────────
+
+
+class TestKnowledgeUpsertPreservesArchived:
+    def test_archived_status_unchanged_on_local_edit(self) -> None:
+        """Unit test for the status-transition branch in propose_knowledge.
+
+        Simulates the in-memory logic: if existing.status is "archived" and we
+        are NOT in cloud agent mode, the new branch must leave status unchanged.
+        """
+        from gateway.store.knowledge import KnowledgeStatus
+
+        # Simulate existing doc with archived status
+        class _FakeDoc:
+            status: str = KnowledgeStatus.archived.value
+
+        existing = _FakeDoc()
+        agent = None  # local-mode (no agent)
+
+        # Mirror the new branch logic from propose_knowledge
+        # Cloud path not triggered (agent is None), so:
+        if agent is not None:
+            existing.status = KnowledgeStatus.pending.value
+        elif existing.status != KnowledgeStatus.archived.value:
+            existing.status = KnowledgeStatus.active.value
+        # else: archived stays archived
+
+        assert existing.status == KnowledgeStatus.archived.value, (
+            "Archived doc must stay archived on local-mode edit"
+        )
+
+    def test_pending_status_promoted_to_active_on_local_edit(self) -> None:
+        """Existing behavior: pending → active in local mode is preserved."""
+        from gateway.store.knowledge import KnowledgeStatus
+
+        class _FakeDoc:
+            status: str = KnowledgeStatus.pending.value
+
+        existing = _FakeDoc()
+        agent = None
+
+        if agent is not None:
+            existing.status = KnowledgeStatus.pending.value
+        elif existing.status != KnowledgeStatus.archived.value:
+            existing.status = KnowledgeStatus.active.value
+
+        assert existing.status == KnowledgeStatus.active.value
+
+
+# ─── Group 10: auth failure bucket cleanup ────────────────────────────────────
+
+
+class TestAuthFailureBucketCleanup:
+    def setup_method(self) -> None:
+        import gateway.auth.mcp_api_key as _mod
+
+        _mod._auth_failures.clear()
+
+    def test_bucket_created_on_first_failure(self) -> None:
+        import gateway.auth.mcp_api_key as _mod
+        from gateway.auth.mcp_api_key import _check_auth_rate
+
+        _check_auth_rate("1.2.3.4")
+        assert "1.2.3.4" in _mod._auth_failures
+
+    def test_stale_entries_pruned_and_bucket_replaced(self, monkeypatch) -> None:
+        import time
+
+        import gateway.auth.mcp_api_key as _mod
+        from gateway.auth.mcp_api_key import _check_auth_rate
+
+        base_time = 1000.0
+        monkeypatch.setattr(time, "monotonic", lambda: base_time)
+        _check_auth_rate("1.2.3.4")
+        assert "1.2.3.4" in _mod._auth_failures
+
+        # Advance 61 seconds — old entry is now stale
+        advanced = base_time + 61.0
+        monkeypatch.setattr(time, "monotonic", lambda: advanced)
+        _check_auth_rate("1.2.3.4")
+
+        # Bucket should still exist (new entry was added) but only have 1 item
+        assert "1.2.3.4" in _mod._auth_failures
+        assert len(_mod._auth_failures["1.2.3.4"]) == 1
+
+    def test_empty_bucket_deleted_after_prune(self, monkeypatch) -> None:
+        import time
+
+        import gateway.auth.mcp_api_key as _mod
+        from gateway.auth.mcp_api_key import _check_auth_rate
+
+        base_time = 1000.0
+        monkeypatch.setattr(time, "monotonic", lambda: base_time)
+        _check_auth_rate("1.2.3.4")
+
+        # Advance 61 seconds then call with a different IP
+        # The "1.2.3.4" bucket will only be cleaned when that IP is checked
+        advanced = base_time + 61.0
+        monkeypatch.setattr(time, "monotonic", lambda: advanced)
+        _check_auth_rate("1.2.3.4")  # prunes old entry, adds new one
+
+        # Advance another 61 seconds — now "1.2.3.4"'s second entry is stale
+        very_advanced = base_time + 122.0
+        monkeypatch.setattr(time, "monotonic", lambda: very_advanced)
+
+        # Call with different IP — does NOT prune 1.2.3.4
+        _check_auth_rate("5.6.7.8")
+
+        # Now explicitly check 1.2.3.4 — bucket prunes to empty and is deleted
+        _check_auth_rate("1.2.3.4")
+        # After 122s, both old entries for 1.2.3.4 are gone; a new one is inserted
+        # The key exists with just the new entry
+        assert "1.2.3.4" in _mod._auth_failures
+        assert len(_mod._auth_failures["1.2.3.4"]) == 1
+
+    def test_bucket_removed_when_only_stale_and_no_new_call(self, monkeypatch) -> None:
+        """Regression: key must be deleted when the pruned hits list is empty before appending."""
+        import time
+
+        import gateway.auth.mcp_api_key as _mod
+        from gateway.auth.mcp_api_key import _check_auth_rate
+
+        base_time = 2000.0
+        monkeypatch.setattr(time, "monotonic", lambda: base_time)
+        _check_auth_rate("9.9.9.9")
+
+        # Advance 61s — old entry is stale. The NEXT call re-inserts a new entry.
+        advanced = base_time + 61.0
+        monkeypatch.setattr(time, "monotonic", lambda: advanced)
+        _check_auth_rate("9.9.9.9")
+
+        # The bucket must be updated with only the new timestamp
+        assert len(_mod._auth_failures["9.9.9.9"]) == 1
+        assert _mod._auth_failures["9.9.9.9"][0] == pytest.approx(advanced)

@@ -103,14 +103,16 @@ _AUTH_FAILURE_RPM: int = 60  # max 60 failed auth attempts per IP per minute
 def _check_auth_rate(client_ip: str) -> bool:
     """Return True if under the auth failure rate limit."""
     now = time.monotonic()
-    hits = _auth_failures.setdefault(client_ip, [])
-    # Prune old entries
     cutoff = now - 60.0
-    _auth_failures[client_ip] = [t for t in hits if t > cutoff]
-    hits = _auth_failures[client_ip]
+    hits = [t for t in _auth_failures.get(client_ip, []) if t > cutoff]
+    if hits:
+        _auth_failures[client_ip] = hits
+    else:
+        _auth_failures.pop(client_ip, None)
     if len(hits) >= _AUTH_FAILURE_RPM:
         return False
     hits.append(now)
+    _auth_failures[client_ip] = hits
     return True
 
 

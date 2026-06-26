@@ -173,3 +173,30 @@ class XataControlClient:
     async def branch_connection_string(self, project_id: str, branch_id: str) -> str | None:
         """The branch's Postgres endpoint (None until the cluster is ready)."""
         return (await self.get_branch(project_id, branch_id)).get("connectionString")
+
+    # ---- new Xata (xata.tech): build endpoint from branch + credentials --------
+    async def get_branch_credentials(self, project_id: str, branch_id: str, username: str = "xata") -> dict:
+        """Return {username, password} for a branch's Postgres role (new Xata API)."""
+        org = _url_quote(self._cfg.org, safe="")
+        return await self._request(
+            "GET",
+            f"/organizations/{org}/projects/{project_id}/branches/{branch_id}/credentials"
+            f"?username={_url_quote(username, safe='')}",
+        )
+
+    async def resolve_branch_endpoint(self, project_id: str, branch_name: str, database: str = "xata") -> str:
+        """Resolve a branch (by name) to a full Postgres connection string.
+
+        New Xata: each branch is its own host (<branchID>.<region>.xata.tech). We
+        look up the branch by name, fetch the xata-user credentials, and assemble
+        the URL server-side — the agent never sees host or password.
+        """
+        branches = await self.list_branches(project_id)
+        b = next((x for x in branches if x.get("name") == branch_name), None)
+        if not b:
+            raise XataControlError(f"branch '{branch_name}' not found in project {project_id}")
+        creds = await self.get_branch_credentials(project_id, b["id"])
+        user = _url_quote(creds.get("username", "xata"), safe="")
+        pw = _url_quote(creds.get("password", ""), safe="")
+        host = f"{b['id']}.{b['region']}.xata.tech"
+        return f"postgresql://{user}:{pw}@{host}/{_url_quote(database, safe='')}?sslmode=require"

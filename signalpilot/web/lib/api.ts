@@ -762,6 +762,19 @@ export const approveKnowledgeDoc = (id: string) =>
 export const listKnowledgeEdits = (id: string, limit = 20) =>
   request<KnowledgeEdit[]>(`/api/knowledge/${id}/edits?limit=${limit}`);
 
+// Reports (rendered HTML)
+import type { Report, ReportSummary } from "./types";
+
+export const listReports = (params?: { scope_ref?: string }) => {
+  const qs = params?.scope_ref ? `?scope_ref=${encodeURIComponent(params.scope_ref)}` : "";
+  return request<ReportSummary[]>(`/api/reports${qs}`);
+};
+export const getReport = (id: string) => request<Report>(`/api/reports/${id}`);
+export const createReport = (payload: { title: string; html: string; scope_ref?: string | null }) =>
+  request<Report>("/api/reports", { method: "POST", body: JSON.stringify(payload) });
+export const deleteReport = (id: string) =>
+  request<void>(`/api/reports/${id}`, { method: "DELETE" });
+
 // Notion Integrations
 export type NotionIntegration = { id: string; name: string; search_page_ids: string[]; report_parent_page_id: string | null; status: string; created_at: number; org_id: string | null };
 export type NotionOAuthInstallationConfig = {

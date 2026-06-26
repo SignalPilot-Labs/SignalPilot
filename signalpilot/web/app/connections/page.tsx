@@ -367,11 +367,22 @@ const DB_CONFIGS: Record<DBType, DBTypeConfig> = {
     fields: ["database"],
     description: "Lightweight file-based database",
   },
+  xata: {
+    label: "Xata",
+    shortLabel: "xata",
+    defaultPort: 5432,
+    category: "warehouse",
+    supportsSSH: false,
+    supportsSSL: false,
+    connectionModes: ["fields"],
+    fields: ["branch"],
+    description: "Postgres at scale with instant branches",
+  },
 };
 
 const DB_TYPE_ORDER: DBType[] = [
   "postgres", "mysql", "mssql", "redshift", "snowflake", "bigquery",
-  "clickhouse", "databricks", "trino", "duckdb", "sqlite",
+  "clickhouse", "databricks", "trino", "xata", "duckdb", "sqlite",
 ];
 
 /* ── Connector tier classification (HEX pattern) ── */
@@ -380,6 +391,7 @@ const CONNECTOR_TIERS: Record<DBType, { tier: number; label: string; color: stri
   mysql:      { tier: 1, label: "T1", color: "text-emerald-400 border-emerald-500/30" },
   snowflake:  { tier: 1, label: "T1", color: "text-emerald-400 border-emerald-500/30" },
   bigquery:   { tier: 1, label: "T1", color: "text-emerald-400 border-emerald-500/30" },
+  xata:       { tier: 1, label: "T1", color: "text-emerald-400 border-emerald-500/30" },
   mssql:      { tier: 2, label: "T2", color: "text-sky-400 border-sky-500/30" },
   redshift:   { tier: 2, label: "T2", color: "text-sky-400 border-sky-500/30" },
   clickhouse: { tier: 2, label: "T2", color: "text-sky-400 border-sky-500/30" },
@@ -478,6 +490,12 @@ const CONNECTION_PRESETS: ConnectionPreset[] = [
     defaults: { database: "md:", duckdb_mode: "motherduck", description: "MotherDuck cloud DuckDB" },
   },
   {
+    label: "Xata Postgres",
+    db_type: "xata",
+    icon: "🦋",
+    defaults: { branch: "main", xata_database: "xata", xata_api_url: "https://api.xata.tech", description: "Xata Postgres project" },
+  },
+  {
     label: "SSH Tunnel (any DB)",
     db_type: "postgres",
     icon: "🔒",
@@ -571,6 +589,16 @@ function DbTypeIcon({ type, size = 12 }: { type: string; size?: number }) {
         <svg width={size} height={size} viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
           <circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="0.75" fill="none" />
           <path d="M4 4L6 8L8 4" stroke="currentColor" strokeWidth="0.75" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+        </svg>
+      );
+    case "xata":
+      return (
+        <svg width={size} height={size} viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
+          <line x1="6" y1="2" x2="6" y2="10" stroke="currentColor" strokeWidth="0.75" />
+          <path d="M6 4C4.5 2.5 2 2.5 2 4.5C2 6 4 6.5 6 6" stroke="currentColor" strokeWidth="0.75" fill="none" strokeLinecap="round" />
+          <path d="M6 4C7.5 2.5 10 2.5 10 4.5C10 6 8 6.5 6 6" stroke="currentColor" strokeWidth="0.75" fill="none" strokeLinecap="round" />
+          <path d="M6 6C4.5 6 3 7 3 8.5C3 9.5 5 9.5 6 8" stroke="currentColor" strokeWidth="0.5" opacity="0.6" fill="none" strokeLinecap="round" />
+          <path d="M6 6C7.5 6 9 7 9 8.5C9 9.5 7 9.5 6 8" stroke="currentColor" strokeWidth="0.5" opacity="0.6" fill="none" strokeLinecap="round" />
         </svg>
       );
     case "sqlite":
@@ -719,6 +747,14 @@ interface FormState {
   databricks_auth_method: "pat" | "oauth_m2m" | "oauth_u2m";
   dbx_oauth_client_id: string;
   dbx_oauth_client_secret: string;
+  // Xata — a "connection" is org + project + branch; the gateway resolves the per-branch
+  // Postgres endpoint server-side. xata_api_key is the control-plane secret (xau_...).
+  branch: string;
+  xata_api_key: string;
+  xata_organization: string;
+  xata_project: string;
+  xata_database: string;
+  xata_api_url: string;
   // SSL
   ssl_enabled: boolean;
   ssl_mode: string;
@@ -803,6 +839,9 @@ const defaultForm: FormState = {
   ch_protocol: "native",
   http_path: "", access_token: "", catalog: "",
   databricks_auth_method: "pat", dbx_oauth_client_id: "", dbx_oauth_client_secret: "",
+  branch: "main",
+  xata_api_key: "", xata_organization: "", xata_project: "", xata_database: "xata",
+  xata_api_url: "https://api.xata.tech",
   ssl_enabled: false, ssl_mode: "require", ssl_ca_cert: "", ssl_client_cert: "", ssl_client_key: "",
   ssh_enabled: false, ssh_host: "", ssh_port: "22", ssh_username: "", ssh_auth_method: "password",
   ssh_password: "", ssh_private_key: "", ssh_key_passphrase: "",
@@ -866,6 +905,8 @@ function buildConnectionPreview(form: FormState): string {
       const trinoPort = form.port || (form.trino_https ? "443" : "8080");
       return `${trinoScheme}://${form.username || "trino"}${form.password ? ":****" : ""}@${form.host || "host"}:${trinoPort}/${form.catalog || "catalog"}${form.schema_name ? `/${form.schema_name}` : ""}`;
     }
+    case "xata":
+      return `xata://${form.xata_organization || "organization"}/${form.xata_project || "project"}/${form.branch || "main"}`;
     case "duckdb":
     case "sqlite":
       return form.database || ":memory:";
@@ -1027,6 +1068,12 @@ function validateForm(form: FormState): Record<string, string> {
     }
   }
 
+  if (form.db_type === "xata") {
+    if (!form.xata_api_key.trim()) errors.xata_api_key = "API key is required";
+    if (!form.xata_organization.trim()) errors.xata_organization = "organization id is required";
+    if (!form.xata_project.trim()) errors.xata_project = "project id is required";
+  }
+
   if (form.db_type === "bigquery") {
     if (!form.project.trim()) errors.project = "GCP project ID is required";
     if (form.bq_auth_method === "service_account" && !form.credentials_json.trim()) {
@@ -1154,6 +1201,17 @@ function buildCreatePayload(form: FormState): Record<string, unknown> {
   // ClickHouse protocol
   if (form.db_type === "clickhouse" && form.ch_protocol === "http") {
     payload.protocol = "http";
+  }
+
+  // Xata — org + project + branch scoped. The gateway resolves the per-branch Postgres
+  // endpoint (<branchID>.<region>.xata.tech) server-side from the control-plane API key.
+  if (form.db_type === "xata") {
+    payload.xata_api_key = form.xata_api_key;
+    payload.xata_organization = form.xata_organization.trim();
+    payload.xata_project = form.xata_project.trim();
+    payload.branch = form.branch.trim() || "main";
+    payload.xata_database = form.xata_database.trim() || "xata";
+    if (form.xata_api_url.trim()) payload.xata_api_url = form.xata_api_url.trim();
   }
 
   // Trino — auth method and HTTPS connection string
@@ -1329,6 +1387,7 @@ function ConnectionFieldsForm({
 }) {
   const config = DB_CONFIGS[form.db_type];
   const [showSnowflakeAdvanced, setShowSnowflakeAdvanced] = useState(false);
+  const [showXataAdvanced, setShowXataAdvanced] = useState(false);
 
   /** Wrap onChange to also clear the server error for this field key. */
   function field(key: keyof FormState, update: (v: string) => void) {
@@ -1542,6 +1601,41 @@ function ConnectionFieldsForm({
           <div><span className="text-[var(--color-text-muted)]">network policy:</span> Add this server&apos;s IP to ALLOWED_IP_LIST. Snowflake Admin → Security → Network Policies.</div>
           <div><span className="text-[var(--color-text-muted)]">private link:</span> For AWS PrivateLink or Azure Private Link, use the private account URL (e.g., org-account.privatelink.snowflakecomputing.com).</div>
           <div><span className="text-[var(--color-text-muted)]">vpn:</span> If your Snowflake is behind a VPN, ensure SignalPilot has network access to the Snowflake endpoint.</div>
+        </div>
+      </>
+    );
+  }
+
+  // Xata fields — a connection is org + project + branch; the agent never sees a raw DB URL.
+  if (form.db_type === "xata") {
+    const xataAdvancedSet = form.xata_api_url.trim() !== "" && form.xata_api_url.trim() !== "https://api.xata.tech";
+    return (
+      <>
+        <FormInput label="API key" value={form.xata_api_key} onChange={field("xata_api_key", (v) => setForm({ ...form, xata_api_key: v }))} type="password" placeholder="xau_..." hint="Xata control-plane API key" required className="col-span-2" {...fieldProps("xata_api_key", formErrors, fieldRefs)} />
+        <FormInput label="organization" value={form.xata_organization} onChange={field("xata_organization", (v) => setForm({ ...form, xata_organization: v }))} placeholder="0psl2d" hint="Xata organization id" required {...fieldProps("xata_organization", formErrors, fieldRefs)} />
+        <FormInput label="project" value={form.xata_project} onChange={field("xata_project", (v) => setForm({ ...form, xata_project: v }))} placeholder="prj_037kol78gl76p88o6fngc8s1jk" hint="Xata project id" required {...fieldProps("xata_project", formErrors, fieldRefs)} />
+        <FormInput label="branch" value={form.branch} onChange={(v) => setForm({ ...form, branch: v })} placeholder="main" hint="optional — defaults to main" />
+        <FormInput label="database" value={form.xata_database} onChange={(v) => setForm({ ...form, xata_database: v })} placeholder="xata" hint="optional — defaults to xata" />
+        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+          <div><Lock className="w-3 h-3 inline mr-1 -mt-0.5" strokeWidth={1.5} /><span className="text-[var(--color-text-muted)]">security:</span> the API key is stored encrypted; the agent only ever receives a governed per-branch endpoint, never the raw URL or key.</div>
+        </div>
+
+        {/* Advanced — control-plane endpoint (only for self-hosted / non-default control planes) */}
+        <div className="col-span-2">
+          <button
+            type="button"
+            onClick={() => setShowXataAdvanced(!showXataAdvanced)}
+            className="flex items-center gap-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider mb-2"
+          >
+            {showXataAdvanced ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            advanced — control plane (optional)
+            {xataAdvancedSet && <span className="text-[var(--color-success)] text-[11px] ml-1">configured</span>}
+          </button>
+          {showXataAdvanced && (
+            <div className="animate-fade-in grid grid-cols-2 gap-3">
+              <FormInput label="control-plane API url" value={form.xata_api_url} onChange={(v) => setForm({ ...form, xata_api_url: v })} placeholder="https://api.xata.tech" hint="optional — only for self-hosted / non-default control planes" className="col-span-2" />
+            </div>
+          )}
         </div>
       </>
     );
@@ -2654,6 +2748,13 @@ export default function ConnectionsPage() {
       bq_max_bytes_billed: (conn as any).maximum_bytes_billed ? String((conn as any).maximum_bytes_billed) : "",
       http_path: conn.http_path || "",
       catalog: conn.catalog || "",
+      // Xata (secrets are never pre-filled)
+      branch: (conn as any).branch || (conn.db_type === "xata" ? "main" : ""),
+      xata_api_key: "",
+      xata_organization: (conn as any).xata_organization || "",
+      xata_project: (conn as any).xata_project || "",
+      xata_database: (conn as any).xata_database || (conn.db_type === "xata" ? "xata" : ""),
+      xata_api_url: (conn as any).xata_api_url || (conn.db_type === "xata" ? "https://api.xata.tech" : ""),
       ssl_enabled: conn.ssl || false,
       ssl_mode: conn.ssl_config?.mode || "require",
       ssl_ca_cert: conn.ssl_config?.ca_cert || "",

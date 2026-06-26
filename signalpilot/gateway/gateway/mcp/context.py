@@ -18,6 +18,7 @@ mcp_raw_key_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mc
 mcp_audit_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_audit_id", default=None)
 mcp_client_ip_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_client_ip", default=None)
 mcp_user_agent_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_user_agent", default=None)
+mcp_scopes_var: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar("mcp_scopes", default=None)
 
 _is_cloud = _os.environ.get("SP_DEPLOYMENT_MODE") == "cloud"
 
@@ -50,6 +51,20 @@ async def _store_session(user_id: str | None = None, org_id: str | None = None):
             yield Store(session, org_id=org_id, user_id=user_id)
     finally:
         current_org_id_var.reset(token)
+
+
+def _require_mcp_admin_scope() -> str | None:
+    """Return None if the caller has admin scope; otherwise a user-facing error string.
+
+    Mirrors the HTTP-side RequireScope("admin") for MCP tools. Bypass:
+      - local-mode org_id "local" — same bypass as `scope_guard.require_scopes` Case 2.
+    """
+    if mcp_org_id_var.get(None) == "local":
+        return None
+    scopes = mcp_scopes_var.get(None) or []
+    if "admin" in scopes:
+        return None
+    return "Error: admin scope required for this action"
 
 
 def _gateway_url() -> str:

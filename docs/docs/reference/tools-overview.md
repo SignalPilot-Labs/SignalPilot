@@ -171,7 +171,9 @@ See [Operational tools](/docs/reference/tools-ops).
 |------|-------------|
 | `get_knowledge` | Load baseline docs + task-relevant knowledge entries |
 | `search_knowledge` | Agent-directed search across the knowledge base |
-| `propose_knowledge` | Propose a new knowledge entry after a run |
+| `propose_knowledge` | Propose a new knowledge entry, or edit one in place with `overwrite=true` |
+| `archive_knowledge` | Archive (soft-delete) a knowledge entry by ID |
+| `manage_report` | Create or permanently delete a rendered HTML report |
 
 ## Notion Integration (4 tools)
 

@@ -461,6 +461,29 @@ class GatewayKnowledgeDoc(GatewayBase):
     )
 
 
+class GatewayReport(GatewayBase):
+    """Rendered HTML reports — org-scoped, optionally grouped by project (scope_ref)."""
+
+    __tablename__ = "gateway_reports"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    scope_ref: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    html: Mapped[str] = mapped_column(Text, nullable=False)
+    bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    view_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    proposed_by_agent: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    __table_args__ = (
+        Index("idx_reports_org_created", "org_id", "created_at"),
+        Index("idx_reports_org_scope", "org_id", "scope_ref"),
+    )
+
+
 class GatewayKnowledgeEdit(GatewayBase):
     """Edit history for Knowledge Base documents."""
 

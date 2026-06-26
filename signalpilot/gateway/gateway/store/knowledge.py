@@ -390,9 +390,17 @@ async def upsert_knowledge_doc(
         )
         session.add(edit)
 
-        # Cloud-only: agent-driven update of an active doc must be re-reviewed.
+        # Status transitions on edit:
+        #   - Cloud agent edits → pending review (governance).
+        #   - All other edits   → preserve existing status. Archived docs STAY archived;
+        #     an explicit unarchive is required to bring them back. Keeping this
+        #     conservative prevents a guessed (scope, scope_ref, category, title) key
+        #     from silently resurrecting a tombstoned doc via overwrite=True.
         if agent is not None and is_cloud_mode():
             existing.status = KnowledgeStatus.pending.value
+        elif existing.status != KnowledgeStatus.archived.value:
+            existing.status = KnowledgeStatus.active.value
+        # else: archived stays archived
 
         existing.body = payload.body
         existing.bytes = body_bytes

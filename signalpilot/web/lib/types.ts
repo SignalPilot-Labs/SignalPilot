@@ -49,6 +49,23 @@ export interface KnowledgeUsage {
   storage_limit_mb: number;
 }
 
+export interface ReportSummary {
+  id: string;
+  org_id: string;
+  scope_ref: string | null;
+  title: string;
+  bytes: number;
+  view_count: number;
+  created_at: number;
+  updated_at: number;
+  created_by: string | null;
+  proposed_by_agent: string | null;
+}
+
+export interface Report extends ReportSummary {
+  html: string;
+}
+
 export type DBType =
   | "postgres"
   | "duckdb"
@@ -60,7 +77,8 @@ export type DBType =
   | "databricks"
   | "mssql"
   | "trino"
-  | "sqlite";
+  | "sqlite"
+  | "xata";
 
 export interface SSHTunnelConfig {
   enabled: boolean;
@@ -110,6 +128,12 @@ export interface ConnectionInfo {
   // Databricks
   http_path: string | null;
   catalog: string | null;
+  // Xata (org/project/branch-scoped; gateway resolves the per-branch Postgres endpoint server-side)
+  branch: string | null;
+  xata_organization: string | null;
+  xata_project: string | null;
+  xata_database: string | null;
+  xata_api_url: string | null;
   // Meta
   description: string;
   tags: string[];

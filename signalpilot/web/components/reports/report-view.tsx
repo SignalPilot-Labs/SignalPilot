@@ -98,12 +98,20 @@ export function ReportViewer({
     );
   }
 
-  // Open the raw HTML document in a new tab — no app chrome, just the file.
+  // Download the raw HTML as a file rather than navigating to a blob: URL.
+  // A blob: URL inherits the app origin, which would let agent-controlled
+  // report HTML run scripts in the SignalPilot origin (sessionStorage API key,
+  // same-origin fetches). Anchor downloads do not execute the document.
   function openRaw() {
     const blob = new Blob([report!.html], { type: "text/html" });
     const url = URL.createObjectURL(blob);
-    const win = window.open(url, "_blank", "noopener,noreferrer");
-    if (!win) toast("popup blocked — allow popups to open the report", "error");
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${report!.title || "report"}.html`;
+    a.rel = "noopener noreferrer";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
@@ -152,7 +160,7 @@ export function ReportViewer({
           </button>
           <button
             onClick={openRaw}
-            title="open raw HTML in new tab"
+            title="download raw HTML"
             className="p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
           >
             <ExternalLink className="w-3.5 h-3.5" />

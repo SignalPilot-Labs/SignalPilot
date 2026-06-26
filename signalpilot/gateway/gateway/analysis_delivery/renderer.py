@@ -103,8 +103,11 @@ async def render_delivery(
     packet: DeliveryPacket,
     *,
     renderer: DeliveryRenderer | None = None,
+    api_key: str | None = None,
 ) -> DeliveryResult:
-    return await (renderer or DeliveryRenderer()).render(packet)
+    if renderer is not None:
+        return await renderer.render(packet)
+    return await DeliveryRenderer(api_key=api_key).render(packet)
 
 
 def fallback_delivery(packet: DeliveryPacket) -> DeliveryResult:
@@ -127,8 +130,12 @@ def fallback_delivery(packet: DeliveryPacket) -> DeliveryResult:
     return DeliveryResult(
         summary=_clip(_string(notebook_outputs.get("summary")) or fallback_text, 500),
         slack_message=fallback_text,
-        notion_comment=_clip(_string(notebook_outputs.get("notionComment") or notebook_outputs.get("notion_comment")) or fallback_text, 1200),
-        final_answer=_string(notebook_outputs.get("finalAnswer") or notebook_outputs.get("final_answer")) or fallback_text,
+        notion_comment=_clip(
+            _string(notebook_outputs.get("notionComment") or notebook_outputs.get("notion_comment")) or fallback_text,
+            1200,
+        ),
+        final_answer=_string(notebook_outputs.get("finalAnswer") or notebook_outputs.get("final_answer"))
+        or fallback_text,
         gotchas=gotchas,
         analysis_method=method,
         notion_charts=[_clean_chart_labels(chart) for chart in packet.charts],
@@ -195,7 +202,9 @@ def _delivery_result_from_payload(payload: dict[str, Any], packet: DeliveryPacke
     charts_raw = payload.get("notionCharts")
     if not isinstance(gotchas_raw, list) or not isinstance(charts_raw, list):
         return None
-    allowed_chart_keys = {_string(chart.get("url")) or _string(chart.get("title")) for chart in packet.charts if isinstance(chart, dict)}
+    allowed_chart_keys = {
+        _string(chart.get("url")) or _string(chart.get("title")) for chart in packet.charts if isinstance(chart, dict)
+    }
     charts: list[dict[str, Any]] = []
     for chart in charts_raw:
         if not isinstance(chart, dict):

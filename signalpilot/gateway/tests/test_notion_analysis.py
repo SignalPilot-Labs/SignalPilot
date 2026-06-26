@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from gateway.analysis_delivery import DeliveryPacket, WorkerPlan, WorkerProgress
+from gateway.analysis_delivery import DeliveryPacket, DeliveryResult, WorkerPlan, WorkerProgress
 from gateway.db.models import NotionInstallation, NotionInstallationConfig
 from gateway.notebooks.session_service import NotebookRuntime
 from gateway.notion import analysis as notion_analysis
@@ -240,7 +240,9 @@ async def test_missing_default_project_posts_setup_required_failure(monkeypatch:
 
 
 @pytest.mark.asyncio
-async def test_notion_preflight_greeting_posts_direct_reply_without_request_page(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_notion_preflight_greeting_posts_direct_reply_without_request_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[str] = []
     install = NotionInstallation(
         id="install-1",
@@ -347,6 +349,147 @@ async def test_notion_trace_progress_updates_comment_only(monkeypatch: pytest.Mo
     assert "Loading:" not in comment_text
 
 
+@pytest.mark.asyncio
+async def test_process_routed_comment_event_uses_user_secret_for_delivery_renderer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    render_api_keys: list[str | None] = []
+    install = NotionInstallation(
+        id="install-1",
+        org_id="org-1",
+        user_id="user-1",
+        workspace_id="workspace-1",
+        bot_id="bot-1",
+        access_token_enc=b"encrypted",
+        status="active",
+    )
+    config = NotionInstallationConfig(
+        installation_id="install-1",
+        parent_page_id=None,
+        trigger_page_id="trigger-1",
+        requests_data_source_id="ds-1",
+        requests_database_page_id="db-1",
+        enabled=True,
+        default_project_id="project-1",
+        default_branch="main",
+        analysis_branch_mode="per_request",
+    )
+    routed = RoutedNotionInstallation(installation=install, config=config, access_token="token-1")
+    db = MagicMock()
+    payload = {
+        "id": "event-1",
+        "entity": {"id": "comment-1"},
+        "data": {"page_id": "page-1"},
+        "authors": [{"id": "notion-user-1", "type": "person"}],
+    }
+    comment = {"id": "comment-1", "discussion_id": "discussion-1", "rich_text": []}
+    runtime = NotebookRuntime(
+        session_id="runtime-1",
+        internal_base_url="http://notebook.internal/notebook/runtime-1",
+        public_base_url="https://app.test/notebook/runtime-1",
+    )
+    route = notion_analysis.AnalysisRoute(
+        source="notion",
+        request_id="notion-req-1",
+        project_id="project-1",
+        branch="analysis/notion/notion-req-1-revenue",
+        default_branch="main",
+        analysis_user_id="analysis:notion:notion-req-1",
+    )
+
+    async def list_comments(*args, **kwargs):
+        return [comment]
+
+    async def query_request_page_by_source(*args, **kwargs):
+        return None
+
+    async def create_request_page(*args, **kwargs):
+        return {"id": "request-page-1", "url": "https://notion.test/request-page-1"}
+
+    async def update_page_properties(*args, **kwargs):
+        return None
+
+    async def append_page_blocks(*args, **kwargs):
+        return None
+
+    async def create_comment(*args, **kwargs):
+        return {"id": "progress-comment-1"}
+
+    async def delete_comment(*args, **kwargs):
+        return None
+
+    async def resolve_route(*args, **kwargs):
+        return route
+
+    async def ensure_runtime(*args, **kwargs):
+        return runtime
+
+    async def noop_async(*args, **kwargs):
+        return None
+
+    async def call_notebook(*args, **kwargs):
+        return {"requestId": "notion-req-1", "trailUrl": "https://app.test/projects?file=analysis.py"}
+
+    async def poll_analysis(*args, **kwargs):
+        return {
+            "status": "Done",
+            "requestId": "notion-req-1",
+            "sessionId": "session-notion-req-1",
+            "summary": "Done",
+        }
+
+    async def load_delivery_packet(*args, **kwargs):
+        assert kwargs["user_id"] == "user-1"
+        return DeliveryPacket(user_request="Analyze revenue by month", status="done")
+
+    async def delivery_api_key_for_user(*args, **kwargs):
+        assert args == (db,)
+        assert kwargs == {"org_id": "org-1", "user_id": "user-1"}
+        return "sk-ant-user"
+
+    async def render_delivery(packet, *, api_key=None, renderer=None):
+        del packet, renderer
+        render_api_keys.append(api_key)
+        return DeliveryResult(
+            summary="Done",
+            slack_message="- Done",
+            notion_comment="- Done",
+            final_answer="- Done",
+            confidence_score=1.0,
+        )
+
+    async def upload_chart_images_to_notion(_token, status, _runtime):
+        return status
+
+    monkeypatch.setattr(notion_client, "list_comments", list_comments)
+    monkeypatch.setattr(notion_client, "query_request_page_by_source", query_request_page_by_source)
+    monkeypatch.setattr(notion_client, "create_request_page", create_request_page)
+    monkeypatch.setattr(notion_client, "update_page_properties", update_page_properties)
+    monkeypatch.setattr(notion_client, "append_page_blocks", append_page_blocks)
+    monkeypatch.setattr(notion_client, "create_comment", create_comment)
+    monkeypatch.setattr(notion_client, "delete_comment", delete_comment)
+    monkeypatch.setattr(notion_client, "is_bot_comment", lambda _comment: False)
+    monkeypatch.setattr(notion_client, "comment_has_page_mention", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(notion_client, "extract_comment_text", lambda _comment: "Analyze revenue by month")
+    monkeypatch.setattr(notion_analysis, "resolve_configured_analysis_route", resolve_route)
+    monkeypatch.setattr(notion_analysis, "ensure_analysis_notebook_session", ensure_runtime)
+    monkeypatch.setattr(notion_analysis, "upsert_analysis_trail_seed", noop_async)
+    monkeypatch.setattr(notion_analysis, "upsert_analysis_trail_from_status", noop_async)
+    monkeypatch.setattr(notion_analysis, "update_analysis_trail_from_status", noop_async)
+    monkeypatch.setattr(notion_analysis, "_call_notebook", call_notebook)
+    monkeypatch.setattr(notion_analysis, "_poll_analysis", poll_analysis)
+    monkeypatch.setattr(notion_analysis, "_with_public_chart_urls", lambda status, runtime: status)
+    monkeypatch.setattr(notion_analysis, "_upload_chart_images_to_notion", upload_chart_images_to_notion)
+    monkeypatch.setattr(notion_analysis, "load_delivery_packet", load_delivery_packet)
+    monkeypatch.setattr(notion_analysis, "delivery_api_key_for_user", delivery_api_key_for_user)
+    monkeypatch.setattr(notion_analysis, "render_delivery", render_delivery)
+
+    result = await notion_analysis.process_routed_comment_event(routed, payload, db=db)
+
+    assert result.status == "processed"
+    assert render_api_keys == ["sk-ant-user"]
+
+
 def test_public_signalpilot_url_preserves_durable_notebooks_trail_url() -> None:
     runtime = NotebookRuntime(
         session_id="runtime-session-1",
@@ -379,8 +522,7 @@ def test_public_signalpilot_url_rewrites_internal_notebooks_trail_to_app_origin(
     rewritten = notion_analysis._public_signalpilot_url(wrong_url, runtime)
 
     assert (
-        rewritten
-        == "https://app.signalpilot.ai/projects?"
+        rewritten == "https://app.signalpilot.ai/projects?"
         "file=signalpilot-notion-analyses/do-an-analysis-of-my-db-9a50e7.py"
         "&session_id=session-notion-97728a45b49a50e7"
     )
@@ -403,8 +545,7 @@ def test_public_signalpilot_url_rewrites_relative_notebooks_trail_to_app_origin(
         rewritten = notion_analysis._public_signalpilot_url(url, runtime)
 
         assert (
-            rewritten
-            == "https://app.signalpilot.ai/projects?"
+            rewritten == "https://app.signalpilot.ai/projects?"
             "file=signalpilot-notion-analyses/analysis.py&session_id=session-notion-abc123"
         )
 
@@ -417,19 +558,12 @@ def test_public_signalpilot_url_rewrites_runtime_urls_to_public_runtime_proxy() 
     )
 
     rewritten = notion_analysis._public_signalpilot_url(
-        "http://10.0.0.5:2718/notebook/runtime-session-1/"
-        "api/notion-analysis/chart/notion-1/chart.png",
+        "http://10.0.0.5:2718/notebook/runtime-session-1/api/notion-analysis/chart/notion-1/chart.png",
         runtime,
     )
 
-    expected = (
-        "https://app.signalpilot.ai/notebook/runtime-session-1/"
-        "api/notion-analysis/chart/notion-1/chart.png"
-    )
-    assert (
-        rewritten
-        == expected
-    )
+    expected = "https://app.signalpilot.ai/notebook/runtime-session-1/api/notion-analysis/chart/notion-1/chart.png"
+    assert rewritten == expected
 
 
 def test_final_comment_rich_text_formats_bullets_links_and_code() -> None:
@@ -447,7 +581,9 @@ def test_final_comment_rich_text_formats_bullets_links_and_code() -> None:
         part.get("text", {}).get("content") == "orders" and part.get("annotations", {}).get("code") is True
         for part in rich_text
     )
-    assert any(part.get("text", {}).get("link", {}).get("url") == "https://charts.test/revenue.png" for part in rich_text)
+    assert any(
+        part.get("text", {}).get("link", {}).get("url") == "https://charts.test/revenue.png" for part in rich_text
+    )
     assert any(part.get("text", {}).get("link", {}).get("url") == request_url for part in rich_text)
 
 
@@ -467,8 +603,7 @@ def test_final_comment_rich_text_avoids_duplicate_bullet_markers_and_formats_bol
     assert content.startswith("• MapleCloud Software")
     assert "\n• Northstar Logistics" in content
     assert any(
-        part.get("text", {}).get("content") == "MapleCloud Software"
-        and part.get("annotations", {}).get("bold") is True
+        part.get("text", {}).get("content") == "MapleCloud Software" and part.get("annotations", {}).get("bold") is True
         for part in rich_text
     )
 
@@ -477,9 +612,7 @@ def test_final_comment_rich_text_formats_italic_and_strikethrough() -> None:
     rich_text = notion_analysis._final_comment_rich_text(
         {
             "notionComment": (
-                "- *Expansion revenue* improved.\n"
-                "- _Pipeline coverage_ strengthened.\n"
-                "- ~~Legacy score~~ was removed."
+                "- *Expansion revenue* improved.\n- _Pipeline coverage_ strengthened.\n- ~~Legacy score~~ was removed."
             )
         },
         "https://notion.test/request-page-1",
@@ -490,13 +623,11 @@ def test_final_comment_rich_text_formats_italic_and_strikethrough() -> None:
     assert "_Pipeline coverage_" not in content
     assert "~~Legacy score~~" not in content
     assert any(
-        part.get("text", {}).get("content") == "Expansion revenue"
-        and part.get("annotations", {}).get("italic") is True
+        part.get("text", {}).get("content") == "Expansion revenue" and part.get("annotations", {}).get("italic") is True
         for part in rich_text
     )
     assert any(
-        part.get("text", {}).get("content") == "Pipeline coverage"
-        and part.get("annotations", {}).get("italic") is True
+        part.get("text", {}).get("content") == "Pipeline coverage" and part.get("annotations", {}).get("italic") is True
         for part in rich_text
     )
     assert any(
@@ -607,8 +738,7 @@ def test_analysis_detail_blocks_prepend_uploaded_chart_images() -> None:
     assert blocks[1]["image"]["type"] == "file_upload"
     assert blocks[1]["image"]["file_upload"]["id"] == "upload-1"
     assert any(
-        part.get("text", {}).get("content") == "MapleCloud"
-        and part.get("annotations", {}).get("bold") is True
+        part.get("text", {}).get("content") == "MapleCloud" and part.get("annotations", {}).get("bold") is True
         for part in blocks[1]["image"]["caption"]
     )
 
@@ -736,10 +866,7 @@ async def test_create_final_comment_deletes_progress_comment_then_posts_attached
             "create",
             {
                 "text": (
-                    "• MapleCloud leads.\n\n"
-                    "Request page: request details\n\n"
-                    "Charts attached:\n"
-                    "• Momentum ranking"
+                    "• MapleCloud leads.\n\nRequest page: request details\n\nCharts attached:\n• Momentum ranking"
                 ),
                 "attachments": [
                     {
@@ -782,9 +909,7 @@ def test_analysis_detail_blocks_render_markdown_as_notion_blocks() -> None:
     blocks = notion_analysis._analysis_detail_blocks(status)
     block_types = [block["type"] for block in blocks]
     block_text = "".join(
-        rich_text.get("text", {}).get("content", "")
-        for block in blocks
-        for rich_text in _block_rich_text(block)
+        rich_text.get("text", {}).get("content", "") for block in blocks for rich_text in _block_rich_text(block)
     )
 
     assert block_types.count("heading_2") == 3
@@ -836,7 +961,8 @@ def test_analysis_detail_blocks_render_markdown_tables_and_bold_text() -> None:
 
     blocks = notion_analysis._analysis_detail_blocks(status)
     detail = next(
-        block for block in blocks
+        block
+        for block in blocks
         if block["type"] == "heading_2" and block["heading_2"]["rich_text"][0]["text"]["content"] == "Detailed Research"
     )
     children = detail["heading_2"]["children"]

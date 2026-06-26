@@ -1,5 +1,6 @@
 """Shared orchestration helpers for notebook-backed external analysis."""
 
+from .credentials import delivery_api_key_for_user
 from .preflight import (
     AnalysisPreflightDecision,
     AnalysisPreflightKind,
@@ -38,6 +39,7 @@ __all__ = [
     "WorkerPlan",
     "WorkerProgress",
     "classify_analysis_request",
+    "delivery_api_key_for_user",
     "delivery_result_to_status",
     "load_delivery_packet",
     "load_delivery_packet_from_events",

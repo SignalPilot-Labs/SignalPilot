@@ -10,12 +10,14 @@ from gateway.analysis_delivery import (
     AnalysisPreflightKind,
     DeliveryRenderer,
     classify_analysis_request,
+    delivery_api_key_for_user,
     delivery_result_to_status,
     load_delivery_packet,
     load_delivery_packet_from_events,
     render_slack_final_message,
     render_slack_progress_message,
 )
+from gateway.analysis_delivery import credentials as credentials_module
 from gateway.analysis_delivery import trace_loader as trace_loader_module
 from gateway.analysis_delivery.renderer import fallback_delivery
 from gateway.trace_markers import redact_trace_control_markers
@@ -210,6 +212,30 @@ def test_slack_progress_waits_for_worker_plan_then_uses_exact_steps() -> None:
 
 
 @pytest.mark.asyncio
+async def test_delivery_api_key_for_user_reads_stored_account_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    get_user_anthropic_key = AsyncMock(return_value="sk-ant-user")
+    monkeypatch.setattr(credentials_module.user_secrets_store, "get_user_anthropic_key", get_user_anthropic_key)
+
+    api_key = await delivery_api_key_for_user(AsyncMock(), org_id="org-1", user_id="user-1")
+
+    assert api_key == "sk-ant-user"
+    get_user_anthropic_key.assert_awaited_once()
+    assert get_user_anthropic_key.await_args.args[1:] == ("org-1", "user-1")
+
+
+@pytest.mark.asyncio
+async def test_delivery_api_key_for_user_disables_model_delivery_without_account_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    get_user_anthropic_key = AsyncMock(return_value=None)
+    monkeypatch.setattr(credentials_module.user_secrets_store, "get_user_anthropic_key", get_user_anthropic_key)
+
+    api_key = await delivery_api_key_for_user(AsyncMock(), org_id="org-1", user_id="user-1")
+
+    assert api_key == ""
+
+
+@pytest.mark.asyncio
 async def test_delivery_renderer_falls_back_to_final_statement_without_model() -> None:
     packet = load_delivery_packet_from_events(
         [
@@ -237,6 +263,36 @@ async def test_delivery_renderer_falls_back_to_final_statement_without_model() -
     assert "- Revenue increased." in slack_text
     assert "*Confidence:* 0.8" in slack_text
     assert "<https://app.test/projects?file=analysis.py|Open authenticated notebook>" in slack_text
+
+
+@pytest.mark.asyncio
+async def test_delivery_renderer_empty_api_key_ignores_server_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "server-ant-key")
+    packet = load_delivery_packet_from_events(
+        [
+            {
+                "idx": 1,
+                "type": "text",
+                "content": (
+                    'FINAL_STATEMENT: {"statement":"Revenue increased.",'
+                    '"confidenceScore":0.8,"caveats":[],"handoffNotes":[]}'
+                ),
+            }
+        ],
+        status_payload={"status": "Done"},
+    )
+
+    class FailingClient:
+        async def post(self, *_args, **_kwargs):
+            raise AssertionError("server env key should not trigger model rendering")
+
+    delivery = await DeliveryRenderer(
+        model="claude-haiku-test",
+        api_key="",
+        http_client=FailingClient(),
+    ).render(packet)  # type: ignore[arg-type]
+
+    assert delivery.slack_message == "- Revenue increased."
 
 
 @pytest.mark.asyncio
@@ -336,7 +392,9 @@ async def test_delivery_renderer_preserves_packet_charts_when_model_returns_empt
             del headers, json
             return FakeResponse()
 
-    delivery = await DeliveryRenderer(model="claude-haiku-test", api_key="test-key", http_client=FakeClient()).render(packet)  # type: ignore[arg-type]
+    delivery = await DeliveryRenderer(model="claude-haiku-test", api_key="test-key", http_client=FakeClient()).render(
+        packet
+    )  # type: ignore[arg-type]
     status = delivery_result_to_status(delivery, packet)
 
     assert [chart["title"] for chart in delivery.notion_charts] == ["Revenue trend", "Margin ranking"]

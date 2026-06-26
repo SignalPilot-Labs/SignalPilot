@@ -621,20 +621,43 @@ def _analysis_source(value: str | None) -> str:
     return source or "notion"
 
 
-def _project_root(app_state: AppState) -> Path:
+def _analysis_project_context(
+    app_state: AppState,
+) -> tuple[str, str] | None:
     request = getattr(app_state, "request", None)
     headers = getattr(request, "headers", {}) or {}
-    project_id = headers.get("x-gateway-project-id")
-    if project_id:
-        branch = headers.get("x-gateway-branch-id", "main").strip() or "main"
+    query_params = getattr(app_state, "query_params", lambda _key: None)
+    project_id = (
+        headers.get("x-gateway-project-id", "")
+        or query_params("project")
+        or ""
+    ).strip()
+    if not project_id:
+        return None
+    branch = (
+        headers.get("x-gateway-branch-id", "")
+        or query_params("branch")
+        or "main"
+    ).strip() or "main"
+    return project_id, branch
+
+
+def _project_root(app_state: AppState) -> Path:
+    context = _analysis_project_context(app_state)
+    if context is not None:
+        project_id, branch = context
         try:
             from signalpilot._server.files.project_sync import (
+                _current_git_branch,
                 local_project_dir,
                 sync_down,
             )
 
             local_dir = local_project_dir(project_id, branch)
-            if (local_dir / ".git").exists():
+            if (
+                (local_dir / ".git").exists()
+                and _current_git_branch(local_dir) == branch
+            ):
                 return local_dir
 
             result = sync_down(project_id, branch)
@@ -862,19 +885,6 @@ def _(sp):
     else:
         text += followup_cell
     path.write_text(text, encoding="utf-8")
-
-
-def _analysis_project_context(app_state: AppState) -> tuple[str, str] | None:
-    project_id = app_state.request.headers.get(
-        "x-gateway-project-id", ""
-    ).strip()
-    if not project_id:
-        return None
-    branch = (
-        app_state.request.headers.get("x-gateway-branch-id", "main").strip()
-        or "main"
-    )
-    return project_id, branch
 
 
 def _checkpoint_analysis_files(
@@ -1244,8 +1254,58 @@ def _chart_dir(app_state: AppState, record: AnalysisRecord) -> Path:
     return chart_dir
 
 
-def _chart_url(record: AnalysisRecord, filename: str) -> str:
-    return f"/api/notion-analysis/chart/{record.request_id}/{filename}"
+def _chart_url(
+    app_state: AppState, record: AnalysisRecord, filename: str
+) -> str:
+    url = f"/api/notion-analysis/chart/{record.request_id}/{filename}"
+    context = _analysis_project_context(app_state)
+    if context is None:
+        return url
+    project_id, branch = context
+    return f"{url}?{urlencode({'project': project_id, 'branch': branch})}"
+
+
+def _chart_file_from_project_registries(
+    request_id: str, filename: str
+) -> Path | None:
+    try:
+        from signalpilot._server.files.project_sync import PROJECTS_ROOT
+    except Exception:
+        return None
+
+    for registry_path in PROJECTS_ROOT.glob(
+        "*/**/notebooks/.signalpilot-analysis-registry.json"
+    ):
+        try:
+            raw = json.loads(registry_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        records = raw.get("records", [])
+        if not isinstance(records, list):
+            continue
+        for item in records:
+            if (
+                not isinstance(item, dict)
+                or item.get("request_id") != request_id
+            ):
+                continue
+            notebook_path = item.get("notebook_path")
+            if not isinstance(notebook_path, str) or not notebook_path:
+                continue
+            repo = registry_path.parent.parent
+            chart_dir = (
+                repo
+                / notebook_path
+            ).parent / "public" / "signalpilot-notion-charts"
+            try:
+                resolved_dir = chart_dir.resolve(strict=True)
+                chart_path = (resolved_dir / filename).resolve(strict=True)
+                chart_path.relative_to(resolved_dir)
+            except (OSError, ValueError):
+                continue
+            if chart_path.is_file():
+                return chart_path
+    return None
 
 
 def _chart_filename_extension(content_type: str) -> str:
@@ -1356,7 +1416,7 @@ def _materialize_existing_chart_artifacts(
         materialized.append(
             AnalysisChart(
                 title=chart.title,
-                url=_chart_url(record, filename),
+                url=_chart_url(app_state, record, filename),
                 caption=chart.caption,
                 alt_text=chart.alt_text,
                 include_in_comment=chart.include_in_comment,
@@ -1505,6 +1565,21 @@ def _image_candidates_from_output_data(
     for mimetype, value in data.items():
         if not isinstance(mimetype, str):
             continue
+        if mimetype == "application/vnd.sp+mimebundle":
+            mimebundle = _load_sp_mimebundle(value)
+            if mimebundle is not None:
+                candidates.extend(
+                    _image_candidates_from_output_data(
+                        app_state,
+                        cell_id,
+                        {
+                            key: item
+                            for key, item in mimebundle.items()
+                            if key != "__metadata__"
+                        },
+                    )
+                )
+            continue
         if mimetype.startswith("image/"):
             if isinstance(value, bytes):
                 candidates.append(
@@ -1553,6 +1628,18 @@ def _image_candidates_from_output_data(
     return candidates
 
 
+def _load_sp_mimebundle(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def _safe_chart_cell_id(cell_id: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", cell_id).strip("-")
     return cleaned[:64] or "cell"
@@ -1579,7 +1666,7 @@ def _write_image_chart_artifacts(
             charts.append(
                 AnalysisChart(
                     title=title,
-                    url=_chart_url(record, filename),
+                    url=_chart_url(app_state, record, filename),
                     caption=title,
                     alt_text=title,
                     include_in_comment=True,
@@ -1589,6 +1676,28 @@ def _write_image_chart_artifacts(
             if len(charts) >= 2:
                 return charts
     return charts
+
+
+def _chart_identity(chart: AnalysisChart) -> str:
+    return chart.url.strip() or chart.title.strip()
+
+
+def _merge_chart_lists(
+    *chart_lists: list[AnalysisChart],
+    limit: int = 2,
+) -> list[AnalysisChart]:
+    merged: list[AnalysisChart] = []
+    seen: set[str] = set()
+    for charts in chart_lists:
+        for chart in charts:
+            key = _chart_identity(chart)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            merged.append(chart)
+            if len(merged) >= limit:
+                return merged
+    return merged
 
 
 _PLOTLY_FIGURE_ATTR_RE = re.compile(
@@ -2273,7 +2382,7 @@ def _write_plotly_chart_artifacts(
             charts.append(
                 AnalysisChart(
                     title=title,
-                    url=_chart_url(record, filename),
+                    url=_chart_url(app_state, record, filename),
                     caption=title,
                     alt_text=f"Chart from notebook cell {cell_id}: {title}",
                     include_in_comment=True,
@@ -2436,7 +2545,7 @@ def _write_result_fallback_chart_artifacts(
         charts.append(
             AnalysisChart(
                 title="Operating momentum composite ranking",
-                url=_chart_url(record, filename),
+                url=_chart_url(app_state, record, filename),
                 caption=f"{winner} has the highest composite momentum score.",
                 alt_text=(
                     "Horizontal bar chart ranking companies by composite "
@@ -2489,7 +2598,7 @@ def _write_result_fallback_chart_artifacts(
             charts.append(
                 AnalysisChart(
                     title="Operating momentum dimension breakdown",
-                    url=_chart_url(record, filename),
+                    url=_chart_url(app_state, record, filename),
                     caption=(
                         "Normalized comparison of the component momentum "
                         "dimensions from the final ranking table."
@@ -2512,6 +2621,12 @@ def _html_outputs_from_output_data(
     html_outputs: list[tuple[str, str]] = []
     for cell_id, data in output_data:
         raw_html = data.get("text/html")
+        if isinstance(raw_html, str):
+            html_outputs.append((cell_id, raw_html))
+        mimebundle = _load_sp_mimebundle(data.get("application/vnd.sp+mimebundle"))
+        if mimebundle is None:
+            continue
+        raw_html = mimebundle.get("text/html")
         if isinstance(raw_html, str):
             html_outputs.append((cell_id, raw_html))
     return html_outputs
@@ -2548,12 +2663,11 @@ def _fallback_chart_artifacts_from_session_cache(
             if not isinstance(data, dict):
                 continue
             output_data.append((cell_id, data))
-    charts = _write_plotly_chart_artifacts(
+    plotly_charts = _write_plotly_chart_artifacts(
         app_state, record, _html_outputs_from_output_data(output_data)
     )
-    if charts:
-        return charts
-    return _write_image_chart_artifacts(app_state, record, output_data)
+    image_charts = _write_image_chart_artifacts(app_state, record, output_data)
+    return _merge_chart_lists(plotly_charts, image_charts)
 
 
 def _fallback_chart_artifacts_from_session(
@@ -2572,15 +2686,15 @@ def _fallback_chart_artifacts_from_session(
         if not isinstance(output, CellOutput):
             continue
         output_data.append((str(cell_id), {output.mimetype: output.data}))
-    charts = _write_plotly_chart_artifacts(
+    plotly_charts = _write_plotly_chart_artifacts(
         app_state, record, _html_outputs_from_output_data(output_data)
     )
-    if charts:
+    image_charts = _write_image_chart_artifacts(app_state, record, output_data)
+    charts = _merge_chart_lists(plotly_charts, image_charts)
+    if len(charts) >= 2:
         return charts
-    charts = _write_image_chart_artifacts(app_state, record, output_data)
-    if charts:
-        return charts
-    return _fallback_chart_artifacts_from_session_cache(app_state, record)
+    cache_charts = _fallback_chart_artifacts_from_session_cache(app_state, record)
+    return _merge_chart_lists(charts, cache_charts)
 
 
 def _ensure_notion_chart_artifacts(
@@ -2593,31 +2707,20 @@ def _ensure_notion_chart_artifacts(
         for chart in (record.result.notion_charts or [])
         if chart.url.strip()
     ]
-    materialized = _materialize_existing_chart_artifacts(
-        app_state, record, existing_charts
-    )
-    if materialized:
-        record.result.notion_charts = materialized
-        return
-    generated = _fallback_chart_artifacts_from_session(app_state, record)
-    if generated:
-        record.result.notion_charts = generated
-    else:
-        generated = _write_result_fallback_chart_artifacts(app_state, record)
-        if generated:
-            record.result.notion_charts = generated
-            return
-    if generated:
-        return
-    elif existing_charts:
+    materialized = _materialize_existing_chart_artifacts(app_state, record, existing_charts)
+    session_charts = _fallback_chart_artifacts_from_session(app_state, record)
+    charts = _merge_chart_lists(materialized, session_charts)
+    if len(charts) < 2:
+        result_charts = _write_result_fallback_chart_artifacts(app_state, record)
+        charts = _merge_chart_lists(charts, result_charts)
+    if len(charts) < 2:
         external_charts = [
             chart
             for chart in existing_charts
             if urlparse(chart.url).scheme in {"http", "https"}
         ]
-        record.result.notion_charts = external_charts[:2]
-    else:
-        record.result.notion_charts = []
+        charts = _merge_chart_lists(charts, external_charts)
+    record.result.notion_charts = charts
 
 
 def _persist_record_completion_artifacts(
@@ -3035,18 +3138,22 @@ async def notion_analysis_chart(*, request: Request) -> FileResponse:
     filename = request.path_params["filename"]
     record = _records_by_request_id.get(request_id)
     if record is None:
-        raise HTTPException(
-            status_code=404, detail="Analysis request not found"
+        chart_path = _chart_file_from_project_registries(
+            request_id, filename
         )
-
-    chart_dir = _chart_dir(app_state, record).resolve(strict=True)
-    try:
-        chart_path = (chart_dir / filename).resolve(strict=True)
-        chart_path.relative_to(chart_dir)
-    except (OSError, ValueError):
-        raise HTTPException(
-            status_code=404, detail="Chart not found"
-        ) from None
+        if chart_path is None:
+            raise HTTPException(
+                status_code=404, detail="Analysis request not found"
+            )
+    else:
+        chart_dir = _chart_dir(app_state, record).resolve(strict=True)
+        try:
+            chart_path = (chart_dir / filename).resolve(strict=True)
+            chart_path.relative_to(chart_dir)
+        except (OSError, ValueError):
+            raise HTTPException(
+                status_code=404, detail="Chart not found"
+            ) from None
 
     media_type = mimetypes.guess_type(chart_path.name)[0] or "image/svg+xml"
     return FileResponse(

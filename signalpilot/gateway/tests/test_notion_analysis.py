@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from gateway.analysis_delivery import DeliveryPacket, WorkerPlan, WorkerProgress
 from gateway.db.models import NotionInstallation, NotionInstallationConfig
 from gateway.notebooks.session_service import NotebookRuntime
 from gateway.notion import analysis as notion_analysis
@@ -298,6 +299,54 @@ def test_start_comment_links_request_details_without_raw_url() -> None:
     assert any(part.get("text", {}).get("link", {}).get("url") == url for part in rich_text)
 
 
+@pytest.mark.asyncio
+async def test_notion_trace_progress_updates_comment_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    packet = DeliveryPacket(
+        user_request="Analyze revenue",
+        plan=WorkerPlan(steps=["Explore schema", "Analyze financials", "Write answer"]),
+        latest_progress=WorkerProgress(
+            current_step="Analyze financials",
+            completed_steps=["Explore schema"],
+            status="running governed queries",
+        ),
+    )
+    calls: dict[str, str | dict] = {}
+
+    async def load_delivery_packet(*args, **kwargs):
+        return packet
+
+    async def update_page_properties(*_args, **_kwargs):
+        calls["properties"] = "unexpected"
+
+    async def update_comment(_token, _comment_id, *, rich_text):
+        calls["comment"] = _rich_text_content(rich_text)
+
+    monkeypatch.setattr(notion_analysis, "load_delivery_packet", load_delivery_packet)
+    monkeypatch.setattr(notion_client, "update_page_properties", update_page_properties)
+    monkeypatch.setattr(notion_client, "update_comment", update_comment)
+
+    reporter = notion_analysis._NotionTraceProgressReporter(
+        token="token-1",
+        request_page_url="https://notion.test/request-page-1",
+        progress_comment_id="comment-1",
+        db=MagicMock(),
+        org_id="org-1",
+        user_id="user-1",
+        thread_id="session-notion-1",
+        user_request="Analyze revenue",
+    )
+
+    await reporter.tick({})
+
+    assert "properties" not in calls
+    comment_text = str(calls["comment"])
+    assert comment_text.startswith("I'm on it and will post the answer back soon.")
+    assert "- [x] Explore schema" in comment_text
+    assert "- [ ] Analyze financials (current)" in comment_text
+    assert "Working on: Analyze financials." in comment_text
+    assert "Loading:" not in comment_text
+
+
 def test_public_signalpilot_url_preserves_durable_notebooks_trail_url() -> None:
     runtime = NotebookRuntime(
         session_id="runtime-session-1",
@@ -479,6 +528,38 @@ def test_final_comment_rich_text_mentions_attached_charts() -> None:
     assert "Momentum ranking" in content
 
 
+def test_final_comment_rich_text_omits_placeholder_chart_titles() -> None:
+    status = {
+        "notionComment": "- MapleCloud leads.",
+        "notionCharts": [
+            {
+                "title": "Notebook image 1",
+                "url": "/api/notion-analysis/chart/req/image-1.png",
+                "fileUploadId": "upload-1",
+                "includeInComment": True,
+                "includeOnPage": True,
+            },
+            {
+                "title": "Notebook image 1",
+                "url": "/api/notion-analysis/chart/req/image-2.png",
+                "fileUploadId": "upload-2",
+                "includeInComment": True,
+                "includeOnPage": True,
+            },
+        ],
+    }
+
+    rich_text = notion_analysis._final_comment_rich_text(status, "https://notion.test/request-page-1")
+    content = _rich_text_content(rich_text)
+
+    assert "Charts attached:" not in content
+    assert "Notebook image" not in content
+    assert notion_analysis._comment_attachments(status) == [
+        {"type": "file_upload", "file_upload_id": "upload-1"},
+        {"type": "file_upload", "file_upload_id": "upload-2"},
+    ]
+
+
 def test_analysis_detail_blocks_prepend_uploaded_chart_images() -> None:
     blocks = notion_analysis._analysis_detail_blocks(
         {
@@ -546,10 +627,15 @@ async def test_upload_chart_images_to_notion_uploads_unique_chart_urls(monkeypat
 
 @pytest.mark.asyncio
 async def test_create_final_comment_retries_without_chart_attachments(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[list[dict] | None] = []
+    calls: list[dict[str, object]] = []
 
     async def create_comment(*args, **kwargs):
-        calls.append(kwargs.get("attachments"))
+        calls.append(
+            {
+                "attachments": kwargs.get("attachments"),
+                "text": _rich_text_content(kwargs["rich_text"]),
+            }
+        )
         if kwargs.get("attachments"):
             raise RuntimeError("attachments rejected")
 
@@ -573,7 +659,74 @@ async def test_create_final_comment_retries_without_chart_attachments(monkeypatc
         "https://notion.test/request-page-1",
     )
 
-    assert calls == [[{"type": "file_upload", "file_upload_id": "upload-1"}], None]
+    assert calls[0]["attachments"] == [{"type": "file_upload", "file_upload_id": "upload-1"}]
+    assert calls[1]["attachments"] is None
+    assert "Charts attached:" in str(calls[0]["text"])
+    assert "Charts attached:" not in str(calls[1]["text"])
+
+
+@pytest.mark.asyncio
+async def test_create_final_comment_deletes_progress_comment_then_posts_attached_final(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, object]] = []
+
+    async def delete_comment(_token, comment_id):
+        calls.append(("delete", comment_id))
+
+    async def create_comment(*args, **kwargs):
+        calls.append(
+            (
+                "create",
+                {
+                    "text": _rich_text_content(kwargs["rich_text"]),
+                    "attachments": kwargs.get("attachments"),
+                },
+            )
+        )
+
+    monkeypatch.setattr(notion_client, "delete_comment", delete_comment)
+    monkeypatch.setattr(notion_client, "create_comment", create_comment)
+
+    await notion_analysis._create_final_comment(
+        "token-1",
+        "discussion-1",
+        {
+            "notionComment": "- MapleCloud leads.",
+            "notionCharts": [
+                {
+                    "title": "Momentum ranking",
+                    "url": "/api/notion-analysis/chart/req/ranking.png",
+                    "fileUploadId": "upload-1",
+                    "includeInComment": True,
+                    "includeOnPage": True,
+                }
+            ],
+        },
+        "https://notion.test/request-page-1",
+        comment_id="comment-1",
+    )
+
+    assert calls == [
+        ("delete", "comment-1"),
+        (
+            "create",
+            {
+                "text": (
+                    "• MapleCloud leads.\n\n"
+                    "Request page: request details\n\n"
+                    "Charts attached:\n"
+                    "• Momentum ranking"
+                ),
+                "attachments": [
+                    {
+                        "type": "file_upload",
+                        "file_upload_id": "upload-1",
+                    }
+                ],
+            },
+        ),
+    ]
 
 
 def test_failure_comment_rich_text_links_page_and_marks_error_as_code() -> None:

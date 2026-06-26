@@ -224,6 +224,55 @@ async def test_delivery_renderer_defaults_to_sonnet_model(monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
+async def test_delivery_renderer_preserves_packet_charts_when_model_returns_empty_chart_list() -> None:
+    packet = load_delivery_packet_from_events(
+        [],
+        status_payload={
+            "status": "Done",
+            "notionCharts": [
+                {"title": "Revenue trend", "url": "/api/notion-analysis/chart/req/revenue.png"},
+                {"title": "Margin ranking", "url": "/api/notion-analysis/chart/req/margin.png"},
+            ],
+        },
+    )
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            {
+                                "summary": "Revenue increased.",
+                                "slackMessage": "- Revenue increased.",
+                                "notionComment": "- Revenue increased.",
+                                "finalAnswer": "- Revenue increased.",
+                                "gotchas": [],
+                                "analysisMethod": "Notebook SDK.",
+                                "notionCharts": [],
+                            }
+                        ),
+                    }
+                ]
+            }
+
+    class FakeClient:
+        async def post(self, _url: str, *, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
+            del headers, json
+            return FakeResponse()
+
+    delivery = await DeliveryRenderer(model="claude-haiku-test", api_key="test-key", http_client=FakeClient()).render(packet)  # type: ignore[arg-type]
+    status = delivery_result_to_status(delivery, packet)
+
+    assert [chart["title"] for chart in delivery.notion_charts] == ["Revenue trend", "Margin ranking"]
+    assert [chart["title"] for chart in status["notionCharts"]] == ["Revenue trend", "Margin ranking"]
+
+
+@pytest.mark.asyncio
 async def test_delivery_renderer_prompt_requires_separate_bullet_lines() -> None:
     packet = load_delivery_packet_from_events(
         [

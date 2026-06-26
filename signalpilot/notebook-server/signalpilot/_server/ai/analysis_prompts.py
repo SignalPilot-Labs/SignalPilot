@@ -179,22 +179,26 @@ Required workflow:
      `print("rows", len(q1_gbp_revenue_df)); print("date range",
      q1_gbp_revenue_df["created_at"].min(),
      q1_gbp_revenue_df["created_at"].max())`
-4. Add charts when the question involves comparison, ranking, trend,
-   distribution, or contribution analysis. Build charts from notebook-computed
-   DataFrames only, never from hand-entered MCP output. Prefer 1-3 focused
-   charts that make the answer easier to audit, such as a ranked bar chart,
-   trend line, scatter/bubble comparison, or contribution waterfall. Give each
-   chart a clear title, axis labels, and one-sentence interpretation in the
-   notebook. If a chart is useful outside the notebook, save or expose it as a
-   shareable PNG/SVG/HTML artifact. For matplotlib charts, save the figure and
-   render it in the notebook by leaving the chart object or `sp.image(src=...)`
-   as the cell's final expression. Do not end chart cells with `plt.show()` or
-   `print(...)`; printed "Chart saved" messages are feedback only and should
-   not replace the visible chart output. The gateway will harvest useful
-   notebook chart outputs for Slack and Notion; do not return channel chart
-   JSON.
-5. Keep chart selection in the notebook itself. If no chart adds value, state
-   why briefly in the notebook caveats or FINAL_STATEMENT handoffNotes.
+4. Produce charts for every completed Slack/Notion data-analysis request when
+   governed source data can be queried. Build charts from notebook-computed
+   DataFrames only, never from hand-entered MCP output. The notebook must expose
+   at least two visible chart outputs for Notion page content whenever the data
+   supports two different useful views; the first chart must also be suitable
+   for the Slack/Notion comment thread. Good defaults are a ranked bar chart
+   plus a trend, distribution, contribution, or dimension-breakdown chart. Give
+   each chart a clear title, axis labels, and one-sentence interpretation in the
+   notebook. If only one chart is defensible, create that one and state why a
+   second would be misleading in the notebook caveats and FINAL_STATEMENT
+   handoffNotes. If no chart can be generated because the request is genuinely
+   non-visual or the data is unavailable, state that as a caveat. For matplotlib
+   charts, save the figure and render it in the notebook by leaving the chart
+   object or `sp.image(src=...)` as the cell's final expression. Do not end chart
+   cells with `plt.show()` or `print(...)`; printed "Chart saved" messages are
+   feedback only and should not replace the visible chart output. The gateway
+   will harvest useful notebook chart outputs for Slack and Notion; do not
+   return channel chart JSON.
+5. Keep chart selection in the notebook itself. Do not finish a completed
+   tabular-data analysis with only prose or tables when charts can be made.
 6. Run the relevant notebook cells in the live session before answering. If a
    cell cannot be run, state that and explain the residual risk in the notebook
    and in FINAL_STATEMENT caveats/handoffNotes.
@@ -231,11 +235,14 @@ Completion checklist before FINAL_STATEMENT:
   In marimo, loop variables such as `row`, `i`, `fig`, or `ax` are notebook
   globals and can trigger MultipleDefinitionError if reused. Use unique names
   per cell or wrap chart-building logic in uniquely named functions.
-- The notebook contains chart cells for comparison/ranking/trend-style
-  requests, unless the request is genuinely non-visual or charting would be
-  misleading. Charts are generated from notebook-computed DataFrames, saved as
-  artifacts when useful for Notion, and rendered as visible notebook outputs
-  instead of ending with `print(...)` feedback.
+- The notebook contains chart cells for completed Slack/Notion data-analysis
+  requests when governed source data can be queried. Aim for two visible,
+  harvestable chart outputs so Notion can render two page charts; include at
+  least one chart unless the request is genuinely non-visual, data is
+  unavailable, or charting would be misleading. Charts are generated from
+  notebook-computed DataFrames, saved as artifacts when useful for Notion, and
+  rendered as visible notebook outputs instead of ending with `print(...)`
+  feedback.
 - FINAL_STATEMENT handoffNotes state that the result came from
   notebook-executed SDK cells, not MCP query outputs.
 - The top of the notebook remains readable: request context, executive summary

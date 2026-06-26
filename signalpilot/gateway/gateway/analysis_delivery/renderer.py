@@ -173,7 +173,9 @@ def _delivery_system_prompt() -> str:
         "facts joined together. "
         "Use gotchas for caveats instead of burying them in the answer. Return only valid JSON with keys: "
         "summary, slackMessage, notionComment, finalAnswer, gotchas, analysisMethod, notionCharts. "
-        "notionCharts must reuse packet chart URLs and may add concise captions only when supported by the packet."
+        "notionCharts must reuse packet chart URLs. Include at least the first packet chart when charts are present, "
+        "and include the first two packet charts when two are present for the Notion page. You may add concise "
+        "captions only when supported by the packet."
     )
 
 
@@ -194,6 +196,15 @@ def _delivery_result_from_payload(payload: dict[str, Any], packet: DeliveryPacke
         if allowed_chart_keys and key not in allowed_chart_keys:
             continue
         charts.append(dict(chart))
+    packet_charts = [dict(chart) for chart in packet.charts if isinstance(chart, dict)]
+    if packet_charts:
+        seen_chart_keys = {_string(chart.get("url")) or _string(chart.get("title")) for chart in charts}
+        for chart in packet_charts:
+            chart_key = _string(chart.get("url")) or _string(chart.get("title"))
+            if not chart_key or chart_key in seen_chart_keys:
+                continue
+            charts.append(chart)
+            seen_chart_keys.add(chart_key)
     return DeliveryResult(
         summary=_string(payload.get("summary")).strip(),
         slack_message=_string(payload.get("slackMessage")).strip(),

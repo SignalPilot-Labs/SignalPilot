@@ -17,7 +17,6 @@ import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.analysis_delivery import (
-    ANALYSIS_INITIAL_PROGRESS_TEXT,
     AnalysisPreflightKind,
     classify_analysis_request,
     delivery_result_to_status,
@@ -98,6 +97,13 @@ def _chart_file_upload_id(chart: dict[str, Any]) -> str:
 
 def _chart_title(chart: dict[str, Any]) -> str:
     return _chart_value(chart, "title") or "Chart"
+
+
+def _chart_comment_title(chart: dict[str, Any]) -> str:
+    title = _chart_title(chart)
+    if re.fullmatch(r"(?:notebook\s+)?(?:chart|image|figure|visualization)(?:\s+\d+)?", title, flags=re.I):
+        return ""
+    return title
 
 
 def _selected_charts(status: dict[str, Any], target: str) -> list[dict[str, Any]]:
@@ -411,6 +417,46 @@ def _start_comment_rich_text(request_page_url: str) -> list[dict[str, Any]]:
     ]
 
 
+def _notion_progress_body(packet: Any) -> str:
+    if packet.plan is None:
+        return ""
+    completed = set(packet.latest_progress.completed_steps if packet.latest_progress else [])
+    current = packet.latest_progress.current_step if packet.latest_progress else ""
+    lines = []
+    for step in packet.plan.steps:
+        marker = "x" if step in completed else " "
+        suffix = " (current)" if current and step == current and step not in completed else ""
+        lines.append(f"- [{marker}] {step}{suffix}")
+    lines.append("")
+    lines.append(_notion_loading_line(packet))
+    return "\n".join(lines).strip()[:1500]
+
+
+def _notion_loading_line(packet: Any) -> str:
+    current = packet.latest_progress.current_step if packet.latest_progress else ""
+    if current:
+        return f"Working on: {current}."
+    status = packet.latest_progress.status if packet.latest_progress else ""
+    if status:
+        return f"Working on: {status.replace('_', ' ')}."
+    return "Working through the analysis."
+
+
+def _notion_progress_text(packet: Any) -> str:
+    body = _notion_progress_body(packet)
+    if not body:
+        return "I'm on it and will post the answer back soon. See your request details."
+    return f"I'm on it and will post the answer back soon. See your request details.\n\n{body}"
+
+
+def _progress_comment_rich_text(packet: Any, request_page_url: str) -> list[dict[str, Any]]:
+    body = _notion_progress_body(packet)
+    rich_text = _start_comment_rich_text(request_page_url)
+    if body:
+        rich_text.extend(notion_formatting.plain_rich_text("\n\n" + body, max_chars=NOTION_RICH_TEXT_MAX_LENGTH))
+    return rich_text
+
+
 async def _create_start_comment(
     token: str,
     *,
@@ -419,7 +465,7 @@ async def _create_start_comment(
     event_id: str | None,
     comment_id: str | None,
     request_page_id: str,
-) -> None:
+) -> str | None:
     logger.info(
         "Posting Notion start comment: event_id=%s comment_id=%s discussion_id=%s request_page_id=%s",
         event_id,
@@ -428,7 +474,7 @@ async def _create_start_comment(
         request_page_id,
     )
     try:
-        await notion_client.create_comment(
+        response = await notion_client.create_comment(
             token,
             discussion_id=discussion_id,
             rich_text=_start_comment_rich_text(request_page_url),
@@ -444,16 +490,23 @@ async def _create_start_comment(
             exc_info=True,
         )
         raise
+    created_comment_id = response.get("id") if isinstance(response, dict) else None
     logger.info(
         "Posted Notion start comment: event_id=%s comment_id=%s discussion_id=%s request_page_id=%s",
         event_id,
-        comment_id,
+        created_comment_id or comment_id,
         discussion_id,
         request_page_id,
     )
+    return str(created_comment_id) if created_comment_id else None
 
 
-def _final_comment_rich_text(status: dict[str, Any], request_page_url: str) -> list[dict[str, Any]]:
+def _final_comment_rich_text(
+    status: dict[str, Any],
+    request_page_url: str,
+    *,
+    include_chart_attachment_note: bool = True,
+) -> list[dict[str, Any]]:
     raw_answer = (
         (status.get("notionComment") or "").strip()
         or (status.get("finalAnswer") or "").strip()
@@ -461,11 +514,15 @@ def _final_comment_rich_text(status: dict[str, Any], request_page_url: str) -> l
         or "I finished the analysis, but there was no written answer in the result."
     )
     answer = _compact_bullet_answer(raw_answer) or raw_answer
-    chart_lines = [
-        f"- {_chart_title(chart)}"
-        for chart in _selected_charts(status, "comment")
-        if _chart_file_upload_id(chart)
-    ]
+    chart_lines = (
+        [
+            f"- {title}"
+            for chart in _selected_charts(status, "comment")
+            if _chart_file_upload_id(chart) and (title := _chart_comment_title(chart))
+        ]
+        if include_chart_attachment_note
+        else []
+    )
     chart_section = "\n\nCharts attached:\n" + "\n".join(chart_lines) if chart_lines else ""
     suffix = "\n\nRequest page: request details" + chart_section
     clipped = _clip_comment_content(answer, len(suffix))
@@ -720,8 +777,21 @@ def _comment_attachments(status: dict[str, Any]) -> list[dict[str, str]]:
     ][:3]
 
 
-async def _create_final_comment(token: str, discussion_id: str, status: dict[str, Any], request_page_url: str) -> None:
+async def _create_final_comment(
+    token: str,
+    discussion_id: str,
+    status: dict[str, Any],
+    request_page_url: str,
+    *,
+    comment_id: str | None = None,
+) -> None:
     attachments = _comment_attachments(status)
+    if comment_id:
+        try:
+            await notion_client.delete_comment(token, comment_id)
+        except Exception:
+            logger.warning("Could not delete Notion progress comment before final delivery", exc_info=True)
+
     try:
         await notion_client.create_comment(
             token,
@@ -736,8 +806,30 @@ async def _create_final_comment(token: str, discussion_id: str, status: dict[str
         await notion_client.create_comment(
             token,
             discussion_id=discussion_id,
-            rich_text=_final_comment_rich_text(status, request_page_url),
+            rich_text=_final_comment_rich_text(status, request_page_url, include_chart_attachment_note=False),
         )
+
+
+async def _create_failure_comment(
+    token: str,
+    discussion_id: str,
+    message: str,
+    request_page_url: str,
+    *,
+    comment_id: str | None = None,
+) -> None:
+    rich_text = _failure_comment_rich_text(message, request_page_url)
+    if comment_id:
+        try:
+            await notion_client.update_comment(token, comment_id, rich_text=rich_text)
+            return
+        except Exception:
+            logger.warning("Could not update Notion failure comment; posting a new failure comment", exc_info=True)
+    await notion_client.create_comment(
+        token,
+        discussion_id=discussion_id,
+        rich_text=rich_text,
+    )
 
 
 def mint_internal_notebook_jwt(org_id: str, user_id: str | None, scopes: list[str] | None = None) -> str:
@@ -819,7 +911,8 @@ class _NotionTraceProgressReporter:
         self,
         *,
         token: str,
-        request_page_id: str,
+        request_page_url: str,
+        progress_comment_id: str | None,
         db: AsyncSession,
         org_id: str,
         user_id: str,
@@ -827,13 +920,14 @@ class _NotionTraceProgressReporter:
         user_request: str,
     ) -> None:
         self.token = token
-        self.request_page_id = request_page_id
+        self.request_page_url = request_page_url
+        self.progress_comment_id = progress_comment_id
         self.db = db
         self.org_id = org_id
         self.user_id = user_id
         self.thread_id = thread_id
         self.user_request = user_request
-        self._previous_summary = ""
+        self._previous_progress_text = "I'm on it and will post the answer back soon. See your request details."
 
     async def tick(self, _status: dict[str, Any]) -> None:
         try:
@@ -847,38 +941,19 @@ class _NotionTraceProgressReporter:
         except Exception as exc:
             logger.info("Could not load Notion trace progress: %s", exc, exc_info=True)
             return
-        summary = _notion_progress_summary(packet)
-        if summary == self._previous_summary:
+        progress_text = _notion_progress_text(packet)
+        if progress_text == self._previous_progress_text:
             return
-        self._previous_summary = summary
-        properties: dict[str, Any] = {
-            "Status": {"rich_text": _rich_text(_notion_progress_status(packet))},
-            "Summary": {"rich_text": _rich_text(summary)},
-        }
-        try:
-            await notion_client.update_page_properties(self.token, self.request_page_id, properties)
-        except Exception as exc:
-            logger.info("Could not update Notion progress: %s", exc, exc_info=True)
-
-
-def _notion_progress_status(packet: Any) -> str:
-    current = packet.latest_progress.current_step if packet.latest_progress else ""
-    return f"Analyzing: {current}"[:200] if current else "Analyzing"
-
-
-def _notion_progress_summary(packet: Any) -> str:
-    if packet.plan is None:
-        return ANALYSIS_INITIAL_PROGRESS_TEXT
-    completed = set(packet.latest_progress.completed_steps if packet.latest_progress else [])
-    current = packet.latest_progress.current_step if packet.latest_progress else ""
-    lines = []
-    for step in packet.plan.steps:
-        marker = "x" if step in completed else " "
-        suffix = " (current)" if current and step == current and step not in completed else ""
-        lines.append(f"- [{marker}] {step}{suffix}")
-    if packet.latest_progress and packet.latest_progress.status:
-        lines.append(packet.latest_progress.status)
-    return "\n".join(lines)[:1500] or ANALYSIS_INITIAL_PROGRESS_TEXT
+        self._previous_progress_text = progress_text
+        if self.progress_comment_id:
+            try:
+                await notion_client.update_comment(
+                    self.token,
+                    self.progress_comment_id,
+                    rich_text=_progress_comment_rich_text(packet, self.request_page_url),
+                )
+            except Exception as exc:
+                logger.info("Could not update Notion progress comment: %s", exc, exc_info=True)
 
 
 def _require_config(config: NotionInstallationConfig) -> tuple[str, str]:
@@ -973,6 +1048,7 @@ async def process_routed_comment_event(
         )
     request_page_id = request_page["id"]
     request_page_url = request_page.get("url") or _request_page_url(request_page_id)
+    progress_comment_id: str | None = None
 
     request_id = _analysis_request_id("notion", discussion_id)
     try:
@@ -1000,7 +1076,7 @@ async def process_routed_comment_event(
         return NotionCommentProcessResult(status="processed")
 
     await notion_client.update_page_properties(token, request_page_id, {"Status": {"rich_text": _rich_text("Analyzing")}})
-    await _create_start_comment(
+    progress_comment_id = await _create_start_comment(
         token,
         discussion_id=discussion_id,
         request_page_url=request_page_url,
@@ -1072,10 +1148,12 @@ async def process_routed_comment_event(
             {"Status": {"rich_text": _rich_text("Failed")}, "Summary": {"rich_text": _rich_text(message)}},
         )
         await notion_client.append_page_blocks(token, request_page_id, _failure_detail_blocks(message))
-        await notion_client.create_comment(
+        await _create_failure_comment(
             token,
-            discussion_id=discussion_id,
-            rich_text=_failure_comment_rich_text(message, request_page_url),
+            discussion_id,
+            message,
+            request_page_url,
+            comment_id=progress_comment_id,
         )
         raise
 
@@ -1092,7 +1170,8 @@ async def process_routed_comment_event(
             route,
             on_tick=_NotionTraceProgressReporter(
                 token=token,
-                request_page_id=request_page_id,
+                request_page_url=request_page_url,
+                progress_comment_id=progress_comment_id,
                 db=db,
                 org_id=routed.installation.org_id,
                 user_id=routed.installation.user_id or route.analysis_user_id,
@@ -1121,10 +1200,12 @@ async def process_routed_comment_event(
             {"Status": {"rich_text": _rich_text("Failed")}, "Summary": {"rich_text": _rich_text(message)}},
         )
         await notion_client.append_page_blocks(token, request_page_id, _failure_detail_blocks(message))
-        await notion_client.create_comment(
+        await _create_failure_comment(
             token,
-            discussion_id=discussion_id,
-            rich_text=_failure_comment_rich_text(message, request_page_url),
+            discussion_id,
+            message,
+            request_page_url,
+            comment_id=progress_comment_id,
         )
         raise
 
@@ -1164,7 +1245,13 @@ async def process_routed_comment_event(
                 "Summary": {"rich_text": _rich_text(final_status_for_notion.get("summary") or final_status_for_notion.get("finalAnswer") or "")},
             },
         )
-        await _create_final_comment(token, discussion_id, final_status_for_notion, request_page_url)
+        await _create_final_comment(
+            token,
+            discussion_id,
+            final_status_for_notion,
+            request_page_url,
+            comment_id=progress_comment_id,
+        )
         await notion_client.append_page_blocks(token, request_page_id, _analysis_detail_blocks(final_status_for_notion))
     else:
         message = final_status.get("error") or "SignalPilot analysis failed."
@@ -1174,9 +1261,11 @@ async def process_routed_comment_event(
             {"Status": {"rich_text": _rich_text("Failed")}, "Summary": {"rich_text": _rich_text(message)}},
         )
         await notion_client.append_page_blocks(token, request_page_id, _failure_detail_blocks(str(message)))
-        await notion_client.create_comment(
+        await _create_failure_comment(
             token,
-            discussion_id=discussion_id,
-            rich_text=_failure_comment_rich_text(str(message), request_page_url),
+            discussion_id,
+            str(message),
+            request_page_url,
+            comment_id=progress_comment_id,
         )
     return NotionCommentProcessResult(status="processed")

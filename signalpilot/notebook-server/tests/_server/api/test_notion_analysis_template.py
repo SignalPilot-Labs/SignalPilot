@@ -125,13 +125,58 @@ def test_project_root_uses_existing_project_checkout(
     )
     monkeypatch.setattr(
         project_sync,
+        "_current_git_branch",
+        lambda _repo: "analysis/slack/test",
+    )
+    monkeypatch.setattr(
+        project_sync,
         "sync_down",
         lambda *_args, **_kwargs: pytest.fail(
-            "sync_down should not run for existing checkout"
+            "sync_down should not run for existing checkout on target branch"
         ),
     )
 
     assert notion_analysis._project_root(app_state) == project_root
+
+
+def test_project_root_syncs_when_existing_checkout_is_on_wrong_branch(
+    tmp_path, monkeypatch
+) -> None:
+    from signalpilot._server.files import project_sync
+
+    project_root = tmp_path / "projects" / "project-1"
+    (project_root / ".git").mkdir(parents=True)
+    app_state = SimpleNamespace(
+        request=SimpleNamespace(
+            headers={
+                "x-gateway-project-id": "project-1",
+                "x-gateway-branch-id": "analysis/notion/current-request",
+            }
+        ),
+        session_manager=SimpleNamespace(
+            workspace=SimpleNamespace(directory=str(tmp_path / "workspace"))
+        ),
+    )
+    calls: list[tuple[str, str]] = []
+
+    def sync_down(project_id: str, branch: str) -> dict[str, str]:
+        calls.append((project_id, branch))
+        return {"local_dir": str(project_root)}
+
+    monkeypatch.setattr(
+        project_sync,
+        "local_project_dir",
+        lambda _project_id, _branch="": project_root,
+    )
+    monkeypatch.setattr(
+        project_sync,
+        "_current_git_branch",
+        lambda _repo: "analysis/notion/previous-request",
+    )
+    monkeypatch.setattr(project_sync, "sync_down", sync_down)
+
+    assert notion_analysis._project_root(app_state) == project_root
+    assert calls == [("project-1", "analysis/notion/current-request")]
 
 
 def test_project_root_syncs_project_checkout_before_workspace_fallback(
@@ -342,6 +387,9 @@ def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
     assert "q1_gbp_revenue_df = pd.DataFrame(db.query" in prompt
     assert "q1_gbp_revenue_df.head(10)" in prompt
     assert "monthly_revenue_chart" in prompt
+    assert "Produce charts for every completed Slack/Notion data-analysis request" in prompt
+    assert "at least two visible chart outputs for Notion page content" in prompt
+    assert "first chart must also be suitable\n   for the Slack/Notion comment thread" in prompt
     assert "head of\n     the joined table/query result" in prompt
     assert "not just a branch list" in prompt
     assert "finding explanation, exact query, data head/preview" in prompt
@@ -388,6 +436,7 @@ def test_analysis_prompt_injects_warm_context_without_changing_output_contract()
     assert "notionCharts" in prompt
     assert "Do not include slackMessage, notionComment, finalAnswer, notionCharts" in prompt
     assert '"Executive Summary and Explorations" cell' in prompt
+    assert "Aim for two visible,\n  harvestable chart outputs" in prompt
 
 
 def test_warm_context_truncation_stays_under_cap() -> None:

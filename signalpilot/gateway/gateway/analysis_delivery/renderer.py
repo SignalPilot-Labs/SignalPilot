@@ -11,6 +11,8 @@ from typing import Any
 
 import httpx
 
+from gateway.string_utils import string_value as _string
+
 from .trace_loader import DeliveryPacket
 
 LOGGER = logging.getLogger(__name__)
@@ -18,6 +20,10 @@ LOGGER = logging.getLogger(__name__)
 _ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 _ANTHROPIC_VERSION = "2023-06-01"
 DEFAULT_DELIVERY_MODEL = "claude-sonnet-4-5-20250929"
+_PLACEHOLDER_CHART_TITLE_RE = re.compile(
+    r"(?:notebook\s+)?(?:chart|image|figure|visualization)(?:\s+\d+)?",
+    flags=re.I,
+)
 
 
 @dataclass(frozen=True)
@@ -125,7 +131,7 @@ def fallback_delivery(packet: DeliveryPacket) -> DeliveryResult:
         final_answer=_string(notebook_outputs.get("finalAnswer") or notebook_outputs.get("final_answer")) or fallback_text,
         gotchas=gotchas,
         analysis_method=method,
-        notion_charts=[dict(chart) for chart in packet.charts],
+        notion_charts=[_clean_chart_labels(chart) for chart in packet.charts],
         confidence_score=packet.final_statement.confidence_score if packet.final_statement else None,
     )
 
@@ -175,7 +181,9 @@ def _delivery_system_prompt() -> str:
         "summary, slackMessage, notionComment, finalAnswer, gotchas, analysisMethod, notionCharts. "
         "notionCharts must reuse packet chart URLs. Include at least the first packet chart when charts are present, "
         "and include the first two packet charts when two are present for the Notion page. You may add concise "
-        "captions only when supported by the packet."
+        "captions only when supported by the packet. Do not label charts as Chart 1, Chart 2, Figure 1, "
+        "Notebook image 1, or similarly generic placeholders; leave chart title/caption fields empty when "
+        "the packet does not support a meaningful label."
     )
 
 
@@ -195,8 +203,8 @@ def _delivery_result_from_payload(payload: dict[str, Any], packet: DeliveryPacke
         key = _string(chart.get("url")) or _string(chart.get("title"))
         if allowed_chart_keys and key not in allowed_chart_keys:
             continue
-        charts.append(dict(chart))
-    packet_charts = [dict(chart) for chart in packet.charts if isinstance(chart, dict)]
+        charts.append(_clean_chart_labels(chart))
+    packet_charts = [_clean_chart_labels(chart) for chart in packet.charts if isinstance(chart, dict)]
     if packet_charts:
         seen_chart_keys = {_string(chart.get("url")) or _string(chart.get("title")) for chart in charts}
         for chart in packet_charts:
@@ -251,6 +259,19 @@ def _clip(value: str, limit: int) -> str:
     return value[: max(0, limit - 3)].rstrip() + "..."
 
 
+def _is_placeholder_chart_label(value: str) -> bool:
+    return bool(_PLACEHOLDER_CHART_TITLE_RE.fullmatch(value.strip()))
+
+
+def _clean_chart_labels(chart: dict[str, Any]) -> dict[str, Any]:
+    cleaned = dict(chart)
+    for key in ("title", "caption", "altText", "alt_text"):
+        value = _string(cleaned.get(key)).strip()
+        if value and _is_placeholder_chart_label(value):
+            cleaned[key] = ""
+    return cleaned
+
+
 def _compact_bullet_answer(content: str, max_bullets: int = 6) -> str:
     stripped = re.sub(r"^Here's what I found:\s*", "", content.strip(), flags=re.IGNORECASE)
     lines = [line.strip() for line in stripped.splitlines() if line.strip()]
@@ -265,7 +286,3 @@ def _compact_bullet_answer(content: str, max_bullets: int = 6) -> str:
         bullets = re.split(r"(?<=[.!?])\s+", stripped)
     unique = [bullet for index, bullet in enumerate(bullets) if bullet and bullets.index(bullet) == index]
     return "\n".join(f"- {bullet}" for bullet in unique[:max_bullets])
-
-
-def _string(value: Any) -> str:
-    return value if isinstance(value, str) else ""

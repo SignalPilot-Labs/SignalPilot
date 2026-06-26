@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.store import chat_traces
+from gateway.string_utils import string_value as _string
 from gateway.trace_markers import iter_trace_marker_payloads
 
 
@@ -76,11 +77,16 @@ async def load_delivery_packet(
         user_id=user_id,
         thread_id=thread_id,
     )
-    events = await chat_traces.get_events(
-        session,
-        org_id=org_id,
-        user_id=user_id,
-        thread_id=thread_id,
+    events = (
+        await chat_traces.get_events(
+            session,
+            org_id=org_id,
+            user_id=user_id,
+            thread_id=thread_id,
+            require_thread=False,
+        )
+        if thread
+        else []
     )
     return load_delivery_packet_from_events(
         events,
@@ -262,10 +268,6 @@ def _event_get(event: Any, key: str, default: Any = None) -> Any:
     if isinstance(event, dict):
         return event.get(key, default)
     return getattr(event, key, default)
-
-
-def _string(value: Any) -> str:
-    return value if isinstance(value, str) else ""
 
 
 def _confidence_score(value: Any) -> float | None:

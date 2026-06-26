@@ -15,6 +15,7 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from gateway.store import chat_traces
+from gateway.string_utils import string_value as _string
 
 LOGGER = logging.getLogger(__name__)
 
@@ -945,7 +946,3 @@ def _clip(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 14].rstrip() + "... truncated"
-
-
-def _string(value: Any) -> str:
-    return value if isinstance(value, str) else ""

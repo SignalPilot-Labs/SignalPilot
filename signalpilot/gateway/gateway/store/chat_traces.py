@@ -217,12 +217,14 @@ async def get_events(
     user_id: str,
     thread_id: str,
     after_index: int = -1,
+    require_thread: bool = True,
 ) -> list[ChatTraceEventInfo]:
-    thread = await get_thread(
-        session, org_id=org_id, user_id=user_id, thread_id=thread_id
-    )
-    if thread is None:
-        raise ValueError(f"Trace thread {thread_id} not found")
+    if require_thread:
+        thread = await get_thread(
+            session, org_id=org_id, user_id=user_id, thread_id=thread_id
+        )
+        if thread is None:
+            raise ValueError(f"Trace thread {thread_id} not found")
 
     result = await session.execute(
         select(GatewayChatTraceEvent)

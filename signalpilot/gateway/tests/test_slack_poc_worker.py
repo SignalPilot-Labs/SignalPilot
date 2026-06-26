@@ -23,7 +23,7 @@ from gateway.slack_poc.worker import (
     SlackPoCWorker,
     SlackRequest,
     _apply_local_runtime_defaults,
-    _final_slack_text,
+    _EventDeduper,
     _remove_bot_mention,
     create_http_app,
 )
@@ -33,25 +33,19 @@ def test_remove_bot_mention_removes_configured_mention_and_fallback_mentions() -
     assert _remove_bot_mention("<@U123> analyze revenue <@U999>", "U123") == "analyze revenue"
 
 
-def test_final_slack_text_includes_answer_trail_confidence_without_chart_links() -> None:
-    text = _final_slack_text(
-        {
-            "status": "Done",
-            "notionComment": "**Revenue grew** in Q2.\nCosts stayed flat.",
-            "confidenceScore": 0.83,
-            "notionCharts": [{"title": "Revenue trend", "url": "https://app.test/chart.png"}],
-        },
-        "https://app.test/projects?file=analysis.py",
-    )
+def test_event_deduper_bounds_size_and_expires_old_events() -> None:
+    deduper = _EventDeduper(max_size=2, ttl_seconds=10)
 
-    assert "*SignalPilot analysis complete*" in text
-    assert "*Revenue grew* in Q2" in text
-    assert "**Revenue grew**" not in text
-    assert "*Confidence:* 0.83" in text
-    assert "<https://app.test/projects?file=analysis.py|Open authenticated notebook>" in text
-    assert "*Notebook trail:* https://" not in text
-    assert "https://app.test/chart.png" not in text
-    assert "*Charts:*" not in text
+    assert deduper.add("event-1", now=100)
+    assert not deduper.add("event-1", now=101)
+    assert deduper.add("event-2", now=102)
+    assert deduper.add("event-3", now=103)
+    assert len(deduper) == 2
+    assert deduper.add("event-1", now=104)
+
+    expiring = _EventDeduper(max_size=10, ttl_seconds=5)
+    assert expiring.add("event-1", now=100)
+    assert expiring.add("event-1", now=106)
 
 
 @pytest.mark.asyncio
@@ -473,6 +467,50 @@ async def test_worker_uploads_chart_images_as_slack_thread_files(monkeypatch: py
         content=b"png-bytes",
         content_type="image/png",
     )
+
+
+@pytest.mark.asyncio
+async def test_worker_omits_placeholder_chart_file_titles(monkeypatch: pytest.MonkeyPatch) -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    slack.fetch_bytes.return_value = (b"png-bytes", "image/png")
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT"),
+        slack,
+        AsyncMock(),
+    )
+
+    monkeypatch.setattr(
+        "gateway.slack_poc.worker.notebook_analysis._internal_signalpilot_url",
+        lambda url, runtime: f"http://notebook.test{url}",
+    )
+
+    await worker._post_chart_attachments(
+        SlackRequest(
+            event_id="Ev1",
+            team_id="T1",
+            channel_id="C1",
+            user_id="U1",
+            text="analyze revenue",
+            event_ts="1.0",
+            thread_ts="1.0",
+            source_url="slack://channel/C1/p10",
+        ),
+        {
+            "notionCharts": [
+                {
+                    "title": "Notebook image 1",
+                    "fileName": "notebook-image-1.png",
+                    "url": "/api/notion-analysis/chart/notion-1/image-1.png",
+                }
+            ]
+        },
+        AsyncMock(),
+    )
+
+    slack.upload_file.assert_awaited_once()
+    kwargs = slack.upload_file.await_args.kwargs
+    assert kwargs["title"] is None
+    assert kwargs["filename"] == "chart-1.png"
     slack.post_message.assert_not_called()
 
 

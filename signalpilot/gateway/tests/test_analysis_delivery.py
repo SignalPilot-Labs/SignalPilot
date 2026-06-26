@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -9,10 +11,13 @@ from gateway.analysis_delivery import (
     DeliveryRenderer,
     classify_analysis_request,
     delivery_result_to_status,
+    load_delivery_packet,
     load_delivery_packet_from_events,
     render_slack_final_message,
     render_slack_progress_message,
 )
+from gateway.analysis_delivery import trace_loader as trace_loader_module
+from gateway.analysis_delivery.renderer import fallback_delivery
 from gateway.trace_markers import redact_trace_control_markers
 
 
@@ -79,6 +84,72 @@ def test_trace_loader_extracts_latest_worker_plan_progress_and_final_statement()
     assert packet.final_statement.confidence_score == 0.8
     assert packet.charts[0]["title"] == "Revenue trend"
     assert packet.status == "done"
+
+
+@pytest.mark.asyncio
+async def test_load_delivery_packet_reuses_loaded_trace_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, dict]] = []
+
+    async def get_thread(*args, **kwargs):
+        calls.append(("get_thread", kwargs))
+        return SimpleNamespace(status="done")
+
+    async def get_events(*args, **kwargs):
+        calls.append(("get_events", kwargs))
+        return []
+
+    monkeypatch.setattr(trace_loader_module.chat_traces, "get_thread", get_thread)
+    monkeypatch.setattr(trace_loader_module.chat_traces, "get_events", get_events)
+
+    packet = await load_delivery_packet(
+        AsyncMock(),
+        org_id="org-1",
+        user_id="user-1",
+        thread_id="thread-1",
+    )
+
+    assert packet.status == "done"
+    assert calls == [
+        (
+            "get_thread",
+            {"org_id": "org-1", "user_id": "user-1", "thread_id": "thread-1"},
+        ),
+        (
+            "get_events",
+            {
+                "org_id": "org-1",
+                "user_id": "user-1",
+                "thread_id": "thread-1",
+                "require_thread": False,
+            },
+        ),
+    ]
+
+
+def test_fallback_delivery_strips_placeholder_chart_labels() -> None:
+    packet = load_delivery_packet_from_events(
+        [],
+        status_payload={
+            "status": "Done",
+            "notionCharts": [
+                {
+                    "title": "Chart 1",
+                    "caption": "Notebook image 1",
+                    "url": "/api/notion-analysis/chart/req/image-1.png",
+                }
+            ],
+        },
+    )
+
+    result = fallback_delivery(packet)
+
+    assert result.notion_charts == [
+        {
+            "title": "",
+            "caption": "",
+            "url": "/api/notion-analysis/chart/req/image-1.png",
+        }
+    ]
 
 
 def test_trace_control_markers_are_redacted_into_metadata_for_delivery() -> None:

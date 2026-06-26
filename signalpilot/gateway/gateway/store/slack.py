@@ -15,6 +15,7 @@ from gateway.models.slack import (
     SlackOAuthInstallationInfo,
 )
 from gateway.store.crypto import _decrypt_with_migration, _encrypt
+from gateway.string_utils import optional_string_value
 
 
 def _scope_list(value: object) -> list[str]:
@@ -23,10 +24,6 @@ def _scope_list(value: object) -> list[str]:
     if isinstance(value, list):
         return [str(scope).strip() for scope in value if str(scope).strip()]
     return []
-
-
-def _string(value: object) -> str | None:
-    return str(value) if value else None
 
 
 def _as_aware_utc(value: datetime) -> datetime:
@@ -125,13 +122,13 @@ async def upsert_oauth_installation(
     enterprise = token_response.get("enterprise") if isinstance(token_response.get("enterprise"), dict) else {}
     authed_user = token_response.get("authed_user") if isinstance(token_response.get("authed_user"), dict) else {}
 
-    team_id = _string(team.get("id"))
-    bot_user_id = _string(token_response.get("bot_user_id"))
-    bot_access_token = _string(token_response.get("access_token"))
+    team_id = optional_string_value(team.get("id"))
+    bot_user_id = optional_string_value(token_response.get("bot_user_id"))
+    bot_access_token = optional_string_value(token_response.get("access_token"))
     if not team_id or not bot_user_id or not bot_access_token:
         raise ValueError("Slack token response is missing team.id, bot_user_id, or access_token")
 
-    app_id = _string(token_response.get("app_id")) or ""
+    app_id = optional_string_value(token_response.get("app_id")) or ""
     result = await session.execute(
         select(SlackInstallation).where(
             SlackInstallation.org_id == org_id,
@@ -147,12 +144,12 @@ async def upsert_oauth_installation(
             org_id=org_id,
             user_id=user_id,
             team_id=team_id,
-            team_name=_string(team.get("name")),
-            enterprise_id=_string(enterprise.get("id")),
-            enterprise_name=_string(enterprise.get("name")),
+            team_name=optional_string_value(team.get("name")),
+            enterprise_id=optional_string_value(enterprise.get("id")),
+            enterprise_name=optional_string_value(enterprise.get("name")),
             app_id=app_id,
             bot_user_id=bot_user_id,
-            authed_user_id=_string(authed_user.get("id")),
+            authed_user_id=optional_string_value(authed_user.get("id")),
             bot_access_token_enc=_encrypt(bot_access_token),
             scopes=_scope_list(token_response.get("scope")),
             status="connected",
@@ -162,11 +159,11 @@ async def upsert_oauth_installation(
         session.add(row)
     else:
         row.user_id = user_id
-        row.team_name = _string(team.get("name"))
-        row.enterprise_id = _string(enterprise.get("id"))
-        row.enterprise_name = _string(enterprise.get("name"))
+        row.team_name = optional_string_value(team.get("name"))
+        row.enterprise_id = optional_string_value(enterprise.get("id"))
+        row.enterprise_name = optional_string_value(enterprise.get("name"))
         row.bot_user_id = bot_user_id
-        row.authed_user_id = _string(authed_user.get("id"))
+        row.authed_user_id = optional_string_value(authed_user.get("id"))
         row.bot_access_token_enc = _encrypt(bot_access_token)
         row.scopes = _scope_list(token_response.get("scope"))
         row.status = "connected"

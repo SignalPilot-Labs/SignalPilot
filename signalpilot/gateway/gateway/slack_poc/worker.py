@@ -43,6 +43,7 @@ from gateway.slack_poc.progress import (
     INITIAL_PROGRESS_TEXT,
 )
 from gateway.store import slack as slack_store
+from gateway.string_utils import string_value as _string
 
 LOGGER = logging.getLogger(__name__)
 SLACK_API_BASE = "https://slack.com/api"
@@ -51,10 +52,57 @@ SLACK_CHART_LIMIT = 3
 SLACK_ACK_REACTION = "eyes"
 SLACK_DONE_REACTION = "white_check_mark"
 SLACK_ERROR_REACTION = "x"
+SLACK_EVENT_DEDUPE_MAX_SIZE = 10_000
+SLACK_EVENT_DEDUPE_TTL_SECONDS = 6 * 60 * 60
+_PLACEHOLDER_CHART_TITLE_RE = re.compile(
+    r"(?:notebook\s+)?(?:chart|image|figure|visualization)(?:\s+\d+)?",
+    flags=re.I,
+)
 
 
 class SlackApiError(RuntimeError):
     """Raised when Slack Web API returns ok=false or a non-2xx response."""
+
+
+class _EventDeduper:
+    def __init__(
+        self,
+        *,
+        max_size: int = SLACK_EVENT_DEDUPE_MAX_SIZE,
+        ttl_seconds: float = SLACK_EVENT_DEDUPE_TTL_SECONDS,
+    ) -> None:
+        self.max_size = max(1, int(max_size))
+        self.ttl_seconds = max(1.0, float(ttl_seconds))
+        self._seen: dict[str, float] = {}
+
+    def add(self, event_id: str, *, now: float | None = None) -> bool:
+        if not event_id:
+            return True
+        current = time.monotonic() if now is None else now
+        self._prune(current)
+        if event_id in self._seen:
+            self._seen[event_id] = current
+            return False
+        self._seen[event_id] = current
+        self._prune_to_size()
+        return True
+
+    def __len__(self) -> int:
+        return len(self._seen)
+
+    def _prune(self, now: float) -> None:
+        cutoff = now - self.ttl_seconds
+        for event_id, seen_at in list(self._seen.items()):
+            if seen_at < cutoff:
+                self._seen.pop(event_id, None)
+
+    def _prune_to_size(self) -> None:
+        overflow = len(self._seen) - self.max_size
+        if overflow <= 0:
+            return
+        oldest = sorted(self._seen, key=self._seen.get)
+        for event_id in oldest[:overflow]:
+            self._seen.pop(event_id, None)
 
 
 def _slack_api_error(method: str, data: dict[str, Any]) -> SlackApiError:
@@ -209,7 +257,7 @@ class SlackApiClient:
         channel: str,
         thread_ts: str,
         filename: str,
-        title: str,
+        title: str | None,
         content: bytes,
         content_type: str,
     ) -> None:
@@ -229,10 +277,13 @@ class SlackApiClient:
         )
         response.raise_for_status()
 
+        file_payload = {"id": file_id}
+        if title:
+            file_payload["title"] = title
         await self._api_form(
             "files.completeUploadExternal",
             {
-                "files": json.dumps([{"id": file_id, "title": title}]),
+                "files": json.dumps([file_payload]),
                 "channel_id": channel,
                 "thread_ts": thread_ts,
             },
@@ -263,17 +314,16 @@ class SlackPoCWorker:
         self.config = config
         self.slack = slack
         self.session_factory = session_factory
-        self._seen_event_ids: set[str] = set()
+        self._seen_event_ids = _EventDeduper()
         self._tasks: set[asyncio.Task[None]] = set()
 
     async def handle_events_api_payload(self, payload: dict[str, Any]) -> None:
         request = await self._request_from_payload(payload)
         if request is None:
             return
-        if request.event_id in self._seen_event_ids:
+        if not self._seen_event_ids.add(request.event_id):
             LOGGER.info("Ignoring duplicate Slack event_id=%s", request.event_id)
             return
-        self._seen_event_ids.add(request.event_id)
         if await self._handle_preflight(request):
             return
         task = asyncio.create_task(self._process_request(request), name=f"slack-poc-{request.event_id}")
@@ -639,7 +689,7 @@ class SlackPoCWorker:
         attached = 0
         errors: list[str] = []
         for index, chart in enumerate(charts):
-            title = _chart_value(chart, "title") or f"Chart {index + 1}"
+            title = _chart_attachment_title(chart)
             source_url = _chart_value(chart, "url")
             if not source_url:
                 continue
@@ -661,7 +711,7 @@ class SlackPoCWorker:
                 LOGGER.warning(
                     "Could not attach Slack chart event_id=%s title=%s url=%s: %s",
                     request.event_id,
-                    title,
+                    title or _chart_value(chart, "title") or f"chart-{index + 1}",
                     source_url,
                     exc,
                     exc_info=True,
@@ -814,7 +864,7 @@ def register_http_routes(
         app.state.slack_poc_client = None
     app.state.slack_poc_worker = None
     app.state.slack_poc_worker_lock = asyncio.Lock()
-    app.state.slack_poc_selfserve_event_ids = set()
+    app.state.slack_poc_selfserve_event_ids = _EventDeduper()
 
     async def ensure_worker() -> SlackPoCWorker:
         if not config.bot_token:
@@ -866,11 +916,10 @@ def register_http_routes(
 
             event_id = _string(payload.get("event_id"))
             if event_id:
-                seen: set[str] = app.state.slack_poc_selfserve_event_ids
-                if event_id in seen:
+                seen: _EventDeduper = app.state.slack_poc_selfserve_event_ids
+                if not seen.add(event_id):
                     LOGGER.info("Ignoring duplicate Slack event_id=%s", event_id)
                     return
-                seen.add(event_id)
             if initialize_db_on_first_request:
                 await init_db()
             await _dispatch_self_serve_payload(payload, config)
@@ -1173,10 +1222,6 @@ def _channel_defaults_from_env() -> dict[str, SlackAnalysisDefaults]:
     return defaults
 
 
-def _string(value: Any) -> str:
-    return value if isinstance(value, str) else ""
-
-
 def _first_authorization_team_id(payload: dict[str, Any]) -> str:
     authorizations = payload.get("authorizations")
     if not isinstance(authorizations, list) or not authorizations:
@@ -1222,6 +1267,23 @@ def _chart_value(chart: dict[str, Any], *keys: str) -> str:
     return ""
 
 
+def _is_placeholder_chart_title(value: str) -> bool:
+    return bool(_PLACEHOLDER_CHART_TITLE_RE.fullmatch(value.strip()))
+
+
+def _chart_attachment_title(chart: dict[str, Any]) -> str | None:
+    for key in ("title", "caption", "altText", "alt_text"):
+        value = _chart_value(chart, key)
+        if value and not _is_placeholder_chart_title(value):
+            return value
+    return None
+
+
+def _is_placeholder_chart_filename(value: str) -> bool:
+    stem = Path(value).stem.replace("-", " ").replace("_", " ").strip()
+    return _is_placeholder_chart_title(stem)
+
+
 def _chart_filename_extension(content_type: str) -> str:
     normalized = content_type.lower().split(";", 1)[0].strip()
     if normalized == "image/jpeg":
@@ -1237,48 +1299,17 @@ def _chart_filename_extension(content_type: str) -> str:
 
 def _chart_filename(chart: dict[str, Any], index: int, content_type: str) -> str:
     explicit = _chart_value(chart, "fileName", "file_name")
-    if explicit:
+    if explicit and not _is_placeholder_chart_filename(explicit):
         return explicit
-    title = _chart_value(chart, "title") or f"chart-{index + 1}"
+    title = _chart_attachment_title(chart) or f"chart-{index + 1}"
     stem = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:80]
     return f"{stem or f'chart-{index + 1}'}.{_chart_filename_extension(content_type)}"
-
-
-def _slack_link(url: str, label: str) -> str:
-    return f"<{url.replace('>', '%3E')}|{label}>"
-
-
-def _to_slack_mrkdwn(text: str) -> str:
-    text = re.sub(r"\*\*([^*\n]+?)\*\*", r"*\1*", text)
-    text = re.sub(r"__([^_\n]+?)__", r"*\1*", text)
-    return re.sub(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)", r"<\2|\1>", text)
-
-
-def _final_slack_text(status: dict[str, Any], trail_url: str | None) -> str:
-    if status.get("status") != "Done" or status.get("error"):
-        return _failure_slack_text(str(status.get("error") or "SignalPilot analysis failed."), trail_url)
-
-    raw_answer = (
-        _string(status.get("slackMessage")).strip()
-        or _string(status.get("notionComment")).strip()
-        or _string(status.get("finalAnswer")).strip()
-        or _string(status.get("summary")).strip()
-        or "I finished the analysis, but there was no written answer in the result."
-    )
-    answer = _to_slack_mrkdwn(notebook_analysis._compact_bullet_answer(raw_answer) or raw_answer)
-    parts = ["*SignalPilot analysis complete*", answer]
-    confidence = status.get("confidenceScore", status.get("confidence_score"))
-    if confidence is not None:
-        parts.append(f"*Confidence:* {confidence}")
-    if trail_url:
-        parts.append(f"*Notebook trail:* {_slack_link(trail_url, 'Open authenticated notebook')}")
-    return _clip_text("\n\n".join(parts))
 
 
 def _failure_slack_text(error: str, trail_url: str | None) -> str:
     text = f"I could not complete the analysis.\n\n```{error[:3000]}```"
     if trail_url:
-        text += f"\n\nNotebook trail: {_slack_link(trail_url, 'Open notebook')}"
+        text += f"\n\nNotebook trail: <{trail_url.replace('>', '%3E')}|Open notebook>"
     return _clip_text(text)
 
 

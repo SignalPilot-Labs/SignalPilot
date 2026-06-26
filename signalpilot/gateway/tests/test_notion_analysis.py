@@ -560,6 +560,29 @@ def test_final_comment_rich_text_omits_placeholder_chart_titles() -> None:
     ]
 
 
+def test_analysis_detail_blocks_omit_placeholder_chart_captions() -> None:
+    blocks = notion_analysis._analysis_detail_blocks(
+        {
+            "summary": "MapleCloud leads.",
+            "notionCharts": [
+                {
+                    "title": "Notebook image 1",
+                    "caption": "Chart 1",
+                    "url": "/api/notion-analysis/chart/req/image-1.png",
+                    "fileUploadId": "upload-1",
+                    "includeInComment": True,
+                    "includeOnPage": True,
+                }
+            ],
+        }
+    )
+
+    image = next(block["image"] for block in blocks if block.get("type") == "image")
+
+    assert image["caption"] == []
+    assert image["file_upload"] == {"id": "upload-1"}
+
+
 def test_analysis_detail_blocks_prepend_uploaded_chart_images() -> None:
     blocks = notion_analysis._analysis_detail_blocks(
         {

@@ -35,6 +35,10 @@ from gateway.notion.webhooks import RoutedNotionInstallation
 from gateway.store import analysis_trails, workspace_projects
 
 NOTION_RICH_TEXT_MAX_LENGTH = notion_formatting.NOTION_RICH_TEXT_MAX_LENGTH
+_PLACEHOLDER_CHART_TITLE_RE = re.compile(
+    r"(?:notebook\s+)?(?:chart|image|figure|visualization)(?:\s+\d+)?",
+    flags=re.I,
+)
 logger = logging.getLogger(__name__)
 
 
@@ -99,11 +103,20 @@ def _chart_title(chart: dict[str, Any]) -> str:
     return _chart_value(chart, "title") or "Chart"
 
 
+def _is_placeholder_chart_title(value: str) -> bool:
+    return bool(_PLACEHOLDER_CHART_TITLE_RE.fullmatch(value.strip()))
+
+
+def _meaningful_chart_text(chart: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = _chart_value(chart, key)
+        if value and not _is_placeholder_chart_title(value):
+            return value
+    return ""
+
+
 def _chart_comment_title(chart: dict[str, Any]) -> str:
-    title = _chart_title(chart)
-    if re.fullmatch(r"(?:notebook\s+)?(?:chart|image|figure|visualization)(?:\s+\d+)?", title, flags=re.I):
-        return ""
-    return title
+    return _meaningful_chart_text(chart, "title", "caption", "altText", "alt_text")
 
 
 def _selected_charts(status: dict[str, Any], target: str) -> list[dict[str, Any]]:
@@ -120,15 +133,14 @@ def _selected_charts(status: dict[str, Any], target: str) -> list[dict[str, Any]
 
 
 def _chart_image_block(chart: dict[str, Any]) -> dict[str, Any]:
-    title = _chart_title(chart)
-    caption = _chart_value(chart, "caption") or _chart_value(chart, "altText", "alt_text") or title
+    caption = _meaningful_chart_text(chart, "caption", "altText", "alt_text", "title")
     return {
         "object": "block",
         "type": "image",
         "image": {
             "type": "file_upload",
             "file_upload": {"id": _chart_file_upload_id(chart)},
-            "caption": notion_formatting.markdown_rich_text(caption, max_chars=NOTION_RICH_TEXT_MAX_LENGTH),
+            "caption": notion_formatting.markdown_rich_text(caption, max_chars=NOTION_RICH_TEXT_MAX_LENGTH) if caption else [],
         },
     }
 

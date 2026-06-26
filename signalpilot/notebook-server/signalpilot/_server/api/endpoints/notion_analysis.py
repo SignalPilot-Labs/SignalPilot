@@ -15,12 +15,11 @@ from dataclasses import asdict, dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
-from urllib.error import HTTPError, URLError
 from urllib.parse import quote, unquote, unquote_to_bytes, urlencode, urlparse
-from urllib.request import Request as UrlRequest, urlopen
 from uuid import NAMESPACE_URL, uuid5
 
 import msgspec
+import requests
 from starlette.exceptions import HTTPException
 from starlette.responses import FileResponse, JSONResponse
 
@@ -30,7 +29,6 @@ from signalpilot._runtime.commands import SerializedQueryParams
 from signalpilot._runtime.virtual_file import read_virtual_file
 from signalpilot._server.ai.analysis_prompts import (
     analysis_prompt as _analysis_prompt,
-    json_repair_prompt as _json_repair_prompt,
 )
 from signalpilot._server.api.deps import AppState
 from signalpilot._server.api.endpoints.notion_urls import (
@@ -56,6 +54,19 @@ LOGGER = _loggers.sp_logger()
 router = APIRouter()
 
 AnalysisStatus = Literal["New", "Analyzing", "Done", "Failed"]
+DEFAULT_ANALYSIS_AGENT_MODEL = "claude-sonnet-4-5-20250929"
+_ANALYSIS_AGENT_MODEL_ENV_NAMES = (
+    "SIGNALPILOT_ANALYSIS_AGENT_MODEL",
+    "SIGNALPILOT_WORKER_AGENT_MODEL",
+)
+
+
+def _analysis_agent_model() -> str:
+    for name in _ANALYSIS_AGENT_MODEL_ENV_NAMES:
+        value = (os.getenv(name) or "").strip()
+        if value:
+            return value
+    return DEFAULT_ANALYSIS_AGENT_MODEL
 
 
 class StartNotionAnalysisRequest(msgspec.Struct, rename="camel"):
@@ -180,7 +191,6 @@ def _gateway_json_get(
 ) -> Any:
     from signalpilot._server.gateway_client import gateway_headers, gateway_url
 
-    headers = {"Accept": "application/json", **gateway_headers()}
     url = f"{gateway_url()}{path}"
     if params:
         query = urlencode(
@@ -188,18 +198,27 @@ def _gateway_json_get(
         )
         if query:
             url = f"{url}?{query}"
-    request = UrlRequest(url, headers=headers, method="GET")
+    _validate_gateway_json_url(url)
+    headers = {"Accept": "application/json", **gateway_headers()}
     try:
-        with urlopen(request, timeout=timeout_seconds) as response:
-            body = response.read().decode("utf-8", errors="replace")
-    except HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")[:500]
-        raise RuntimeError(f"Gateway HTTP {e.code}: {body}") from e
-    except URLError as e:
-        raise RuntimeError(f"Gateway unavailable: {e.reason}") from e
+        response = requests.get(url, headers=headers, timeout=timeout_seconds)
+        response.raise_for_status()
+    except requests.HTTPError as e:
+        body = e.response.text[:500] if e.response is not None else ""
+        status_code = e.response.status_code if e.response is not None else "error"
+        raise RuntimeError(f"Gateway HTTP {status_code}: {body}") from e
+    except requests.RequestException as e:
+        raise RuntimeError(f"Gateway unavailable: {e}") from e
+    body = response.text
     if not body:
         return None
     return json.loads(body)
+
+
+def _validate_gateway_json_url(url: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError("Gateway URL must be an absolute http or https URL")
 
 
 def _connection_label(connection: dict[str, Any]) -> str:
@@ -609,20 +628,43 @@ def _analysis_source(value: str | None) -> str:
     return source or "notion"
 
 
-def _project_root(app_state: AppState) -> Path:
+def _analysis_project_context(
+    app_state: AppState,
+) -> tuple[str, str] | None:
     request = getattr(app_state, "request", None)
     headers = getattr(request, "headers", {}) or {}
-    project_id = headers.get("x-gateway-project-id")
-    if project_id:
-        branch = headers.get("x-gateway-branch-id", "main").strip() or "main"
+    query_params = getattr(app_state, "query_params", lambda _key: None)
+    project_id = (
+        headers.get("x-gateway-project-id", "")
+        or query_params("project")
+        or ""
+    ).strip()
+    if not project_id:
+        return None
+    branch = (
+        headers.get("x-gateway-branch-id", "")
+        or query_params("branch")
+        or "main"
+    ).strip() or "main"
+    return project_id, branch
+
+
+def _project_root(app_state: AppState) -> Path:
+    context = _analysis_project_context(app_state)
+    if context is not None:
+        project_id, branch = context
         try:
             from signalpilot._server.files.project_sync import (
+                _current_git_branch,
                 local_project_dir,
                 sync_down,
             )
 
             local_dir = local_project_dir(project_id, branch)
-            if (local_dir / ".git").exists():
+            if (
+                (local_dir / ".git").exists()
+                and _current_git_branch(local_dir) == branch
+            ):
                 return local_dir
 
             result = sync_down(project_id, branch)
@@ -788,11 +830,11 @@ app = sp.App()
 def _():
     import signalpilot as sp
     sp.md({request_context_json})
+    return (sp,)
 
 
 @app.cell(hide_code=True)
-def _():
-    import signalpilot as sp
+def _(sp):
     sp.md("""
     ## Executive Summary and Explorations
 
@@ -801,8 +843,7 @@ def _():
 
 
 @app.cell(hide_code=True)
-def _():
-    import signalpilot as sp
+def _(sp):
     sp.md("""
     ## Analysis steps
 
@@ -851,19 +892,6 @@ def _(sp):
     else:
         text += followup_cell
     path.write_text(text, encoding="utf-8")
-
-
-def _analysis_project_context(app_state: AppState) -> tuple[str, str] | None:
-    project_id = app_state.request.headers.get(
-        "x-gateway-project-id", ""
-    ).strip()
-    if not project_id:
-        return None
-    branch = (
-        app_state.request.headers.get("x-gateway-branch-id", "main").strip()
-        or "main"
-    )
-    return project_id, branch
 
 
 def _checkpoint_analysis_files(
@@ -1097,6 +1125,47 @@ def _parse_result(text: str) -> AnalysisResult:
     )
 
 
+def _parse_final_statement_result(text: str) -> AnalysisResult:
+    data = _extract_marker_json(text, "FINAL_STATEMENT")
+    statement = str(data.get("statement", "")).strip()
+    if not statement:
+        raise ValueError("Agent did not emit FINAL_STATEMENT.statement")
+    confidence = data.get("confidenceScore", data.get("confidence_score"))
+    if confidence is not None:
+        confidence = float(confidence)
+        confidence = max(0.0, min(1.0, confidence))
+    caveats = data.get("caveats") or []
+    if not isinstance(caveats, list):
+        caveats = [str(caveats)]
+    handoff_notes = data.get("handoffNotes", data.get("handoff_notes", [])) or []
+    if not isinstance(handoff_notes, list):
+        handoff_notes = [str(handoff_notes)]
+    return AnalysisResult(
+        summary=statement[:500],
+        confidence_score=confidence,
+        final_answer=statement,
+        gotchas=[str(item) for item in caveats],
+        analysis_method="; ".join(str(item) for item in handoff_notes),
+        notion_comment=statement[:1200],
+        notion_charts=[],
+    )
+
+
+def _extract_marker_json(text: str, marker: str) -> dict[str, Any]:
+    decoder = json.JSONDecoder()
+    latest: dict[str, Any] | None = None
+    for match in re.finditer(rf"(?m)^\s*{re.escape(marker)}\s*:\s*", text):
+        try:
+            parsed, _ = decoder.raw_decode(text[match.end() :].lstrip())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            latest = parsed
+    if latest is None:
+        raise ValueError(f"Agent did not emit {marker}")
+    return latest
+
+
 def _truncate_comment(text: str, limit: int = 1200) -> str:
     text = text.strip()
     if len(text) <= limit:
@@ -1112,21 +1181,20 @@ def _plain_text_failure_result(text: str, error: Exception) -> AnalysisResult:
         final_answer=(
             "## Executive Summary and Explorations\n\n"
             "- I could not complete the requested analysis.\n"
-            "- The agent returned plain text instead of the required JSON "
-            "response, so SignalPilot preserved the available failure details "
-            "below.\n\n"
+            "- The agent did not emit the required FINAL_STATEMENT marker, so "
+            "SignalPilot preserved the available failure details below.\n\n"
             "## Detailed Research\n\n"
             f"{detail}\n\n"
             "## Confidence Score: 0\n\n"
             "- No completed analysis result was produced."
         ),
         gotchas=[
-            "The agent did not return the required JSON response.",
+            "The agent did not emit the required FINAL_STATEMENT marker.",
             "The analysis should be rerun after inspecting the notebook trail.",
         ],
         analysis_method=(
-            "The agent returned plain text instead of the required JSON object; "
-            "SignalPilot preserved that text as failure detail."
+            "The agent did not emit the required FINAL_STATEMENT marker; "
+            "SignalPilot preserved the available text as failure detail."
         ),
         notion_comment=_truncate_comment(
             f"I could not complete the requested analysis.\n\n{detail}"
@@ -1193,8 +1261,58 @@ def _chart_dir(app_state: AppState, record: AnalysisRecord) -> Path:
     return chart_dir
 
 
-def _chart_url(record: AnalysisRecord, filename: str) -> str:
-    return f"/api/notion-analysis/chart/{record.request_id}/{filename}"
+def _chart_url(
+    app_state: AppState, record: AnalysisRecord, filename: str
+) -> str:
+    url = f"/api/notion-analysis/chart/{record.request_id}/{filename}"
+    context = _analysis_project_context(app_state)
+    if context is None:
+        return url
+    project_id, branch = context
+    return f"{url}?{urlencode({'project': project_id, 'branch': branch})}"
+
+
+def _chart_file_from_project_registries(
+    request_id: str, filename: str
+) -> Path | None:
+    try:
+        from signalpilot._server.files.project_sync import PROJECTS_ROOT
+    except Exception:
+        return None
+
+    for registry_path in PROJECTS_ROOT.glob(
+        "*/**/notebooks/.signalpilot-analysis-registry.json"
+    ):
+        try:
+            raw = json.loads(registry_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        records = raw.get("records", [])
+        if not isinstance(records, list):
+            continue
+        for item in records:
+            if (
+                not isinstance(item, dict)
+                or item.get("request_id") != request_id
+            ):
+                continue
+            notebook_path = item.get("notebook_path")
+            if not isinstance(notebook_path, str) or not notebook_path:
+                continue
+            repo = registry_path.parent.parent
+            chart_dir = (
+                repo
+                / notebook_path
+            ).parent / "public" / "signalpilot-notion-charts"
+            try:
+                resolved_dir = chart_dir.resolve(strict=True)
+                chart_path = (resolved_dir / filename).resolve(strict=True)
+                chart_path.relative_to(resolved_dir)
+            except (OSError, ValueError):
+                continue
+            if chart_path.is_file():
+                return chart_path
+    return None
 
 
 def _chart_filename_extension(content_type: str) -> str:
@@ -1305,7 +1423,7 @@ def _materialize_existing_chart_artifacts(
         materialized.append(
             AnalysisChart(
                 title=chart.title,
-                url=_chart_url(record, filename),
+                url=_chart_url(app_state, record, filename),
                 caption=chart.caption,
                 alt_text=chart.alt_text,
                 include_in_comment=chart.include_in_comment,
@@ -1454,6 +1572,21 @@ def _image_candidates_from_output_data(
     for mimetype, value in data.items():
         if not isinstance(mimetype, str):
             continue
+        if mimetype == "application/vnd.sp+mimebundle":
+            mimebundle = _load_sp_mimebundle(value)
+            if mimebundle is not None:
+                candidates.extend(
+                    _image_candidates_from_output_data(
+                        app_state,
+                        cell_id,
+                        {
+                            key: item
+                            for key, item in mimebundle.items()
+                            if key != "__metadata__"
+                        },
+                    )
+                )
+            continue
         if mimetype.startswith("image/"):
             if isinstance(value, bytes):
                 candidates.append(
@@ -1502,6 +1635,18 @@ def _image_candidates_from_output_data(
     return candidates
 
 
+def _load_sp_mimebundle(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def _safe_chart_cell_id(cell_id: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", cell_id).strip("-")
     return cleaned[:64] or "cell"
@@ -1528,7 +1673,7 @@ def _write_image_chart_artifacts(
             charts.append(
                 AnalysisChart(
                     title=title,
-                    url=_chart_url(record, filename),
+                    url=_chart_url(app_state, record, filename),
                     caption=title,
                     alt_text=title,
                     include_in_comment=True,
@@ -1538,6 +1683,28 @@ def _write_image_chart_artifacts(
             if len(charts) >= 2:
                 return charts
     return charts
+
+
+def _chart_identity(chart: AnalysisChart) -> str:
+    return chart.url.strip() or chart.title.strip()
+
+
+def _merge_chart_lists(
+    *chart_lists: list[AnalysisChart],
+    limit: int = 2,
+) -> list[AnalysisChart]:
+    merged: list[AnalysisChart] = []
+    seen: set[str] = set()
+    for charts in chart_lists:
+        for chart in charts:
+            key = _chart_identity(chart)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            merged.append(chart)
+            if len(merged) >= limit:
+                return merged
+    return merged
 
 
 _PLOTLY_FIGURE_ATTR_RE = re.compile(
@@ -2222,7 +2389,7 @@ def _write_plotly_chart_artifacts(
             charts.append(
                 AnalysisChart(
                     title=title,
-                    url=_chart_url(record, filename),
+                    url=_chart_url(app_state, record, filename),
                     caption=title,
                     alt_text=f"Chart from notebook cell {cell_id}: {title}",
                     include_in_comment=True,
@@ -2385,7 +2552,7 @@ def _write_result_fallback_chart_artifacts(
         charts.append(
             AnalysisChart(
                 title="Operating momentum composite ranking",
-                url=_chart_url(record, filename),
+                url=_chart_url(app_state, record, filename),
                 caption=f"{winner} has the highest composite momentum score.",
                 alt_text=(
                     "Horizontal bar chart ranking companies by composite "
@@ -2438,7 +2605,7 @@ def _write_result_fallback_chart_artifacts(
             charts.append(
                 AnalysisChart(
                     title="Operating momentum dimension breakdown",
-                    url=_chart_url(record, filename),
+                    url=_chart_url(app_state, record, filename),
                     caption=(
                         "Normalized comparison of the component momentum "
                         "dimensions from the final ranking table."
@@ -2461,6 +2628,12 @@ def _html_outputs_from_output_data(
     html_outputs: list[tuple[str, str]] = []
     for cell_id, data in output_data:
         raw_html = data.get("text/html")
+        if isinstance(raw_html, str):
+            html_outputs.append((cell_id, raw_html))
+        mimebundle = _load_sp_mimebundle(data.get("application/vnd.sp+mimebundle"))
+        if mimebundle is None:
+            continue
+        raw_html = mimebundle.get("text/html")
         if isinstance(raw_html, str):
             html_outputs.append((cell_id, raw_html))
     return html_outputs
@@ -2497,12 +2670,11 @@ def _fallback_chart_artifacts_from_session_cache(
             if not isinstance(data, dict):
                 continue
             output_data.append((cell_id, data))
-    charts = _write_plotly_chart_artifacts(
+    plotly_charts = _write_plotly_chart_artifacts(
         app_state, record, _html_outputs_from_output_data(output_data)
     )
-    if charts:
-        return charts
-    return _write_image_chart_artifacts(app_state, record, output_data)
+    image_charts = _write_image_chart_artifacts(app_state, record, output_data)
+    return _merge_chart_lists(plotly_charts, image_charts)
 
 
 def _fallback_chart_artifacts_from_session(
@@ -2521,15 +2693,15 @@ def _fallback_chart_artifacts_from_session(
         if not isinstance(output, CellOutput):
             continue
         output_data.append((str(cell_id), {output.mimetype: output.data}))
-    charts = _write_plotly_chart_artifacts(
+    plotly_charts = _write_plotly_chart_artifacts(
         app_state, record, _html_outputs_from_output_data(output_data)
     )
-    if charts:
+    image_charts = _write_image_chart_artifacts(app_state, record, output_data)
+    charts = _merge_chart_lists(plotly_charts, image_charts)
+    if len(charts) >= 2:
         return charts
-    charts = _write_image_chart_artifacts(app_state, record, output_data)
-    if charts:
-        return charts
-    return _fallback_chart_artifacts_from_session_cache(app_state, record)
+    cache_charts = _fallback_chart_artifacts_from_session_cache(app_state, record)
+    return _merge_chart_lists(charts, cache_charts)
 
 
 def _ensure_notion_chart_artifacts(
@@ -2542,31 +2714,20 @@ def _ensure_notion_chart_artifacts(
         for chart in (record.result.notion_charts or [])
         if chart.url.strip()
     ]
-    materialized = _materialize_existing_chart_artifacts(
-        app_state, record, existing_charts
-    )
-    if materialized:
-        record.result.notion_charts = materialized
-        return
-    generated = _fallback_chart_artifacts_from_session(app_state, record)
-    if generated:
-        record.result.notion_charts = generated
-    else:
-        generated = _write_result_fallback_chart_artifacts(app_state, record)
-        if generated:
-            record.result.notion_charts = generated
-            return
-    if generated:
-        return
-    elif existing_charts:
+    materialized = _materialize_existing_chart_artifacts(app_state, record, existing_charts)
+    session_charts = _fallback_chart_artifacts_from_session(app_state, record)
+    charts = _merge_chart_lists(materialized, session_charts)
+    if len(charts) < 2:
+        result_charts = _write_result_fallback_chart_artifacts(app_state, record)
+        charts = _merge_chart_lists(charts, result_charts)
+    if len(charts) < 2:
         external_charts = [
             chart
             for chart in existing_charts
             if urlparse(chart.url).scheme in {"http", "https"}
         ]
-        record.result.notion_charts = external_charts[:2]
-    else:
-        record.result.notion_charts = []
+        charts = _merge_chart_lists(charts, external_charts)
+    record.result.notion_charts = charts
 
 
 def _persist_record_completion_artifacts(
@@ -2698,6 +2859,7 @@ async def _run_analysis(
                 async for event in run_notebook_agent(
                     message=prompt,
                     session_id=SessionId(record.session_id),
+                    model=_analysis_agent_model(),
                     new_chat=new_chat,
                     thread_id=record.session_id,
                     notebook_mcp_app=app_state.request.app,
@@ -2777,63 +2939,7 @@ async def _run_analysis(
             )
             return
 
-        try:
-            record.result = _parse_result("".join(text_parts))
-        except Exception as parse_error:
-            repair_parts: list[str] = []
-            await append_trace_event(
-                {
-                    "type": "text",
-                    "content": (
-                        "Formatting the completed analysis into the required "
-                        "Notion JSON response."
-                    ),
-                    "tool_name": "",
-                    "tool_input": None,
-                    "tool_call_id": "",
-                    "is_error": False,
-                    "cost_usd": None,
-                    "turn": 0,
-                },
-            )
-            try:
-                async with asyncio.timeout(
-                    min(120.0, _agent_timeout_seconds())
-                ):
-                    async for event in run_notebook_agent(
-                        message=_json_repair_prompt(
-                            body.prompt, "".join(text_parts)
-                        ),
-                        session_id=SessionId(record.session_id),
-                        new_chat=False,
-                        max_turns=3,
-                        thread_id=record.session_id,
-                        notebook_mcp_app=app_state.request.app,
-                        cwd=agent_cwd,
-                        disallow_file_edits=True,
-                        additional_disallowed_tools=["Agent"],
-                    ):
-                        event_data = {
-                            "type": event.type,
-                            "content": event.content,
-                            "tool_name": event.tool_name,
-                            "tool_input": event.tool_input,
-                            "tool_call_id": event.tool_call_id,
-                            "is_error": event.is_error,
-                            "cost_usd": event.cost_usd,
-                            "turn": event.turn,
-                        }
-                        await append_trace_event(event_data)
-                        if event.type == "text" and event.content:
-                            repair_parts.append(event.content)
-                        if event.type == "error":
-                            raise RuntimeError(
-                                event.content or "Agent JSON repair failed"
-                            )
-                text_parts.extend(repair_parts)
-                record.result = _parse_result("".join(repair_parts))
-            except Exception as repair_error:
-                raise parse_error from repair_error
+        record.result = _parse_final_statement_result("".join(text_parts))
         record.status = "Done"
         record.error = None
         _persist_record_completion_artifacts(app_state, record)
@@ -2870,7 +2976,7 @@ async def _run_analysis(
         LOGGER.exception("Notion analysis %s failed", record.request_id)
         failed = False
         try:
-            record.result = _parse_result("".join(text_parts))
+            record.result = _parse_final_statement_result("".join(text_parts))
             record.status = "Done"
             record.error = None
         except Exception:
@@ -3039,18 +3145,22 @@ async def notion_analysis_chart(*, request: Request) -> FileResponse:
     filename = request.path_params["filename"]
     record = _records_by_request_id.get(request_id)
     if record is None:
-        raise HTTPException(
-            status_code=404, detail="Analysis request not found"
+        chart_path = _chart_file_from_project_registries(
+            request_id, filename
         )
-
-    chart_dir = _chart_dir(app_state, record).resolve(strict=True)
-    try:
-        chart_path = (chart_dir / filename).resolve(strict=True)
-        chart_path.relative_to(chart_dir)
-    except (OSError, ValueError):
-        raise HTTPException(
-            status_code=404, detail="Chart not found"
-        ) from None
+        if chart_path is None:
+            raise HTTPException(
+                status_code=404, detail="Analysis request not found"
+            )
+    else:
+        chart_dir = _chart_dir(app_state, record).resolve(strict=True)
+        try:
+            chart_path = (chart_dir / filename).resolve(strict=True)
+            chart_path.relative_to(chart_dir)
+        except (OSError, ValueError):
+            raise HTTPException(
+                status_code=404, detail="Chart not found"
+            ) from None
 
     media_type = mimetypes.guess_type(chart_path.name)[0] or "image/svg+xml"
     return FileResponse(

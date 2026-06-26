@@ -71,6 +71,8 @@ async def test_pod_extra_env_includes_gateway_oauth_user_anthropic_key_and_web_u
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-token")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "global-ant-key")
     monkeypatch.delenv("SP_WEB_URL", raising=False)
+    monkeypatch.delenv("SIGNALPILOT_ANALYSIS_AGENT_MODEL", raising=False)
+    monkeypatch.delenv("SIGNALPILOT_WORKER_AGENT_MODEL", raising=False)
     monkeypatch.setenv("SIGNALPILOT_WEB_URL", "https://app.signalpilot.ai")
     monkeypatch.setattr(
         session_service.user_secrets_store,
@@ -97,6 +99,8 @@ async def test_pod_extra_env_includes_gateway_oauth_user_anthropic_key_and_web_u
 async def test_pod_extra_env_defaults_web_url_in_cloud_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SP_WEB_URL", raising=False)
     monkeypatch.delenv("SIGNALPILOT_WEB_URL", raising=False)
+    monkeypatch.delenv("SIGNALPILOT_ANALYSIS_AGENT_MODEL", raising=False)
+    monkeypatch.delenv("SIGNALPILOT_WORKER_AGENT_MODEL", raising=False)
     monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
     monkeypatch.setattr(
         session_service.user_secrets_store,
@@ -112,6 +116,28 @@ async def test_pod_extra_env_defaults_web_url_in_cloud_mode(monkeypatch: pytest.
     )
 
     assert env == {"SP_WEB_URL": "https://app.signalpilot.ai"}
+
+
+@pytest.mark.asyncio
+async def test_pod_extra_env_includes_analysis_agent_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("CLAUDE_CODE_OAUTH_TOKEN", "OAUTH_TOKEN", "ANTHROPIC_API_KEY", "SP_WEB_URL", "SIGNALPILOT_WEB_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
+    monkeypatch.setenv("SIGNALPILOT_ANALYSIS_AGENT_MODEL", "claude-sonnet-4-5-20250929")
+    monkeypatch.setattr(
+        session_service.user_secrets_store,
+        "get_user_anthropic_key",
+        AsyncMock(return_value=None),
+    )
+
+    env = await session_service._pod_extra_env(
+        AsyncMock(),
+        org_id="org-1",
+        user_id="user-1",
+        extra_env=None,
+    )
+
+    assert env == {"SIGNALPILOT_ANALYSIS_AGENT_MODEL": "claude-sonnet-4-5-20250929"}
 
 
 @pytest.mark.asyncio

@@ -414,8 +414,41 @@ async def test_create_request_page_does_not_write_prompt_or_source_body(monkeypa
     body = calls[0]["json_body"]
     assert body["parent"] == {"type": "data_source_id", "data_source_id": "data-source-123"}
     assert body["properties"]["Summary"]["rich_text"][0]["text"]["content"].startswith("## Question")
+    assert body["properties"]["Created at"] == {"date": {"start": "2026-06-01T12:00:00+00:00"}}
 
     assert "children" not in body
+
+
+@pytest.mark.asyncio
+async def test_create_request_page_falls_back_to_readable_created_at_for_legacy_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict] = []
+
+    async def fake_notion_json(api_key: str, method: str, path: str, *, json_body=None, params=None):
+        del api_key, method, path, params
+        calls.append(json.loads(json.dumps(json_body)))
+        if len(calls) == 1:
+            request = httpx.Request("POST", "https://api.notion.com/v1/pages")
+            response = httpx.Response(400, json={"message": "Created at should be rich_text"}, request=request)
+            raise httpx.HTTPStatusError("bad request", request=request, response=response)
+        return {"id": "request-page-123", "url": "https://notion.test/request-page-123"}
+
+    monkeypatch.setattr(notion_client, "notion_json", fake_notion_json)
+
+    page = await notion_client.create_request_page(
+        "token",
+        "data-source-123",
+        headline="Revenue question",
+        source_url="https://notion.test/source-page",
+        requester_id="user-123",
+        prompt="Analyze revenue",
+        created_at="2026-06-26T14:38:44.790255+00:00",
+    )
+
+    assert page == {"id": "request-page-123", "url": "https://notion.test/request-page-123"}
+    assert calls[0]["properties"]["Created at"] == {"date": {"start": "2026-06-26T14:38:44.790255+00:00"}}
+    assert calls[1]["properties"]["Created at"]["rich_text"][0]["text"]["content"] == "Jun 26, 2026 14:38 UTC"
 
 
 @pytest.mark.asyncio

@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 OrchestratorFactory = Callable[[], Awaitable[NotebookOrchestrator]]
 _AI_CREDENTIAL_ENV_NAMES = ("CLAUDE_CODE_OAUTH_TOKEN", "OAUTH_TOKEN", "ANTHROPIC_API_KEY")
+_NOTEBOOK_MODEL_ENV_NAMES = ("SIGNALPILOT_ANALYSIS_AGENT_MODEL", "SIGNALPILOT_WORKER_AGENT_MODEL")
 _DEFAULT_CLOUD_WEB_URL = "https://app.signalpilot.ai"
 
 
@@ -114,7 +115,7 @@ async def _pod_extra_env(
 ) -> dict[str, str] | None:
     env: dict[str, str] = {
         name: value
-        for name in _AI_CREDENTIAL_ENV_NAMES
+        for name in (*_AI_CREDENTIAL_ENV_NAMES, *_NOTEBOOK_MODEL_ENV_NAMES)
         if (value := os.getenv(name))
     }
 

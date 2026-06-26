@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from urllib.parse import urlencode
 
 import httpx
@@ -101,7 +102,7 @@ REQUEST_DATABASE_PROPERTIES: dict[str, dict] = {
     "Trail URL": {"url": {}},
     "Confidence score": {"number": {}},
     "Status": {"rich_text": {}},
-    "Created at": {"rich_text": {}},
+    "Created at": {"date": {}},
     "Requester": {"select": {"options": []}},
     "Summary": {"rich_text": {}},
     "Escalated to": {"rich_text": {}},
@@ -580,38 +581,93 @@ async def create_request_page(
 ) -> dict[str, str]:
     body = {
         "parent": {"type": "data_source_id", "data_source_id": data_source_id},
-        "properties": {
-            "Request": {"title": _title(headline)},
-            "Source": {"url": source_url},
-            "Trail URL": {"url": None},
-            "Confidence score": {"number": None},
-            "Status": {"rich_text": _rich_text("New")},
-            "Created at": {"rich_text": _rich_text(created_at)},
-            "Requester": {"select": {"name": requester_id[:100] or "Unknown"}},
-            "Summary": {"rich_text": _rich_text(prompt)},
-            "Escalated to": {"rich_text": []},
-        },
+        "properties": _request_page_properties(
+            headline=headline,
+            source_url=source_url,
+            requester_id=requester_id,
+            prompt=prompt,
+            created_at=created_at,
+            use_date_created_at=True,
+        ),
     }
-    data = await notion_json(
-        api_key,
-        "POST",
-        "/pages",
-        json_body=body,
-    )
+    try:
+        data = await notion_json(
+            api_key,
+            "POST",
+            "/pages",
+            json_body=body,
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code != 400:
+            raise
+        body["properties"] = _request_page_properties(
+            headline=headline,
+            source_url=source_url,
+            requester_id=requester_id,
+            prompt=prompt,
+            created_at=created_at,
+            use_date_created_at=False,
+        )
+        data = await notion_json(
+            api_key,
+            "POST",
+            "/pages",
+            json_body=body,
+        )
     return {
         "id": data.get("id", ""),
         "url": data.get("url") or f"https://www.notion.so/{normalize_id(data.get('id', ''))}",
     }
 
 
-async def update_page_properties(api_key: str, page_id: str, properties: dict) -> None:
-    await notion_json(api_key, "PATCH", f"/pages/{page_id}", json_body={"properties": properties})
+def _request_page_properties(
+    *,
+    headline: str,
+    source_url: str,
+    requester_id: str,
+    prompt: str,
+    created_at: str,
+    use_date_created_at: bool,
+) -> dict:
+    created_at_property = (
+        {"date": {"start": created_at}}
+        if use_date_created_at
+        else {"rich_text": _rich_text(_created_at_display(created_at))}
+    )
+    return {
+        "Request": {"title": _title(headline)},
+        "Source": {"url": source_url},
+        "Trail URL": {"url": None},
+        "Confidence score": {"number": None},
+        "Status": {"rich_text": _rich_text("New")},
+        "Created at": created_at_property,
+        "Requester": {"select": {"name": requester_id[:100] or "Unknown"}},
+        "Summary": {"rich_text": _rich_text(prompt)},
+        "Escalated to": {"rich_text": []},
+    }
 
 
-async def append_page_blocks(api_key: str, page_id: str, children: list[dict]) -> None:
+def _created_at_display(created_at: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    except ValueError:
+        return created_at
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(UTC)
+        zone = " UTC"
+    else:
+        zone = ""
+    return f"{parsed:%b} {parsed.day}, {parsed:%Y %H:%M}{zone}"
+
+
+async def update_page_properties(api_key: str, page_id: str, properties: dict) -> dict:
+    return await notion_json(api_key, "PATCH", f"/pages/{page_id}", json_body={"properties": properties})
+
+
+async def append_page_blocks(api_key: str, page_id: str, children: list[dict]) -> dict:
     if not children:
-        return
-    await notion_json(api_key, "PATCH", f"/blocks/{page_id}/children", json_body={"children": children[:100]})
+        return {"results": []}
+    return await notion_json(api_key, "PATCH", f"/blocks/{page_id}/children", json_body={"children": children[:100]})
 
 
 async def list_comments(api_key: str, block_id: str) -> list[dict]:
@@ -655,18 +711,40 @@ async def create_comment(
     discussion_id: str,
     rich_text: list[dict],
     attachments: list[dict] | None = None,
-) -> None:
+) -> dict:
     body: dict = {
         "discussion_id": discussion_id,
         "rich_text": rich_text,
     }
     if attachments:
         body["attachments"] = attachments[:3]
-    await notion_json(
+    return await notion_json(
         api_key,
         "POST",
         "/comments",
         json_body=body,
+    )
+
+
+async def update_comment(
+    api_key: str,
+    comment_id: str,
+    *,
+    rich_text: list[dict],
+) -> dict:
+    return await notion_json(
+        api_key,
+        "PATCH",
+        f"/comments/{comment_id}",
+        json_body={"rich_text": rich_text},
+    )
+
+
+async def delete_comment(api_key: str, comment_id: str) -> dict:
+    return await notion_json(
+        api_key,
+        "DELETE",
+        f"/comments/{comment_id}",
     )
 
 

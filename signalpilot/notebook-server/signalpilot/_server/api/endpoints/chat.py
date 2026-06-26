@@ -153,6 +153,8 @@ def _assistant_trace_message(
     content = payload.get("content")
     final_json: str | None = None
     if isinstance(content, str):
+        content = _friendly_trace_control_content(content)
+        payload = {**payload, "content": content}
         final_json = _extract_final_json_content(content)
         if final_json is not None:
             payload = {**payload, "content": final_json}
@@ -175,6 +177,149 @@ def _assistant_trace_message(
         "metadata_json": None,
         "created_at": created_at,
     }
+
+
+def _friendly_trace_control_content(content: str) -> str:
+    final_statement = _extract_marker_payload(content, "FINAL_STATEMENT")
+    if final_statement is not None:
+        return _format_final_statement_for_chat(final_statement)
+    return _replace_plan_progress_markers(content)
+
+
+def _extract_marker_payload(content: str, marker: str) -> dict[str, Any] | None:
+    decoder = json.JSONDecoder()
+    for match in re.finditer(rf"(?m)^\s*{marker}\s*:\s*", content):
+        remainder = content[match.end() :]
+        stripped = remainder.lstrip()
+        try:
+            parsed, _ = decoder.raw_decode(stripped)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _replace_plan_progress_markers(content: str) -> str:
+    decoder = json.JSONDecoder()
+    replacements: list[tuple[int, int, str]] = []
+    for match in re.finditer(r"(?m)^\s*(PLAN|PROGRESS)\s*:\s*", content):
+        marker = match.group(1)
+        remainder = content[match.end() :]
+        stripped = remainder.lstrip()
+        offset = len(remainder) - len(stripped)
+        try:
+            parsed, end = decoder.raw_decode(stripped)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        replacement = (
+            _format_plan_for_chat(parsed)
+            if marker == "PLAN"
+            else _format_progress_for_chat(parsed)
+        )
+        replacements.append((match.start(), match.end() + offset + end, replacement))
+    for start, end, replacement in reversed(replacements):
+        content = f"{content[:start]}{replacement}{content[end:]}"
+    return re.sub(r"\n{3,}", "\n\n", content).strip()
+
+
+def _format_plan_for_chat(payload: dict[str, Any]) -> str:
+    steps = payload.get("steps")
+    if not isinstance(steps, list):
+        return "Plan updated."
+    bullets = [_clean_bullet_text(step) for step in steps]
+    bullets = [step for step in bullets if step]
+    if not bullets:
+        return "Plan updated."
+    return "Plan:\n" + "\n".join(f"- {step}" for step in bullets)
+
+
+def _format_progress_for_chat(payload: dict[str, Any]) -> str:
+    current = _clean_bullet_text(
+        payload.get("currentStep") or payload.get("current_step") or ""
+    )
+    status = _clean_bullet_text(payload.get("status") or "")
+    completed_raw = payload.get("completedSteps", payload.get("completed_steps", []))
+    completed = (
+        [_clean_bullet_text(step) for step in completed_raw]
+        if isinstance(completed_raw, list)
+        else []
+    )
+    completed = [step for step in completed if step]
+    lines = ["Progress:"]
+    if current:
+        lines.append(f"- Current: {current}")
+    if status:
+        lines.append(f"- Status: {status}")
+    if completed:
+        lines.append("- Completed: " + ", ".join(completed))
+    return "\n".join(lines)
+
+
+def _format_final_statement_for_chat(payload: dict[str, Any]) -> str:
+    statement = _clean_bullet_text(payload.get("statement") or "")
+    caveats_raw = payload.get("caveats", [])
+    notes_raw = payload.get("handoffNotes", payload.get("handoff_notes", []))
+    caveats = (
+        [_clean_bullet_text(item) for item in caveats_raw]
+        if isinstance(caveats_raw, list)
+        else []
+    )
+    notes = (
+        [_clean_bullet_text(item) for item in notes_raw]
+        if isinstance(notes_raw, list)
+        else []
+    )
+    caveats = [item for item in caveats if item]
+    notes = [item for item in notes if item]
+
+    lines = ["Analysis complete."]
+    answer_bullets = _bulletize_text(statement)
+    if answer_bullets:
+        lines.extend(["", "Findings:", *[f"- {item}" for item in answer_bullets]])
+    confidence = _format_confidence(payload.get("confidenceScore", payload.get("confidence_score")))
+    if confidence:
+        lines.extend(["", f"Confidence: {confidence}"])
+    if caveats:
+        lines.extend(["", "Gotchas / caveats:", *[f"- {item}" for item in caveats[:8]]])
+    if notes:
+        lines.extend(["", "Method:", *[f"- {item}" for item in notes[:6]]])
+    return "\n".join(lines)
+
+
+def _bulletize_text(content: str, max_bullets: int = 6) -> list[str]:
+    stripped = content.strip()
+    if not stripped:
+        return []
+    bullets: list[str] = []
+    for line in stripped.splitlines():
+        cleaned = _clean_bullet_text(line)
+        if cleaned:
+            bullets.append(cleaned)
+    if len(bullets) <= 1:
+        bullets = [_clean_bullet_text(part) for part in re.split(r"(?<=[.!?])\s+", stripped)]
+    unique = [bullet for index, bullet in enumerate(bullets) if bullet and bullets.index(bullet) == index]
+    return unique[:max_bullets]
+
+
+def _clean_bullet_text(value: Any) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"^#{1,6}\s+", "", text)
+    text = re.sub(r"^[-*]\s+", "", text)
+    text = re.sub(r"^\d+[.)]\s+", "", text)
+    return text.strip()
+
+
+def _format_confidence(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return str(value).strip()
+    return f"{numeric:.2f}".rstrip("0").rstrip(".")
 
 
 def _extract_final_json_content(content: str) -> str | None:

@@ -17,6 +17,7 @@ from ..models.workspace import (
     ChatTraceThreadInfo,
     ChatTraceThreadUpsert,
 )
+from ..trace_markers import redact_trace_control_markers
 
 
 def _thread_scope(org_id: str, thread_id: str):
@@ -145,6 +146,7 @@ async def append_event(
     ).scalar_one()
     idx = int(next_idx)
     now = time.time()
+    content, metadata = redact_trace_control_markers(event.content or "", event.metadata)
     row = GatewayChatTraceEvent(
         id=str(uuid.uuid4()),
         org_id=org_id,
@@ -153,14 +155,14 @@ async def append_event(
         idx=idx,
         event_type=event.type,
         role=event.role,
-        content=event.content or "",
+        content=content,
         tool_name=event.tool_name or "",
         tool_input_json=event.tool_input,
         tool_call_id=event.tool_call_id or "",
         is_error=bool(event.is_error),
         cost_usd=event.cost_usd,
         turn=int(event.turn or 0),
-        metadata_json=event.metadata,
+        metadata_json=metadata,
         created_at=now,
     )
     session.add(row)
@@ -215,12 +217,14 @@ async def get_events(
     user_id: str,
     thread_id: str,
     after_index: int = -1,
+    require_thread: bool = True,
 ) -> list[ChatTraceEventInfo]:
-    thread = await get_thread(
-        session, org_id=org_id, user_id=user_id, thread_id=thread_id
-    )
-    if thread is None:
-        raise ValueError(f"Trace thread {thread_id} not found")
+    if require_thread:
+        thread = await get_thread(
+            session, org_id=org_id, user_id=user_id, thread_id=thread_id
+        )
+        if thread is None:
+            raise ValueError(f"Trace thread {thread_id} not found")
 
     result = await session.execute(
         select(GatewayChatTraceEvent)

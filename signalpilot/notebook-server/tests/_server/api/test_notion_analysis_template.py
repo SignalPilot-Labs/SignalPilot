@@ -47,6 +47,10 @@ def test_notebook_template_uses_compact_three_cell_scaffold() -> None:
 
     assert template.count("@app.cell") == 3
     assert template.count("@app.cell(hide_code=True)") == 3
+    assert template.count("import signalpilot as sp") == 2
+    assert template.count("    import signalpilot as sp") == 1
+    assert template.count("def _(sp):") == 2
+    assert "    return (sp,)" in template
     assert "# SignalPilot analysis" in template
     assert "AI generated title" not in template
     assert "**Source request:** https://slack.test/archives/C/p123" in template
@@ -121,13 +125,58 @@ def test_project_root_uses_existing_project_checkout(
     )
     monkeypatch.setattr(
         project_sync,
+        "_current_git_branch",
+        lambda _repo: "analysis/slack/test",
+    )
+    monkeypatch.setattr(
+        project_sync,
         "sync_down",
         lambda *_args, **_kwargs: pytest.fail(
-            "sync_down should not run for existing checkout"
+            "sync_down should not run for existing checkout on target branch"
         ),
     )
 
     assert notion_analysis._project_root(app_state) == project_root
+
+
+def test_project_root_syncs_when_existing_checkout_is_on_wrong_branch(
+    tmp_path, monkeypatch
+) -> None:
+    from signalpilot._server.files import project_sync
+
+    project_root = tmp_path / "projects" / "project-1"
+    (project_root / ".git").mkdir(parents=True)
+    app_state = SimpleNamespace(
+        request=SimpleNamespace(
+            headers={
+                "x-gateway-project-id": "project-1",
+                "x-gateway-branch-id": "analysis/notion/current-request",
+            }
+        ),
+        session_manager=SimpleNamespace(
+            workspace=SimpleNamespace(directory=str(tmp_path / "workspace"))
+        ),
+    )
+    calls: list[tuple[str, str]] = []
+
+    def sync_down(project_id: str, branch: str) -> dict[str, str]:
+        calls.append((project_id, branch))
+        return {"local_dir": str(project_root)}
+
+    monkeypatch.setattr(
+        project_sync,
+        "local_project_dir",
+        lambda _project_id, _branch="": project_root,
+    )
+    monkeypatch.setattr(
+        project_sync,
+        "_current_git_branch",
+        lambda _repo: "analysis/notion/previous-request",
+    )
+    monkeypatch.setattr(project_sync, "sync_down", sync_down)
+
+    assert notion_analysis._project_root(app_state) == project_root
+    assert calls == [("project-1", "analysis/notion/current-request")]
 
 
 def test_project_root_syncs_project_checkout_before_workspace_fallback(
@@ -200,6 +249,9 @@ def test_analysis_agent_runs_from_project_root(tmp_path, monkeypatch) -> None:
     from signalpilot._server.ai.claude_agent import AgentEvent
     from signalpilot._types.ids import SessionId
 
+    monkeypatch.delenv("SIGNALPILOT_ANALYSIS_AGENT_MODEL", raising=False)
+    monkeypatch.delenv("SIGNALPILOT_WORKER_AGENT_MODEL", raising=False)
+
     class FakeStore:
         async def upsert_thread(self, thread) -> None:
             del thread
@@ -226,12 +278,9 @@ def test_analysis_agent_runs_from_project_root(tmp_path, monkeypatch) -> None:
         captured.update(kwargs)
         yield AgentEvent(
             type="text",
-            content=json.dumps(
-                {
-                    "summary": "Done",
-                    "confidenceScore": 0.9,
-                    "finalAnswer": "Done",
-                }
+            content=(
+                'FINAL_STATEMENT: {"statement":"Done","confidenceScore":0.9,'
+                '"caveats":[],"handoffNotes":["Notebook-executed SDK cells."]}'
             ),
         )
 
@@ -273,18 +322,34 @@ def test_analysis_agent_runs_from_project_root(tmp_path, monkeypatch) -> None:
     )
 
     assert captured["session_id"] == SessionId(record.session_id)
+    assert captured["model"] == notion_analysis.DEFAULT_ANALYSIS_AGENT_MODEL
     assert captured["cwd"] == str(project_root)
     assert captured["additional_disallowed_tools"] == ["Agent"]
     assert "Likely connection: `dev-db`" in str(captured["message"])
+
+
+def test_analysis_agent_model_prefers_env_override(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "SIGNALPILOT_ANALYSIS_AGENT_MODEL",
+        "claude-sonnet-analysis-test",
+    )
+    monkeypatch.setenv("SIGNALPILOT_WORKER_AGENT_MODEL", "claude-sonnet-worker-test")
+
+    assert notion_analysis._analysis_agent_model() == "claude-sonnet-analysis-test"
+
+    monkeypatch.delenv("SIGNALPILOT_ANALYSIS_AGENT_MODEL")
+
+    assert notion_analysis._analysis_agent_model() == "claude-sonnet-worker-test"
 
 
 def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
     prompt = notion_analysis._analysis_prompt(_record(), _body())
 
     assert "`sp.init()`" in prompt
-    assert (
-        "`import signalpilot as sp`, `sp.init()`, `sp.connections()`" in prompt
-    )
+    assert "Define `sp` in exactly one notebook cell" in prompt
+    assert "must not repeat `import signalpilot as sp`" in prompt
+    assert "causes `MultipleDefinitionError`" in prompt
+    assert "`sp.init()`, `sp.connections()`" in prompt
     assert 'then `sp.connect("connection_name")`' in prompt
     assert "Markdown-only `sp.md(...)` cells" in prompt
     assert "not require `sp.init()`" in prompt
@@ -322,6 +387,9 @@ def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
     assert "q1_gbp_revenue_df = pd.DataFrame(db.query" in prompt
     assert "q1_gbp_revenue_df.head(10)" in prompt
     assert "monthly_revenue_chart" in prompt
+    assert "Produce charts for every completed Slack/Notion data-analysis request" in prompt
+    assert "at least two visible chart outputs for Notion page content" in prompt
+    assert "first chart must also be suitable\n   for the Slack/Notion comment thread" in prompt
     assert "head of\n     the joined table/query result" in prompt
     assert "not just a branch list" in prompt
     assert "finding explanation, exact query, data head/preview" in prompt
@@ -329,7 +397,7 @@ def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
     assert '"Evidence Trace"' not in prompt
     assert "Mermaid" not in prompt
     assert "top-line result" not in prompt
-    assert "Confidence methodology/rationale" in prompt
+    assert "confidence score/methodology rationale" in prompt
     assert "Queries must not be buried" in prompt
     assert "Previous discussion messages:" in prompt
     assert "Previous Notion discussion messages:" not in prompt
@@ -358,12 +426,17 @@ def test_analysis_prompt_injects_warm_context_without_changing_output_contract()
 
     assert "Likely connection: `dev-db`" in prompt
     assert "CREATE TABLE public.orders" in prompt
-    assert (
-        "When the analysis is complete, your final assistant message must be only valid"
-        in prompt
-    )
-    assert '"notionCharts": [' in prompt
-    assert "## Executive Summary and Explorations" in prompt
+    assert "user-friendly and audit-ready for the notebook chat thread" in prompt
+    assert "Start with a concise bullet-point answer" in prompt
+    assert "PLAN:" in prompt
+    assert "PROGRESS:" in prompt
+    assert "Never use raw machine" in prompt
+    assert 'status enums such as `"in_progress"`' in prompt
+    assert "FINAL_STATEMENT:" in prompt
+    assert "notionCharts" in prompt
+    assert "Do not include slackMessage, notionComment, finalAnswer, notionCharts" in prompt
+    assert '"Executive Summary and Explorations" cell' in prompt
+    assert "Aim for two visible,\n  harvestable chart outputs" in prompt
 
 
 def test_warm_context_truncation_stays_under_cap() -> None:
@@ -373,6 +446,13 @@ def test_warm_context_truncation_stays_under_cap() -> None:
 
     assert len(clipped) <= notion_analysis.WARM_CONTEXT_MAX_CHARS
     assert "Warm context truncated" in clipped
+
+
+def test_gateway_json_get_rejects_non_http_gateway_url(monkeypatch) -> None:
+    monkeypatch.setenv("SP_GATEWAY_URL", "file:///tmp/signalpilot-gateway")
+
+    with pytest.raises(RuntimeError, match="absolute http or https"):
+        notion_analysis._gateway_json_get("/api/connections")
 
 
 def test_warm_context_builder_clips_oversized_schema_link(

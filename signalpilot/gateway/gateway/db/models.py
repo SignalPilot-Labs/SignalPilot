@@ -413,6 +413,66 @@ class NotionOAuthState(GatewayBase):
     __table_args__ = (Index("ix_notion_oauth_states_expires", "expires_at"),)
 
 
+class SlackInstallation(GatewayBase):
+    """OAuth-installed Slack app scoped by org."""
+
+    __tablename__ = "slack_installations"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    team_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    team_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    enterprise_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    enterprise_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    app_id: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    bot_user_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    authed_user_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    bot_access_token_enc: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    scopes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="connected", server_default="connected")
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "team_id", "app_id", name="uq_slack_install_org_team_app"),
+        Index("ix_slack_install_team", "team_id"),
+        Index("ix_slack_install_org_status", "org_id", "status"),
+    )
+
+
+class SlackInstallationConfig(GatewayBase):
+    """Setup metadata for a Slack OAuth installation."""
+
+    __tablename__ = "slack_installation_config"
+
+    installation_id: Mapped[str] = mapped_column(String, primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    default_project_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    default_branch: Mapped[str] = mapped_column(String(100), nullable=False, default="main", server_default="main")
+    analysis_branch_mode: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="per_request",
+        server_default="per_request",
+    )
+    allowed_channel_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+
+
+class SlackOAuthState(GatewayBase):
+    """Short-lived Slack OAuth state for CSRF protection and post-install redirect."""
+
+    __tablename__ = "slack_oauth_states"
+
+    state: Mapped[str] = mapped_column(String(128), primary_key=True)
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    redirect_after: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+    __table_args__ = (Index("ix_slack_oauth_states_expires", "expires_at"),)
+
+
 class GatewayApiKey(GatewayBase):
     __tablename__ = "gateway_api_keys"
 

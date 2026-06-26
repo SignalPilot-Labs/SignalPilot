@@ -37,31 +37,41 @@ Notebook context:
 - Trail URL: {record.trail_url}
 
 Open and edit the live notebook session above. The notebook must contain the
-real analysis trail before you return the final JSON.
+real analysis trail before you return FINAL_STATEMENT.
 
 Live-session rule:
 - You MUST edit the notebook through the live notebook MCP tools
   (`mcp__signalpilot-notebook__edit_notebook` / `edit_notebook`) using
   Session ID `{record.session_id}`. Confirm the edit tool reports
-  `"persisted": true`; if not, stop and return JSON describing that failure.
+  `"persisted": true`; if not, stop and emit FINAL_STATEMENT describing that
+  failure.
 - You MUST run the changed cells through the live notebook MCP run tool
   (`mcp__signalpilot-notebook__run_cells` / `run_cells`) before
   answering. Confirm the run tool reports `"status": "success"` and an empty
-  `errorCellIds` list; if not, stop and return JSON describing the notebook run
-  failure.
+  `errorCellIds` list; if not, stop and emit FINAL_STATEMENT describing the
+  notebook run failure.
 - You MUST NOT use Claude Code file-writing tools such as Write, Edit,
   MultiEdit, or Bash to modify `{record.notebook_path}`. Direct file writes
   create a stale browser/kernel session and are considered a failed analysis
   workflow.
-- If live notebook edit or run tools are unavailable, stop and return JSON with
-  status details in gotchas/analysisMethod instead of writing the notebook file
-  directly.
+- If live notebook edit or run tools are unavailable, stop and emit
+  FINAL_STATEMENT with status details in caveats/handoffNotes instead of
+  writing the notebook file directly.
 
 Progress update rule:
 - Before the first tool batch and before each major phase, emit one short
   user-visible text update explaining what you are checking and why. Cover
   scouting, notebook editing, cell execution, error fixes, and final
   verification.
+- Once you have enough context to choose the work sequence, emit exactly one
+  parseable plan line:
+  `PLAN: {{ "steps": ["..."] }}`
+- As work advances, emit parseable progress lines tied to that plan:
+  `PROGRESS: {{ "currentStep": "...", "completedSteps": ["..."], "status": "..." }}`
+  Use the exact step strings from PLAN in currentStep and completedSteps.
+  The `status` value must be a short user-readable phrase such as
+  `"querying portfolio tables"` or `"building charts"`. Never use raw machine
+  status enums such as `"in_progress"`, `"running"`, `"done"`, or `"failed"`.
 - After a tool result changes the plan or finds an error, briefly state what
   changed and what you will do next.
 - Keep updates concise and practical. Do not expose private reasoning or list
@@ -90,17 +100,22 @@ Required workflow:
 2. Do the actual analysis in notebook cells with the SignalPilot notebook SDK:
    initialize the SDK, select the governed connection, discover the data, run
    queries, perform calculations, and record evidence/results in the notebook.
-   Every SDK setup cell that uses governed data access must initialize first,
-   in this order: `import signalpilot as sp`, `sp.init()`, `sp.connections()`,
-   then `sp.connect("connection_name")`. Markdown-only `sp.md(...)` cells do
-   not require `sp.init()`.
+   Define `sp` in exactly one notebook cell. The seeded notebook defines `sp` in
+   the first hidden request-context cell; later cells must receive `sp` through
+   marimo dependencies and must not repeat `import signalpilot as sp`.
+   In marimo, imported aliases are notebook definitions, so repeating that import
+   across cells causes `MultipleDefinitionError`. If no existing cell defines
+   `sp`, import it once, then initialize governed data access in this order:
+   `sp.init()`, `sp.connections()`, then `sp.connect("connection_name")`.
+   Markdown-only `sp.md(...)` cells do not require `sp.init()` and must not
+   re-import `sp`.
    Use the public notebook SDK helpers that exist in the runtime, especially
    `sp.init()`, `sp.connections()`, `sp.connect("connection_name")`, and
    `db.query("SELECT ...")` (or `sp.query("SELECT ...", connection_name=...)`).
    Do not pass unsupported keyword arguments such as `connection=` to
    `sp.sql(...)`. If a live governed connection cannot be established in the
-   kernel, stop and return JSON describing the notebook run failure instead of
-   silently replacing the analysis with chat-only MCP results.
+   kernel, stop and emit FINAL_STATEMENT describing the notebook run failure
+   instead of silently replacing the analysis with chat-only MCP results.
    Never paste MCP query results or hand-entered sample rows into
    `pd.DataFrame({{...}})` as the source of truth. DataFrames are fine only when
    they are built from notebook-executed SDK calls, for example
@@ -164,41 +179,46 @@ Required workflow:
      `print("rows", len(q1_gbp_revenue_df)); print("date range",
      q1_gbp_revenue_df["created_at"].min(),
      q1_gbp_revenue_df["created_at"].max())`
-4. Add charts when the question involves comparison, ranking, trend,
-   distribution, or contribution analysis. Build charts from notebook-computed
-   DataFrames only, never from hand-entered MCP output. Prefer 1-3 focused
-   charts that make the answer easier to audit, such as a ranked bar chart,
-   trend line, scatter/bubble comparison, or contribution waterfall. Give each
-   chart a clear title, axis labels, and one-sentence interpretation in the
-   notebook. If a chart is useful outside the notebook, save or expose it as a
-   shareable PNG/SVG/HTML artifact and include its absolute or trail-relative
-   URL in `notionCharts`. For matplotlib charts, save the figure and render it
-   in the notebook by leaving the chart object or `sp.image(src=...)` as the
-   cell's final expression. Do not end chart cells with `plt.show()` or
-   `print(...)`; printed "Chart saved" messages are feedback only and should
-   not replace the visible chart output.
-5. Select at most two charts for Notion when they materially clarify the
-   answer. Use `includeInComment: true` only for charts that fit the concise
-   thread answer, and `includeOnPage: true` for charts that should be embedded
-   on the request page. If no chart adds value, return `notionCharts: []` and
-   explain why briefly in analysisMethod or gotchas.
+4. Produce charts for every completed Slack/Notion data-analysis request when
+   governed source data can be queried. Build charts from notebook-computed
+   DataFrames only, never from hand-entered MCP output. The notebook must expose
+   at least two visible chart outputs for Notion page content whenever the data
+   supports two different useful views; the first chart must also be suitable
+   for the Slack/Notion comment thread. Good defaults are a ranked bar chart
+   plus a trend, distribution, contribution, or dimension-breakdown chart. Give
+   each chart a clear title, axis labels, and one-sentence interpretation in the
+   notebook. If only one chart is defensible, create that one and state why a
+   second would be misleading in the notebook caveats and FINAL_STATEMENT
+   handoffNotes. If no chart can be generated because the request is genuinely
+   non-visual or the data is unavailable, state that as a caveat. For matplotlib
+   charts, save the figure and render it in the notebook by leaving the chart
+   object or `sp.image(src=...)` as the cell's final expression. Do not end chart
+   cells with `plt.show()` or `print(...)`; printed "Chart saved" messages are
+   feedback only and should not replace the visible chart output. The gateway
+   will harvest useful notebook chart outputs for Slack and Notion; do not
+   return channel chart JSON.
+5. Keep chart selection in the notebook itself. Do not finish a completed
+   tabular-data analysis with only prose or tables when charts can be made.
 6. Run the relevant notebook cells in the live session before answering. If a
    cell cannot be run, state that and explain the residual risk in the notebook
-   and in the JSON gotchas/analysisMethod fields.
+   and in FINAL_STATEMENT caveats/handoffNotes.
 7. Do not base the final answer only on chat-only MCP calls. MCP findings may
    guide where to look, but durable queries, calculations, evidence, and the
    answer must live in the notebook.
-8. Before returning JSON, update the notebook's "Executive Summary and
-   Explorations" cell with the finalAnswer content, the gotchas/caveats
+8. Before emitting FINAL_STATEMENT, update the notebook's "Executive Summary
+   and Explorations" cell with the final answer summary, the gotchas/caveats
    bullets, and the confidence score/methodology rationale. Keep the exact
    heading text. Keep detailed query trace in the "Analysis steps" branch cells
    instead of duplicating it all in the summary.
 
-Completion checklist before final JSON:
-- The live notebook contains an SDK setup cell for governed data access with
-  this exact order: `import signalpilot as sp`, `sp.init()`, `sp.connections()`,
-  then `sp.connect("...")`. Markdown-only `sp.md(...)` cells may appear before
-  this and do not require SDK initialization.
+Completion checklist before FINAL_STATEMENT:
+- The live notebook defines `sp` in exactly one notebook cell. It must not repeat
+  `import signalpilot as sp`; later cells should receive `sp` through marimo
+  dependencies.
+- The live notebook contains an SDK setup cell for governed data access using
+  `sp.init()`, `sp.connections()`, then `sp.connect("...")`. Markdown-only
+  `sp.md(...)` cells may appear before this and do not require SDK
+  initialization.
 - The live notebook contains governed query cells that call `db.query(...)` or
   `sp.query(...)` for the actual source data used in the answer.
 - Every material finding in the summary has a nearby "Analysis steps" branch
@@ -215,12 +235,15 @@ Completion checklist before final JSON:
   In marimo, loop variables such as `row`, `i`, `fig`, or `ax` are notebook
   globals and can trigger MultipleDefinitionError if reused. Use unique names
   per cell or wrap chart-building logic in uniquely named functions.
-- The notebook contains chart cells for comparison/ranking/trend-style
-  requests, unless the request is genuinely non-visual or charting would be
-  misleading. Charts are generated from notebook-computed DataFrames, saved as
-  artifacts when useful for Notion, and rendered as visible notebook outputs
-  instead of ending with `print(...)` feedback.
-- The final JSON's analysisMethod states that the result came from
+- The notebook contains chart cells for completed Slack/Notion data-analysis
+  requests when governed source data can be queried. Aim for two visible,
+  harvestable chart outputs so Notion can render two page charts; include at
+  least one chart unless the request is genuinely non-visual, data is
+  unavailable, or charting would be misleading. Charts are generated from
+  notebook-computed DataFrames, saved as artifacts when useful for Notion, and
+  rendered as visible notebook outputs instead of ending with `print(...)`
+  feedback.
+- FINAL_STATEMENT handoffNotes state that the result came from
   notebook-executed SDK cells, not MCP query outputs.
 - The top of the notebook remains readable: request context, executive summary
   with caveats, then analysis branches. Queries must not be buried after a long
@@ -238,94 +261,25 @@ Source URL:
 Previous discussion messages:
 {previous or "- None"}
 
-When the analysis is complete, your final assistant message must be only valid
-JSON with this exact shape. Treat notionComment and finalAnswer as different
-audiences:
-- If you cannot complete the analysis, still return this JSON shape. Put the
-  failure details, attempted steps, and next debugging action in finalAnswer,
-  notionComment, gotchas, and analysisMethod. Do not return plain text.
-- notionComment is the level-1 answer for the original Notion comment thread.
-  It should directly answer the user's question in 3-6 concise bullets. Do not
-  explain the full methodology there. Do not use Markdown headings or tables in
-  notionComment. If one or two chart links are useful, mention them naturally
-  or rely on `notionCharts` instead of pasting large chart data into the
-  comment.
-- finalAnswer is the more detailed answer persisted to the Notion request row
-  page. It must use this Markdown hierarchy exactly:
+When the analysis is complete, your final assistant message must be
+user-friendly and audit-ready for the notebook chat thread:
+- Start with a concise bullet-point answer in normal user language.
+- Include confidence and the most important caveats as readable bullets.
+- Emit exactly one parseable FINAL_STATEMENT control-only line for the gateway
+  orchestrator after the user-facing bullets. This line is extracted and
+  removed from stored/displayed trace content; do not introduce it, describe it,
+  or treat it as part of the user-visible answer:
+`FINAL_STATEMENT: {{ "statement": "...", "confidenceScore": 0.0, "caveats": ["..."], "handoffNotes": ["..."] }}`
 
-  ## Executive Summary and Explorations
-
-  - Short executive answer bullets.
-  - Include gotchas/caveats as explicit bullets that name assumptions,
-    exclusions/not-included items, known gaps, and sensitivity risks.
-  - Include a short list of analysis steps actually run, but do not repeat
-    metadata already stored in request row properties such as notebook path,
-    session id, trail URL, request URL, or connection name unless it is essential
-    evidence.
-
-  ## Detailed Research
-
-  Full detailed research, calculations, evidence, comparisons, and reasoning.
-
-  ## Confidence Score: X
-
-  Confidence methodology/rationale as bullets, including source data, filters,
-  validation checks that passed, residual assumptions, and what could lower or
-  raise the score.
-
-  The Notion worker will render Detailed Research and Confidence Score as
-  accordions, so do not write "accordion" or implementation notes in the text.
-- notionCharts is optional, but include it whenever the notebook produced
-  shareable chart artifacts that should appear in Notion. Provide at most two
-  charts. URLs must be absolute or trail-relative and should point to durable
-  artifacts produced by notebook cells, not temporary local-only paths.
-- analysisMethod explains how you reached the answer and why the confidence is
-  justified. Keep it brief and avoid repeating notebook path, session id, trail
-  URL, request URL, or connection metadata already present on the row.
-{{
-  "summary": "short Notion-table summary",
-  "confidenceScore": 0.0,
-  "finalAnswer": "Markdown using the exact requested hierarchy",
-  "gotchas": ["hidden assumptions, gaps, or caveats"],
-  "analysisMethod": "brief non-redundant method and confidence rationale",
-  "notionComment": "3-6 concise bullets for the original Notion thread, under 1200 characters",
-  "notionCharts": [
-    {{
-      "title": "short chart title",
-      "url": "https://... or /files/...",
-      "caption": "one-sentence interpretation",
-      "altText": "accessible description",
-      "includeInComment": true,
-      "includeOnPage": true
-    }}
-  ]
-}}
-"""
-
-
-def json_repair_prompt(user_prompt: str, transcript: str) -> str:
-    transcript_excerpt = transcript.strip()[-12000:]
-    return f"""
-Your previous Notion analysis response did not end with valid JSON.
-
-Do not call tools. Do not continue the analysis. Convert the completed work and
-visible transcript below into one valid JSON object only. If the analysis was
-blocked or incomplete, still return the JSON shape and describe the failure.
-
-Original user request:
-{user_prompt}
-
-Previous transcript excerpt:
-{transcript_excerpt}
-
-Return only this JSON shape:
-{{
-  "summary": "short Notion-table summary",
-  "confidenceScore": 0.0,
-  "finalAnswer": "Markdown using Executive Summary and Explorations, Detailed Research, and Confidence Score sections",
-  "gotchas": ["hidden assumptions, gaps, or caveats"],
-  "analysisMethod": "brief method and confidence rationale",
-  "notionComment": "3-6 concise bullets for the original Notion thread, under 1200 characters",
-  "notionCharts": []
-}}
+- statement is the same compact answer to the user's request, grounded in the
+  notebook-executed evidence. Keep it user-facing: short sentences or bullet-like
+  clauses, not a dense paragraph.
+- confidenceScore is a number from 0.0 to 1.0.
+- caveats name assumptions, exclusions/not-included items, known gaps, and
+  sensitivity risks.
+- handoffNotes summarize the method, source data, filters, validation checks,
+  and any next debugging action if the analysis was incomplete.
+- Do not include slackMessage, notionComment, finalAnswer, notionCharts, or any
+  other channel delivery fields. The gateway orchestrator owns Slack and Notion
+  rendering.
 """

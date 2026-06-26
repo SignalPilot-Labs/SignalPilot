@@ -490,6 +490,103 @@ async def get_xata_branch_diff(
     }
 
 
+# Branches that NEVER yield writable dbt credentials. dbt write access is issued only
+# for non-protected (agent-created) branches; production/base branches stay read-only and
+# are reachable only through the governed MCP query path. Override/extend per connection
+# with a comma-separated `xata_protected_branches` credential extra.
+_PROTECTED_BRANCHES = {"main", "master", "staging", "prod", "production", "default"}
+
+
+def _resolve_protected(extras: dict) -> set[str]:
+    protected = set(_PROTECTED_BRANCHES)
+    extra = extras.get("xata_protected_branches")
+    if extra:
+        protected |= {b.strip().lower() for b in str(extra).split(",") if b.strip()}
+    return protected
+
+
+@router.get("/connections/{name}/xata/dbt-profile", dependencies=[RequireScope("write")])
+async def get_xata_dbt_profile(
+    name: str,
+    store: StoreD,
+    branch: str = Query(..., pattern=r"^[A-Za-z0-9_.-]{1,64}$"),
+    profile: str = Query("default", pattern=r"^[A-Za-z0-9_.-]{1,64}$"),
+    target: str | None = Query(default=None, pattern=r"^[A-Za-z0-9_.-]{1,64}$"),
+    schema: str = Query("public", pattern=r"^[A-Za-z0-9_.-]{1,64}$"),
+):
+    """Resolve a NON-protected Xata branch to a dbt `profiles.yml` target block (write path).
+
+    Enforces the protected-branch denylist server-side: main/staging/prod/etc. never yield
+    writable dbt credentials — only agent-created branches do, and those are throwaway
+    copy-on-write branches. The gateway resolves the branch's Postgres endpoint from the
+    stored control-plane key; this is the one place a branch credential is surfaced, and
+    only for a non-protected branch.
+    """
+    from urllib.parse import unquote, urlparse
+
+    from gateway.connectors.drivers.xata import XataConnector
+
+    info = await require_connection(store, name)
+    if "xata" not in (info.db_type or "").lower():
+        raise HTTPException(status_code=400, detail=f"Connection '{name}' is not a Xata connection")
+    extras = await store.get_credential_extras(name)
+    if branch.lower() in _resolve_protected(extras):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Branch '{branch}' is protected — dbt write credentials are only issued for "
+                f"non-protected (agent-created) branches. Fork a new branch first."
+            ),
+        )
+    try:
+        cs = await XataConnector._resolve_endpoint({**extras, "branch": branch})
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=sanitize_db_error(str(e), info.db_type))
+
+    u = urlparse(cs)
+    tgt = target or branch
+    params = {
+        "host": u.hostname,
+        "port": u.port or 5432,
+        "user": unquote(u.username or ""),
+        "dbname": (u.path or "/").lstrip("/") or "xata",
+        "schema": schema,
+    }
+    password = unquote(u.password or "")
+    block = (
+        f"      {tgt}:\n"
+        f"        type: postgres\n"
+        f"        host: {params['host']}\n"
+        f"        port: {params['port']}\n"
+        f"        user: {params['user']}\n"
+        f"        password: {password}\n"
+        f"        dbname: {params['dbname']}\n"
+        f"        schema: {params['schema']}\n"
+        f"        threads: 4\n"
+        f"        sslmode: require\n"
+    )
+    output = {
+        "type": "postgres",
+        "host": params["host"],
+        "port": params["port"],
+        "user": params["user"],
+        "password": password,
+        "dbname": params["dbname"],
+        "schema": params["schema"],
+        "threads": 4,
+        "sslmode": "require",
+    }
+    return {
+        "connection": name,
+        "branch": branch,
+        "profile": profile,
+        "target": tgt,
+        "params": params,  # non-secret connection params (no password)
+        "output": output,  # full dbt target incl. password — for direct fetch-to-file
+        "profiles_target_block": block,  # ready-to-paste under <profile>.outputs
+    }
+
+
 def _xata_control_from_extras(conn_str: str | None, extras: dict) -> Any:
     """Build a XataControlClient from a connection's stored extras.
 

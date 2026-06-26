@@ -393,6 +393,69 @@ async def delete_xata_branch(connection_name: str, project: str, branch_name: st
 
 
 @audited_tool(mcp)
+async def get_dbt_profile(
+    connection_name: str, branch: str, profile: str = "default", target: str = "", schema: str = "public"
+) -> str:
+    """
+    Wire dbt to a NON-protected Xata branch WITHOUT exposing the branch credentials.
+
+    Returns a single shell command to run, not the credentials. The command fetches
+    the branch's Postgres credentials from the gateway and writes them straight into
+    `profiles.yml` (upserting only this target, keeping your other targets) — the
+    credentials flow gateway -> command -> file and never enter this conversation.
+    After it runs, build with `dbt run --target <target>`.
+
+    Protected branches (main/staging/prod) are refused server-side: write credentials
+    are only issued for agent-created (throwaway copy-on-write) branches.
+
+    Do NOT read or print `profiles.yml` afterward — it holds the live branch password.
+
+    Args:
+        connection_name: The Xata workspace connection.
+        branch: The non-protected branch to target, e.g. "agent_dim_users_20260625".
+        profile: Your dbt profile name (the `profile:` value in dbt_project.yml).
+        target: dbt target name to use (default: the branch name).
+        schema: Default dbt schema for the target (default "public").
+    """
+    import os as _os
+    from urllib.parse import quote as _q
+
+    no_xata = await _no_xata_db_msg()
+    if no_xata:
+        return no_xata
+    if not _CONN_NAME_RE.match(connection_name):
+        return "Error: Invalid connection name"
+
+    tgt = target or branch
+    base = (_os.environ.get("SP_PUBLIC_URL") or _gateway_url()).rstrip("/")
+    url = (
+        f"{base}/api/connections/{_q(connection_name)}/xata/dbt-profile"
+        f"?branch={_q(branch)}&profile={_q(profile)}&target={_q(tgt)}&schema={_q(schema)}"
+    )
+    # Pure-python (cross-platform, no curl) fetch + idempotent profiles.yml upsert.
+    # Credentials land in d['output'] -> profiles.yml; only "wrote dbt target X" prints.
+    inner = (
+        "import urllib.request,json,yaml,os;"
+        f"req=urllib.request.Request('{url}');"
+        "(req.add_header('X-API-Key',os.environ['SP_API_KEY']) if os.environ.get('SP_API_KEY') else None);"
+        "d=json.load(urllib.request.urlopen(req));"
+        "p='profiles.yml';y=(yaml.safe_load(open(p)) or {}) if os.path.exists(p) else {};"
+        "pr=y.setdefault(d['profile'],{});pr.setdefault('outputs',{})[d['target']]=d['output'];"
+        "pr.setdefault('target',d['target']);"
+        "yaml.safe_dump(y,open(p,'w'),sort_keys=False);print('wrote dbt target',d['target'])"
+    )
+    cmd = f'python -c "{inner}"'
+    return (
+        f"Wire dbt to branch '{branch}' (profile '{profile}', target '{tgt}') WITHOUT exposing creds.\n"
+        f"Run this once from the dbt project dir (it writes profiles.yml directly; it does NOT print "
+        f"the credentials). In cloud mode set SP_API_KEY first; local mode needs no key.\n\n"
+        f"{cmd}\n\n"
+        f"Then build:  dbt run --target {tgt}\n"
+        f"Do not read or print profiles.yml afterward — it holds the live branch password."
+    )
+
+
+@audited_tool(mcp)
 async def schema_ddl(connection_name: str, max_tables: int = 50, compress: bool = False) -> str:
     """
     Get the database schema as CREATE TABLE DDL statements.

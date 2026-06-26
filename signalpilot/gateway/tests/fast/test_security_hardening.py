@@ -130,14 +130,17 @@ class TestDbtProfileBlockRedaction:
         assert output["password"] == fake_password, "output must still carry the live password"
 
 
-# ─── Group 3: parent-branch protection on dbt profile ────────────────────────
+# ─── Group 3: forks of protected branches ARE allowed (intended workflow) ────
 
 
-class TestDbtProfileParentBranchProtected:
-    """When the resolved branch was forked from a protected branch, raise 403."""
+class TestDbtProfileForkOfProtectedAllowed:
+    """Forking a protected branch (main/staging) is the intended workflow: the fork is an
+    isolated copy-on-write branch, so issuing dbt WRITE credentials for it never touches
+    the parent. Only a protected branch NAME is denied (covered by the name-denylist test);
+    a fork of one must succeed."""
 
     @pytest.mark.asyncio
-    async def test_parent_protected_raises_403(self) -> None:
+    async def test_fork_of_main_is_issued(self) -> None:
         from gateway.api.schema.exploration import get_xata_dbt_profile
 
         mock_store = AsyncMock()
@@ -150,17 +153,17 @@ class TestDbtProfileParentBranchProtected:
         mock_info = MagicMock()
         mock_info.db_type = "xata"
 
-        # Simulate branch list where "agent_x" has parentID pointing to "main"
+        # "agent_x" is a fork of the protected branch "main"
         fake_branches = [
             {"id": "br_main", "name": "main", "parentID": None},
             {"id": "br_agent", "name": "agent_x", "parentID": "br_main"},
         ]
-
         mock_client = AsyncMock()
         mock_client.list_branches = AsyncMock(return_value=fake_branches)
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=None)
 
+        cs = "postgresql://xata:secretpw@br_agent.us-east-1.xata.tech/xata?sslmode=require"
         with (
             patch(
                 "gateway.api.schema.exploration.require_connection",
@@ -170,19 +173,23 @@ class TestDbtProfileParentBranchProtected:
                 "gateway.api.schema.exploration._xata_control_from_extras",
                 return_value=mock_client,
             ),
+            patch(
+                "gateway.connectors.drivers.xata.XataConnector._resolve_endpoint",
+                AsyncMock(return_value=cs),
+            ),
         ):
-            with pytest.raises(HTTPException) as exc_info:
-                await get_xata_dbt_profile(
-                    name="conn",
-                    store=mock_store,
-                    branch="agent_x",
-                    profile="default",
-                    target=None,
-                    schema="public",
-                )
+            result = await get_xata_dbt_profile(
+                name="conn",
+                store=mock_store,
+                branch="agent_x",
+                profile="default",
+                target=None,
+                schema="public",
+            )
 
-        assert exc_info.value.status_code == 403
-        assert "main" in exc_info.value.detail
+        # Fork of a protected branch is allowed → full credential output is returned.
+        assert result["output"]["password"] == "secretpw"
+        assert result["target"] == "agent_x"
 
 
 # ─── Group 4: delete_xata_branch — protected branch denylist ─────────────────

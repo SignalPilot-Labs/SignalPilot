@@ -538,10 +538,11 @@ async def get_xata_dbt_profile(
                 f"non-protected (agent-created) branches. Fork a new branch first."
             ),
         )
-    # Defense-in-depth: refuse issuance when the resolved branch was forked from a
-    # protected branch (e.g. an agent fork of `main`). Best-effort — if the control
-    # plane is not configured for this connection, the direct branch-name denylist
-    # above is the only gate.
+    # Resolve the parent branch for the audit log only. Forking a protected branch
+    # (e.g. an agent fork of `main`/`staging`) IS the intended workflow — the fork is an
+    # isolated copy-on-write branch, so write credentials to it never touch the parent.
+    # The branch-name denylist above is the real gate (creds are never issued for a
+    # protected branch itself). Best-effort; never blocks issuance.
     parent: str | None = None
     try:
         project = extras.get("xata_project")
@@ -554,20 +555,8 @@ async def get_xata_dbt_profile(
                 if parent_id:
                     parent_branch_record = next((b for b in branches if b.get("id") == parent_id), None)
                     parent = (parent_branch_record or {}).get("name")
-                if parent and parent.lower() in _resolve_protected(extras):
-                    raise HTTPException(
-                        status_code=403,
-                        detail=(
-                            f"Branch '{branch}' was forked from protected branch '{parent}' — "
-                            f"dbt write credentials are only issued for forks of non-protected branches."
-                        ),
-                    )
-    except HTTPException:
-        raise
     except Exception:
-        # Best-effort: do not block issuance on a control-plane hiccup; the direct
-        # denylist above still applies.
-        parent = None
+        parent = None  # control-plane hiccup — fall back to "?" in the audit log
     try:
         cs = await XataConnector._resolve_endpoint({**extras, "branch": branch})
     except Exception as e:

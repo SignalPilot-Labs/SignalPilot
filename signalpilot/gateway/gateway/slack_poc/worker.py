@@ -29,6 +29,7 @@ from gateway.analysis_delivery import (
     AnalysisPreflightKind,
     SlackTraceProgressReporter,
     classify_analysis_request,
+    delivery_api_key_for_user,
     delivery_result_to_status,
     load_delivery_packet,
     load_delivery_packet_from_events,
@@ -157,7 +158,9 @@ class SlackRequest:
 
 
 class SlackApiClient:
-    def __init__(self, bot_token: str, app_token: str | None = None, *, http_client: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self, bot_token: str, app_token: str | None = None, *, http_client: httpx.AsyncClient | None = None
+    ) -> None:
         self.bot_token = bot_token
         self.app_token = app_token
         self._owned_client = http_client is None
@@ -167,7 +170,9 @@ class SlackApiClient:
         if self._owned_client:
             await self._client.aclose()
 
-    async def _api(self, method: str, payload: dict[str, Any] | None = None, *, token: str | None = None) -> dict[str, Any]:
+    async def _api(
+        self, method: str, payload: dict[str, Any] | None = None, *, token: str | None = None
+    ) -> dict[str, Any]:
         response = await self._client.post(
             f"{SLACK_API_BASE}/{method}",
             headers={"Authorization": f"Bearer {token or self.bot_token}", "Content-Type": "application/json"},
@@ -504,8 +509,14 @@ class SlackPoCWorker:
                     status=status,
                 )
             public_status = notebook_analysis._with_public_chart_urls(status, runtime)
+            delivery_api_key = ""
             try:
                 async with self.session_factory() as db:
+                    delivery_api_key = await delivery_api_key_for_user(
+                        db,
+                        org_id=self.config.org_id,
+                        user_id=analysis_user_id,
+                    )
                     packet = await load_delivery_packet(
                         db,
                         org_id=self.config.org_id,
@@ -524,7 +535,7 @@ class SlackPoCWorker:
                     trail_url=trail_url or "",
                     thread_status="done",
                 )
-            delivery = await render_delivery(packet)
+            delivery = await render_delivery(packet, api_key=delivery_api_key)
             slack_status = delivery_result_to_status(delivery, packet, base_status=public_status)
             await self._update_or_post_result_message(
                 channel=request.channel_id,
@@ -576,7 +587,9 @@ class SlackPoCWorker:
         try:
             await self.slack.remove_reaction(channel=request.channel_id, timestamp=request.event_ts, name=name)
         except Exception as exc:
-            LOGGER.info("Could not remove Slack reaction=%s event_id=%s: %s", name, request.event_id, exc, exc_info=True)
+            LOGGER.info(
+                "Could not remove Slack reaction=%s event_id=%s: %s", name, request.event_id, exc, exc_info=True
+            )
 
     async def _mark_request_done(self, request: SlackRequest) -> None:
         await self._add_request_reaction(request, SLACK_DONE_REACTION)
@@ -1114,7 +1127,9 @@ def load_config_from_env() -> SlackPoCConfig:
         bot_user_id=os.getenv("SLACK_BOT_USER_ID") or None,
         org_id=os.getenv("SLACK_POC_ORG_ID") or os.getenv("SIGNALPILOT_SLACK_ORG_ID") or "slack-poc",
         user_id=os.getenv("SLACK_POC_USER_ID") or os.getenv("SIGNALPILOT_SLACK_USER_ID") or None,
-        default_project_id=os.getenv("SLACK_POC_DEFAULT_PROJECT_ID") or os.getenv("SIGNALPILOT_SLACK_DEFAULT_PROJECT_ID") or None,
+        default_project_id=os.getenv("SLACK_POC_DEFAULT_PROJECT_ID")
+        or os.getenv("SIGNALPILOT_SLACK_DEFAULT_PROJECT_ID")
+        or None,
         default_branch=os.getenv("SLACK_POC_DEFAULT_BRANCH") or "main",
         analysis_branch_mode=os.getenv("SLACK_POC_ANALYSIS_BRANCH_MODE") or "per_request",
         channel_defaults=_channel_defaults_from_env(),
@@ -1137,7 +1152,9 @@ def load_http_config_from_env() -> SlackPoCConfig:
         bot_user_id=os.getenv("SLACK_BOT_USER_ID") or None,
         org_id=os.getenv("SLACK_POC_ORG_ID") or os.getenv("SIGNALPILOT_SLACK_ORG_ID") or "slack-poc",
         user_id=os.getenv("SLACK_POC_USER_ID") or os.getenv("SIGNALPILOT_SLACK_USER_ID") or None,
-        default_project_id=os.getenv("SLACK_POC_DEFAULT_PROJECT_ID") or os.getenv("SIGNALPILOT_SLACK_DEFAULT_PROJECT_ID") or None,
+        default_project_id=os.getenv("SLACK_POC_DEFAULT_PROJECT_ID")
+        or os.getenv("SIGNALPILOT_SLACK_DEFAULT_PROJECT_ID")
+        or None,
         default_branch=os.getenv("SLACK_POC_DEFAULT_BRANCH") or "main",
         analysis_branch_mode=os.getenv("SLACK_POC_ANALYSIS_BRANCH_MODE") or "per_request",
         channel_defaults=_channel_defaults_from_env(),
@@ -1155,7 +1172,9 @@ def _apply_local_runtime_defaults() -> None:
     if os.getenv("SP_DEPLOYMENT_MODE", "").lower() == "cloud":
         return
     os.environ.setdefault("SP_DEPLOYMENT_MODE", "local")
-    os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://signalpilot:changeme_dev_only@localhost:5601/signalpilot")
+    os.environ.setdefault(
+        "DATABASE_URL", "postgresql+asyncpg://signalpilot:changeme_dev_only@localhost:5601/signalpilot"
+    )
     os.environ.setdefault("SP_NOTEBOOK_DIRECT_URL", "http://localhost:2718")
     os.environ.setdefault("SIGNALPILOT_NOTEBOOK_PUBLIC_URL", "http://localhost:3200/notebook")
     os.environ.setdefault("SP_WEB_URL", "http://localhost:3200")

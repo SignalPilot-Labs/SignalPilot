@@ -14,6 +14,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from gateway.analysis_delivery import DeliveryResult
 from gateway.db.models import SlackInstallation, SlackInstallationConfig
 from gateway.slack_poc import worker as worker_module
 from gateway.slack_poc.progress import COMPLETING_PROGRESS_TEXT, INITIAL_PROGRESS_TEXT
@@ -242,6 +243,7 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
     events: list[str] = []
     progress_seen = asyncio.Event()
     slack_events: list[tuple[str, str]] = []
+    render_api_keys: list[str | None] = []
 
     class SessionContext:
         async def __aenter__(self):
@@ -313,6 +315,25 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
     monkeypatch.setattr(worker_module.notebook_analysis, "_poll_analysis", poll_analysis)
     monkeypatch.setattr(worker_module.notebook_analysis, "_public_signalpilot_url", lambda url, runtime: url)
     monkeypatch.setattr(worker_module.notebook_analysis, "_with_public_chart_urls", lambda status, runtime: status)
+
+    async def delivery_api_key_for_user(*args, **kwargs):
+        assert args == ("db",)
+        assert kwargs == {"org_id": "org-1", "user_id": "user-1"}
+        return "sk-ant-user"
+
+    async def render_delivery(packet, *, api_key=None, renderer=None):
+        del packet, renderer
+        render_api_keys.append(api_key)
+        return DeliveryResult(
+            summary="Done",
+            slack_message="- Done",
+            notion_comment="- Done",
+            final_answer="- Done",
+            confidence_score=1.0,
+        )
+
+    monkeypatch.setattr(worker_module, "delivery_api_key_for_user", delivery_api_key_for_user)
+    monkeypatch.setattr(worker_module, "render_delivery", render_delivery)
 
     slack = AsyncMock(spec=SlackApiClient)
     slack.thread_messages.return_value = []
@@ -398,6 +419,7 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
     assert slack_events[-1][0] == "update"
     assert "*Analysis complete*" in slack_events[-1][1]
     assert slack.post_message.await_count == 1
+    assert render_api_keys == ["sk-ant-user"]
     slack.add_reaction.assert_any_await(channel="C1", timestamp="1.0", name="eyes")
     slack.add_reaction.assert_any_await(channel="C1", timestamp="1.0", name="white_check_mark")
     slack.remove_reaction.assert_any_await(channel="C1", timestamp="1.0", name="eyes")
@@ -482,9 +504,7 @@ async def test_worker_uploads_chart_images_as_slack_thread_files(monkeypatch: py
         AsyncMock(),
     )
 
-    slack.fetch_bytes.assert_awaited_once_with(
-        "http://notebook.test/api/notion-analysis/chart/notion-1/chart.png"
-    )
+    slack.fetch_bytes.assert_awaited_once_with("http://notebook.test/api/notion-analysis/chart/notion-1/chart.png")
     slack.upload_file.assert_awaited_once_with(
         channel="C1",
         thread_ts="1.0",

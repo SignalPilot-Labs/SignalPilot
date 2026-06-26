@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.analysis_delivery import (
     AnalysisPreflightKind,
     classify_analysis_request,
+    delivery_api_key_for_user,
     delivery_result_to_status,
     load_delivery_packet,
     load_delivery_packet_from_events,
@@ -140,13 +141,17 @@ def _chart_image_block(chart: dict[str, Any]) -> dict[str, Any]:
         "image": {
             "type": "file_upload",
             "file_upload": {"id": _chart_file_upload_id(chart)},
-            "caption": notion_formatting.markdown_rich_text(caption, max_chars=NOTION_RICH_TEXT_MAX_LENGTH) if caption else [],
+            "caption": notion_formatting.markdown_rich_text(caption, max_chars=NOTION_RICH_TEXT_MAX_LENGTH)
+            if caption
+            else [],
         },
     }
 
 
 def _chart_detail_blocks(status: dict[str, Any]) -> list[dict[str, Any]]:
-    chart_blocks = [_chart_image_block(chart) for chart in _selected_charts(status, "page") if _chart_file_upload_id(chart)]
+    chart_blocks = [
+        _chart_image_block(chart) for chart in _selected_charts(status, "page") if _chart_file_upload_id(chart)
+    ]
     if not chart_blocks:
         return []
     return [_heading_block("Charts"), *chart_blocks]
@@ -191,7 +196,9 @@ def _analysis_detail_blocks(status: dict[str, Any]) -> list[dict[str, Any]]:
         *chart_blocks,
         _heading_block("Executive Summary and Explorations"),
         *notion_formatting.markdown_blocks(status.get("summary") or answer),
-        notion_formatting.toggle_heading_block("Detailed Research", notion_formatting.markdown_blocks(answer) or [_paragraph_block(answer)]),
+        notion_formatting.toggle_heading_block(
+            "Detailed Research", notion_formatting.markdown_blocks(answer) or [_paragraph_block(answer)]
+        ),
         notion_formatting.toggle_heading_block(
             f"Confidence Score: {confidence_text}",
             [notion_formatting.bulleted_list_item_block(str(gotcha)) for gotcha in gotchas],
@@ -773,7 +780,11 @@ async def _upload_chart_images_to_notion(
     return {
         **status,
         "notionCharts": [
-            {**chart, "fileUploadId": uploads[_chart_value(chart, "url")]["id"], "fileName": uploads[_chart_value(chart, "url")]["fileName"]}
+            {
+                **chart,
+                "fileUploadId": uploads[_chart_value(chart, "url")]["id"],
+                "fileName": uploads[_chart_value(chart, "url")]["fileName"],
+            }
             if _chart_value(chart, "url") in uploads
             else chart
             for chart in _status_charts(status)
@@ -846,7 +857,9 @@ async def _create_failure_comment(
 
 def mint_internal_notebook_jwt(org_id: str, user_id: str | None, scopes: list[str] | None = None) -> str:
     """Mint the internal JWT used by the notebook API for org-scoped work."""
-    secret = os.getenv("SIGNALPILOT_INTERNAL_JWT_SECRET") or os.getenv("SP_INTERNAL_JWT_SECRET") or load_session_jwt_secret()
+    secret = (
+        os.getenv("SIGNALPILOT_INTERNAL_JWT_SECRET") or os.getenv("SP_INTERNAL_JWT_SECRET") or load_session_jwt_secret()
+    )
     now = datetime.now(UTC)
     payload = {
         "iss": "signalpilot-gateway",
@@ -989,7 +1002,9 @@ async def process_routed_comment_event(
     page_id = payload.get("data", {}).get("page_id")
     parent_block_id = payload.get("data", {}).get("parent", {}).get("id")
     if not comment_id or not page_id:
-        return _ignored("missing_comment_or_page_id", event_id=payload.get("id"), comment_id=comment_id, page_id=page_id)
+        return _ignored(
+            "missing_comment_or_page_id", event_id=payload.get("id"), comment_id=comment_id, page_id=page_id
+        )
 
     block_id = parent_block_id or page_id
     comments = await notion_client.list_comments(token, block_id)
@@ -999,7 +1014,9 @@ async def process_routed_comment_event(
             trigger_comment = await notion_client.retrieve_comment(token, str(comment_id))
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
-                return _ignored("comment_not_found", event_id=payload.get("id"), comment_id=comment_id, block_id=block_id)
+                return _ignored(
+                    "comment_not_found", event_id=payload.get("id"), comment_id=comment_id, block_id=block_id
+                )
             raise
     if notion_client.is_bot_comment(trigger_comment):
         return _ignored("bot_comment", event_id=payload.get("id"), comment_id=comment_id)
@@ -1087,7 +1104,9 @@ async def process_routed_comment_event(
         )
         return NotionCommentProcessResult(status="processed")
 
-    await notion_client.update_page_properties(token, request_page_id, {"Status": {"rich_text": _rich_text("Analyzing")}})
+    await notion_client.update_page_properties(
+        token, request_page_id, {"Status": {"rich_text": _rich_text("Analyzing")}}
+    )
     progress_comment_id = await _create_start_comment(
         token,
         discussion_id=discussion_id,
@@ -1224,11 +1243,17 @@ async def process_routed_comment_event(
     if final_status.get("status") == "Done" and not final_status.get("error"):
         public_status = _with_public_chart_urls(final_status, runtime)
         public_trail_url = _public_signalpilot_url(public_status.get("trailUrl") or start_trail_url, runtime)
+        delivery_user_id = routed.installation.user_id or route.analysis_user_id
+        delivery_api_key = await delivery_api_key_for_user(
+            db,
+            org_id=routed.installation.org_id,
+            user_id=delivery_user_id,
+        )
         try:
             packet = await load_delivery_packet(
                 db,
                 org_id=routed.installation.org_id,
-                user_id=routed.installation.user_id or route.analysis_user_id,
+                user_id=delivery_user_id,
                 thread_id=f"session-{route.request_id}",
                 user_request=prompt,
                 status_payload=public_status,
@@ -1243,7 +1268,7 @@ async def process_routed_comment_event(
                 trail_url=public_trail_url,
                 thread_status="done",
             )
-        delivery = await render_delivery(packet)
+        delivery = await render_delivery(packet, api_key=delivery_api_key)
         rendered_status = delivery_result_to_status(delivery, packet, base_status=public_status)
         uploaded_status = await _upload_chart_images_to_notion(token, rendered_status, runtime)
         final_status_for_notion = _with_public_chart_urls(uploaded_status, runtime)
@@ -1252,9 +1277,16 @@ async def process_routed_comment_event(
             request_page_id,
             {
                 "Status": {"rich_text": _rich_text("Done")},
-                "Trail URL": {"url": _public_signalpilot_url(final_status_for_notion.get("trailUrl") or start_trail_url, runtime) or None},
+                "Trail URL": {
+                    "url": _public_signalpilot_url(final_status_for_notion.get("trailUrl") or start_trail_url, runtime)
+                    or None
+                },
                 "Confidence score": {"number": final_status_for_notion.get("confidenceScore")},
-                "Summary": {"rich_text": _rich_text(final_status_for_notion.get("summary") or final_status_for_notion.get("finalAnswer") or "")},
+                "Summary": {
+                    "rich_text": _rich_text(
+                        final_status_for_notion.get("summary") or final_status_for_notion.get("finalAnswer") or ""
+                    )
+                },
             },
         )
         await _create_final_comment(

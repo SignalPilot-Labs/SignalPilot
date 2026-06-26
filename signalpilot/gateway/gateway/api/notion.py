@@ -442,6 +442,8 @@ async def provision_notion_oauth_installation(
     the older advanced setup path.
     """
     existing = await store.get_notion_oauth_installation(installation_id)
+    if body.default_project_id and await store.get_workspace_project(body.default_project_id) is None:
+        raise HTTPException(status_code=404, detail="Default project not found")
     existing_config = existing.config if existing else None
     existing_is_provisioned = bool(
         existing_config
@@ -483,6 +485,9 @@ async def provision_notion_oauth_installation(
         requests_data_source_id=provisioned["requests_data_source_id"],
         requests_database_page_id=provisioned["requests_database_page_id"],
         enabled=True,
+        default_project_id=body.default_project_id,
+        default_branch=body.default_branch,
+        analysis_branch_mode=body.analysis_branch_mode,
     )
     if installation is None:
         raise HTTPException(status_code=404, detail="Notion installation not found")

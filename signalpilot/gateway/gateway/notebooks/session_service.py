@@ -90,6 +90,21 @@ def _pod_web_url() -> str | None:
     return None
 
 
+def _notebook_start_timeout_seconds() -> int:
+    raw_value = os.getenv("SP_NOTEBOOK_START_TIMEOUT_SECONDS")
+    if raw_value is None:
+        return 90
+    try:
+        timeout = int(raw_value)
+    except ValueError:
+        logger.warning(
+            "Invalid SP_NOTEBOOK_START_TIMEOUT_SECONDS=%r; using default",
+            raw_value,
+        )
+        return 90
+    return max(30, timeout)
+
+
 async def _pod_extra_env(
     session: AsyncSession,
     *,
@@ -114,6 +129,33 @@ async def _pod_extra_env(
     if extra_env:
         env.update(extra_env)
     return env or None
+
+
+async def _mark_session_status_best_effort(
+    session: AsyncSession,
+    *,
+    session_id: str,
+    org_id: str,
+    status: str,
+) -> None:
+    try:
+        await ns.update_session_status(
+            session,
+            session_id=session_id,
+            org_id=org_id,
+            status=status,
+        )
+    except Exception:
+        logger.warning(
+            "Could not mark notebook session %s as %s after startup failure",
+            session_id,
+            status,
+            exc_info=True,
+        )
+        try:
+            await session.rollback()
+        except Exception:
+            logger.debug("Rollback after notebook session status update failure failed", exc_info=True)
 
 
 def _public_base_url(session_id: str) -> str:
@@ -167,6 +209,7 @@ async def ensure_notebook_session(
     user_id: str,
     project_id: str | None,
     branch: str,
+    credential_user_id: str | None = None,
     extra_env: dict[str, str] | None = None,
     get_orchestrator: OrchestratorFactory | None = None,
 ) -> NotebookSessionInfo:
@@ -253,11 +296,11 @@ async def ensure_notebook_session(
     pod_extra_env = await _pod_extra_env(
         session,
         org_id=org_id,
-        user_id=user_id,
+        user_id=credential_user_id or user_id,
         extra_env=extra_env,
     )
     session_jwt = mint_session_jwt(
-        user_id=user_id,
+        user_id=credential_user_id or user_id,
         org_id=org_id,
         session_id=session_info.id,
         project_id=project_id,
@@ -295,9 +338,10 @@ async def ensure_notebook_session(
             create_pod_fn=_create_pod_fn,
         )
         logger.info("Waiting for notebook pod %s to be running...", pod)
-        await orch.wait_for_running(pod, org_id=org_id, timeout=90)
+        start_timeout = _notebook_start_timeout_seconds()
+        await orch.wait_for_running(pod, org_id=org_id, timeout=start_timeout)
         logger.info("Notebook pod %s is running; waiting for readiness probe", pod)
-        pod_info = await orch.wait_for_ready(pod, org_id=org_id, timeout=90)
+        pod_info = await orch.wait_for_ready(pod, org_id=org_id, timeout=start_timeout)
         logger.info("Notebook pod %s is ready: ip=%s", pod, pod_info.ip)
         await ns.update_session_status(
             session,
@@ -312,7 +356,7 @@ async def ensure_notebook_session(
         session_info.notebook_url = f"/notebook/{session_info.id}/"
         return session_info
     except ValueError:
-        await ns.update_session_status(
+        await _mark_session_status_best_effort(
             session,
             session_id=session_info.id,
             org_id=org_id,
@@ -320,7 +364,7 @@ async def ensure_notebook_session(
         )
         raise
     except Exception as exc:
-        await ns.update_session_status(
+        await _mark_session_status_best_effort(
             session,
             session_id=session_info.id,
             org_id=org_id,
@@ -348,5 +392,31 @@ async def ensure_notion_notebook_session(
         user_id=user_id or "notion-webhook",
         project_id=None,
         branch="main",
+    )
+    return await runtime_for_session(session, session_info)
+
+
+async def ensure_analysis_notebook_session(
+    session: AsyncSession,
+    *,
+    org_id: str,
+    source: str,
+    request_id: str,
+    project_id: str,
+    branch: str,
+    credential_user_id: str | None = None,
+) -> NotebookRuntime:
+    analysis_user_id = f"analysis:{source}:{request_id}"
+    session_info = await ensure_notebook_session(
+        session,
+        org_id=org_id,
+        user_id=analysis_user_id,
+        project_id=project_id,
+        branch=branch,
+        credential_user_id=credential_user_id,
+        extra_env={
+            "SP_ANALYSIS_SOURCE": source,
+            "SP_ANALYSIS_REQUEST_ID": request_id,
+        },
     )
     return await runtime_for_session(session, session_info)

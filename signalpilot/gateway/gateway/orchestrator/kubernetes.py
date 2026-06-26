@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 
 from . import NotebookOrchestrator, PodInfo
 from .namespaces import ensure_org_namespace, namespace_for_org
@@ -40,6 +41,16 @@ _NOTEBOOK_NODE_LABEL_VALUE = os.getenv("SP_NOTEBOOK_NODE_LABEL_VALUE", "true").s
 # These MUST stay in sync with signalpilot/_server/entrypoint.py _JWT_PATH (F-6).
 SP_SESSION_JWT_MOUNT_DIR = "/var/run/sp/session_jwt"
 SP_SESSION_JWT_MOUNT_FILE = "/var/run/sp/session_jwt/session_jwt"
+_K8S_LABEL_INVALID_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
+
+
+def _k8s_label_value(value: str, fallback: str) -> str:
+    """Return a Kubernetes-safe label value while preserving readability."""
+    label = _K8S_LABEL_INVALID_CHARS.sub("-", value.strip())[:63]
+    label = label.strip("-_.")
+    if label:
+        return label
+    return fallback[:63].strip("-_.") or "unknown"
 
 
 def _parse_single_kv(selector_str: str) -> dict[str, str]:
@@ -137,8 +148,8 @@ def _pod_manifest(
             "namespace": namespace,
             "labels": {
                 "app": "signalpilot-notebook",
-                "signalpilot.ai/user": user_id[:63],
-                "signalpilot.ai/org": org_id[:63],
+                "signalpilot.ai/user": _k8s_label_value(user_id, "user"),
+                "signalpilot.ai/org": _k8s_label_value(org_id, "org"),
             },
         },
         "spec": {

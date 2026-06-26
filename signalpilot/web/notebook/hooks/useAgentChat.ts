@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { spApiUrl } from "@/core/network/api";
+import { notionRequestIdFromSessionId } from "@/core/notion/trail";
 
 export interface AgentMessage {
   id: string;
@@ -221,6 +222,17 @@ export function useAgentChat({
           if (Array.isArray(notionConvs)) {
             mergeConversations(conversations, notionConvs);
           }
+
+          const slackData = await chatFetch(
+            "/conversations?source=slack",
+            hdrs,
+          );
+          const slackConvs =
+            (slackData as { conversations?: Array<Record<string, unknown>> })
+              ?.conversations ?? [];
+          if (Array.isArray(slackConvs)) {
+            mergeConversations(conversations, slackConvs);
+          }
         }
 
         if (
@@ -305,14 +317,17 @@ export function useAgentChat({
   );
 
   useEffect(() => {
+    const trailSessionId = notionRequestIdFromSessionId(initialSessionId)
+      ? initialSessionId
+      : null;
     if (
-      !initialSessionId?.startsWith("session-notion-") ||
-      conversationIdRef.current === initialSessionId
+      !trailSessionId ||
+      conversationIdRef.current === trailSessionId
     ) {
       return;
     }
 
-    loadSession(initialSessionId);
+    loadSession(trailSessionId);
   }, [initialSessionId, loadSession]);
 
   const deleteSession = useCallback(

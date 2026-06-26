@@ -25,7 +25,11 @@ import {
   gatewayBranchIdAtom as coreGatewayBranchIdAtom,
   gatewayProjectIdAtom,
 } from "./network/gateway-state";
-import { isNotionTrailSearchParams } from "./notion/trail";
+import {
+  DURABLE_TRAIL_FILE_PREFIXES,
+  isNotionTrailParams,
+  isNotionTrailSearchParams,
+} from "./notion/trail";
 import { store } from "./state/jotai";
 import { rawFallbackAtom } from "./meta/state";
 import { filenameAtom } from "./saving/file-state";
@@ -64,6 +68,30 @@ function currentSearchParams(): URLSearchParams {
 
 function isCurrentPageNotionTrail(): boolean {
   return isNotionTrailSearchParams(currentSearchParams());
+}
+
+function isProjectEntrySearchParams(params: URLSearchParams): boolean {
+  return Boolean(
+    params.get(KnownQueryParams.project) &&
+      (params.get(KnownQueryParams.filePath) || "").startsWith("__new__"),
+  );
+}
+
+function clearEditorTabState() {
+  store.set(openTabsAtom, []);
+  store.set(activeTabIdAtom, null);
+  store.set(filenameAtom, null);
+  store.set(rawFallbackAtom, false);
+}
+
+function isTrailTabPath(path: string, sessionId: string | null | undefined): boolean {
+  const normalized = path.replace(/\\/g, "/").replace(/^\/+/, "");
+  return (
+    isNotionTrailParams({ file: normalized, sessionId }) ||
+    DURABLE_TRAIL_FILE_PREFIXES.some(
+      (prefix) => normalized.startsWith(prefix) || normalized.includes(`/${prefix}`),
+    )
+  );
 }
 
 function clearNotionTrailProjectState() {
@@ -181,6 +209,11 @@ export const EditApp: React.FC<AppProps> = ({
     const init = async () => {
       const params = currentSearchParams();
       const isNotionTrail = isNotionTrailSearchParams(params);
+      const isProjectEntry = isProjectEntrySearchParams(params);
+
+      if (isProjectEntry) {
+        clearEditorTabState();
+      }
 
       // Hydrate project/branch from URL (shareable links)
       const urlProject = params.get(KnownQueryParams.project);
@@ -242,8 +275,7 @@ export const EditApp: React.FC<AppProps> = ({
         openFileInTab(filePath, isRawFallback);
       } else if (!fileInUrl || fileInUrl.startsWith("__new__")) {
         console.log("[EditApp.init] __new__ project — clearing tabs");
-        store.set(openTabsAtom, []);
-        store.set(activeTabIdAtom, null);
+        clearEditorTabState();
       }
     };
 
@@ -297,6 +329,7 @@ export const EditApp: React.FC<AppProps> = ({
     updateQueryParams((params) => {
       const currentParams = new URLSearchParams(window.location.search);
       const isNotionTrailUrl = isNotionTrailSearchParams(currentParams);
+      const isProjectEntry = isProjectEntrySearchParams(currentParams);
       if (isNotionTrailUrl) {
         params.delete(KnownQueryParams.project);
         params.delete(KnownQueryParams.branch);
@@ -314,6 +347,9 @@ export const EditApp: React.FC<AppProps> = ({
 
       if (activeTab) {
         const filePath = activeTab.path.replace(/\\/g, "/");
+        if ((isProjectEntry || projectId) && isTrailTabPath(filePath, activeTab.sessionId)) {
+          return;
+        }
         // Strip the sync directory prefix to get project-relative path
         const syncMarker = "/.sp/projects/";
         const syncIdx = filePath.indexOf(syncMarker);

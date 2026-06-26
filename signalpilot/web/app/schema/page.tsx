@@ -173,10 +173,21 @@ export default function SchemaExplorerPage() {
   }, [selectedConn]);
 
   useEffect(() => {
-    if (selectedConn) {
-      loadSchema();
-      if (viewMode === "ddl") loadDDL();
+    if (!selectedConn) {
+      setSchema(null);
+      setError(null);
+      setExpandedTables(new Set());
+      setPiiDetections(null);
+      setLastRefresh(null);
+      setRefreshInterval(null);
+      setDdlContent("");
+      setDdlTokens(0);
+      setDdlLoading(false);
+      return;
     }
+
+    loadSchema();
+    if (viewMode === "ddl") loadDDL();
   }, [selectedConn, loadSchema, viewMode, loadDDL]);
 
   function toggleTable(key: string) {

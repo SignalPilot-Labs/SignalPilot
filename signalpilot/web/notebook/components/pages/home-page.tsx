@@ -46,6 +46,7 @@ import { Label } from "@/components/ui/label";
 import { Tooltip } from "@/components/ui/tooltip";
 import { toast } from "@/components/ui/use-toast";
 import { isSessionId } from "@/core/kernel/session";
+import { isNotionTrailParams, notionRequestIdFromSessionId } from "@/core/notion/trail";
 import { apiCall } from "@/core/network/api-call";
 import type {
   FileInfo,
@@ -100,9 +101,8 @@ function isProjectsProduct(): boolean {
 
 function isNotionNotebookFile(file: SpFile): boolean {
   return (
-    file.path.includes("signalpilot-notion-analyses/") ||
-    file.path.startsWith("session-notion-") ||
-    Boolean(file.sessionId?.startsWith("session-notion-"))
+    isNotionTrailParams({ file: file.path, sessionId: file.sessionId }) ||
+    Boolean(notionRequestIdFromSessionId(file.path))
   );
 }
 
@@ -236,7 +236,7 @@ const HomePage: React.FC = () => {
 
       try {
         const gatewayUrl = notebookConfig.gatewayUrl.replace(/\/$/, "");
-        const resp = await fetch(`${gatewayUrl}/api/chat/traces/threads?source=notion`, {
+        const resp = await fetch(`${gatewayUrl}/api/chat/traces/threads`, {
           headers,
         });
         if (!resp.ok) {
@@ -244,7 +244,12 @@ const HomePage: React.FC = () => {
         }
         const data = (await resp.json()) as { threads?: GatewayNotionThread[] };
         const files = (data.threads ?? [])
-          .filter((thread) => thread.source === "notion" || thread.thread_id.startsWith("session-notion-"))
+          .filter(
+            (thread) =>
+              thread.source === "notion" ||
+              thread.source === "slack" ||
+              Boolean(notionRequestIdFromSessionId(thread.thread_id)),
+          )
           .map(toNotionTraceFile)
           .filter((file): file is SpFile => file !== null);
         if (!cancelled) {

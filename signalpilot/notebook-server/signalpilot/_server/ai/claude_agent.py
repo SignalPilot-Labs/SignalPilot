@@ -618,6 +618,7 @@ async def run_notebook_agent(
 
     chat_session_id, is_resume = _get_or_create_chat_session(chat_session_key)
 
+    effective_cwd = cwd or os.getcwd()
     mcp_servers = _get_mcp_servers_config(mcp_config)
     system_prompt = system_prompt_override or _get_system_prompt()
     disallowed_tools = _build_disallowed_tools(
@@ -639,7 +640,7 @@ async def run_notebook_agent(
 
     # Add dbt project context on first message
     if not is_resume:
-        dbt_context = _get_dbt_project_context()
+        dbt_context = _get_dbt_project_context(effective_cwd)
         if dbt_context:
             system_prompt += f"\n\n{dbt_context}\n"
 
@@ -683,6 +684,8 @@ async def run_notebook_agent(
                     workspace_dir = getattr(tc.session_manager.workspace, "directory", None)
                     if workspace_dir:
                         resolved = Path(workspace_dir) / context_file
+                if not resolved.is_absolute():
+                    resolved = Path(effective_cwd) / context_file
                 if resolved.is_file():
                     contents = resolved.read_text(encoding="utf-8", errors="replace")
                     if len(contents) > 20000:
@@ -702,7 +705,7 @@ async def run_notebook_agent(
         target=_run_agent_in_thread,
         args=(
             agent, message, model, max_turns, mcp_servers,
-            system_prompt, chat_session_id, is_resume, disallowed_tools, effective_app, cwd,
+            system_prompt, chat_session_id, is_resume, disallowed_tools, effective_app, effective_cwd,
         ),
         daemon=True,
     )

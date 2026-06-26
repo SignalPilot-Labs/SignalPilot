@@ -16,7 +16,7 @@ from signalpilot._server.auth.session_token import load_session_jwt
 if TYPE_CHECKING:
     from signalpilot._server.api.deps import AppStateBase
 
-ChatSource = Literal["user", "notion"]
+ChatSource = Literal["user", "notion", "slack"]
 ThreadStatus = Literal["active", "done", "failed"]
 
 

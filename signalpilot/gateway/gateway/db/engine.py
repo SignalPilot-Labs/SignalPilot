@@ -79,6 +79,7 @@ def get_engine():
             pool_size=5,
             max_overflow=10,
             pool_recycle=1800,
+            pool_pre_ping=True,
             connect_args=connect_args,
         )
         _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
@@ -342,23 +343,68 @@ async def _ensure_chat_trace_indexes(engine) -> None:
     async with engine.begin() as conn:
         await conn.execute(
             text(
-                "CREATE INDEX IF NOT EXISTS ix_gw_trace_threads_session "
-                "ON gateway_chat_trace_threads (org_id, user_id, session_id, updated_at)"
+                "CREATE INDEX IF NOT EXISTS ix_gw_trace_threads_session_org "
+                "ON gateway_chat_trace_threads (org_id, session_id, updated_at)"
             )
         )
         await conn.execute(
             text(
-                "CREATE INDEX IF NOT EXISTS ix_gw_trace_threads_source "
-                "ON gateway_chat_trace_threads (org_id, user_id, source, updated_at)"
+                "CREATE INDEX IF NOT EXISTS ix_gw_trace_threads_source_org "
+                "ON gateway_chat_trace_threads (org_id, source, updated_at)"
             )
         )
         await conn.execute(
             text(
-                "CREATE INDEX IF NOT EXISTS ix_gw_trace_events_thread_idx "
-                "ON gateway_chat_trace_events (org_id, user_id, thread_id, idx)"
+                "CREATE INDEX IF NOT EXISTS ix_gw_trace_events_thread_idx_org "
+                "ON gateway_chat_trace_events (org_id, thread_id, idx)"
             )
         )
     logger.info("Ensured chat trace indexes")
+
+
+async def _ensure_notion_installation_config_analysis_columns(engine) -> None:
+    """Add default project routing columns to Notion installation config."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("ALTER TABLE notion_installation_config ADD COLUMN IF NOT EXISTS default_project_id TEXT")
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE notion_installation_config "
+                "ADD COLUMN IF NOT EXISTS default_branch VARCHAR(100) NOT NULL DEFAULT 'main'"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE notion_installation_config "
+                "ADD COLUMN IF NOT EXISTS analysis_branch_mode VARCHAR(30) NOT NULL DEFAULT 'per_request'"
+            )
+        )
+    logger.info("Ensured Notion analysis routing columns")
+
+
+async def _ensure_analysis_trail_indexes(engine) -> None:
+    """Create durable analysis trail lookup indexes idempotently."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_gw_analysis_trail_thread "
+                "ON gateway_analysis_trails (org_id, thread_id)"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_gw_analysis_trail_project "
+                "ON gateway_analysis_trails (org_id, project_id, branch)"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_gw_analysis_trail_source_status "
+                "ON gateway_analysis_trails (org_id, source, status)"
+            )
+        )
+    logger.info("Ensured analysis trail indexes")
 
 
 async def _ensure_branch_columns(engine) -> None:
@@ -453,6 +499,8 @@ async def init_db() -> None:
     await _ensure_knowledge_columns(engine)
     await _ensure_chat_columns(engine)
     await _ensure_chat_trace_indexes(engine)
+    await _ensure_notion_installation_config_analysis_columns(engine)
+    await _ensure_analysis_trail_indexes(engine)
     await _ensure_branch_columns(engine)
     await _ensure_notebook_session_columns(engine)
     await _ensure_notebook_session_org_id(engine)

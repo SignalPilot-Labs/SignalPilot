@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -12,6 +13,12 @@ REPOS_ROOT = Path(os.getenv("SP_REPOS_DIR", "/repos"))
 # Name of the GitHub remote in each bare repo. Mirrors sync.GITHUB_REMOTE_NAME;
 # duplicated here to avoid a circular import (sync.py imports repos.py).
 _GITHUB_REMOTE = "github"
+_BRANCH_RE = re.compile(r"^[A-Za-z0-9._/\-]+$")
+
+
+def _validate_branch_name(branch: str) -> None:
+    if not branch or branch.startswith("-") or not _BRANCH_RE.match(branch):
+        raise ValueError(f"Invalid branch name: {branch!r}")
 
 
 def _run_git(*args: str, cwd: Path | str | None = None, timeout: int = 30) -> tuple[int, str, str]:
@@ -115,6 +122,39 @@ def list_branches(project_id: str) -> list[str]:
         if name:
             branches.append(name)
     return branches
+
+
+def ensure_branch_from(project_id: str, branch: str, from_branch: str = "main") -> str:
+    """Ensure a local bare-repo branch exists from another branch and return its HEAD SHA."""
+    _validate_branch_name(branch)
+    _validate_branch_name(from_branch)
+    path = repo_path(project_id)
+    if not path.exists():
+        raise RuntimeError(f"Git repository not initialized for project {project_id}")
+
+    rc, out, _ = _run_git("rev-parse", "--verify", f"refs/heads/{branch}", cwd=path)
+    if rc == 0 and out.strip():
+        return out.strip()
+
+    rc, out, err = _run_git("rev-parse", "--verify", f"refs/heads/{from_branch}", cwd=path)
+    if rc != 0 or not out.strip():
+        raise RuntimeError(f"Default branch {from_branch!r} not found for project {project_id}: {err.strip()}")
+
+    sha = out.strip()
+    rc, _, err = _run_git("update-ref", f"refs/heads/{branch}", sha, cwd=path)
+    if rc != 0:
+        raise RuntimeError(f"Could not create branch {branch!r}: {err.strip()}")
+    return sha
+
+
+def branch_head_sha(project_id: str, branch: str) -> str | None:
+    """Return the local bare-repo branch HEAD SHA, if present."""
+    _validate_branch_name(branch)
+    path = repo_path(project_id)
+    if not path.exists():
+        return None
+    rc, out, _ = _run_git("rev-parse", "--verify", f"refs/heads/{branch}", cwd=path)
+    return out.strip() if rc == 0 and out.strip() else None
 
 
 def _detect_remote_default_branch(path: Path) -> str | None:

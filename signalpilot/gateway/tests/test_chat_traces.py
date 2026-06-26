@@ -168,7 +168,7 @@ async def test_append_events_monotonic_and_clear_scoped(db_session) -> None:
 
 
 @pytest.mark.asyncio
-async def test_trace_thread_listing_is_org_user_scoped(db_session) -> None:
+async def test_trace_thread_listing_is_org_scoped(db_session) -> None:
     await upsert_thread(
         db_session, org_id="org-a", user_id="user-a", thread=_thread()
     )
@@ -189,7 +189,16 @@ async def test_trace_thread_listing_is_org_user_scoped(db_session) -> None:
         db_session, org_id="org-a", user_id="user-a", source="notion"
     )
 
-    assert [thread.thread_id for thread in source_threads] == ["thread-1"]
+    assert {thread.thread_id for thread in source_threads} == {"thread-1", "thread-user-b"}
+    assert (
+        await get_thread(
+            db_session,
+            org_id="org-a",
+            user_id="user-b",
+            thread_id="thread-1",
+        )
+        is not None
+    )
     assert (
         await get_thread(
             db_session,

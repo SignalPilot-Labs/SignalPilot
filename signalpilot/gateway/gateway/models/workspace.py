@@ -132,7 +132,7 @@ class ChatMessageInfo(BaseModel):
     created_at: float
 
 
-ChatTraceSource = Literal["user", "notion"]
+ChatTraceSource = Literal["user", "notion", "slack"]
 ChatTraceStatus = Literal["active", "done", "failed"]
 
 

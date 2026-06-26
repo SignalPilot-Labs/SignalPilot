@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 # Must match gateway/orchestrator/kubernetes.py SP_SESSION_JWT_MOUNT_FILE.
 _JWT_PATH = "/var/run/sp/session_jwt/session_jwt"
@@ -59,6 +60,37 @@ def _run_project_sync_boot() -> int:
     ).returncode
 
 
+def _synced_project_workspace() -> str | None:
+    project_id = os.environ.get("SP_PROJECT_ID", "").strip()
+    if not project_id:
+        return None
+
+    project_parent = Path.home() / ".sp" / "projects" / project_id
+    if not project_parent.exists():
+        return None
+
+    git_roots = [
+        path.parent
+        for path in project_parent.rglob(".git")
+        if path.is_dir()
+    ]
+    if not git_roots:
+        return None
+    git_roots.sort(key=lambda path: len(path.parts))
+    return str(git_roots[0])
+
+
+def _rewrite_workspace_args(args: list[str], workspace: str | None) -> list[str]:
+    if not workspace:
+        return args
+    next_args = list(args)
+    if next_args and next_args[-1] == "/workspace":
+        next_args[-1] = workspace
+    else:
+        next_args.append(workspace)
+    return next_args
+
+
 def main() -> int:
     _load_and_destroy_jwt()
     rc = _run_project_sync_boot()
@@ -66,7 +98,11 @@ def main() -> int:
         # Boot clone failed — exit non-zero so :2718 never binds and the gateway's
         # readiness probe times out (surfaces as a clear "failed to start" error).
         return rc
-    os.execvp("sp", ["sp", "edit", *sys.argv[1:]])
+    workspace = _synced_project_workspace()
+    if workspace:
+        os.chdir(workspace)
+        os.environ["PWD"] = workspace
+    os.execvp("sp", ["sp", "edit", *_rewrite_workspace_args(sys.argv[1:], workspace)])
     return 0  # unreachable after execvp; satisfies type checker
 
 

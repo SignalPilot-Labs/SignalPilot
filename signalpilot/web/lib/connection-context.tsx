@@ -35,7 +35,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const setSelectedConn = useCallback((name: string) => {
     setSelectedConnState(name);
     try {
-      localStorage.setItem(STORAGE_KEY, name);
+      if (name) {
+        localStorage.setItem(STORAGE_KEY, name);
+      } else {
+        localStorage.removeItem(STORAGE_KEY);
+      }
     } catch {}
   }, []);
 
@@ -50,6 +54,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         setSelectedConn(conns[0].name);
       } else if (stillExists && !selectedConn) {
         setSelectedConnState(currentName);
+      } else if (!stillExists) {
+        setSelectedConn("");
       }
     } catch {} finally {
       setLoading(false);
@@ -62,10 +68,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       setLoading(false);
       return;
     }
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) setSelectedConnState(stored);
-    } catch {}
     getConnections()
       .then((conns) => {
         setConnections(conns);
@@ -75,6 +77,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           setSelectedConnState(stored);
         } else if (conns.length > 0) {
           setSelectedConn(conns[0].name);
+        } else {
+          setSelectedConn("");
         }
       })
       .catch(() => {})

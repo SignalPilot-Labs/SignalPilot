@@ -94,6 +94,23 @@ class TestGitHubOAuthState:
 
         assert verify_state(state) is None
 
+    def test_state_survives_realistic_github_install_delay(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        fixed_key_env: None,
+    ):
+        """GitHub App installs can take longer than a simple OAuth redirect."""
+        state = make_state("my-org")
+
+        original_time = time.time
+        monkeypatch.setattr(
+            _oauth_state.time,
+            "time",
+            lambda: original_time() + 20 * 60,
+        )
+
+        assert verify_state(state) == "my-org"
+
     # ── verify_state: replay ──────────────────────────────────────────────
 
     def test_replay_rejected(self, fixed_key_env: None):

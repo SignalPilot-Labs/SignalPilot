@@ -13,9 +13,7 @@ import { toast } from "@/components/ui/use-toast";
 import { setGatewayBranchId, setGatewayProjectId, spApiUrl } from "@/core/network/api";
 import { getApiHeaders } from "@/core/network/api-headers";
 import { cn } from "@/utils/cn";
-import { request } from "~/lib/api";
-
-const GATEWAY_AUTH_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
+import { getGitHubInstallUrl, request } from "~/lib/api";
 
 interface Props {
   onProjectCreated: () => void | Promise<void>;
@@ -277,6 +275,7 @@ const GitHubImportForm: React.FC<{
   const [loadingRepos, setLoadingRepos] = useState(false);
   const [selectedInstall, setSelectedInstall] = useState<GitHubInstallation | null>(null);
   const [importing, setImporting] = useState<string | null>(null);
+  const [connectingGithub, setConnectingGithub] = useState(false);
 
   const loadInstallations = useCallback(async () => {
     setLoadingInstalls(true);
@@ -303,6 +302,21 @@ const GitHubImportForm: React.FC<{
       .catch(() => setRepos([]))
       .finally(() => setLoadingRepos(false));
   }, [selectedInstall]);
+
+  const handleConnectGithub = async () => {
+    setConnectingGithub(true);
+    try {
+      const { install_url } = await getGitHubInstallUrl();
+      window.location.href = install_url;
+    } catch (e) {
+      toast({
+        title: "Error",
+        description: e instanceof Error ? e.message : "Failed to connect GitHub",
+        variant: "danger",
+      });
+      setConnectingGithub(false);
+    }
+  };
 
   const handleImportRepo = async (repo: GitHubRepo) => {
     if (!selectedInstall) {return;}
@@ -402,8 +416,6 @@ const GitHubImportForm: React.FC<{
     }
   };
 
-  const connectUrl = `${GATEWAY_AUTH_URL}/auth/github`;
-
   return (
     <div className="mt-3 p-4 border border-border rounded-lg bg-muted/30 space-y-3">
       <div className="text-sm font-semibold flex items-center gap-2">
@@ -421,15 +433,16 @@ const GitHubImportForm: React.FC<{
           <p className="text-sm text-muted-foreground">
             No GitHub account connected.
           </p>
-          <a
-            href={connectUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
+          <button
+            type="button"
+            onClick={handleConnectGithub}
+            disabled={connectingGithub}
+            className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-60"
           >
+            {connectingGithub && <Loader2Icon size={12} className="animate-spin" />}
             Connect GitHub
             <ExternalLinkIcon size={12} />
-          </a>
+          </button>
         </div>
       ) : (
         <>
@@ -461,15 +474,16 @@ const GitHubImportForm: React.FC<{
           ) : repos.length === 0 ? (
             <div className="text-center py-4 text-sm text-muted-foreground">
               <p>No repositories found.</p>
-              <a
-                href={connectUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline mt-1"
+              <button
+                type="button"
+                onClick={handleConnectGithub}
+                disabled={connectingGithub}
+                className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline mt-1 disabled:cursor-not-allowed disabled:opacity-60"
               >
+                {connectingGithub && <Loader2Icon size={10} className="animate-spin" />}
                 Add more repositories
                 <ExternalLinkIcon size={10} />
-              </a>
+              </button>
             </div>
           ) : (
             <div className="max-h-[240px] overflow-y-auto space-y-1">
@@ -506,17 +520,21 @@ const GitHubImportForm: React.FC<{
           )}
 
           <div className="flex items-center justify-between pt-2 border-t border-border/50">
-            <a
-              href={connectUrl}
-              target="_blank"
-              rel="noopener noreferrer"
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 text-xs"
+              onClick={handleConnectGithub}
+              disabled={connectingGithub}
             >
-              <Button variant="outline" size="sm" className="gap-1.5 text-xs">
+              {connectingGithub ? (
+                <Loader2Icon size={12} className="animate-spin" />
+              ) : (
                 <PlusIcon size={12} />
-                Add Repository
-                <ExternalLinkIcon size={10} className="opacity-50" />
-              </Button>
-            </a>
+              )}
+              Add Repository
+              <ExternalLinkIcon size={10} className="opacity-50" />
+            </Button>
             <Button variant="ghost" size="sm" onClick={onClose}>
               Cancel
             </Button>

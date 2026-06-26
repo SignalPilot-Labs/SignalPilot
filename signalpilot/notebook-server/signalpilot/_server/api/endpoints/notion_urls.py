@@ -17,6 +17,18 @@ def notebooks_base_url(request_base_url: str) -> str:
     ).rstrip("/")
 
 
-def trail_url(file_key: str, session_id: str, request_base_url: str) -> str:
+def trail_url(
+    file_key: str,
+    session_id: str,
+    request_base_url: str,
+    *,
+    project_id: str | None = None,
+    branch: str | None = None,
+) -> str:
     trail_base_url = notebooks_base_url(request_base_url)
+    if project_id:
+        url = f"{trail_base_url}?project={quote(project_id)}"
+        if branch:
+            url += f"&branch={quote(branch)}"
+        return f"{url}&file={quote(file_key)}"
     return f"{trail_base_url}?file={quote(file_key)}&session_id={quote(session_id)}"

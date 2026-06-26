@@ -79,6 +79,16 @@ async def test_start_comment_is_posted_before_notebook_call_failure(monkeypatch:
         calls.append("call_notebook")
         raise RuntimeError("notebook unavailable")
 
+    async def resolve_route(*args, **kwargs):
+        return notion_analysis.AnalysisRoute(
+            source="notion",
+            request_id="notion-req-1",
+            project_id="project-1",
+            branch="analysis/notion/notion-req-1-hello",
+            default_branch="main",
+            analysis_user_id="analysis:notion:notion-req-1",
+        )
+
     async def ensure_runtime(*args, **kwargs):
         calls.append("ensure_runtime")
         return NotebookRuntime(
@@ -86,6 +96,9 @@ async def test_start_comment_is_posted_before_notebook_call_failure(monkeypatch:
             internal_base_url="http://10.0.0.5:2718/notebook/session-1",
             public_base_url="https://app.test/notebook/session-1",
         )
+
+    async def seed_trail(*args, **kwargs):
+        calls.append("seed_trail")
 
     monkeypatch.setattr(notion_client, "list_comments", list_comments)
     monkeypatch.setattr(notion_client, "query_request_page_by_source", query_request_page_by_source)
@@ -96,7 +109,9 @@ async def test_start_comment_is_posted_before_notebook_call_failure(monkeypatch:
     monkeypatch.setattr(notion_client, "is_bot_comment", lambda _comment: False)
     monkeypatch.setattr(notion_client, "comment_has_page_mention", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(notion_client, "extract_comment_text", lambda _comment: "Hello")
-    monkeypatch.setattr(notion_analysis, "ensure_notion_notebook_session", ensure_runtime)
+    monkeypatch.setattr(notion_analysis, "resolve_configured_analysis_route", resolve_route)
+    monkeypatch.setattr(notion_analysis, "ensure_analysis_notebook_session", ensure_runtime)
+    monkeypatch.setattr(notion_analysis, "upsert_analysis_trail_seed", seed_trail)
     monkeypatch.setattr(notion_analysis, "_call_notebook", call_notebook)
 
     with pytest.raises(RuntimeError, match="notebook unavailable"):
@@ -107,6 +122,74 @@ async def test_start_comment_is_posted_before_notebook_call_failure(monkeypatch:
     assert start_comment_index < notebook_index
     assert "https://notion.test/request-page-1" not in calls[start_comment_index]
     assert "request details" in calls[start_comment_index]
+
+
+@pytest.mark.asyncio
+async def test_missing_default_project_posts_setup_required_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    install = NotionInstallation(
+        id="install-1",
+        org_id="org-1",
+        user_id="user-1",
+        workspace_id="workspace-1",
+        bot_id="bot-1",
+        access_token_enc=b"encrypted",
+        status="active",
+    )
+    config = NotionInstallationConfig(
+        installation_id="install-1",
+        parent_page_id=None,
+        trigger_page_id="trigger-1",
+        requests_data_source_id="ds-1",
+        requests_database_page_id="db-1",
+        enabled=True,
+    )
+    routed = RoutedNotionInstallation(installation=install, config=config, access_token="token-1")
+    payload = {
+        "entity": {"id": "comment-1"},
+        "data": {"page_id": "page-1"},
+        "authors": [{"id": "user-1", "type": "person"}],
+    }
+    comment = {"id": "comment-1", "discussion_id": "discussion-1", "rich_text": []}
+
+    async def list_comments(*args, **kwargs):
+        return [comment]
+
+    async def query_request_page_by_source(*args, **kwargs):
+        return None
+
+    async def create_request_page(*args, **kwargs):
+        return {"id": "request-page-1", "url": "https://notion.test/request-page-1"}
+
+    async def update_page_properties(*args, **kwargs):
+        calls.append("update_page_properties")
+
+    async def append_page_blocks(*args, **kwargs):
+        calls.append("append_page_blocks")
+
+    async def create_comment(*args, **kwargs):
+        calls.append(f"comment:{_rich_text_content(kwargs['rich_text'])}")
+
+    async def call_notebook(*args, **kwargs):
+        calls.append("call_notebook")
+
+    monkeypatch.setattr(notion_client, "list_comments", list_comments)
+    monkeypatch.setattr(notion_client, "query_request_page_by_source", query_request_page_by_source)
+    monkeypatch.setattr(notion_client, "create_request_page", create_request_page)
+    monkeypatch.setattr(notion_client, "update_page_properties", update_page_properties)
+    monkeypatch.setattr(notion_client, "append_page_blocks", append_page_blocks)
+    monkeypatch.setattr(notion_client, "create_comment", create_comment)
+    monkeypatch.setattr(notion_client, "is_bot_comment", lambda _comment: False)
+    monkeypatch.setattr(notion_client, "comment_has_page_mention", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(notion_client, "extract_comment_text", lambda _comment: "Hello")
+    monkeypatch.setattr(notion_analysis, "_call_notebook", call_notebook)
+
+    result = await notion_analysis.process_routed_comment_event(routed, payload, db=MagicMock())
+
+    assert result.status == "processed"
+    assert "call_notebook" not in calls
+    assert any("default dbt project" in call for call in calls if call.startswith("comment:"))
 
 
 def test_start_comment_links_request_details_without_raw_url() -> None:

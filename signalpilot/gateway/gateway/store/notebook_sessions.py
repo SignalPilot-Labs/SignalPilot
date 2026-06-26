@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from dataclasses import dataclass
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import GatewayNotebookSession
 from ..models.notebook_sessions import NotebookSessionInfo
 from .crypto import _decrypt_with_migration, _encrypt
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -136,7 +140,7 @@ async def update_session_status(
         values["pod_ip"] = pod_ip
     if pod_ip_internal is not None:
         values["pod_ip_internal"] = pod_ip_internal
-    await session.execute(
+    stmt = (
         update(GatewayNotebookSession)
         .where(
             GatewayNotebookSession.id == session_id,
@@ -144,7 +148,7 @@ async def update_session_status(
         )
         .values(**values)
     )
-    await session.commit()
+    await _execute_and_commit_with_closed_connection_retry(session, stmt, "update notebook session status")
 
 
 async def ping_session(
@@ -181,7 +185,7 @@ async def ping_session_by_id(
 
 
 async def mark_stopped(session: AsyncSession, *, session_id: str, org_id: str) -> None:
-    await session.execute(
+    stmt = (
         update(GatewayNotebookSession)
         .where(
             GatewayNotebookSession.id == session_id,
@@ -189,7 +193,38 @@ async def mark_stopped(session: AsyncSession, *, session_id: str, org_id: str) -
         )
         .values(status="stopped")
     )
-    await session.commit()
+    await _execute_and_commit_with_closed_connection_retry(session, stmt, "mark notebook session stopped")
+
+
+async def _execute_and_commit_with_closed_connection_retry(
+    session: AsyncSession,
+    statement,
+    operation: str,
+) -> None:
+    try:
+        await session.execute(statement)
+        await session.commit()
+    except (InterfaceError, OperationalError, DBAPIError) as exc:
+        if not _looks_like_closed_connection(exc):
+            raise
+        logger.warning("Stale DB connection during %s; retrying once", operation, exc_info=True)
+        try:
+            await session.rollback()
+        except Exception:
+            logger.debug("Rollback after stale DB connection failed", exc_info=True)
+        await session.execute(statement)
+        await session.commit()
+
+
+def _looks_like_closed_connection(exc: BaseException) -> bool:
+    if isinstance(exc, DBAPIError) and getattr(exc, "connection_invalidated", False):
+        return True
+    message = str(exc).lower()
+    return (
+        "connection is closed" in message
+        or "connection was closed" in message
+        or "connection has been closed" in message
+    )
 
 
 async def delete_stopped(session: AsyncSession, *, org_id: str, user_id: str) -> None:

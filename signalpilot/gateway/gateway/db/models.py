@@ -369,6 +369,14 @@ class NotionInstallationConfig(GatewayBase):
     requests_data_source_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     requests_database_page_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    default_project_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    default_branch: Mapped[str] = mapped_column(String(100), nullable=False, default="main", server_default="main")
+    analysis_branch_mode: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="per_request",
+        server_default="per_request",
+    )
 
 
 class NotionWebhookDelivery(GatewayBase):
@@ -646,9 +654,9 @@ class GatewayChatTraceThread(GatewayBase):
     metadata_json: Mapped[dict | None] = mapped_column(JSON)
 
     __table_args__ = (
-        UniqueConstraint("org_id", "user_id", "thread_id", name="uq_gw_trace_thread_scope"),
-        Index("ix_gw_trace_threads_session", "org_id", "user_id", "session_id", "updated_at"),
-        Index("ix_gw_trace_threads_source", "org_id", "user_id", "source", "updated_at"),
+        UniqueConstraint("org_id", "thread_id", name="uq_gw_trace_thread_org"),
+        Index("ix_gw_trace_threads_session_org", "org_id", "session_id", "updated_at"),
+        Index("ix_gw_trace_threads_source_org", "org_id", "source", "updated_at"),
     )
 
 
@@ -675,8 +683,41 @@ class GatewayChatTraceEvent(GatewayBase):
     metadata_json: Mapped[dict | None] = mapped_column(JSON)
 
     __table_args__ = (
-        UniqueConstraint("org_id", "user_id", "thread_id", "idx", name="uq_gw_trace_event_scope_idx"),
-        Index("ix_gw_trace_events_thread_idx", "org_id", "user_id", "thread_id", "idx"),
+        UniqueConstraint("org_id", "thread_id", "idx", name="uq_gw_trace_event_org_idx"),
+        Index("ix_gw_trace_events_thread_idx_org", "org_id", "thread_id", "idx"),
+    )
+
+
+class GatewayAnalysisTrail(GatewayBase):
+    """Durable metadata for external-source notebook analyses."""
+
+    __tablename__ = "gateway_analysis_trails"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False)
+    request_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    thread_id: Mapped[str] = mapped_column(String(300), nullable=False)
+    runtime_session_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    branch: Mapped[str] = mapped_column(String(100), nullable=False)
+    default_branch: Mapped[str] = mapped_column(String(100), nullable=False, default="main")
+    notebook_path: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    latest_commit_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_thread_id: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    source_request_id: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    analysis_user_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "source", "request_id", name="uq_gw_analysis_trail_request"),
+        Index("ix_gw_analysis_trail_thread", "org_id", "thread_id"),
+        Index("ix_gw_analysis_trail_project", "org_id", "project_id", "branch"),
+        Index("ix_gw_analysis_trail_source_status", "org_id", "source", "status"),
     )
 
 

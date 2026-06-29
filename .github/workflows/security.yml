@@ -76,7 +76,7 @@ jobs:
           fetch-depth: 0
 
       - name: Scan commit range for secrets
-        uses: trufflesecurity/trufflehog@v3.95.5
+        uses: trufflesecurity/trufflehog@v3.95.6
         with:
           path: ./
           version: 3.95.5

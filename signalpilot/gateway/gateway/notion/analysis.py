@@ -1281,7 +1281,9 @@ async def process_routed_comment_event(
                     "url": _public_signalpilot_url(final_status_for_notion.get("trailUrl") or start_trail_url, runtime)
                     or None
                 },
-                "Confidence score": {"number": final_status_for_notion.get("confidenceScore")},
+                "Confidence score": {
+                    "rich_text": _rich_text(str(final_status_for_notion.get("confidenceScore") or ""))
+                },
                 "Summary": {
                     "rich_text": _rich_text(
                         final_status_for_notion.get("summary") or final_status_for_notion.get("finalAnswer") or ""

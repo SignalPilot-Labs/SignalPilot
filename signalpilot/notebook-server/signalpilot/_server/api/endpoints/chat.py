@@ -279,7 +279,9 @@ def _format_final_statement_for_chat(payload: dict[str, Any]) -> str:
     answer_bullets = _bulletize_text(statement)
     if answer_bullets:
         lines.extend(["", "Findings:", *[f"- {item}" for item in answer_bullets]])
-    confidence = _format_confidence(payload.get("confidenceScore", payload.get("confidence_score")))
+    confidence = _format_confidence(
+        payload.get("confidenceScore", payload.get("confidence_score"))
+    )
     if confidence:
         lines.extend(["", f"Confidence: {confidence}"])
     if caveats:
@@ -313,13 +315,12 @@ def _clean_bullet_text(value: Any) -> str:
 
 
 def _format_confidence(value: Any) -> str:
-    if value is None:
+    if not isinstance(value, str):
         return ""
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return str(value).strip()
-    return f"{numeric:.2f}".rstrip("0").rstrip(".")
+    label = value.strip()
+    if label in {"high", "medium", "lower"}:
+        return label
+    return ""
 
 
 def _extract_final_json_content(content: str) -> str | None:

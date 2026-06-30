@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Literal, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.store import chat_traces
 from gateway.string_utils import string_value as _string
 from gateway.trace_markers import iter_trace_marker_payloads
+
+ConfidenceLabel = Literal["high", "medium", "lower"]
 
 
 @dataclass(frozen=True)
@@ -27,7 +29,7 @@ class WorkerProgress:
 @dataclass(frozen=True)
 class FinalStatement:
     statement: str = ""
-    confidence_score: float | None = None
+    confidence_score: ConfidenceLabel | None = None
     caveats: list[str] = field(default_factory=list)
     handoff_notes: list[str] = field(default_factory=list)
 
@@ -170,6 +172,7 @@ def load_delivery_packet_from_events(
         status=status,
     )
 
+
 def _parse_plan(payload: dict[str, Any]) -> WorkerPlan | None:
     steps = payload.get("steps")
     if not isinstance(steps, list):
@@ -196,9 +199,15 @@ def _parse_final_statement(payload: dict[str, Any]) -> FinalStatement | None:
     statement = _string(payload.get("statement")).strip()
     caveats_raw = payload.get("caveats", [])
     notes_raw = payload.get("handoffNotes", payload.get("handoff_notes", []))
-    confidence = _confidence_score(payload.get("confidenceScore", payload.get("confidence_score")))
-    caveats = [_string(item).strip() for item in caveats_raw if _string(item).strip()] if isinstance(caveats_raw, list) else []
-    notes = [_string(item).strip() for item in notes_raw if _string(item).strip()] if isinstance(notes_raw, list) else []
+    confidence = _confidence_label(payload.get("confidenceScore", payload.get("confidence_score")))
+    caveats = (
+        [_string(item).strip() for item in caveats_raw if _string(item).strip()]
+        if isinstance(caveats_raw, list)
+        else []
+    )
+    notes = (
+        [_string(item).strip() for item in notes_raw if _string(item).strip()] if isinstance(notes_raw, list) else []
+    )
     if not statement and confidence is None and not caveats and not notes:
         return None
     return FinalStatement(
@@ -270,14 +279,13 @@ def _event_get(event: Any, key: str, default: Any = None) -> Any:
     return getattr(event, key, default)
 
 
-def _confidence_score(value: Any) -> float | None:
-    if value is None:
+def _confidence_label(value: Any) -> ConfidenceLabel | None:
+    if not isinstance(value, str):
         return None
-    try:
-        score = float(value)
-    except (TypeError, ValueError):
-        return None
-    return max(0.0, min(1.0, score))
+    label = value.strip()
+    if label in ("high", "medium", "lower"):
+        return cast(ConfidenceLabel, label)
+    return None
 
 
 def _append_unique(items: list[str], value: str, limit: int) -> None:

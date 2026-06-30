@@ -13,7 +13,7 @@ import httpx
 
 from gateway.string_utils import string_value as _string
 
-from .trace_loader import DeliveryPacket
+from .trace_loader import ConfidenceLabel, DeliveryPacket
 
 LOGGER = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ class DeliveryResult:
     gotchas: list[str] = field(default_factory=list)
     analysis_method: str = ""
     notion_charts: list[dict[str, Any]] = field(default_factory=list)
-    confidence_score: float | None = None
+    confidence_score: ConfidenceLabel | None = None
 
 
 class DeliveryRenderer:

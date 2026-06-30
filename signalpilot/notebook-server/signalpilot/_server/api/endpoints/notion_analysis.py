@@ -54,6 +54,7 @@ LOGGER = _loggers.sp_logger()
 router = APIRouter()
 
 AnalysisStatus = Literal["New", "Analyzing", "Done", "Failed"]
+ConfidenceLabel = Literal["high", "medium", "lower"]
 DEFAULT_ANALYSIS_AGENT_MODEL = "claude-sonnet-4-5-20250929"
 _ANALYSIS_AGENT_MODEL_ENV_NAMES = (
     "SIGNALPILOT_ANALYSIS_AGENT_MODEL",
@@ -94,7 +95,7 @@ class AnalysisChart:
 @dataclass
 class AnalysisResult:
     summary: str = ""
-    confidence_score: float | None = None
+    confidence_score: ConfidenceLabel | None = None
     final_answer: str = ""
     gotchas: list[str] | None = None
     analysis_method: str = ""
@@ -1095,10 +1096,9 @@ def _extract_json_object(text: str) -> dict[str, Any]:
 
 def _parse_result(text: str) -> AnalysisResult:
     data = _extract_json_object(text)
-    confidence = data.get("confidenceScore", data.get("confidence_score"))
-    if confidence is not None:
-        confidence = float(confidence)
-        confidence = max(0.0, min(1.0, confidence))
+    confidence = _confidence_label(
+        data.get("confidenceScore", data.get("confidence_score"))
+    )
     gotchas = data.get("gotchas") or []
     if not isinstance(gotchas, list):
         gotchas = [str(gotchas)]
@@ -1130,14 +1130,15 @@ def _parse_final_statement_result(text: str) -> AnalysisResult:
     statement = str(data.get("statement", "")).strip()
     if not statement:
         raise ValueError("Agent did not emit FINAL_STATEMENT.statement")
-    confidence = data.get("confidenceScore", data.get("confidence_score"))
-    if confidence is not None:
-        confidence = float(confidence)
-        confidence = max(0.0, min(1.0, confidence))
+    confidence = _confidence_label(
+        data.get("confidenceScore", data.get("confidence_score"))
+    )
     caveats = data.get("caveats") or []
     if not isinstance(caveats, list):
         caveats = [str(caveats)]
-    handoff_notes = data.get("handoffNotes", data.get("handoff_notes", [])) or []
+    handoff_notes = (
+        data.get("handoffNotes", data.get("handoff_notes", [])) or []
+    )
     if not isinstance(handoff_notes, list):
         handoff_notes = [str(handoff_notes)]
     return AnalysisResult(
@@ -1166,6 +1167,15 @@ def _extract_marker_json(text: str, marker: str) -> dict[str, Any]:
     return latest
 
 
+def _confidence_label(value: Any) -> ConfidenceLabel | None:
+    if not isinstance(value, str):
+        return None
+    label = value.strip()
+    if label in ("high", "medium", "lower"):
+        return cast(ConfidenceLabel, label)
+    return None
+
+
 def _truncate_comment(text: str, limit: int = 1200) -> str:
     text = text.strip()
     if len(text) <= limit:
@@ -1177,7 +1187,7 @@ def _plain_text_failure_result(text: str, error: Exception) -> AnalysisResult:
     detail = text.strip() or str(error)
     return AnalysisResult(
         summary="Analysis could not be completed.",
-        confidence_score=0.0,
+        confidence_score="lower",
         final_answer=(
             "## Executive Summary and Explorations\n\n"
             "- I could not complete the requested analysis.\n"
@@ -1185,8 +1195,8 @@ def _plain_text_failure_result(text: str, error: Exception) -> AnalysisResult:
             "SignalPilot preserved the available failure details below.\n\n"
             "## Detailed Research\n\n"
             f"{detail}\n\n"
-            "## Confidence Score: 0\n\n"
-            "- No completed analysis result was produced."
+            "## Confidence Score: lower\n\n"
+            "- No relevant dbt model backed a completed final answer."
         ),
         gotchas=[
             "The agent did not emit the required FINAL_STATEMENT marker.",
@@ -1206,7 +1216,7 @@ def _timeout_failure_result(timeout_seconds: float) -> AnalysisResult:
     minutes = max(1, round(timeout_seconds / 60))
     return AnalysisResult(
         summary="Analysis timed out before completion.",
-        confidence_score=0.0,
+        confidence_score="lower",
         final_answer=(
             "## Executive Summary and Explorations\n\n"
             "- I could not complete the requested analysis.\n"
@@ -1218,8 +1228,8 @@ def _timeout_failure_result(timeout_seconds: float) -> AnalysisResult:
             "the notebook-first workflow within the allowed runtime. The "
             "request should be rerun after inspecting the agent event log for "
             "where progress stalled.\n\n"
-            "## Confidence Score: 0\n\n"
-            "- Confidence is 0 because the analysis did not complete."
+            "## Confidence Score: lower\n\n"
+            "- No relevant dbt model backed a completed final answer."
         ),
         gotchas=[
             "The notebook agent timed out before completion.",

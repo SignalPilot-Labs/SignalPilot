@@ -115,7 +115,7 @@ def test_trace_messages_render_final_statement_as_user_friendly_bullets(
                 "type": "text",
                 "content": (
                     'FINAL_STATEMENT: {"statement":"Revenue increased. Costs stayed flat.",'
-                    '"confidenceScore":0.8,"caveats":["Excludes refunds"],'
+                    '"confidenceScore":"medium","caveats":["Excludes refunds"],'
                     '"handoffNotes":["Used notebook SDK cells."]}'
                 ),
                 "created_at": 1_800_000_000,
@@ -132,11 +132,39 @@ def test_trace_messages_render_final_statement_as_user_friendly_bullets(
     assert "Findings:" in content
     assert "- Revenue increased." in content
     assert "- Costs stayed flat." in content
-    assert "Confidence: 0.8" in content
+    assert "Confidence: medium" in content
     assert "Gotchas / caveats:" in content
     assert "- Excludes refunds" in content
     assert "Method:" in content
     assert "- Used notebook SDK cells." in content
+
+
+def test_trace_messages_drop_numeric_confidence_from_final_statement(
+    monkeypatch,
+) -> None:
+    chat_endpoint = _load_chat_endpoint(monkeypatch)
+    trace_event_messages = chat_endpoint["_trace_event_messages"]
+
+    messages = trace_event_messages(
+        [
+            {
+                "idx": 1,
+                "type": "text",
+                "content": (
+                    'FINAL_STATEMENT: {"statement":"Revenue increased.",'
+                    '"confidenceScore":0.8,"caveats":[],"handoffNotes":[]}'
+                ),
+                "created_at": 1_800_000_000,
+            },
+        ]
+    )
+
+    payload = json.loads(messages[-1]["content"])
+    content = payload["content"]
+
+    assert "FINAL_STATEMENT" not in content
+    assert "Revenue increased." in content
+    assert "Confidence:" not in content
 
 
 def test_trace_messages_render_plan_and_progress_markers_readably(

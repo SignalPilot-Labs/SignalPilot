@@ -54,7 +54,7 @@ def test_trace_loader_extracts_latest_worker_plan_progress_and_final_statement()
                 "idx": 4,
                 "type": "text",
                 "content": (
-                    'FINAL_STATEMENT: {"statement":"Revenue increased.","confidenceScore":0.8,'
+                    'FINAL_STATEMENT: {"statement":"Revenue increased.","confidenceScore":"high",'
                     '"caveats":["Excludes refunds"],"handoffNotes":["Used notebook SDK."]}'
                 ),
             },
@@ -83,9 +83,33 @@ def test_trace_loader_extracts_latest_worker_plan_progress_and_final_statement()
     assert packet.latest_progress.current_step == "Inspect schema"
     assert packet.final_statement is not None
     assert packet.final_statement.statement == "Revenue increased."
-    assert packet.final_statement.confidence_score == 0.8
+    assert packet.final_statement.confidence_score == "high"
     assert packet.charts[0]["title"] == "Revenue trend"
     assert packet.status == "done"
+
+
+def test_trace_loader_drops_numeric_confidence_score() -> None:
+    packet = load_delivery_packet_from_events(
+        [
+            {
+                "idx": 1,
+                "type": "text",
+                "content": (
+                    'FINAL_STATEMENT: {"statement":"Revenue increased.",'
+                    '"confidenceScore":0.8,"caveats":[],"handoffNotes":[]}'
+                ),
+            }
+        ],
+        status_payload={"status": "Done"},
+    )
+
+    assert packet.final_statement is not None
+    assert packet.final_statement.confidence_score is None
+
+    delivery = fallback_delivery(packet)
+    status = delivery_result_to_status(delivery, packet)
+
+    assert "confidenceScore" not in status
 
 
 @pytest.mark.asyncio
@@ -159,7 +183,7 @@ def test_trace_control_markers_are_redacted_into_metadata_for_delivery() -> None
         "- Revenue increased.\n"
         "- Costs stayed flat.\n\n"
         'FINAL_STATEMENT: {"statement":"Revenue increased. Costs stayed flat.",'
-        '"confidenceScore":0.8,"caveats":["Excludes refunds"],'
+        '"confidenceScore":"medium","caveats":["Excludes refunds"],'
         '"handoffNotes":["Used notebook SDK."]}'
     )
 
@@ -180,7 +204,7 @@ def test_trace_control_markers_are_redacted_into_metadata_for_delivery() -> None
 
     assert packet.final_statement is not None
     assert packet.final_statement.statement == "Revenue increased. Costs stayed flat."
-    assert packet.final_statement.confidence_score == 0.8
+    assert packet.final_statement.confidence_score == "medium"
     assert packet.final_statement.caveats == ["Excludes refunds"]
     assert packet.final_statement.handoff_notes == ["Used notebook SDK."]
 
@@ -243,7 +267,7 @@ async def test_delivery_renderer_falls_back_to_final_statement_without_model() -
                 "idx": 1,
                 "type": "text",
                 "content": (
-                    'FINAL_STATEMENT: {"statement":"Revenue increased.","confidenceScore":0.8,'
+                    'FINAL_STATEMENT: {"statement":"Revenue increased.","confidenceScore":"high",'
                     '"caveats":["Excludes refunds"],"handoffNotes":["Used notebook SDK."]}'
                 ),
             }
@@ -258,10 +282,10 @@ async def test_delivery_renderer_falls_back_to_final_statement_without_model() -
 
     assert delivery.slack_message == "- Revenue increased."
     assert status["finalAnswer"] == "- Revenue increased."
-    assert status["confidenceScore"] == 0.8
+    assert status["confidenceScore"] == "high"
     assert "*Analysis complete*" in slack_text
     assert "- Revenue increased." in slack_text
-    assert "*Confidence:* 0.8" in slack_text
+    assert "*Confidence:* high" in slack_text
     assert "<https://app.test/projects?file=analysis.py|Open authenticated notebook>" in slack_text
 
 
@@ -275,7 +299,7 @@ async def test_delivery_renderer_empty_api_key_ignores_server_env(monkeypatch: p
                 "type": "text",
                 "content": (
                     'FINAL_STATEMENT: {"statement":"Revenue increased.",'
-                    '"confidenceScore":0.8,"caveats":[],"handoffNotes":[]}'
+                    '"confidenceScore":"high","caveats":[],"handoffNotes":[]}'
                 ),
             }
         ],
@@ -305,7 +329,7 @@ async def test_delivery_renderer_defaults_to_sonnet_model(monkeypatch: pytest.Mo
                 "type": "text",
                 "content": (
                     'FINAL_STATEMENT: {"statement":"Revenue increased.",'
-                    '"confidenceScore":0.8,"caveats":[],"handoffNotes":[]}'
+                    '"confidenceScore":"high","caveats":[],"handoffNotes":[]}'
                 ),
             }
         ],
@@ -410,7 +434,7 @@ async def test_delivery_renderer_prompt_requires_separate_bullet_lines() -> None
                 "type": "text",
                 "content": (
                     'FINAL_STATEMENT: {"statement":"Revenue increased. Costs stayed flat.",'
-                    '"confidenceScore":0.8,"caveats":[],"handoffNotes":[]}'
+                    '"confidenceScore":"high","caveats":[],"handoffNotes":[]}'
                 ),
             }
         ],

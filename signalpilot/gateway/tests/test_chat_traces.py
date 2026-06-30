@@ -268,7 +268,7 @@ def test_slack_progress_sanitizer_extracts_signals_without_findings() -> None:
             "type": "text",
             "content": (
                 '{"finalAnswer":"Revenue was 2,628.88 across 220 completed transfers",'
-                '"confidenceScore":0.82}'
+                '"confidenceScore":"high"}'
             ),
             "created_at": 103.0,
         },

@@ -279,7 +279,7 @@ def test_analysis_agent_runs_from_project_root(tmp_path, monkeypatch) -> None:
         yield AgentEvent(
             type="text",
             content=(
-                'FINAL_STATEMENT: {"statement":"Done","confidenceScore":0.9,'
+                'FINAL_STATEMENT: {"statement":"Done","confidenceScore":"high",'
                 '"caveats":[],"handoffNotes":["Notebook-executed SDK cells."]}'
             ),
         )
@@ -342,6 +342,23 @@ def test_analysis_agent_model_prefers_env_override(monkeypatch) -> None:
     assert notion_analysis._analysis_agent_model() == "claude-sonnet-worker-test"
 
 
+def test_parse_final_statement_preserves_only_confidence_labels() -> None:
+    for label in ("high", "medium", "lower"):
+        result = notion_analysis._parse_final_statement_result(
+            'FINAL_STATEMENT: {"statement":"Done","confidenceScore":"'
+            f'{label}","caveats":[],"handoffNotes":[]}}'
+        )
+
+        assert result.confidence_score == label
+
+    numeric_result = notion_analysis._parse_final_statement_result(
+        'FINAL_STATEMENT: {"statement":"Done","confidenceScore":0.9,'
+        '"caveats":[],"handoffNotes":[]}'
+    )
+
+    assert numeric_result.confidence_score is None
+
+
 def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
     prompt = notion_analysis._analysis_prompt(_record(), _body())
 
@@ -364,13 +381,14 @@ def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
     assert "Do not add request metadata variables" in prompt
     assert "do not rename this heading" in prompt
     assert "`### Gotchas / Caveats`" in prompt
-    assert "`### Confidence Score: X`" in prompt
+    assert "`### Confidence Score: high|medium|lower`" in prompt
     assert "assumptions used" in prompt
     assert "exclusions/not-included items" in prompt
     assert "known gaps" in prompt
     assert "sensitivity" in prompt
+    assert "dbt evidence path" in prompt
     assert "source tables, filters, validation checks" in prompt
-    assert "issues\n       that would lower or raise confidence" in prompt
+    assert "issues\n       that would change the confidence label" in prompt
     assert "repeated finding branch" in prompt
     assert "`### Finding: ...`" in prompt
     assert "1-3 sentences explaining" in prompt
@@ -397,7 +415,7 @@ def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
     assert '"Evidence Trace"' not in prompt
     assert "Mermaid" not in prompt
     assert "top-line result" not in prompt
-    assert "confidence score/methodology rationale" in prompt
+    assert "dbt evidence confidence label/methodology rationale" in prompt
     assert "Queries must not be buried" in prompt
     assert "Previous discussion messages:" in prompt
     assert "Previous Notion discussion messages:" not in prompt
@@ -433,6 +451,13 @@ def test_analysis_prompt_injects_warm_context_without_changing_output_contract()
     assert "Never use raw machine" in prompt
     assert 'status enums such as `"in_progress"`' in prompt
     assert "FINAL_STATEMENT:" in prompt
+    assert '"confidenceScore": "high"' in prompt
+    assert (
+        'confidenceScore must be exactly "high", "medium", or "lower"'
+        in prompt
+    )
+    assert "number from 0.0 to 1.0" not in prompt
+    assert "numeric probability" in prompt
     assert "notionCharts" in prompt
     assert "Do not include slackMessage, notionComment, finalAnswer, notionCharts" in prompt
     assert '"Executive Summary and Explorations" cell' in prompt

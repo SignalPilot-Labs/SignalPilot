@@ -354,6 +354,7 @@ async def test_process_routed_comment_event_uses_user_secret_for_delivery_render
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     render_api_keys: list[str | None] = []
+    property_updates: list[dict[str, object]] = []
     install = NotionInstallation(
         id="install-1",
         org_id="org-1",
@@ -406,8 +407,8 @@ async def test_process_routed_comment_event_uses_user_secret_for_delivery_render
     async def create_request_page(*args, **kwargs):
         return {"id": "request-page-1", "url": "https://notion.test/request-page-1"}
 
-    async def update_page_properties(*args, **kwargs):
-        return None
+    async def update_page_properties(_token, _page_id, properties):
+        property_updates.append(properties)
 
     async def append_page_blocks(*args, **kwargs):
         return None
@@ -455,7 +456,7 @@ async def test_process_routed_comment_event_uses_user_secret_for_delivery_render
             slack_message="- Done",
             notion_comment="- Done",
             final_answer="- Done",
-            confidence_score=1.0,
+            confidence_score="high",
         )
 
     async def upload_chart_images_to_notion(_token, status, _runtime):
@@ -488,6 +489,10 @@ async def test_process_routed_comment_event_uses_user_secret_for_delivery_render
 
     assert result.status == "processed"
     assert render_api_keys == ["sk-ant-user"]
+    confidence_updates = [update["Confidence score"] for update in property_updates if "Confidence score" in update]
+    assert confidence_updates
+    assert "number" not in confidence_updates[-1]
+    assert _rich_text_content(confidence_updates[-1]["rich_text"]) == "high"
 
 
 def test_public_signalpilot_url_preserves_durable_notebooks_trail_url() -> None:
@@ -894,13 +899,13 @@ def test_failure_comment_rich_text_links_page_and_marks_error_as_code() -> None:
 
 def test_analysis_detail_blocks_render_markdown_as_notion_blocks() -> None:
     status = {
-        "confidenceScore": 0.82,
+        "confidenceScore": "high",
         "finalAnswer": (
             "## Executive Summary and Explorations\n\n"
             "- Revenue increased in `orders`.\n\n"
             "## Detailed Research\n\n"
             "See [chart](https://charts.test/revenue.png).\n\n"
-            "## Confidence Score: 0.82\n\n"
+            "## Confidence Score: high\n\n"
             "- Source data was complete."
         ),
         "gotchas": ["Source data was complete."],
@@ -922,7 +927,7 @@ def test_analysis_detail_blocks_render_markdown_as_notion_blocks() -> None:
     )
     assert any(
         block["type"] == "heading_2"
-        and block["heading_2"]["rich_text"][0]["text"]["content"] == "Confidence Score: 0.82"
+        and block["heading_2"]["rich_text"][0]["text"]["content"] == "Confidence Score: high"
         and block["heading_2"].get("is_toggleable") is True
         for block in blocks
     )
@@ -942,7 +947,7 @@ def test_analysis_detail_blocks_render_markdown_as_notion_blocks() -> None:
 
 def test_analysis_detail_blocks_render_markdown_tables_and_bold_text() -> None:
     status = {
-        "confidenceScore": 0.72,
+        "confidenceScore": "medium",
         "finalAnswer": (
             "## Executive Summary and Explorations\n\n"
             "**MapleCloud Software (79.3)** dominates.\n\n"
@@ -953,7 +958,7 @@ def test_analysis_detail_blocks_render_markdown_tables_and_bold_text() -> None:
             "|---------|---------------|-----------------|\n"
             "| Canopy Industrial Supply | 12.95% | +2.72 pp |\n"
             "| MapleCloud Software | 10.33% | +2.83 pp |\n\n"
-            "## Confidence Score: 0.72\n\n"
+            "## Confidence Score: medium\n\n"
             "- Strong evidence."
         ),
         "gotchas": ["Strong evidence."],

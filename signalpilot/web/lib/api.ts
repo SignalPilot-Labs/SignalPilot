@@ -820,6 +820,7 @@ export const getNotionOAuthPages = (installationId: string, query?: string) => {
   return request<NotionPageOption[]>(`/api/integrations/notion/oauth/${installationId}/pages${qs}`);
 };
 export type NotionProvisionPayload = {
+  sibling_page_id?: string | null;
   parent_page_id?: string | null;
   default_project_id?: string | null;
   default_branch?: string;

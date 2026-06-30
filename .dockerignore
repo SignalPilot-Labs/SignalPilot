@@ -18,4 +18,6 @@ __pycache__
 *.pyc
 node_modules
 .next
+signalpilot/web/node_modules
 signalpilot/web/.next
+signalpilot/web/.turbo

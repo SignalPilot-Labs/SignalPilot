@@ -1,6 +1,8 @@
+export type ConfidenceScoreLabel = "high" | "medium" | "lower";
+
 export interface FinalJsonSummary {
   summary: string;
-  confidenceScore: number | null;
+  confidenceScore: ConfidenceScoreLabel | null;
   finalAnswer: string;
   gotchas: string[];
   analysisMethod: string;
@@ -85,6 +87,14 @@ function chartArray(value: unknown): Array<{ title?: string; url?: string }> {
     }));
 }
 
+function confidenceScoreLabel(value: unknown): ConfidenceScoreLabel | null {
+  if (typeof value !== "string") {return null;}
+  if (value === "high" || value === "medium" || value === "lower") {
+    return value;
+  }
+  return null;
+}
+
 export function parseFinalJsonSummary(
   content: string,
 ): FinalJsonSummary | null {
@@ -131,10 +141,7 @@ function summarizeParsedFinalJson(parsed: unknown): FinalJsonSummary | null {
   const confidence = object.confidenceScore ?? object.confidence_score;
   return {
     summary: String(object.summary ?? ""),
-    confidenceScore:
-      typeof confidence === "number" && Number.isFinite(confidence)
-        ? confidence
-        : null,
+    confidenceScore: confidenceScoreLabel(confidence),
     finalAnswer: String(object.finalAnswer ?? object.final_answer ?? ""),
     gotchas: stringArray(object.gotchas),
     analysisMethod: String(

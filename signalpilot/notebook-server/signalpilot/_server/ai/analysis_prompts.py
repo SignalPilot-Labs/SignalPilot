@@ -128,16 +128,17 @@ Required workflow:
      Source prompt. Do not add request metadata variables or executable analysis
      code to this first cell.
    - Replace the "Executive Summary and Explorations" cell with the final
-     answer summary plus clearly documented confidence and caveats. Keep it as a
-     code-hidden markdown cell and do not rename this heading. Inside this cell,
-     include concise subsections for:
+     answer summary plus the dbt evidence confidence label and caveats. Keep it
+     as a code-hidden markdown cell and do not rename this heading. Inside this
+     cell, include concise subsections for:
      - the executive answer bullets;
      - `### Gotchas / Caveats`, explicitly separating assumptions used,
        exclusions/not-included items, known gaps, and sensitivity notes when
        relevant;
-     - `### Confidence Score: X`, with a clear methodology/rationale covering
+     - `### Confidence Score: high|medium|lower`, with a clear
+       methodology/rationale covering the dbt evidence path,
        source tables, filters, validation checks that passed, and the issues
-       that would lower or raise confidence.
+       that would change the confidence label.
    - Replace the "Analysis steps" cell with the first branch-style claim, then
      interleave supporting code/query cells directly beneath that branch. Add the
      next branch heading only when its supporting cells immediately follow. Do
@@ -207,9 +208,9 @@ Required workflow:
    answer must live in the notebook.
 8. Before emitting FINAL_STATEMENT, update the notebook's "Executive Summary
    and Explorations" cell with the final answer summary, the gotchas/caveats
-   bullets, and the confidence score/methodology rationale. Keep the exact
-   heading text. Keep detailed query trace in the "Analysis steps" branch cells
-   instead of duplicating it all in the summary.
+   bullets, and the dbt evidence confidence label/methodology rationale. Keep
+   the exact heading text. Keep detailed query trace in the "Analysis steps"
+   branch cells instead of duplicating it all in the summary.
 
 Completion checklist before FINAL_STATEMENT:
 - The live notebook defines `sp` in exactly one notebook cell. It must not repeat
@@ -227,8 +228,9 @@ Completion checklist before FINAL_STATEMENT:
 - The "Executive Summary and Explorations" cell contains clearly documented
   Gotchas / Caveats and Confidence Score sections. Gotchas must name the
   assumptions used, exclusions/not-included items, known gaps, and meaningful
-  sensitivity risks. Confidence must explain the methodology, source data,
-  filters, validation checks, and what could change the score.
+  sensitivity risks. Confidence must explain the dbt evidence path,
+  methodology, source data, filters, validation checks, and what could change
+  the label.
 - The notebook does not use hardcoded `pd.DataFrame({{...}})` literals as a
   substitute for governed source queries.
 - The notebook does not reuse top-level helper variable names across cells.
@@ -264,17 +266,25 @@ Previous discussion messages:
 When the analysis is complete, your final assistant message must be
 user-friendly and audit-ready for the notebook chat thread:
 - Start with a concise bullet-point answer in normal user language.
-- Include confidence and the most important caveats as readable bullets.
+- Include the dbt evidence confidence label and the most important caveats as
+  readable bullets.
 - Emit exactly one parseable FINAL_STATEMENT control-only line for the gateway
   orchestrator after the user-facing bullets. This line is extracted and
   removed from stored/displayed trace content; do not introduce it, describe it,
   or treat it as part of the user-visible answer:
-`FINAL_STATEMENT: {{ "statement": "...", "confidenceScore": 0.0, "caveats": ["..."], "handoffNotes": ["..."] }}`
+`FINAL_STATEMENT: {{ "statement": "...", "confidenceScore": "high", "caveats": ["..."], "handoffNotes": ["..."] }}`
 
 - statement is the same compact answer to the user's request, grounded in the
   notebook-executed evidence. Keep it user-facing: short sentences or bullet-like
   clauses, not a dense paragraph.
-- confidenceScore is a number from 0.0 to 1.0.
+- confidenceScore must be exactly "high", "medium", or "lower". It is a dbt
+  evidence-quality label, not model certainty and not a numeric probability.
+- Use "high" when the final answer uses a relevant materialized dbt model.
+- Use "medium" when dbt code or manifest context informed the analysis, but the
+  final query used raw or staging tables.
+- Use "lower" when no relevant dbt model backed the final answer.
+- Raw validation/probe queries are allowed; choose the label from the evidence
+  path backing the final business claim, not every query in the notebook.
 - caveats name assumptions, exclusions/not-included items, known gaps, and
   sensitivity risks.
 - handoffNotes summarize the method, source data, filters, validation checks,

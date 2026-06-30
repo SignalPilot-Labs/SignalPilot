@@ -83,10 +83,16 @@ class NotionPageOption(BaseModel):
 class NotionProvisionRequest(BaseModel):
     """Provision SignalPilot Notion resources.
 
-    When parent_page_id is omitted, resources are created privately at the
-    workspace level for the authorizing Notion user.
+    By default SignalPilot creates or reuses a "SignalPilot Integration" page
+    using the pages visible to the Notion connection, then puts its trigger page
+    and requests database inside that integration page.
+
+    sibling_page_id and parent_page_id are retained for direct placement
+    compatibility. Workspace-level creation places resources in the authorizing
+    user's Private section and is not used by automatic provisioning.
     """
 
+    sibling_page_id: str | None = Field(default=None, min_length=1, max_length=100)
     parent_page_id: str | None = Field(default=None, min_length=1, max_length=100)
     default_project_id: str | None = Field(default=None, min_length=1, max_length=200)
     default_branch: str = Field(default="main", min_length=1, max_length=100)

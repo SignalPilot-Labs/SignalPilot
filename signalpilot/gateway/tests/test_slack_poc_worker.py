@@ -305,7 +305,7 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
         events.append("poll")
         assert events.index("db_exit") < events.index("start")
         await asyncio.wait_for(progress_seen.wait(), timeout=1)
-        return {"status": "Done", "notionComment": "Done", "confidenceScore": 1.0}
+        return {"status": "Done", "notionComment": "Done", "confidenceScore": "high"}
 
     monkeypatch.setattr(worker_module.notebook_analysis, "resolve_analysis_route_for_defaults", resolve_route)
     monkeypatch.setattr(worker_module, "ensure_analysis_notebook_session", ensure_session)
@@ -329,7 +329,7 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
             slack_message="- Done",
             notion_comment="- Done",
             final_answer="- Done",
-            confidence_score=1.0,
+            confidence_score="high",
         )
 
     monkeypatch.setattr(worker_module, "delivery_api_key_for_user", delivery_api_key_for_user)

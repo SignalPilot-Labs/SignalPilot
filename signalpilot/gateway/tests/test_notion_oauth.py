@@ -637,6 +637,36 @@ async def test_existing_trigger_page_receives_bot_icon(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
+async def test_existing_trigger_page_ignores_bot_icon_permission_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_list_block_children(_api_key: str, _block_id: str):
+        return [
+            {
+                "id": "trigger-page-123",
+                "type": "child_page",
+                "child_page": {"title": notion_client.SIGNALPILOT_TRIGGER_PAGE_TITLE},
+            }
+        ]
+
+    async def fail_update_page_icon(*_args, **_kwargs):
+        raise _notion_http_error(403, method="PATCH", path="/v1/pages/trigger-page-123")
+
+    async def fail_create_page(*_args, **_kwargs):
+        raise AssertionError("existing trigger page should be reused")
+
+    monkeypatch.setattr(notion_client, "list_block_children", fake_list_block_children)
+    monkeypatch.setattr(notion_client, "update_page_icon", fail_update_page_icon)
+    monkeypatch.setattr(notion_client, "create_page", fail_create_page)
+
+    page = await notion_client.ensure_child_page(
+        "token",
+        "parent-page",
+        icon=notion_client.SIGNALPILOT_TRIGGER_PAGE_ICON,
+    )
+
+    assert page["id"] == "trigger-page-123"
+
+
+@pytest.mark.asyncio
 async def test_provisioning_creates_container_page_as_sibling(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict] = []
 

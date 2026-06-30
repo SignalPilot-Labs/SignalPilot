@@ -491,7 +491,13 @@ async def ensure_child_page(
         if block.get("type") == "child_page" and block.get("child_page", {}).get("title") == title:
             page_id = block.get("id", "")
             if icon and page_id:
-                await update_page_icon(api_key, page_id, icon)
+                try:
+                    await update_page_icon(api_key, page_id, icon)
+                except httpx.HTTPStatusError as exc:
+                    logger.warning(
+                        "Notion trigger page icon update failed; continuing with existing page: %s",
+                        http_error_summary(exc),
+                    )
             return {
                 "id": page_id,
                 "title": title,

@@ -16,13 +16,16 @@ SignalPilot can launch notebook-backed data analysis from Notion comments. In Si
 
 1. Open SignalPilot Cloud and go to **Integrations**.
 2. Click **Connect Notion**.
-3. Approve the Notion OAuth install and grant SignalPilot access to the workspace pages where requests should be allowed.
-4. Back in SignalPilot, click **Provision workspace**.
+3. Approve the Notion OAuth install and grant SignalPilot access to the shared workspace or teamspace area where SignalPilot should create its resources.
+4. Back in SignalPilot, choose a default project, then click **Provision integration**.
 
 Provisioning creates the Notion resources SignalPilot needs:
 
-- A `SignalPilot` page that acts as the mention trigger.
-- A `SignalPilot Requests` database where requests and generated notebook runs are tracked.
+- A `SignalPilot Integration` page reused from the selected Notion area when present, or created automatically beside a visible child page when Notion exposes a page parent.
+- A `SignalPilot` page inside `SignalPilot Integration` that acts as the mention trigger.
+- A `SignalPilot Requests` database inside `SignalPilot Integration` where requests and generated notebook runs are tracked.
+
+If Notion only exposes top-level pages and SignalPilot cannot create a sibling page, create a page named `SignalPilot Integration` in the shared workspace or teamspace area, share it with the SignalPilot connection, then provision again.
 
 ## Add your Anthropic key
 

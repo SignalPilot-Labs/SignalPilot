@@ -139,6 +139,12 @@ def _allowed_redirect_origins() -> set[str]:
     return origins
 
 
+def _same_notion_id(left: str | None, right: str | None) -> bool:
+    if not left or not right:
+        return left == right
+    return notion_client.normalize_id(left) == notion_client.normalize_id(right)
+
+
 def _is_safe_redirect_target(target: str) -> bool:
     if not target or target.startswith(("//", "\\")):
         return False
@@ -428,6 +434,18 @@ async def list_notion_oauth_pages(
     return [NotionPageOption(**page) for page in pages]
 
 
+async def _probe_comment_read_capability(token: str, trigger_page_id: str) -> None:
+    try:
+        await notion_client.list_comments(token, trigger_page_id)
+    except httpx.HTTPStatusError as exc:
+        if notion_client.is_comment_read_capability_error(exc):
+            raise
+        logger.warning(
+            "Notion comment-read probe failed during provisioning; continuing because resources were provisioned: %s",
+            notion_client.http_error_summary(exc),
+        )
+
+
 @router.post("/oauth/{installation_id}/provision", dependencies=[RequireScope("write")])
 async def provision_notion_oauth_installation(
     installation_id: str,
@@ -435,12 +453,7 @@ async def provision_notion_oauth_installation(
     store: StoreD,
     _role: OrgAdmin,
 ) -> NotionProvisionResponse:
-    """Provision the SignalPilot trigger page and Requests database.
-
-    By default the resources are created at workspace level in the installing
-    user's private Notion section. A parent_page_id can still be supplied for
-    the older advanced setup path.
-    """
+    """Provision SignalPilot Notion resources under a shared integration page."""
     existing = await store.get_notion_oauth_installation(installation_id)
     if body.default_project_id and await store.get_workspace_project(body.default_project_id) is None:
         raise HTTPException(status_code=404, detail="Default project not found")
@@ -451,18 +464,29 @@ async def provision_notion_oauth_installation(
         and existing_config.requests_data_source_id
         and existing_config.requests_database_page_id
     )
+    existing_parent_page_id = existing_config.parent_page_id if existing_config else None
+    target_parent_page_id = body.parent_page_id or existing_parent_page_id
+    should_reprovision = bool(
+        body.sibling_page_id
+        or not existing_is_provisioned
+        or not _same_notion_id(target_parent_page_id, existing_parent_page_id)
+    )
 
     async def _operation(token: str):
-        if existing_is_provisioned and existing_config is not None:
+        if not should_reprovision and existing_config is not None:
             provisioned = {
                 "parent_page_id": existing_config.parent_page_id,
                 "trigger_page_id": existing_config.trigger_page_id,
                 "requests_data_source_id": existing_config.requests_data_source_id,
                 "requests_database_page_id": existing_config.requests_database_page_id,
             }
+        elif body.sibling_page_id:
+            provisioned = await notion_client.provision_signalpilot_resources_for_sibling(token, body.sibling_page_id)
+        elif target_parent_page_id:
+            provisioned = await notion_client.provision_signalpilot_resources(token, target_parent_page_id)
         else:
-            provisioned = await notion_client.provision_signalpilot_resources(token, body.parent_page_id)
-        await notion_client.list_comments(token, str(provisioned["trigger_page_id"]))
+            provisioned = await notion_client.provision_signalpilot_resources_auto(token)
+        await _probe_comment_read_capability(token, str(provisioned["trigger_page_id"]))
         return provisioned
 
     try:
@@ -477,6 +501,8 @@ async def provision_notion_oauth_installation(
                 ),
             ) from exc
         raise HTTPException(status_code=exc.response.status_code, detail=notion_client.http_error_summary(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     installation = await store.save_notion_oauth_installation_config(
         installation_id,

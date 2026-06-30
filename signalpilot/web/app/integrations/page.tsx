@@ -40,8 +40,12 @@ const PAID_TIERS = ["pro", "team", "enterprise", "unlimited"];
 
 function oauthStatus(installation: NotionOAuthInstallation): { label: string; tone: "healthy" | "warning" | "error" | "unknown" } {
   if (installation.status === "disconnected") return { label: "disconnected", tone: "error" };
-  if (installation.config?.enabled && installation.config?.default_project_id) return { label: "active", tone: "healthy" };
-  if (installation.config?.enabled && !installation.config?.default_project_id) return { label: "needs setup", tone: "warning" };
+  if (installation.config?.enabled && installation.config?.default_project_id && installation.config?.parent_page_id) {
+    return { label: "active", tone: "healthy" };
+  }
+  if (installation.config?.enabled && (!installation.config?.default_project_id || !installation.config?.parent_page_id)) {
+    return { label: "needs setup", tone: "warning" };
+  }
   if (installation.status === "connected") return { label: "needs setup", tone: "warning" };
   return { label: installation.status || "unknown", tone: "unknown" };
 }
@@ -216,7 +220,7 @@ function IntegrationsContent() {
         if (!result) return;
 
         const installation = result.notionInstallations.find((candidate) => candidate.id === oauthInstallationId);
-        if (installation?.config?.enabled) {
+        if (installation?.config?.enabled && installation.config.default_project_id && installation.config.parent_page_id) {
           if (active) toast("notion connected", "success");
           return;
         }
@@ -225,7 +229,7 @@ function IntegrationsContent() {
           return;
         }
 
-        if (active) toast("notion connected; select a project", "success");
+        if (active) toast("notion connected; complete setup", "success");
       } catch (e) {
         if (active) {
           setLoading(false);
@@ -263,6 +267,7 @@ function IntegrationsContent() {
   }
 
   async function handleProvision(installationId: string) {
+    const installation = oauthInstallations.find((candidate) => candidate.id === installationId);
     const selectedProjectId = projectSelections[installationId] || "";
     const selectedProject = workspaceProjects.find((project) => project.id === selectedProjectId);
     if (!selectedProject) {
@@ -270,9 +275,7 @@ function IntegrationsContent() {
       return;
     }
 
-    const installation = oauthInstallations.find((candidate) => candidate.id === installationId);
     const alreadyProvisioned = Boolean(installation?.config?.enabled);
-
     setProvisioningId(installationId);
     try {
       await provisionNotionOAuthInstallation(installationId, {
@@ -280,7 +283,7 @@ function IntegrationsContent() {
         default_branch: selectedProject.default_branch || "main",
         analysis_branch_mode: "per_request",
       });
-      toast(alreadyProvisioned ? "default project saved" : "notion workspace provisioned", "success");
+      toast(alreadyProvisioned ? "notion setup saved" : "notion workspace provisioned", "success");
       await fetchIntegrations();
     } catch (e) {
       toast(`provision failed: ${e}`, "error");
@@ -346,7 +349,7 @@ function IntegrationsContent() {
   const hasConnectedInstall = visibleInstallations.length > 0;
   const hasConnectedSlackInstall = visibleSlackInstallations.length > 0;
   const activeOauthCount = visibleInstallations.filter(
-    (installation) => installation.config?.enabled && installation.config?.default_project_id,
+    (installation) => installation.config?.enabled && installation.config?.default_project_id && installation.config?.parent_page_id,
   ).length;
   const activeSlackCount = visibleSlackInstallations.filter(
     (installation) => installation.config?.enabled && installation.config?.default_project_id,
@@ -421,6 +424,7 @@ function IntegrationsContent() {
 
         {visibleInstallations.map((installation) => {
           const status = oauthStatus(installation);
+          const parentUrl = notionPageUrl(installation.config?.parent_page_id);
           const triggerUrl = notionPageUrl(installation.config?.trigger_page_id);
           const requestsUrl = notionPageUrl(installation.config?.requests_database_page_id);
           return (
@@ -436,6 +440,20 @@ function IntegrationsContent() {
                     <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider uppercase">{status.label}</span>
                   </div>
                   <div className="space-y-1 text-[11px] text-[var(--color-text-dim)] tracking-wider">
+                    <p className="flex items-center gap-1.5">
+                      <span>
+                        integration page:
+                        {!installation.config?.parent_page_id && (
+                          <span className="ml-1 text-[var(--color-error)]">*</span>
+                        )}
+                      </span>
+                      <span className="text-[var(--color-text-muted)] font-mono">{shortenedId(installation.config?.parent_page_id)}</span>
+                      {parentUrl && (
+                        <a href={parentUrl} target="_blank" rel="noopener noreferrer" title="open integration page in Notion" aria-label="open integration page in Notion" className="inline-flex h-4 w-4 items-center justify-center text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors">
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      )}
+                    </p>
                     <p className="flex items-center gap-1.5">
                       <span>trigger page:</span>
                       <span className="text-[var(--color-text-muted)] font-mono">{shortenedId(installation.config?.trigger_page_id)}</span>
@@ -496,50 +514,53 @@ function IntegrationsContent() {
                 const selectedProjectId = projectSelections[installation.id] ?? configuredProjectId;
                 const selectedProject = selectedProjectId ? projectsById.get(selectedProjectId) : null;
                 const projectChanged = selectedProjectId !== configuredProjectId;
+                const configuredParentPageId = installation.config?.parent_page_id || "";
                 const canSubmitProject =
                   Boolean(selectedProject) &&
                   provisioningId !== installation.id &&
-                  (!installation.config?.enabled || projectChanged);
+                  (!installation.config?.enabled || projectChanged || !configuredParentPageId);
 
                 return (
-                  <div className="border-t border-[var(--color-border)] pt-4">
-                    <label htmlFor={`notion-project-${installation.id}`} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">
-                      default project
-                      <span className="ml-1 text-[var(--color-error)]">*</span>
-                    </label>
-                    <div className="flex flex-col sm:flex-row gap-2">
-                      <select
-                        id={`notion-project-${installation.id}`}
-                        value={selectedProjectId}
-                        onChange={(event) => {
-                          setProjectSelections((prev) => ({
-                            ...prev,
-                            [installation.id]: event.target.value,
-                          }));
-                        }}
-                        disabled={workspaceProjects.length === 0 || provisioningId === installation.id}
-                        className="min-w-0 flex-1 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none disabled:opacity-40"
-                      >
-                        <option value="">
-                          {workspaceProjects.length === 0 && !selectedProjectId ? "no active projects" : "select a project..."}
-                        </option>
-                        {selectedProjectId && !selectedProject && (
-                          <option value={selectedProjectId}>configured project unavailable</option>
-                        )}
-                        {workspaceProjects.map((project) => (
-                          <option key={project.id} value={project.id}>
-                            {projectLabel(project)}
+                  <div className="border-t border-[var(--color-border)] pt-4 space-y-3">
+                    <div>
+                      <label htmlFor={`notion-project-${installation.id}`} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">
+                        default project
+                        <span className="ml-1 text-[var(--color-error)]">*</span>
+                      </label>
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <select
+                          id={`notion-project-${installation.id}`}
+                          value={selectedProjectId}
+                          onChange={(event) => {
+                            setProjectSelections((prev) => ({
+                              ...prev,
+                              [installation.id]: event.target.value,
+                            }));
+                          }}
+                          disabled={workspaceProjects.length === 0 || provisioningId === installation.id}
+                          className="min-w-0 flex-1 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none disabled:opacity-40"
+                        >
+                          <option value="">
+                            {workspaceProjects.length === 0 && !selectedProjectId ? "no active projects" : "select a project..."}
                           </option>
-                        ))}
-                      </select>
-                      <button
-                        onClick={() => handleProvision(installation.id)}
-                        disabled={!canSubmitProject}
-                        className="flex items-center justify-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
-                      >
-                        {provisioningId === installation.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Database className="w-3 h-3" />}
-                        {installation.config?.enabled ? "save project" : "provision workspace"}
-                      </button>
+                          {selectedProjectId && !selectedProject && (
+                            <option value={selectedProjectId}>configured project unavailable</option>
+                          )}
+                          {workspaceProjects.map((project) => (
+                            <option key={project.id} value={project.id}>
+                              {projectLabel(project)}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => handleProvision(installation.id)}
+                          disabled={!canSubmitProject}
+                          className="flex items-center justify-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
+                        >
+                          {provisioningId === installation.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Database className="w-3 h-3" />}
+                          {installation.config?.enabled ? "save setup" : "provision integration"}
+                        </button>
+                      </div>
                     </div>
                   </div>
                 );

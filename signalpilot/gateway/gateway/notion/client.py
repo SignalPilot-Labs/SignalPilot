@@ -16,7 +16,12 @@ NOTION_AUTHORIZE_URL = "https://api.notion.com/v1/oauth/authorize"
 NOTION_API_VERSION = "2026-03-11"
 REQUEST_TIMEOUT = 15
 SIGNALPILOT_TRIGGER_PAGE_TITLE = "SignalPilot"
+SIGNALPILOT_TRIGGER_PAGE_ICON = {"type": "emoji", "emoji": "\U0001f916"}
+SIGNALPILOT_INTEGRATION_PAGE_TITLE = "SignalPilot Integration"
 SIGNALPILOT_REQUESTS_DATABASE_TITLE = "SignalPilot Requests"
+SIGNALPILOT_INTEGRATION_PAGE_CONTENT = (
+    "SignalPilot-created pages for Notion analysis requests. Keep this page shared with the SignalPilot connection."
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +79,14 @@ def _extract_page_title(page: dict) -> str:
             title_parts = prop.get("title", [])
             return "".join(t.get("plain_text", "") for t in title_parts)
     return "(untitled)"
+
+
+def _normalized_title(value: str) -> str:
+    return " ".join(value.split()).casefold()
+
+
+def _is_signalpilot_integration_page(page: dict) -> bool:
+    return _normalized_title(_extract_page_title(page)) == _normalized_title(SIGNALPILOT_INTEGRATION_PAGE_TITLE)
 
 
 def _plain_text(content: str) -> dict:
@@ -275,7 +288,11 @@ async def _fetch_blocks_recursive(
 
         if block.get("has_children", False):
             sub_lines, sub_children = await _fetch_blocks_recursive(
-                client, headers, block["id"], depth + 1, counter=counter,
+                client,
+                headers,
+                block["id"],
+                depth + 1,
+                counter=counter,
             )
             lines.extend(sub_lines)
             child_pages.extend(sub_children)
@@ -306,7 +323,10 @@ async def fetch_page(api_key: str, page_id: str) -> dict[str, str | list[dict[st
         title = _extract_page_title(page_data)
 
         lines, child_pages = await _fetch_blocks_recursive(
-            client, _headers(api_key), page_id, depth=0,
+            client,
+            _headers(api_key),
+            page_id,
+            depth=0,
         )
         content = "\n".join(lines)[:MAX_CONTENT_CHARS]
 
@@ -329,6 +349,7 @@ async def create_page(
     parent_page_id: str | None,
     title: str,
     content: str,
+    icon: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Create a page under a parent page, or privately at workspace level.
 
@@ -337,25 +358,29 @@ async def create_page(
         parent_page_id: The parent page ID, or None for workspace-private content.
         title: Page title.
         content: Plain text content for the page body.
+        icon: Optional Notion page icon object.
 
     Returns:
         Dict with keys: id, title, url.
     """
     blocks = _text_to_blocks(content)
+    body = {
+        "parent": _parent_payload(parent_page_id),
+        "properties": {
+            "title": {
+                "title": [{"type": "text", "text": {"content": title}}],
+            },
+        },
+        "children": blocks[:100],  # Notion limit: 100 blocks per request
+    }
+    if icon:
+        body["icon"] = icon
 
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         r = await client.post(
             f"{NOTION_API_BASE}/pages",
             headers=_headers(api_key),
-            json={
-                "parent": _parent_payload(parent_page_id),
-                "properties": {
-                    "title": {
-                        "title": [{"type": "text", "text": {"content": title}}],
-                    },
-                },
-                "children": blocks[:100],  # Notion limit: 100 blocks per request
-            },
+            json=body,
         )
         r.raise_for_status()
         data = r.json()
@@ -365,6 +390,14 @@ async def create_page(
         "title": title,
         "url": data.get("url", ""),
     }
+
+
+def _page_parent_page_id(page: dict) -> str | None:
+    parent = page.get("parent")
+    if not isinstance(parent, dict) or parent.get("type") != "page_id":
+        return None
+    value = parent.get("page_id")
+    return str(value) if value else None
 
 
 async def notion_json(
@@ -390,14 +423,7 @@ async def notion_json(
 
 async def list_parent_pages(api_key: str, query: str | None = None) -> list[dict[str, str]]:
     """List pages visible to an OAuth installation for setup."""
-    payload: dict = {
-        "filter": {"value": "page", "property": "object"},
-        "page_size": 50,
-    }
-    if query:
-        payload["query"] = query
-    data = await notion_json(api_key, "POST", "/search", json_body=payload)
-    pages = data.get("results", [])
+    pages = await search_visible_page_objects(api_key, query=query)
     return [
         {
             "id": page.get("id", ""),
@@ -407,6 +433,19 @@ async def list_parent_pages(api_key: str, query: str | None = None) -> list[dict
         for page in pages
         if page.get("id")
     ]
+
+
+async def search_visible_page_objects(api_key: str, query: str | None = None, page_size: int = 50) -> list[dict]:
+    """Return raw page objects visible to an OAuth installation."""
+    payload: dict = {
+        "filter": {"value": "page", "property": "object"},
+        "page_size": page_size,
+    }
+    if query:
+        payload["query"] = query
+    data = await notion_json(api_key, "POST", "/search", json_body=payload)
+    pages = data.get("results", [])
+    return [page for page in pages if isinstance(page, dict) and page.get("id")]
 
 
 async def list_block_children(api_key: str, block_id: str) -> list[dict]:
@@ -426,10 +465,17 @@ async def list_block_children(api_key: str, block_id: str) -> list[dict]:
             return children
 
 
+async def update_page_icon(api_key: str, page_id: str, icon: dict[str, str]) -> None:
+    """Set the icon on an existing Notion page."""
+    await notion_json(api_key, "PATCH", f"/pages/{page_id}", json_body={"icon": icon})
+
+
 async def ensure_child_page(
     api_key: str,
     parent_page_id: str | None,
     title: str = SIGNALPILOT_TRIGGER_PAGE_TITLE,
+    content: str = "Mention this page in a Notion comment to start SignalPilot analysis.",
+    icon: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Find or create the mentionable SignalPilot trigger page."""
     if parent_page_id is None:
@@ -437,22 +483,27 @@ async def ensure_child_page(
             api_key,
             None,
             title,
-            "Mention this page in a Notion comment to start SignalPilot analysis.",
+            content,
+            icon=icon,
         )
 
     for block in await list_block_children(api_key, parent_page_id):
         if block.get("type") == "child_page" and block.get("child_page", {}).get("title") == title:
+            page_id = block.get("id", "")
+            if icon and page_id:
+                await update_page_icon(api_key, page_id, icon)
             return {
-                "id": block.get("id", ""),
+                "id": page_id,
                 "title": title,
-                "url": f"https://www.notion.so/{normalize_id(block.get('id', ''))}",
+                "url": f"https://www.notion.so/{normalize_id(page_id)}",
             }
 
     return await create_page(
         api_key,
         parent_page_id,
         title,
-        "Mention this page in a Notion comment to start SignalPilot analysis.",
+        content,
+        icon=icon,
     )
 
 
@@ -524,7 +575,11 @@ async def ensure_requests_database(
 
 async def provision_signalpilot_resources(api_key: str, parent_page_id: str | None = None) -> dict[str, str | None]:
     """Create/fetch all Notion resources needed by SignalPilot analysis."""
-    trigger_page = await ensure_child_page(api_key, parent_page_id)
+    if not parent_page_id:
+        raise ValueError(
+            "Notion parent_page_id is required; workspace-level provisioning creates resources in Private."
+        )
+    trigger_page = await ensure_child_page(api_key, parent_page_id, icon=SIGNALPILOT_TRIGGER_PAGE_ICON)
     database_id, data_source_id = await ensure_requests_database(api_key, parent_page_id)
     return {
         "parent_page_id": parent_page_id,
@@ -532,6 +587,58 @@ async def provision_signalpilot_resources(api_key: str, parent_page_id: str | No
         "requests_database_page_id": database_id,
         "requests_data_source_id": data_source_id,
     }
+
+
+async def provision_signalpilot_resources_auto(api_key: str) -> dict[str, str | None]:
+    """Create/fetch SignalPilot resources using pages exposed by the Notion install."""
+    integration_pages = await search_visible_page_objects(
+        api_key,
+        query=SIGNALPILOT_INTEGRATION_PAGE_TITLE,
+        page_size=10,
+    )
+    for page in integration_pages:
+        if _is_signalpilot_integration_page(page):
+            return await provision_signalpilot_resources(api_key, str(page["id"]))
+
+    pages = await search_visible_page_objects(api_key, page_size=50)
+    for page in pages:
+        parent_page_id = _page_parent_page_id(page)
+        if parent_page_id:
+            container_page = await ensure_child_page(
+                api_key,
+                parent_page_id,
+                SIGNALPILOT_INTEGRATION_PAGE_TITLE,
+                SIGNALPILOT_INTEGRATION_PAGE_CONTENT,
+            )
+            return await provision_signalpilot_resources(api_key, container_page["id"])
+
+    raise ValueError(
+        f"Create a Notion page named {SIGNALPILOT_INTEGRATION_PAGE_TITLE!r} in the workspace or teamspace "
+        "shared with SignalPilot, make sure it is shared with the SignalPilot connection, then run provisioning again."
+    )
+
+
+async def provision_signalpilot_resources_for_sibling(api_key: str, sibling_page_id: str) -> dict[str, str | None]:
+    """Create/fetch the integration container beside a selected page."""
+    if not sibling_page_id:
+        raise ValueError("Notion sibling_page_id is required")
+    sibling_page = await retrieve_page(api_key, sibling_page_id)
+    parent_page_id = _page_parent_page_id(sibling_page)
+    if not parent_page_id:
+        if _extract_page_title(sibling_page).casefold() == SIGNALPILOT_INTEGRATION_PAGE_TITLE.casefold():
+            return await provision_signalpilot_resources(api_key, sibling_page_id)
+        raise ValueError(
+            "Selected Notion page does not expose a page parent. "
+            f"Choose a page whose parent is visible to the SignalPilot connection, or choose "
+            f"the existing {SIGNALPILOT_INTEGRATION_PAGE_TITLE!r} page."
+        )
+    container_page = await ensure_child_page(
+        api_key,
+        parent_page_id,
+        SIGNALPILOT_INTEGRATION_PAGE_TITLE,
+        SIGNALPILOT_INTEGRATION_PAGE_CONTENT,
+    )
+    return await provision_signalpilot_resources(api_key, container_page["id"])
 
 
 async def retrieve_page(api_key: str, page_id: str) -> dict:

@@ -12,6 +12,11 @@ ENV NEXT_PUBLIC_GATEWAY_URL=$NEXT_PUBLIC_GATEWAY_URL
 # Install dependencies before copying the full source so Docker can cache them.
 COPY signalpilot/web/package.json signalpilot/web/package-lock.json signalpilot/web/
 RUN cd signalpilot/web && npm install --legacy-peer-deps
+RUN cd signalpilot/web && \
+    case "$(uname -m)" in \
+      aarch64) npm install --legacy-peer-deps --no-save lightningcss-linux-arm64-musl@1.32.0 @tailwindcss/oxide-linux-arm64-musl@4.2.4 ;; \
+      x86_64) npm install --legacy-peer-deps --no-save lightningcss-linux-x64-musl@1.32.0 @tailwindcss/oxide-linux-x64-musl@4.2.4 ;; \
+    esac
 
 ARG SP_GATEWAY_INTERNAL_URL=http://gateway:3300
 ENV SP_GATEWAY_INTERNAL_URL=$SP_GATEWAY_INTERNAL_URL

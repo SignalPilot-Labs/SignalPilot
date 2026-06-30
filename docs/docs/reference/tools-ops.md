@@ -137,9 +137,42 @@ Propose a new knowledge entry after a run. Entries are auto-accepted.
 | `category` | string | Yes | One of: understanding, conventions, decisions, domain-rules, debugging, quirks |
 | `title` | string | Yes | Entry title |
 | `body` | string | Yes | Entry body |
-| `supersedes` | string | No | ID of a doc this entry replaces |
+| `overwrite` | boolean | No | Edit the existing doc (same scope/scope_ref/category/title) in place instead of rejecting it as a duplicate |
+| `supersedes` | string | No | Deprecated — passing any value behaves like `overwrite=true`. To retire a doc under a different title, use `archive_knowledge`. |
 
-**Returns:** Confirmation with the new doc ID.
+**Returns:** Confirmation with the new doc ID and `status` (`created` or `updated`).
+
+---
+
+### archive_knowledge
+
+Archive (soft-delete) a knowledge entry by ID. Archived entries are excluded from `search_knowledge` and `get_knowledge` but retained for audit.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `doc_id` | string | Yes | ID of the doc to archive |
+
+**Returns:** `status` of `archived`, `not_found`, or `already_archived`.
+
+---
+
+### manage_report
+
+Create or permanently delete a rendered HTML report. Reports appear in the web UI under `/reports` (and the "reports" tab on `/knowledge`), rendered in a sandboxed iframe. Unlike knowledge archival, report deletion is permanent — there is no undo.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `action` | string | Yes | `create` or `delete` |
+| `title` | string | For `create` | Report title |
+| `html` | string | For `create` | Full, self-contained HTML document (max 5 MB) |
+| `scope_ref` | string | No | Optional project grouping for `create` |
+| `report_id` | string | For `delete` | ID of the report to delete |
+
+**Returns:** On `create`, `status: created` with the report `id` and a shareable `url`. On `delete`, `status` of `deleted` or `not_found`.
 
 ---
 

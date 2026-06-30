@@ -27,7 +27,7 @@ class SnowflakeConnector(BaseConnector):
         self._connect_params: dict = {}
         self._credential_extras: dict = {}
         self._login_timeout: int = 15
-        self._network_timeout: int = 120
+        self._network_timeout: int = 150  # was 120 — large-warehouse schema pulls need headroom
         self._keepalive: bool = True
         self._keepalive_heartbeat: int = 900  # 15 min default
 
@@ -78,6 +78,10 @@ class SnowflakeConnector(BaseConnector):
                 "private_key_passphrase",
                 "oauth_access_token",
                 "auth_method",
+                "authenticator",
+                "passcode",
+                "snowflake_host",
+                "snowflake_protocol",
             ):
                 val = self._credential_extras.get(key)
                 if val:
@@ -98,15 +102,28 @@ class SnowflakeConnector(BaseConnector):
             "disable_ocsp_checks": params.get("disable_ocsp_checks", False),
         }
 
-        # Auth method priority: OAuth > Key-pair > Password (HEX pattern)
-        auth_method = params.get("auth_method", "").lower()
-        if auth_method == "oauth" or params.get("oauth_access_token"):
-            token = params.get("oauth_access_token")
+        # Host override + port/protocol — required for PrivateLink, China (.cn),
+        # SnowGov, and VPS accounts where the account identifier alone is insufficient.
+        # account is still passed (the connector requires it even with an explicit host).
+        if params.get("snowflake_host"):
+            connect_args["host"] = params["snowflake_host"]
+        if params.get("port"):
+            connect_args["port"] = int(params["port"])
+        if params.get("snowflake_protocol"):
+            connect_args["protocol"] = params["snowflake_protocol"]
+
+        # Auth dispatch. `authenticator` (or legacy `auth_method`) selects the method:
+        #   oauth | key_pair | pat | mfa | password | <Okta URL https://...>.
+        # Back-compat: an oauth token or a private_key alone still picks the right path.
+        authr = (params.get("authenticator") or params.get("auth_method") or "").strip()
+        al = authr.lower()
+        token = params.get("oauth_access_token")
+        if al == "oauth" or (token and al in ("", "oauth")):
             if not token:
                 raise RuntimeError("OAuth auth requires an access token (oauth_access_token)")
             connect_args["authenticator"] = "oauth"
             connect_args["token"] = token
-        elif params.get("private_key"):
+        elif al in ("key_pair", "keypair") or params.get("private_key"):
             try:
                 pk_bytes = self._load_private_key(
                     params["private_key"],
@@ -115,6 +132,19 @@ class SnowflakeConnector(BaseConnector):
                 connect_args["private_key"] = pk_bytes
             except Exception as e:
                 raise RuntimeError(f"Invalid private key: {e}") from e
+        elif authr.startswith("https://"):  # Okta native SSO (authenticator = Okta URL)
+            connect_args["authenticator"] = authr
+            if params.get("password"):
+                connect_args["password"] = params["password"]
+        elif al in ("mfa", "username_password_mfa"):
+            connect_args["authenticator"] = "username_password_mfa"
+            connect_args["password"] = params.get("password", "")
+            if params.get("passcode"):
+                connect_args["passcode"] = params["passcode"]
+        elif al == "pat":
+            # Programmatic Access Token — used in place of a password (works across
+            # all account types; bypasses MFA). The PAT is supplied in the password field.
+            connect_args["password"] = params.get("password") or token or ""
         elif params.get("password"):
             connect_args["password"] = params["password"]
 
@@ -258,57 +288,107 @@ class SnowflakeConnector(BaseConnector):
             WHERE TABLE_SCHEMA NOT IN ('INFORMATION_SCHEMA')
                 AND TABLE_TYPE IN ('BASE TABLE', 'VIEW')
         """
-        fk_sql = """
-            SELECT
-                FK_SCHEMA_NAME, FK_TABLE_NAME, FK_COLUMN_NAME,
-                PK_SCHEMA_NAME, PK_TABLE_NAME, PK_COLUMN_NAME
-            FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
-            JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-                ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
-                AND rc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA
-            WHERE rc.CONSTRAINT_SCHEMA NOT IN ('INFORMATION_SCHEMA')
-        """
-        pk_sql = """
-            SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME
-            FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-            JOIN INFORMATION_SCHEMA.CONSTRAINT_COLUMN_USAGE ccu
-                USING (CONSTRAINT_CATALOG, CONSTRAINT_SCHEMA, CONSTRAINT_NAME)
-            WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
-                AND tc.TABLE_SCHEMA NOT IN ('INFORMATION_SCHEMA')
-        """
+        # Snowflake's INFORMATION_SCHEMA has NO KEY_COLUMN_USAGE / CONSTRAINT_COLUMN_USAGE
+        # views (those queries error and silently returned no keys). The metadata SHOW
+        # commands are the correct, supported source for keys (cloud-services, no warehouse).
+        fk_sql = "SHOW IMPORTED KEYS IN DATABASE"
+        pk_sql = "SHOW PRIMARY KEYS IN DATABASE"
 
         # Clustering keys — SHOW TABLES returns cluster_by (not in information_schema)
         # Run as a 5th parallel query
         cluster_sql = "SHOW TABLES IN DATABASE"
 
-        # snowflake-connector-python connections are NOT thread-safe —
-        # run all queries sequentially in a single background thread
-        def _fetch(query: str, label: str = "") -> list:
+        # All work runs in one background thread (the connection is not thread-safe),
+        # but the 5 metadata queries are submitted with execute_async so Snowflake runs
+        # them CONCURRENTLY server-side — wall time ≈ the slowest query, not the sum.
+        import time as _t
+
+        def _collect(cur):
+            """Block until an async query finishes, then return its rows. Raises on query error."""
+            qid = cur.sfqid
+            status = self._conn.get_query_status_throw_if_error(qid)
+            while self._conn.is_still_running(status):
+                _t.sleep(0.1)
+                status = self._conn.get_query_status_throw_if_error(qid)
+            cur.get_results_from_sfqid(qid)
+            return cur.fetchall()
+
+        def _columns_per_schema() -> list:
+            # Fallback for massive DBs where the whole-DB INFORMATION_SCHEMA.COLUMNS query
+            # hits the "too much data" cap (or would time out). Each per-schema query is
+            # bounded, so it never caps; batches are submitted async and run in parallel.
             try:
-                cursor = self._conn.cursor(snowflake.connector.DictCursor)
-                cursor.execute(query)
-                result = cursor.fetchall()
-                cursor.close()
-                return result
-            except Exception as e:
-                logger.info("Snowflake metadata query failed (%s): %s", label, e)
+                scur = self._conn.cursor(snowflake.connector.DictCursor)
+                scur.execute("SHOW SCHEMAS IN DATABASE")
+                schemas = [s.get("name") for s in scur.fetchall() if s.get("name") != "INFORMATION_SCHEMA"]
+                scur.close()
+            except Exception:
                 return []
+            per_sql = (
+                "SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE, "
+                "COLUMN_DEFAULT, COMMENT FROM INFORMATION_SCHEMA.COLUMNS "
+                "WHERE TABLE_SCHEMA = %s ORDER BY TABLE_NAME, ORDINAL_POSITION"
+            )
+            out: list = []
+            batch_size = 8
+            for i in range(0, len(schemas), batch_size):
+                curs = []
+                for sch in schemas[i : i + batch_size]:
+                    try:
+                        cu = self._conn.cursor(snowflake.connector.DictCursor)
+                        cu.execute_async(per_sql, (sch,))
+                        curs.append(cu)
+                    except Exception as e:
+                        logger.info("per-schema submit failed: %s", e)
+                for cu in curs:
+                    try:
+                        out.extend(_collect(cu))
+                        cu.close()
+                    except Exception as e:
+                        logger.info("per-schema collect failed: %s", e)
+            return out
 
         def _fetch_all():
-            # Increase statement timeout for metadata queries — large databases
-            # (e.g., STACKOVERFLOW with 23M+ rows) can timeout at the default 30s.
             try:
-                timeout_cursor = self._conn.cursor()
-                timeout_cursor.execute("ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = 120")
-                timeout_cursor.close()
+                tc = self._conn.cursor()
+                tc.execute(f"ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = {self._network_timeout}")
+                tc.close()
             except Exception:
                 pass
+            # Submit all five concurrently, then collect each.
+            submitted: dict[str, Any] = {}
+            for label, q in (
+                ("columns", col_sql), ("tables", rc_sql), ("fk", fk_sql),
+                ("pk", pk_sql), ("cluster", cluster_sql),
+            ):
+                try:
+                    cu = self._conn.cursor(snowflake.connector.DictCursor)
+                    cu.execute_async(q)
+                    submitted[label] = cu
+                except Exception as e:
+                    logger.info("metadata submit failed (%s): %s", label, e)
+                    submitted[label] = None
+            res: dict[str, list] = {}
+            for label, cu in submitted.items():
+                if cu is None:
+                    res[label] = []
+                    continue
+                try:
+                    res[label] = _collect(cu)
+                    cu.close()
+                except Exception as e:
+                    # Columns is the only query that can be too big for one statement
+                    # (cap OR statement-timeout) on a massive DB — recover via bounded,
+                    # parallel per-schema pulls so a huge warehouse never fails the pull.
+                    if label == "columns":
+                        logger.info("columns whole-DB pull failed (%s) — parallel per-schema fallback", e)
+                        res[label] = _columns_per_schema()
+                    else:
+                        logger.info("metadata collect failed (%s): %s", label, e)
+                        res[label] = []
             return (
-                _fetch(col_sql, "columns"),
-                _fetch(rc_sql, "row_counts"),
-                _fetch(fk_sql, "foreign_keys"),
-                _fetch(pk_sql, "primary_keys"),
-                _fetch(cluster_sql, "clustering"),
+                res.get("columns", []), res.get("tables", []), res.get("fk", []),
+                res.get("pk", []), res.get("cluster", []),
             )
 
         t0 = _time.monotonic()
@@ -336,18 +416,18 @@ class SnowflakeConnector(BaseConnector):
             if comment:
                 table_comments_map[key] = comment
 
-        # Build FK map
+        # Build FK map from SHOW IMPORTED KEYS (lowercase column names)
         foreign_keys: dict[str, list[dict]] = {}
         for r in fk_rows_raw:
-            key = f"{r['FK_SCHEMA_NAME']}.{r['FK_TABLE_NAME']}"
-            if key not in foreign_keys:
-                foreign_keys[key] = []
-            foreign_keys[key].append(
+            fk_schema = r.get("fk_schema_name", "")
+            fk_table = r.get("fk_table_name", "")
+            key = f"{fk_schema}.{fk_table}"
+            foreign_keys.setdefault(key, []).append(
                 {
-                    "column": r["FK_COLUMN_NAME"],
-                    "references_schema": r["PK_SCHEMA_NAME"],
-                    "references_table": r["PK_TABLE_NAME"],
-                    "references_column": r["PK_COLUMN_NAME"],
+                    "column": r.get("fk_column_name", ""),
+                    "references_schema": r.get("pk_schema_name", ""),
+                    "references_table": r.get("pk_table_name", ""),
+                    "references_column": r.get("pk_column_name", ""),
                 }
             )
 
@@ -391,8 +471,10 @@ class SnowflakeConnector(BaseConnector):
                 }
             )
 
-        # Enrich with primary key info (already fetched in parallel)
-        pk_set = {(r["TABLE_SCHEMA"], r["TABLE_NAME"], r["COLUMN_NAME"]) for r in pk_rows}
+        # Enrich with primary key info from SHOW PRIMARY KEYS (lowercase column names)
+        pk_set = {
+            (r.get("schema_name"), r.get("table_name"), r.get("column_name")) for r in pk_rows
+        }
         for table_data in schema.values():
             for col in table_data["columns"]:
                 if (table_data["schema"], table_data["name"], col["name"]) in pk_set:

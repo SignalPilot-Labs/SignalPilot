@@ -367,11 +367,22 @@ const DB_CONFIGS: Record<DBType, DBTypeConfig> = {
     fields: ["database"],
     description: "Lightweight file-based database",
   },
+  xata: {
+    label: "Xata",
+    shortLabel: "xata",
+    defaultPort: 5432,
+    category: "warehouse",
+    supportsSSH: false,
+    supportsSSL: false,
+    connectionModes: ["fields"],
+    fields: ["branch"],
+    description: "Postgres at scale with instant branches",
+  },
 };
 
 const DB_TYPE_ORDER: DBType[] = [
   "postgres", "mysql", "mssql", "redshift", "snowflake", "bigquery",
-  "clickhouse", "databricks", "trino", "duckdb", "sqlite",
+  "clickhouse", "databricks", "trino", "xata", "duckdb", "sqlite",
 ];
 
 /* ── Connector tier classification (HEX pattern) ── */
@@ -380,6 +391,7 @@ const CONNECTOR_TIERS: Record<DBType, { tier: number; label: string; color: stri
   mysql:      { tier: 1, label: "T1", color: "text-emerald-400 border-emerald-500/30" },
   snowflake:  { tier: 1, label: "T1", color: "text-emerald-400 border-emerald-500/30" },
   bigquery:   { tier: 1, label: "T1", color: "text-emerald-400 border-emerald-500/30" },
+  xata:       { tier: 1, label: "T1", color: "text-emerald-400 border-emerald-500/30" },
   mssql:      { tier: 2, label: "T2", color: "text-sky-400 border-sky-500/30" },
   redshift:   { tier: 2, label: "T2", color: "text-sky-400 border-sky-500/30" },
   clickhouse: { tier: 2, label: "T2", color: "text-sky-400 border-sky-500/30" },
@@ -478,6 +490,12 @@ const CONNECTION_PRESETS: ConnectionPreset[] = [
     defaults: { database: "md:", duckdb_mode: "motherduck", description: "MotherDuck cloud DuckDB" },
   },
   {
+    label: "Xata Postgres",
+    db_type: "xata",
+    icon: "🦋",
+    defaults: { branch: "main", xata_database: "xata", xata_api_url: "https://api.xata.tech", description: "Xata Postgres project" },
+  },
+  {
     label: "SSH Tunnel (any DB)",
     db_type: "postgres",
     icon: "🔒",
@@ -571,6 +589,16 @@ function DbTypeIcon({ type, size = 12 }: { type: string; size?: number }) {
         <svg width={size} height={size} viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
           <circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="0.75" fill="none" />
           <path d="M4 4L6 8L8 4" stroke="currentColor" strokeWidth="0.75" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+        </svg>
+      );
+    case "xata":
+      return (
+        <svg width={size} height={size} viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
+          <line x1="6" y1="2" x2="6" y2="10" stroke="currentColor" strokeWidth="0.75" />
+          <path d="M6 4C4.5 2.5 2 2.5 2 4.5C2 6 4 6.5 6 6" stroke="currentColor" strokeWidth="0.75" fill="none" strokeLinecap="round" />
+          <path d="M6 4C7.5 2.5 10 2.5 10 4.5C10 6 8 6.5 6 6" stroke="currentColor" strokeWidth="0.75" fill="none" strokeLinecap="round" />
+          <path d="M6 6C4.5 6 3 7 3 8.5C3 9.5 5 9.5 6 8" stroke="currentColor" strokeWidth="0.5" opacity="0.6" fill="none" strokeLinecap="round" />
+          <path d="M6 6C7.5 6 9 7 9 8.5C9 9.5 7 9.5 6 8" stroke="currentColor" strokeWidth="0.5" opacity="0.6" fill="none" strokeLinecap="round" />
         </svg>
       );
     case "sqlite":
@@ -719,6 +747,14 @@ interface FormState {
   databricks_auth_method: "pat" | "oauth_m2m" | "oauth_u2m";
   dbx_oauth_client_id: string;
   dbx_oauth_client_secret: string;
+  // Xata — a "connection" is org + project + branch; the gateway resolves the per-branch
+  // Postgres endpoint server-side. xata_api_key is the control-plane secret (xau_...).
+  branch: string;
+  xata_api_key: string;
+  xata_organization: string;
+  xata_project: string;
+  xata_database: string;
+  xata_api_url: string;
   // SSL
   ssl_enabled: boolean;
   ssl_mode: string;
@@ -738,11 +774,17 @@ interface FormState {
   ssh_proxy_enabled: boolean;
   ssh_proxy_host: string;
   ssh_proxy_port: string;
-  // Snowflake auth method (password, key-pair, or OAuth)
-  snowflake_auth_method: "password" | "key_pair" | "oauth";
+  // Snowflake auth method (password, key-pair, OAuth, PAT, Okta SSO, or MFA)
+  snowflake_auth_method: "password" | "key_pair" | "oauth" | "pat" | "okta" | "mfa";
   sf_private_key: string;
   sf_private_key_passphrase: string;
   sf_oauth_token: string;
+  sf_pat: string; // Programmatic access token (sent in password field)
+  sf_passcode: string; // MFA passcode
+  sf_okta_url: string; // Okta SSO URL (sent as authenticator)
+  // Snowflake advanced: explicit host/protocol override (PrivateLink, China, gov, VPS)
+  snowflake_host: string;
+  snowflake_protocol: "https" | "http";
   // AWS IAM auth (PostgreSQL, MySQL on RDS, Redshift)
   iam_auth: boolean;
   aws_region: string;
@@ -797,11 +839,16 @@ const defaultForm: FormState = {
   ch_protocol: "native",
   http_path: "", access_token: "", catalog: "",
   databricks_auth_method: "pat", dbx_oauth_client_id: "", dbx_oauth_client_secret: "",
+  branch: "main",
+  xata_api_key: "", xata_organization: "", xata_project: "", xata_database: "xata",
+  xata_api_url: "https://api.xata.tech",
   ssl_enabled: false, ssl_mode: "require", ssl_ca_cert: "", ssl_client_cert: "", ssl_client_key: "",
   ssh_enabled: false, ssh_host: "", ssh_port: "22", ssh_username: "", ssh_auth_method: "password",
   ssh_password: "", ssh_private_key: "", ssh_key_passphrase: "",
   ssh_proxy_enabled: false, ssh_proxy_host: "", ssh_proxy_port: "3128",
   snowflake_auth_method: "password", sf_private_key: "", sf_private_key_passphrase: "", sf_oauth_token: "",
+  sf_pat: "", sf_passcode: "", sf_okta_url: "",
+  snowflake_host: "", snowflake_protocol: "https",
   iam_auth: false, aws_region: "us-east-1", aws_access_key_id: "", aws_secret_access_key: "",
   redshift_cluster_id: "", redshift_workgroup: "",
   azure_ad_auth: false, azure_tenant_id: "", azure_client_id: "", azure_client_secret: "",
@@ -833,8 +880,20 @@ function buildConnectionPreview(form: FormState): string {
       const chPort = form.port || (form.ch_protocol === "http" ? (form.ssl_enabled ? "8443" : "8123") : (form.ssl_enabled ? "9440" : "9000"));
       return `${chScheme}://${form.username || "default"}:****@${form.host || "host"}:${chPort}/${form.database || "default"}`;
     }
-    case "snowflake":
-      return `snowflake://${form.username || "user"}:****@${form.account || "account"}/${form.database || "db"}/${form.schema_name || "schema"}${form.warehouse ? `?warehouse=${form.warehouse}` : ""}`;
+    case "snowflake": {
+      const sfHost = form.snowflake_host.trim() || form.account || "account";
+      const sfParams: string[] = [];
+      if (form.warehouse) sfParams.push(`warehouse=${form.warehouse}`);
+      if (form.role) sfParams.push(`role=${form.role}`);
+      // Reflect the chosen auth method; secrets stay masked.
+      const sfAuthLabel: Record<FormState["snowflake_auth_method"], string> = {
+        password: "password", key_pair: "key_pair", oauth: "oauth",
+        pat: "pat", okta: "okta", mfa: "mfa",
+      };
+      sfParams.push(`authenticator=${sfAuthLabel[form.snowflake_auth_method]}`);
+      const sfQuery = sfParams.length ? `?${sfParams.join("&")}` : "";
+      return `snowflake://${form.username || "user"}:****@${sfHost}/${form.database || "db"}/${form.schema_name || "schema"}${sfQuery}`;
+    }
     case "bigquery":
       return `bigquery://${form.project || "project"}/${form.dataset || "dataset"}`;
     case "databricks":
@@ -846,6 +905,8 @@ function buildConnectionPreview(form: FormState): string {
       const trinoPort = form.port || (form.trino_https ? "443" : "8080");
       return `${trinoScheme}://${form.username || "trino"}${form.password ? ":****" : ""}@${form.host || "host"}:${trinoPort}/${form.catalog || "catalog"}${form.schema_name ? `/${form.schema_name}` : ""}`;
     }
+    case "xata":
+      return `xata://${form.xata_organization || "organization"}/${form.xata_project || "project"}/${form.branch || "main"}`;
     case "duckdb":
     case "sqlite":
       return form.database || ":memory:";
@@ -988,6 +1049,29 @@ function validateForm(form: FormState): Record<string, string> {
     if (form.snowflake_auth_method === "oauth" && !form.sf_oauth_token.trim()) {
       errors.sf_oauth_token = "OAuth access token is required";
     }
+    if (form.snowflake_auth_method === "pat" && !form.sf_pat.trim()) {
+      errors.sf_pat = "programmatic access token is required";
+    }
+    if (form.snowflake_auth_method === "mfa" && !form.password.trim()) {
+      errors.password = "password is required for MFA auth";
+    }
+    if (form.snowflake_auth_method === "okta") {
+      if (!form.sf_okta_url.trim()) {
+        errors.sf_okta_url = "Okta URL is required";
+      } else if (!/^https:\/\/.+\.okta\.com/.test(form.sf_okta_url.trim())) {
+        errors.sf_okta_url = "must be an Okta URL (e.g., https://your-org.okta.com)";
+      }
+      if (!form.password.trim()) errors.password = "password is required for Okta SSO";
+    }
+    if (form.snowflake_protocol === "http" && !form.snowflake_host.trim()) {
+      errors.snowflake_host = "host override is required when protocol is http";
+    }
+  }
+
+  if (form.db_type === "xata") {
+    if (!form.xata_api_key.trim()) errors.xata_api_key = "API key is required";
+    if (!form.xata_organization.trim()) errors.xata_organization = "organization id is required";
+    if (!form.xata_project.trim()) errors.xata_project = "project id is required";
   }
 
   if (form.db_type === "bigquery") {
@@ -1119,6 +1203,17 @@ function buildCreatePayload(form: FormState): Record<string, unknown> {
     payload.protocol = "http";
   }
 
+  // Xata — org + project + branch scoped. The gateway resolves the per-branch Postgres
+  // endpoint (<branchID>.<region>.xata.tech) server-side from the control-plane API key.
+  if (form.db_type === "xata") {
+    payload.xata_api_key = form.xata_api_key;
+    payload.xata_organization = form.xata_organization.trim();
+    payload.xata_project = form.xata_project.trim();
+    payload.branch = form.branch.trim() || "main";
+    payload.xata_database = form.xata_database.trim() || "xata";
+    if (form.xata_api_url.trim()) payload.xata_api_url = form.xata_api_url.trim();
+  }
+
   // Trino — auth method and HTTPS connection string
   if (form.db_type === "trino" && form.connectionMode !== "url") {
     if (form.trino_https) {
@@ -1147,14 +1242,45 @@ function buildCreatePayload(form: FormState): Record<string, unknown> {
     payload.tags = form.tags;
   }
 
-  // Snowflake auth method
+  // Snowflake auth method → maps to the gateway `authenticator` contract.
   if (form.db_type === "snowflake") {
-    payload.auth_method = form.snowflake_auth_method;
-    if (form.snowflake_auth_method === "key_pair") {
-      payload.private_key = form.sf_private_key;
-      if (form.sf_private_key_passphrase) payload.private_key_passphrase = form.sf_private_key_passphrase;
-    } else if (form.snowflake_auth_method === "oauth") {
-      payload.oauth_access_token = form.sf_oauth_token;
+    switch (form.snowflake_auth_method) {
+      case "key_pair":
+        payload.authenticator = "key_pair";
+        payload.private_key = form.sf_private_key;
+        if (form.sf_private_key_passphrase) payload.private_key_passphrase = form.sf_private_key_passphrase;
+        delete payload.password; // key-pair does not use a password
+        break;
+      case "oauth":
+        payload.authenticator = "oauth";
+        payload.access_token = form.sf_oauth_token;
+        delete payload.password; // OAuth does not use a password
+        break;
+      case "pat":
+        // Programmatic access token is supplied in the password field.
+        payload.authenticator = "pat";
+        payload.password = form.sf_pat;
+        break;
+      case "mfa":
+        payload.authenticator = "mfa";
+        payload.password = form.password;
+        if (form.sf_passcode) payload.passcode = form.sf_passcode;
+        break;
+      case "okta":
+        // Okta native SSO: the Okta URL itself is the authenticator value.
+        payload.authenticator = form.sf_okta_url.trim();
+        payload.password = form.password;
+        break;
+      case "password":
+      default:
+        payload.authenticator = "password";
+        payload.password = form.password;
+        break;
+    }
+    // Advanced host/protocol overrides (PrivateLink, China, gov, VPS).
+    if (form.snowflake_host.trim()) payload.snowflake_host = form.snowflake_host.trim();
+    if (form.snowflake_protocol && form.snowflake_protocol !== "https") {
+      payload.snowflake_protocol = form.snowflake_protocol;
     }
   }
 
@@ -1260,6 +1386,8 @@ function ConnectionFieldsForm({
   clearServerError: (key: string) => void;
 }) {
   const config = DB_CONFIGS[form.db_type];
+  const [showSnowflakeAdvanced, setShowSnowflakeAdvanced] = useState(false);
+  const [showXataAdvanced, setShowXataAdvanced] = useState(false);
 
   /** Wrap onChange to also clear the server error for this field key. */
   function field(key: keyof FormState, update: (v: string) => void) {
@@ -1345,8 +1473,15 @@ function ConnectionFieldsForm({
         <FormInput label="username" value={form.username} onChange={field("username", (v) => setForm({ ...form, username: v }))} placeholder="ANALYTICS_USER" required {...fieldProps("username", formErrors, fieldRefs)} />
         <div className="col-span-2 mb-1">
           <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">authentication method</label>
-          <div className="flex gap-2">
-            {(["password", "key_pair", "oauth"] as const).map((method) => (
+          <div className="flex flex-wrap gap-2">
+            {([
+              ["password", "password"],
+              ["key_pair", "key pair (RSA)"],
+              ["oauth", "OAuth"],
+              ["pat", "programmatic access token"],
+              ["okta", "Okta SSO"],
+              ["mfa", "username+password+MFA"],
+            ] as const).map(([method, label]) => (
               <button
                 key={method}
                 type="button"
@@ -1357,7 +1492,7 @@ function ConnectionFieldsForm({
                     : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
                 }`}
               >
-                {method === "password" ? "password" : method === "key_pair" ? "key pair (RSA)" : "OAuth"}
+                {label}
               </button>
             ))}
           </div>
@@ -1384,7 +1519,7 @@ function ConnectionFieldsForm({
             />
             <FormInput label="key passphrase" value={form.sf_private_key_passphrase} onChange={(v) => setForm({ ...form, sf_private_key_passphrase: v })} type="password" hint="leave empty if key is unencrypted" className="col-span-2" />
           </>
-        ) : (
+        ) : form.snowflake_auth_method === "oauth" ? (
           <>
             <FormInput label="OAuth access token" value={form.sf_oauth_token} onChange={(v) => setForm({ ...form, sf_oauth_token: v })} type="password" required className="col-span-2" hint="from your identity provider (Okta, Azure AD, etc.)" {...fieldProps("sf_oauth_token", formErrors, fieldRefs)} />
             <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
@@ -1392,15 +1527,115 @@ function ConnectionFieldsForm({
               <div><span className="text-[var(--color-text-muted)]">local dev:</span> Use Snowflake&apos;s built-in SNOWFLAKE$LOCAL_APPLICATION integration for quick setup without admin involvement.</div>
             </div>
           </>
+        ) : form.snowflake_auth_method === "pat" ? (
+          <>
+            <FormInput label="programmatic access token" value={form.sf_pat} onChange={field("sf_pat", (v) => setForm({ ...form, sf_pat: v }))} type="password" required className="col-span-2" hint="Snowflake PAT (Admin → Users → Programmatic Access Tokens)" {...fieldProps("sf_pat", formErrors, fieldRefs)} />
+          </>
+        ) : form.snowflake_auth_method === "mfa" ? (
+          <>
+            <FormInput label="password" value={form.password} onChange={field("password", (v) => setForm({ ...form, password: v }))} type="password" required className="col-span-2" {...fieldProps("password", formErrors, fieldRefs)} />
+            <FormInput label="MFA passcode" value={form.sf_passcode} onChange={(v) => setForm({ ...form, sf_passcode: v })} placeholder="123456" className="col-span-2" hint="optional — TOTP passcode from your authenticator app. leave empty to receive a Duo push." />
+          </>
+        ) : (
+          <>
+            <FormInput label="Okta URL" value={form.sf_okta_url} onChange={field("sf_okta_url", (v) => setForm({ ...form, sf_okta_url: v }))} placeholder="https://your-org.okta.com" required className="col-span-2" hint="your Okta organization URL — sent as the Snowflake authenticator" {...fieldProps("sf_okta_url", formErrors, fieldRefs)} />
+            <FormInput label="password" value={form.password} onChange={field("password", (v) => setForm({ ...form, password: v }))} type="password" required className="col-span-2" {...fieldProps("password", formErrors, fieldRefs)} />
+            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+              <div><span className="text-[var(--color-text-muted)]">native SSO:</span> Snowflake authenticates directly against Okta using your Okta username and password. Requires Snowflake to be federated with this Okta org.</div>
+            </div>
+          </>
         )}
         <FormInput label="warehouse" value={form.warehouse} onChange={(v) => setForm({ ...form, warehouse: v })} placeholder="COMPUTE_WH" hint="optional — default warehouse" />
         <FormInput label="database" value={form.database} onChange={(v) => setForm({ ...form, database: v })} placeholder="PROD_DB" hint="optional — default database" />
         <FormInput label="schema" value={form.schema_name} onChange={(v) => setForm({ ...form, schema_name: v })} placeholder="PUBLIC" hint="optional — default schema" />
         <FormInput label="role" value={form.role} onChange={(v) => setForm({ ...form, role: v })} placeholder="ANALYST_ROLE" hint="optional — Snowflake role" />
+        <div className="col-span-2">
+          <button
+            type="button"
+            onClick={() => setShowSnowflakeAdvanced(!showSnowflakeAdvanced)}
+            className="flex items-center gap-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider mb-2"
+          >
+            {showSnowflakeAdvanced ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            advanced — host override
+            {(form.snowflake_host.trim() !== "" || form.snowflake_protocol !== "https") && (
+              <span className="text-[var(--color-success)] text-[11px] ml-1">
+                {[form.snowflake_host.trim() !== "" && "host", form.snowflake_protocol !== "https" && "http"].filter(Boolean).join(" + ")}
+              </span>
+            )}
+          </button>
+          {showSnowflakeAdvanced && (
+            <div className="animate-fade-in grid grid-cols-2 gap-3">
+              <FormInput
+                label="host override"
+                value={form.snowflake_host}
+                onChange={field("snowflake_host", (v) => setForm({ ...form, snowflake_host: v }))}
+                placeholder="org-account.privatelink.snowflakecomputing.com"
+                hint="explicit host — for PrivateLink, China (.cn), SnowGov, or VPS"
+                className="col-span-2"
+                {...fieldProps("snowflake_host", formErrors, fieldRefs)}
+              />
+              <div className="col-span-2">
+                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">protocol</label>
+                <div className="flex gap-2">
+                  {(["https", "http"] as const).map((proto) => (
+                    <button
+                      key={proto}
+                      type="button"
+                      onClick={() => setForm({ ...form, snowflake_protocol: proto })}
+                      className={`px-2.5 py-1 text-[12px] tracking-wider border transition-all ${
+                        form.snowflake_protocol === proto
+                          ? "border-[var(--color-text)] text-[var(--color-text)]"
+                          : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
+                      }`}
+                    >
+                      {proto}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">defaults to https — leave host override blank unless you need a non-standard endpoint</p>
+              </div>
+            </div>
+          )}
+        </div>
         <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
           <div><span className="text-[var(--color-text-muted)]">network policy:</span> Add this server&apos;s IP to ALLOWED_IP_LIST. Snowflake Admin → Security → Network Policies.</div>
           <div><span className="text-[var(--color-text-muted)]">private link:</span> For AWS PrivateLink or Azure Private Link, use the private account URL (e.g., org-account.privatelink.snowflakecomputing.com).</div>
           <div><span className="text-[var(--color-text-muted)]">vpn:</span> If your Snowflake is behind a VPN, ensure SignalPilot has network access to the Snowflake endpoint.</div>
+        </div>
+      </>
+    );
+  }
+
+  // Xata fields — a connection is org + project + branch; the agent never sees a raw DB URL.
+  if (form.db_type === "xata") {
+    const xataAdvancedSet = form.xata_api_url.trim() !== "" && form.xata_api_url.trim() !== "https://api.xata.tech";
+    return (
+      <>
+        <FormInput label="API key" value={form.xata_api_key} onChange={field("xata_api_key", (v) => setForm({ ...form, xata_api_key: v }))} type="password" placeholder="xau_..." hint="Xata control-plane API key" required className="col-span-2" {...fieldProps("xata_api_key", formErrors, fieldRefs)} />
+        <FormInput label="organization" value={form.xata_organization} onChange={field("xata_organization", (v) => setForm({ ...form, xata_organization: v }))} placeholder="0psl2d" hint="Xata organization id" required {...fieldProps("xata_organization", formErrors, fieldRefs)} />
+        <FormInput label="project" value={form.xata_project} onChange={field("xata_project", (v) => setForm({ ...form, xata_project: v }))} placeholder="prj_037kol78gl76p88o6fngc8s1jk" hint="Xata project id" required {...fieldProps("xata_project", formErrors, fieldRefs)} />
+        <FormInput label="branch" value={form.branch} onChange={(v) => setForm({ ...form, branch: v })} placeholder="main" hint="optional — defaults to main" />
+        <FormInput label="database" value={form.xata_database} onChange={(v) => setForm({ ...form, xata_database: v })} placeholder="xata" hint="optional — defaults to xata" />
+        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+          <div><Lock className="w-3 h-3 inline mr-1 -mt-0.5" strokeWidth={1.5} /><span className="text-[var(--color-text-muted)]">security:</span> the API key is stored encrypted; the agent only ever receives a governed per-branch endpoint, never the raw URL or key.</div>
+        </div>
+
+        {/* Advanced — control-plane endpoint (only for self-hosted / non-default control planes) */}
+        <div className="col-span-2">
+          <button
+            type="button"
+            onClick={() => setShowXataAdvanced(!showXataAdvanced)}
+            className="flex items-center gap-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider mb-2"
+          >
+            {showXataAdvanced ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            advanced — control plane (optional)
+            {xataAdvancedSet && <span className="text-[var(--color-success)] text-[11px] ml-1">configured</span>}
+          </button>
+          {showXataAdvanced && (
+            <div className="animate-fade-in grid grid-cols-2 gap-3">
+              <FormInput label="control-plane API url" value={form.xata_api_url} onChange={(v) => setForm({ ...form, xata_api_url: v })} placeholder="https://api.xata.tech" hint="optional — only for self-hosted / non-default control planes" className="col-span-2" />
+            </div>
+          )}
         </div>
       </>
     );
@@ -2494,12 +2729,32 @@ export default function ConnectionsPage() {
       warehouse: conn.warehouse || "",
       schema_name: conn.schema_name || "",
       role: conn.role || "",
+      // Snowflake auth method — derived from the gateway `authenticator` value.
+      snowflake_auth_method: (() => {
+        const a = String((conn as any).authenticator || "").toLowerCase();
+        if (a.includes("okta.com")) return "okta";
+        if (a === "key_pair" || a === "snowflake_jwt") return "key_pair";
+        if (a === "oauth") return "oauth";
+        if (a === "pat") return "pat";
+        if (a === "mfa" || a === "username_password_mfa") return "mfa";
+        return "password";
+      })(),
+      sf_okta_url: String((conn as any).authenticator || "").includes("okta.com") ? String((conn as any).authenticator) : "",
+      snowflake_host: (conn as any).snowflake_host || "",
+      snowflake_protocol: (conn as any).snowflake_protocol === "http" ? "http" : "https",
       project: conn.project || "",
       dataset: conn.dataset || "",
       bq_location: (conn as any).location || "",
       bq_max_bytes_billed: (conn as any).maximum_bytes_billed ? String((conn as any).maximum_bytes_billed) : "",
       http_path: conn.http_path || "",
       catalog: conn.catalog || "",
+      // Xata (secrets are never pre-filled)
+      branch: (conn as any).branch || (conn.db_type === "xata" ? "main" : ""),
+      xata_api_key: "",
+      xata_organization: (conn as any).xata_organization || "",
+      xata_project: (conn as any).xata_project || "",
+      xata_database: (conn as any).xata_database || (conn.db_type === "xata" ? "xata" : ""),
+      xata_api_url: (conn as any).xata_api_url || (conn.db_type === "xata" ? "https://api.xata.tech" : ""),
       ssl_enabled: conn.ssl || false,
       ssl_mode: conn.ssl_config?.mode || "require",
       ssl_ca_cert: conn.ssl_config?.ca_cert || "",

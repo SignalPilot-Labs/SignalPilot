@@ -114,3 +114,7 @@ signalpilot/web/enterprise-connections.md
 
 # Vendored GitHub Copilot LSP binaries (~81MB, disabled by default; install at build if needed)
 signalpilot/notebook-server/signalpilot/_lsp/copilot/
+
+# Local demo / scratch content (not part of the product)
+demo-2/
+demo-2.zip

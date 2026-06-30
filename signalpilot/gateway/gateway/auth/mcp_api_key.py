@@ -103,14 +103,16 @@ _AUTH_FAILURE_RPM: int = 60  # max 60 failed auth attempts per IP per minute
 def _check_auth_rate(client_ip: str) -> bool:
     """Return True if under the auth failure rate limit."""
     now = time.monotonic()
-    hits = _auth_failures.setdefault(client_ip, [])
-    # Prune old entries
     cutoff = now - 60.0
-    _auth_failures[client_ip] = [t for t in hits if t > cutoff]
-    hits = _auth_failures[client_ip]
+    hits = [t for t in _auth_failures.get(client_ip, []) if t > cutoff]
+    if hits:
+        _auth_failures[client_ip] = hits
+    else:
+        _auth_failures.pop(client_ip, None)
     if len(hits) >= _AUTH_FAILURE_RPM:
         return False
     hits.append(now)
+    _auth_failures[client_ip] = hits
     return True
 
 
@@ -237,7 +239,16 @@ class MCPAuthMiddleware:
                     mcp_user_agent_var.set(_extract_user_agent(scope))
                     if "state" not in scope:
                         scope["state"] = {}
-                    scope["state"]["auth"] = {"user_id": "local", "org_id": "local"}
+                    from ..models import VALID_API_KEY_SCOPES
+
+                    scope["state"]["auth"] = {
+                        "user_id": "local",
+                        "org_id": "local",
+                        "scopes": list(VALID_API_KEY_SCOPES),
+                    }
+                    from ..mcp import mcp_scopes_var
+
+                    mcp_scopes_var.set(list(VALID_API_KEY_SCOPES))
                     await self._app(scope, receive, send)
                     return
 
@@ -277,11 +288,14 @@ class MCPAuthMiddleware:
                     "key_name": matched.name,
                     "user_id": key_user_id,
                     "org_id": key_org_id,
+                    "scopes": list(matched.scopes or []),
                 }
                 # Set user_id and org_id context vars for MCP store access
                 mcp_user_id_var.set(key_user_id)
                 mcp_org_id_var.set(key_org_id)
-                from ..mcp import mcp_client_ip_var, mcp_raw_key_var, mcp_user_agent_var
+                from ..mcp import mcp_client_ip_var, mcp_raw_key_var, mcp_scopes_var, mcp_user_agent_var
+
+                mcp_scopes_var.set(list(matched.scopes or []))
 
                 mcp_raw_key_var.set(raw_key)
                 mcp_client_ip_var.set(_extract_client_ip(scope))

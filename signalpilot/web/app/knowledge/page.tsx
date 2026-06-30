@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, Suspense, type ReactNode } from "react";
+import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import {
   RefreshCw,
@@ -28,9 +29,11 @@ import {
   useKnowledgeDocs,
   useKnowledgeUsage,
   useKnowledgeEdits,
+  useReports,
   invalidateKnowledge,
   SWR_KEYS,
 } from "~/lib/hooks/use-gateway-data";
+import { ReportList, ReportViewer } from "~/components/reports/report-view";
 import type { KnowledgeDoc, KnowledgeEdit } from "~/lib/types";
 import { useToast } from "~/components/ui/toast";
 import { PageLoader } from "~/components/ui/page-loader";
@@ -625,11 +628,21 @@ function CreateDocForm({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-export default function KnowledgePage() {
+function KnowledgePage() {
   const { toast } = useToast();
+  const searchParams = useSearchParams();
+
+  // View + selection are plain state, initialized once from the URL. We reflect
+  // changes back to the address bar with history.replaceState (no Next
+  // navigation) so deep-links work without triggering re-render/Suspense churn.
+  const [view, setView] = useState<"docs" | "reports">(
+    () => (searchParams.get("view") === "reports" ? "reports" : "docs"),
+  );
+  const [reportId, setReportId] = useState<string | null>(() => searchParams.get("report"));
+  const { data: reports } = useReports();
 
   // Page state
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(() => searchParams.get("entry"));
   const [editMode, setEditMode] = useState(false);
   const [editBuffer, setEditBuffer] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(() => {
@@ -641,7 +654,10 @@ export default function KnowledgePage() {
       return new Set(["scope:org"]);
     }
   });
-  const [statusFilter, setStatusFilter] = useState<"active" | "pending" | "archived">("active");
+  const [statusFilter, setStatusFilter] = useState<"active" | "pending" | "archived">(() => {
+    const s = searchParams.get("status");
+    return s === "pending" || s === "archived" ? s : "active";
+  });
   const [searchQ, setSearchQ] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -698,6 +714,40 @@ export default function KnowledgePage() {
     return () => window.removeEventListener("keydown", handleKey);
   }, [selectedId, editMode]);
 
+  // Reflect current view/selection to the address bar without navigating.
+  function syncUrl(next: {
+    view: "docs" | "reports";
+    reportId?: string | null;
+    status?: "active" | "pending" | "archived";
+    entry?: string | null;
+  }) {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams();
+    if (next.view === "reports") {
+      params.set("view", "reports");
+      if (next.reportId) params.set("report", next.reportId);
+    } else {
+      if (next.status && next.status !== "active") params.set("status", next.status);
+      if (next.entry) params.set("entry", next.entry);
+    }
+    const qs = params.toString();
+    window.history.replaceState(null, "", `/knowledge${qs ? `?${qs}` : ""}`);
+  }
+
+  // Switch to the reports view (optionally selecting a report).
+  function goReports(id?: string | null) {
+    setView("reports");
+    setReportId(id ?? null);
+    syncUrl({ view: "reports", reportId: id ?? null });
+  }
+
+  // Switch to a docs status tab — also leaves the reports view if active.
+  function selectStatus(s: "active" | "pending" | "archived") {
+    setView("docs");
+    setStatusFilter(s);
+    syncUrl({ view: "docs", status: s, entry: selectedId });
+  }
+
   function toggleExpand(key: string) {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -718,6 +768,7 @@ export default function KnowledgePage() {
     }
     setEditMode(false);
     setSelectedId(id);
+    syncUrl({ view: "docs", status: statusFilter, entry: id });
   }
 
   async function handleSave() {
@@ -851,7 +902,7 @@ export default function KnowledgePage() {
   if (isFirstLoad) return <PageLoader label="loading knowledge base" />;
 
   return (
-    <div className="p-8 animate-fade-in">
+    <div className="h-screen flex flex-col p-8 animate-fade-in overflow-hidden">
       <PageHeader
         title="knowledge"
         subtitle="base"
@@ -951,41 +1002,51 @@ export default function KnowledgePage() {
       )}
 
       {/* Main split layout */}
-      <div className="flex border border-[var(--color-border)] bg-[var(--color-bg-card)]" style={{ minHeight: "calc(100vh - 320px)" }}>
+      <div className="flex flex-1 min-h-0 border border-[var(--color-border)] bg-[var(--color-bg-card)] mt-4">
         {/* Tree pane */}
-        <div className="w-72 flex-shrink-0 border-r border-[var(--color-border)] flex flex-col">
+        <div className="w-72 flex-shrink-0 border-r border-[var(--color-border)] flex flex-col min-h-0">
           {/* Search + filter */}
           <div className="p-2 border-b border-[var(--color-border)] space-y-2">
             <input
               type="text"
-              placeholder="filter docs..."
+              placeholder={view === "reports" ? "filter reports..." : "filter docs..."}
               value={searchQ}
               onChange={(e) => setSearchQ(e.target.value)}
               className="w-full px-2 py-1.5 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-[12px] focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
             />
             <div className="flex items-center gap-1">
-              {(["active", "pending", "archived"] as const).map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setStatusFilter(s)}
-                  className={`flex-1 py-1 text-[10px] uppercase tracking-[0.1em] transition-colors border ${
-                    statusFilter === s
-                      ? "border-[var(--color-text-dim)] text-[var(--color-text)]"
-                      : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)]"
-                  }`}
-                >
-                  {s}
-                  {s === "pending" && pendingCount > 0 && (
-                    <span className="ml-1 text-[var(--color-warning)]">{pendingCount}</span>
-                  )}
-                </button>
-              ))}
+              {(["active", "pending", "archived", "reports"] as const).map((s) => {
+                const isActive = s === "reports" ? view === "reports" : view === "docs" && statusFilter === s;
+                return (
+                  <button
+                    key={s}
+                    onClick={() => (s === "reports" ? goReports(reportId) : selectStatus(s))}
+                    className={`flex-1 py-1 text-[10px] uppercase tracking-[0.1em] transition-colors border ${
+                      isActive
+                        ? "border-[var(--color-text-dim)] text-[var(--color-text)]"
+                        : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)]"
+                    }`}
+                  >
+                    {s}
+                    {s === "pending" && pendingCount > 0 && (
+                      <span className="ml-1 text-[var(--color-warning)]">{pendingCount}</span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          {/* Tree */}
-          <div className="flex-1 overflow-y-auto py-1">
-            {filteredDocs.length === 0 ? (
+          {/* Tree (docs) or report list */}
+          <div className="flex-1 min-h-0 overflow-y-auto py-1">
+            {view === "reports" ? (
+              <ReportList
+                reports={reports}
+                selectedId={reportId}
+                onSelect={(id) => goReports(id)}
+                filterQ={searchQ}
+              />
+            ) : filteredDocs.length === 0 ? (
               <div className="px-4 py-8 text-center text-[12px] text-[var(--color-text-dim)] tracking-wider">
                 {searchQ ? "no matches" : "no docs"}
               </div>
@@ -1015,8 +1076,10 @@ export default function KnowledgePage() {
         </div>
 
         {/* Content pane */}
-        <div className="flex-1 flex flex-col min-w-0">
-          {!selectedId ? (
+        <div className="flex-1 flex flex-col min-w-0 min-h-0">
+          {view === "reports" ? (
+            <ReportViewer reportId={reportId} onDeleted={() => goReports(null)} />
+          ) : !selectedId ? (
             <EmptyState
               icon={EmptyList}
               title="select a doc"
@@ -1226,6 +1289,14 @@ export default function KnowledgePage() {
         onCancel={() => { setDirtyConfirm(false); setPendingSelectId(null); }}
       />
     </div>
+  );
+}
+
+export default function KnowledgePageWrapper() {
+  return (
+    <Suspense fallback={null}>
+      <KnowledgePage />
+    </Suspense>
   );
 }
 

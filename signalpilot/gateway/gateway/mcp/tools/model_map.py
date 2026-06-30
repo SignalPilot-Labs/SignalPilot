@@ -12,6 +12,7 @@ generate_model_blueprint tool used.
 
 from __future__ import annotations
 
+import os as _os
 import re
 from pathlib import Path
 
@@ -23,7 +24,54 @@ from gateway.mcp.validation import _MODEL_NAME_RE, _validate_connection_name
 
 SKIP_DIRS = (".claude", "dbt_packages", "target", "__pycache__")
 BINARY_TYPES = {"BLOB", "BYTEA", "BINARY", "VARBINARY", "IMAGE"}
-_SAFE_DIR_RE = re.compile(r"^[A-Za-z0-9_./\\:-]{1,512}$")
+
+_PROJECT_DIR_MAX_LEN = 512
+
+
+def _resolve_workspace_root() -> Path:
+    """Workspace root that `project_dir` must live under.
+
+    Resolution order:
+      1. $SP_WORKSPACE_ROOT — explicit operator config (cloud + multi-tenant).
+      2. $SP_NOTEBOOK_ROOT — existing local-dev convention if present.
+      3. Path.cwd() — local fallback. Fail-closed for cloud deployments is enforced
+         in the caller by checking SP_DEPLOYMENT_MODE.
+    """
+    raw = _os.environ.get("SP_WORKSPACE_ROOT") or _os.environ.get("SP_NOTEBOOK_ROOT")
+    if raw:
+        return Path(raw).resolve()
+    return Path.cwd().resolve()
+
+
+def _validated_project_dir(project_dir: str) -> tuple[Path | None, str | None]:
+    """Return (resolved_path, None) if safe; (None, error_string) otherwise.
+
+    Rules:
+      - Length cap (defense-in-depth against pathological inputs).
+      - Must resolve under the workspace root after Path.resolve() (follows symlinks).
+      - In cloud mode (SP_DEPLOYMENT_MODE == "cloud"), require an explicit
+        SP_WORKSPACE_ROOT — fail-closed rather than fall back to CWD which is the
+        gateway process dir on cloud.
+      - The resolved path must exist and be a directory.
+    """
+    if not project_dir or len(project_dir) > _PROJECT_DIR_MAX_LEN:
+        return None, f"Error: Invalid project_dir (empty or > {_PROJECT_DIR_MAX_LEN} chars)."
+    if _os.environ.get("SP_DEPLOYMENT_MODE") == "cloud" and not (
+        _os.environ.get("SP_WORKSPACE_ROOT") or _os.environ.get("SP_NOTEBOOK_ROOT")
+    ):
+        return None, "Error: project_dir not permitted — SP_WORKSPACE_ROOT not configured."
+    root = _resolve_workspace_root()
+    try:
+        candidate = Path(project_dir).resolve()
+    except (OSError, RuntimeError):
+        return None, f"Error: Invalid project_dir '{project_dir}'."
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None, f"Error: project_dir '{project_dir}' is outside the workspace root."
+    if not candidate.exists() or not candidate.is_dir():
+        return None, f"Error: project_dir '{project_dir}' does not exist or is not a directory."
+    return candidate, None
 
 
 # ── pure filesystem / parsing helpers (verbatim from the bin script) ────────
@@ -587,11 +635,9 @@ async def map_columns(connection_name: str, model_name: str, project_dir: str,
         return f"Error: {err}"
     if not model_name or not _MODEL_NAME_RE.match(model_name):
         return f"Error: Invalid model name '{model_name}'."
-    if not project_dir or not _SAFE_DIR_RE.match(project_dir):
-        return f"Error: Invalid project_dir '{project_dir}'."
-    work_dir = Path(project_dir)
-    if not work_dir.exists():
-        return f"Error: project_dir '{project_dir}' does not exist."
+    work_dir, err = _validated_project_dir(project_dir)
+    if err:
+        return err
     exclude_set = {c.strip().lower() for c in exclude.split(",") if c.strip()}
 
     async with _store_session() as store:
@@ -653,6 +699,20 @@ _APPROX_DISTINCT_FN = {
 }
 
 
+def _scan_expr(dialect: str, qc: str, row_count: int) -> str | None:
+    """SQL distinct-count expression for a column the catalog has no stat for, or None when
+    a scan would be too expensive (large row-store without an approximate function).
+    Columnar engines do exact COUNT(DISTINCT) cheaply at any size; MPP engines have a fast
+    approximate-distinct; plain row-stores only scan when small."""
+    if dialect in _COLUMNAR_DISTINCT:
+        return f"COUNT(DISTINCT {qc})"                  # columnar: exact is cheap at any size
+    if dialect in _APPROX_DISTINCT_FN:
+        return f"{_APPROX_DISTINCT_FN[dialect]}({qc})"  # MPP: fast approximate
+    if row_count and row_count <= _DISTINCT_EXACT_CAP:
+        return f"COUNT(DISTINCT {qc})"                  # small row-store: exact ok
+    return None                                        # large row-store w/o stats — don't scan
+
+
 async def _distinct(connector, schema: _Schema, table: str, col: str) -> int | None:
     """Distinct-count for a column, fast on every engine and never scanning a huge table:
     catalog stats first (PG/Redshift/MSSQL), then columnar-exact, then MPP-approx, then
@@ -660,21 +720,47 @@ async def _distinct(connector, schema: _Schema, table: str, col: str) -> int | N
     d = schema.distinct(table, col)
     if d is not None:
         return d  # catalog — no scan
-    dialect = schema.dialect
-    qc = connector._quote_identifier(col)
-    if dialect in _COLUMNAR_DISTINCT:
-        expr = f"COUNT(DISTINCT {qc})"          # columnar: exact is cheap at any size
-    elif dialect in _APPROX_DISTINCT_FN:
-        expr = f"{_APPROX_DISTINCT_FN[dialect]}({qc})"   # MPP: fast approximate
-    elif schema.row_count(table) and schema.row_count(table) <= _DISTINCT_EXACT_CAP:
-        expr = f"COUNT(DISTINCT {qc})"          # small row-store: exact ok
-    else:
-        return None                            # large row-store w/o stats — don't scan
+    expr = _scan_expr(schema.dialect, connector._quote_identifier(col), schema.row_count(table))
+    if expr is None:
+        return None
     try:
         q = connector._quote_table(schema.resolve(table))
         return (await _q(connector, f"SELECT {expr} FROM {q}"))[0][0]
     except Exception:
         return None
+
+
+async def _distinct_batch(connector, schema: _Schema, table: str, cols: list[str]) -> dict[str, int | None]:
+    """Distinct-counts for several columns of ONE table, reading the table at most once.
+
+    Catalog stats are used per-column with no scan; every remaining column is folded into a
+    single `SELECT <agg>(c0), <agg>(c1), ... FROM table`, so the table is scanned once
+    instead of once per column. Values are identical to calling _distinct per column — the
+    only difference is round trips, which dominate on MPP engines (Snowflake) where each
+    scan is a separate query.
+    """
+    out: dict[str, int | None] = {col: schema.distinct(table, col) for col in cols}
+    scan_cols = [col for col in cols if out[col] is None]
+    if not scan_cols:
+        return out  # all answered from the catalog — no scan
+    rc = schema.row_count(table)
+    exprs: list[str] = []
+    scanned: list[str] = []
+    for col in scan_cols:
+        expr = _scan_expr(schema.dialect, connector._quote_identifier(col), rc)
+        if expr is not None:
+            exprs.append(expr)
+            scanned.append(col)
+    if not exprs:
+        return out  # large row-store w/o stats — leave as None
+    try:
+        q = connector._quote_table(schema.resolve(table))
+        row = (await _q(connector, f"SELECT {', '.join(exprs)} FROM {q}"))[0]
+        for col, val in zip(scanned, row, strict=False):
+            out[col] = val
+    except Exception:
+        pass  # leave scanned columns as None on failure
+    return out
 
 
 async def _driving_table_gaps(connector, schema: _Schema, cap: int = 10) -> list[str]:
@@ -691,6 +777,14 @@ async def _driving_table_gaps(connector, schema: _Schema, cap: int = 10) -> list
     parents = {t: next((c for c in cols if c.lower() == "id"), None) for t, cols in tables.items()}
     parents = {t: c for t, c in parents.items() if c}
     checked: set[tuple[str, str, str]] = set()
+
+    # Enumerate candidate (parent, pid, child, fk) pairs up front — pure string work, no I/O
+    # — and record, per table, the columns we may need a distinct-count for. This lets each
+    # table be scanned at most once (all its needed columns in a single query) while the
+    # pair loop below still stops early at `cap` hits. The pair order is identical to the
+    # old nested loop, so the hints produced are byte-for-byte the same.
+    pairs: list[tuple[str, str, str, str]] = []
+    needed: dict[str, set[str]] = {}
     for child, ccols in tables.items():
         for fk in [c for c in ccols if c.lower().endswith("_id") and c.lower() != "id"]:
             prefix = fk.lower().replace("_id", "")
@@ -700,15 +794,35 @@ async def _driving_table_gaps(connector, schema: _Schema, cap: int = 10) -> list
                 checked.add((parent, child, fk))
                 if prefix not in parent.lower():
                     continue  # plausibility filter (avoids N^2 work)
-                pd = await _distinct(connector, schema, parent, pid)
-                cd = await _distinct(connector, schema, child, fk)
-                if pd is None or cd is None or pd <= cd:
-                    continue
-                hints.append(f"  {parent}.{pid} ↔ {child}.{fk}: ~{pd - cd} of {pd} parent keys are not "
-                             f"referenced by {child} (some parents have no children). "
-                             f"Drive FROM {parent} LEFT JOIN {child}.")
-                if len(hints) >= cap:
-                    return hints
+                pairs.append((parent, pid, child, fk))
+                needed.setdefault(parent, set()).add(pid)
+                needed.setdefault(child, set()).add(fk)
+
+    # Distinct-count cache. A table is scanned once, for ALL its needed columns, on first
+    # touch: on MPP engines (Snowflake) one scan computing many APPROX_COUNT_DISTINCT is
+    # several times faster than one scan per column. Tables never reached (because `cap`
+    # hits first) are never scanned.
+    _dcache: dict[tuple[str, str], int | None] = {}
+    _scanned: set[str] = set()
+
+    async def _dist(tbl: str, col: str) -> int | None:
+        if tbl not in _scanned:
+            vals = await _distinct_batch(connector, schema, tbl, sorted(needed.get(tbl, {col})))
+            for c, v in vals.items():
+                _dcache[(tbl, c)] = v
+            _scanned.add(tbl)
+        return _dcache.get((tbl, col))
+
+    for parent, pid, child, fk in pairs:
+        pd = await _dist(parent, pid)
+        cd = await _dist(child, fk)
+        if pd is None or cd is None or pd <= cd:
+            continue
+        hints.append(f"  {parent}.{pid} ↔ {child}.{fk}: ~{pd - cd} of {pd} parent keys are not "
+                     f"referenced by {child} (some parents have no children). "
+                     f"Drive FROM {parent} LEFT JOIN {child}.")
+        if len(hints) >= cap:
+            return hints
     return hints
 
 
@@ -727,25 +841,36 @@ async def analyze_project_db(connection_name: str) -> str:
     """
     if err := _validate_connection_name(connection_name):
         return f"Error: {err}"
-    async with _store_session() as store:
-        conn_info = await store.get_connection(connection_name)
-        if not conn_info:
-            return f"Error: Connection '{connection_name}' not found."
-        conn_str = await store.get_connection_string(connection_name)
-        if not conn_str:
-            return "Error: No credentials stored for this connection"
-        extras = await store.get_credential_extras(connection_name)
 
     from gateway.connectors.pool_manager import pool_manager
+    from gateway.connectors.schema_cache import schema_cache
 
+    # Stay inside the store session for the whole call: it sets current_org_id_var, which
+    # schema_cache requires (org-scoped keys). The cache is the same one schema_overview /
+    # schema_ddl populate, so a recent introspection is reused instead of re-pulling the
+    # full schema (~seconds on a many-schema warehouse). Staleness is bounded by the
+    # cache's TTL, and it is invalidated on structural change like every other consumer.
     try:
-        async with pool_manager.connection(
-            conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name
-        ) as connector:
-            schema = _Schema(await connector.get_schema(), conn_info.db_type)
-            lookups = _detect_lookups(connector, schema)
-            staging = await _staging_gaps(schema)
-            driving = await _driving_table_gaps(connector, schema)
+        async with _store_session() as store:
+            conn_info = await store.get_connection(connection_name)
+            if not conn_info:
+                return f"Error: Connection '{connection_name}' not found."
+            conn_str = await store.get_connection_string(connection_name)
+            if not conn_str:
+                return "Error: No credentials stored for this connection"
+            extras = await store.get_credential_extras(connection_name)
+
+            raw = schema_cache.get(connection_name)
+            async with pool_manager.connection(
+                conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name
+            ) as connector:
+                if raw is None:
+                    raw = await connector.get_schema()
+                    schema_cache.put(connection_name, raw)
+                schema = _Schema(raw, conn_info.db_type)
+                lookups = _detect_lookups(connector, schema)
+                staging = await _staging_gaps(schema)
+                driving = await _driving_table_gaps(connector, schema)
     except Exception as e:
         return f"Error: {sanitize_mcp_error(str(e))}"
 

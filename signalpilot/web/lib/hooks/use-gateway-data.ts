@@ -17,6 +17,8 @@ import {
   listKnowledge,
   getKnowledgeUsage,
   listKnowledgeEdits,
+  listReports,
+  getReport,
 } from "~/lib/api";
 import type { PlanUsage } from "~/lib/api";
 import type {
@@ -26,6 +28,8 @@ import type {
   KnowledgeDoc,
   KnowledgeEdit,
   KnowledgeUsage,
+  Report,
+  ReportSummary,
 } from "~/lib/types";
 
 // ── Cache keys (exported for manual invalidation) ────────────────────────────
@@ -47,6 +51,8 @@ export const SWR_KEYS = {
   knowledgeUsage: "/api/knowledge/usage",
   knowledgeDoc: (id: string) => `/api/knowledge/${id}`,
   knowledgeEdits: (id: string) => `/api/knowledge/${id}/edits`,
+  reports: (qs?: string) => `/api/reports${qs ? `?${qs}` : ""}`,
+  report: (id: string) => `/api/reports/${id}`,
 } as const;
 
 // ── Hooks ────────────────────────────────────────────────────────────────────
@@ -206,6 +212,36 @@ export function useKnowledgeEdits(id: string | null) {
 export function invalidateKnowledge() {
   return mutate(
     (key: unknown) => typeof key === "string" && key.startsWith("/api/knowledge"),
+    undefined,
+    { revalidate: true },
+  );
+}
+
+// ── Reports hooks ─────────────────────────────────────────────────────────────
+
+/** Report list (metadata only) — 30s cache. */
+export function useReports(filters?: { scope_ref?: string }) {
+  const qs = filters?.scope_ref ? `scope_ref=${encodeURIComponent(filters.scope_ref)}` : "";
+  return useSWR<ReportSummary[]>(
+    SWR_KEYS.reports(qs || undefined),
+    () => listReports(filters),
+    { dedupingInterval: 30_000 },
+  );
+}
+
+/** A single report including HTML — fetched only when id is provided. */
+export function useReport(id: string | null) {
+  return useSWR<Report>(
+    id ? SWR_KEYS.report(id) : null,
+    () => getReport(id!),
+    { dedupingInterval: 30_000 },
+  );
+}
+
+/** Invalidate all /api/reports keys using predicate mutate. */
+export function invalidateReports() {
+  return mutate(
+    (key: unknown) => typeof key === "string" && key.startsWith("/api/reports"),
     undefined,
     { revalidate: true },
   );

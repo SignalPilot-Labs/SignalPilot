@@ -20,14 +20,21 @@ def _build_connection_string(conn: ConnectionCreate) -> str:
         ssl_param = f"?sslmode={ssl_mode}" if ssl_mode else ""
         return f"postgresql://{user}{pw}@{host}:{port}/{db}{ssl_param}"
     if conn.db_type == DBType.xata:
-        # Xata is Postgres wire-compatible. The stored secret is a scoped Xata API
-        # key (conn.password); workspace is the URL user; the branch is appended to
-        # the database name as `database:branch`. TLS is mandatory.
+        # New Xata (xata.tech): there is NO static URL — each branch is its own host
+        # and the connector resolves it via the control-plane API key at connect
+        # time. Return a secret-free sentinel (unique per branch → distinct pool key).
+        if conn.xata_api_key or conn.xata_project:
+            org = conn.xata_organization or conn.xata_org or ""
+            proj = conn.xata_project or ""
+            br = conn.branch or "main"
+            db = conn.xata_database or conn.database or "xata"
+            return f"xata://{org}/{proj}/{br}/{db}"
+        # Legacy Xata (xata.sh) fallback — workspace/region + API key as password.
         ws = url_quote(conn.workspace or conn.username or "", safe="")
         key = f":{url_quote(conn.password or '', safe='')}" if conn.password else ""
-        region = conn.region            # validated non-empty
-        db = conn.database              # validated non-empty
-        branch = conn.branch or "main"  # main is a documented Xata default — keep
+        region = conn.region or ""
+        db = conn.database or ""
+        branch = conn.branch or "main"
         return f"postgresql://{ws}{key}@{region}.sql.xata.sh:5432/{db}:{branch}?sslmode=require"
     if conn.db_type == DBType.mysql:
         user = url_quote(conn.username or "", safe="")
@@ -135,20 +142,38 @@ def _extract_credential_extras(conn: ConnectionCreate) -> dict:
             extras["private_key"] = conn.private_key
         if conn.private_key_passphrase:
             extras["private_key_passphrase"] = conn.private_key_passphrase
+        # auth method + host override (all account types). OAuth token rides in
+        # access_token (set above) → mapped to oauth_access_token for the connector.
+        if conn.access_token:
+            extras["oauth_access_token"] = conn.access_token
+        for attr in ("authenticator", "passcode", "snowflake_host", "snowflake_protocol"):
+            val = getattr(conn, attr, None)
+            if val:
+                extras[attr] = val
     if conn.db_type == DBType.databricks:
         for attr in ("http_path", "access_token", "catalog", "schema_name"):
             extras[attr] = getattr(conn, attr, None)
     if conn.db_type == DBType.xata:
-        # Stash workspace/region/database so the connector can mint a sibling
-        # endpoint for ANY branch without re-parsing the encrypted URL.
-        for attr in ("workspace", "region", "database", "branch"):
-            val = getattr(conn, attr, None)
-            if val is not None:
-                extras[f"xata_{attr}"] = val
-        # Control-plane config (branch lifecycle). Stored in encrypted extras.
-        for attr in ("xata_api_url", "xata_org", "xata_token_url",
-                     "xata_client_id", "xata_client_secret",
-                     "xata_username", "xata_password"):
+        # New Xata (xata.tech): the connector resolves the branch endpoint from
+        # these (API key + org/project/branch). Keys must match what XataConnector
+        # ._resolve_endpoint reads.
+        if conn.xata_api_key:
+            extras["xata_api_key"] = conn.xata_api_key
+        if conn.xata_api_url:
+            extras["xata_api_url"] = conn.xata_api_url
+        org = conn.xata_organization or conn.xata_org
+        if org:
+            extras["xata_organization"] = org
+        if conn.xata_project:
+            extras["xata_project"] = conn.xata_project
+        db = conn.xata_database or conn.database
+        if db:
+            extras["xata_database"] = db
+        if conn.branch:
+            extras["branch"] = conn.branch
+        # Legacy / self-hosted OIDC control-plane (back-compat).
+        for attr in ("xata_token_url", "xata_client_id", "xata_client_secret",
+                     "xata_username", "xata_password", "workspace", "region"):
             val = getattr(conn, attr, None)
             if val is not None:
                 extras[attr] = val

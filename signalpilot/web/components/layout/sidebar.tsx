@@ -138,7 +138,7 @@ const nav: { href: string; label: string; icon: NavIconComponent; shortcut: stri
   { href: "/projects", label: "projects", icon: NavIconProject, shortcut: "5" },
   { href: "/query", label: "query", icon: NavIconQuery, shortcut: "6" },
   { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "7" },
-  { href: "/knowledge", label: "knowledge", icon: NavIconKnowledge, shortcut: "8" },
+  { href: "/knowledge", label: "library", icon: NavIconKnowledge, shortcut: "8" },
   { href: "/health", label: "health", icon: NavIconHealth, shortcut: "H" },
   { href: "/settings", label: "settings", icon: NavIconSettings, shortcut: "0" },
 ];

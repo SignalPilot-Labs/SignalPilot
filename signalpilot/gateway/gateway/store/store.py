@@ -1067,6 +1067,53 @@ class Store:
         async with factory() as session:
             await knowledge_mod.increment_knowledge_view(session, org_id=oid, doc_id=doc_id)
 
+    # ─── Reports (rendered HTML) ─────────────────────────────────────────────
+
+    async def insert_report(self, payload, *, user_id: str | None, agent: str | None = None):
+        from . import reports as reports_mod
+
+        oid = self._require_org_id()
+        return await reports_mod.insert_report(
+            self.session, org_id=oid, payload=payload, user_id=user_id, agent=agent
+        )
+
+    async def list_reports(self, *, scope_ref: str | None = None, limit: int = 200, offset: int = 0):
+        from . import reports as reports_mod
+
+        oid = self._require_org_id()
+        return await reports_mod.list_reports(
+            self.session, org_id=oid, scope_ref=scope_ref, limit=limit, offset=offset
+        )
+
+    async def get_report(self, report_id: str, *, bump_view: bool = False):
+        import asyncio
+
+        from . import reports as reports_mod
+
+        oid = self._require_org_id()
+        report = await reports_mod.get_report(self.session, org_id=oid, report_id=report_id)
+        if report is None:
+            return None
+        if bump_view:
+            asyncio.create_task(self.increment_report_view(report_id))
+        return report
+
+    async def delete_report(self, report_id: str) -> bool:
+        from . import reports as reports_mod
+
+        oid = self._require_org_id()
+        return await reports_mod.delete_report(self.session, org_id=oid, report_id=report_id)
+
+    async def increment_report_view(self, report_id: str) -> None:
+        from gateway.db.engine import get_session_factory
+
+        from . import reports as reports_mod
+
+        oid = self._require_org_id()
+        factory = get_session_factory()
+        async with factory() as session:
+            await reports_mod.increment_report_view(session, org_id=oid, report_id=report_id)
+
     # ─── Workspace Projects ─────────────────────────────────────────────────
 
     async def create_workspace_project(self, **kwargs):

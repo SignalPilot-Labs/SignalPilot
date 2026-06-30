@@ -22,11 +22,13 @@ from gateway.mcp.context import (
     _gateway_url,
     _gw_headers,
     _is_cloud,
+    _require_mcp_admin_scope,
     _store_session,
     mcp_audit_id_var,
     mcp_client_ip_var,
     mcp_org_id_var,
     mcp_raw_key_var,
+    mcp_scopes_var,
     mcp_user_agent_var,
     mcp_user_id_var,
 )
@@ -47,7 +49,6 @@ from gateway.mcp.tools.model_verify import (
     compare_join_types,
     validate_model_output,
 )
-from gateway.mcp.tools.workspace_projects import list_workspace_projects
 from gateway.mcp.tools.query import (
     check_budget,
     debug_cte_query,
@@ -72,6 +73,7 @@ from gateway.mcp.tools.schema import (
     schema_overview,
     schema_statistics,
 )
+from gateway.mcp.tools.workspace_projects import list_workspace_projects
 from gateway.mcp.validation import _quote_table
 from gateway.store import Store
 
@@ -129,4 +131,6 @@ __all__ = [
     "_gateway_url",
     "_gw_headers",
     "_is_cloud",
+    "_require_mcp_admin_scope",
+    "mcp_scopes_var",
 ]

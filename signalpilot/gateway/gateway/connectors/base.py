@@ -38,7 +38,9 @@ class BaseConnector(ABC):
         self._ssl_config: dict | None = None
         self._temp_files: list[str] = []
         self._connection_timeout: int = 15
-        self._query_timeout: int = 30
+        # Default per-query/introspection timeout. Schema pulls on large warehouses
+        # (thousands of tables) can exceed 30s, so the floor is 150s.
+        self._query_timeout: int = 150
 
     # ─── Abstract methods (must implement) ────────────────────────────
 

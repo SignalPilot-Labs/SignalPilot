@@ -11,6 +11,10 @@ import {
   bootRuntime,
   type NotebookStaticData,
 } from "./boot-runtime";
+import {
+  ANALYSIS_TRAIL_CONFIG_OVERRIDES,
+  isGeneratedAnalysisTrailNotebook,
+} from "./analysis-trails";
 
 const PHASE_LABELS: Record<string, string> = {
   health: "starting runtime...",
@@ -139,6 +143,11 @@ export default function NotebookBoot({
   }
 
   const staticData = staticDataRef.current;
+  const isGeneratedAnalysisTrail = isGeneratedAnalysisTrailNotebook({
+    project: config.project,
+    branch: config.branch,
+    file: config.file,
+  });
 
   return (
     <>
@@ -151,6 +160,9 @@ export default function NotebookBoot({
           initialCode: staticData.code,
           session: staticData.session,
           notebook: staticData.notebook,
+          configOverrides: isGeneratedAnalysisTrail
+            ? ANALYSIS_TRAIL_CONFIG_OVERRIDES
+            : undefined,
         }}
         className="h-full"
       />

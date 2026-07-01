@@ -10,6 +10,9 @@ if TYPE_CHECKING:
 from signalpilot import _loggers
 from signalpilot._server.api.auth import validate_auth
 from signalpilot._server.api.deps import AppState
+from signalpilot._server.api.endpoints.ws.analysis_trails import (
+    is_generated_analysis_trail_notebook,
+)
 from signalpilot._server.codes import WebSocketCodes
 from signalpilot._server.workspace import SpFileKey
 from signalpilot._types.ids import SessionId
@@ -75,6 +78,7 @@ class WebSocketConnectionValidator:
             self.app_state.query_params(FILE_QUERY_PARAM_KEY)
             or self.app_state.session_manager.workspace.get_unique_file_key()
         )
+        requested_file_key = file_key
 
         if file_key is None:
             await self.websocket.close(
@@ -84,8 +88,8 @@ class WebSocketConnectionValidator:
 
         # For cloud projects, resolve relative file_key to absolute synced path
         project_id = self.app_state.query_params("project")
+        branch = self.app_state.query_params("branch") or "main"
         if project_id and file_key and not Path(file_key).is_absolute():
-            branch = self.app_state.query_params("branch") or "main"
             try:
                 from signalpilot._server.files.project_sync import local_project_dir
                 local_dir = local_project_dir(project_id, branch)
@@ -108,6 +112,12 @@ class WebSocketConnectionValidator:
         config = self.app_state.config_manager_at_file(file_key).get_config()
         rtc_enabled = config.get("experimental", {}).get("rtc_v2", False)
         auto_instantiate = config["runtime"]["auto_instantiate"]
+        if is_generated_analysis_trail_notebook(
+            project_id=project_id,
+            branch=branch,
+            file_key=requested_file_key,
+        ):
+            auto_instantiate = False
 
         return ConnectionParams(
             session_id=session_id,

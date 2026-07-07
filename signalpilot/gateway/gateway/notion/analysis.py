@@ -859,7 +859,7 @@ async def _insert_html_deliverable(
 ) -> bool:
     html_result = await render_html_deliverable(
         packet,
-        api_key=api_key,
+        api_key=api_key or None,
         fetch_snapshot=_snapshot_fetcher(runtime),
     )
     report = await reports_store.insert_report(

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
-from gateway.analysis_delivery import DeliveryPacket, DeliveryResult, WorkerPlan, WorkerProgress
+from gateway.analysis_delivery import DeliveryPacket, DeliveryResult, HtmlDeliverableResult, WorkerPlan, WorkerProgress
 from gateway.db.models import NotionInstallation, NotionInstallationConfig
 from gateway.notebooks.session_service import NotebookRuntime
 from gateway.notion import analysis as notion_analysis
@@ -493,6 +494,81 @@ async def test_process_routed_comment_event_uses_user_secret_for_delivery_render
     assert confidence_updates
     assert "number" not in confidence_updates[-1]
     assert _rich_text_content(confidence_updates[-1]["rich_text"]) == "high"
+
+
+@pytest.mark.asyncio
+async def test_insert_html_deliverable_lets_empty_user_key_use_gateway_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received_api_keys: list[str | None] = []
+    recorded_deliverables: list[dict] = []
+    install = NotionInstallation(
+        id="install-1",
+        org_id="org-1",
+        user_id="user-1",
+        workspace_id="workspace-1",
+        bot_id="bot-1",
+        access_token_enc=b"encrypted",
+        status="active",
+    )
+    config = NotionInstallationConfig(installation_id="install-1")
+    routed = RoutedNotionInstallation(installation=install, config=config, access_token="token-1")
+    route = notion_analysis.AnalysisRoute(
+        source="notion",
+        request_id="notion-req-1",
+        project_id="project-1",
+        branch="analysis/notion/notion-req-1-dashboard",
+        default_branch="main",
+        analysis_user_id="analysis:notion:notion-req-1",
+    )
+
+    async def render_html_deliverable(packet, *, api_key=None, fetch_snapshot=None, orchestrator=None):
+        del packet, fetch_snapshot, orchestrator
+        received_api_keys.append(api_key)
+        return HtmlDeliverableResult(
+            kind="dashboard",
+            title="Database Dashboard",
+            html='<!doctype html><html><body><script type="application/json" id="sp-data">{}</script></body></html>',
+            data_json={"rows": []},
+        )
+
+    async def insert_report(*args, **kwargs):
+        return SimpleNamespace(id="report-1")
+
+    async def insert_html_deliverable(*args, **kwargs):
+        return SimpleNamespace(
+            block_id="embed-block-1",
+            file_upload_id="file-upload-1",
+            fallback_url=None,
+            archived_block_id=None,
+        )
+
+    async def record_deliverable(*args, **kwargs):
+        recorded_deliverables.append(kwargs)
+
+    monkeypatch.setattr(notion_analysis, "render_html_deliverable", render_html_deliverable)
+    monkeypatch.setattr(notion_analysis.reports_store, "insert_report", insert_report)
+    monkeypatch.setattr(notion_analysis.notion_dashboards, "insert_html_deliverable", insert_html_deliverable)
+    monkeypatch.setattr(notion_analysis.notion_store, "record_deliverable", record_deliverable)
+
+    delivered = await notion_analysis._insert_html_deliverable(
+        db=MagicMock(),
+        token="token-1",
+        routed=routed,
+        route=route,
+        page_id="page-1",
+        request_page_id="request-page-1",
+        discussion_id="discussion-1",
+        anchor_block_id=None,
+        packet=DeliveryPacket(user_request="Build a database dashboard", status="done"),
+        api_key="",
+        runtime=None,
+        session_id="session-notion-req-1",
+    )
+
+    assert delivered is True
+    assert received_api_keys == [None]
+    assert recorded_deliverables[0]["report_id"] == "report-1"
 
 
 def test_public_signalpilot_url_preserves_durable_notebooks_trail_url() -> None:

@@ -121,3 +121,15 @@ def test_html_system_contract_bans_audit_language() -> None:
     assert "confidence score" in prompt
     assert "audit notes" in prompt
     assert "trail links" in prompt
+
+
+def test_html_orchestrator_timeout_defaults_to_long_dashboard_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SIGNALPILOT_ORCHESTRATOR_TIMEOUT_SECONDS", raising=False)
+
+    assert HtmlOrchestrator(api_key="key").timeout_seconds == 90.0
+
+
+def test_html_orchestrator_timeout_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SIGNALPILOT_ORCHESTRATOR_TIMEOUT_SECONDS", "120")
+
+    assert HtmlOrchestrator(api_key="key").timeout_seconds == 120.0

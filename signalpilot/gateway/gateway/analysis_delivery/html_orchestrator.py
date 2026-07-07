@@ -20,6 +20,7 @@ LOGGER = logging.getLogger(__name__)
 
 _ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 _ANTHROPIC_VERSION = "2023-06-01"
+_DEFAULT_TIMEOUT_SECONDS = 90.0
 
 HtmlKind = Literal["report", "dashboard"]
 SnapshotFetcher = Callable[[dict[str, Any]], Awaitable[Any]]
@@ -40,14 +41,14 @@ class HtmlOrchestrator:
         *,
         provider: str = "anthropic",
         model: str | None = None,
-        timeout_seconds: float = 30.0,
+        timeout_seconds: float | None = None,
         api_key: str | None = None,
         http_client: httpx.AsyncClient | None = None,
         fetch_snapshot: SnapshotFetcher | None = None,
     ) -> None:
         self.provider = (provider or "anthropic").strip().lower()
         self.model = (model or os.getenv("SIGNALPILOT_ORCHESTRATOR_MODEL") or DEFAULT_DELIVERY_MODEL).strip()
-        self.timeout_seconds = max(float(timeout_seconds or 30.0), 0.1)
+        self.timeout_seconds = _timeout_seconds(timeout_seconds)
         self.api_key = api_key if api_key is not None else os.getenv("ANTHROPIC_API_KEY")
         self._http_client = http_client
         self._fetch_snapshot = fetch_snapshot
@@ -200,6 +201,18 @@ def _html_model_payload(packet: DeliveryPacket) -> dict[str, Any]:
         "dataSnapshots": packet.data_snapshots,
         "charts": packet.charts,
     }
+
+
+def _timeout_seconds(value: float | None) -> float:
+    if value is not None:
+        return max(float(value), 0.1)
+    raw = os.getenv("SIGNALPILOT_ORCHESTRATOR_TIMEOUT_SECONDS", "").strip()
+    if raw:
+        try:
+            return max(float(raw), 0.1)
+        except ValueError:
+            LOGGER.warning("Invalid SIGNALPILOT_ORCHESTRATOR_TIMEOUT_SECONDS=%r; using default", raw)
+    return _DEFAULT_TIMEOUT_SECONDS
 
 
 def _html_orchestrator_system_prompt() -> str:

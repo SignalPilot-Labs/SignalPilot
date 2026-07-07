@@ -21,12 +21,30 @@ def analysis_prompt(
     body: AnalysisPromptBody,
     *,
     warm_context: str | None = None,
+    output_mode: str = "answer",
 ) -> str:
     previous = "\n".join(f"- {message}" for message in body.previous_messages)
     warm_context_block = warm_context or (
         "## Warm Context\n"
         "- No precomputed schema warm context was available before this run."
     )
+    deliverable_block = ""
+    if output_mode == "deliverable":
+        deliverable_block = f"""
+
+Deliverable snapshot mode:
+- The user asked for a static HTML dashboard or data-backed report. Do not author
+  HTML and do not design the final dashboard/report in the notebook. The gateway
+  orchestrator owns HTML rendering after this analysis completes.
+- Before FINAL_STATEMENT, save 1-3 tidy aggregate data snapshots with the
+  `mcp__signalpilot-notebook__save_data_snapshot` / `save_data_snapshot` tool.
+  Use Session ID `{record.session_id}`. Each snapshot must be compact,
+  presentation-ready, and derived from notebook-executed governed data.
+- Snapshot rows should be aggregates or ranked outputs needed for a dashboard or
+  report, not raw table dumps. Keep column names clear and stable.
+- Preserve the normal notebook audit surface: visible query evidence, validation
+  cells, chart cells when useful, caveats, confidence label, and FINAL_STATEMENT.
+"""
     return f"""
 You are SignalPilot. Answer the user's governed data-analysis request by making
 the current durable marimo notebook the primary audit artifact.
@@ -211,6 +229,7 @@ Required workflow:
    bullets, and the dbt evidence confidence label/methodology rationale. Keep
    the exact heading text. Keep detailed query trace in the "Analysis steps"
    branch cells instead of duplicating it all in the summary.
+{deliverable_block}
 
 Completion checklist before FINAL_STATEMENT:
 - The live notebook defines `sp` in exactly one notebook cell. It must not repeat

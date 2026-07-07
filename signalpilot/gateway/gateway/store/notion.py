@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.db.models import (
     GatewayNotionIntegration,
+    NotionDeliverable,
     NotionInstallation,
     NotionInstallationConfig,
     NotionOAuthState,
@@ -36,9 +37,7 @@ async def list_integrations(
     org_id: str,
 ) -> list[NotionIntegrationInfo]:
     """List all Notion integrations for an org."""
-    result = await session.execute(
-        select(GatewayNotionIntegration).where(GatewayNotionIntegration.org_id == org_id)
-    )
+    result = await session.execute(select(GatewayNotionIntegration).where(GatewayNotionIntegration.org_id == org_id))
     return [NotionIntegrationInfo(**row.to_info_dict()) for row in result.scalars()]
 
 
@@ -249,6 +248,42 @@ async def consume_oauth_state(
     await session.commit()
     if _as_aware_utc(row.expires_at) < datetime.now(UTC):
         return None
+    return row
+
+
+async def record_deliverable(
+    session: AsyncSession,
+    *,
+    org_id: str,
+    installation_id: str,
+    page_id: str,
+    request_id: str,
+    report_id: str,
+    kind: str,
+    request_page_id: str | None = None,
+    discussion_id: str | None = None,
+    embed_block_id: str | None = None,
+    file_upload_id: str | None = None,
+    session_id: str | None = None,
+    metadata: dict | None = None,
+) -> NotionDeliverable:
+    row = NotionDeliverable(
+        org_id=org_id,
+        installation_id=installation_id,
+        page_id=page_id,
+        request_page_id=request_page_id,
+        discussion_id=discussion_id,
+        request_id=request_id,
+        report_id=report_id,
+        kind=kind,
+        embed_block_id=embed_block_id,
+        file_upload_id=file_upload_id,
+        session_id=session_id,
+        metadata_json=metadata,
+    )
+    session.add(row)
+    await session.commit()
+    await session.refresh(row)
     return row
 
 

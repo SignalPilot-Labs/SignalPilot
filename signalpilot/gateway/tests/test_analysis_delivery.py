@@ -16,9 +16,11 @@ from gateway.analysis_delivery import (
     load_delivery_packet_from_events,
     render_slack_final_message,
     render_slack_progress_message,
+    wants_html_deliverable,
 )
 from gateway.analysis_delivery import credentials as credentials_module
 from gateway.analysis_delivery import trace_loader as trace_loader_module
+from gateway.analysis_delivery.html_orchestrator import _html_model_payload
 from gateway.analysis_delivery.renderer import fallback_delivery
 from gateway.trace_markers import redact_trace_control_markers
 
@@ -33,6 +35,8 @@ def test_preflight_gates_greetings_and_ambiguous_data_prompts() -> None:
     assert ambiguous.kind == AnalysisPreflightKind.AMBIGUOUS
     assert "fresh, specific analysis request" in (ambiguous.response or "")
     assert classify_analysis_request("Analyze revenue by product for Q2").kind == AnalysisPreflightKind.ANALYZE
+    assert classify_analysis_request("Build a dashboard for revenue by product").kind == AnalysisPreflightKind.ANALYZE
+    assert wants_html_deliverable("Create a scorecard for Q2 pipeline")
 
 
 def test_trace_loader_extracts_latest_worker_plan_progress_and_final_statement() -> None:
@@ -73,7 +77,17 @@ def test_trace_loader_extracts_latest_worker_plan_progress_and_final_statement()
                 },
             },
         ],
-        status_payload={"status": "Done"},
+        status_payload={
+            "status": "Done",
+            "dataSnapshots": [
+                {
+                    "name": "Revenue by month",
+                    "url": "/api/notion-analysis/snapshot/req/revenue.json",
+                    "columns": ["month", "revenue"],
+                    "rowCount": 1,
+                }
+            ],
+        },
     )
 
     assert packet.user_request == "Analyze revenue"
@@ -85,7 +99,45 @@ def test_trace_loader_extracts_latest_worker_plan_progress_and_final_statement()
     assert packet.final_statement.statement == "Revenue increased."
     assert packet.final_statement.confidence_score == "high"
     assert packet.charts[0]["title"] == "Revenue trend"
+    assert packet.data_snapshots[0]["name"] == "Revenue by month"
     assert packet.status == "done"
+
+
+def test_html_payload_excludes_audit_and_confidence_fields() -> None:
+    packet = load_delivery_packet_from_events(
+        [
+            {
+                "idx": 1,
+                "type": "text",
+                "content": (
+                    'FINAL_STATEMENT: {"statement":"Revenue increased.",'
+                    '"confidenceScore":"high","caveats":["Excludes refunds"],'
+                    '"handoffNotes":["Used notebook SDK."]}'
+                ),
+            }
+        ],
+        user_request="Build a revenue dashboard",
+        status_payload={
+            "status": "Done",
+            "summary": "Revenue increased.",
+            "confidenceScore": "high",
+            "gotchas": ["Excludes refunds"],
+            "analysisMethod": "Used notebook SDK",
+            "trailUrl": "https://app.test/projects?file=analysis.py",
+            "dataSnapshots": [{"name": "Revenue", "url": "/snapshot.json"}],
+        },
+    )
+
+    payload = _html_model_payload(packet)
+    serialized = json.dumps(payload)
+
+    assert set(payload) == {"userRequest", "answer", "summary", "dataSnapshots", "charts"}
+    assert payload["dataSnapshots"] == [{"name": "Revenue", "url": "/snapshot.json"}]
+    assert "confidenceScore" not in serialized
+    assert "caveats" not in serialized
+    assert "gotchas" not in serialized
+    assert "analysisMethod" not in serialized
+    assert "trailUrl" not in serialized
 
 
 def test_trace_loader_drops_numeric_confidence_score() -> None:

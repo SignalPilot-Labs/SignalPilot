@@ -42,6 +42,7 @@ class DeliveryPacket:
     final_statement: FinalStatement | None = None
     final_notebook_outputs: dict[str, Any] = field(default_factory=dict)
     charts: list[dict[str, Any]] = field(default_factory=list)
+    data_snapshots: list[dict[str, Any]] = field(default_factory=list)
     trail_url: str = ""
     known_errors: list[str] = field(default_factory=list)
     status: str = "active"
@@ -54,6 +55,7 @@ class DeliveryPacket:
             "finalStatement": asdict(self.final_statement) if self.final_statement else None,
             "finalNotebookOutputs": self.final_notebook_outputs,
             "charts": self.charts,
+            "dataSnapshots": self.data_snapshots,
             "trailUrl": self.trail_url,
             "knownErrors": self.known_errors,
             "status": self.status,
@@ -156,6 +158,7 @@ def load_delivery_packet_from_events(
     status_payload = status_payload or {}
     notebook_outputs = _compact_notebook_outputs(latest_result, status_payload)
     charts = _charts_from_sources(status_payload, latest_result)
+    data_snapshots = _data_snapshots_from_sources(status_payload, latest_result)
     if status_payload.get("error"):
         _append_unique(known_errors, _string(status_payload.get("error")), 8)
 
@@ -167,6 +170,7 @@ def load_delivery_packet_from_events(
         final_statement=final_statement,
         final_notebook_outputs=notebook_outputs,
         charts=charts,
+        data_snapshots=data_snapshots,
         trail_url=trail_url or _string(status_payload.get("trailUrl") or status_payload.get("trail_url")),
         known_errors=known_errors,
         status=status,
@@ -256,6 +260,26 @@ def _charts_from_sources(*sources: dict[str, Any]) -> list[dict[str, Any]]:
             seen.add(key)
             charts.append(dict(chart))
     return charts[:3]
+
+
+def _data_snapshots_from_sources(*sources: dict[str, Any]) -> list[dict[str, Any]]:
+    snapshots: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for source in sources:
+        raw_snapshots = source.get("dataSnapshots", source.get("data_snapshots", []))
+        if not isinstance(raw_snapshots, list):
+            continue
+        for snapshot in raw_snapshots:
+            if not isinstance(snapshot, dict):
+                continue
+            url = _string(snapshot.get("url")).strip()
+            name = _string(snapshot.get("name")).strip()
+            key = url or name
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            snapshots.append(dict(snapshot))
+    return snapshots[:5]
 
 
 def _status_from_sources(

@@ -30,7 +30,7 @@ from signalpilot._runtime.virtual_file import read_virtual_file
 from signalpilot._server.ai.analysis_prompts import (
     analysis_prompt as _analysis_prompt,
 )
-from signalpilot._server.api.deps import AppState
+from signalpilot._server.api.deps import AppState, AppStateBase
 from signalpilot._server.api.endpoints.notion_urls import (
     trail_url as _trail_url,
 )
@@ -55,7 +55,10 @@ router = APIRouter()
 
 AnalysisStatus = Literal["New", "Analyzing", "Done", "Failed"]
 ConfidenceLabel = Literal["high", "medium", "lower"]
+OutputMode = Literal["answer", "deliverable"]
 DEFAULT_ANALYSIS_AGENT_MODEL = "claude-sonnet-4-5-20250929"
+DEFAULT_SNAPSHOT_MAX_BYTES = 1_000_000
+MAX_DATA_SNAPSHOTS = 5
 _ANALYSIS_AGENT_MODEL_ENV_NAMES = (
     "SIGNALPILOT_ANALYSIS_AGENT_MODEL",
     "SIGNALPILOT_WORKER_AGENT_MODEL",
@@ -80,6 +83,7 @@ class StartNotionAnalysisRequest(msgspec.Struct, rename="camel"):
     notion_request_page_id: str | None = None
     requester: list[str] = msgspec.field(default_factory=list)
     previous_messages: list[str] = msgspec.field(default_factory=list)
+    output_mode: OutputMode = "answer"
 
 
 @dataclass
@@ -90,6 +94,17 @@ class AnalysisChart:
     alt_text: str = ""
     include_in_comment: bool = True
     include_on_page: bool = True
+
+
+@dataclass
+class DataSnapshot:
+    name: str = ""
+    description: str = ""
+    columns: list[str] | None = None
+    row_count: int = 0
+    filename: str = ""
+    url: str = ""
+    bytes: int = 0
 
 
 @dataclass
@@ -116,6 +131,8 @@ class AnalysisRecord:
     created_at: str
     source: str = "notion"
     notion_request_page_id: str | None = None
+    output_mode: OutputMode = "answer"
+    data_snapshots: list[DataSnapshot] | None = None
     latest_commit_sha: str | None = None
     error: str | None = None
     result: AnalysisResult | None = None
@@ -613,6 +630,35 @@ def _parse_chart_list(value: Any) -> list[AnalysisChart]:
     return charts
 
 
+def _parse_data_snapshot_list(value: Any) -> list[DataSnapshot]:
+    if not isinstance(value, list):
+        return []
+    snapshots: list[DataSnapshot] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        columns_raw = item.get("columns") or []
+        columns = (
+            [str(column) for column in columns_raw]
+            if isinstance(columns_raw, list)
+            else []
+        )
+        snapshots.append(
+            DataSnapshot(
+                name=str(item.get("name", "")),
+                description=str(item.get("description", "")),
+                columns=columns,
+                row_count=int(
+                    item.get("row_count", item.get("rowCount", 0)) or 0
+                ),
+                filename=str(item.get("filename", "")),
+                url=str(item.get("url", "")),
+                bytes=int(item.get("bytes", 0) or 0),
+            )
+        )
+    return snapshots
+
+
 def _analysis_result_from_dict(value: dict[str, Any]) -> AnalysisResult:
     result = dict(value)
     result["notion_charts"] = _parse_chart_list(
@@ -620,6 +666,10 @@ def _analysis_result_from_dict(value: dict[str, Any]) -> AnalysisResult:
     )
     result.pop("notionCharts", None)
     return AnalysisResult(**result)
+
+
+def _output_mode(value: str | None) -> OutputMode:
+    return "deliverable" if value == "deliverable" else "answer"
 
 
 def _analysis_source(value: str | None) -> str:
@@ -735,6 +785,10 @@ def _load_registry(app_state: AppState) -> None:
             created_at=item["created_at"],
             source=item.get("source", "notion"),
             notion_request_page_id=item.get("notion_request_page_id"),
+            output_mode=_output_mode(item.get("output_mode")),
+            data_snapshots=_parse_data_snapshot_list(
+                item.get("data_snapshots", item.get("dataSnapshots", []))
+            ),
             latest_commit_sha=item.get("latest_commit_sha"),
             error=item.get("error"),
             result=_analysis_result_from_dict(result) if result else None,
@@ -979,6 +1033,7 @@ def _ensure_record(
     existing_id = _records_by_discussion_id.get(body.discussion_id)
     if existing_id:
         record = _records_by_request_id[existing_id]
+        record.output_mode = _output_mode(body.output_mode)
         _refresh_trail_url(app_state, record, request_base_url)
         if record.status != "Analyzing":
             _append_followup_to_notebook(app_state, record, body)
@@ -1016,6 +1071,8 @@ def _ensure_record(
         created_at=body.created_at,
         source=source,
         notion_request_page_id=body.notion_request_page_id,
+        output_mode=_output_mode(body.output_mode),
+        data_snapshots=[],
     )
     _records_by_request_id[record.request_id] = record
     _records_by_discussion_id[record.discussion_id] = record.request_id
@@ -1282,6 +1339,29 @@ def _chart_url(
     return f"{url}?{urlencode({'project': project_id, 'branch': branch})}"
 
 
+def _snapshot_dir(app_state: AppStateBase, record: AnalysisRecord) -> Path:
+    notebook_path = _resolve_notebook_path(app_state, record.notebook_path)
+    snapshot_dir = (
+        notebook_path.parent
+        / "public"
+        / "signalpilot-notion-snapshots"
+        / record.request_id
+    )
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    return snapshot_dir
+
+
+def _snapshot_url(
+    app_state: AppStateBase, record: AnalysisRecord, filename: str
+) -> str:
+    url = f"/api/notion-analysis/snapshot/{record.request_id}/{filename}"
+    context = _analysis_project_context(app_state)
+    if context is None:
+        return url
+    project_id, branch = context
+    return f"{url}?{urlencode({'project': project_id, 'branch': branch})}"
+
+
 def _chart_file_from_project_registries(
     request_id: str, filename: str
 ) -> Path | None:
@@ -1323,6 +1403,166 @@ def _chart_file_from_project_registries(
             if chart_path.is_file():
                 return chart_path
     return None
+
+
+def _snapshot_file_from_project_registries(
+    request_id: str, filename: str
+) -> Path | None:
+    try:
+        from signalpilot._server.files.project_sync import PROJECTS_ROOT
+    except Exception:
+        return None
+
+    for registry_path in PROJECTS_ROOT.glob(
+        "*/**/notebooks/.signalpilot-analysis-registry.json"
+    ):
+        try:
+            raw = json.loads(registry_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        records = raw.get("records", [])
+        if not isinstance(records, list):
+            continue
+        for item in records:
+            if (
+                not isinstance(item, dict)
+                or item.get("request_id") != request_id
+            ):
+                continue
+            notebook_path = item.get("notebook_path")
+            if not isinstance(notebook_path, str) or not notebook_path:
+                continue
+            repo = registry_path.parent.parent
+            snapshot_dir = (
+                (repo / notebook_path).parent
+                / "public"
+                / "signalpilot-notion-snapshots"
+                / request_id
+            )
+            try:
+                resolved_dir = snapshot_dir.resolve(strict=True)
+                snapshot_path = (resolved_dir / filename).resolve(strict=True)
+                snapshot_path.relative_to(resolved_dir)
+            except (OSError, ValueError):
+                continue
+            if snapshot_path.is_file():
+                return snapshot_path
+    return None
+
+
+def _snapshot_max_bytes() -> int:
+    raw_value = os.environ.get("SIGNALPILOT_SNAPSHOT_MAX_BYTES")
+    if raw_value is None:
+        return DEFAULT_SNAPSHOT_MAX_BYTES
+    try:
+        return max(1024, int(raw_value))
+    except ValueError:
+        LOGGER.warning(
+            "Invalid SIGNALPILOT_SNAPSHOT_MAX_BYTES=%r; using default",
+            raw_value,
+        )
+        return DEFAULT_SNAPSHOT_MAX_BYTES
+
+
+def _snapshot_filename(name: str, index: int) -> str:
+    stem = re.sub(r"[^a-zA-Z0-9]+", "-", name.strip().lower()).strip("-")
+    stem = stem[:80] or "data-snapshot"
+    return f"{stem}-{index}.json"
+
+
+def save_data_snapshot_for_session(
+    app_state: AppStateBase,
+    *,
+    session_id: str,
+    name: str,
+    description: str,
+    columns: list[Any],
+    rows: list[Any],
+) -> dict[str, Any]:
+    _load_registry(app_state)
+    record = next(
+        (
+            item
+            for item in _records_by_request_id.values()
+            if item.session_id == session_id
+        ),
+        None,
+    )
+    if record is None:
+        raise ValueError(
+            f"No active analysis record for session_id={session_id}"
+        )
+
+    if not isinstance(columns, list) or not isinstance(rows, list):
+        raise ValueError("columns and rows must be JSON arrays")
+
+    snapshots = list(record.data_snapshots or [])
+    normalized_name = name.strip() or f"Data snapshot {len(snapshots) + 1}"
+    existing_index = next(
+        (
+            index
+            for index, snapshot in enumerate(snapshots)
+            if snapshot.name == normalized_name
+        ),
+        None,
+    )
+    if existing_index is None and len(snapshots) >= MAX_DATA_SNAPSHOTS:
+        raise ValueError(
+            f"At most {MAX_DATA_SNAPSHOTS} data snapshots are allowed"
+        )
+
+    filename = (
+        snapshots[existing_index].filename
+        if existing_index is not None
+        else _snapshot_filename(normalized_name, len(snapshots) + 1)
+    )
+    payload = {
+        "name": normalized_name,
+        "description": description.strip(),
+        "columns": [str(column) for column in columns],
+        "rows": rows,
+    }
+    try:
+        content = json.dumps(
+            payload, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Snapshot rows must be JSON serializable: {exc}"
+        ) from exc
+
+    max_bytes = _snapshot_max_bytes()
+    if len(content) > max_bytes:
+        raise ValueError(
+            f"Snapshot is {len(content)} bytes; the limit is {max_bytes} bytes"
+        )
+
+    snapshot_path = _snapshot_dir(app_state, record) / filename
+    snapshot_path.write_bytes(content)
+    snapshot = DataSnapshot(
+        name=normalized_name,
+        description=description.strip(),
+        columns=[str(column) for column in columns],
+        row_count=len(rows),
+        filename=filename,
+        url=_snapshot_url(app_state, record, filename),
+        bytes=len(content),
+    )
+    if existing_index is None:
+        snapshots.append(snapshot)
+    else:
+        snapshots[existing_index] = snapshot
+    record.data_snapshots = snapshots
+    _save_registry(app_state)
+    return {
+        "name": snapshot.name,
+        "description": snapshot.description,
+        "columns": snapshot.columns or [],
+        "rowCount": snapshot.row_count,
+        "filename": snapshot.filename,
+        "url": snapshot.url,
+        "bytes": snapshot.bytes,
+    }
 
 
 def _chart_filename_extension(content_type: str) -> str:
@@ -2814,7 +3054,12 @@ async def _run_analysis(
         body,
         project_root=project_root,
     )
-    prompt = _analysis_prompt(record, body, warm_context=warm_context)
+    prompt = _analysis_prompt(
+        record,
+        body,
+        warm_context=warm_context,
+        output_mode=record.output_mode,
+    )
     text_parts: list[str] = []
     store = get_gateway_chat_trace_store()
 
@@ -3072,6 +3317,7 @@ def _record_response(record: AnalysisRecord) -> dict[str, Any]:
     return {
         "requestId": record.request_id,
         "source": record.source,
+        "outputMode": record.output_mode,
         "sessionId": record.session_id,
         "notebookPath": record.notebook_path,
         "trailUrl": record.trail_url,
@@ -3093,6 +3339,18 @@ def _record_response(record: AnalysisRecord) -> dict[str, Any]:
                 "includeOnPage": chart.include_on_page,
             }
             for chart in (result.notion_charts or [])
+        ],
+        "dataSnapshots": [
+            {
+                "name": snapshot.name,
+                "description": snapshot.description,
+                "columns": snapshot.columns or [],
+                "rowCount": snapshot.row_count,
+                "filename": snapshot.filename,
+                "url": snapshot.url,
+                "bytes": snapshot.bytes,
+            }
+            for snapshot in (record.data_snapshots or [])
         ],
         "error": record.error,
     }
@@ -3176,6 +3434,38 @@ async def notion_analysis_chart(*, request: Request) -> FileResponse:
     return FileResponse(
         chart_path,
         media_type=media_type,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@router.get("/snapshot/{request_id}/{filename:path}")
+async def notion_analysis_snapshot(*, request: Request) -> FileResponse:
+    app_state = AppState(request)
+    _load_registry(app_state)
+    request_id = request.path_params["request_id"]
+    filename = request.path_params["filename"]
+    record = _records_by_request_id.get(request_id)
+    if record is None:
+        snapshot_path = _snapshot_file_from_project_registries(
+            request_id, filename
+        )
+        if snapshot_path is None:
+            raise HTTPException(
+                status_code=404, detail="Analysis request not found"
+            )
+    else:
+        snapshot_dir = _snapshot_dir(app_state, record).resolve(strict=True)
+        try:
+            snapshot_path = (snapshot_dir / filename).resolve(strict=True)
+            snapshot_path.relative_to(snapshot_dir)
+        except (OSError, ValueError):
+            raise HTTPException(
+                status_code=404, detail="Snapshot not found"
+            ) from None
+
+    return FileResponse(
+        snapshot_path,
+        media_type="application/json",
         headers={"Cache-Control": "public, max-age=86400"},
     )
 

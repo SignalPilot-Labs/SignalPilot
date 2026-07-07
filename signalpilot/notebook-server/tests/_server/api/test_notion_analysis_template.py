@@ -333,13 +333,20 @@ def test_analysis_agent_model_prefers_env_override(monkeypatch) -> None:
         "SIGNALPILOT_ANALYSIS_AGENT_MODEL",
         "claude-sonnet-analysis-test",
     )
-    monkeypatch.setenv("SIGNALPILOT_WORKER_AGENT_MODEL", "claude-sonnet-worker-test")
+    monkeypatch.setenv(
+        "SIGNALPILOT_WORKER_AGENT_MODEL", "claude-sonnet-worker-test"
+    )
 
-    assert notion_analysis._analysis_agent_model() == "claude-sonnet-analysis-test"
+    assert (
+        notion_analysis._analysis_agent_model()
+        == "claude-sonnet-analysis-test"
+    )
 
     monkeypatch.delenv("SIGNALPILOT_ANALYSIS_AGENT_MODEL")
 
-    assert notion_analysis._analysis_agent_model() == "claude-sonnet-worker-test"
+    assert (
+        notion_analysis._analysis_agent_model() == "claude-sonnet-worker-test"
+    )
 
 
 def test_parse_final_statement_preserves_only_confidence_labels() -> None:
@@ -405,9 +412,17 @@ def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
     assert "q1_gbp_revenue_df = pd.DataFrame(db.query" in prompt
     assert "q1_gbp_revenue_df.head(10)" in prompt
     assert "monthly_revenue_chart" in prompt
-    assert "Produce charts for every completed Slack/Notion data-analysis request" in prompt
-    assert "at least two visible chart outputs for Notion page content" in prompt
-    assert "first chart must also be suitable\n   for the Slack/Notion comment thread" in prompt
+    assert (
+        "Produce charts for every completed Slack/Notion data-analysis request"
+        in prompt
+    )
+    assert (
+        "at least two visible chart outputs for Notion page content" in prompt
+    )
+    assert (
+        "first chart must also be suitable\n   for the Slack/Notion comment thread"
+        in prompt
+    )
     assert "head of\n     the joined table/query result" in prompt
     assert "not just a branch list" in prompt
     assert "finding explanation, exact query, data head/preview" in prompt
@@ -444,7 +459,9 @@ def test_analysis_prompt_injects_warm_context_without_changing_output_contract()
 
     assert "Likely connection: `dev-db`" in prompt
     assert "CREATE TABLE public.orders" in prompt
-    assert "user-friendly and audit-ready for the notebook chat thread" in prompt
+    assert (
+        "user-friendly and audit-ready for the notebook chat thread" in prompt
+    )
     assert "Start with a concise bullet-point answer" in prompt
     assert "PLAN:" in prompt
     assert "PROGRESS:" in prompt
@@ -459,9 +476,29 @@ def test_analysis_prompt_injects_warm_context_without_changing_output_contract()
     assert "number from 0.0 to 1.0" not in prompt
     assert "numeric probability" in prompt
     assert "notionCharts" in prompt
-    assert "Do not include slackMessage, notionComment, finalAnswer, notionCharts" in prompt
+    assert (
+        "Do not include slackMessage, notionComment, finalAnswer, notionCharts"
+        in prompt
+    )
     assert '"Executive Summary and Explorations" cell' in prompt
     assert "Aim for two visible,\n  harvestable chart outputs" in prompt
+
+
+def test_analysis_prompt_adds_snapshot_instructions_only_for_deliverables() -> (
+    None
+):
+    answer_prompt = notion_analysis._analysis_prompt(_record(), _body())
+    deliverable_prompt = notion_analysis._analysis_prompt(
+        _record(),
+        _body(),
+        output_mode="deliverable",
+    )
+
+    assert "save_data_snapshot" not in answer_prompt
+    assert "Deliverable snapshot mode" in deliverable_prompt
+    assert "save 1-3 tidy aggregate data snapshots" in deliverable_prompt
+    assert "Do not author\n  HTML" in deliverable_prompt
+    assert "Preserve the normal notebook audit surface" in deliverable_prompt
 
 
 def test_warm_context_truncation_stays_under_cap() -> None:

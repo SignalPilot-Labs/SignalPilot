@@ -1104,6 +1104,12 @@ class Store:
         oid = self._require_org_id()
         return await reports_mod.delete_report(self.session, org_id=oid, report_id=report_id)
 
+    async def update_report_html(self, report_id: str, payload):
+        from . import reports as reports_mod
+
+        oid = self._require_org_id()
+        return await reports_mod.update_report_html(self.session, org_id=oid, report_id=report_id, payload=payload)
+
     async def increment_report_view(self, report_id: str) -> None:
         from gateway.db.engine import get_session_factory
 

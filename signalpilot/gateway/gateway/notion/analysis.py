@@ -24,16 +24,22 @@ from gateway.analysis_delivery import (
     load_delivery_packet,
     load_delivery_packet_from_events,
     render_delivery,
+    render_html_deliverable,
+    wants_html_deliverable,
 )
 from gateway.auth.jwt_secret import load_session_jwt_secret
 from gateway.db.models import NotionInstallationConfig
 from gateway.git.repos import ensure_branch_from
 from gateway.models.analysis_trails import AnalysisTrailUpdate, AnalysisTrailUpsert
+from gateway.models.reports import ReportCreate
 from gateway.notebooks.session_service import NotebookRuntime, ensure_analysis_notebook_session
 from gateway.notion import client as notion_client
+from gateway.notion import dashboards as notion_dashboards
 from gateway.notion import formatting as notion_formatting
 from gateway.notion.webhooks import RoutedNotionInstallation
 from gateway.store import analysis_trails, workspace_projects
+from gateway.store import notion as notion_store
+from gateway.store import reports as reports_store
 
 NOTION_RICH_TEXT_MAX_LENGTH = notion_formatting.NOTION_RICH_TEXT_MAX_LENGTH
 _PLACEHOLDER_CHART_TITLE_RE = re.compile(
@@ -698,6 +704,50 @@ def _with_public_chart_urls(status: dict[str, Any], runtime: NotebookRuntime | N
     }
 
 
+def _status_snapshots(status: dict[str, Any]) -> list[dict[str, Any]]:
+    snapshots = status.get("dataSnapshots", status.get("data_snapshots", []))
+    if not isinstance(snapshots, list):
+        return []
+    return [snapshot for snapshot in snapshots if isinstance(snapshot, dict)]
+
+
+def _snapshot_value(snapshot: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = snapshot.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _with_public_snapshot_urls(status: dict[str, Any], runtime: NotebookRuntime | None = None) -> dict[str, Any]:
+    snapshots = _status_snapshots(status)
+    if not snapshots:
+        return status
+    return {
+        **status,
+        "dataSnapshots": [
+            {**snapshot, "url": _public_signalpilot_url(_snapshot_value(snapshot, "url"), runtime)}
+            if _snapshot_value(snapshot, "url")
+            else snapshot
+            for snapshot in snapshots
+        ],
+    }
+
+
+def _snapshot_fetcher(runtime: NotebookRuntime | None):
+    async def fetch(snapshot: dict[str, Any]) -> Any:
+        source_url = _snapshot_value(snapshot, "url")
+        if not source_url:
+            return snapshot
+        fetch_url = _internal_signalpilot_url(source_url, runtime)
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.get(fetch_url)
+            response.raise_for_status()
+            return response.json()
+
+    return fetch
+
+
 def _chart_filename_extension(content_type: str) -> str:
     normalized = content_type.lower().split(";", 1)[0].strip()
     if normalized == "image/jpeg":
@@ -790,6 +840,70 @@ async def _upload_chart_images_to_notion(
             for chart in _status_charts(status)
         ],
     }
+
+
+async def _insert_html_deliverable(
+    *,
+    db: AsyncSession,
+    token: str,
+    routed: RoutedNotionInstallation,
+    route: AnalysisRoute,
+    page_id: str,
+    request_page_id: str,
+    discussion_id: str,
+    anchor_block_id: str | None,
+    packet: Any,
+    api_key: str | None,
+    runtime: NotebookRuntime | None,
+    session_id: str | None,
+) -> bool:
+    html_result = await render_html_deliverable(
+        packet,
+        api_key=api_key,
+        fetch_snapshot=_snapshot_fetcher(runtime),
+    )
+    report = await reports_store.insert_report(
+        db,
+        org_id=routed.installation.org_id,
+        payload=ReportCreate(
+            title=html_result.title,
+            html=html_result.html,
+            scope_ref=route.project_id,
+            kind=html_result.kind,
+            data_json=html_result.data_json
+            if html_result.data_json is not None
+            else {"dataSnapshots": packet.data_snapshots},
+        ),
+        user_id=routed.installation.user_id,
+        agent="notion_html_orchestrator",
+    )
+    inserted = await notion_dashboards.insert_html_deliverable(
+        token,
+        page_id=page_id,
+        anchor_block_id=anchor_block_id,
+        title=html_result.title,
+        html=html_result.html,
+        report_id=report.id,
+    )
+    await notion_store.record_deliverable(
+        db,
+        org_id=routed.installation.org_id,
+        installation_id=routed.installation.id,
+        page_id=page_id,
+        request_page_id=request_page_id,
+        discussion_id=discussion_id,
+        request_id=route.request_id,
+        report_id=report.id,
+        kind=html_result.kind,
+        embed_block_id=inserted.block_id,
+        file_upload_id=inserted.file_upload_id,
+        session_id=session_id,
+        metadata={
+            "fallback_url": inserted.fallback_url,
+            "archived_block_id": inserted.archived_block_id,
+        },
+    )
+    return True
 
 
 def _comment_attachments(status: dict[str, Any]) -> list[dict[str, str]]:
@@ -1046,6 +1160,7 @@ async def process_routed_comment_event(
             rich_text=_rich_text(preflight.response or "Send a fresh, specific analysis request to start SignalPilot."),
         )
         return NotionCommentProcessResult(status="processed")
+    html_deliverable = wants_html_deliverable(prompt)
 
     previous_messages = [
         notion_client.extract_comment_text(comment)
@@ -1151,6 +1266,7 @@ async def process_routed_comment_event(
                     "requester": requester_ids,
                     "headline": headline,
                     "prompt": prompt,
+                    "outputMode": "deliverable" if html_deliverable else "answer",
                     "previousMessages": previous_messages,
                     "createdAt": created_at,
                 },
@@ -1241,7 +1357,7 @@ async def process_routed_comment_event(
         raise
 
     if final_status.get("status") == "Done" and not final_status.get("error"):
-        public_status = _with_public_chart_urls(final_status, runtime)
+        public_status = _with_public_snapshot_urls(_with_public_chart_urls(final_status, runtime), runtime)
         public_trail_url = _public_signalpilot_url(public_status.get("trailUrl") or start_trail_url, runtime)
         delivery_user_id = routed.installation.user_id or route.analysis_user_id
         delivery_api_key = await delivery_api_key_for_user(
@@ -1270,6 +1386,72 @@ async def process_routed_comment_event(
             )
         delivery = await render_delivery(packet, api_key=delivery_api_key)
         rendered_status = delivery_result_to_status(delivery, packet, base_status=public_status)
+        if html_deliverable:
+            try:
+                delivered = await _insert_html_deliverable(
+                    db=db,
+                    token=token,
+                    routed=routed,
+                    route=route,
+                    page_id=page_id,
+                    request_page_id=request_page_id,
+                    discussion_id=discussion_id,
+                    anchor_block_id=parent_block_id,
+                    packet=packet,
+                    api_key=delivery_api_key,
+                    runtime=runtime,
+                    session_id=str(final_status.get("sessionId") or ""),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Could not deliver Notion HTML artifact for %s; falling back to standard delivery: %s",
+                    route.request_id,
+                    exc,
+                    exc_info=True,
+                )
+                delivered = False
+            if delivered:
+                final_status_for_notion = _with_public_snapshot_urls(
+                    _with_public_chart_urls(rendered_status, runtime),
+                    runtime,
+                )
+                await notion_client.update_page_properties(
+                    token,
+                    request_page_id,
+                    {
+                        "Status": {"rich_text": _rich_text("Done")},
+                        "Trail URL": {
+                            "url": _public_signalpilot_url(
+                                final_status_for_notion.get("trailUrl") or start_trail_url,
+                                runtime,
+                            )
+                            or None
+                        },
+                        "Confidence score": {
+                            "rich_text": _rich_text(str(final_status_for_notion.get("confidenceScore") or ""))
+                        },
+                        "Summary": {
+                            "rich_text": _rich_text(
+                                final_status_for_notion.get("summary")
+                                or final_status_for_notion.get("finalAnswer")
+                                or ""
+                            )
+                        },
+                    },
+                )
+                await _create_final_comment(
+                    token,
+                    discussion_id,
+                    final_status_for_notion,
+                    request_page_url,
+                    comment_id=progress_comment_id,
+                )
+                await notion_client.append_page_blocks(
+                    token,
+                    request_page_id,
+                    _analysis_detail_blocks(final_status_for_notion),
+                )
+                return NotionCommentProcessResult(status="processed")
         uploaded_status = await _upload_chart_images_to_notion(token, rendered_status, runtime)
         final_status_for_notion = _with_public_chart_urls(uploaded_status, runtime)
         await notion_client.update_page_properties(

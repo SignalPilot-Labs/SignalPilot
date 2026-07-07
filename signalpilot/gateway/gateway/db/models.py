@@ -399,6 +399,34 @@ class NotionWebhookDelivery(GatewayBase):
     )
 
 
+class NotionDeliverable(GatewayBase):
+    """Link a Notion HTML deliverable block to the report and analysis request."""
+
+    __tablename__ = "notion_deliverables"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    installation_id: Mapped[str] = mapped_column(String, nullable=False)
+    page_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    request_page_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    discussion_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    request_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    report_id: Mapped[str] = mapped_column(String, nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, default="report", server_default="report")
+    embed_block_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    file_upload_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    session_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_notion_deliverables_org_request", "org_id", "request_id"),
+        Index("ix_notion_deliverables_report", "org_id", "report_id"),
+        Index("ix_notion_deliverables_install", "installation_id", "created_at"),
+    )
+
+
 class NotionOAuthState(GatewayBase):
     """Short-lived OAuth state for CSRF protection and post-install redirect."""
 
@@ -529,8 +557,10 @@ class GatewayReport(GatewayBase):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     org_id: Mapped[str] = mapped_column(String, nullable=False)
     scope_ref: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, default="report", server_default="report")
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     html: Mapped[str] = mapped_column(Text, nullable=False)
+    data_json: Mapped[dict | list | str | int | float | bool | None] = mapped_column(JSON)
     bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     view_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
@@ -541,6 +571,7 @@ class GatewayReport(GatewayBase):
     __table_args__ = (
         Index("idx_reports_org_created", "org_id", "created_at"),
         Index("idx_reports_org_scope", "org_id", "scope_ref"),
+        Index("idx_reports_org_kind", "org_id", "kind", "created_at"),
     )
 
 

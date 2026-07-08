@@ -104,6 +104,7 @@ simulate-notebook-ws-connection.py
 empty.env
 
 # Runtime state / generated data
+analysis_outputs/
 signalpilot/gateway/data/local_api_key
 signalpilot/notebook-server/signalpilot/_server/ai/.chat_sessions.json
 *.bak

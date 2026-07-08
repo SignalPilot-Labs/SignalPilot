@@ -8,13 +8,15 @@ import time
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update as sa_update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.db.models import (
     GatewayNotionIntegration,
     NotionDeliverable,
+    NotionDeliverableContextSnapshot,
+    NotionDeliverableUpdate,
     NotionInstallation,
     NotionInstallationConfig,
     NotionOAuthState,
@@ -30,6 +32,10 @@ from gateway.models.notion import (
 from gateway.store.crypto import _decrypt_with_migration, _encrypt
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_notion_id(value: str | None) -> str:
+    return (value or "").replace("-", "")
 
 
 async def list_integrations(
@@ -285,6 +291,248 @@ async def record_deliverable(
     await session.commit()
     await session.refresh(row)
     return row
+
+
+async def find_deliverable_by_embed_block(
+    session: AsyncSession,
+    *,
+    org_id: str,
+    installation_id: str,
+    embed_block_id: str | None,
+) -> NotionDeliverable | None:
+    """Find a deliverable by Notion embed block ID, accepting dashed/undashed IDs."""
+    normalized = _normalize_notion_id(embed_block_id)
+    if not normalized:
+        return None
+    result = await session.execute(
+        select(NotionDeliverable)
+        .where(
+            NotionDeliverable.org_id == org_id,
+            NotionDeliverable.installation_id == installation_id,
+            NotionDeliverable.embed_block_id.isnot(None),
+        )
+        .order_by(NotionDeliverable.updated_at.desc(), NotionDeliverable.created_at.desc())
+    )
+    for row in result.scalars():
+        if _normalize_notion_id(row.embed_block_id) == normalized:
+            return row
+    return None
+
+
+async def find_deliverable_by_discussion(
+    session: AsyncSession,
+    *,
+    org_id: str,
+    installation_id: str,
+    discussion_id: str | None,
+) -> NotionDeliverable | None:
+    """Find the latest deliverable created from a Notion comment discussion."""
+    normalized = _normalize_notion_id(discussion_id)
+    if not normalized:
+        return None
+    result = await session.execute(
+        select(NotionDeliverable)
+        .where(
+            NotionDeliverable.org_id == org_id,
+            NotionDeliverable.installation_id == installation_id,
+            NotionDeliverable.discussion_id.isnot(None),
+        )
+        .order_by(NotionDeliverable.updated_at.desc(), NotionDeliverable.created_at.desc())
+    )
+    for row in result.scalars():
+        if _normalize_notion_id(row.discussion_id) == normalized:
+            return row
+    return None
+
+
+async def update_deliverable_discussion(
+    session: AsyncSession,
+    *,
+    deliverable_id: str,
+    discussion_id: str,
+) -> NotionDeliverable | None:
+    row = await session.get(NotionDeliverable, deliverable_id)
+    if row is None:
+        return None
+    metadata = dict(row.metadata_json or {})
+    if row.discussion_id and row.discussion_id != discussion_id and "initial_discussion_id" not in metadata:
+        metadata["initial_discussion_id"] = row.discussion_id
+    row.discussion_id = discussion_id
+    row.metadata_json = metadata
+    row.updated_at = datetime.now(UTC)
+    await session.commit()
+    await session.refresh(row)
+    return row
+
+
+async def record_deliverable_context_snapshot(
+    session: AsyncSession,
+    *,
+    deliverable_id: str,
+    org_id: str,
+    request_id: str,
+    base_notebook_code: str,
+    session_id: str | None = None,
+    base_chat_events: list[dict] | None = None,
+    base_final_packet: dict | None = None,
+    base_notebook_sha256: str | None = None,
+    base_notebook_path: str | None = None,
+    project_id: str | None = None,
+    branch: str | None = None,
+    source_prompt: str | None = None,
+    metadata: dict | None = None,
+) -> NotionDeliverableContextSnapshot:
+    row = NotionDeliverableContextSnapshot(
+        id=str(uuid.uuid4()),
+        deliverable_id=deliverable_id,
+        org_id=org_id,
+        request_id=request_id,
+        session_id=session_id,
+        base_notebook_code=base_notebook_code,
+        base_chat_events=base_chat_events or [],
+        base_final_packet=base_final_packet or {},
+        base_notebook_sha256=base_notebook_sha256,
+        base_notebook_path=base_notebook_path,
+        project_id=project_id,
+        branch=branch,
+        source_prompt=source_prompt,
+        metadata_json=metadata,
+    )
+    session.add(row)
+    deliverable = await session.get(NotionDeliverable, deliverable_id)
+    if deliverable is not None:
+        deliverable.context_snapshot_id = row.id
+        deliverable.status = "active"
+        deliverable.error = None
+    await session.commit()
+    await session.refresh(row)
+    return row
+
+
+async def latest_deliverable_context_snapshot(
+    session: AsyncSession,
+    *,
+    deliverable_id: str,
+) -> NotionDeliverableContextSnapshot | None:
+    result = await session.execute(
+        select(NotionDeliverableContextSnapshot)
+        .where(NotionDeliverableContextSnapshot.deliverable_id == deliverable_id)
+        .order_by(NotionDeliverableContextSnapshot.created_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def create_deliverable_update(
+    session: AsyncSession,
+    *,
+    deliverable_id: str,
+    org_id: str,
+    mode: str,
+    prompt: str,
+    data_instruction: str,
+    render_instruction: str,
+    old_file_upload_id: str | None,
+    ephemeral_run_id: str | None = None,
+    metadata: dict | None = None,
+) -> NotionDeliverableUpdate:
+    row = NotionDeliverableUpdate(
+        id=str(uuid.uuid4()),
+        deliverable_id=deliverable_id,
+        org_id=org_id,
+        mode=mode,
+        status="running",
+        prompt=prompt,
+        data_instruction=data_instruction,
+        render_instruction=render_instruction,
+        ephemeral_run_id=ephemeral_run_id,
+        old_file_upload_id=old_file_upload_id,
+        metadata_json=metadata,
+    )
+    session.add(row)
+    deliverable = await session.get(NotionDeliverable, deliverable_id)
+    if deliverable is not None:
+        deliverable.latest_update_id = row.id
+        deliverable.status = "updating"
+        deliverable.error = None
+    await session.commit()
+    await session.refresh(row)
+    return row
+
+
+async def mark_deliverable_update_succeeded(
+    session: AsyncSession,
+    *,
+    update_id: str,
+    deliverable_id: str,
+    new_file_upload_id: str | None,
+    html_bytes: int,
+) -> NotionDeliverableUpdate | None:
+    update = await session.get(NotionDeliverableUpdate, update_id)
+    deliverable = await session.get(NotionDeliverable, deliverable_id)
+    if update is None:
+        return None
+    update.status = "succeeded"
+    update.error = None
+    update.new_file_upload_id = new_file_upload_id
+    update.html_bytes = html_bytes
+    if deliverable is not None:
+        values: dict[str, object | None] = {
+            "latest_file_upload_id": new_file_upload_id,
+            "latest_html_bytes": html_bytes,
+            "status": "active",
+            "error": None,
+            "updated_at": datetime.now(UTC),
+        }
+        if new_file_upload_id:
+            values["file_upload_id"] = new_file_upload_id
+        await session.execute(
+            sa_update(NotionDeliverable)
+            .where(
+                NotionDeliverable.id == deliverable_id,
+                NotionDeliverable.latest_update_id == update.id,
+            )
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+    await session.commit()
+    await session.refresh(update)
+    return update
+
+
+async def mark_deliverable_update_failed(
+    session: AsyncSession,
+    *,
+    update_id: str | None,
+    deliverable_id: str,
+    error: str,
+) -> NotionDeliverableUpdate | None:
+    update = await session.get(NotionDeliverableUpdate, update_id) if update_id else None
+    deliverable = await session.get(NotionDeliverable, deliverable_id)
+    if update is not None:
+        update.status = "failed"
+        update.error = error
+    if deliverable is not None and update is not None:
+        await session.execute(
+            sa_update(NotionDeliverable)
+            .where(
+                NotionDeliverable.id == deliverable_id,
+                NotionDeliverable.latest_update_id == update.id,
+            )
+            .values(
+                status="failed",
+                error=error,
+                updated_at=datetime.now(UTC),
+            )
+            .execution_options(synchronize_session=False)
+        )
+    elif deliverable is not None and update_id is None:
+        deliverable.status = "failed"
+        deliverable.error = error
+    await session.commit()
+    if update is not None:
+        await session.refresh(update)
+    return update
 
 
 async def upsert_oauth_installation(

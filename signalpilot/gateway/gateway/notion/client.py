@@ -474,7 +474,7 @@ async def ensure_child_page(
     api_key: str,
     parent_page_id: str | None,
     title: str = SIGNALPILOT_TRIGGER_PAGE_TITLE,
-    content: str = "Mention this page in a Notion comment to start SignalPilot analysis.",
+    content: str = "Mention the SignalPilot agent in any connected Notion page to start analysis.",
     icon: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Find or create the mentionable SignalPilot trigger page."""

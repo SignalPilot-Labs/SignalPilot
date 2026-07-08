@@ -1,9 +1,11 @@
 """Shared orchestration helpers for notebook-backed external analysis."""
 
 from .credentials import delivery_api_key_for_user
+from .followups import DeliverableFollowupPlan, plan_deliverable_followup
 from .html_orchestrator import (
     HtmlDeliverableResult,
     HtmlOrchestrator,
+    render_followup,
     render_html_deliverable,
 )
 from .preflight import (
@@ -40,6 +42,7 @@ __all__ = [
     "DeliveryPacket",
     "DeliveryRenderer",
     "DeliveryResult",
+    "DeliverableFollowupPlan",
     "FinalStatement",
     "HtmlDeliverableResult",
     "HtmlOrchestrator",
@@ -52,8 +55,10 @@ __all__ = [
     "load_delivery_packet",
     "load_delivery_packet_from_events",
     "render_delivery",
+    "render_followup",
     "render_html_deliverable",
     "render_slack_final_message",
     "render_slack_progress_message",
     "wants_html_deliverable",
+    "plan_deliverable_followup",
 ]

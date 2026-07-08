@@ -1,0 +1,420 @@
+{
+  "source_csv": "/Users/lfnandoo/Downloads/polished-resonance-69540728_production_neondb_2026-06-22_15-45-32.csv",
+  "html": "/Users/lfnandoo/Projects/sagebook/SignalPilot/analysis_outputs/slack_trace_5343c499/trace_visualization.html",
+  "report": "/Users/lfnandoo/Projects/sagebook/SignalPilot/analysis_outputs/slack_trace_5343c499/report.md",
+  "thread_id": "session-slack-5343c4998179530d",
+  "session_id": "session-slack-5343c4998179530d",
+  "source": "slack",
+  "source_url": "https://luizs-workspace.slack.com/archives/C0BCF008EE4/p1782152691119069",
+  "project_id": "907a47d1-b196-428b-89de-7f4a8b7acc41",
+  "branch": "analysis/slack/slack-5343c4998179530d-i-m-pulling-together-a-board-deck-how-much-trans",
+  "default_branch": "main",
+  "request_id": "slack-5343c4998179530d",
+  "runtime_session_id": "6c6b04d1-07b5-4a35-9ed5-cd4e42aa1b63",
+  "notebook_path": "notebooks/slack/i-m-pulling-together-a-board-deck-how-much-transfer-revenue-did-we-do-from-our-u-79530d.py",
+  "latest_commit_sha": "8f55812a4281be0ddfbfdff2cf53df5dcacfd93b",
+  "event_count": 770,
+  "duration_sec": 773.859563,
+  "recorded_cost_usd": 2.1691922999999997,
+  "event_counts": {
+    "user": 1,
+    "block_start": 49,
+    "thinking_delta": 480,
+    "thinking": 14,
+    "text_delta": 126,
+    "text": 16,
+    "tool_use": 41,
+    "tool_result": 41,
+    "done": 2
+  },
+  "tool_counts": {
+    "ToolSearch": 1,
+    "Agent": 1,
+    "Read": 18,
+    "mcp__signalpilot-notebook__get_lightweight_cell_map": 2,
+    "Glob": 5,
+    "Grep": 1,
+    "mcp__signalpilot-notebook__edit_notebook": 7,
+    "mcp__signalpilot-notebook__run_cells": 6
+  },
+  "read_paths": [
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/.claude/skills/sp-notebook/SKILL.md",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/.claude/skills/sp-data/SKILL.md",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/dbt_project.yml",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/profiles.yml",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/marts/core/_core.yml",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/marts/finance/_finance.yml",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/intermediate/int_transfers_enriched.sql",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/intermediate/int_revenue_per_transfer.sql",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/marts/core/fct_transfers.sql",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/marts/core/dim_customers.sql",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/staging/raw_core_transfers/_raw_core_transfers__sources.yml",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/staging/raw_core_transfers/stg_core_transfers__customers.sql",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/staging/raw_core_transfers/stg_core_transfers__transfers.sql",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/marts/core/dim_corridors.sql",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/marts/core/dim_recipients.sql",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/intermediate/int_customer_identity_resolved.sql",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/marts/finance/fct_revenue_daily.sql",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/intermediate/int_customer_lifetime.sql"
+  ],
+  "project_read_paths": [
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/dbt_project.yml",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/profiles.yml",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/marts/core/_core.yml",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/marts/finance/_finance.yml",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/intermediate/int_transfers_enriched.sql",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/intermediate/int_revenue_per_transfer.sql",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/marts/core/fct_transfers.sql",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/marts/core/dim_customers.sql",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/staging/raw_core_transfers/_raw_core_transfers__sources.yml",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/staging/raw_core_transfers/stg_core_transfers__customers.sql",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/staging/raw_core_transfers/stg_core_transfers__transfers.sql",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/marts/core/dim_corridors.sql",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/marts/core/dim_recipients.sql",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/intermediate/int_customer_identity_resolved.sql",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/marts/finance/fct_revenue_daily.sql",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/models/intermediate/int_customer_lifetime.sql"
+  ],
+  "missing_skill_paths": [
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/.claude/skills/sp-notebook/SKILL.md",
+    "/home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project/.claude/skills/sp-data/SKILL.md"
+  ],
+  "sql_snippets": [
+    {
+      "idx": 432,
+      "cell_id": null,
+      "sql": "SELECT COUNT(*) as transfer_count, ROUND(SUM(fee_revenue)::numeric, 2) as total_fee_revenue, ROUND(SUM(fx_margin_revenue)::numeric, 2) as total_fx_margin_revenue, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue, MIN(created_at::date) as earliest_transfer, MAX(created_at::date) as latest_transfer FROM fct_transfers WHERE send_currency = 'GBP' AND is_completed = true AND created_at >= '2026-01-01' AND created_at < '2026-04-01'"
+    },
+    {
+      "idx": 432,
+      "cell_id": null,
+      "sql": "SELECT status_clean, COUNT(*) as transfer_count, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue FROM fct_transfers WHERE send_currency = 'GBP' AND created_at >= '2026-01-01' AND created_at < '2026-04-01' GROUP BY status_clean ORDER BY total_revenue DESC"
+    },
+    {
+      "idx": 432,
+      "cell_id": null,
+      "sql": "SELECT DATE_TRUNC('month', created_at)::date as revenue_month, TO_CHAR(DATE_TRUNC('month', created_at), 'Mon YYYY') as month_label, COUNT(*) as transfer_count, ROUND(SUM(fee_revenue)::numeric, 2) as fee_revenue, ROUND(SUM(fx_margin_revenue)::numeric, 2) as fx_margin_revenue, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue FROM fct_transfers WHERE send_currency = 'GBP' AND is_completed = true AND created_at >= '2026-01-01' AND created_at < '2026-04-01' GROUP BY 1, 2 ORDER BY 1"
+    },
+    {
+      "idx": 432,
+      "cell_id": null,
+      "sql": "SELECT ROUND(SUM(fee_revenue)::numeric, 2) as fee_revenue, ROUND(SUM(fx_margin_revenue)::numeric, 2) as fx_margin_revenue, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue, ROUND((SUM(fee_revenue) + SUM(fx_margin_revenue) - SUM(total_revenue))::numeric, 2) as promo_discount_implied FROM fct_transfers WHERE send_currency = 'GBP' AND is_completed = true AND created_at >= '2026-01-01' AND created_at < '2026-04-01'"
+    },
+    {
+      "idx": 486,
+      "cell_id": null,
+      "sql": "SELECT COUNT(*) as transfer_count, ROUND(SUM(fee_revenue)::numeric, 2) as total_fee_revenue, ROUND(SUM(fx_margin_revenue)::numeric, 2) as total_fx_margin_revenue, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue, MIN(created_at::date) as earliest_transfer, MAX(created_at::date) as latest_transfer FROM fct_transfers WHERE send_currency = 'GBP' AND is_completed = true AND created_at >= '2026-01-01' AND created_at < '2026-04-01'"
+    },
+    {
+      "idx": 486,
+      "cell_id": null,
+      "sql": "SELECT status_clean, COUNT(*) as transfer_count, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue FROM fct_transfers WHERE send_currency = 'GBP' AND created_at >= '2026-01-01' AND created_at < '2026-04-01' GROUP BY status_clean ORDER BY total_revenue DESC"
+    },
+    {
+      "idx": 486,
+      "cell_id": null,
+      "sql": "SELECT DATE_TRUNC('month', created_at)::date as revenue_month, TO_CHAR(DATE_TRUNC('month', created_at), 'Mon YYYY') as month_label, COUNT(*) as transfer_count, ROUND(SUM(fee_revenue)::numeric, 2) as fee_revenue, ROUND(SUM(fx_margin_revenue)::numeric, 2) as fx_margin_revenue, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue FROM fct_transfers WHERE send_currency = 'GBP' AND is_completed = true AND created_at >= '2026-01-01' AND created_at < '2026-04-01' GROUP BY 1, 2 ORDER BY 1"
+    },
+    {
+      "idx": 486,
+      "cell_id": null,
+      "sql": "SELECT ROUND(SUM(fee_revenue)::numeric, 2) as fee_revenue, ROUND(SUM(fx_margin_revenue)::numeric, 2) as fx_margin_revenue, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue, ROUND((SUM(fee_revenue) + SUM(fx_margin_revenue) - SUM(total_revenue))::numeric, 2) as promo_discount_implied FROM fct_transfers WHERE send_currency = 'GBP' AND is_completed = true AND created_at >= '2026-01-01' AND created_at < '2026-04-01'"
+    },
+    {
+      "idx": 593,
+      "cell_id": "4e186794",
+      "sql": "SELECT COUNT(*) as transfer_count, ROUND(SUM(fee_revenue)::numeric, 2) as total_fee_revenue, ROUND(SUM(fx_margin_revenue)::numeric, 2) as total_fx_margin_revenue, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue, MIN(created_at::date) as earliest_transfer, MAX(created_at::date) as latest_transfer FROM analytics_marts.fct_transfers WHERE send_currency = 'GBP' AND is_completed = true AND created_at >= '2026-01-01' AND created_at < '2026-04-01'"
+    },
+    {
+      "idx": 593,
+      "cell_id": "f154ac27",
+      "sql": "SELECT status_clean, COUNT(*) as transfer_count, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue FROM analytics_marts.fct_transfers WHERE send_currency = 'GBP' AND created_at >= '2026-01-01' AND created_at < '2026-04-01' GROUP BY status_clean ORDER BY total_revenue DESC"
+    },
+    {
+      "idx": 593,
+      "cell_id": "d912a1da",
+      "sql": "SELECT DATE_TRUNC('month', created_at)::date as revenue_month, TO_CHAR(DATE_TRUNC('month', created_at), 'Mon YYYY') as month_label, COUNT(*) as transfer_count, ROUND(SUM(fee_revenue)::numeric, 2) as fee_revenue, ROUND(SUM(fx_margin_revenue)::numeric, 2) as fx_margin_revenue, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue FROM analytics_marts.fct_transfers WHERE send_currency = 'GBP' AND is_completed = true AND created_at >= '2026-01-01' AND created_at < '2026-04-01' GROUP BY 1, 2 ORDER BY 1"
+    },
+    {
+      "idx": 593,
+      "cell_id": "bdac5f1c",
+      "sql": "SELECT ROUND(SUM(fee_revenue)::numeric, 2) as fee_revenue, ROUND(SUM(fx_margin_revenue)::numeric, 2) as fx_margin_revenue, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue, ROUND((SUM(fee_revenue) + SUM(fx_margin_revenue) - SUM(total_revenue))::numeric, 2) as promo_discount_implied FROM analytics_marts.fct_transfers WHERE send_currency = 'GBP' AND is_completed = true AND created_at >= '2026-01-01' AND created_at < '2026-04-01'"
+    }
+  ],
+  "setup_snippets": [
+    {
+      "idx": 432,
+      "cell_id": null,
+      "lines": [
+        "connections_list = sp.connections()",
+        "db = sp.connect(\"nala\")"
+      ]
+    },
+    {
+      "idx": 486,
+      "cell_id": null,
+      "lines": [
+        "connections_list = sp.connections()",
+        "db = sp.connect(\"nala\")"
+      ]
+    },
+    {
+      "idx": 517,
+      "cell_id": "7933675a",
+      "lines": [
+        "sp.init()",
+        "connections_list = sp.connections()",
+        "db = sp.connect(\"nala\")"
+      ]
+    },
+    {
+      "idx": 546,
+      "cell_id": "7933675a",
+      "lines": [
+        "sp.init()",
+        "connections_list = sp.connections()",
+        "connections_list"
+      ]
+    },
+    {
+      "idx": 566,
+      "cell_id": "7933675a",
+      "lines": [
+        "sp.init()",
+        "connections_list = sp.connections()",
+        "db = sp.connect(\"fin-db\")"
+      ]
+    }
+  ],
+  "stages": [
+    {
+      "label": "Boot/tool setup and prompt intake",
+      "start_idx": 0,
+      "end_idx": 24,
+      "events": 25,
+      "duration_sec": 26.16,
+      "start_offset_sec": 0.0,
+      "end_offset_sec": 26.16,
+      "note": "Initial Slack request, assistant status text, notebook tool discovery."
+    },
+    {
+      "label": "dbt project scouting and planning",
+      "start_idx": 25,
+      "end_idx": 430,
+      "events": 406,
+      "duration_sec": 434.98,
+      "start_offset_sec": 32.87,
+      "end_offset_sec": 467.85,
+      "note": "Explore subagent, Glob/Read/Grep over dbt files, and long planning before notebook edits."
+    },
+    {
+      "label": "Notebook rebuild after edit transaction failure",
+      "start_idx": 431,
+      "end_idx": 502,
+      "events": 72,
+      "duration_sec": 87.55,
+      "start_offset_sec": 468.04,
+      "end_offset_sec": 555.59,
+      "note": "First edit partially applied because a stale cell id was missing; agent inspected notebook and rebuilt cells."
+    },
+    {
+      "label": "Execution/debug loop: SDK init, connection, schema prefix",
+      "start_idx": 503,
+      "end_idx": 600,
+      "events": 98,
+      "duration_sec": 68.68,
+      "start_offset_sec": 555.78,
+      "end_offset_sec": 624.46,
+      "note": "Fixed missing sp.init(), wrong connection name nala, and unqualified fct_transfers table references."
+    },
+    {
+      "label": "Successful notebook execution and summary update",
+      "start_idx": 601,
+      "end_idx": 652,
+      "events": 52,
+      "duration_sec": 65.57,
+      "start_offset_sec": 632.06,
+      "end_offset_sec": 697.63,
+      "note": "Ran notebook successfully against analytics_marts.fct_transfers and updated summary/result cells."
+    },
+    {
+      "label": "Final answer generation",
+      "start_idx": 653,
+      "end_idx": 769,
+      "events": 117,
+      "duration_sec": 73.91,
+      "start_offset_sec": 699.95,
+      "end_offset_sec": 773.86,
+      "note": "Generated final JSON result, methodology, caveats, and chart metadata."
+    }
+  ],
+  "text_snapshots": [
+    {
+      "idx": 15,
+      "elapsed_sec": 22.47,
+      "content": "I'm starting the analysis for your Q1 2026 GBP transfer revenue question. Let me first load the tools I need and scout your dbt project and database schema."
+    },
+    {
+      "idx": 23,
+      "elapsed_sec": 25.96,
+      "content": "Good, tools are loaded. Let me now scout the dbt project structure and read the skill files to understand the notebook SDK, while also checking the current notebook state."
+    },
+    {
+      "idx": 430,
+      "elapsed_sec": 467.85,
+      "content": "Now let me check the current notebook state and scout the dbt project in parallel to plan my queries."
+    },
+    {
+      "idx": 457,
+      "elapsed_sec": 509.19,
+      "content": "The edit reported a transaction error but individual operations showed \"ok\". Let me check the actual notebook state to verify what was applied."
+    },
+    {
+      "idx": 484,
+      "elapsed_sec": 524.26,
+      "content": "The transaction partially applied — only Hbol remains (MJUe and vblA were deleted but adds were rolled back). Let me rebuild the notebook by adding all needed cells in a fresh edit."
+    },
+    {
+      "idx": 501,
+      "elapsed_sec": 555.39,
+      "content": "All 13 cells added successfully. Now running all cells to execute the queries and generate charts."
+    },
+    {
+      "idx": 515,
+      "elapsed_sec": 560.52,
+      "content": "The setup cell failed because `sp.init()` wasn't called. I need to initialize the SDK first. Let me fix the setup cell."
+    },
+    {
+      "idx": 529,
+      "elapsed_sec": 567.28,
+      "content": "Good, cell updated. Running all cells again to pick up the SDK initialization."
+    },
+    {
+      "idx": 544,
+      "elapsed_sec": 573.75,
+      "content": "The SDK initialized, but the connection name \"nala\" wasn't found. Let me discover the available connections first."
+    },
+    {
+      "idx": 564,
+      "elapsed_sec": 583.64,
+      "content": "Found it — the connection is named \"fin-db\" (matching the user's \"fin db\"). Let me update the setup cell and run the full notebook."
+    },
+    {
+      "idx": 571,
+      "elapsed_sec": 587.02,
+      "content": "Now running all cells with the correct connection."
+    },
+    {
+      "idx": 591,
+      "elapsed_sec": 611.87,
+      "content": "The connection works but tables need schema prefixes. I can see `analytics_intermediate.*` tables, so the marts are likely in `analytics_marts`. Let me fix all query cells to use `analytics_marts.fct_transfers`."
+    },
+    {
+      "idx": 598,
+      "elapsed_sec": 623.69,
+      "content": "All query cells updated with `analytics_marts.fct_transfers`. Running the full notebook now."
+    },
+    {
+      "idx": 637,
+      "elapsed_sec": 661.98,
+      "content": "All cells executed successfully with clean data. Here's what I found:\n- **£2,530.33** total completed GBP transfer revenue in Q1 2026\n- **190 transfers** across all 3 months\n- Revenue is 91.6% FX margin, 7.7% fees\n- Monthly reconciliation ✅ passes\n\nNow let me update the executive summary and finding headings with actual results."
+    },
+    {
+      "idx": 649,
+      "elapsed_sec": 691.64,
+      "content": "Summary cells updated. Running final verification to confirm all cells execute cleanly."
+    },
+    {
+      "idx": 767,
+      "elapsed_sec": 770.04,
+      "content": "All 14 cells executed cleanly — zero errors, all reconciliation checks pass, both charts rendered. The notebook is complete. Here is the final analysis result:\n\n```json\n{\n  \"summary\": \"Q1 2026 completed GBP transfer revenue: £2,530.33 across 190 transfers (91.6% FX margin, 7.7% fees)\",\n  \"confidenceScore\": 0.90,\n  \"finalAnswer\": \"## Executive Summary and Explorations\\n\\n- **Q1 2026 completed GBP transfer revenue: £2,530.33** across 190 completed transfers (Jan 1 – Mar 31, 2026).\\n- Revenue is heavily FX-margin-driven: £2,316.94 FX margin (91.6%) vs £195.57 fees (7.7%), with a small £17.82 net promo credit.\\n- Monthly trajectory: Jan £876.43 (69 transfers) → Feb £867.78 (43 transfers) → Mar £786.12 (78 transfers). Broadly flat with a slight downward trend, though transfer volume increased in March.\\n- Only completed transfers are included. Including all statuses (pending, failed, cancelled, refunded) would give £2,793.60 across 222 transfers.\\n- **Assumptions:** \\\"UK (GBP) customers\\\" interpreted as `send_currency = 'GBP'`; only `is_completed = true` transfers included; revenue dated by `created_at` not settlement date.\\n- **Exclusions:** Non-GBP transfers from UK-domiciled customers; pending/failed/cancelled/refunded transfers.\\n- **Known gaps:** FX margin revenue is modeled (`send_amount × fx_margin_bps / 10,000`), not actual realized execution margin.\\n- **Sensitivity:** If the business definition of \\\"UK customers\\\" includes non-GBP senders domiciled in UK, or if revenue recognition should use completion date, the figure could shift.\\n- Steps run: SDK init → governed connection to `fin-db` → total revenue query → status breakdown validation → monthly trend query → monthly chart → monthly reconciliation → component breakdown query → component chart → component reconciliation.\\n\\n## Detailed Research\\n\\n### Total Q1 2026 Completed GBP Transfer Revenue\\nQueried `analytics_marts.fct_transfers` with filters `send_currency = 'GBP'`, `is_completed = true`, and `created_at` in [2026-01-01, 2026-04-01). Result: 190 transfers, £195.57 fee revenue, £2,316.94 FX margin revenue, £2,530.33 total revenue. Date range spans Jan 1 to Mar 31.\\n\\n### Status Breakdown Validation\\nAll GBP transfers in Q1 (regardless of status): completed 190 (£2,530.33), refunded 5 (£88.82), pending 14 (£79.24), failed 7 (£51.38), cancelled 6 (£43.83). Total across all statuses: £2,793.60 from 222 transfers. Completed transfers represent 85.6% of all Q1 GBP transfers by count and 90.6% by revenue.\\n\\n### Monthly Revenue Trend\\n- January: 69 transfers, £56.69 fees, £815.78 FX margin, **£876.43 total**\\n- February: 43 transfers, £55.78 fees, £808.04 FX margin, **£867.78 total**\\n- March: 78 transfers, £83.10 fees, £693.12 FX margin, **£786.12 total**\\n\\nMonthly sum (£2,530.33) reconciles exactly to the total query. Revenue dipped ~10% from Jan to Mar despite March having the highest transfer count, driven by lower FX margin revenue per transfer.\\n\\n### Revenue Component Breakdown\\n- Fee revenue: £195.57 (7.7% of total)\\n- FX margin revenue: £2,316.94 (91.6% of total)\\n- Implied promo credit: £17.82 (fee + FX margin = £2,512.51, but total is £2,530.33, indicating net promo credits added to revenue)\\n- Components reconcile: fee + FX margin – implied promo = total ✅\\n\\nThe revenue mix is overwhelmingly FX margin. Transfer fees are a minor contributor. The small net promo credit suggests promotional bonus adjustments in Q1.\\n\\n## Confidence Score: 0.90\\n\\n- **Source:** Canonical `analytics_marts.fct_transfers` dbt mart table, queried via governed `fin-db` connection through the SignalPilot data SDK.\\n- **Filters applied:** `send_currency = 'GBP'`, `is_completed = true`, `created_at >= '2026-01-01' AND created_at < '2026-04-01'`.\\n- **Validation checks passed:** Monthly sums reconcile to total (£2,530.33 ✅). Component breakdown reconciles (fee + FX margin – promo = total ✅). Full Q1 date range confirmed (Jan 1 – Mar 31). All 3 months represented with non-zero data.\\n- **What could raise confidence:** Cross-checking against `fct_revenue_daily` mart; confirming FX margin against actual execution data; validating that `send_currency = 'GBP'` matches the intended UK customer definition.\\n- **What could lower confidence:** If \\\"UK customers\\\" should include non-GBP senders domiciled in the UK; if revenue recognition should use completion/settlement date rather than creation date; if FX margin model diverges materially from realized margins.\",\n  \"gotchas\": [\n    \"Only completed transfers included (is_completed = true). Pending, failed, cancelled, and refunded transfers (£263.27 additional) are excluded.\",\n    \"UK (GBP) customers interpreted as send_currency = 'GBP'. UK-domiciled customers sending in other currencies are not captured.\",\n    \"Revenue dated by transfer creation date (created_at), not settlement or completion date.\",\n    \"FX margin revenue is modeled (send_amount × fx_margin_bps / 10,000), not actual realized FX execution margin.\",\n    \"A net promo credit of £17.82 means total_revenue exceeds fee + FX margin components — promo/bonus adjustments are embedded in the total.\"\n  ],\n  \"analysisMethod\": \"Queried the dbt analytics_marts.fct_transfers mart via governed fin-db connection using the SignalPilot notebook SDK (sp.init → sp.connect → db.query). Ran four governed SQL queries: total Q1 GBP completed revenue, status breakdown for all Q1 GBP transfers, monthly completed revenue breakdown, and component split (fee vs FX margin). Validated with monthly-to-total reconciliation (exact match) and component-to-total reconciliation (exact match after promo adjustment). Two charts generated: monthly revenue bar chart and component bar/pie chart. All evidence, calculations, and checks executed in notebook cells — no MCP-only or hardcoded results.\",\n  \"notionComment\": \"• Q1 2026 completed GBP transfer revenue: **£2,530.33** from 190 transfers (Jan–Mar 2026)\\n• Revenue mix: £2,316.94 FX margin (91.6%) + £195.57 fees (7.7%) + £17.82 net promo credit\\n• Monthly trend: Jan £876 → Feb £868 → Mar £786 — broadly flat, slight dip in March despite higher transfer volume\\n• Only completed transfers included; all statuses would total £2,793.60 across 222 transfers\\n• Revenue uses transfer creation date and modeled FX margin — see notebook for full caveats and methodology\",\n  \"notionCharts\": [\n    {\n      \"title\": \"Q1 2026 GBP Monthly Revenue\",\n      \"url\": \"notebooks/slack/q1_gbp_monthly_revenue.png\",\n      \"caption\": \"Monthly completed GBP transfer revenue trended slightly downward from £876 in January to £786 in March, despite higher transfer volume in March.\",\n      \"altText\": \"Bar chart showing Q1 2026 GBP transfer revenue by month: Jan £876, Feb £868, Mar £786\",\n      \"includeInComment\": true,\n      \"includeOnPage\": true\n    },\n    {\n      \"title\": \"Q1 2026 GBP Revenue Components\",\n      \"url\": \"notebooks/slack/q1_gbp_revenue_components.png\",\n      \"caption\": \"FX margin dominates the revenue mix at 91.6%, with transfer fees contributing just 7.7% of the £2,530.33 total.\",\n      \"altText\": \"Side-by-side bar and pie chart showing revenue split: £2,317 FX margin (91.6%) vs £196 fees (7.7%)\",\n      \"includeInComment\": false,\n      \"includeOnPage\": true\n    }\n  ]\n}\n```"
+    }
+  ],
+  "tool_result_issues": [
+    {
+      "idx": 29,
+      "elapsed_sec": 34.06,
+      "is_error": true,
+      "tool_call_id": "toolu_01RjCyMDtZULgMmGwRBgLdzd",
+      "content": "File does not exist. Note: your current working directory is /home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project."
+    },
+    {
+      "idx": 32,
+      "elapsed_sec": 34.8,
+      "is_error": true,
+      "tool_call_id": "toolu_01Wk767mfF3qXZZ3N2k1fWRE",
+      "content": "File does not exist. Note: your current working directory is /home/notebook/.sp/projects/907a47d1-b196-428b-89de-7f4a8b7acc41/fin-project."
+    },
+    {
+      "idx": 433,
+      "elapsed_sec": 492.32,
+      "is_error": false,
+      "tool_call_id": "toolu_01CQmo8g3rLaNiwRPtgd1JJD",
+      "content": "[{'type': 'text', 'text': '{\"error\": \"Transaction failed: \\\\\"Cell \\'vblA\\' not found in document\\\\\"\", \"edits\": [{\"op\": \"update_cell\", \"cell_id\": \"Hbol\", \"status\": \"ok\", \"hide_code\": true}, {\"op\": \"delete_cell\", \"cell_id\": \"MJUe\", \"status\": \"ok\"}, {\"op\": \"delete_cell\", \"cell_id\": \"vblA\", \"status\": \"ok\"}, {\"op\": \"add_cell\", \"cell_id\": \"cd648931\", \"status\": \"ok\", \"hide_code\": true}, {\"op\": \"add_cell\", \"cell_id\": \"55c93031\", \"status\": \"ok\", \"hide_code\": false}, {\"op\": \"add_cell\", \"cell_id\": \"cba36734\", \"status\": \"ok\", \"hide_code\": true}, {\"op\": \"add_cell\", \"cell_id\": \"9f869a54\", \"status\": \"ok\", \"hide_code\": false}, {\"op\": \"add_cell\", \"cell_id\": \"16d4cdb6\", \"status\": \"ok\", \"hide_code\": false}, {\"op\": \"add_cell\", \"cell_id\": \"594d590d\", \"status\": \"ok\", \"hide_code\": true}, {\"op\": \"add_cell\", \"cell_id\": \"5da1580f\", \"status\": \"ok\", \"hide_code\": false}, {\"op\": \"add_cell\", \"cell_id\": \"e69b7c8b\", \"status\": \"ok\", \"hide_code\": false}, {\"op\": \"add_cell\", \"cell_id\": \"639796a1\", \"status\": \"ok\", \"hide_code\": false}, {\"op\": \"add_cell\", \"cell_id\": \"1965f943\", \"status\": \"ok\", \"hide_code\": true}, {\"op\": \"add_cell\", \"cell_id\": \"08d66f04\", \"status\": \"ok\", \"hide_code\": false}, {\"op\": \"add_cell\", \"cell_id\": \"55bd8219\", \"status\": \"ok\", \"hide_code\": false}, {\"op\": \"add_cell\", \"cell_id\": \"8c33c6f3\", \"status\": \"ok\", \"hide_code\": false}]}'}]"
+    },
+    {
+      "idx": 504,
+      "elapsed_sec": 555.96,
+      "is_error": false,
+      "tool_call_id": "toolu_012ajFtcyzV2WwKJ9SuLeKjG",
+      "content": "[{'type': 'text', 'text': '{\"cells\": [{\"cell_id\": \"Hbol\", \"status\": \"idle\", \"output\": {\"mimetype\": \"text/markdown\", \"data\": \"<span class=\\\\\"markdown prose dark:prose-invert contents\\\\\"><h1 id=\\\\\"q1-2026-uk-gbp-transfer-revenue-analysis\\\\\">Q1 2026 UK (GBP) Transfer Revenue Analysis</h1>\\\\n<span class=\\\\\"paragraph\\\\\"><strong>Source request:</strong> <a href=\\\\\"https://luizs-workspace.slack.com/archives/C0BCF008EE4/p1782152691119069\\\\\" rel=\\\\\"noopener noreferrer\\\\\" target=\\\\\"_blank\\\\\">https://luizs-workspace.slack.com/archives/C0BCF008EE4/p1782152691119069</a></span>\\\\n<span class=\\\\\"paragraph\\\\\"><strong>Source prompt:</strong> I\\'m pulling together a board deck, how much transfer revenue did we do from our UK (GBP) customers in Q1 this year? Use my fin db and my dbt project</span></span>\"}}, {\"cell_id\": \"6564b397\", \"status\": \"idle\", \"output\": {\"mimetype\": \"text/markdown\", \"data\": \"<span class=\\\\\"markdown prose dark:prose-invert contents\\\\\"><h2 id=\\\\\"executive-summary-and-explorations\\\\\">Executive Summary and Explorations</h2>\\\\n<span class=\\\\\"paragraph\\\\\"><em>Analysis in progress \\\\u2014 results will be populated after queries complete.</em></span></span>\"}}, {\"cell_id\": \"7933675a\", \"status\": \"idle\", \"output\": {\"mimetype\": \"application/vnd.sp+error\", \"data\": \"[SpExceptionRaisedError(msg=\\\\\"SDK not initialized. Call sp.init() first.\\\\\\\\n  Local:  sp.init()\\\\\\\\n  Cloud:  sp.init(api_key=\\'sp_...\\')\\\\\", exception_type=\\'RuntimeError\\', raising_cell=None, traceback=None)]\"}, \"console\": [{\"channel\": \"CellChannel.STDERR\", \"text\": \"<span class=\\\\\"codehilite\\\\\"><div class=\\\\\"highlight\\\\\"><pre><span></span><span class=\\\\\"gt\\\\\">Traceback (most recent call last):</span>\\\\n  File <span class=\\\\\"nb\\\\\">&quot;/tmp/signalpilot_42/__sp__cell_7933675a_.py&quot;</span>, line <span class=\\\\\"m\\\\\">5</span>, in <span class=\\\\\"n\\\\\">&lt;module&gt;</span>\\\\n<span class=\\\\\"w\\\\\">    </span><span class=\\\\\"n\\\\\">connections_list</span> <span class=\\\\\"o\\\\\">=</span> <span class=\\\\\"n\\\\\">sp</span><span class=\\\\\"o\\\\\">.</span><span class=\\\\\"n\\\\\">connections</span><span class=\\\\\"p\\\\\">()</span>\\\\n  File <span class=\\\\\"nb\\\\\">&quot;/opt/sp-notebook/signalpilot/_sdk/__init__.py&quot;</span>, line <span class=\\\\\"m\\\\\">39</span>, in <span class=\\\\\"n\\\\\">connections</span>\\\\n<span class=\\\\\"w\\\\\">    </span><span class=\\\\\"n\\\\\">_require_init</span><span class=\\\\\"p\\\\\">()</span>\\\\n<span class=\\\\\"w\\\\\">    </span><span class=\\\\\"pm\\\\\">~~~~~~~~~~~~~^^</span>\\\\n  File <span class=\\\\\"nb\\\\\">&quot;/opt/sp-notebook/signalpilot/_sdk/__init__.py&quot;</span>, line <span class=\\\\\"m\\\\\">56</span>, in <span class=\\\\\"n\\\\\">_require_init</span>\\\\n<span class=\\\\\"w\\\\\">    </span><span cla\"}]}, {\"cell_id\": \"e2006228\", \"status\": \"idle\", \"output\": {\"mimetype\": \"text/markdown\", \"data\": \"<span class=\\\\\"markdown prose dark:prose-invert contents\\\\\"><h2 id=\\\\\"analysis-steps\\\\\">Analysis steps</h2>\\\\n<h3 id=\\\\\"finding-total-q1-2026-completed-gbp-transfer-revenue\\\\\">Finding: Total Q1 2026 completed GBP transfer revenue</h3>\\\\n<sp"
+    },
+    {
+      "idx": 532,
+      "elapsed_sec": 567.89,
+      "is_error": false,
+      "tool_call_id": "toolu_01EaWVjE4966EFrr33XehjDV",
+      "content": "[{'type': 'text', 'text': '{\"cells\": [{\"cell_id\": \"Hbol\", \"status\": \"idle\", \"output\": {\"mimetype\": \"text/markdown\", \"data\": \"<span class=\\\\\"markdown prose dark:prose-invert contents\\\\\"><h1 id=\\\\\"q1-2026-uk-gbp-transfer-revenue-analysis\\\\\">Q1 2026 UK (GBP) Transfer Revenue Analysis</h1>\\\\n<span class=\\\\\"paragraph\\\\\"><strong>Source request:</strong> <a href=\\\\\"https://luizs-workspace.slack.com/archives/C0BCF008EE4/p1782152691119069\\\\\" rel=\\\\\"noopener noreferrer\\\\\" target=\\\\\"_blank\\\\\">https://luizs-workspace.slack.com/archives/C0BCF008EE4/p1782152691119069</a></span>\\\\n<span class=\\\\\"paragraph\\\\\"><strong>Source prompt:</strong> I\\'m pulling together a board deck, how much transfer revenue did we do from our UK (GBP) customers in Q1 this year? Use my fin db and my dbt project</span></span>\"}}, {\"cell_id\": \"6564b397\", \"status\": \"idle\", \"output\": {\"mimetype\": \"text/markdown\", \"data\": \"<span class=\\\\\"markdown prose dark:prose-invert contents\\\\\"><h2 id=\\\\\"executive-summary-and-explorations\\\\\">Executive Summary and Explorations</h2>\\\\n<span class=\\\\\"paragraph\\\\\"><em>Analysis in progress \\\\u2014 results will be populated after queries complete.</em></span></span>\"}}, {\"cell_id\": \"7933675a\", \"status\": \"idle\", \"output\": {\"mimetype\": \"application/vnd.sp+error\", \"data\": \"[SpExceptionRaisedError(msg=\\'Gateway error (HTTP 404): {\\\\\"detail\\\\\":\\\\\"Connection \\\\\\\\\\'nala\\\\\\\\\\' not found\\\\\"}\\', exception_type=\\'RuntimeError\\', raising_cell=None, traceback=None)]\"}, \"console\": [{\"channel\": \"CellChannel.STDERR\", \"text\": \"<span class=\\\\\"codehilite\\\\\"><div class=\\\\\"highlight\\\\\"><pre><span></span><span class=\\\\\"gt\\\\\">Traceback (most recent call last):</span>\\\\n  File <span class=\\\\\"nb\\\\\">&quot;/tmp/signalpilot_42/__sp__cell_7933675a_.py&quot;</span>, line <span class=\\\\\"m\\\\\">12</span>, in <span class=\\\\\"n\\\\\">&lt;module&gt;</span>\\\\n<span class=\\\\\"w\\\\\">    </span><span class=\\\\\"n\\\\\">available_tables</span> <span class=\\\\\"o\\\\\">=</span> <span class=\\\\\"n\\\\\">db</span><span class=\\\\\"o\\\\\">.</span><span class=\\\\\"n\\\\\">tables</span><span class=\\\\\"p\\\\\">()</span>\\\\n  File <span class=\\\\\"nb\\\\\">&quot;/opt/sp-notebook/signalpilot/_sdk/_connection.py&quot;</span>, line <span class=\\\\\"m\\\\\">30</span>, in <span class=\\\\\"n\\\\\">tables</span>\\\\n<span class=\\\\\"w\\\\\">    </span><span class=\\\\\"n\\\\\">data</span> <span class=\\\\\"o\\\\\">=</span> <span class=\\\\\"bp\\\\\">self</span><span class=\\\\\"o\\\\\">.</span><span class=\\\\\"n\\\\\">_client</span><span class=\\\\\"o\\\\\">.</span><span class=\\\\\"n\\\\\">get</span><span class=\\\\\"p\\\\\">(</span><span class=\\\\\"sa\\\\\">f</span><span class=\\\\\"s2\\\\\">&quot;/api/connections/</span><span class=\\\\\"si\\\\\">{</span><span class=\\\\\"bp\\\\\">self</span\"}]}, {\"cell_id\": \"e2006228\", \"status\": \"idle\", \"output\": {\"mimetype\": \"text/markdown\", \"data\": \"<span class=\\\\\"markdown prose dark:prose-invert contents\\\\\"><h2 id=\\\\\"analysis-steps\\\\\">Analysis steps</h2>\\\\n<h3 id=\\\\\"finding-total-q1-2026-completed-gbp-transfer-revenue\\\\\">Finding: Total Q1 2026 completed GBP transfer revenue</h3>\\\\n<span class=\\\\\"para"
+    },
+    {
+      "idx": 574,
+      "elapsed_sec": 602.66,
+      "is_error": false,
+      "tool_call_id": "toolu_01ThCNf1wTr8cyBtSsHffaFT",
+      "content": "[{'type': 'text', 'text': '{\"cells\": [{\"cell_id\": \"Hbol\", \"status\": \"idle\", \"output\": {\"mimetype\": \"text/markdown\", \"data\": \"<span class=\\\\\"markdown prose dark:prose-invert contents\\\\\"><h1 id=\\\\\"q1-2026-uk-gbp-transfer-revenue-analysis\\\\\">Q1 2026 UK (GBP) Transfer Revenue Analysis</h1>\\\\n<span class=\\\\\"paragraph\\\\\"><strong>Source request:</strong> <a href=\\\\\"https://luizs-workspace.slack.com/archives/C0BCF008EE4/p1782152691119069\\\\\" rel=\\\\\"noopener noreferrer\\\\\" target=\\\\\"_blank\\\\\">https://luizs-workspace.slack.com/archives/C0BCF008EE4/p1782152691119069</a></span>\\\\n<span class=\\\\\"paragraph\\\\\"><strong>Source prompt:</strong> I\\'m pulling together a board deck, how much transfer revenue did we do from our UK (GBP) customers in Q1 this year? Use my fin db and my dbt project</span></span>\"}}, {\"cell_id\": \"6564b397\", \"status\": \"idle\", \"output\": {\"mimetype\": \"text/markdown\", \"data\": \"<span class=\\\\\"markdown prose dark:prose-invert contents\\\\\"><h2 id=\\\\\"executive-summary-and-explorations\\\\\">Executive Summary and Explorations</h2>\\\\n<span class=\\\\\"paragraph\\\\\"><em>Analysis in progress \\\\u2014 results will be populated after queries complete.</em></span></span>\"}}, {\"cell_id\": \"7933675a\", \"status\": \"idle\", \"output\": {\"mimetype\": \"application/json\", \"data\": \"{\\\\\"analytics_intermediate.int_acquisition_funnel_steps\\\\\": {\\\\\"schema\\\\\": \\\\\"analytics_intermediate\\\\\", \\\\\"name\\\\\": \\\\\"int_acquisition_funnel_steps\\\\\", \\\\\"type\\\\\": \\\\\"view\\\\\", \\\\\"columns\\\\\": [{\\\\\"name\\\\\": \\\\\"customer_code\\\\\", \\\\\"type\\\\\": \\\\\"text\\\\\", \\\\\"nullable\\\\\": true, \\\\\"primary_key\\\\\": false, \\\\\"default\\\\\": null, \\\\\"comment\\\\\": \\\\\"\\\\\"}, {\\\\\"name\\\\\": \\\\\"installed_at\\\\\", \\\\\"type\\\\\": \\\\\"timestamp with time zone\\\\\", \\\\\"nullable\\\\\": true, \\\\\"primary_key\\\\\": false, \\\\\"default\\\\\": null, \\\\\"comment\\\\\": \\\\\"\\\\\"}, {\\\\\"name\\\\\": \\\\\"signed_up_at\\\\\", \\\\\"type\\\\\": \\\\\"timestamp with time zone\\\\\", \\\\\"nullable\\\\\": true, \\\\\"primary_key\\\\\": false, \\\\\"default\\\\\": null, \\\\\"comment\\\\\": \\\\\"\\\\\"}, {\\\\\"name\\\\\": \\\\\"kyc_at\\\\\", \\\\\"type\\\\\": \\\\\"timestamp with time zone\\\\\", \\\\\"nullable\\\\\": true, \\\\\"primary_key\\\\\": false, \\\\\"default\\\\\": null, \\\\\"comment\\\\\": \\\\\"\\\\\"}, {\\\\\"name\\\\\": \\\\\"first_transfer_at\\\\\", \\\\\"type\\\\\": \\\\\"timestamp with time zone\\\\\", \\\\\"nullable\\\\\": true, \\\\\"primary_key\\\\\": false, \\\\\"default\\\\\": null, \\\\\"comment\\\\\": \\\\\"\\\\\"}], \\\\\"foreign_keys\\\\\": [], \\\\\"indexes\\\\\": [], \\\\\"row_count\\\\\": 0, \\\\\"size_mb\\\\\": 0, \\\\\"description\\\\\": \\\\\"\\\\\"}, \\\\\"analytics_intermediate.int_active_users_daily\\\\\": {\\\\\"schema\\\\\": \\\\\"analytics_intermediate\\\\\", \\\\\"name\\\\\": \\\\\"int_active_users_daily\\\\\", \\\\\"type\\\\\": \\\\\"view\\\\\", \\\\\"columns\\\\\": [{\\\\\"name\\\\\": \\\\\"activity_date\\\\\", \\\\\"type\\\\\": \\\\\"date\\\\\", \\\\\"nullable\\\\\": true, \\\\\"primary_key\\\\\": false, \\\\\"default\\\\\": null, \\\\\"comment\\\\\": \\\\\"\\\\\"}, {\\\\\"name\\\\\": \\\\\"active_users\\\\\", \\\\\"type\\\\\": \\\\\"bigint\\\\\", \\\\\"nullable\\\\\": true, \\\\\"primary_key\\\\\": false, \\\\\"default\\\\\": null, \\\\\"comment\\\\\": \\\\\"\\\\\"}], \\\\\"foreign_keys\\\\\": [], \\\\\"indexes\\\\\": [], \\\\\"row_count\\\\\": 0, \\\\\"size_mb\\\\\": 0, \\\\\"description\\\\\": \\\\\"\\\\\"}, \\\\\"a"
+    }
+  ],
+  "final_result": {
+    "summary": "Q1 2026 completed GBP transfer revenue: £2,530.33 across 190 transfers (91.6% FX margin, 7.7% fees)",
+    "confidence_score": 0.9,
+    "final_answer": "## Executive Summary and Explorations\n\n- **Q1 2026 completed GBP transfer revenue: £2,530.33** across 190 completed transfers (Jan 1 – Mar 31, 2026).\n- Revenue is heavily FX-margin-driven: £2,316.94 FX margin (91.6%) vs £195.57 fees (7.7%), with a small £17.82 net promo credit.\n- Monthly trajectory: Jan £876.43 (69 transfers) → Feb £867.78 (43 transfers) → Mar £786.12 (78 transfers). Broadly flat with a slight downward trend, though transfer volume increased in March.\n- Only completed transfers are included. Including all statuses (pending, failed, cancelled, refunded) would give £2,793.60 across 222 transfers.\n- **Assumptions:** \"UK (GBP) customers\" interpreted as `send_currency = 'GBP'`; only `is_completed = true` transfers included; revenue dated by `created_at` not settlement date.\n- **Exclusions:** Non-GBP transfers from UK-domiciled customers; pending/failed/cancelled/refunded transfers.\n- **Known gaps:** FX margin revenue is modeled (`send_amount × fx_margin_bps / 10,000`), not actual realized execution margin.\n- **Sensitivity:** If the business definition of \"UK customers\" includes non-GBP senders domiciled in UK, or if revenue recognition should use completion date, the figure could shift.\n- Steps run: SDK init → governed connection to `fin-db` → total revenue query → status breakdown validation → monthly trend query → monthly chart → monthly reconciliation → component breakdown query → component chart → component reconciliation.\n\n## Detailed Research\n\n### Total Q1 2026 Completed GBP Transfer Revenue\nQueried `analytics_marts.fct_transfers` with filters `send_currency = 'GBP'`, `is_completed = true`, and `created_at` in [2026-01-01, 2026-04-01). Result: 190 transfers, £195.57 fee revenue, £2,316.94 FX margin revenue, £2,530.33 total revenue. Date range spans Jan 1 to Mar 31.\n\n### Status Breakdown Validation\nAll GBP transfers in Q1 (regardless of status): completed 190 (£2,530.33), refunded 5 (£88.82), pending 14 (£79.24), failed 7 (£51.38), cancelled 6 (£43.83). Total across all statuses: £2,793.60 from 222 transfers. Completed transfers represent 85.6% of all Q1 GBP transfers by count and 90.6% by revenue.\n\n### Monthly Revenue Trend\n- January: 69 transfers, £56.69 fees, £815.78 FX margin, **£876.43 total**\n- February: 43 transfers, £55.78 fees, £808.04 FX margin, **£867.78 total**\n- March: 78 transfers, £83.10 fees, £693.12 FX margin, **£786.12 total**\n\nMonthly sum (£2,530.33) reconciles exactly to the total query. Revenue dipped ~10% from Jan to Mar despite March having the highest transfer count, driven by lower FX margin revenue per transfer.\n\n### Revenue Component Breakdown\n- Fee revenue: £195.57 (7.7% of total)\n- FX margin revenue: £2,316.94 (91.6% of total)\n- Implied promo credit: £17.82 (fee + FX margin = £2,512.51, but total is £2,530.33, indicating net promo credits added to revenue)\n- Components reconcile: fee + FX margin – implied promo = total ✅\n\nThe revenue mix is overwhelmingly FX margin. Transfer fees are a minor contributor. The small net promo credit suggests promotional bonus adjustments in Q1.\n\n## Confidence Score: 0.90\n\n- **Source:** Canonical `analytics_marts.fct_transfers` dbt mart table, queried via governed `fin-db` connection through the SignalPilot data SDK.\n- **Filters applied:** `send_currency = 'GBP'`, `is_completed = true`, `created_at >= '2026-01-01' AND created_at < '2026-04-01'`.\n- **Validation checks passed:** Monthly sums reconcile to total (£2,530.33 ✅). Component breakdown reconciles (fee + FX margin – promo = total ✅). Full Q1 date range confirmed (Jan 1 – Mar 31). All 3 months represented with non-zero data.\n- **What could raise confidence:** Cross-checking against `fct_revenue_daily` mart; confirming FX margin against actual execution data; validating that `send_currency = 'GBP'` matches the intended UK customer definition.\n- **What could lower confidence:** If \"UK customers\" should include non-GBP senders domiciled in the UK; if revenue recognition should use completion/settlement date rather than creation date; if FX margin model diverges materially from realized margins.",
+    "gotchas": [
+      "Only completed transfers included (is_completed = true). Pending, failed, cancelled, and refunded transfers (£263.27 additional) are excluded.",
+      "UK (GBP) customers interpreted as send_currency = 'GBP'. UK-domiciled customers sending in other currencies are not captured.",
+      "Revenue dated by transfer creation date (created_at), not settlement or completion date.",
+      "FX margin revenue is modeled (send_amount × fx_margin_bps / 10,000), not actual realized FX execution margin.",
+      "A net promo credit of £17.82 means total_revenue exceeds fee + FX margin components — promo/bonus adjustments are embedded in the total."
+    ],
+    "analysis_method": "Queried the dbt analytics_marts.fct_transfers mart via governed fin-db connection using the SignalPilot notebook SDK (sp.init → sp.connect → db.query). Ran four governed SQL queries: total Q1 GBP completed revenue, status breakdown for all Q1 GBP transfers, monthly completed revenue breakdown, and component split (fee vs FX margin). Validated with monthly-to-total reconciliation (exact match) and component-to-total reconciliation (exact match after promo adjustment). Two charts generated: monthly revenue bar chart and component bar/pie chart. All evidence, calculations, and checks executed in notebook cells — no MCP-only or hardcoded results.",
+    "notion_comment": "• Q1 2026 completed GBP transfer revenue: **£2,530.33** from 190 transfers (Jan–Mar 2026)\n• Revenue mix: £2,316.94 FX margin (91.6%) + £195.57 fees (7.7%) + £17.82 net promo credit\n• Monthly trend: Jan £876 → Feb £868 → Mar £786 — broadly flat, slight dip in March despite higher transfer volume\n• Only completed transfers included; all statuses would total £2,793.60 across 222 transfers\n• Revenue uses transfer creation date and modeled FX margin — see notebook for full caveats and methodology",
+    "notion_charts": []
+  },
+  "facts": {
+    "final_summary": "Q1 2026 completed GBP transfer revenue: £2,530.33 across 190 transfers (91.6% FX margin, 7.7% fees)",
+    "confidence_score": 0.9,
+    "headline_revenue_gbp": 2530.33,
+    "completed_transfers": 190,
+    "fx_margin_gbp": 2316.94,
+    "fee_revenue_gbp": 195.57,
+    "promo_credit_gbp": 17.82,
+    "all_status_revenue_gbp": 2793.6,
+    "all_status_transfers": 222,
+    "monthly": [
+      {
+        "month": "Jan 2026",
+        "transfers": 69,
+        "revenue_gbp": 876.43
+      },
+      {
+        "month": "Feb 2026",
+        "transfers": 43,
+        "revenue_gbp": 867.78
+      },
+      {
+        "month": "Mar 2026",
+        "transfers": 78,
+        "revenue_gbp": 786.12
+      }
+    ]
+  }
+}

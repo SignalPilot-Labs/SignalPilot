@@ -586,7 +586,7 @@ async def test_create_page_sends_icon_payload(monkeypatch: pytest.MonkeyPatch) -
         "token",
         "parent-page",
         notion_client.SIGNALPILOT_TRIGGER_PAGE_TITLE,
-        "Mention this page in a Notion comment to start SignalPilot analysis.",
+        "Mention the SignalPilot agent in any connected Notion page to start analysis.",
         icon=notion_client.SIGNALPILOT_TRIGGER_PAGE_ICON,
     )
 
@@ -731,7 +731,7 @@ async def test_provisioning_creates_container_page_as_sibling(monkeypatch: pytes
             "path": "/pages",
             "parent_page_id": "integration-page-123",
             "title": notion_client.SIGNALPILOT_TRIGGER_PAGE_TITLE,
-            "content": "Mention this page in a Notion comment to start SignalPilot analysis.",
+            "content": "Mention the SignalPilot agent in any connected Notion page to start analysis.",
             "icon": notion_client.SIGNALPILOT_TRIGGER_PAGE_ICON,
         },
     ]
@@ -802,7 +802,7 @@ async def test_provisioning_uses_selected_workspace_level_integration_page(
             "path": "/pages",
             "parent_page_id": "integration-page-123",
             "title": notion_client.SIGNALPILOT_TRIGGER_PAGE_TITLE,
-            "content": "Mention this page in a Notion comment to start SignalPilot analysis.",
+            "content": "Mention the SignalPilot agent in any connected Notion page to start analysis.",
             "icon": notion_client.SIGNALPILOT_TRIGGER_PAGE_ICON,
         },
     ]
@@ -876,7 +876,7 @@ async def test_auto_provisioning_reuses_visible_integration_page(monkeypatch: py
             "path": "/pages",
             "parent_page_id": "integration-page-123",
             "title": notion_client.SIGNALPILOT_TRIGGER_PAGE_TITLE,
-            "content": "Mention this page in a Notion comment to start SignalPilot analysis.",
+            "content": "Mention the SignalPilot agent in any connected Notion page to start analysis.",
             "icon": notion_client.SIGNALPILOT_TRIGGER_PAGE_ICON,
         },
     ]
@@ -954,7 +954,7 @@ async def test_auto_provisioning_creates_container_beside_visible_page(monkeypat
             "path": "/pages",
             "parent_page_id": "integration-page-123",
             "title": notion_client.SIGNALPILOT_TRIGGER_PAGE_TITLE,
-            "content": "Mention this page in a Notion comment to start SignalPilot analysis.",
+            "content": "Mention the SignalPilot agent in any connected Notion page to start analysis.",
             "icon": notion_client.SIGNALPILOT_TRIGGER_PAGE_ICON,
         },
     ]
@@ -1289,8 +1289,10 @@ async def test_webhook_routing_rejects_ambiguous_installations(monkeypatch: pyte
 
 
 @pytest.mark.asyncio
-async def test_webhook_routing_uses_trigger_page_mention_to_disambiguate(monkeypatch: pytest.MonkeyPatch) -> None:
-    install_1 = NotionInstallation(
+async def test_webhook_routing_routes_owned_install_without_page_scope_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install = NotionInstallation(
         id="install-1",
         org_id="org-1",
         user_id="user-1",
@@ -1300,51 +1302,24 @@ async def test_webhook_routing_uses_trigger_page_mention_to_disambiguate(monkeyp
         access_token_enc=b"encrypted",
         status="active",
     )
-    install_2 = NotionInstallation(
-        id="install-2",
-        org_id="org-2",
-        user_id="user-2",
-        workspace_id="workspace-1",
-        workspace_name="Workspace",
-        bot_id="bot-1",
-        access_token_enc=b"encrypted",
-        status="active",
-    )
-    config_1 = NotionInstallationConfig(
+    config = NotionInstallationConfig(
         installation_id="install-1",
-        parent_page_id=None,
+        parent_page_id="signalpilot-integration-page",
         trigger_page_id="trigger-1",
         requests_data_source_id="ds-1",
         requests_database_page_id="db-1",
         enabled=True,
     )
-    config_2 = NotionInstallationConfig(
-        installation_id="install-2",
-        parent_page_id=None,
-        trigger_page_id="trigger-2",
-        requests_data_source_id="ds-2",
-        requests_database_page_id="db-2",
-        enabled=True,
-    )
 
     async def fake_records(session, workspace_id: str):
         assert workspace_id == "workspace-1"
-        return [(install_1, config_1, "token-1"), (install_2, config_2, "token-2")]
+        return [(install, config, "token-1")]
 
-    async def fake_belongs(*args, **kwargs):
-        return True
-
-    async def fake_list_comments(*args, **kwargs):
-        return [
-            {
-                "id": "comment-1",
-                "rich_text": [{"type": "mention", "mention": {"type": "page", "page": {"id": "trigger-2"}}}],
-            }
-        ]
+    async def fail_belongs(*args, **kwargs):
+        raise AssertionError("page scope should not gate SignalPilot agent mentions")
 
     monkeypatch.setattr(notion_store, "list_active_installation_records_for_workspace", fake_records)
-    monkeypatch.setattr(notion_client, "page_belongs_to_scope", fake_belongs)
-    monkeypatch.setattr(notion_client, "list_comments", fake_list_comments)
+    monkeypatch.setattr(notion_client, "page_belongs_to_scope", fail_belongs)
 
     payload = {
         "workspace_id": "workspace-1",
@@ -1357,7 +1332,7 @@ async def test_webhook_routing_uses_trigger_page_mention_to_disambiguate(monkeyp
     routed = await notion_webhooks.route_comment_event(object(), payload)
 
     assert routed is not None
-    assert routed.installation.id == "install-2"
+    assert routed.installation.id == "install-1"
 
 
 def test_bot_authored_comment_events_are_ignored() -> None:

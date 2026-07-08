@@ -8,6 +8,7 @@ import {
   Link,
   Loader2,
   MessageSquare,
+  Palette,
   Trash2,
   X,
 } from "lucide-react";
@@ -33,6 +34,7 @@ import { useToast } from "~/components/ui/toast";
 import { ApiKeysSkeleton } from "~/components/ui/skeleton";
 import { NotebooksProjectsPaywall } from "~/components/billing/notebooks-projects-paywall";
 import { NotionIcon } from "~/components/branding/notion-icon";
+import { ThemeEditor } from "~/components/integrations/theme-editor";
 import { useSubscription } from "~/lib/subscription-context";
 
 const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
@@ -718,6 +720,13 @@ function IntegrationsContent() {
             </div>
           );
         })}
+      </section>
+
+      <section className="mb-8">
+        <div className="flex items-center justify-between mb-4">
+          <SectionHeader icon={Palette} title="deliverable theme" />
+        </div>
+        <ThemeEditor />
       </section>
     </div>
   );

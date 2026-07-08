@@ -1,0 +1,44 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Slack Trace Deep Comparison</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:24px;background:#fafafa;color:#202124}h1{font-size:24px;margin-bottom:6px}h2{font-size:18px;margin-top:28px;border-bottom:1px solid #ddd;padding-bottom:6px}table{border-collapse:collapse;width:100%;background:white;border:1px solid #ddd;margin:12px 0}th,td{padding:8px;border-bottom:1px solid #eee;text-align:left;vertical-align:top}th{background:#f1f3f4}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}pre{white-space:pre-wrap;background:#fff;border:1px solid #ddd;padding:10px;border-radius:6px}.good{color:#137333;font-weight:650}.bad{color:#b3261e;font-weight:650}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}.card{background:#fff;border:1px solid #ddd;border-radius:6px;padding:12px}.label{font-size:12px;color:#5f6368;text-transform:uppercase}.value{font-size:20px;font-weight:700;margin-top:4px}</style></head><body>
+<h1>Deep Comparison: Slack 14:02 vs Slack 15:45</h1>
+<p class="mono">Generated 2026-06-22T16:01:14</p>
+<div class="cards">
+<div class="card"><div class="label">Runtime improvement</div><div class="value">17.0%</div></div>
+<div class="card"><div class="label">Cost improvement</div><div class="value">16.5%</div></div>
+<div class="card"><div class="label">Tool-call reduction</div><div class="value">28</div></div>
+<div class="card"><div class="label">Answer delta</div><div class="value">£442.65</div></div>
+</div>
+<h2>Scorecard</h2><table><tr><th>Dimension</th><th>14:02 raw fallback</th><th>15:45 mart backed</th><th>Interpretation</th></tr>
+<tr><td>Runtime</td><td>932.1s</td><td>773.9s</td><td>15:45 faster</td></tr>
+<tr><td>Cost</td><td>$2.597882</td><td>$2.169192</td><td>15:45 cheaper</td></tr>
+<tr><td>Tool calls</td><td>69</td><td>41</td><td>15:45 fewer loops</td></tr>
+<tr><td>Read calls</td><td>34</td><td>18</td><td>less dbt/file scouting</td></tr>
+<tr><td>Final answer</td><td>Q1 2026 GBP customer transfer revenue: ~£2,088 (GBP equiv.) from 220 completed transfers</td><td>Q1 2026 completed GBP transfer revenue: £2,530.33 across 190 transfers (91.6% FX margin, 7.7% fees)</td><td>material semantic shift</td></tr>
+<tr><td>Query path</td><td>raw tables + FX conversion</td><td>analytics_marts.fct_transfers</td><td>mart path is better</td></tr>
+</table>
+<h2>Why Answers Differ</h2><table><tr><th>Difference</th><th>14:02</th><th>15:45</th><th>Effect</th></tr>
+<tr><td>Population</td><td>customers.currency = GBP</td><td>send_currency = GBP</td><td>different transfer population</td></tr>
+<tr><td>Currency</td><td>mixed GBP/EUR/USD converted to GBP</td><td>GBP mart rows</td><td>different revenue basis</td></tr>
+<tr><td>Count</td><td>220</td><td>190</td><td>-30 transfers</td></tr>
+<tr><td>Revenue</td><td>£2,087.68</td><td>£2,530.33</td><td>+£442.65</td></tr>
+</table>
+<h2>Representative SQL</h2><h3>14:02 raw fallback</h3><pre>SELECT t.send_currency AS revenue_currency, COUNT(*) AS total_transfers, COUNT(*) FILTER (WHERE t.status = &#x27;COMPLETED&#x27;) AS completed_transfers, ROUND(SUM(t.send_amount) FILTER (WHERE t.status = &#x27;COMPLETED&#x27;), 2) AS completed_send_volume, ROUND(SUM(t.fee_amount) FILTER (WHERE t.status = &#x27;COMPLETED&#x27;), 2) AS completed_fee_amount, ROUND(SUM(t.send_amount * t.fx_margin_bps / 10000.0) FILTER (WHERE t.status = &#x27;COMPLETED&#x27;), 2) AS completed_fx_margin_modelled, ROUND( SUM(t.fee_amount) FILTER (WHERE t.status = &#x27;COMPLETED&#x27;) + SUM(t.send_amount * t.fx_margin_bps / 10000.0) FILTER (WHERE t.status = &#x27;COMPLETED&#x27;) , 2) AS completed_total_revenue_modelled FROM raw_core_transfers.transfers t JOIN raw_core_transfers.customers c ON t.customer_id = c.customer_id WHERE c.currency = &#x27;GBP&#x27; AND t.created_at &gt;= &#x27;2026-01-01&#x27; AND t.created_at &lt; &#x27;2026-04-01&#x27; GROUP BY t.send_currency</pre><h3>15:45 mart backed</h3><pre>SELECT COUNT(*) as transfer_count, ROUND(SUM(fee_revenue)::numeric, 2) as total_fee_revenue, ROUND(SUM(fx_margin_revenue)::numeric, 2) as total_fx_margin_revenue, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue, MIN(created_at::date) as earliest_transfer, MAX(created_at::date) as latest_transfer FROM analytics_marts.fct_transfers WHERE send_currency = &#x27;GBP&#x27; AND is_completed = true AND created_at &gt;= &#x27;2026-01-01&#x27; AND created_at &lt; &#x27;2026-04-01&#x27;</pre>
+<h2>Phases</h2>
+<h3>14:02 raw fallback</h3><table><tr><th>Phase</th><th>Idx</th><th>Events</th><th>Duration</th><th>Note</th></tr>
+<tr><td>Initial setup</td><td class="mono">0-188</td><td>189</td><td>204.9s</td><td>tools, missing skill files, dbt understanding</td></tr>
+<tr><td>Notebook setup / connection discovery</td><td class="mono">189-315</td><td>127</td><td>107.0s</td><td>setup cells, duplicate sp import repair, connection discovery</td></tr>
+<tr><td>Initial mart attempt</td><td class="mono">316-342</td><td>27</td><td>37.5s</td><td>created fct_transfers queries, run failed because relation did not exist</td></tr>
+<tr><td>Schema/materialization discovery</td><td class="mono">343-486</td><td>144</td><td>112.6s</td><td>searched schemas/tables, concluded only raw schemas existed</td></tr>
+<tr><td>Raw-table fallback execution</td><td class="mono">487-637</td><td>151</td><td>185.6s</td><td>rewrote SQL against raw_core_transfers and executed successfully</td></tr>
+<tr><td>FX/charts/repair</td><td class="mono">638-755</td><td>118</td><td>157.6s</td><td>added FX conversion and charts; fixed missing EUR rate and corridor send_currency</td></tr>
+<tr><td>Verification/finalization</td><td class="mono">756-915</td><td>160</td><td>125.8s</td><td>checked stale errors, updated summary, final JSON</td></tr>
+</table>
+<h3>15:45 mart backed</h3><table><tr><th>Phase</th><th>Idx</th><th>Events</th><th>Duration</th><th>Note</th></tr>
+<tr><td>Initial setup</td><td class="mono">0-24</td><td>25</td><td>26.2s</td><td>tools and prompt intake</td></tr>
+<tr><td>dbt scouting / model selection</td><td class="mono">25-430</td><td>406</td><td>435.0s</td><td>Explore subagent plus dbt file reads before notebook edit</td></tr>
+<tr><td>Notebook rebuild after edit failure</td><td class="mono">431-502</td><td>72</td><td>87.5s</td><td>stale cell id caused partial edit; rebuilt notebook cells</td></tr>
+<tr><td>Execution repair loop</td><td class="mono">503-600</td><td>98</td><td>68.7s</td><td>fixed sp.init, connection name, and schema prefix</td></tr>
+<tr><td>Mart execution and summary</td><td class="mono">601-652</td><td>52</td><td>65.6s</td><td>successful analytics_marts.fct_transfers run and summary update</td></tr>
+<tr><td>Final JSON</td><td class="mono">653-769</td><td>117</td><td>73.9s</td><td>final answer generation</td></tr>
+</table>
+</body></html>

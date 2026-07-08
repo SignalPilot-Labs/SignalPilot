@@ -1,0 +1,312 @@
+{
+  "outputs": {
+    "report": "/Users/lfnandoo/Projects/sagebook/SignalPilot/analysis_outputs/slack_runs_deep_comparison/report.md",
+    "html": "/Users/lfnandoo/Projects/sagebook/SignalPilot/analysis_outputs/slack_runs_deep_comparison/comparison.html",
+    "json": "/Users/lfnandoo/Projects/sagebook/SignalPilot/analysis_outputs/slack_runs_deep_comparison/comparison.json"
+  },
+  "runs": [
+    {
+      "key": "raw_fallback_1402",
+      "label": "14:02 raw fallback",
+      "thread_id": "session-slack-15f7b21fd28d5279",
+      "source_csv": "/Users/lfnandoo/Downloads/polished-resonance-69540728_production_neondb_2026-06-22_14-02-34.csv",
+      "duration_sec": 932.079267,
+      "cost": 2.59788245,
+      "events": 916,
+      "tool_calls": 69,
+      "tool_counts": {
+        "ToolSearch": 1,
+        "Read": 34,
+        "mcp__signalpilot-notebook__get_lightweight_cell_map": 1,
+        "Agent": 1,
+        "Glob": 4,
+        "mcp__signalpilot-notebook__edit_notebook": 14,
+        "mcp__signalpilot-notebook__run_cells": 13,
+        "mcp__signalpilot-notebook__get_notebook_errors": 1
+      },
+      "read_calls": 34,
+      "project_reads": 32,
+      "missing_skill_reads": 2,
+      "final_summary": "Q1 2026 GBP customer transfer revenue: ~£2,088 (GBP equiv.) from 220 completed transfers",
+      "confidence": 0.82,
+      "phases": [
+        {
+          "name": "Initial setup",
+          "start_idx": 0,
+          "end_idx": 188,
+          "events": 189,
+          "duration_sec": 204.86,
+          "note": "tools, missing skill files, dbt understanding"
+        },
+        {
+          "name": "Notebook setup / connection discovery",
+          "start_idx": 189,
+          "end_idx": 315,
+          "events": 127,
+          "duration_sec": 106.97,
+          "note": "setup cells, duplicate sp import repair, connection discovery"
+        },
+        {
+          "name": "Initial mart attempt",
+          "start_idx": 316,
+          "end_idx": 342,
+          "events": 27,
+          "duration_sec": 37.53,
+          "note": "created fct_transfers queries, run failed because relation did not exist"
+        },
+        {
+          "name": "Schema/materialization discovery",
+          "start_idx": 343,
+          "end_idx": 486,
+          "events": 144,
+          "duration_sec": 112.58,
+          "note": "searched schemas/tables, concluded only raw schemas existed"
+        },
+        {
+          "name": "Raw-table fallback execution",
+          "start_idx": 487,
+          "end_idx": 637,
+          "events": 151,
+          "duration_sec": 185.6,
+          "note": "rewrote SQL against raw_core_transfers and executed successfully"
+        },
+        {
+          "name": "FX/charts/repair",
+          "start_idx": 638,
+          "end_idx": 755,
+          "events": 118,
+          "duration_sec": 157.56,
+          "note": "added FX conversion and charts; fixed missing EUR rate and corridor send_currency"
+        },
+        {
+          "name": "Verification/finalization",
+          "start_idx": 756,
+          "end_idx": 915,
+          "events": 160,
+          "duration_sec": 125.85,
+          "note": "checked stale errors, updated summary, final JSON"
+        }
+      ],
+      "table_refs": {
+        "fct_transfers": 3,
+        "raw_core_transfers.transfers": 6,
+        "raw_core_transfers.customers": 6,
+        "raw_core_transfers.transfer_fees": 1,
+        "raw_fx.fx_rates": 2
+      },
+      "sqls": [
+        {
+          "idx": 317,
+          "cell_id": null,
+          "sql": "SELECT t.revenue_currency, COUNT(*) AS total_transfers, SUM(CASE WHEN t.is_completed THEN 1 ELSE 0 END) AS completed_transfers, ROUND(SUM(t.send_amount)::numeric, 2) AS total_send_volume, ROUND(SUM(CASE WHEN t.is_completed THEN t.send_amount ELSE 0 END)::numeric, 2) AS completed_send_volume, ROUND(SUM(t.total_revenue)::numeric, 2) AS total_revenue_all_status, ROUND(SUM(CASE WHEN t.is_completed THEN t.total_revenue ELSE 0 END)::numeric, 2) AS completed_total_revenue, ROUND(SUM(CASE WHEN t.is_completed THEN t.fee_revenue ELSE 0 END)::numeric, 2) AS completed_fee_revenue, ROUND(SUM(CASE WHEN t.is_completed THEN t.fx_margin_revenue ELSE 0 END)::numeric, 2) AS completed_fx_margin_revenue FROM fct_transfers t JOIN dim_customers c ON t.customer_id = c.customer_id WHERE c.default_currency = 'GBP' AND t.created_at >= '2026-01-01' AND t.created_at < '2026-04-01' GROUP BY t.revenue_currency"
+        },
+        {
+          "idx": 317,
+          "cell_id": null,
+          "sql": "SELECT DATE_TRUNC('month', t.created_at)::date AS month, COUNT(*) AS total_transfers, SUM(CASE WHEN t.is_completed THEN 1 ELSE 0 END) AS completed_transfers, ROUND(SUM(CASE WHEN t.is_completed THEN t.send_amount ELSE 0 END)::numeric, 2) AS completed_send_volume, ROUND(SUM(CASE WHEN t.is_completed THEN t.total_revenue ELSE 0 END)::numeric, 2) AS completed_total_revenue, ROUND(SUM(CASE WHEN t.is_completed THEN t.fee_revenue ELSE 0 END)::numeric, 2) AS completed_fee_revenue, ROUND(SUM(CASE WHEN t.is_completed THEN t.fx_margin_revenue ELSE 0 END)::numeric, 2) AS completed_fx_margin_revenue FROM fct_transfers t JOIN dim_customers c ON t.customer_id = c.customer_id WHERE c.default_currency = 'GBP' AND t.created_at >= '2026-01-01' AND t.created_at < '2026-04-01' GROUP BY 1 ORDER BY 1"
+        },
+        {
+          "idx": 317,
+          "cell_id": null,
+          "sql": "SELECT t.receive_country, t.receive_currency, t.send_currency, COUNT(*) AS total_transfers, SUM(CASE WHEN t.is_completed THEN 1 ELSE 0 END) AS completed_transfers, ROUND(SUM(CASE WHEN t.is_completed THEN t.send_amount ELSE 0 END)::numeric, 2) AS completed_send_volume, ROUND(SUM(CASE WHEN t.is_completed THEN t.total_revenue ELSE 0 END)::numeric, 2) AS completed_total_revenue, ROUND(SUM(CASE WHEN t.is_completed THEN t.fee_revenue ELSE 0 END)::numeric, 2) AS completed_fee_revenue, ROUND(SUM(CASE WHEN t.is_completed THEN t.fx_margin_revenue ELSE 0 END)::numeric, 2) AS completed_fx_margin_revenue FROM fct_transfers t JOIN dim_customers c ON t.customer_id = c.customer_id WHERE c.default_currency = 'GBP' AND t.created_at >= '2026-01-01' AND t.created_at < '2026-04-01' GROUP BY 1, 2, 3 ORDER BY completed_total_revenue DESC"
+        },
+        {
+          "idx": 488,
+          "cell_id": "d83448ec",
+          "sql": "SELECT table_name FROM information_schema.tables WHERE table_schema = 'raw_core_transfers' ORDER BY table_name"
+        },
+        {
+          "idx": 488,
+          "cell_id": "448abbd8",
+          "sql": "SELECT t.send_currency AS revenue_currency, COUNT(*) AS total_transfers, COUNT(*) FILTER (WHERE t.status = 'COMPLETED') AS completed_transfers, ROUND(SUM(t.send_amount) FILTER (WHERE t.status = 'COMPLETED'), 2) AS completed_send_volume, ROUND(SUM(t.fee_amount) FILTER (WHERE t.status = 'COMPLETED'), 2) AS completed_fee_amount, ROUND(SUM(t.send_amount * t.fx_margin_bps / 10000.0) FILTER (WHERE t.status = 'COMPLETED'), 2) AS completed_fx_margin_modelled, ROUND( SUM(t.fee_amount) FILTER (WHERE t.status = 'COMPLETED') + SUM(t.send_amount * t.fx_margin_bps / 10000.0) FILTER (WHERE t.status = 'COMPLETED') , 2) AS completed_total_revenue_modelled FROM raw_core_transfers.transfers t JOIN raw_core_transfers.customers c ON t.customer_id = c.customer_id WHERE c.currency = 'GBP' AND t.created_at >= '2026-01-01' AND t.created_at < '2026-04-01' GROUP BY t.send_currency"
+        },
+        {
+          "idx": 488,
+          "cell_id": "c822c3fa",
+          "sql": "SELECT tf.fee_type, COUNT(*) AS fee_line_count, ROUND(SUM(tf.amount), 2) AS total_amount, ROUND(SUM(CASE WHEN tf.is_waived THEN tf.amount ELSE 0 END), 2) AS waived_amount, ROUND(SUM(CASE WHEN NOT tf.is_waived THEN tf.amount ELSE 0 END), 2) AS effective_amount FROM raw_core_transfers.transfers t JOIN raw_core_transfers.customers c ON t.customer_id = c.customer_id JOIN raw_core_transfers.transfer_fees tf ON t.transfer_id = tf.transfer_id WHERE c.currency = 'GBP' AND t.created_at >= '2026-01-01' AND t.created_at < '2026-04-01' AND t.status = 'COMPLETED' GROUP BY tf.fee_type ORDER BY effective_amount DESC"
+        },
+        {
+          "idx": 488,
+          "cell_id": "b0716c70",
+          "sql": "SELECT DATE_TRUNC('month', t.created_at)::date AS month, COUNT(*) AS total_transfers, COUNT(*) FILTER (WHERE t.status = 'COMPLETED') AS completed_transfers, ROUND(SUM(t.send_amount) FILTER (WHERE t.status = 'COMPLETED'), 2) AS completed_send_volume, ROUND(SUM(t.fee_amount) FILTER (WHERE t.status = 'COMPLETED'), 2) AS completed_fee_revenue, ROUND(SUM(t.send_amount * t.fx_margin_bps / 10000.0) FILTER (WHERE t.status = 'COMPLETED'), 2) AS completed_fx_margin_revenue, ROUND( SUM(t.fee_amount) FILTER (WHERE t.status = 'COMPLETED') + SUM(t.send_amount * t.fx_margin_bps / 10000.0) FILTER (WHERE t.status = 'COMPLETED') , 2) AS completed_total_revenue FROM raw_core_transfers.transfers t JOIN raw_core_transfers.customers c ON t.customer_id = c.customer_id WHERE c.currency = 'GBP' AND t.created_at >= '2026-01-01' AND t.created_at < '2026-04-01' GROUP BY 1 ORDER BY 1"
+        },
+        {
+          "idx": 488,
+          "cell_id": "ae5d0540",
+          "sql": "SELECT t.receive_country, t.receive_currency, COUNT(*) FILTER (WHERE t.status = 'COMPLETED') AS completed_transfers, ROUND(SUM(t.send_amount) FILTER (WHERE t.status = 'COMPLETED'), 2) AS completed_send_volume, ROUND( SUM(t.fee_amount) FILTER (WHERE t.status = 'COMPLETED') + SUM(t.send_amount * t.fx_margin_bps / 10000.0) FILTER (WHERE t.status = 'COMPLETED') , 2) AS completed_total_revenue, ROUND(SUM(t.fee_amount) FILTER (WHERE t.status = 'COMPLETED'), 2) AS completed_fee_revenue, ROUND(SUM(t.send_amount * t.fx_margin_bps / 10000.0) FILTER (WHERE t.status = 'COMPLETED'), 2) AS completed_fx_margin_revenue FROM raw_core_transfers.transfers t JOIN raw_core_transfers.customers c ON t.customer_id = c.customer_id WHERE c.currency = 'GBP' AND t.created_at >= '2026-01-01' AND t.created_at < '2026-04-01' GROUP BY 1, 2 HAVING COUNT(*) FILTER (WHERE t.status = 'COMPLETED') > 0 ORDER BY completed_total_revenue DESC"
+        },
+        {
+          "idx": 639,
+          "cell_id": null,
+          "sql": "SELECT DISTINCT ON (base_currency, quote_currency) base_currency, quote_currency, mid_rate, ts_iso FROM raw_fx.fx_rates WHERE quote_currency = 'GBP' AND base_currency IN ('EUR', 'USD') ORDER BY base_currency, quote_currency, ts_iso DESC"
+        },
+        {
+          "idx": 647,
+          "cell_id": null,
+          "sql": "SELECT DATE_TRUNC('month', t.created_at)::date AS month, t.send_currency, COUNT(*) FILTER (WHERE t.status = 'COMPLETED') AS completed_transfers, ROUND(SUM(t.fee_amount) FILTER (WHERE t.status = 'COMPLETED'), 2) AS completed_fee_revenue, ROUND(SUM(t.send_amount * t.fx_margin_bps / 10000.0) FILTER (WHERE t.status = 'COMPLETED'), 2) AS completed_fx_margin_revenue, ROUND( SUM(t.fee_amount) FILTER (WHERE t.status = 'COMPLETED') + SUM(t.send_amount * t.fx_margin_bps / 10000.0) FILTER (WHERE t.status = 'COMPLETED') , 2) AS completed_total_revenue FROM raw_core_transfers.transfers t JOIN raw_core_transfers.customers c ON t.customer_id = c.customer_id WHERE c.currency = 'GBP' AND t.created_at >= '2026-01-01' AND t.created_at < '2026-04-01' GROUP BY 1, 2 ORDER BY 1, 2"
+        },
+        {
+          "idx": 694,
+          "cell_id": "2e362de3",
+          "sql": "SELECT DISTINCT ON (base_currency, quote_currency) base_currency, quote_currency, mid_rate, ts_iso FROM raw_fx.fx_rates WHERE (quote_currency = 'GBP' AND base_currency IN ('EUR', 'USD')) OR (base_currency = 'GBP' AND quote_currency IN ('EUR', 'USD')) ORDER BY base_currency, quote_currency, ts_iso DESC"
+        },
+        {
+          "idx": 694,
+          "cell_id": "ae5d0540",
+          "sql": "SELECT t.receive_country, t.receive_currency, t.send_currency, COUNT(*) FILTER (WHERE t.status = 'COMPLETED') AS completed_transfers, ROUND(SUM(t.send_amount) FILTER (WHERE t.status = 'COMPLETED'), 2) AS completed_send_volume, ROUND( SUM(t.fee_amount) FILTER (WHERE t.status = 'COMPLETED') + SUM(t.send_amount * t.fx_margin_bps / 10000.0) FILTER (WHERE t.status = 'COMPLETED') , 2) AS completed_total_revenue, ROUND(SUM(t.fee_amount) FILTER (WHERE t.status = 'COMPLETED'), 2) AS completed_fee_revenue, ROUND(SUM(t.send_amount * t.fx_margin_bps / 10000.0) FILTER (WHERE t.status = 'COMPLETED'), 2) AS completed_fx_margin_revenue FROM raw_core_transfers.transfers t JOIN raw_core_transfers.customers c ON t.customer_id = c.customer_id WHERE c.currency = 'GBP' AND t.created_at >= '2026-01-01' AND t.created_at < '2026-04-01' GROUP BY 1, 2, 3 HAVING COUNT(*) FILTER (WHERE t.status = 'COMPLETED') > 0 ORDER BY completed_total_revenue DESC"
+        }
+      ]
+    },
+    {
+      "key": "mart_backed_1545",
+      "label": "15:45 mart backed",
+      "thread_id": "session-slack-5343c4998179530d",
+      "source_csv": "/Users/lfnandoo/Downloads/polished-resonance-69540728_production_neondb_2026-06-22_15-45-32.csv",
+      "duration_sec": 773.859563,
+      "cost": 2.1691922999999997,
+      "events": 770,
+      "tool_calls": 41,
+      "tool_counts": {
+        "ToolSearch": 1,
+        "Agent": 1,
+        "Read": 18,
+        "mcp__signalpilot-notebook__get_lightweight_cell_map": 2,
+        "Glob": 5,
+        "Grep": 1,
+        "mcp__signalpilot-notebook__edit_notebook": 7,
+        "mcp__signalpilot-notebook__run_cells": 6
+      },
+      "read_calls": 18,
+      "project_reads": 16,
+      "missing_skill_reads": 2,
+      "final_summary": "Q1 2026 completed GBP transfer revenue: £2,530.33 across 190 transfers (91.6% FX margin, 7.7% fees)",
+      "confidence": 0.9,
+      "phases": [
+        {
+          "name": "Initial setup",
+          "start_idx": 0,
+          "end_idx": 24,
+          "events": 25,
+          "duration_sec": 26.16,
+          "note": "tools and prompt intake"
+        },
+        {
+          "name": "dbt scouting / model selection",
+          "start_idx": 25,
+          "end_idx": 430,
+          "events": 406,
+          "duration_sec": 434.98,
+          "note": "Explore subagent plus dbt file reads before notebook edit"
+        },
+        {
+          "name": "Notebook rebuild after edit failure",
+          "start_idx": 431,
+          "end_idx": 502,
+          "events": 72,
+          "duration_sec": 87.55,
+          "note": "stale cell id caused partial edit; rebuilt notebook cells"
+        },
+        {
+          "name": "Execution repair loop",
+          "start_idx": 503,
+          "end_idx": 600,
+          "events": 98,
+          "duration_sec": 68.68,
+          "note": "fixed sp.init, connection name, and schema prefix"
+        },
+        {
+          "name": "Mart execution and summary",
+          "start_idx": 601,
+          "end_idx": 652,
+          "events": 52,
+          "duration_sec": 65.57,
+          "note": "successful analytics_marts.fct_transfers run and summary update"
+        },
+        {
+          "name": "Final JSON",
+          "start_idx": 653,
+          "end_idx": 769,
+          "events": 117,
+          "duration_sec": 73.91,
+          "note": "final answer generation"
+        }
+      ],
+      "table_refs": {
+        "fct_transfers": 8,
+        "analytics_marts.fct_transfers": 4
+      },
+      "sqls": [
+        {
+          "idx": 432,
+          "cell_id": null,
+          "sql": "SELECT COUNT(*) as transfer_count, ROUND(SUM(fee_revenue)::numeric, 2) as total_fee_revenue, ROUND(SUM(fx_margin_revenue)::numeric, 2) as total_fx_margin_revenue, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue, MIN(created_at::date) as earliest_transfer, MAX(created_at::date) as latest_transfer FROM fct_transfers WHERE send_currency = 'GBP' AND is_completed = true AND created_at >= '2026-01-01' AND created_at < '2026-04-01'"
+        },
+        {
+          "idx": 432,
+          "cell_id": null,
+          "sql": "SELECT status_clean, COUNT(*) as transfer_count, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue FROM fct_transfers WHERE send_currency = 'GBP' AND created_at >= '2026-01-01' AND created_at < '2026-04-01' GROUP BY status_clean ORDER BY total_revenue DESC"
+        },
+        {
+          "idx": 432,
+          "cell_id": null,
+          "sql": "SELECT DATE_TRUNC('month', created_at)::date as revenue_month, TO_CHAR(DATE_TRUNC('month', created_at), 'Mon YYYY') as month_label, COUNT(*) as transfer_count, ROUND(SUM(fee_revenue)::numeric, 2) as fee_revenue, ROUND(SUM(fx_margin_revenue)::numeric, 2) as fx_margin_revenue, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue FROM fct_transfers WHERE send_currency = 'GBP' AND is_completed = true AND created_at >= '2026-01-01' AND created_at < '2026-04-01' GROUP BY 1, 2 ORDER BY 1"
+        },
+        {
+          "idx": 432,
+          "cell_id": null,
+          "sql": "SELECT ROUND(SUM(fee_revenue)::numeric, 2) as fee_revenue, ROUND(SUM(fx_margin_revenue)::numeric, 2) as fx_margin_revenue, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue, ROUND((SUM(fee_revenue) + SUM(fx_margin_revenue) - SUM(total_revenue))::numeric, 2) as promo_discount_implied FROM fct_transfers WHERE send_currency = 'GBP' AND is_completed = true AND created_at >= '2026-01-01' AND created_at < '2026-04-01'"
+        },
+        {
+          "idx": 486,
+          "cell_id": null,
+          "sql": "SELECT COUNT(*) as transfer_count, ROUND(SUM(fee_revenue)::numeric, 2) as total_fee_revenue, ROUND(SUM(fx_margin_revenue)::numeric, 2) as total_fx_margin_revenue, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue, MIN(created_at::date) as earliest_transfer, MAX(created_at::date) as latest_transfer FROM fct_transfers WHERE send_currency = 'GBP' AND is_completed = true AND created_at >= '2026-01-01' AND created_at < '2026-04-01'"
+        },
+        {
+          "idx": 486,
+          "cell_id": null,
+          "sql": "SELECT status_clean, COUNT(*) as transfer_count, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue FROM fct_transfers WHERE send_currency = 'GBP' AND created_at >= '2026-01-01' AND created_at < '2026-04-01' GROUP BY status_clean ORDER BY total_revenue DESC"
+        },
+        {
+          "idx": 486,
+          "cell_id": null,
+          "sql": "SELECT DATE_TRUNC('month', created_at)::date as revenue_month, TO_CHAR(DATE_TRUNC('month', created_at), 'Mon YYYY') as month_label, COUNT(*) as transfer_count, ROUND(SUM(fee_revenue)::numeric, 2) as fee_revenue, ROUND(SUM(fx_margin_revenue)::numeric, 2) as fx_margin_revenue, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue FROM fct_transfers WHERE send_currency = 'GBP' AND is_completed = true AND created_at >= '2026-01-01' AND created_at < '2026-04-01' GROUP BY 1, 2 ORDER BY 1"
+        },
+        {
+          "idx": 486,
+          "cell_id": null,
+          "sql": "SELECT ROUND(SUM(fee_revenue)::numeric, 2) as fee_revenue, ROUND(SUM(fx_margin_revenue)::numeric, 2) as fx_margin_revenue, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue, ROUND((SUM(fee_revenue) + SUM(fx_margin_revenue) - SUM(total_revenue))::numeric, 2) as promo_discount_implied FROM fct_transfers WHERE send_currency = 'GBP' AND is_completed = true AND created_at >= '2026-01-01' AND created_at < '2026-04-01'"
+        },
+        {
+          "idx": 593,
+          "cell_id": "4e186794",
+          "sql": "SELECT COUNT(*) as transfer_count, ROUND(SUM(fee_revenue)::numeric, 2) as total_fee_revenue, ROUND(SUM(fx_margin_revenue)::numeric, 2) as total_fx_margin_revenue, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue, MIN(created_at::date) as earliest_transfer, MAX(created_at::date) as latest_transfer FROM analytics_marts.fct_transfers WHERE send_currency = 'GBP' AND is_completed = true AND created_at >= '2026-01-01' AND created_at < '2026-04-01'"
+        },
+        {
+          "idx": 593,
+          "cell_id": "f154ac27",
+          "sql": "SELECT status_clean, COUNT(*) as transfer_count, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue FROM analytics_marts.fct_transfers WHERE send_currency = 'GBP' AND created_at >= '2026-01-01' AND created_at < '2026-04-01' GROUP BY status_clean ORDER BY total_revenue DESC"
+        },
+        {
+          "idx": 593,
+          "cell_id": "d912a1da",
+          "sql": "SELECT DATE_TRUNC('month', created_at)::date as revenue_month, TO_CHAR(DATE_TRUNC('month', created_at), 'Mon YYYY') as month_label, COUNT(*) as transfer_count, ROUND(SUM(fee_revenue)::numeric, 2) as fee_revenue, ROUND(SUM(fx_margin_revenue)::numeric, 2) as fx_margin_revenue, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue FROM analytics_marts.fct_transfers WHERE send_currency = 'GBP' AND is_completed = true AND created_at >= '2026-01-01' AND created_at < '2026-04-01' GROUP BY 1, 2 ORDER BY 1"
+        },
+        {
+          "idx": 593,
+          "cell_id": "bdac5f1c",
+          "sql": "SELECT ROUND(SUM(fee_revenue)::numeric, 2) as fee_revenue, ROUND(SUM(fx_margin_revenue)::numeric, 2) as fx_margin_revenue, ROUND(SUM(total_revenue)::numeric, 2) as total_revenue, ROUND((SUM(fee_revenue) + SUM(fx_margin_revenue) - SUM(total_revenue))::numeric, 2) as promo_discount_implied FROM analytics_marts.fct_transfers WHERE send_currency = 'GBP' AND is_completed = true AND created_at >= '2026-01-01' AND created_at < '2026-04-01'"
+        }
+      ]
+    }
+  ],
+  "answer_delta": {
+    "raw_revenue_gbp": 2087.68,
+    "mart_revenue_gbp": 2530.33,
+    "delta_gbp": 442.6500000000001,
+    "delta_pct": 21.202962139791545,
+    "raw_transfers": 220,
+    "mart_transfers": 190,
+    "transfer_delta": -30,
+    "transfer_delta_pct": -13.636363636363635
+  }
+}

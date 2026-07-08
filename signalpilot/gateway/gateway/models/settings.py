@@ -7,6 +7,7 @@ from enum import Enum
 from pydantic import BaseModel, Field, field_validator
 
 from ._helpers import _validate_string_list
+from .deliverable_theme import DeliverableTheme
 
 _INT_GTE_ZERO_MSG = "knowledge_history_versions_override must be a non-negative integer or None"
 
@@ -38,6 +39,9 @@ class GatewaySettings(BaseModel):
     # Knowledge Base — number of edit history versions to keep per doc.
     # None = follow plan default. 0 = unlimited. >= 1 = exact count.
     knowledge_history_versions_override: int | None = None
+
+    # Org-wide visual tokens for generated HTML deliverables. None = SignalPilot defaults.
+    deliverable_theme: DeliverableTheme | None = None
 
     @field_validator("blocked_tables")
     @classmethod

@@ -1,0 +1,81 @@
+{
+  "source_csv": "/Users/lfnandoo/Downloads/polished-resonance-69540728_production_neondb_2026-06-22_13-43-52.csv",
+  "html": "/Users/lfnandoo/Projects/sagebook/SignalPilot/analysis_outputs/notion_trace_93b8a8f2/trace_visualization.html",
+  "report": "/Users/lfnandoo/Projects/sagebook/SignalPilot/analysis_outputs/notion_trace_93b8a8f2/report.md",
+  "thread_id": "session-notion-93b8a8f2d1145c6c",
+  "event_count": 351,
+  "duration_sec": 237.774725,
+  "recorded_cost_usd": 0.85762725,
+  "event_counts": {
+    "user": 1,
+    "block_start": 53,
+    "thinking_delta": 71,
+    "thinking": 9,
+    "text_delta": 146,
+    "text": 19,
+    "tool_use": 25,
+    "tool_result": 25,
+    "done": 2
+  },
+  "tool_counts": {
+    "ToolSearch": 2,
+    "mcp__signalpilot-notebook__get_lightweight_cell_map": 2,
+    "Read": 2,
+    "mcp__signalpilot-notebook__get_signal_pilot_rules": 1,
+    "mcp__signalpilot-notebook__edit_notebook": 8,
+    "mcp__signalpilot-notebook__run_cells": 8,
+    "mcp__signalpilot-notebook__get_tables_and_variables": 1,
+    "mcp__signalpilot-notebook__get_notebook_errors": 1
+  },
+  "error_event_count": 5,
+  "facts": {
+    "db_name": "dev-db",
+    "tables": 15,
+    "rows": 270,
+    "columns": 161,
+    "size_mb": 0.93,
+    "confidence_score": 0.88
+  },
+  "stages": [
+    {
+      "label": "Bootstrapping and tool/schema discovery",
+      "start_idx": 0,
+      "end_idx": 43,
+      "events": 44,
+      "duration_sec": 19.47,
+      "note": "User request, tool search, notebook map, failed skill-file reads, failed remote rules fetch."
+    },
+    {
+      "label": "Connection and table discovery",
+      "start_idx": 44,
+      "end_idx": 110,
+      "events": 67,
+      "duration_sec": 42.91,
+      "note": "Built notebook setup cells, connected to dev-db, listed tables, profiled table summary."
+    },
+    {
+      "label": "Metadata profiling and charts",
+      "start_idx": 111,
+      "end_idx": 164,
+      "events": 54,
+      "duration_sec": 61.6,
+      "note": "Queried information_schema and pg_stat tables, created row-count/type charts and evidence cells."
+    },
+    {
+      "label": "Activity/audit analysis with repair",
+      "start_idx": 165,
+      "end_idx": 233,
+      "events": 69,
+      "duration_sec": 58.31,
+      "note": "Tried activity queries, hit incorrect audit column names, inspected schema, repaired with timestamp/event_type."
+    },
+    {
+      "label": "Final verification and answer JSON",
+      "start_idx": 234,
+      "end_idx": 350,
+      "events": 117,
+      "duration_sec": 51.43,
+      "note": "Checked notebook errors, cell map, emitted final summary/confidence/caveats."
+    }
+  ]
+}

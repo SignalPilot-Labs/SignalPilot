@@ -107,3 +107,37 @@ async def test_oversize_html_inserts_report_link_without_upload(
     assert calls[0][0] == "page-1"
     assert calls[0][2] == "anchor-1"
     assert calls[0][1][0]["type"] == "paragraph"
+
+
+@pytest.mark.asyncio
+async def test_replace_html_deliverable_updates_existing_embed_with_file_upload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    async def upload_file(_token, *, filename, content_type, content):
+        calls.append(("upload", filename, content_type, content))
+        return {"id": "upload-2"}
+
+    async def update_block(_token, block_id, body):
+        calls.append(("update", block_id, body))
+        return {"id": block_id}
+
+    monkeypatch.setattr(notion_client, "upload_file", upload_file)
+    monkeypatch.setattr(notion_client, "update_block", update_block)
+
+    result = await dashboards.replace_html_deliverable(
+        "token",
+        embed_block_id="embed-1",
+        title="Revenue Dashboard",
+        html="<html></html>",
+        report_id="report-1",
+    )
+
+    assert result.block_id == "embed-1"
+    assert result.file_upload_id == "upload-2"
+    assert calls[1] == (
+        "update",
+        "embed-1",
+        {"embed": {"file_upload": {"id": "upload-2"}}},
+    )

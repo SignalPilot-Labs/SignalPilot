@@ -29,6 +29,12 @@ class DeliverableInsertResult:
     archived_block_id: str | None = None
 
 
+@dataclass(frozen=True)
+class DeliverableReplaceResult:
+    block_id: str
+    file_upload_id: str
+
+
 def dashboard_max_bytes() -> int:
     raw_value = os.getenv("NOTION_DASHBOARD_MAX_BYTES")
     if raw_value is None:
@@ -132,6 +138,36 @@ async def insert_html_deliverable(
         fallback_url=None,
         archived_block_id=archived,
     )
+
+
+async def replace_html_deliverable(
+    token: str,
+    *,
+    embed_block_id: str,
+    title: str,
+    html: str,
+    report_id: str,
+) -> DeliverableReplaceResult:
+    html_bytes = html.encode("utf-8")
+    if len(html_bytes) > dashboard_max_bytes():
+        raise ValueError("Updated Notion HTML deliverable exceeds the Notion embed size limit")
+
+    upload = await notion_client.upload_file(
+        token,
+        filename=_html_filename(title, report_id),
+        content_type="text/html",
+        content=html_bytes,
+    )
+    file_upload_id = str(upload.get("id") or "")
+    if not file_upload_id:
+        raise RuntimeError("Notion did not return a file upload id for updated HTML deliverable")
+
+    await notion_client.update_block(
+        token,
+        embed_block_id,
+        {"embed": {"file_upload": {"id": file_upload_id}}},
+    )
+    return DeliverableReplaceResult(block_id=embed_block_id, file_upload_id=file_upload_id)
 
 
 async def _archive_placeholder(token: str, block_id: str | None) -> str | None:

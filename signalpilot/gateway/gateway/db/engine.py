@@ -393,6 +393,22 @@ async def _ensure_report_deliverable_columns(engine) -> None:
         await conn.execute(
             text("CREATE INDEX IF NOT EXISTS idx_reports_org_kind ON gateway_reports (org_id, kind, created_at)")
         )
+        await conn.execute(text("ALTER TABLE notion_deliverables ADD COLUMN IF NOT EXISTS context_snapshot_id TEXT"))
+        await conn.execute(text("ALTER TABLE notion_deliverables ADD COLUMN IF NOT EXISTS latest_update_id TEXT"))
+        await conn.execute(
+            text("ALTER TABLE notion_deliverables ADD COLUMN IF NOT EXISTS latest_file_upload_id VARCHAR(100)")
+        )
+        await conn.execute(text("ALTER TABLE notion_deliverables ADD COLUMN IF NOT EXISTS latest_html_bytes INTEGER"))
+        await conn.execute(
+            text("ALTER TABLE notion_deliverables ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active'")
+        )
+        await conn.execute(text("ALTER TABLE notion_deliverables ADD COLUMN IF NOT EXISTS error TEXT"))
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_notion_deliverables_embed "
+                "ON notion_deliverables (installation_id, embed_block_id)"
+            )
+        )
     logger.info("Ensured report deliverable columns")
 
 

@@ -37,11 +37,11 @@ SignalPilot stores the key encrypted on the server and uses it to run the analys
 
 Open a Notion page that has SignalPilot added as a connection. If the page does not have the connection yet, use Notion's page menu to add the SignalPilot connection first.
 
-Add a comment on that page and mention the provisioned `SignalPilot` page, then write the analysis request you want SignalPilot to run:
+Add a comment on that page and mention the `SignalPilot` agent, then write the analysis request you want SignalPilot to run:
 
 > `@SignalPilot using the production warehouse connection, compare revenue by segment for Q2 and build a notebook with the supporting charts`
 
-Select the `SignalPilot` page mention from Notion's picker. SignalPilot ignores comments that do not mention the provisioned `SignalPilot` page.
+Select the `SignalPilot` agent from Notion's picker. SignalPilot ignores unrelated comments and only handles events routed to the SignalPilot connection.
 
 The Notion comment is the trigger and prompt. SignalPilot does not inspect or edit the surrounding Notion page content. It runs the analysis through SignalPilot's configured data connections and notebook infrastructure.
 
@@ -51,7 +51,7 @@ When the request is accepted, SignalPilot adds a Notion comment, creates a reque
 
 **No response in Notion**
 
-Confirm the page where you commented has SignalPilot added as a connection, and confirm your comment mentions the `SignalPilot` page created during provisioning.
+Confirm the page where you commented has SignalPilot added as a connection, and confirm your comment mentions the `SignalPilot` agent.
 
 **SignalPilot did not use the surrounding page content**
 

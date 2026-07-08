@@ -10,6 +10,32 @@ export interface GatewaySettings {
   gateway_url: string;
   api_key: string | null;
   knowledge_history_versions_override: number | null;
+  deliverable_theme: DeliverableTheme | null;
+}
+
+export interface ThemeColors {
+  bg: string;
+  surface: string;
+  surface_alt: string;
+  border: string;
+  text: string;
+  muted: string;
+  accent: string;
+  positive: string;
+  warning: string;
+  negative: string;
+  chart_grid: string;
+  chart_axis: string;
+}
+
+export interface DeliverableTheme {
+  version: number;
+  colors: ThemeColors;
+  chart_series: string[];
+  font_family: string;
+  font_size_base_px: number;
+  spacing_unit_px: number;
+  radius_px: number;
 }
 
 export interface KnowledgeDoc {

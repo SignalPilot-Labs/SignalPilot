@@ -198,6 +198,51 @@ def build_notebook_mcp_server(context: ToolContext) -> Any:
     )
     tool_definitions.append(
         Tool(
+            name="save_data_snapshot",
+            description=(
+                "Save a compact aggregate data snapshot for the current external "
+                "analysis deliverable. Requires session_id, name, description, "
+                "columns, and rows. Use this only for governed notebook-derived "
+                "data needed by a dashboard or report; do not dump raw tables."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID of the target analysis notebook",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Short stable snapshot name",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "One-sentence explanation of the snapshot",
+                    },
+                    "columns": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Ordered column names in each row",
+                    },
+                    "rows": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "Compact aggregate rows, JSON serializable",
+                    },
+                },
+                "required": [
+                    "session_id",
+                    "name",
+                    "description",
+                    "columns",
+                    "rows",
+                ],
+            },
+        )
+    )
+    tool_definitions.append(
+        Tool(
             name="start_notebook_session",
             description=(
                 "Start a kernel session for a notebook file so you can edit and run its cells. "
@@ -239,6 +284,9 @@ def build_notebook_mcp_server(context: ToolContext) -> Any:
         if name == "run_cells":
             return _handle_run_cells(context, arguments)
 
+        if name == "save_data_snapshot":
+            return _handle_save_data_snapshot(context, arguments)
+
         if name == "start_notebook_session":
             return _handle_start_notebook_session(context, arguments)
 
@@ -247,6 +295,35 @@ def build_notebook_mcp_server(context: ToolContext) -> Any:
     return McpSdkServerConfig(
         type="sdk", name="signalpilot-notebook", instance=server
     )
+
+
+def _handle_save_data_snapshot(
+    context: ToolContext, arguments: dict[str, Any]
+) -> list[Any]:
+    from mcp.types import TextContent
+
+    try:
+        from signalpilot._server.api.deps import AppStateBase
+        from signalpilot._server.api.endpoints.notion_analysis import (
+            save_data_snapshot_for_session,
+        )
+
+        result = save_data_snapshot_for_session(
+            AppStateBase.from_app(context.get_app()),
+            session_id=str(arguments.get("session_id") or ""),
+            name=str(arguments.get("name") or ""),
+            description=str(arguments.get("description") or ""),
+            columns=arguments.get("columns") or [],
+            rows=arguments.get("rows") or [],
+        )
+        return [TextContent(type="text", text=json.dumps(result))]
+    except Exception as exc:
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps({"error": str(exc)}),
+            )
+        ]
 
 
 def _handle_edit_notebook(

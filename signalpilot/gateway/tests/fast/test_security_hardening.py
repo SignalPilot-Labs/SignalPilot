@@ -372,6 +372,93 @@ class TestManageReportAdminScope:
 
         assert "created" in result
 
+    @pytest.mark.asyncio
+    async def test_edit_with_admin_scope_proceeds(self) -> None:
+        from gateway.mcp.context import mcp_org_id_var, mcp_scopes_var
+        from gateway.mcp.tools.reports import manage_report
+
+        token_org = mcp_org_id_var.set("real-org-123")
+        token_scopes = mcp_scopes_var.set(["admin"])
+
+        mock_store = AsyncMock()
+        mock_report = MagicMock()
+        mock_report.id = "rpt_xyz"
+        mock_store.update_report_html = AsyncMock(return_value=mock_report)
+
+        @asynccontextmanager
+        async def _fake_store_session(
+            user_id: str | None = None, org_id: str | None = None
+        ) -> AsyncIterator[AsyncMock]:
+            yield mock_store
+
+        try:
+            with patch("gateway.mcp.tools.reports._store_session", _fake_store_session):
+                result = await manage_report(
+                    action="edit",
+                    report_id="rpt_xyz",
+                    html="<html>edited</html>",
+                    data_json='{"rows":[]}',
+                )
+        finally:
+            mcp_org_id_var.reset(token_org)
+            mcp_scopes_var.reset(token_scopes)
+
+        assert "edited" in result
+        payload = mock_store.update_report_html.await_args.args[1]
+        assert payload.html == "<html>edited</html>"
+        assert payload.data_json == {"rows": []}
+
+    @pytest.mark.asyncio
+    async def test_manage_dashboard_create_requires_data_json(self) -> None:
+        from gateway.mcp.context import mcp_org_id_var, mcp_scopes_var
+        from gateway.mcp.tools.reports import manage_dashboard
+
+        token_org = mcp_org_id_var.set("real-org-123")
+        token_scopes = mcp_scopes_var.set(["admin"])
+        try:
+            result = await manage_dashboard(action="create", title="Dashboard", html="<html/>")
+        finally:
+            mcp_org_id_var.reset(token_org)
+            mcp_scopes_var.reset(token_scopes)
+
+        assert "requires title, html, and data_json" in result
+
+    @pytest.mark.asyncio
+    async def test_manage_dashboard_create_with_admin_scope_proceeds(self) -> None:
+        from gateway.mcp.context import mcp_org_id_var, mcp_scopes_var
+        from gateway.mcp.tools.reports import manage_dashboard
+
+        token_org = mcp_org_id_var.set("real-org-123")
+        token_scopes = mcp_scopes_var.set(["admin"])
+
+        mock_store = AsyncMock()
+        mock_report = MagicMock()
+        mock_report.id = "dash_xyz"
+        mock_store.insert_report = AsyncMock(return_value=mock_report)
+
+        @asynccontextmanager
+        async def _fake_store_session(
+            user_id: str | None = None, org_id: str | None = None
+        ) -> AsyncIterator[AsyncMock]:
+            yield mock_store
+
+        try:
+            with patch("gateway.mcp.tools.reports._store_session", _fake_store_session):
+                result = await manage_dashboard(
+                    action="create",
+                    title="Dashboard",
+                    html="<html/>",
+                    data_json='{"rows":[]}',
+                )
+        finally:
+            mcp_org_id_var.reset(token_org)
+            mcp_scopes_var.reset(token_scopes)
+
+        assert "created" in result
+        payload = mock_store.insert_report.await_args.args[0]
+        assert payload.kind == "dashboard"
+        assert payload.data_json == {"rows": []}
+
 
 # ─── Group 7: xata_branch_diff — admin scope enforcement for html format ──────
 
@@ -582,9 +669,7 @@ class TestKnowledgeUpsertPreservesArchived:
             existing.status = KnowledgeStatus.active.value
         # else: archived stays archived
 
-        assert existing.status == KnowledgeStatus.archived.value, (
-            "Archived doc must stay archived on local-mode edit"
-        )
+        assert existing.status == KnowledgeStatus.archived.value, "Archived doc must stay archived on local-mode edit"
 
     def test_pending_status_promoted_to_active_on_local_edit(self) -> None:
         """Existing behavior: pending → active in local mode is preserved."""

@@ -36,6 +36,7 @@ from gateway.analysis_delivery import (
     render_delivery,
     render_slack_final_message,
 )
+from gateway.analysis_delivery.design_system import theme_token_map
 from gateway.db.engine import close_db, get_session_factory, init_db
 from gateway.notebooks.session_service import NotebookRuntime, ensure_analysis_notebook_session
 from gateway.notion import analysis as notebook_analysis
@@ -774,6 +775,8 @@ class SlackPoCWorker:
     ) -> dict[str, Any]:
         discussion_id = _discussion_id(request)
         created_at = datetime.now(UTC).isoformat()
+        async with self.session_factory() as db:
+            theme = await notebook_analysis._org_deliverable_theme(db, self.config.org_id)
         return await notebook_analysis._call_notebook(
             runtime,
             "/api/notion-analysis/start",
@@ -790,6 +793,7 @@ class SlackPoCWorker:
                     "prompt": request.text,
                     "previousMessages": previous_messages,
                     "createdAt": created_at,
+                    "theme": theme_token_map(theme),
                 },
                 "headers": {
                     "X-Gateway-Project-Id": route.project_id,

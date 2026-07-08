@@ -9,11 +9,11 @@ import logging
 import time
 import uuid
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.db.models import GatewayReport
-from gateway.models.reports import Report, ReportCreate, ReportSummary
+from gateway.models.reports import Report, ReportCreate, ReportSummary, ReportUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,7 @@ def _row_to_summary(row: GatewayReport) -> ReportSummary:
         id=row.id,
         org_id=row.org_id,
         scope_ref=row.scope_ref,
+        kind=row.kind or "report",
         title=row.title,
         bytes=row.bytes,
         view_count=row.view_count,
@@ -46,7 +47,11 @@ def _row_to_summary(row: GatewayReport) -> ReportSummary:
 
 
 def _row_to_report(row: GatewayReport) -> Report:
-    return Report(html=row.html, **_row_to_summary(row).model_dump())
+    return Report(
+        html=row.html,
+        data_json=row.data_json,
+        **_row_to_summary(row).model_dump(),
+    )
 
 
 async def insert_report(
@@ -60,17 +65,17 @@ async def insert_report(
     """Insert a new report. Raises ReportSizeExceeded when the HTML is too large."""
     html_bytes = len(payload.html.encode("utf-8"))
     if html_bytes > MAX_REPORT_BYTES:
-        raise ReportSizeExceeded(
-            f"Report HTML is {html_bytes} bytes; the limit is {MAX_REPORT_BYTES} bytes"
-        )
+        raise ReportSizeExceeded(f"Report HTML is {html_bytes} bytes; the limit is {MAX_REPORT_BYTES} bytes")
 
     now = time.time()
     row = GatewayReport(
         id=str(uuid.uuid4()),
         org_id=org_id,
         scope_ref=payload.scope_ref,
+        kind=payload.kind,
         title=payload.title,
         html=payload.html,
+        data_json=payload.data_json,
         bytes=html_bytes,
         view_count=0,
         created_at=now,
@@ -79,6 +84,39 @@ async def insert_report(
         proposed_by_agent=agent,
     )
     session.add(row)
+    await session.commit()
+    await session.refresh(row)
+    return _row_to_report(row)
+
+
+async def update_report_html(
+    session: AsyncSession,
+    *,
+    org_id: str,
+    report_id: str,
+    payload: ReportUpdate,
+) -> Report:
+    result = await session.execute(
+        select(GatewayReport).where(
+            GatewayReport.id == report_id,
+            GatewayReport.org_id == org_id,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        raise ReportNotFound(report_id)
+
+    if payload.title is not None:
+        row.title = payload.title
+    if payload.html is not None:
+        html_bytes = len(payload.html.encode("utf-8"))
+        if html_bytes > MAX_REPORT_BYTES:
+            raise ReportSizeExceeded(f"Report HTML is {html_bytes} bytes; the limit is {MAX_REPORT_BYTES} bytes")
+        row.html = payload.html
+        row.bytes = html_bytes
+    if "data_json" in payload.model_fields_set:
+        row.data_json = payload.data_json
+    row.updated_at = time.time()
     await session.commit()
     await session.refresh(row)
     return _row_to_report(row)
@@ -100,9 +138,7 @@ async def list_reports(
     return [_row_to_summary(r) for r in result.scalars().all()]
 
 
-async def get_report(
-    session: AsyncSession, *, org_id: str, report_id: str
-) -> Report | None:
+async def get_report(session: AsyncSession, *, org_id: str, report_id: str) -> Report | None:
     result = await session.execute(
         select(GatewayReport).where(
             GatewayReport.id == report_id,

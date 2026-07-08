@@ -474,7 +474,7 @@ async def ensure_child_page(
     api_key: str,
     parent_page_id: str | None,
     title: str = SIGNALPILOT_TRIGGER_PAGE_TITLE,
-    content: str = "Mention this page in a Notion comment to start SignalPilot analysis.",
+    content: str = "Mention the SignalPilot agent in any connected Notion page to start analysis.",
     icon: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Find or create the mentionable SignalPilot trigger page."""
@@ -777,10 +777,58 @@ async def update_page_properties(api_key: str, page_id: str, properties: dict) -
     return await notion_json(api_key, "PATCH", f"/pages/{page_id}", json_body={"properties": properties})
 
 
-async def append_page_blocks(api_key: str, page_id: str, children: list[dict]) -> dict:
+async def update_block(api_key: str, block_id: str, body: dict) -> dict:
+    return await notion_json(api_key, "PATCH", f"/blocks/{block_id}", json_body=body)
+
+
+async def archive_block(api_key: str, block_id: str) -> dict:
+    return await update_block(api_key, block_id, {"in_trash": True})
+
+
+async def append_block_children(
+    api_key: str,
+    block_id: str,
+    children: list[dict],
+    *,
+    after_block_id: str | None = None,
+) -> dict:
     if not children:
         return {"results": []}
-    return await notion_json(api_key, "PATCH", f"/blocks/{page_id}/children", json_body={"children": children[:100]})
+    body: dict = {"children": children[:100]}
+    if after_block_id:
+        body["position"] = {
+            "type": "after_block",
+            "after_block": {"id": after_block_id},
+        }
+    return await notion_json(api_key, "PATCH", f"/blocks/{block_id}/children", json_body=body)
+
+
+async def append_page_blocks(api_key: str, page_id: str, children: list[dict]) -> dict:
+    return await append_block_children(api_key, page_id, children)
+
+
+def comment_anchor_block_id(payload: dict) -> str | None:
+    parent_id = payload.get("data", {}).get("parent", {}).get("id")
+    return str(parent_id) if parent_id else None
+
+
+def is_empty_placeholder_block(block: dict) -> bool:
+    block_type = block.get("type")
+    if block_type != "paragraph":
+        return False
+    paragraph = block.get("paragraph") if isinstance(block.get("paragraph"), dict) else {}
+    return not paragraph.get("rich_text") and not block.get("has_children")
+
+
+def html_embed_block(file_upload_id: str) -> dict:
+    return {
+        "object": "block",
+        "type": "embed",
+        "embed": {
+            "type": "file_upload",
+            "file_upload": {"id": file_upload_id},
+        },
+    }
 
 
 async def list_comments(api_key: str, block_id: str) -> list[dict]:

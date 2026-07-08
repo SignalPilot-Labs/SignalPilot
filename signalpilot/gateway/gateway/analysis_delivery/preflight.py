@@ -113,13 +113,15 @@ _SPECIFICITY_TERMS = {
     "yearly",
     "ytd",
 }
+_HTML_DELIVERABLE_PATTERNS = (
+    r"\b(?:dashboard|scorecard)\b",
+    r"\b(?:build|create|make|generate|show|produce)\s+(?:a\s+)?(?:data[-\s]+backed\s+)?report\b",
+    r"\b(?:html|interactive|static)\s+(?:dashboard|report)\b",
+    r"\breport\s+(?:with|using|from|based\s+on)\s+(?:the\s+)?(?:data|db|database|metrics|revenue|sales|customers)\b",
+)
 
-DIRECT_GREETING_RESPONSE = (
-    "Hi. Send me a specific data question and I will run it through SignalPilot."
-)
-DIRECT_THANKS_RESPONSE = (
-    "You are welcome. Send a specific data question when you want me to analyze something."
-)
+DIRECT_GREETING_RESPONSE = "Hi. Send me a specific data question and I will run it through SignalPilot."
+DIRECT_THANKS_RESPONSE = "You are welcome. Send a specific data question when you want me to analyze something."
 AMBIGUOUS_ANALYSIS_RESPONSE = (
     "SignalPilot needs a fresh, specific analysis request before it starts a notebook run. "
     "For example: `Compare monthly revenue by product for Q2 and show the top drivers.`"
@@ -138,6 +140,9 @@ def classify_analysis_request(prompt: str) -> AnalysisPreflightDecision:
         return AnalysisPreflightDecision(AnalysisPreflightKind.DIRECT, DIRECT_GREETING_RESPONSE)
     if _matches_any(normalized, _THANKS_PATTERNS):
         return AnalysisPreflightDecision(AnalysisPreflightKind.DIRECT, DIRECT_THANKS_RESPONSE)
+
+    if wants_html_deliverable(normalized):
+        return AnalysisPreflightDecision(AnalysisPreflightKind.ANALYZE)
 
     words = re.findall(r"[a-z0-9_.$%-]+", normalized)
     word_set = set(words)
@@ -160,6 +165,13 @@ def classify_analysis_request(prompt: str) -> AnalysisPreflightDecision:
             "Send me a specific data question and I will run it through SignalPilot.",
         )
     return AnalysisPreflightDecision(AnalysisPreflightKind.AMBIGUOUS, AMBIGUOUS_ANALYSIS_RESPONSE)
+
+
+def wants_html_deliverable(prompt: str) -> bool:
+    normalized = _normalize(prompt)
+    if not normalized:
+        return False
+    return any(re.search(pattern, normalized) for pattern in _HTML_DELIVERABLE_PATTERNS)
 
 
 def _normalize(value: str) -> str:

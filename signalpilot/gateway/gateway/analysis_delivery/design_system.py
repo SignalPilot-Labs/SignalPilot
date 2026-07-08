@@ -2,19 +2,14 @@
 
 from __future__ import annotations
 
-from gateway.models.deliverable_theme import DEFAULT_CHART_SERIES, DeliverableTheme
+from gateway.models.deliverable_theme import DeliverableTheme, chart_series_from_positive
 
 DESIGN_SYSTEM_STYLE_ID = "sp-design-system"
 DEFAULT_THEME = DeliverableTheme()
 
 
 def _series_tokens(theme: DeliverableTheme) -> list[str]:
-    fallback = DEFAULT_CHART_SERIES
-    count = max(6, len(theme.chart_series))
-    return [
-        theme.chart_series[index] if index < len(theme.chart_series) else fallback[index % len(fallback)]
-        for index in range(count)
-    ]
+    return chart_series_from_positive(theme.colors.positive)
 
 
 def design_system_style(theme: DeliverableTheme | None = None) -> str:

@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 
 HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 DEFAULT_CHART_SERIES = ["#087a3d", "#0fa45a", "#35c978", "#8eeaa8", "#c8f8d4", "#e7fcec"]
+DEFAULT_POSITIVE_COLOR = "#00ff88"
 DEFAULT_FONT_FAMILY = '"SF Mono", "Fira Code", "Cascadia Code", ui-monospace, monospace'
 
 
@@ -15,6 +16,47 @@ def _validate_hex_color(value: str, field_name: str) -> str:
     if not HEX_COLOR_RE.fullmatch(value):
         raise ValueError(f"{field_name} must be a #rgb or #rrggbb hex color")
     return value.lower()
+
+
+def _expand_hex_color(value: str) -> str:
+    normalized = value.lower()
+    if len(normalized) == 4:
+        return f"#{normalized[1] * 2}{normalized[2] * 2}{normalized[3] * 2}"
+    return normalized
+
+
+def _mix_channel(channel: int, target: int, amount: float) -> int:
+    return int(channel + (target - channel) * amount + 0.5)
+
+
+def _mix_rgb(rgb: tuple[int, int, int], target: tuple[int, int, int], amount: float) -> str:
+    red = _mix_channel(rgb[0], target[0], amount)
+    green = _mix_channel(rgb[1], target[1], amount)
+    blue = _mix_channel(rgb[2], target[2], amount)
+    return f"#{red:02x}{green:02x}{blue:02x}"
+
+
+def chart_series_from_positive(positive: str) -> list[str]:
+    """Generate the ranked chart scale from the theme positive color."""
+    normalized = _expand_hex_color(_validate_hex_color(positive, "positive"))
+    if normalized == DEFAULT_POSITIVE_COLOR:
+        return DEFAULT_CHART_SERIES.copy()
+
+    rgb = (
+        int(normalized[1:3], 16),
+        int(normalized[3:5], 16),
+        int(normalized[5:7], 16),
+    )
+    black = (0, 0, 0)
+    white = (255, 255, 255)
+    return [
+        _mix_rgb(rgb, black, 0.35),
+        _mix_rgb(rgb, black, 0.18),
+        normalized,
+        _mix_rgb(rgb, white, 0.32),
+        _mix_rgb(rgb, white, 0.58),
+        _mix_rgb(rgb, white, 0.78),
+    ]
 
 
 class ThemeColors(BaseModel):
@@ -25,7 +67,7 @@ class ThemeColors(BaseModel):
     text: str = "#eeeeee"
     muted: str = "#999999"
     accent: str = "#ffffff"
-    positive: str = "#00ff88"
+    positive: str = DEFAULT_POSITIVE_COLOR
     warning: str = "#ffaa00"
     negative: str = "#ff4444"
     chart_grid: str = "#1f1f1f"

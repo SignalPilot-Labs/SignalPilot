@@ -13,7 +13,12 @@ from gateway.analysis_delivery.html_orchestrator import (
     _tool_args_dict,
 )
 from gateway.analysis_delivery.trace_loader import DeliveryPacket
-from gateway.models.deliverable_theme import DEFAULT_CHART_SERIES, DeliverableTheme, ThemeColors
+from gateway.models.deliverable_theme import (
+    DEFAULT_CHART_SERIES,
+    DeliverableTheme,
+    ThemeColors,
+    chart_series_from_positive,
+)
 
 
 class _Response:
@@ -166,9 +171,7 @@ async def test_fetched_snapshot_overrides_model_data_json_for_same_key() -> None
     ).render(
         DeliveryPacket(
             user_request="Create a dashboard",
-            data_snapshots=[
-                {"name": "latest_financial_metrics", "url": "/snapshot/latest.json"}
-            ],
+            data_snapshots=[{"name": "latest_financial_metrics", "url": "/snapshot/latest.json"}],
         )
     )
 
@@ -334,8 +337,28 @@ def test_html_orchestrator_injects_custom_theme_and_replaces_stale_style() -> No
     assert result.html.count('id="sp-design-system"') == 1
     assert "--sp-bg: #101010" in result.html
     assert "--sp-positive: #12ab34" in result.html
-    assert "--sp-chart-2: #abcdef" in result.html
+    assert "--sp-chart-2: #0f8c2b" in result.html
+    assert "#abcdef" not in result.html
     assert "#ff0000" not in result.html
+
+
+def test_html_orchestrator_derives_chart_scale_from_positive_color() -> None:
+    html = '<!doctype html><html><head></head><body><main class="sp-report">Report</main></body></html>'
+    theme = DeliverableTheme(
+        colors=ThemeColors(positive="#3366ff"),
+        chart_series=["#111111", "#222222", "#333333"],
+    )
+
+    result = _normalize_html_result(
+        HtmlDeliverableResult(kind="report", title="Report", html=html),
+        {},
+        theme=theme,
+    )
+
+    expected = chart_series_from_positive("#3366ff")
+    assert f"--sp-chart-1: {expected[0]}" in result.html
+    assert f"--sp-chart-6: {expected[5]}" in result.html
+    assert "#111111" not in result.html
 
 
 def test_html_orchestrator_preserves_existing_data_island_when_data_json_omitted() -> None:
@@ -402,10 +425,48 @@ def test_html_orchestrator_supports_horizontal_pipeline_bars() -> None:
     )
 
     assert ".sp-horizontal-bar-chart" in result.html
-    assert ".sp-bar-chart:has(.bar-track)" in result.html
+    assert '.sp-bar-chart:has(.bar-track .sp-bar[style*="width"])' in result.html
     assert "flex-direction: column !important;" in result.html
     assert "grid-template-columns: minmax(7.5rem, 11rem) minmax(0, 1fr) max-content;" in result.html
     assert "do not render pipeline stages as vertical columns" in _HTML_COMPONENT_CONTRACT
+
+
+def test_html_orchestrator_keeps_height_based_tracked_column_chart_visible() -> None:
+    html = """<!doctype html><html><head></head><body>
+<div class="sp-chart-card">
+  <h3>Revenue by Company</h3>
+  <div class="sp-chart sp-bar-chart">
+    <div class="chart-content">
+      <div class="sp-bar-group">
+        <div class="bar-value">$22.5M</div>
+        <div class="bar-track">
+          <div class="sp-bar sp-chart-rank-1" style="height: 100%;"></div>
+        </div>
+        <div class="bar-label">Northstar Logistics</div>
+      </div>
+      <div class="sp-bar-group">
+        <div class="bar-value">$16.5M</div>
+        <div class="bar-track">
+          <div class="sp-bar sp-chart-rank-2" style="height: 73%;"></div>
+        </div>
+        <div class="bar-label">TrueNorth Healthcare</div>
+      </div>
+    </div>
+  </div>
+</div>
+</body></html>"""
+
+    result = _normalize_html_result(
+        HtmlDeliverableResult(kind="dashboard", title="Revenue by Company", html=html),
+        {},
+    )
+
+    assert ".sp-bar-chart > .chart-content" in result.html
+    assert ".sp-bar-chart .bar-track" in result.html
+    assert ".bar-chart .sp-bar-track {\n    grid-row: 2;" in result.html
+    assert ".sp-bar-chart:has(.bar-track),\n" not in result.html
+    assert '.sp-bar-chart:has(.bar-track .sp-bar[style*="width"])' in result.html
+    assert "Do not wrap vertical column bars in .bar-track" in _HTML_COMPONENT_CONTRACT
 
 
 def test_html_orchestrator_injects_ranked_chart_and_pie_styles() -> None:

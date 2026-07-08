@@ -359,7 +359,7 @@ function IntegrationsContent() {
   const projectsById = new Map(workspaceProjects.map((project) => [project.id, project]));
 
   return (
-    <div className="p-8 max-w-3xl animate-fade-in">
+    <div className="p-8 max-w-6xl animate-fade-in">
       <PageHeader
         title="integrations"
         subtitle="notion + slack"

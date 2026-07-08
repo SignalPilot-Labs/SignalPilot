@@ -54,6 +54,10 @@ _PLACEHOLDER_CHART_TITLE_RE = re.compile(
     flags=re.I,
 )
 logger = logging.getLogger(__name__)
+_HTML_DELIVERABLE_SUCCESS_NOTE = "- HTML block inserted on this Notion page."
+_HTML_DELIVERABLE_FAILURE_NOTE = (
+    "- I could not insert the HTML block in Notion, so I delivered the analysis text here instead."
+)
 
 
 def _text(value: Any) -> str:
@@ -598,6 +602,15 @@ def _final_comment_rich_text(
         *notion_formatting.linked_rich_text("request details", request_page_url),
         *notion_formatting.markdown_rich_text(chart_section, max_chars=None),
     ]
+
+
+def _with_notion_comment_note(status: dict[str, Any], note: str) -> dict[str, Any]:
+    next_status = dict(status)
+    existing = _text(next_status.get("notionComment")).strip()
+    if note in existing:
+        return next_status
+    next_status["notionComment"] = f"{existing}\n{note}" if existing else note
+    return next_status
 
 
 def _failure_comment_rich_text(error: str, request_page_url: str) -> list[dict[str, Any]]:
@@ -1857,6 +1870,7 @@ async def process_routed_comment_event(
             )
         delivery = await render_delivery(packet, api_key=delivery_api_key)
         rendered_status = delivery_result_to_status(delivery, packet, base_status=public_status)
+        html_delivery_error: str | None = None
         if html_deliverable and _is_incomplete_analysis_fallback(final_status):
             logger.info(
                 "Skipping Notion HTML deliverable for incomplete analysis fallback: request_id=%s",
@@ -1888,11 +1902,16 @@ async def process_routed_comment_event(
                     exc,
                     exc_info=True,
                 )
+                html_delivery_error = str(exc) or exc.__class__.__name__
                 delivered = False
             if delivered:
                 final_status_for_notion = _with_public_snapshot_urls(
                     _with_public_chart_urls(rendered_status, runtime),
                     runtime,
+                )
+                final_status_for_notion = _with_notion_comment_note(
+                    final_status_for_notion,
+                    _HTML_DELIVERABLE_SUCCESS_NOTE,
                 )
                 await notion_client.update_page_properties(
                     token,
@@ -1933,6 +1952,11 @@ async def process_routed_comment_event(
                 return NotionCommentProcessResult(status="processed")
         uploaded_status = await _upload_chart_images_to_notion(token, rendered_status, runtime)
         final_status_for_notion = _with_public_chart_urls(uploaded_status, runtime)
+        if html_delivery_error:
+            final_status_for_notion = _with_notion_comment_note(
+                final_status_for_notion,
+                _HTML_DELIVERABLE_FAILURE_NOTE,
+            )
         await notion_client.update_page_properties(
             token,
             request_page_id,

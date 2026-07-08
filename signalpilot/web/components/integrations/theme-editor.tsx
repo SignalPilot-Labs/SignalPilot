@@ -3,25 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Loader2, RotateCcw, Save } from "lucide-react";
 import { getSettings, updateSettings } from "~/lib/api";
-import { cloneTheme, DEFAULT_DELIVERABLE_THEME, themeToCssVars } from "~/lib/deliverable-theme";
-import type { DeliverableTheme, ThemeColors } from "~/lib/types";
+import { cloneTheme, DEFAULT_DELIVERABLE_THEME, themeToCssVars, themeWithGeneratedChartSeries } from "~/lib/deliverable-theme";
+import type { DeliverableTheme } from "~/lib/types";
 import { useToast } from "~/components/ui/toast";
 
 const HEX_RE = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
-const COLOR_FIELDS: { key: keyof ThemeColors; label: string }[] = [
-  { key: "bg", label: "background" },
-  { key: "surface", label: "surface" },
-  { key: "surface_alt", label: "surface alt" },
-  { key: "border", label: "border" },
-  { key: "text", label: "text" },
-  { key: "muted", label: "muted" },
-  { key: "accent", label: "accent" },
-  { key: "positive", label: "positive" },
-  { key: "warning", label: "warning" },
-  { key: "negative", label: "negative" },
-  { key: "chart_grid", label: "chart grid" },
-  { key: "chart_axis", label: "chart axis" },
-];
 
 function expandHex(value: string): string {
   if (/^#[0-9a-fA-F]{3}$/.test(value)) {
@@ -32,12 +18,11 @@ function expandHex(value: string): string {
 
 function normalizeTheme(theme: DeliverableTheme | null | undefined): DeliverableTheme {
   const source = theme ?? DEFAULT_DELIVERABLE_THEME;
-  const chartSeries = [...(source.chart_series?.length ? source.chart_series : []), ...DEFAULT_DELIVERABLE_THEME.chart_series].slice(0, 6);
-  return cloneTheme({
+  return themeWithGeneratedChartSeries({
     ...DEFAULT_DELIVERABLE_THEME,
     ...source,
+    font_family: DEFAULT_DELIVERABLE_THEME.font_family,
     colors: { ...DEFAULT_DELIVERABLE_THEME.colors, ...source.colors },
-    chart_series: chartSeries,
   });
 }
 
@@ -46,11 +31,7 @@ function isForbidden(error: unknown): boolean {
 }
 
 function invalidTheme(theme: DeliverableTheme): boolean {
-  return (
-    COLOR_FIELDS.some(({ key }) => !HEX_RE.test(theme.colors[key])) ||
-    theme.chart_series.some((color) => !HEX_RE.test(color)) ||
-    !theme.font_family.trim()
-  );
+  return !HEX_RE.test(theme.colors.positive);
 }
 
 export function ThemeEditor() {
@@ -92,16 +73,8 @@ export function ThemeEditor() {
     };
   }, [toast]);
 
-  function updateColor(key: keyof ThemeColors, value: string) {
-    setDraft((theme) => ({ ...theme, colors: { ...theme.colors, [key]: value } }));
-  }
-
-  function updateSeries(index: number, value: string) {
-    setDraft((theme) => {
-      const next = [...theme.chart_series];
-      next[index] = value;
-      return { ...theme, chart_series: next };
-    });
+  function updateMainColor(value: string) {
+    setDraft((theme) => themeWithGeneratedChartSeries({ ...theme, colors: { ...theme.colors, positive: value } }));
   }
 
   function updateNumber(key: "font_size_base_px" | "spacing_unit_px" | "radius_px", value: string) {
@@ -114,7 +87,10 @@ export function ThemeEditor() {
     setSaving(true);
     try {
       const current = await getSettings();
-      const updated = await updateSettings({ ...current, deliverable_theme: nextTheme });
+      const updated = await updateSettings({
+        ...current,
+        deliverable_theme: nextTheme ? themeWithGeneratedChartSeries(nextTheme) : null,
+      });
       const next = normalizeTheme(updated.deliverable_theme);
       setDraft(next);
       setSaved(cloneTheme(next));
@@ -145,7 +121,7 @@ export function ThemeEditor() {
     <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-5">
         <div>
-          <p className="text-[13px] text-[var(--color-text)] tracking-wider">org deliverable tokens</p>
+          <p className="text-[13px] text-[var(--color-text)] tracking-wider">HTML deliverable theme</p>
           {adminLocked && <p className="mt-1 text-[11px] text-[var(--color-error)] tracking-wider">org admin required</p>}
         </div>
         <div className="flex items-center gap-2">
@@ -168,73 +144,30 @@ export function ThemeEditor() {
         </div>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_460px]">
         <div className="space-y-5">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {COLOR_FIELDS.map(({ key, label }) => (
-              <label key={key} className="block">
-                <span className="block text-[11px] text-[var(--color-text-dim)] tracking-wider uppercase mb-1.5">{label}</span>
-                <div className="flex items-center border border-[var(--color-border)] bg-[var(--color-bg-input)]">
-                  <input
-                    type="color"
-                    value={expandHex(draft.colors[key])}
-                    onChange={(event) => updateColor(key, event.target.value)}
-                    disabled={disabled}
-                    className="h-9 w-10 bg-transparent border-0 p-1 disabled:opacity-30"
-                  />
-                  <input
-                    value={draft.colors[key]}
-                    onChange={(event) => updateColor(key, event.target.value)}
-                    disabled={disabled}
-                    className={`min-w-0 flex-1 bg-transparent px-2 py-2 font-mono text-[12px] outline-none disabled:opacity-30 ${
-                      HEX_RE.test(draft.colors[key]) ? "text-[var(--color-text)]" : "text-[var(--color-error)]"
-                    }`}
-                  />
-                </div>
-              </label>
-            ))}
-          </div>
-
-          <div>
-            <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider uppercase mb-2">chart rank scale</p>
-            <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
-              {draft.chart_series.slice(0, 6).map((color, index) => (
-                <label key={index} className="block">
-                  <span className="block text-[10px] text-[var(--color-text-dim)] tracking-wider mb-1">
-                    rank {index + 1}{index === 0 ? " highest" : ""}
-                  </span>
-                  <div className="flex items-center border border-[var(--color-border)] bg-[var(--color-bg-input)]">
-                    <input
-                      type="color"
-                      value={expandHex(color)}
-                      onChange={(event) => updateSeries(index, event.target.value)}
-                      disabled={disabled}
-                      className="h-9 w-10 bg-transparent border-0 p-1 disabled:opacity-30"
-                    />
-                    <input
-                      value={color}
-                      onChange={(event) => updateSeries(index, event.target.value)}
-                      disabled={disabled}
-                      className={`min-w-0 flex-1 bg-transparent px-2 py-2 font-mono text-[12px] outline-none disabled:opacity-30 ${
-                        HEX_RE.test(color) ? "text-[var(--color-text)]" : "text-[var(--color-error)]"
-                      }`}
-                    />
-                  </div>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_120px_120px_120px]">
-            <label className="block">
-              <span className="block text-[11px] text-[var(--color-text-dim)] tracking-wider uppercase mb-1.5">font family</span>
+          <label className="block max-w-md">
+            <span className="block text-[11px] text-[var(--color-text-dim)] tracking-wider uppercase mb-1.5">main color</span>
+            <div className="flex items-center border border-[var(--color-border)] bg-[var(--color-bg-input)]">
               <input
-                value={draft.font_family}
-                onChange={(event) => setDraft((theme) => ({ ...theme, font_family: event.target.value }))}
+                type="color"
+                value={expandHex(draft.colors.positive)}
+                onChange={(event) => updateMainColor(event.target.value)}
                 disabled={disabled}
-                className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-[12px] text-[var(--color-text)] font-mono outline-none disabled:opacity-30"
+                className="h-10 w-12 bg-transparent border-0 p-1 disabled:opacity-30"
               />
-            </label>
+              <input
+                value={draft.colors.positive}
+                onChange={(event) => updateMainColor(event.target.value)}
+                disabled={disabled}
+                className={`min-w-0 flex-1 bg-transparent px-3 py-2.5 font-mono text-[12px] outline-none disabled:opacity-30 ${
+                  HEX_RE.test(draft.colors.positive) ? "text-[var(--color-text)]" : "text-[var(--color-error)]"
+                }`}
+              />
+            </div>
+          </label>
+
+          <div className="grid max-w-md gap-3 sm:grid-cols-3">
             <NumberField label="font px" value={draft.font_size_base_px} min={10} max={24} disabled={disabled} onChange={(value) => updateNumber("font_size_base_px", value)} />
             <NumberField label="space px" value={draft.spacing_unit_px} min={4} max={24} disabled={disabled} onChange={(value) => updateNumber("spacing_unit_px", value)} />
             <NumberField label="radius px" value={draft.radius_px} min={0} max={24} disabled={disabled} onChange={(value) => updateNumber("radius_px", value)} />
@@ -295,12 +228,12 @@ function Preview({ theme }: { theme: DeliverableTheme }) {
           <div className="sp-kpi-card bg-[var(--sp-surface)] border border-[var(--sp-border)] p-[var(--sp-space-2)]" style={{ borderRadius: "var(--sp-radius)" }}>
             <div className="sp-kpi-label text-[var(--sp-muted)] text-[11px] uppercase tracking-wider">revenue</div>
             <div className="sp-kpi-value">$2.4m</div>
-            <div className="sp-delta-up text-[12px]">+18.2%</div>
+            <div className="sp-delta-up text-[12px] text-[var(--sp-positive)]">+18.2%</div>
           </div>
           <div className="sp-kpi-card bg-[var(--sp-surface)] border border-[var(--sp-border)] p-[var(--sp-space-2)]" style={{ borderRadius: "var(--sp-radius)" }}>
             <div className="sp-kpi-label text-[var(--sp-muted)] text-[11px] uppercase tracking-wider">risk</div>
             <div className="sp-kpi-value">low</div>
-            <div className="sp-delta-down text-[12px]">-3 pts</div>
+            <div className="sp-delta-down text-[12px] text-[var(--sp-negative)]">-3 pts</div>
           </div>
         </div>
         <div className="sp-chart-card mb-[var(--sp-space-2)] bg-[var(--sp-surface)] border border-[var(--sp-border)] p-[var(--sp-space-2)]" style={{ borderRadius: "var(--sp-radius)" }}>
@@ -338,12 +271,12 @@ function Preview({ theme }: { theme: DeliverableTheme }) {
               <tr>
                 <td className="border-b border-[var(--sp-border)] p-[var(--sp-space)]">enterprise</td>
                 <td className="border-b border-[var(--sp-border)] p-[var(--sp-space)]">91</td>
-                <td className="sp-delta-up border-b border-[var(--sp-border)] p-[var(--sp-space)]">+8</td>
+                <td className="sp-delta-up border-b border-[var(--sp-border)] p-[var(--sp-space)] text-[var(--sp-positive)]">+8</td>
               </tr>
               <tr>
                 <td className="border-b border-[var(--sp-border)] p-[var(--sp-space)]">mid market</td>
                 <td className="border-b border-[var(--sp-border)] p-[var(--sp-space)]">74</td>
-                <td className="sp-delta-down border-b border-[var(--sp-border)] p-[var(--sp-space)]">-2</td>
+                <td className="sp-delta-down border-b border-[var(--sp-border)] p-[var(--sp-space)] text-[var(--sp-negative)]">-2</td>
               </tr>
             </tbody>
           </table>

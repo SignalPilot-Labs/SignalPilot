@@ -138,7 +138,19 @@ svg.sp-chart-svg,
     min-height: 340px;
     padding: 0.5rem 0 0;
 }}
+.sp-bar-chart > .chart-content,
+.bar-chart > .chart-content {{
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    gap: 8px;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+}}
 .sp-bar-chart .sp-bar-group,
+.sp-bar-chart .bar-group,
+.bar-chart .sp-bar-group,
 .bar-chart .bar-group {{
     display: grid;
     flex: 1 1 0;
@@ -150,14 +162,31 @@ svg.sp-chart-svg,
     min-width: 0;
     min-height: 0;
 }}
+.sp-bar-chart .sp-bar-value,
 .sp-bar-chart .bar-value,
+.bar-chart .sp-bar-value,
 .bar-chart .bar-value {{
     grid-row: 1;
     align-self: end;
     margin: 0;
     line-height: 1.2;
 }}
+.sp-bar-chart .bar-track,
+.sp-bar-chart .sp-bar-track,
+.bar-chart .bar-track,
+.bar-chart .sp-bar-track {{
+    grid-row: 2;
+    align-self: stretch;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    width: min(100%, 72px);
+    height: 100%;
+    min-height: 0;
+}}
 .sp-bar-chart .sp-bar,
+.sp-bar-chart .bar,
+.bar-chart .sp-bar,
 .bar-chart .bar {{
     grid-row: 2;
     align-self: end;
@@ -166,7 +195,9 @@ svg.sp-chart-svg,
     min-height: 2px;
     max-height: 100%;
 }}
+.sp-bar-chart .sp-bar-label,
 .sp-bar-chart .bar-label,
+.bar-chart .sp-bar-label,
 .bar-chart .bar-label {{
     grid-row: 3;
     align-self: start;
@@ -188,10 +219,16 @@ svg.sp-chart-svg,
     padding: 0.25rem 0 0;
 }}
 .sp-horizontal-bar-chart .sp-bar-group,
+.sp-horizontal-bar-chart .bar-group,
+.horizontal-bar-chart .sp-bar-group,
 .horizontal-bar-chart .bar-group,
 .sp-pipeline-chart .sp-bar-group,
+.sp-pipeline-chart .bar-group,
+.pipeline-chart .sp-bar-group,
 .pipeline-chart .bar-group,
 .sp-funnel-chart .sp-bar-group,
+.sp-funnel-chart .bar-group,
+.funnel-chart .sp-bar-group,
 .funnel-chart .bar-group {{
     display: grid;
     grid-template-columns: minmax(7.5rem, 11rem) minmax(0, 1fr) max-content;
@@ -202,11 +239,17 @@ svg.sp-chart-svg,
     height: auto;
     min-height: 2rem;
 }}
+.sp-horizontal-bar-chart .sp-bar-label,
 .sp-horizontal-bar-chart .bar-label,
+.horizontal-bar-chart .sp-bar-label,
 .horizontal-bar-chart .bar-label,
+.sp-pipeline-chart .sp-bar-label,
 .sp-pipeline-chart .bar-label,
+.pipeline-chart .sp-bar-label,
 .pipeline-chart .bar-label,
+.sp-funnel-chart .sp-bar-label,
 .sp-funnel-chart .bar-label,
+.funnel-chart .sp-bar-label,
 .funnel-chart .bar-label {{
     grid-row: 1;
     grid-column: 1;
@@ -230,42 +273,63 @@ svg.sp-chart-svg,
     grid-column: 2;
     width: 100%;
     min-width: 0;
+    min-height: 1.5rem;
 }}
 .sp-horizontal-bar-chart .sp-bar,
+.sp-horizontal-bar-chart .bar,
+.horizontal-bar-chart .sp-bar,
 .horizontal-bar-chart .bar,
 .sp-pipeline-chart .sp-bar,
+.sp-pipeline-chart .bar,
+.pipeline-chart .sp-bar,
 .pipeline-chart .bar,
 .sp-funnel-chart .sp-bar,
+.sp-funnel-chart .bar,
+.funnel-chart .sp-bar,
 .funnel-chart .bar {{
     grid-row: auto;
     height: 100%;
     max-height: none;
 }}
+.sp-horizontal-bar-chart .sp-bar-value,
 .sp-horizontal-bar-chart .bar-value,
+.horizontal-bar-chart .sp-bar-value,
 .horizontal-bar-chart .bar-value,
+.sp-pipeline-chart .sp-bar-value,
 .sp-pipeline-chart .bar-value,
+.pipeline-chart .sp-bar-value,
 .pipeline-chart .bar-value,
+.sp-funnel-chart .sp-bar-value,
 .sp-funnel-chart .bar-value,
+.funnel-chart .sp-bar-value,
 .funnel-chart .bar-value {{
     grid-row: 1;
     grid-column: 3;
     align-self: center;
     white-space: nowrap;
 }}
-.sp-bar-chart:has(.bar-track),
-.sp-bar-chart:has(.sp-bar-track),
-.bar-chart:has(.bar-track),
-.bar-chart:has(.sp-bar-track) {{
+.sp-bar-chart:has(.bar-track .sp-bar[style*="width"]),
+.sp-bar-chart:has(.bar-track .bar[style*="width"]),
+.sp-bar-chart:has(.sp-bar-track .sp-bar[style*="width"]),
+.sp-bar-chart:has(.sp-bar-track .bar[style*="width"]),
+.bar-chart:has(.bar-track .sp-bar[style*="width"]),
+.bar-chart:has(.bar-track .bar[style*="width"]),
+.bar-chart:has(.sp-bar-track .sp-bar[style*="width"]),
+.bar-chart:has(.sp-bar-track .bar[style*="width"]) {{
     flex-direction: column;
     gap: 0.65rem;
     height: auto;
     min-height: 0;
     padding: 0.25rem 0 0;
 }}
-.sp-bar-chart:has(.bar-track) .sp-bar-group,
-.sp-bar-chart:has(.sp-bar-track) .sp-bar-group,
-.bar-chart:has(.bar-track) .bar-group,
-.bar-chart:has(.sp-bar-track) .bar-group {{
+.sp-bar-chart:has(.bar-track .sp-bar[style*="width"]) .sp-bar-group,
+.sp-bar-chart:has(.bar-track .bar[style*="width"]) .sp-bar-group,
+.sp-bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .sp-bar-group,
+.sp-bar-chart:has(.sp-bar-track .bar[style*="width"]) .sp-bar-group,
+.bar-chart:has(.bar-track .sp-bar[style*="width"]) .bar-group,
+.bar-chart:has(.bar-track .bar[style*="width"]) .bar-group,
+.bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .bar-group,
+.bar-chart:has(.sp-bar-track .bar[style*="width"]) .bar-group {{
     grid-template-columns: minmax(7.5rem, 11rem) minmax(0, 1fr) max-content;
     grid-template-rows: 1fr;
     gap: 0.75rem;
@@ -274,29 +338,41 @@ svg.sp-chart-svg,
     height: auto;
     min-height: 2rem;
 }}
-.sp-bar-chart:has(.bar-track) .bar-label,
-.sp-bar-chart:has(.sp-bar-track) .bar-label,
-.bar-chart:has(.bar-track) .bar-label,
-.bar-chart:has(.sp-bar-track) .bar-label {{
+.sp-bar-chart:has(.bar-track .sp-bar[style*="width"]) .bar-label,
+.sp-bar-chart:has(.bar-track .bar[style*="width"]) .bar-label,
+.sp-bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .bar-label,
+.sp-bar-chart:has(.sp-bar-track .bar[style*="width"]) .bar-label,
+.bar-chart:has(.bar-track .sp-bar[style*="width"]) .bar-label,
+.bar-chart:has(.bar-track .bar[style*="width"]) .bar-label,
+.bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .bar-label,
+.bar-chart:has(.sp-bar-track .bar[style*="width"]) .bar-label {{
     grid-row: 1;
     grid-column: 1;
     align-self: center;
     max-width: none;
     text-align: right;
 }}
-.sp-bar-chart:has(.bar-track) .bar-track,
-.sp-bar-chart:has(.sp-bar-track) .sp-bar-track,
-.bar-chart:has(.bar-track) .bar-track,
-.bar-chart:has(.sp-bar-track) .sp-bar-track {{
+.sp-bar-chart:has(.bar-track .sp-bar[style*="width"]) .bar-track,
+.sp-bar-chart:has(.bar-track .bar[style*="width"]) .bar-track,
+.sp-bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .sp-bar-track,
+.sp-bar-chart:has(.sp-bar-track .bar[style*="width"]) .sp-bar-track,
+.bar-chart:has(.bar-track .sp-bar[style*="width"]) .bar-track,
+.bar-chart:has(.bar-track .bar[style*="width"]) .bar-track,
+.bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .sp-bar-track,
+.bar-chart:has(.sp-bar-track .bar[style*="width"]) .sp-bar-track {{
     grid-row: 1;
     grid-column: 2;
     width: 100%;
     min-width: 0;
 }}
-.sp-bar-chart:has(.bar-track) .bar-value,
-.sp-bar-chart:has(.sp-bar-track) .bar-value,
-.bar-chart:has(.bar-track) .bar-value,
-.bar-chart:has(.sp-bar-track) .bar-value {{
+.sp-bar-chart:has(.bar-track .sp-bar[style*="width"]) .bar-value,
+.sp-bar-chart:has(.bar-track .bar[style*="width"]) .bar-value,
+.sp-bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .bar-value,
+.sp-bar-chart:has(.sp-bar-track .bar[style*="width"]) .bar-value,
+.bar-chart:has(.bar-track .sp-bar[style*="width"]) .bar-value,
+.bar-chart:has(.bar-track .bar[style*="width"]) .bar-value,
+.bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .bar-value,
+.bar-chart:has(.sp-bar-track .bar[style*="width"]) .bar-value {{
     grid-row: 1;
     grid-column: 3;
     align-self: center;
@@ -388,20 +464,32 @@ svg.sp-chart-svg,
         height: auto;
     }}
     .sp-horizontal-bar-chart .sp-bar-group,
+    .sp-horizontal-bar-chart .bar-group,
+    .horizontal-bar-chart .sp-bar-group,
     .horizontal-bar-chart .bar-group,
     .sp-pipeline-chart .sp-bar-group,
+    .sp-pipeline-chart .bar-group,
+    .pipeline-chart .sp-bar-group,
     .pipeline-chart .bar-group,
     .sp-funnel-chart .sp-bar-group,
+    .sp-funnel-chart .bar-group,
+    .funnel-chart .sp-bar-group,
     .funnel-chart .bar-group {{
         grid-template-columns: 1fr;
         grid-template-rows: auto 1.8rem auto;
         gap: 0.35rem;
     }}
+    .sp-horizontal-bar-chart .sp-bar-label,
     .sp-horizontal-bar-chart .bar-label,
+    .horizontal-bar-chart .sp-bar-label,
     .horizontal-bar-chart .bar-label,
+    .sp-pipeline-chart .sp-bar-label,
     .sp-pipeline-chart .bar-label,
+    .pipeline-chart .sp-bar-label,
     .pipeline-chart .bar-label,
+    .sp-funnel-chart .sp-bar-label,
     .sp-funnel-chart .bar-label,
+    .funnel-chart .sp-bar-label,
     .funnel-chart .bar-label {{
         grid-row: 1;
         grid-column: 1;
@@ -422,42 +510,64 @@ svg.sp-chart-svg,
         grid-row: 2;
         grid-column: 1;
     }}
+    .sp-horizontal-bar-chart .sp-bar-value,
     .sp-horizontal-bar-chart .bar-value,
+    .horizontal-bar-chart .sp-bar-value,
     .horizontal-bar-chart .bar-value,
+    .sp-pipeline-chart .sp-bar-value,
     .sp-pipeline-chart .bar-value,
+    .pipeline-chart .sp-bar-value,
     .pipeline-chart .bar-value,
+    .sp-funnel-chart .sp-bar-value,
     .sp-funnel-chart .bar-value,
+    .funnel-chart .sp-bar-value,
     .funnel-chart .bar-value {{
         grid-row: 3;
         grid-column: 1;
     }}
-    .sp-bar-chart:has(.bar-track) .sp-bar-group,
-    .sp-bar-chart:has(.sp-bar-track) .sp-bar-group,
-    .bar-chart:has(.bar-track) .bar-group,
-    .bar-chart:has(.sp-bar-track) .bar-group {{
+    .sp-bar-chart:has(.bar-track .sp-bar[style*="width"]) .sp-bar-group,
+    .sp-bar-chart:has(.bar-track .bar[style*="width"]) .sp-bar-group,
+    .sp-bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .sp-bar-group,
+    .sp-bar-chart:has(.sp-bar-track .bar[style*="width"]) .sp-bar-group,
+    .bar-chart:has(.bar-track .sp-bar[style*="width"]) .bar-group,
+    .bar-chart:has(.bar-track .bar[style*="width"]) .bar-group,
+    .bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .bar-group,
+    .bar-chart:has(.sp-bar-track .bar[style*="width"]) .bar-group {{
         grid-template-columns: 1fr;
         grid-template-rows: auto 1.8rem auto;
         gap: 0.35rem;
     }}
-    .sp-bar-chart:has(.bar-track) .bar-label,
-    .sp-bar-chart:has(.sp-bar-track) .bar-label,
-    .bar-chart:has(.bar-track) .bar-label,
-    .bar-chart:has(.sp-bar-track) .bar-label {{
+    .sp-bar-chart:has(.bar-track .sp-bar[style*="width"]) .bar-label,
+    .sp-bar-chart:has(.bar-track .bar[style*="width"]) .bar-label,
+    .sp-bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .bar-label,
+    .sp-bar-chart:has(.sp-bar-track .bar[style*="width"]) .bar-label,
+    .bar-chart:has(.bar-track .sp-bar[style*="width"]) .bar-label,
+    .bar-chart:has(.bar-track .bar[style*="width"]) .bar-label,
+    .bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .bar-label,
+    .bar-chart:has(.sp-bar-track .bar[style*="width"]) .bar-label {{
         grid-row: 1;
         grid-column: 1;
         text-align: left;
     }}
-    .sp-bar-chart:has(.bar-track) .bar-track,
-    .sp-bar-chart:has(.sp-bar-track) .sp-bar-track,
-    .bar-chart:has(.bar-track) .bar-track,
-    .bar-chart:has(.sp-bar-track) .sp-bar-track {{
+    .sp-bar-chart:has(.bar-track .sp-bar[style*="width"]) .bar-track,
+    .sp-bar-chart:has(.bar-track .bar[style*="width"]) .bar-track,
+    .sp-bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .sp-bar-track,
+    .sp-bar-chart:has(.sp-bar-track .bar[style*="width"]) .sp-bar-track,
+    .bar-chart:has(.bar-track .sp-bar[style*="width"]) .bar-track,
+    .bar-chart:has(.bar-track .bar[style*="width"]) .bar-track,
+    .bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .sp-bar-track,
+    .bar-chart:has(.sp-bar-track .bar[style*="width"]) .sp-bar-track {{
         grid-row: 2;
         grid-column: 1;
     }}
-    .sp-bar-chart:has(.bar-track) .bar-value,
-    .sp-bar-chart:has(.sp-bar-track) .bar-value,
-    .bar-chart:has(.bar-track) .bar-value,
-    .bar-chart:has(.sp-bar-track) .bar-value {{
+    .sp-bar-chart:has(.bar-track .sp-bar[style*="width"]) .bar-value,
+    .sp-bar-chart:has(.bar-track .bar[style*="width"]) .bar-value,
+    .sp-bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .bar-value,
+    .sp-bar-chart:has(.sp-bar-track .bar[style*="width"]) .bar-value,
+    .bar-chart:has(.bar-track .sp-bar[style*="width"]) .bar-value,
+    .bar-chart:has(.bar-track .bar[style*="width"]) .bar-value,
+    .bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .bar-value,
+    .bar-chart:has(.sp-bar-track .bar[style*="width"]) .bar-value {{
         grid-row: 3;
         grid-column: 1;
     }}
@@ -489,7 +599,19 @@ _BAR_CHART_LAYOUT_GUARD = f"""<style id="{_BAR_CHART_LAYOUT_GUARD_ID}">
     min-height: 340px;
     padding: 0.5rem 0 0;
 }}
+.sp-bar-chart > .chart-content,
+.bar-chart > .chart-content {{
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: stretch !important;
+    gap: 8px;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+}}
 .sp-bar-chart .sp-bar-group,
+.sp-bar-chart .bar-group,
+.bar-chart .sp-bar-group,
 .bar-chart .bar-group {{
     display: grid !important;
     grid-template-rows: 1.4rem minmax(0, 1fr) 3.2rem;
@@ -499,14 +621,31 @@ _BAR_CHART_LAYOUT_GUARD = f"""<style id="{_BAR_CHART_LAYOUT_GUARD_ID}">
     justify-items: center;
     min-height: 0;
 }}
+.sp-bar-chart .sp-bar-value,
 .sp-bar-chart .bar-value,
+.bar-chart .sp-bar-value,
 .bar-chart .bar-value {{
     grid-row: 1;
     align-self: end;
     line-height: 1.2;
     margin: 0;
 }}
+.sp-bar-chart .bar-track,
+.sp-bar-chart .sp-bar-track,
+.bar-chart .bar-track,
+.bar-chart .sp-bar-track {{
+    grid-row: 2;
+    align-self: stretch;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    width: min(100%, 72px);
+    height: 100%;
+    min-height: 0;
+}}
 .sp-bar-chart .sp-bar,
+.sp-bar-chart .bar,
+.bar-chart .sp-bar,
 .bar-chart .bar {{
     grid-row: 2;
     align-self: end;
@@ -514,7 +653,9 @@ _BAR_CHART_LAYOUT_GUARD = f"""<style id="{_BAR_CHART_LAYOUT_GUARD_ID}">
     min-height: 2px;
     max-height: 100%;
 }}
+.sp-bar-chart .sp-bar-label,
 .sp-bar-chart .bar-label,
+.bar-chart .sp-bar-label,
 .bar-chart .bar-label {{
     grid-row: 3;
     align-self: start;
@@ -536,10 +677,16 @@ _BAR_CHART_LAYOUT_GUARD = f"""<style id="{_BAR_CHART_LAYOUT_GUARD_ID}">
     padding: 0.25rem 0 0 !important;
 }}
 .sp-horizontal-bar-chart .sp-bar-group,
+.sp-horizontal-bar-chart .bar-group,
+.horizontal-bar-chart .sp-bar-group,
 .horizontal-bar-chart .bar-group,
 .sp-pipeline-chart .sp-bar-group,
+.sp-pipeline-chart .bar-group,
+.pipeline-chart .sp-bar-group,
 .pipeline-chart .bar-group,
 .sp-funnel-chart .sp-bar-group,
+.sp-funnel-chart .bar-group,
+.funnel-chart .sp-bar-group,
 .funnel-chart .bar-group {{
     display: grid !important;
     grid-template-columns: minmax(7.5rem, 11rem) minmax(0, 1fr) max-content;
@@ -550,11 +697,17 @@ _BAR_CHART_LAYOUT_GUARD = f"""<style id="{_BAR_CHART_LAYOUT_GUARD_ID}">
     height: auto !important;
     min-height: 2rem;
 }}
+.sp-horizontal-bar-chart .sp-bar-label,
 .sp-horizontal-bar-chart .bar-label,
+.horizontal-bar-chart .sp-bar-label,
 .horizontal-bar-chart .bar-label,
+.sp-pipeline-chart .sp-bar-label,
 .sp-pipeline-chart .bar-label,
+.pipeline-chart .sp-bar-label,
 .pipeline-chart .bar-label,
+.sp-funnel-chart .sp-bar-label,
 .sp-funnel-chart .bar-label,
+.funnel-chart .sp-bar-label,
 .funnel-chart .bar-label {{
     grid-row: 1 !important;
     grid-column: 1;
@@ -578,42 +731,63 @@ _BAR_CHART_LAYOUT_GUARD = f"""<style id="{_BAR_CHART_LAYOUT_GUARD_ID}">
     grid-column: 2;
     width: 100%;
     min-width: 0;
+    min-height: 1.5rem;
 }}
 .sp-horizontal-bar-chart .sp-bar,
+.sp-horizontal-bar-chart .bar,
+.horizontal-bar-chart .sp-bar,
 .horizontal-bar-chart .bar,
 .sp-pipeline-chart .sp-bar,
+.sp-pipeline-chart .bar,
+.pipeline-chart .sp-bar,
 .pipeline-chart .bar,
 .sp-funnel-chart .sp-bar,
+.sp-funnel-chart .bar,
+.funnel-chart .sp-bar,
 .funnel-chart .bar {{
     grid-row: auto;
     height: 100%;
     max-height: none;
 }}
+.sp-horizontal-bar-chart .sp-bar-value,
 .sp-horizontal-bar-chart .bar-value,
+.horizontal-bar-chart .sp-bar-value,
 .horizontal-bar-chart .bar-value,
+.sp-pipeline-chart .sp-bar-value,
 .sp-pipeline-chart .bar-value,
+.pipeline-chart .sp-bar-value,
 .pipeline-chart .bar-value,
+.sp-funnel-chart .sp-bar-value,
 .sp-funnel-chart .bar-value,
+.funnel-chart .sp-bar-value,
 .funnel-chart .bar-value {{
     grid-row: 1 !important;
     grid-column: 3;
     align-self: center;
     white-space: nowrap;
 }}
-.sp-bar-chart:has(.bar-track),
-.sp-bar-chart:has(.sp-bar-track),
-.bar-chart:has(.bar-track),
-.bar-chart:has(.sp-bar-track) {{
+.sp-bar-chart:has(.bar-track .sp-bar[style*="width"]),
+.sp-bar-chart:has(.bar-track .bar[style*="width"]),
+.sp-bar-chart:has(.sp-bar-track .sp-bar[style*="width"]),
+.sp-bar-chart:has(.sp-bar-track .bar[style*="width"]),
+.bar-chart:has(.bar-track .sp-bar[style*="width"]),
+.bar-chart:has(.bar-track .bar[style*="width"]),
+.bar-chart:has(.sp-bar-track .sp-bar[style*="width"]),
+.bar-chart:has(.sp-bar-track .bar[style*="width"]) {{
     flex-direction: column !important;
     gap: 0.65rem !important;
     height: auto !important;
     min-height: 0 !important;
     padding: 0.25rem 0 0 !important;
 }}
-.sp-bar-chart:has(.bar-track) .sp-bar-group,
-.sp-bar-chart:has(.sp-bar-track) .sp-bar-group,
-.bar-chart:has(.bar-track) .bar-group,
-.bar-chart:has(.sp-bar-track) .bar-group {{
+.sp-bar-chart:has(.bar-track .sp-bar[style*="width"]) .sp-bar-group,
+.sp-bar-chart:has(.bar-track .bar[style*="width"]) .sp-bar-group,
+.sp-bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .sp-bar-group,
+.sp-bar-chart:has(.sp-bar-track .bar[style*="width"]) .sp-bar-group,
+.bar-chart:has(.bar-track .sp-bar[style*="width"]) .bar-group,
+.bar-chart:has(.bar-track .bar[style*="width"]) .bar-group,
+.bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .bar-group,
+.bar-chart:has(.sp-bar-track .bar[style*="width"]) .bar-group {{
     grid-template-columns: minmax(7.5rem, 11rem) minmax(0, 1fr) max-content;
     grid-template-rows: 1fr !important;
     gap: 0.75rem;
@@ -622,29 +796,41 @@ _BAR_CHART_LAYOUT_GUARD = f"""<style id="{_BAR_CHART_LAYOUT_GUARD_ID}">
     height: auto !important;
     min-height: 2rem;
 }}
-.sp-bar-chart:has(.bar-track) .bar-label,
-.sp-bar-chart:has(.sp-bar-track) .bar-label,
-.bar-chart:has(.bar-track) .bar-label,
-.bar-chart:has(.sp-bar-track) .bar-label {{
+.sp-bar-chart:has(.bar-track .sp-bar[style*="width"]) .bar-label,
+.sp-bar-chart:has(.bar-track .bar[style*="width"]) .bar-label,
+.sp-bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .bar-label,
+.sp-bar-chart:has(.sp-bar-track .bar[style*="width"]) .bar-label,
+.bar-chart:has(.bar-track .sp-bar[style*="width"]) .bar-label,
+.bar-chart:has(.bar-track .bar[style*="width"]) .bar-label,
+.bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .bar-label,
+.bar-chart:has(.sp-bar-track .bar[style*="width"]) .bar-label {{
     grid-row: 1 !important;
     grid-column: 1;
     align-self: center;
     max-width: none;
     text-align: right;
 }}
-.sp-bar-chart:has(.bar-track) .bar-track,
-.sp-bar-chart:has(.sp-bar-track) .sp-bar-track,
-.bar-chart:has(.bar-track) .bar-track,
-.bar-chart:has(.sp-bar-track) .sp-bar-track {{
+.sp-bar-chart:has(.bar-track .sp-bar[style*="width"]) .bar-track,
+.sp-bar-chart:has(.bar-track .bar[style*="width"]) .bar-track,
+.sp-bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .sp-bar-track,
+.sp-bar-chart:has(.sp-bar-track .bar[style*="width"]) .sp-bar-track,
+.bar-chart:has(.bar-track .sp-bar[style*="width"]) .bar-track,
+.bar-chart:has(.bar-track .bar[style*="width"]) .bar-track,
+.bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .sp-bar-track,
+.bar-chart:has(.sp-bar-track .bar[style*="width"]) .sp-bar-track {{
     grid-row: 1;
     grid-column: 2;
     width: 100%;
     min-width: 0;
 }}
-.sp-bar-chart:has(.bar-track) .bar-value,
-.sp-bar-chart:has(.sp-bar-track) .bar-value,
-.bar-chart:has(.bar-track) .bar-value,
-.bar-chart:has(.sp-bar-track) .bar-value {{
+.sp-bar-chart:has(.bar-track .sp-bar[style*="width"]) .bar-value,
+.sp-bar-chart:has(.bar-track .bar[style*="width"]) .bar-value,
+.sp-bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .bar-value,
+.sp-bar-chart:has(.sp-bar-track .bar[style*="width"]) .bar-value,
+.bar-chart:has(.bar-track .sp-bar[style*="width"]) .bar-value,
+.bar-chart:has(.bar-track .bar[style*="width"]) .bar-value,
+.bar-chart:has(.sp-bar-track .sp-bar[style*="width"]) .bar-value,
+.bar-chart:has(.sp-bar-track .bar[style*="width"]) .bar-value {{
     grid-row: 1 !important;
     grid-column: 3;
     align-self: center;
@@ -661,8 +847,8 @@ Component contract:
 - Use .sp-chart-rank-1 through .sp-chart-rank-6 or var(--sp-chart-1) through var(--sp-chart-6) for ranked chart marks. Positive and negative deltas use .sp-delta-up and .sp-delta-down. Do not restyle preset sp-* components.
 - Every chart must live inside .sp-chart-card and a fixed-size .sp-chart wrapper. The chart wrapper must define explicit height and min-height. Do not use percentage heights unless every parent in that chart scope has an explicit height.
 - SVG charts must use a viewBox, preserveAspectRatio, and width/height 100%. Keep axes, labels, legends, and value annotations inside the viewBox so they are not clipped.
-- Column charts must use .sp-bar-chart > .sp-bar-group > .sp-bar, with groups at height: 100%, bars anchored to the bottom, a visible minimum height for non-zero values, and separate value/bar/label rows so a 100% bar cannot overlap the chart title or labels.
-- Pipeline, funnel, stage, and ranked-list bar charts must use .sp-horizontal-bar-chart, .sp-pipeline-chart, or .sp-funnel-chart in addition to .sp-bar-chart. Each .sp-bar-group must be one horizontal row with label, bar track, and value in separate columns; do not render pipeline stages as vertical columns.
+- Column charts must use .sp-bar-chart > .sp-bar-group > .sp-bar, with groups at height: 100%, bars anchored to the bottom, a visible minimum height for non-zero values, and separate value/bar/label rows so a 100% bar cannot overlap the chart title or labels. Do not wrap vertical column bars in .bar-track or .sp-bar-track; those track wrappers are reserved for width-based horizontal bars.
+- Pipeline, funnel, stage, and ranked-list bar charts must use .sp-horizontal-bar-chart, .sp-pipeline-chart, or .sp-funnel-chart in addition to .sp-bar-chart. Each .sp-bar-group must be one horizontal row with label, width-based bar track, and value in separate columns; do not render pipeline stages as vertical columns.
 - Line, area, scatter, and heatmap charts must use SVG inside .sp-line-chart, .sp-area-chart, .sp-scatter-chart, or .sp-heatmap. Compute plot bounds from data, reserve padding for axes and labels, and clamp points/marks inside the plot area.
 - Pie and donut charts must use .sp-pie-chart or .sp-donut-chart with a square SVG graphic (.sp-pie-graphic or .sp-donut-graphic), preserveAspectRatio="xMidYMid meet", direct slice labels, a matching legend, and no remote images or canvas dependencies. Slice paths must be mathematically circular: use the same radius for x/y arc radii, close each slice to the center, and keep the SVG width and height equal so the chart cannot render as an ellipse or irregular circle.
 - Tables must use .sp-table-wrap > table.sp-data-table. The wrapper owns horizontal overflow, headers stay readable, numeric columns align consistently, and cells wrap instead of forcing a viewport wider than 320px.
@@ -1014,8 +1200,7 @@ def _html_orchestrator_system_prompt() -> str:
         "and return a full replacement HTML document for the same dashboard/report. "
         "When a follow-up edit uses a forced edit_dashboard or edit_report tool, call "
         "that tool with the full title, html, report_id, and data_json; do not ask for "
-        "more data or call placeholder/partial tools. "
-        + _HTML_COMPONENT_CONTRACT
+        "more data or call placeholder/partial tools. " + _HTML_COMPONENT_CONTRACT
     )
 
 

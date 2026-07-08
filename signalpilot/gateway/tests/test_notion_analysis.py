@@ -814,7 +814,11 @@ async def test_refresh_followup_bypasses_generic_preflight_and_replaces_same_blo
     monkeypatch.setattr(notion_client, "comment_has_page_mention", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(notion_client, "extract_comment_text", lambda _comment: "refresh this")
     monkeypatch.setattr(notion_analysis.notion_store, "find_deliverable_by_embed_block", find_deliverable)
-    monkeypatch.setattr(notion_analysis, "classify_analysis_request", lambda _prompt: (_ for _ in ()).throw(AssertionError("preflight should not run")))
+    monkeypatch.setattr(
+        notion_analysis,
+        "classify_analysis_request",
+        lambda _prompt: (_ for _ in ()).throw(AssertionError("preflight should not run")),
+    )
     monkeypatch.setattr(notion_analysis.reports_store, "get_report", get_report)
     monkeypatch.setattr(notion_analysis.notion_store, "create_deliverable_update", create_update)
     monkeypatch.setattr(notion_analysis.notion_store, "latest_deliverable_context_snapshot", latest_context)
@@ -836,7 +840,9 @@ async def test_refresh_followup_bypasses_generic_preflight_and_replaces_same_blo
     assert replace_call["embed_block_id"] == "embed-block-1"
     update_call = next(payload for name, payload in calls if name == "update_report")
     assert update_call["report_id"] == "report-1"
-    assert any(payload == "Updated this dashboard/report with fresh data." for name, payload in calls if name == "comment")
+    assert any(
+        payload == "Updated this dashboard/report with fresh data." for name, payload in calls if name == "comment"
+    )
 
 
 @pytest.mark.asyncio
@@ -876,7 +882,9 @@ async def test_edit_only_followup_does_not_call_notebook_refresh(monkeypatch: py
         return None
 
     async def render_followup(*args, **kwargs):
-        calls.append(("render", {"mode": args[3], "packet": args[2], "existing": args[1], "api_key": kwargs["api_key"]}))
+        calls.append(
+            ("render", {"mode": args[3], "packet": args[2], "existing": args[1], "api_key": kwargs["api_key"]})
+        )
         return HtmlDeliverableResult(kind="dashboard", title="Revenue Dashboard", html="<html>edited</html>")
 
     async def replace_html(*args, **kwargs):
@@ -897,7 +905,11 @@ async def test_edit_only_followup_does_not_call_notebook_refresh(monkeypatch: py
     monkeypatch.setattr(notion_analysis.notion_store, "find_deliverable_by_embed_block", find_deliverable)
     monkeypatch.setattr(notion_analysis.reports_store, "get_report", get_report)
     monkeypatch.setattr(notion_analysis.notion_store, "create_deliverable_update", create_update)
-    monkeypatch.setattr(notion_analysis, "_run_ephemeral_deliverable_refresh", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("refresh should not run")))
+    monkeypatch.setattr(
+        notion_analysis,
+        "_run_ephemeral_deliverable_refresh",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("refresh should not run")),
+    )
     monkeypatch.setattr(notion_analysis, "delivery_api_key_for_user", delivery_api_key)
     monkeypatch.setattr(notion_analysis, "render_followup", render_followup)
     monkeypatch.setattr(notion_analysis.notion_dashboards, "replace_html_deliverable", replace_html)
@@ -1039,13 +1051,23 @@ async def test_followup_reply_routes_by_discussion_when_parent_is_not_embed(
     monkeypatch.setattr(notion_client, "create_comment", create_comment)
     monkeypatch.setattr(notion_client, "is_bot_comment", lambda _comment: False)
     monkeypatch.setattr(notion_client, "comment_has_page_mention", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(notion_client, "extract_comment_text", lambda _comment: "breakdown monthly revenue using bar chart")
+    monkeypatch.setattr(
+        notion_client, "extract_comment_text", lambda _comment: "breakdown monthly revenue using bar chart"
+    )
     monkeypatch.setattr(notion_analysis.notion_store, "find_deliverable_by_embed_block", find_by_embed)
     monkeypatch.setattr(notion_analysis.notion_store, "find_deliverable_by_discussion", find_by_discussion)
-    monkeypatch.setattr(notion_analysis, "classify_analysis_request", lambda _prompt: (_ for _ in ()).throw(AssertionError("preflight should not run")))
+    monkeypatch.setattr(
+        notion_analysis,
+        "classify_analysis_request",
+        lambda _prompt: (_ for _ in ()).throw(AssertionError("preflight should not run")),
+    )
     monkeypatch.setattr(notion_analysis.reports_store, "get_report", get_report)
     monkeypatch.setattr(notion_analysis.notion_store, "create_deliverable_update", create_update)
-    monkeypatch.setattr(notion_analysis, "_run_ephemeral_deliverable_refresh", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("refresh should not run")))
+    monkeypatch.setattr(
+        notion_analysis,
+        "_run_ephemeral_deliverable_refresh",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("refresh should not run")),
+    )
     monkeypatch.setattr(notion_analysis, "delivery_api_key_for_user", delivery_api_key)
     monkeypatch.setattr(notion_analysis, "render_followup", render_followup)
     monkeypatch.setattr(notion_analysis.notion_dashboards, "replace_html_deliverable", replace_html)
@@ -1110,9 +1132,21 @@ async def test_refresh_without_context_refuses_rebuild_and_does_not_refresh(
     monkeypatch.setattr(notion_analysis.reports_store, "get_report", get_report)
     monkeypatch.setattr(notion_analysis.notion_store, "create_deliverable_update", create_update)
     monkeypatch.setattr(notion_analysis.notion_store, "latest_deliverable_context_snapshot", latest_context)
-    monkeypatch.setattr(notion_analysis, "_run_ephemeral_deliverable_refresh", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("refresh should not run")))
-    monkeypatch.setattr(notion_analysis, "render_followup", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("render should not run")))
-    monkeypatch.setattr(notion_analysis.notion_dashboards, "replace_html_deliverable", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("replace should not run")))
+    monkeypatch.setattr(
+        notion_analysis,
+        "_run_ephemeral_deliverable_refresh",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("refresh should not run")),
+    )
+    monkeypatch.setattr(
+        notion_analysis,
+        "render_followup",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("render should not run")),
+    )
+    monkeypatch.setattr(
+        notion_analysis.notion_dashboards,
+        "replace_html_deliverable",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("replace should not run")),
+    )
     monkeypatch.setattr(notion_analysis.notion_store, "mark_deliverable_update_failed", mark_failed)
 
     result = await notion_analysis.process_routed_comment_event(routed, _followup_payload(), db=MagicMock())
@@ -1433,10 +1467,7 @@ def test_incomplete_analysis_fallback_skips_html_deliverable() -> None:
         {
             "status": "Done",
             "summary": "Analysis could not be completed.",
-            "finalAnswer": (
-                "The agent did not emit the required FINAL_STATEMENT marker. "
-                "API Error: Overloaded"
-            ),
+            "finalAnswer": ("The agent did not emit the required FINAL_STATEMENT marker. API Error: Overloaded"),
         }
     )
     assert not notion_analysis._is_incomplete_analysis_fallback(
@@ -1595,6 +1626,17 @@ def test_failure_comment_rich_text_links_page_and_marks_error_as_code() -> None:
         "ValueError" in part.get("text", {}).get("content", "") and part.get("annotations", {}).get("code") is True
         for part in rich_text
     )
+
+
+def test_notion_comment_note_appends_html_delivery_status_once() -> None:
+    status = {"notionComment": "- Done"}
+
+    updated = notion_analysis._with_notion_comment_note(status, "- HTML block inserted on this Notion page.")
+    updated_again = notion_analysis._with_notion_comment_note(updated, "- HTML block inserted on this Notion page.")
+
+    assert updated["notionComment"] == "- Done\n- HTML block inserted on this Notion page."
+    assert updated_again["notionComment"] == updated["notionComment"]
+    assert status["notionComment"] == "- Done"
 
 
 def test_analysis_detail_blocks_render_markdown_as_notion_blocks() -> None:

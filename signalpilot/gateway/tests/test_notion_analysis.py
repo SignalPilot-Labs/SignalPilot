@@ -1306,6 +1306,34 @@ def test_final_comment_rich_text_formats_bullets_links_and_code() -> None:
     assert any(part.get("text", {}).get("link", {}).get("url") == request_url for part in rich_text)
 
 
+def test_final_comment_rich_text_appends_confidence_score() -> None:
+    rich_text = notion_analysis._final_comment_rich_text(
+        {
+            "notionComment": "- Northstar leads revenue.",
+            "confidenceScore": "medium",
+        },
+        "https://notion.test/request-page-1",
+    )
+    content = _rich_text_content(rich_text)
+
+    assert "• Northstar leads revenue." in content
+    assert "• Confidence score: medium" in content
+    assert content.index("Confidence score: medium") < content.index("Request page:")
+
+
+def test_final_comment_rich_text_does_not_duplicate_existing_confidence_score() -> None:
+    rich_text = notion_analysis._final_comment_rich_text(
+        {
+            "notionComment": "- Northstar leads revenue.\n- Confidence score: medium",
+            "confidenceScore": "medium",
+        },
+        "https://notion.test/request-page-1",
+    )
+    content = _rich_text_content(rich_text)
+
+    assert content.count("Confidence score: medium") == 1
+
+
 def test_final_comment_rich_text_avoids_duplicate_bullet_markers_and_formats_bold() -> None:
     rich_text = notion_analysis._final_comment_rich_text(
         {

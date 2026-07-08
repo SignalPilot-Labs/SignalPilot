@@ -594,14 +594,23 @@ def _final_comment_rich_text(
         else []
     )
     chart_section = "\n\nCharts attached:\n" + "\n".join(chart_lines) if chart_lines else ""
-    suffix = "\n\nRequest page: request details" + chart_section
+    confidence = _text(status.get("confidenceScore")).strip()
+    confidence_section = (
+        f"\n\n- Confidence score: {confidence}" if confidence and not _mentions_confidence(answer) else ""
+    )
+    suffix = confidence_section + "\n\nRequest page: request details" + chart_section
     clipped = _clip_comment_content(answer, len(suffix))
     return [
         *notion_formatting.markdown_rich_text(clipped, max_chars=len(clipped)),
+        *notion_formatting.markdown_rich_text(confidence_section, max_chars=None),
         *notion_formatting.plain_rich_text("\n\nRequest page: ", max_chars=None),
         *notion_formatting.linked_rich_text("request details", request_page_url),
         *notion_formatting.markdown_rich_text(chart_section, max_chars=None),
     ]
+
+
+def _mentions_confidence(text: str) -> bool:
+    return bool(re.search(r"(?im)^\s*(?:[-*•]\s*)?(?:\*\*)?confidence(?:\s+score)?\b", text))
 
 
 def _with_notion_comment_note(status: dict[str, Any], note: str) -> dict[str, Any]:

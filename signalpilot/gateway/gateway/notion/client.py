@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from urllib.parse import urlencode
@@ -15,6 +17,8 @@ NOTION_API_BASE = "https://api.notion.com/v1"
 NOTION_AUTHORIZE_URL = "https://api.notion.com/v1/oauth/authorize"
 NOTION_API_VERSION = "2026-03-11"
 REQUEST_TIMEOUT = 15
+FILE_UPLOAD_TIMEOUT = 60
+FILE_UPLOAD_ATTEMPTS = 3
 SIGNALPILOT_TRIGGER_PAGE_TITLE = "SignalPilot"
 SIGNALPILOT_TRIGGER_PAGE_ICON = {"type": "emoji", "emoji": "\U0001f916"}
 SIGNALPILOT_INTEGRATION_PAGE_TITLE = "SignalPilot Integration"
@@ -24,6 +28,24 @@ SIGNALPILOT_INTEGRATION_PAGE_CONTENT = (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int, *, minimum: int) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    try:
+        return max(minimum, int(raw_value))
+    except ValueError:
+        return default
+
+
+def _file_upload_timeout() -> int:
+    return _env_int("NOTION_FILE_UPLOAD_TIMEOUT_SECONDS", FILE_UPLOAD_TIMEOUT, minimum=REQUEST_TIMEOUT)
+
+
+def _file_upload_attempts() -> int:
+    return _env_int("NOTION_FILE_UPLOAD_ATTEMPTS", FILE_UPLOAD_ATTEMPTS, minimum=1)
 
 
 def _headers(api_key: str) -> dict[str, str]:
@@ -400,16 +422,16 @@ def _page_parent_page_id(page: dict) -> str | None:
     return str(value) if value else None
 
 
-async def notion_json(
+async def _request_json(
     api_key: str,
     method: str,
     path: str,
     *,
     json_body: dict | None = None,
     params: dict | None = None,
+    timeout: int = REQUEST_TIMEOUT,
 ) -> dict:
-    """Perform a Notion API request and return JSON."""
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.request(
             method,
             f"{NOTION_API_BASE}{path}",
@@ -419,6 +441,18 @@ async def notion_json(
         )
         response.raise_for_status()
         return response.json()
+
+
+async def notion_json(
+    api_key: str,
+    method: str,
+    path: str,
+    *,
+    json_body: dict | None = None,
+    params: dict | None = None,
+) -> dict:
+    """Perform a Notion API request and return JSON."""
+    return await _request_json(api_key, method, path, json_body=json_body, params=params)
 
 
 async def list_parent_pages(api_key: str, query: str | None = None) -> list[dict[str, str]]:
@@ -840,8 +874,16 @@ async def retrieve_comment(api_key: str, comment_id: str) -> dict:
     return await notion_json(api_key, "GET", f"/comments/{comment_id}")
 
 
-async def upload_file(api_key: str, *, filename: str, content_type: str, content: bytes) -> dict:
-    created = await notion_json(
+def _is_retryable_upload_error(exc: Exception) -> bool:
+    if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError)):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code == 429 or 500 <= exc.response.status_code < 600
+    return False
+
+
+async def _upload_file_once(api_key: str, *, filename: str, content_type: str, content: bytes) -> dict:
+    created = await _request_json(
         api_key,
         "POST",
         "/file_uploads",
@@ -850,12 +892,13 @@ async def upload_file(api_key: str, *, filename: str, content_type: str, content
             "filename": filename,
             "content_type": content_type,
         },
+        timeout=_file_upload_timeout(),
     )
     upload_id = created.get("id")
     if not upload_id:
         raise RuntimeError("Notion did not return a file upload id")
 
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=_file_upload_timeout()) as client:
         response = await client.post(
             f"{NOTION_API_BASE}/file_uploads/{upload_id}/send",
             headers=_multipart_headers(api_key),
@@ -864,6 +907,25 @@ async def upload_file(api_key: str, *, filename: str, content_type: str, content
         response.raise_for_status()
         sent = response.json()
     return sent or created
+
+
+async def upload_file(api_key: str, *, filename: str, content_type: str, content: bytes) -> dict:
+    attempts = _file_upload_attempts()
+    for attempt in range(1, attempts + 1):
+        try:
+            return await _upload_file_once(api_key, filename=filename, content_type=content_type, content=content)
+        except Exception as exc:
+            if attempt >= attempts or not _is_retryable_upload_error(exc):
+                raise
+            logger.warning(
+                "Notion file upload attempt %s/%s failed for %s: %s",
+                attempt,
+                attempts,
+                filename,
+                exc.__class__.__name__,
+            )
+            await asyncio.sleep(min(2.0, 0.5 * attempt))
+    raise RuntimeError("Notion file upload retry loop exited unexpectedly")
 
 
 async def create_comment(

@@ -508,9 +508,9 @@ register_routers(app)
 
 if (os.getenv("SLACK_DELIVERY_MODE") or "").lower() == "http":
     try:
-        from .slack_poc.worker import load_config_from_env, register_http_routes
+        from .slack_poc.worker import load_http_config_from_env, register_http_routes
 
-        register_http_routes(app, load_config_from_env())
+        register_http_routes(app, load_http_config_from_env())
         logger.info("Slack PoC HTTP endpoint mounted at /slack/events")
     except Exception:
         logger.exception("Failed to mount Slack PoC HTTP endpoint")

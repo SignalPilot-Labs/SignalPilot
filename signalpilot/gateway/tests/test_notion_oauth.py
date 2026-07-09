@@ -15,7 +15,7 @@ from starlette.requests import Request
 
 from gateway.api import notion as notion_api
 from gateway.db.models import NotionInstallation, NotionInstallationConfig
-from gateway.models.notion import NotionProvisionRequest
+from gateway.models.notion import NotionInstallationConfigInfo, NotionOAuthInstallationInfo, NotionProvisionRequest
 from gateway.notion import client as notion_client
 from gateway.notion import webhooks as notion_webhooks
 from gateway.store import notion as notion_store
@@ -259,7 +259,7 @@ async def test_provisioning_reports_missing_comment_read_capability(monkeypatch:
             assert installation_id == "install-1"
             return SimpleNamespace(
                 config=SimpleNamespace(
-                    parent_page_id=None,
+                    parent_page_id="parent-1",
                     trigger_page_id="trigger-1",
                     requests_data_source_id="ds-1",
                     requests_database_page_id="db-1",
@@ -278,13 +278,200 @@ async def test_provisioning_reports_missing_comment_read_capability(monkeypatch:
     with pytest.raises(HTTPException) as exc:
         await notion_api.provision_notion_oauth_installation(
             "install-1",
-            NotionProvisionRequest(),
+            NotionProvisionRequest(parent_page_id="parent-1"),
             Store(),
             object(),
         )
 
     assert exc.value.status_code == 424
     assert "Read comments capability" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_provisioning_ignores_comment_probe_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    saved: list[dict] = []
+
+    class Store:
+        async def get_notion_oauth_installation(self, installation_id: str):
+            assert installation_id == "install-1"
+            return SimpleNamespace(
+                config=SimpleNamespace(
+                    parent_page_id="parent-1",
+                    trigger_page_id="trigger-1",
+                    requests_data_source_id="ds-1",
+                    requests_database_page_id="db-1",
+                )
+            )
+
+        async def get_notion_oauth_installation_token(self, installation_id: str):
+            assert installation_id == "install-1"
+            return "token-1"
+
+        async def save_notion_oauth_installation_config(self, installation_id: str, **kwargs):
+            assert installation_id == "install-1"
+            saved.append(kwargs)
+            return NotionOAuthInstallationInfo(
+                id=installation_id,
+                workspace_id="workspace-1",
+                workspace_name="Workspace",
+                bot_id="bot-1",
+                owner_user_id=None,
+                status="active",
+                created_at=None,
+                updated_at=None,
+                org_id="org-1",
+                config=NotionInstallationConfigInfo(**kwargs),
+            )
+
+    async def list_comments(*_args, **_kwargs):
+        raise _notion_http_error(404)
+
+    monkeypatch.setattr(notion_client, "list_comments", list_comments)
+
+    response = await notion_api.provision_notion_oauth_installation(
+        "install-1",
+        NotionProvisionRequest(parent_page_id="parent-1"),
+        Store(),
+        object(),
+    )
+
+    assert response.trigger_page_id == "trigger-1"
+    assert saved == [
+        {
+            "parent_page_id": "parent-1",
+            "trigger_page_id": "trigger-1",
+            "requests_data_source_id": "ds-1",
+            "requests_database_page_id": "db-1",
+            "enabled": True,
+            "default_project_id": None,
+            "default_branch": "main",
+            "analysis_branch_mode": "per_request",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_oauth_provisioning_auto_provisions_without_selected_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    class Store:
+        async def get_notion_oauth_installation(self, installation_id: str):
+            assert installation_id == "install-1"
+            return SimpleNamespace(config=None)
+
+        async def get_workspace_project(self, project_id: str):
+            assert project_id == "project-1"
+            return SimpleNamespace(id=project_id)
+
+        async def get_notion_oauth_installation_token(self, installation_id: str):
+            assert installation_id == "install-1"
+            return "token-1"
+
+        async def save_notion_oauth_installation_config(self, installation_id: str, **kwargs):
+            assert installation_id == "install-1"
+            return NotionOAuthInstallationInfo(
+                id=installation_id,
+                workspace_id="workspace-1",
+                workspace_name="Workspace",
+                bot_id="bot-1",
+                owner_user_id=None,
+                status="active",
+                created_at=None,
+                updated_at=None,
+                org_id="org-1",
+                config=NotionInstallationConfigInfo(**kwargs),
+            )
+
+    async def provision_auto(api_key: str):
+        calls.append(api_key)
+        return {
+            "parent_page_id": "signalpilot-integration",
+            "trigger_page_id": "new-trigger",
+            "requests_data_source_id": "new-ds",
+            "requests_database_page_id": "new-db",
+        }
+
+    async def list_comments(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(notion_client, "provision_signalpilot_resources_auto", provision_auto)
+    monkeypatch.setattr(notion_client, "list_comments", list_comments)
+
+    response = await notion_api.provision_notion_oauth_installation(
+        "install-1",
+        NotionProvisionRequest(default_project_id="project-1"),
+        Store(),
+        object(),
+    )
+
+    assert calls == ["token-1"]
+    assert response.trigger_page_id == "new-trigger"
+    assert response.installation.config is not None
+    assert response.installation.config.parent_page_id == "signalpilot-integration"
+    assert response.installation.config.default_project_id == "project-1"
+
+
+@pytest.mark.asyncio
+async def test_oauth_provisioning_uses_selected_sibling_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    class Store:
+        async def get_notion_oauth_installation(self, installation_id: str):
+            assert installation_id == "install-1"
+            return SimpleNamespace(
+                config=SimpleNamespace(
+                    parent_page_id=None,
+                    trigger_page_id="old-trigger",
+                    requests_data_source_id="old-ds",
+                    requests_database_page_id="old-db",
+                )
+            )
+
+        async def get_notion_oauth_installation_token(self, installation_id: str):
+            assert installation_id == "install-1"
+            return "token-1"
+
+        async def save_notion_oauth_installation_config(self, installation_id: str, **kwargs):
+            assert installation_id == "install-1"
+            return NotionOAuthInstallationInfo(
+                id=installation_id,
+                workspace_id="workspace-1",
+                workspace_name="Workspace",
+                bot_id="bot-1",
+                owner_user_id=None,
+                status="active",
+                created_at=None,
+                updated_at=None,
+                org_id="org-1",
+                config=NotionInstallationConfigInfo(**kwargs),
+            )
+
+    async def provision(api_key: str, sibling_page_id: str):
+        calls.append((api_key, sibling_page_id))
+        return {
+            "parent_page_id": "signalpilot-integration",
+            "trigger_page_id": "new-trigger",
+            "requests_data_source_id": "new-ds",
+            "requests_database_page_id": "new-db",
+        }
+
+    async def list_comments(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(notion_client, "provision_signalpilot_resources_for_sibling", provision)
+    monkeypatch.setattr(notion_client, "list_comments", list_comments)
+
+    response = await notion_api.provision_notion_oauth_installation(
+        "install-1",
+        NotionProvisionRequest(sibling_page_id="teamspace-child"),
+        Store(),
+        object(),
+    )
+
+    assert calls == [("token-1", "teamspace-child")]
+    assert response.trigger_page_id == "new-trigger"
+    assert response.installation.config is not None
+    assert response.installation.config.parent_page_id == "signalpilot-integration"
 
 
 def test_comment_page_mention_matches_trigger_page_id() -> None:
@@ -326,26 +513,532 @@ def test_trigger_page_mention_does_not_match_user_mentions() -> None:
 async def test_provisioning_creates_trigger_page_and_requests_database(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict] = []
 
-    async def fake_create_page(api_key: str, parent_page_id: str | None, title: str, content: str):
-        calls.append({"api_key": api_key, "path": "/pages", "parent_page_id": parent_page_id, "title": title, "content": content})
+    async def fake_create_page(
+        api_key: str,
+        parent_page_id: str | None,
+        title: str,
+        content: str,
+        icon: dict[str, str] | None = None,
+    ):
+        calls.append(
+            {
+                "api_key": api_key,
+                "path": "/pages",
+                "parent_page_id": parent_page_id,
+                "title": title,
+                "content": content,
+                "icon": icon,
+            }
+        )
         return {"id": "trigger-page-123", "url": "https://notion.test/trigger-page-123"}
 
     async def fake_notion_json(api_key: str, method: str, path: str, *, json_body=None, params=None):
         calls.append({"api_key": api_key, "method": method, "path": path, "json_body": json_body, "params": params})
         return {"id": "database-123", "data_sources": [{"id": "data-source-123"}]}
 
+    async def fake_list_block_children(*_args, **_kwargs):
+        return []
+
     monkeypatch.setattr(notion_client, "create_page", fake_create_page)
     monkeypatch.setattr(notion_client, "notion_json", fake_notion_json)
+    monkeypatch.setattr(notion_client, "list_block_children", fake_list_block_children)
 
-    provisioned = await notion_client.provision_signalpilot_resources("token", None)
+    provisioned = await notion_client.provision_signalpilot_resources("token", "parent-page")
 
     assert provisioned == {
-        "parent_page_id": None,
+        "parent_page_id": "parent-page",
         "trigger_page_id": "trigger-page-123",
         "requests_database_page_id": "database-123",
         "requests_data_source_id": "data-source-123",
     }
     assert [call["path"] for call in calls] == ["/pages", "/databases"]
+    assert calls[0]["icon"] == notion_client.SIGNALPILOT_TRIGGER_PAGE_ICON
+
+
+@pytest.mark.asyncio
+async def test_create_page_sends_icon_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict] = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"id": "trigger-page-123", "url": "https://notion.test/trigger-page-123"}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            del args
+
+        async def post(self, url: str, *, headers: dict, json: dict):
+            calls.append({"url": url, "headers": headers, "json": json})
+            return FakeResponse()
+
+    monkeypatch.setattr(notion_client.httpx, "AsyncClient", FakeAsyncClient)
+
+    page = await notion_client.create_page(
+        "token",
+        "parent-page",
+        notion_client.SIGNALPILOT_TRIGGER_PAGE_TITLE,
+        "Mention the SignalPilot agent in any connected Notion page to start analysis.",
+        icon=notion_client.SIGNALPILOT_TRIGGER_PAGE_ICON,
+    )
+
+    assert page == {"id": "trigger-page-123", "title": "SignalPilot", "url": "https://notion.test/trigger-page-123"}
+    assert calls[0]["json"]["parent"] == {"type": "page_id", "page_id": "parent-page"}
+    assert calls[0]["json"]["icon"] == notion_client.SIGNALPILOT_TRIGGER_PAGE_ICON
+
+
+@pytest.mark.asyncio
+async def test_existing_trigger_page_receives_bot_icon(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict] = []
+
+    async def fake_list_block_children(api_key: str, block_id: str):
+        calls.append({"api_key": api_key, "path": f"/blocks/{block_id}/children"})
+        return [
+            {
+                "id": "trigger-page-123",
+                "type": "child_page",
+                "child_page": {"title": notion_client.SIGNALPILOT_TRIGGER_PAGE_TITLE},
+            }
+        ]
+
+    async def fake_update_page_icon(api_key: str, page_id: str, icon: dict[str, str]):
+        calls.append({"api_key": api_key, "path": f"/pages/{page_id}", "icon": icon})
+
+    async def fail_create_page(*_args, **_kwargs):
+        raise AssertionError("existing trigger page should be reused")
+
+    monkeypatch.setattr(notion_client, "list_block_children", fake_list_block_children)
+    monkeypatch.setattr(notion_client, "update_page_icon", fake_update_page_icon)
+    monkeypatch.setattr(notion_client, "create_page", fail_create_page)
+
+    page = await notion_client.ensure_child_page(
+        "token",
+        "parent-page",
+        icon=notion_client.SIGNALPILOT_TRIGGER_PAGE_ICON,
+    )
+
+    assert page["id"] == "trigger-page-123"
+    assert calls == [
+        {"api_key": "token", "path": "/blocks/parent-page/children"},
+        {
+            "api_key": "token",
+            "path": "/pages/trigger-page-123",
+            "icon": notion_client.SIGNALPILOT_TRIGGER_PAGE_ICON,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_existing_trigger_page_ignores_bot_icon_permission_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_list_block_children(_api_key: str, _block_id: str):
+        return [
+            {
+                "id": "trigger-page-123",
+                "type": "child_page",
+                "child_page": {"title": notion_client.SIGNALPILOT_TRIGGER_PAGE_TITLE},
+            }
+        ]
+
+    async def fail_update_page_icon(*_args, **_kwargs):
+        raise _notion_http_error(403, method="PATCH", path="/v1/pages/trigger-page-123")
+
+    async def fail_create_page(*_args, **_kwargs):
+        raise AssertionError("existing trigger page should be reused")
+
+    monkeypatch.setattr(notion_client, "list_block_children", fake_list_block_children)
+    monkeypatch.setattr(notion_client, "update_page_icon", fail_update_page_icon)
+    monkeypatch.setattr(notion_client, "create_page", fail_create_page)
+
+    page = await notion_client.ensure_child_page(
+        "token",
+        "parent-page",
+        icon=notion_client.SIGNALPILOT_TRIGGER_PAGE_ICON,
+    )
+
+    assert page["id"] == "trigger-page-123"
+
+
+@pytest.mark.asyncio
+async def test_provisioning_creates_container_page_as_sibling(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict] = []
+
+    async def fake_create_page(
+        api_key: str,
+        parent_page_id: str | None,
+        title: str,
+        content: str,
+        icon: dict[str, str] | None = None,
+    ):
+        calls.append(
+            {
+                "api_key": api_key,
+                "path": "/pages",
+                "parent_page_id": parent_page_id,
+                "title": title,
+                "content": content,
+                "icon": icon,
+            }
+        )
+        if title == notion_client.SIGNALPILOT_INTEGRATION_PAGE_TITLE:
+            return {"id": "integration-page-123", "url": "https://notion.test/integration-page-123"}
+        return {"id": "trigger-page-123", "url": "https://notion.test/trigger-page-123"}
+
+    async def fake_notion_json(api_key: str, method: str, path: str, *, json_body=None, params=None):
+        calls.append({"api_key": api_key, "method": method, "path": path, "json_body": json_body, "params": params})
+        if method == "GET" and path == "/pages/teamspace-child":
+            return {"id": "teamspace-child", "parent": {"type": "page_id", "page_id": "teamspace-parent"}}
+        return {"id": "database-123", "data_sources": [{"id": "data-source-123"}]}
+
+    async def fake_list_block_children(_api_key: str, block_id: str):
+        calls.append({"api_key": _api_key, "method": "GET", "path": f"/blocks/{block_id}/children"})
+        return []
+
+    monkeypatch.setattr(notion_client, "create_page", fake_create_page)
+    monkeypatch.setattr(notion_client, "notion_json", fake_notion_json)
+    monkeypatch.setattr(notion_client, "list_block_children", fake_list_block_children)
+
+    provisioned = await notion_client.provision_signalpilot_resources_for_sibling("token", "teamspace-child")
+
+    assert provisioned == {
+        "parent_page_id": "integration-page-123",
+        "trigger_page_id": "trigger-page-123",
+        "requests_database_page_id": "database-123",
+        "requests_data_source_id": "data-source-123",
+    }
+    created_pages = [call for call in calls if call.get("path") == "/pages"]
+    assert created_pages == [
+        {
+            "api_key": "token",
+            "path": "/pages",
+            "parent_page_id": "teamspace-parent",
+            "title": notion_client.SIGNALPILOT_INTEGRATION_PAGE_TITLE,
+            "content": (
+                "SignalPilot-created pages for Notion analysis requests. "
+                "Keep this page shared with the SignalPilot connection."
+            ),
+            "icon": None,
+        },
+        {
+            "api_key": "token",
+            "path": "/pages",
+            "parent_page_id": "integration-page-123",
+            "title": notion_client.SIGNALPILOT_TRIGGER_PAGE_TITLE,
+            "content": "Mention the SignalPilot agent in any connected Notion page to start analysis.",
+            "icon": notion_client.SIGNALPILOT_TRIGGER_PAGE_ICON,
+        },
+    ]
+    databases = [call for call in calls if call.get("path") == "/databases"]
+    assert databases[0]["json_body"]["parent"] == {"type": "page_id", "page_id": "integration-page-123"}
+
+
+@pytest.mark.asyncio
+async def test_provisioning_uses_selected_workspace_level_integration_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict] = []
+
+    async def fake_create_page(
+        api_key: str,
+        parent_page_id: str | None,
+        title: str,
+        content: str,
+        icon: dict[str, str] | None = None,
+    ):
+        calls.append(
+            {
+                "api_key": api_key,
+                "path": "/pages",
+                "parent_page_id": parent_page_id,
+                "title": title,
+                "content": content,
+                "icon": icon,
+            }
+        )
+        return {"id": "trigger-page-123", "url": "https://notion.test/trigger-page-123"}
+
+    async def fake_notion_json(api_key: str, method: str, path: str, *, json_body=None, params=None):
+        calls.append({"api_key": api_key, "method": method, "path": path, "json_body": json_body, "params": params})
+        if method == "GET" and path == "/pages/integration-page-123":
+            return {
+                "id": "integration-page-123",
+                "parent": {"type": "workspace", "workspace": True},
+                "properties": {
+                    "title": {
+                        "type": "title",
+                        "title": [{"plain_text": "SignalPilot Integration"}],
+                    }
+                },
+            }
+        return {"id": "database-123", "data_sources": [{"id": "data-source-123"}]}
+
+    async def fake_list_block_children(_api_key: str, block_id: str):
+        calls.append({"api_key": _api_key, "method": "GET", "path": f"/blocks/{block_id}/children"})
+        return []
+
+    monkeypatch.setattr(notion_client, "create_page", fake_create_page)
+    monkeypatch.setattr(notion_client, "notion_json", fake_notion_json)
+    monkeypatch.setattr(notion_client, "list_block_children", fake_list_block_children)
+
+    provisioned = await notion_client.provision_signalpilot_resources_for_sibling("token", "integration-page-123")
+
+    assert provisioned == {
+        "parent_page_id": "integration-page-123",
+        "trigger_page_id": "trigger-page-123",
+        "requests_database_page_id": "database-123",
+        "requests_data_source_id": "data-source-123",
+    }
+    created_pages = [call for call in calls if call.get("path") == "/pages"]
+    assert created_pages == [
+        {
+            "api_key": "token",
+            "path": "/pages",
+            "parent_page_id": "integration-page-123",
+            "title": notion_client.SIGNALPILOT_TRIGGER_PAGE_TITLE,
+            "content": "Mention the SignalPilot agent in any connected Notion page to start analysis.",
+            "icon": notion_client.SIGNALPILOT_TRIGGER_PAGE_ICON,
+        },
+    ]
+    databases = [call for call in calls if call.get("path") == "/databases"]
+    assert databases[0]["json_body"]["parent"] == {"type": "page_id", "page_id": "integration-page-123"}
+
+
+@pytest.mark.asyncio
+async def test_auto_provisioning_reuses_visible_integration_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict] = []
+
+    async def fake_create_page(
+        api_key: str,
+        parent_page_id: str | None,
+        title: str,
+        content: str,
+        icon: dict[str, str] | None = None,
+    ):
+        calls.append(
+            {
+                "api_key": api_key,
+                "path": "/pages",
+                "parent_page_id": parent_page_id,
+                "title": title,
+                "content": content,
+                "icon": icon,
+            }
+        )
+        return {"id": "trigger-page-123", "url": "https://notion.test/trigger-page-123"}
+
+    async def fake_notion_json(api_key: str, method: str, path: str, *, json_body=None, params=None):
+        calls.append({"api_key": api_key, "method": method, "path": path, "json_body": json_body, "params": params})
+        if method == "POST" and path == "/search":
+            assert json_body["query"] == notion_client.SIGNALPILOT_INTEGRATION_PAGE_TITLE
+            return {
+                "results": [
+                    {
+                        "id": "integration-page-123",
+                        "parent": {"type": "workspace", "workspace": True},
+                        "properties": {
+                            "title": {
+                                "type": "title",
+                                "title": [{"plain_text": "SignalPilot Integration"}],
+                            }
+                        },
+                    }
+                ]
+            }
+        return {"id": "database-123", "data_sources": [{"id": "data-source-123"}]}
+
+    async def fake_list_block_children(_api_key: str, block_id: str):
+        calls.append({"api_key": _api_key, "method": "GET", "path": f"/blocks/{block_id}/children"})
+        return []
+
+    monkeypatch.setattr(notion_client, "create_page", fake_create_page)
+    monkeypatch.setattr(notion_client, "notion_json", fake_notion_json)
+    monkeypatch.setattr(notion_client, "list_block_children", fake_list_block_children)
+
+    provisioned = await notion_client.provision_signalpilot_resources_auto("token")
+
+    assert provisioned == {
+        "parent_page_id": "integration-page-123",
+        "trigger_page_id": "trigger-page-123",
+        "requests_database_page_id": "database-123",
+        "requests_data_source_id": "data-source-123",
+    }
+    created_pages = [call for call in calls if call.get("path") == "/pages"]
+    assert created_pages == [
+        {
+            "api_key": "token",
+            "path": "/pages",
+            "parent_page_id": "integration-page-123",
+            "title": notion_client.SIGNALPILOT_TRIGGER_PAGE_TITLE,
+            "content": "Mention the SignalPilot agent in any connected Notion page to start analysis.",
+            "icon": notion_client.SIGNALPILOT_TRIGGER_PAGE_ICON,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_auto_provisioning_creates_container_beside_visible_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict] = []
+
+    async def fake_create_page(
+        api_key: str,
+        parent_page_id: str | None,
+        title: str,
+        content: str,
+        icon: dict[str, str] | None = None,
+    ):
+        calls.append(
+            {
+                "api_key": api_key,
+                "path": "/pages",
+                "parent_page_id": parent_page_id,
+                "title": title,
+                "content": content,
+                "icon": icon,
+            }
+        )
+        if title == notion_client.SIGNALPILOT_INTEGRATION_PAGE_TITLE:
+            return {"id": "integration-page-123", "url": "https://notion.test/integration-page-123"}
+        return {"id": "trigger-page-123", "url": "https://notion.test/trigger-page-123"}
+
+    async def fake_notion_json(api_key: str, method: str, path: str, *, json_body=None, params=None):
+        calls.append({"api_key": api_key, "method": method, "path": path, "json_body": json_body, "params": params})
+        if method == "POST" and path == "/search" and json_body.get("query"):
+            return {"results": []}
+        if method == "POST" and path == "/search":
+            return {
+                "results": [
+                    {
+                        "id": "teamspace-child",
+                        "parent": {"type": "page_id", "page_id": "teamspace-parent"},
+                        "properties": {
+                            "title": {
+                                "type": "title",
+                                "title": [{"plain_text": "Teamspace child"}],
+                            }
+                        },
+                    }
+                ]
+            }
+        return {"id": "database-123", "data_sources": [{"id": "data-source-123"}]}
+
+    async def fake_list_block_children(_api_key: str, block_id: str):
+        calls.append({"api_key": _api_key, "method": "GET", "path": f"/blocks/{block_id}/children"})
+        return []
+
+    monkeypatch.setattr(notion_client, "create_page", fake_create_page)
+    monkeypatch.setattr(notion_client, "notion_json", fake_notion_json)
+    monkeypatch.setattr(notion_client, "list_block_children", fake_list_block_children)
+
+    provisioned = await notion_client.provision_signalpilot_resources_auto("token")
+
+    assert provisioned["parent_page_id"] == "integration-page-123"
+    created_pages = [call for call in calls if call.get("path") == "/pages"]
+    assert created_pages == [
+        {
+            "api_key": "token",
+            "path": "/pages",
+            "parent_page_id": "teamspace-parent",
+            "title": notion_client.SIGNALPILOT_INTEGRATION_PAGE_TITLE,
+            "content": notion_client.SIGNALPILOT_INTEGRATION_PAGE_CONTENT,
+            "icon": None,
+        },
+        {
+            "api_key": "token",
+            "path": "/pages",
+            "parent_page_id": "integration-page-123",
+            "title": notion_client.SIGNALPILOT_TRIGGER_PAGE_TITLE,
+            "content": "Mention the SignalPilot agent in any connected Notion page to start analysis.",
+            "icon": notion_client.SIGNALPILOT_TRIGGER_PAGE_ICON,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_auto_provisioning_errors_when_only_workspace_level_pages_are_visible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict] = []
+
+    async def fake_create_page(*_args, **_kwargs):
+        raise AssertionError("auto provisioning must not create inside an arbitrary visible page")
+
+    async def fake_notion_json(api_key: str, method: str, path: str, *, json_body=None, params=None):
+        calls.append({"api_key": api_key, "method": method, "path": path, "json_body": json_body, "params": params})
+        if method == "POST" and path == "/search" and json_body.get("query"):
+            return {"results": []}
+        if method == "POST" and path == "/search":
+            return {
+                "results": [
+                    {
+                        "id": "workspace-level-page",
+                        "parent": {"type": "workspace", "workspace": True},
+                        "properties": {
+                            "title": {
+                                "type": "title",
+                                "title": [{"plain_text": "SP my Integration"}],
+                            }
+                        },
+                    }
+                ]
+            }
+        raise AssertionError(f"unexpected Notion call {method} {path}")
+
+    monkeypatch.setattr(notion_client, "create_page", fake_create_page)
+    monkeypatch.setattr(notion_client, "notion_json", fake_notion_json)
+
+    with pytest.raises(ValueError, match="Create a Notion page named 'SignalPilot Integration'"):
+        await notion_client.provision_signalpilot_resources_auto("token")
+
+    assert [call["path"] for call in calls] == ["/search", "/search"]
+
+
+@pytest.mark.asyncio
+async def test_list_parent_pages_returns_visible_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    async def fake_notion_json(api_key: str, method: str, path: str, *, json_body=None, params=None):
+        del api_key, json_body, params
+        calls.append((method, path))
+        if method == "POST" and path == "/search":
+            return {
+                "results": [
+                    {
+                        "id": "nested-page",
+                        "parent": {"type": "page_id", "page_id": "teamspace-root"},
+                        "properties": {"title": {"type": "title", "title": [{"plain_text": "Nested"}]}},
+                    },
+                    {
+                        "id": "other-page",
+                        "parent": {"type": "page_id", "page_id": "teamspace-root"},
+                        "properties": {"title": {"type": "title", "title": [{"plain_text": "Other"}]}},
+                        "url": "https://notion.test/other-page",
+                    },
+                ]
+            }
+        raise AssertionError(f"unexpected Notion call {method} {path}")
+
+    monkeypatch.setattr(notion_client, "notion_json", fake_notion_json)
+
+    pages = await notion_client.list_parent_pages("token")
+
+    assert pages == [
+        {"id": "nested-page", "title": "Nested", "url": ""},
+        {"id": "other-page", "title": "Other", "url": "https://notion.test/other-page"},
+    ]
+    assert calls == [("POST", "/search")]
+
+
+@pytest.mark.asyncio
+async def test_provisioning_requires_parent_page_to_avoid_private_workspace_resources() -> None:
+    with pytest.raises(ValueError, match="parent_page_id is required"):
+        await notion_client.provision_signalpilot_resources("token", None)
 
 
 @pytest.mark.asyncio
@@ -414,8 +1107,41 @@ async def test_create_request_page_does_not_write_prompt_or_source_body(monkeypa
     body = calls[0]["json_body"]
     assert body["parent"] == {"type": "data_source_id", "data_source_id": "data-source-123"}
     assert body["properties"]["Summary"]["rich_text"][0]["text"]["content"].startswith("## Question")
+    assert body["properties"]["Created at"] == {"date": {"start": "2026-06-01T12:00:00+00:00"}}
 
     assert "children" not in body
+
+
+@pytest.mark.asyncio
+async def test_create_request_page_falls_back_to_readable_created_at_for_legacy_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict] = []
+
+    async def fake_notion_json(api_key: str, method: str, path: str, *, json_body=None, params=None):
+        del api_key, method, path, params
+        calls.append(json.loads(json.dumps(json_body)))
+        if len(calls) == 1:
+            request = httpx.Request("POST", "https://api.notion.com/v1/pages")
+            response = httpx.Response(400, json={"message": "Created at should be rich_text"}, request=request)
+            raise httpx.HTTPStatusError("bad request", request=request, response=response)
+        return {"id": "request-page-123", "url": "https://notion.test/request-page-123"}
+
+    monkeypatch.setattr(notion_client, "notion_json", fake_notion_json)
+
+    page = await notion_client.create_request_page(
+        "token",
+        "data-source-123",
+        headline="Revenue question",
+        source_url="https://notion.test/source-page",
+        requester_id="user-123",
+        prompt="Analyze revenue",
+        created_at="2026-06-26T14:38:44.790255+00:00",
+    )
+
+    assert page == {"id": "request-page-123", "url": "https://notion.test/request-page-123"}
+    assert calls[0]["properties"]["Created at"] == {"date": {"start": "2026-06-26T14:38:44.790255+00:00"}}
+    assert calls[1]["properties"]["Created at"]["rich_text"][0]["text"]["content"] == "Jun 26, 2026 14:38 UTC"
 
 
 @pytest.mark.asyncio
@@ -563,8 +1289,10 @@ async def test_webhook_routing_rejects_ambiguous_installations(monkeypatch: pyte
 
 
 @pytest.mark.asyncio
-async def test_webhook_routing_uses_trigger_page_mention_to_disambiguate(monkeypatch: pytest.MonkeyPatch) -> None:
-    install_1 = NotionInstallation(
+async def test_webhook_routing_routes_owned_install_without_page_scope_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install = NotionInstallation(
         id="install-1",
         org_id="org-1",
         user_id="user-1",
@@ -574,51 +1302,24 @@ async def test_webhook_routing_uses_trigger_page_mention_to_disambiguate(monkeyp
         access_token_enc=b"encrypted",
         status="active",
     )
-    install_2 = NotionInstallation(
-        id="install-2",
-        org_id="org-2",
-        user_id="user-2",
-        workspace_id="workspace-1",
-        workspace_name="Workspace",
-        bot_id="bot-1",
-        access_token_enc=b"encrypted",
-        status="active",
-    )
-    config_1 = NotionInstallationConfig(
+    config = NotionInstallationConfig(
         installation_id="install-1",
-        parent_page_id=None,
+        parent_page_id="signalpilot-integration-page",
         trigger_page_id="trigger-1",
         requests_data_source_id="ds-1",
         requests_database_page_id="db-1",
         enabled=True,
     )
-    config_2 = NotionInstallationConfig(
-        installation_id="install-2",
-        parent_page_id=None,
-        trigger_page_id="trigger-2",
-        requests_data_source_id="ds-2",
-        requests_database_page_id="db-2",
-        enabled=True,
-    )
 
     async def fake_records(session, workspace_id: str):
         assert workspace_id == "workspace-1"
-        return [(install_1, config_1, "token-1"), (install_2, config_2, "token-2")]
+        return [(install, config, "token-1")]
 
-    async def fake_belongs(*args, **kwargs):
-        return True
-
-    async def fake_list_comments(*args, **kwargs):
-        return [
-            {
-                "id": "comment-1",
-                "rich_text": [{"type": "mention", "mention": {"type": "page", "page": {"id": "trigger-2"}}}],
-            }
-        ]
+    async def fail_belongs(*args, **kwargs):
+        raise AssertionError("page scope should not gate SignalPilot agent mentions")
 
     monkeypatch.setattr(notion_store, "list_active_installation_records_for_workspace", fake_records)
-    monkeypatch.setattr(notion_client, "page_belongs_to_scope", fake_belongs)
-    monkeypatch.setattr(notion_client, "list_comments", fake_list_comments)
+    monkeypatch.setattr(notion_client, "page_belongs_to_scope", fail_belongs)
 
     payload = {
         "workspace_id": "workspace-1",
@@ -631,7 +1332,7 @@ async def test_webhook_routing_uses_trigger_page_mention_to_disambiguate(monkeyp
     routed = await notion_webhooks.route_comment_event(object(), payload)
 
     assert routed is not None
-    assert routed.installation.id == "install-2"
+    assert routed.installation.id == "install-1"
 
 
 def test_bot_authored_comment_events_are_ignored() -> None:

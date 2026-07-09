@@ -21,13 +21,21 @@ def _validate_branch_name(branch: str) -> None:
         raise ValueError(f"Invalid branch name: {branch!r}")
 
 
-def _run_git(*args: str, cwd: Path | str | None = None, timeout: int = 30) -> tuple[int, str, str]:
+def _run_git(
+    *args: str,
+    cwd: Path | str | None = None,
+    timeout: int = 30,
+    input: str | None = None,
+    env: dict[str, str] | None = None,
+) -> tuple[int, str, str]:
     result = subprocess.run(
         ["git", *args],
         cwd=str(cwd) if cwd else None,
         capture_output=True,
         text=True,
         timeout=timeout,
+        input=input,
+        env={**os.environ, **env} if env else None,
     )
     return result.returncode, result.stdout, result.stderr
 
@@ -35,7 +43,7 @@ def _run_git(*args: str, cwd: Path | str | None = None, timeout: int = 30) -> tu
 def repo_path(project_id: str) -> Path:
     import re
     if not re.match(r"^[a-f0-9\-]{36}$", project_id):
-        raise ValueError(f"Invalid project_id: must be a UUID")
+        raise ValueError("Invalid project_id: must be a UUID")
     path = REPOS_ROOT / f"{project_id}.git"
     if not str(path.resolve()).startswith(str(REPOS_ROOT.resolve())):
         raise ValueError("Path traversal detected")
@@ -50,9 +58,11 @@ def repo_exists(project_id: str) -> bool:
 
 
 def init_bare_repo(project_id: str, default_branch: str = "main") -> Path:
+    _validate_branch_name(default_branch)
     path = repo_path(project_id)
     if path.exists():
         logger.info("Bare repo already exists: %s", path)
+        _ensure_initial_default_branch(path, default_branch)
         return path
 
     path.mkdir(parents=True, exist_ok=True)
@@ -62,9 +72,49 @@ def init_bare_repo(project_id: str, default_branch: str = "main") -> Path:
 
     _run_git("config", "http.receivepack", "true", cwd=path)
     _run_git("config", "receive.denyCurrentBranch", "updateInstead", cwd=path)
+    _ensure_initial_default_branch(path, default_branch)
 
     logger.info("Created bare repo: %s (default branch: %s)", path, default_branch)
     return path
+
+
+def _ensure_initial_default_branch(path: Path, default_branch: str) -> None:
+    """Make fresh managed repos branchable by giving the default branch a root commit."""
+    rc, out, _ = _run_git("rev-parse", "--verify", f"refs/heads/{default_branch}", cwd=path)
+    if rc == 0 and out.strip():
+        return
+
+    rc, out, err = _run_git("for-each-ref", "--format=%(refname)", "refs/heads/", cwd=path)
+    if rc == 0 and out.strip():
+        return
+
+    rc, tree, err = _run_git("mktree", cwd=path, input="")
+    if rc != 0 or not tree.strip():
+        raise RuntimeError(f"Could not create empty tree for managed repo: {err}")
+
+    rc, commit, err = _run_git(
+        "commit-tree",
+        tree.strip(),
+        "-m",
+        "Initial empty project",
+        cwd=path,
+        env={
+            "GIT_AUTHOR_NAME": "SignalPilot",
+            "GIT_AUTHOR_EMAIL": "local@signalpilot.dev",
+            "GIT_COMMITTER_NAME": "SignalPilot",
+            "GIT_COMMITTER_EMAIL": "local@signalpilot.dev",
+        },
+    )
+    if rc != 0 or not commit.strip():
+        raise RuntimeError(f"Could not create initial commit for managed repo: {err}")
+
+    rc, _, err = _run_git("update-ref", f"refs/heads/{default_branch}", commit.strip(), cwd=path)
+    if rc != 0:
+        raise RuntimeError(f"Could not set initial {default_branch!r} branch: {err}")
+
+    rc, _, err = _run_git("symbolic-ref", "HEAD", f"refs/heads/{default_branch}", cwd=path)
+    if rc != 0:
+        raise RuntimeError(f"Could not point HEAD at {default_branch!r}: {err}")
 
 
 def delete_repo(project_id: str) -> bool:

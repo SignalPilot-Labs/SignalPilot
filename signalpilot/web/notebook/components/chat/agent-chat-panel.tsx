@@ -683,7 +683,7 @@ const FinalJsonCard: React.FC<{ result: FinalJsonSummary }> = ({ result }) => {
   const confidence =
     result.confidenceScore === null
       ? "not provided"
-      : result.confidenceScore.toFixed(2);
+      : result.confidenceScore;
   const chartCount = result.notionCharts.length;
   const caveatCount = result.gotchas.length;
   const commentPreview = result.notionComment.trim();

@@ -383,6 +383,35 @@ async def _ensure_notion_installation_config_analysis_columns(engine) -> None:
     logger.info("Ensured Notion analysis routing columns")
 
 
+async def _ensure_report_deliverable_columns(engine) -> None:
+    """Add report/dashboard metadata columns to existing report rows."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("ALTER TABLE gateway_reports ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'report'")
+        )
+        await conn.execute(text("ALTER TABLE gateway_reports ADD COLUMN IF NOT EXISTS data_json JSONB"))
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_reports_org_kind ON gateway_reports (org_id, kind, created_at)")
+        )
+        await conn.execute(text("ALTER TABLE notion_deliverables ADD COLUMN IF NOT EXISTS context_snapshot_id TEXT"))
+        await conn.execute(text("ALTER TABLE notion_deliverables ADD COLUMN IF NOT EXISTS latest_update_id TEXT"))
+        await conn.execute(
+            text("ALTER TABLE notion_deliverables ADD COLUMN IF NOT EXISTS latest_file_upload_id VARCHAR(100)")
+        )
+        await conn.execute(text("ALTER TABLE notion_deliverables ADD COLUMN IF NOT EXISTS latest_html_bytes INTEGER"))
+        await conn.execute(
+            text("ALTER TABLE notion_deliverables ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active'")
+        )
+        await conn.execute(text("ALTER TABLE notion_deliverables ADD COLUMN IF NOT EXISTS error TEXT"))
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_notion_deliverables_embed "
+                "ON notion_deliverables (installation_id, embed_block_id)"
+            )
+        )
+    logger.info("Ensured report deliverable columns")
+
+
 async def _ensure_analysis_trail_indexes(engine) -> None:
     """Create durable analysis trail lookup indexes idempotently."""
     async with engine.begin() as conn:
@@ -500,6 +529,7 @@ async def init_db() -> None:
     await _ensure_chat_columns(engine)
     await _ensure_chat_trace_indexes(engine)
     await _ensure_notion_installation_config_analysis_columns(engine)
+    await _ensure_report_deliverable_columns(engine)
     await _ensure_analysis_trail_indexes(engine)
     await _ensure_branch_columns(engine)
     await _ensure_notebook_session_columns(engine)

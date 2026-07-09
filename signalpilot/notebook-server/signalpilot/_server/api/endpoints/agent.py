@@ -25,7 +25,7 @@ router = APIRouter()
 
 
 class CreateAgentRequest(msgspec.Struct, rename="camel"):
-    model: str = "claude-sonnet-4-20250514"
+    model: str = "claude-sonnet-4-5-20250929"
     system_prompt: str | None = None
     session_id: str | None = None
 

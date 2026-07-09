@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import html
 import io
 import json
@@ -12,15 +13,15 @@ import os
 import re
 import struct
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
-from urllib.error import HTTPError, URLError
 from urllib.parse import quote, unquote, unquote_to_bytes, urlencode, urlparse
-from urllib.request import Request as UrlRequest, urlopen
 from uuid import NAMESPACE_URL, uuid5
 
 import msgspec
+import requests
 from starlette.exceptions import HTTPException
 from starlette.responses import FileResponse, JSONResponse
 
@@ -30,13 +31,18 @@ from signalpilot._runtime.commands import SerializedQueryParams
 from signalpilot._runtime.virtual_file import read_virtual_file
 from signalpilot._server.ai.analysis_prompts import (
     analysis_prompt as _analysis_prompt,
-    json_repair_prompt as _json_repair_prompt,
 )
-from signalpilot._server.api.deps import AppState
+from signalpilot._server.api.deps import AppState, AppStateBase
 from signalpilot._server.api.endpoints.notion_urls import (
     trail_url as _trail_url,
 )
 from signalpilot._server.api.utils import parse_request
+from signalpilot._server.chart_theme import (
+    DEFAULT_CHART_THEME,
+    ChartTheme,
+    contrast_text,
+    ranked_series_colors,
+)
 from signalpilot._server.export._session_cache import (
     persist_session_view_to_cache,
 )
@@ -56,6 +62,23 @@ LOGGER = _loggers.sp_logger()
 router = APIRouter()
 
 AnalysisStatus = Literal["New", "Analyzing", "Done", "Failed"]
+ConfidenceLabel = Literal["high", "medium", "lower"]
+OutputMode = Literal["answer", "deliverable"]
+DEFAULT_ANALYSIS_AGENT_MODEL = "claude-sonnet-4-5-20250929"
+DEFAULT_SNAPSHOT_MAX_BYTES = 1_000_000
+MAX_DATA_SNAPSHOTS = 5
+_ANALYSIS_AGENT_MODEL_ENV_NAMES = (
+    "SIGNALPILOT_ANALYSIS_AGENT_MODEL",
+    "SIGNALPILOT_WORKER_AGENT_MODEL",
+)
+
+
+def _analysis_agent_model() -> str:
+    for name in _ANALYSIS_AGENT_MODEL_ENV_NAMES:
+        value = (os.getenv(name) or "").strip()
+        if value:
+            return value
+    return DEFAULT_ANALYSIS_AGENT_MODEL
 
 
 class StartNotionAnalysisRequest(msgspec.Struct, rename="camel"):
@@ -68,6 +91,20 @@ class StartNotionAnalysisRequest(msgspec.Struct, rename="camel"):
     notion_request_page_id: str | None = None
     requester: list[str] = msgspec.field(default_factory=list)
     previous_messages: list[str] = msgspec.field(default_factory=list)
+    output_mode: OutputMode = "answer"
+    theme: dict[str, Any] | None = None
+
+
+class RefreshNotionAnalysisRequest(msgspec.Struct, rename="camel"):
+    ephemeral_run_id: str
+    deliverable_id: str
+    base_notebook_code: str
+    prompt: str
+    base_chat_events: list[dict[str, Any]] = msgspec.field(default_factory=list)
+    base_final_packet: dict[str, Any] | None = None
+    output_mode: OutputMode = "deliverable"
+    base_notebook_path: str | None = None
+    theme: dict[str, Any] | None = None
 
 
 @dataclass
@@ -81,9 +118,20 @@ class AnalysisChart:
 
 
 @dataclass
+class DataSnapshot:
+    name: str = ""
+    description: str = ""
+    columns: list[str] | None = None
+    row_count: int = 0
+    filename: str = ""
+    url: str = ""
+    bytes: int = 0
+
+
+@dataclass
 class AnalysisResult:
     summary: str = ""
-    confidence_score: float | None = None
+    confidence_score: ConfidenceLabel | None = None
     final_answer: str = ""
     gotchas: list[str] | None = None
     analysis_method: str = ""
@@ -104,6 +152,9 @@ class AnalysisRecord:
     created_at: str
     source: str = "notion"
     notion_request_page_id: str | None = None
+    output_mode: OutputMode = "answer"
+    theme: dict[str, Any] | None = None
+    data_snapshots: list[DataSnapshot] | None = None
     latest_commit_sha: str | None = None
     error: str | None = None
     result: AnalysisResult | None = None
@@ -180,7 +231,6 @@ def _gateway_json_get(
 ) -> Any:
     from signalpilot._server.gateway_client import gateway_headers, gateway_url
 
-    headers = {"Accept": "application/json", **gateway_headers()}
     url = f"{gateway_url()}{path}"
     if params:
         query = urlencode(
@@ -188,18 +238,27 @@ def _gateway_json_get(
         )
         if query:
             url = f"{url}?{query}"
-    request = UrlRequest(url, headers=headers, method="GET")
+    _validate_gateway_json_url(url)
+    headers = {"Accept": "application/json", **gateway_headers()}
     try:
-        with urlopen(request, timeout=timeout_seconds) as response:
-            body = response.read().decode("utf-8", errors="replace")
-    except HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")[:500]
-        raise RuntimeError(f"Gateway HTTP {e.code}: {body}") from e
-    except URLError as e:
-        raise RuntimeError(f"Gateway unavailable: {e.reason}") from e
+        response = requests.get(url, headers=headers, timeout=timeout_seconds)
+        response.raise_for_status()
+    except requests.HTTPError as e:
+        body = e.response.text[:500] if e.response is not None else ""
+        status_code = e.response.status_code if e.response is not None else "error"
+        raise RuntimeError(f"Gateway HTTP {status_code}: {body}") from e
+    except requests.RequestException as e:
+        raise RuntimeError(f"Gateway unavailable: {e}") from e
+    body = response.text
     if not body:
         return None
     return json.loads(body)
+
+
+def _validate_gateway_json_url(url: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError("Gateway URL must be an absolute http or https URL")
 
 
 def _connection_label(connection: dict[str, Any]) -> str:
@@ -593,6 +652,35 @@ def _parse_chart_list(value: Any) -> list[AnalysisChart]:
     return charts
 
 
+def _parse_data_snapshot_list(value: Any) -> list[DataSnapshot]:
+    if not isinstance(value, list):
+        return []
+    snapshots: list[DataSnapshot] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        columns_raw = item.get("columns") or []
+        columns = (
+            [str(column) for column in columns_raw]
+            if isinstance(columns_raw, list)
+            else []
+        )
+        snapshots.append(
+            DataSnapshot(
+                name=str(item.get("name", "")),
+                description=str(item.get("description", "")),
+                columns=columns,
+                row_count=int(
+                    item.get("row_count", item.get("rowCount", 0)) or 0
+                ),
+                filename=str(item.get("filename", "")),
+                url=str(item.get("url", "")),
+                bytes=int(item.get("bytes", 0) or 0),
+            )
+        )
+    return snapshots
+
+
 def _analysis_result_from_dict(value: dict[str, Any]) -> AnalysisResult:
     result = dict(value)
     result["notion_charts"] = _parse_chart_list(
@@ -602,6 +690,10 @@ def _analysis_result_from_dict(value: dict[str, Any]) -> AnalysisResult:
     return AnalysisResult(**result)
 
 
+def _output_mode(value: str | None) -> OutputMode:
+    return "deliverable" if value == "deliverable" else "answer"
+
+
 def _analysis_source(value: str | None) -> str:
     source = re.sub(
         r"[^a-zA-Z0-9_-]+", "-", (value or "notion").strip().lower()
@@ -609,20 +701,43 @@ def _analysis_source(value: str | None) -> str:
     return source or "notion"
 
 
-def _project_root(app_state: AppState) -> Path:
+def _analysis_project_context(
+    app_state: AppState,
+) -> tuple[str, str] | None:
     request = getattr(app_state, "request", None)
     headers = getattr(request, "headers", {}) or {}
-    project_id = headers.get("x-gateway-project-id")
-    if project_id:
-        branch = headers.get("x-gateway-branch-id", "main").strip() or "main"
+    query_params = getattr(app_state, "query_params", lambda _key: None)
+    project_id = (
+        headers.get("x-gateway-project-id", "")
+        or query_params("project")
+        or ""
+    ).strip()
+    if not project_id:
+        return None
+    branch = (
+        headers.get("x-gateway-branch-id", "")
+        or query_params("branch")
+        or "main"
+    ).strip() or "main"
+    return project_id, branch
+
+
+def _project_root(app_state: AppState) -> Path:
+    context = _analysis_project_context(app_state)
+    if context is not None:
+        project_id, branch = context
         try:
             from signalpilot._server.files.project_sync import (
+                _current_git_branch,
                 local_project_dir,
                 sync_down,
             )
 
             local_dir = local_project_dir(project_id, branch)
-            if (local_dir / ".git").exists():
+            if (
+                (local_dir / ".git").exists()
+                and _current_git_branch(local_dir) == branch
+            ):
                 return local_dir
 
             result = sync_down(project_id, branch)
@@ -692,6 +807,11 @@ def _load_registry(app_state: AppState) -> None:
             created_at=item["created_at"],
             source=item.get("source", "notion"),
             notion_request_page_id=item.get("notion_request_page_id"),
+            output_mode=_output_mode(item.get("output_mode")),
+            theme=item.get("theme"),
+            data_snapshots=_parse_data_snapshot_list(
+                item.get("data_snapshots", item.get("dataSnapshots", []))
+            ),
             latest_commit_sha=item.get("latest_commit_sha"),
             error=item.get("error"),
             result=_analysis_result_from_dict(result) if result else None,
@@ -788,11 +908,11 @@ app = sp.App()
 def _():
     import signalpilot as sp
     sp.md({request_context_json})
+    return (sp,)
 
 
 @app.cell(hide_code=True)
-def _():
-    import signalpilot as sp
+def _(sp):
     sp.md("""
     ## Executive Summary and Explorations
 
@@ -801,8 +921,7 @@ def _():
 
 
 @app.cell(hide_code=True)
-def _():
-    import signalpilot as sp
+def _(sp):
     sp.md("""
     ## Analysis steps
 
@@ -812,7 +931,73 @@ def _():
 
 if __name__ == "__main__":
     app.run()
-'''
+	'''
+
+
+def _refresh_request_id(ephemeral_run_id: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", ephemeral_run_id.strip()).strip("-")
+    if not slug:
+        slug = uuid5(NAMESPACE_URL, "notion-refresh").hex[:16]
+    return slug if slug.startswith("notion-refresh-") else f"notion-refresh-{slug}"
+
+
+def _refresh_discussion_id(body: RefreshNotionAnalysisRequest) -> str:
+    return f"refresh:{body.deliverable_id}:{body.ephemeral_run_id}"
+
+
+def _refresh_records_dir(app_state: AppState) -> Path:
+    path = _project_root(app_state) / "notebooks" / "notion-refresh"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _write_refresh_notebook(
+    app_state: AppState,
+    body: RefreshNotionAnalysisRequest,
+    request_id: str,
+) -> str:
+    if not body.base_notebook_code.strip():
+        raise ValueError("baseNotebookCode is required for deliverable refresh")
+    filename = f"{_slugify(body.deliverable_id)}-{request_id[-8:]}.py"
+    notebook_path = _refresh_records_dir(app_state) / filename
+    notebook_path.write_text(body.base_notebook_code, encoding="utf-8")
+    root = _project_root(app_state)
+    return (
+        str(notebook_path.relative_to(root))
+        if notebook_path.is_relative_to(root)
+        else str(notebook_path)
+    )
+
+
+def _refresh_previous_messages(body: RefreshNotionAnalysisRequest) -> list[str]:
+    messages: list[str] = [
+        "This is an isolated refresh of an existing SignalPilot HTML deliverable.",
+        "Use the notebook file seeded from the immutable code captured when the deliverable was created.",
+        "Do not read or resume the original notebook path; it is metadata only.",
+    ]
+    if body.base_notebook_path:
+        messages.append(f"Original notebook path metadata: {body.base_notebook_path}")
+    if body.base_final_packet:
+        summary = json.dumps(body.base_final_packet, ensure_ascii=True, separators=(",", ":"))
+        messages.append(f"Original final delivery packet snapshot: {_clip_warm_context(summary, max_chars=6000)}")
+    if body.base_chat_events:
+        event_text = json.dumps(body.base_chat_events[-40:], ensure_ascii=True, separators=(",", ":"))
+        messages.append(f"Bounded original chat trace snapshot: {_clip_warm_context(event_text, max_chars=6000)}")
+    return messages
+
+
+def _refresh_start_body(body: RefreshNotionAnalysisRequest) -> StartNotionAnalysisRequest:
+    return StartNotionAnalysisRequest(
+        discussion_id=_refresh_discussion_id(body),
+        source_url=f"notion-deliverable:{body.deliverable_id}",
+        headline=f"Refresh deliverable {body.deliverable_id[:8]}",
+        prompt=body.prompt,
+        created_at=datetime.now(UTC).isoformat(),
+        source="notion",
+        previous_messages=_refresh_previous_messages(body),
+        output_mode=body.output_mode,
+        theme=body.theme,
+    )
 
 
 def _append_followup_to_notebook(
@@ -851,19 +1036,6 @@ def _(sp):
     else:
         text += followup_cell
     path.write_text(text, encoding="utf-8")
-
-
-def _analysis_project_context(app_state: AppState) -> tuple[str, str] | None:
-    project_id = app_state.request.headers.get(
-        "x-gateway-project-id", ""
-    ).strip()
-    if not project_id:
-        return None
-    branch = (
-        app_state.request.headers.get("x-gateway-branch-id", "main").strip()
-        or "main"
-    )
-    return project_id, branch
 
 
 def _checkpoint_analysis_files(
@@ -950,6 +1122,7 @@ def _ensure_record(
     existing_id = _records_by_discussion_id.get(body.discussion_id)
     if existing_id:
         record = _records_by_request_id[existing_id]
+        record.output_mode = _output_mode(body.output_mode)
         _refresh_trail_url(app_state, record, request_base_url)
         if record.status != "Analyzing":
             _append_followup_to_notebook(app_state, record, body)
@@ -987,6 +1160,9 @@ def _ensure_record(
         created_at=body.created_at,
         source=source,
         notion_request_page_id=body.notion_request_page_id,
+        output_mode=_output_mode(body.output_mode),
+        theme=body.theme,
+        data_snapshots=[],
     )
     _records_by_request_id[record.request_id] = record
     _records_by_discussion_id[record.discussion_id] = record.request_id
@@ -997,16 +1173,22 @@ def _ensure_record(
     return record
 
 
-def _ensure_session(app_state: AppState, record: AnalysisRecord) -> None:
+def _ensure_session(
+    app_state: AppState,
+    record: AnalysisRecord,
+    *,
+    allow_resume: bool = True,
+) -> None:
     session_id = SessionId(record.session_id)
     if app_state.session_manager.get_session(session_id) is not None:
         return
 
-    app_state.session_manager.maybe_resume_session(
-        session_id, record.notebook_path
-    )
-    if app_state.session_manager.get_session(session_id) is not None:
-        return
+    if allow_resume:
+        app_state.session_manager.maybe_resume_session(
+            session_id, record.notebook_path
+        )
+        if app_state.session_manager.get_session(session_id) is not None:
+            return
 
     app_state.session_manager.create_session(
         session_id=session_id,
@@ -1067,10 +1249,9 @@ def _extract_json_object(text: str) -> dict[str, Any]:
 
 def _parse_result(text: str) -> AnalysisResult:
     data = _extract_json_object(text)
-    confidence = data.get("confidenceScore", data.get("confidence_score"))
-    if confidence is not None:
-        confidence = float(confidence)
-        confidence = max(0.0, min(1.0, confidence))
+    confidence = _confidence_label(
+        data.get("confidenceScore", data.get("confidence_score"))
+    )
     gotchas = data.get("gotchas") or []
     if not isinstance(gotchas, list):
         gotchas = [str(gotchas)]
@@ -1097,6 +1278,81 @@ def _parse_result(text: str) -> AnalysisResult:
     )
 
 
+def _parse_final_statement_result(text: str) -> AnalysisResult:
+    data = _extract_marker_json(text, "FINAL_STATEMENT")
+    statement = str(data.get("statement", "")).strip()
+    if not statement:
+        raise ValueError("Agent did not emit FINAL_STATEMENT.statement")
+    confidence = _confidence_label(
+        data.get("confidenceScore", data.get("confidence_score"))
+    )
+    caveats = data.get("caveats") or []
+    if not isinstance(caveats, list):
+        caveats = [str(caveats)]
+    handoff_notes = (
+        data.get("handoffNotes", data.get("handoff_notes", [])) or []
+    )
+    if not isinstance(handoff_notes, list):
+        handoff_notes = [str(handoff_notes)]
+    return AnalysisResult(
+        summary=statement[:500],
+        confidence_score=confidence,
+        final_answer=statement,
+        gotchas=[str(item) for item in caveats],
+        analysis_method="; ".join(str(item) for item in handoff_notes),
+        notion_comment=statement[:1200],
+        notion_charts=[],
+    )
+
+
+def _extract_marker_json(text: str, marker: str) -> dict[str, Any]:
+    decoder = json.JSONDecoder()
+    latest: dict[str, Any] | None = None
+    for match in re.finditer(rf"(?m)^\s*{re.escape(marker)}\s*:\s*", text):
+        try:
+            parsed, _ = decoder.raw_decode(text[match.end() :].lstrip())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            latest = parsed
+    if latest is None:
+        raise ValueError(f"Agent did not emit {marker}")
+    return latest
+
+
+def _confidence_label(value: Any) -> ConfidenceLabel | None:
+    if not isinstance(value, str):
+        return None
+    label = value.strip()
+    if label in ("high", "medium", "lower"):
+        return cast(ConfidenceLabel, label)
+    return None
+
+
+def _is_transient_agent_overload(text: str) -> bool:
+    normalized = text.lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "api error: overloaded",
+            "overloaded_error",
+            "rate_limit_error",
+            "rate limited",
+        )
+    )
+
+
+def _agent_overload_retry_prompt(original_prompt: str) -> str:
+    return (
+        "The previous notebook analysis attempt was interrupted by a transient "
+        "model-provider overload before it emitted FINAL_STATEMENT. Continue "
+        "from the current notebook state, reuse any completed notebook outputs "
+        "when they are available, and finish the requested analysis. End with "
+        "exactly one FINAL_STATEMENT JSON marker.\n\n"
+        f"Original user request:\n{original_prompt}"
+    )
+
+
 def _truncate_comment(text: str, limit: int = 1200) -> str:
     text = text.strip()
     if len(text) <= limit:
@@ -1108,25 +1364,24 @@ def _plain_text_failure_result(text: str, error: Exception) -> AnalysisResult:
     detail = text.strip() or str(error)
     return AnalysisResult(
         summary="Analysis could not be completed.",
-        confidence_score=0.0,
+        confidence_score="lower",
         final_answer=(
             "## Executive Summary and Explorations\n\n"
             "- I could not complete the requested analysis.\n"
-            "- The agent returned plain text instead of the required JSON "
-            "response, so SignalPilot preserved the available failure details "
-            "below.\n\n"
+            "- The agent did not emit the required FINAL_STATEMENT marker, so "
+            "SignalPilot preserved the available failure details below.\n\n"
             "## Detailed Research\n\n"
             f"{detail}\n\n"
-            "## Confidence Score: 0\n\n"
-            "- No completed analysis result was produced."
+            "## Confidence Score: lower\n\n"
+            "- No relevant dbt model backed a completed final answer."
         ),
         gotchas=[
-            "The agent did not return the required JSON response.",
+            "The agent did not emit the required FINAL_STATEMENT marker.",
             "The analysis should be rerun after inspecting the notebook trail.",
         ],
         analysis_method=(
-            "The agent returned plain text instead of the required JSON object; "
-            "SignalPilot preserved that text as failure detail."
+            "The agent did not emit the required FINAL_STATEMENT marker; "
+            "SignalPilot preserved the available text as failure detail."
         ),
         notion_comment=_truncate_comment(
             f"I could not complete the requested analysis.\n\n{detail}"
@@ -1138,7 +1393,7 @@ def _timeout_failure_result(timeout_seconds: float) -> AnalysisResult:
     minutes = max(1, round(timeout_seconds / 60))
     return AnalysisResult(
         summary="Analysis timed out before completion.",
-        confidence_score=0.0,
+        confidence_score="lower",
         final_answer=(
             "## Executive Summary and Explorations\n\n"
             "- I could not complete the requested analysis.\n"
@@ -1150,8 +1405,8 @@ def _timeout_failure_result(timeout_seconds: float) -> AnalysisResult:
             "the notebook-first workflow within the allowed runtime. The "
             "request should be rerun after inspecting the agent event log for "
             "where progress stalled.\n\n"
-            "## Confidence Score: 0\n\n"
-            "- Confidence is 0 because the analysis did not complete."
+            "## Confidence Score: lower\n\n"
+            "- No relevant dbt model backed a completed final answer."
         ),
         gotchas=[
             "The notebook agent timed out before completion.",
@@ -1193,8 +1448,241 @@ def _chart_dir(app_state: AppState, record: AnalysisRecord) -> Path:
     return chart_dir
 
 
-def _chart_url(record: AnalysisRecord, filename: str) -> str:
-    return f"/api/notion-analysis/chart/{record.request_id}/{filename}"
+def _chart_url(
+    app_state: AppState, record: AnalysisRecord, filename: str
+) -> str:
+    url = f"/api/notion-analysis/chart/{record.request_id}/{filename}"
+    context = _analysis_project_context(app_state)
+    if context is None:
+        return url
+    project_id, branch = context
+    return f"{url}?{urlencode({'project': project_id, 'branch': branch})}"
+
+
+def _snapshot_dir(app_state: AppStateBase, record: AnalysisRecord) -> Path:
+    notebook_path = _resolve_notebook_path(app_state, record.notebook_path)
+    snapshot_dir = (
+        notebook_path.parent
+        / "public"
+        / "signalpilot-notion-snapshots"
+        / record.request_id
+    )
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    return snapshot_dir
+
+
+def _snapshot_url(
+    app_state: AppStateBase, record: AnalysisRecord, filename: str
+) -> str:
+    url = f"/api/notion-analysis/snapshot/{record.request_id}/{filename}"
+    context = _analysis_project_context(app_state)
+    if context is None:
+        return url
+    project_id, branch = context
+    return f"{url}?{urlencode({'project': project_id, 'branch': branch})}"
+
+
+def _chart_file_from_project_registries(
+    request_id: str, filename: str
+) -> Path | None:
+    try:
+        from signalpilot._server.files.project_sync import PROJECTS_ROOT
+    except Exception:
+        return None
+
+    for registry_path in PROJECTS_ROOT.glob(
+        "*/**/notebooks/.signalpilot-analysis-registry.json"
+    ):
+        try:
+            raw = json.loads(registry_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        records = raw.get("records", [])
+        if not isinstance(records, list):
+            continue
+        for item in records:
+            if (
+                not isinstance(item, dict)
+                or item.get("request_id") != request_id
+            ):
+                continue
+            notebook_path = item.get("notebook_path")
+            if not isinstance(notebook_path, str) or not notebook_path:
+                continue
+            repo = registry_path.parent.parent
+            chart_dir = (
+                repo
+                / notebook_path
+            ).parent / "public" / "signalpilot-notion-charts"
+            try:
+                resolved_dir = chart_dir.resolve(strict=True)
+                chart_path = (resolved_dir / filename).resolve(strict=True)
+                chart_path.relative_to(resolved_dir)
+            except (OSError, ValueError):
+                continue
+            if chart_path.is_file():
+                return chart_path
+    return None
+
+
+def _snapshot_file_from_project_registries(
+    request_id: str, filename: str
+) -> Path | None:
+    try:
+        from signalpilot._server.files.project_sync import PROJECTS_ROOT
+    except Exception:
+        return None
+
+    for registry_path in PROJECTS_ROOT.glob(
+        "*/**/notebooks/.signalpilot-analysis-registry.json"
+    ):
+        try:
+            raw = json.loads(registry_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        records = raw.get("records", [])
+        if not isinstance(records, list):
+            continue
+        for item in records:
+            if (
+                not isinstance(item, dict)
+                or item.get("request_id") != request_id
+            ):
+                continue
+            notebook_path = item.get("notebook_path")
+            if not isinstance(notebook_path, str) or not notebook_path:
+                continue
+            repo = registry_path.parent.parent
+            snapshot_dir = (
+                (repo / notebook_path).parent
+                / "public"
+                / "signalpilot-notion-snapshots"
+                / request_id
+            )
+            try:
+                resolved_dir = snapshot_dir.resolve(strict=True)
+                snapshot_path = (resolved_dir / filename).resolve(strict=True)
+                snapshot_path.relative_to(resolved_dir)
+            except (OSError, ValueError):
+                continue
+            if snapshot_path.is_file():
+                return snapshot_path
+    return None
+
+
+def _snapshot_max_bytes() -> int:
+    raw_value = os.environ.get("SIGNALPILOT_SNAPSHOT_MAX_BYTES")
+    if raw_value is None:
+        return DEFAULT_SNAPSHOT_MAX_BYTES
+    try:
+        return max(1024, int(raw_value))
+    except ValueError:
+        LOGGER.warning(
+            "Invalid SIGNALPILOT_SNAPSHOT_MAX_BYTES=%r; using default",
+            raw_value,
+        )
+        return DEFAULT_SNAPSHOT_MAX_BYTES
+
+
+def _snapshot_filename(name: str, index: int) -> str:
+    stem = re.sub(r"[^a-zA-Z0-9]+", "-", name.strip().lower()).strip("-")
+    stem = stem[:80] or "data-snapshot"
+    return f"{stem}-{index}.json"
+
+
+def save_data_snapshot_for_session(
+    app_state: AppStateBase,
+    *,
+    session_id: str,
+    name: str,
+    description: str,
+    columns: list[Any],
+    rows: list[Any],
+) -> dict[str, Any]:
+    _load_registry(app_state)
+    record = next(
+        (
+            item
+            for item in _records_by_request_id.values()
+            if item.session_id == session_id
+        ),
+        None,
+    )
+    if record is None:
+        raise ValueError(
+            f"No active analysis record for session_id={session_id}"
+        )
+
+    if not isinstance(columns, list) or not isinstance(rows, list):
+        raise ValueError("columns and rows must be JSON arrays")
+
+    snapshots = list(record.data_snapshots or [])
+    normalized_name = name.strip() or f"Data snapshot {len(snapshots) + 1}"
+    existing_index = next(
+        (
+            index
+            for index, snapshot in enumerate(snapshots)
+            if snapshot.name == normalized_name
+        ),
+        None,
+    )
+    if existing_index is None and len(snapshots) >= MAX_DATA_SNAPSHOTS:
+        raise ValueError(
+            f"At most {MAX_DATA_SNAPSHOTS} data snapshots are allowed"
+        )
+
+    filename = (
+        snapshots[existing_index].filename
+        if existing_index is not None
+        else _snapshot_filename(normalized_name, len(snapshots) + 1)
+    )
+    payload = {
+        "name": normalized_name,
+        "description": description.strip(),
+        "columns": [str(column) for column in columns],
+        "rows": rows,
+    }
+    try:
+        content = json.dumps(
+            payload, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Snapshot rows must be JSON serializable: {exc}"
+        ) from exc
+
+    max_bytes = _snapshot_max_bytes()
+    if len(content) > max_bytes:
+        raise ValueError(
+            f"Snapshot is {len(content)} bytes; the limit is {max_bytes} bytes"
+        )
+
+    snapshot_path = _snapshot_dir(app_state, record) / filename
+    snapshot_path.write_bytes(content)
+    snapshot = DataSnapshot(
+        name=normalized_name,
+        description=description.strip(),
+        columns=[str(column) for column in columns],
+        row_count=len(rows),
+        filename=filename,
+        url=_snapshot_url(app_state, record, filename),
+        bytes=len(content),
+    )
+    if existing_index is None:
+        snapshots.append(snapshot)
+    else:
+        snapshots[existing_index] = snapshot
+    record.data_snapshots = snapshots
+    _save_registry(app_state)
+    return {
+        "name": snapshot.name,
+        "description": snapshot.description,
+        "columns": snapshot.columns or [],
+        "rowCount": snapshot.row_count,
+        "filename": snapshot.filename,
+        "url": snapshot.url,
+        "bytes": snapshot.bytes,
+    }
 
 
 def _chart_filename_extension(content_type: str) -> str:
@@ -1305,7 +1793,7 @@ def _materialize_existing_chart_artifacts(
         materialized.append(
             AnalysisChart(
                 title=chart.title,
-                url=_chart_url(record, filename),
+                url=_chart_url(app_state, record, filename),
                 caption=chart.caption,
                 alt_text=chart.alt_text,
                 include_in_comment=chart.include_in_comment,
@@ -1454,6 +1942,21 @@ def _image_candidates_from_output_data(
     for mimetype, value in data.items():
         if not isinstance(mimetype, str):
             continue
+        if mimetype == "application/vnd.sp+mimebundle":
+            mimebundle = _load_sp_mimebundle(value)
+            if mimebundle is not None:
+                candidates.extend(
+                    _image_candidates_from_output_data(
+                        app_state,
+                        cell_id,
+                        {
+                            key: item
+                            for key, item in mimebundle.items()
+                            if key != "__metadata__"
+                        },
+                    )
+                )
+            continue
         if mimetype.startswith("image/"):
             if isinstance(value, bytes):
                 candidates.append(
@@ -1502,6 +2005,18 @@ def _image_candidates_from_output_data(
     return candidates
 
 
+def _load_sp_mimebundle(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def _safe_chart_cell_id(cell_id: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", cell_id).strip("-")
     return cleaned[:64] or "cell"
@@ -1528,7 +2043,7 @@ def _write_image_chart_artifacts(
             charts.append(
                 AnalysisChart(
                     title=title,
-                    url=_chart_url(record, filename),
+                    url=_chart_url(app_state, record, filename),
                     caption=title,
                     alt_text=title,
                     include_in_comment=True,
@@ -1538,6 +2053,28 @@ def _write_image_chart_artifacts(
             if len(charts) >= 2:
                 return charts
     return charts
+
+
+def _chart_identity(chart: AnalysisChart) -> str:
+    return chart.url.strip() or chart.title.strip()
+
+
+def _merge_chart_lists(
+    *chart_lists: list[AnalysisChart],
+    limit: int = 2,
+) -> list[AnalysisChart]:
+    merged: list[AnalysisChart] = []
+    seen: set[str] = set()
+    for charts in chart_lists:
+        for chart in charts:
+            key = _chart_identity(chart)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            merged.append(chart)
+            if len(merged) >= limit:
+                return merged
+    return merged
 
 
 _PLOTLY_FIGURE_ATTR_RE = re.compile(
@@ -1635,7 +2172,10 @@ def _plotly_figures_from_html(raw_html: str) -> list[dict[str, Any]]:
     return figures
 
 
-def _render_plotly_bar_svg(fig: dict[str, Any], title: str) -> str | None:
+def _render_plotly_bar_svg(
+    fig: dict[str, Any], title: str, theme: ChartTheme | None = None
+) -> str | None:
+    theme = theme or DEFAULT_CHART_THEME
     traces = [
         trace
         for trace in cast(list[dict[str, Any]], fig.get("data", []))
@@ -1650,30 +2190,40 @@ def _render_plotly_bar_svg(fig: dict[str, Any], title: str) -> str | None:
     margin_right = 60
     margin_top = 82
     margin_bottom = 70
-    colors = ["#2563eb", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"]
+    colors = theme.series
+    font_family = _svg_text(theme.font_family)
     orientation = traces[0].get("orientation")
 
     if orientation == "h":
         categories: list[str] = []
-        series: list[tuple[str, dict[str, float], str]] = []
+        series: list[tuple[str, dict[str, float], dict[str, str], str]] = []
+        single_trace = len(traces) == 1
         for index, trace in enumerate(traces):
             label = str(trace.get("name") or f"Series {index + 1}")
             ys = [str(item) for item in _as_list(trace.get("y"))]
             xs = [_as_float(item) for item in _as_list(trace.get("x"))]
-            color = (
+            marker_color = (
                 trace.get("marker", {}).get("color")
                 if isinstance(trace.get("marker"), dict)
                 else None
-            ) or colors[index % len(colors)]
+            )
+            default_color = colors[index % len(colors)]
+            rank_colors = ranked_series_colors(xs, colors) if single_trace and marker_color is None else []
             values: dict[str, float] = {}
-            for cat, val in zip(ys, xs, strict=False):
+            category_colors: dict[str, str] = {}
+            for item_index, (cat, val) in enumerate(zip(ys, xs, strict=False)):
                 if cat not in categories:
                     categories.append(cat)
                 values[cat] = val
-            series.append((label, values, str(color)))
+                category_colors[cat] = (
+                    rank_colors[item_index]
+                    if rank_colors
+                    else _plotly_marker_color(marker_color, item_index, default_color)
+                )
+            series.append((label, values, category_colors, default_color))
 
         totals = [
-            sum(values.get(cat, 0.0) for _, values, _ in series)
+            sum(values.get(cat, 0.0) for _, values, _, _ in series)
             for cat in categories
         ]
         max_total = max(max(totals or [1.0]), 1.0)
@@ -1683,62 +2233,75 @@ def _render_plotly_bar_svg(fig: dict[str, Any], title: str) -> str | None:
         )
         svg: list[str] = [
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
-            '<rect width="100%" height="100%" fill="white"/>',
-            f'<text x="{width / 2}" y="36" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700" fill="#111827">{_svg_text(title)}</text>',
+            f'<rect width="100%" height="100%" fill="{_svg_text(theme.bg)}"/>',
+            f'<text x="{width / 2}" y="36" text-anchor="middle" font-family="{font_family}" font-size="24" font-weight="700" fill="{_svg_text(theme.text)}">{_svg_text(title)}</text>',
         ]
         for i in range(6):
             x = margin_left + plot_width * i / 5
             svg.append(
-                f'<line x1="{x:.1f}" y1="{margin_top - 10}" x2="{x:.1f}" y2="{height - margin_bottom + 8}" stroke="#e5e7eb" stroke-width="1"/>'
+                f'<line x1="{x:.1f}" y1="{margin_top - 10}" x2="{x:.1f}" y2="{height - margin_bottom + 8}" stroke="{_svg_text(theme.grid)}" stroke-width="1"/>'
             )
             svg.append(
-                f'<text x="{x:.1f}" y="{height - margin_bottom + 32}" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="12" fill="#6b7280">{max_total * i / 5:.0f}</text>'
+                f'<text x="{x:.1f}" y="{height - margin_bottom + 32}" text-anchor="middle" font-family="{font_family}" font-size="12" fill="{_svg_text(theme.axis)}">{max_total * i / 5:.0f}</text>'
             )
         for row, cat in enumerate(categories):
             y = margin_top + row * row_height
             svg.append(
-                f'<text x="{margin_left - 14}" y="{y + row_height / 2 + 5:.1f}" text-anchor="end" font-family="Inter, Arial, sans-serif" font-size="13" fill="#111827">{_svg_text(cat)}</text>'
+                f'<text x="{margin_left - 14}" y="{y + row_height / 2 + 5:.1f}" text-anchor="end" font-family="{font_family}" font-size="13" fill="{_svg_text(theme.text)}">{_svg_text(cat)}</text>'
             )
             x_cursor = margin_left
-            for _, values, color in series:
+            for _, values, category_colors, default_color in series:
                 value = values.get(cat, 0.0)
-                bar_width = plot_width * value / max_total
+                color = category_colors.get(cat, default_color)
+                bar_width = max(plot_width * value / max_total, 2.0) if value != 0 else 0.0
                 svg.append(
                     f'<rect x="{x_cursor:.1f}" y="{y + 10:.1f}" width="{bar_width:.1f}" height="{max(row_height - 20, 8):.1f}" rx="4" fill="{_svg_text(color)}"/>'
                 )
                 if bar_width > 32:
                     svg.append(
-                        f'<text x="{x_cursor + bar_width / 2:.1f}" y="{y + row_height / 2 + 5:.1f}" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="12" fill="white">{value:.0f}</text>'
+                        f'<text x="{x_cursor + bar_width / 2:.1f}" y="{y + row_height / 2 + 5:.1f}" text-anchor="middle" font-family="{font_family}" font-size="12" fill="{_svg_text(contrast_text(color))}">{value:.0f}</text>'
                     )
                 x_cursor += bar_width
         legend_y = height - 22
         legend_x = margin_left
-        for label, _, color in series[:5]:
+        for label, _, _, color in series[:5]:
             svg.append(
                 f'<rect x="{legend_x}" y="{legend_y - 10}" width="12" height="12" rx="2" fill="{_svg_text(color)}"/>'
             )
             svg.append(
-                f'<text x="{legend_x + 18}" y="{legend_y}" font-family="Inter, Arial, sans-serif" font-size="12" fill="#374151">{_svg_text(label)}</text>'
+                f'<text x="{legend_x + 18}" y="{legend_y}" font-family="{font_family}" font-size="12" fill="{_svg_text(theme.muted)}">{_svg_text(label)}</text>'
             )
             legend_x += min(180, 28 + len(label) * 7)
         svg.append("</svg>")
         return "".join(svg)
 
-    bars: list[tuple[str, float, str]] = []
+    pending_bars: list[tuple[str, float, str | None]] = []
     for index, trace in enumerate(traces):
         xs = [str(item) for item in _as_list(trace.get("x"))]
         ys = [_as_float(item) for item in _as_list(trace.get("y"))]
-        color = (
+        marker_color = (
             trace.get("marker", {}).get("color")
             if isinstance(trace.get("marker"), dict)
             else None
-        ) or colors[index % len(colors)]
-        for label, value in zip(xs, ys, strict=False):
-            bars.append(
-                (label or str(trace.get("name") or ""), value, str(color))
+        )
+        default_color = colors[index % len(colors)]
+        for item_index, (label, value) in enumerate(zip(xs, ys, strict=False)):
+            pending_bars.append(
+                (
+                    label or str(trace.get("name") or ""),
+                    value,
+                    _plotly_marker_color(marker_color, item_index, default_color)
+                    if marker_color is not None
+                    else None,
+                )
             )
-    if not bars:
+    if not pending_bars:
         return None
+    rank_colors = ranked_series_colors([value for _, value, _ in pending_bars], colors)
+    bars = [
+        (label, value, color or rank_colors[index])
+        for index, (label, value, color) in enumerate(pending_bars)
+    ]
 
     plot_width = width - 90 - 40
     plot_height = height - margin_top - 105
@@ -1749,34 +2312,37 @@ def _render_plotly_bar_svg(fig: dict[str, Any], title: str) -> str | None:
     bar_width = max(16, (plot_width - bar_gap * (len(bars) - 1)) / len(bars))
     svg = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
-        '<rect width="100%" height="100%" fill="white"/>',
-        f'<text x="{width / 2}" y="36" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700" fill="#111827">{_svg_text(title)}</text>',
+        f'<rect width="100%" height="100%" fill="{_svg_text(theme.bg)}"/>',
+        f'<text x="{width / 2}" y="36" text-anchor="middle" font-family="{font_family}" font-size="24" font-weight="700" fill="{_svg_text(theme.text)}">{_svg_text(title)}</text>',
     ]
     for i in range(6):
         y = bottom - plot_height * i / 5
         svg.append(
-            f'<line x1="{left}" y1="{y:.1f}" x2="{left + plot_width}" y2="{y:.1f}" stroke="#e5e7eb" stroke-width="1"/>'
+            f'<line x1="{left}" y1="{y:.1f}" x2="{left + plot_width}" y2="{y:.1f}" stroke="{_svg_text(theme.grid)}" stroke-width="1"/>'
         )
         svg.append(
-            f'<text x="{left - 12}" y="{y + 4:.1f}" text-anchor="end" font-family="Inter, Arial, sans-serif" font-size="12" fill="#6b7280">{max_value * i / 5:.0f}</text>'
+            f'<text x="{left - 12}" y="{y + 4:.1f}" text-anchor="end" font-family="{font_family}" font-size="12" fill="{_svg_text(theme.axis)}">{max_value * i / 5:.0f}</text>'
         )
     for index, (label, value, color) in enumerate(bars):
         x = left + index * (bar_width + bar_gap)
-        h = plot_height * value / max_value
+        h = max(plot_height * value / max_value, 2.0) if value > 0 else 0.0
         svg.append(
             f'<rect x="{x:.1f}" y="{bottom - h:.1f}" width="{bar_width:.1f}" height="{h:.1f}" rx="6" fill="{_svg_text(color)}"/>'
         )
         svg.append(
-            f'<text x="{x + bar_width / 2:.1f}" y="{bottom - h - 8:.1f}" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="700" fill="#111827">{value:.1f}</text>'
+            f'<text x="{x + bar_width / 2:.1f}" y="{bottom - h - 8:.1f}" text-anchor="middle" font-family="{font_family}" font-size="13" font-weight="700" fill="{_svg_text(theme.text)}">{value:.1f}</text>'
         )
         svg.append(
-            f'<text x="{x + bar_width / 2:.1f}" y="{bottom + 18:.1f}" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="11" fill="#374151">{_svg_text(label[:18])}</text>'
+            f'<text x="{x + bar_width / 2:.1f}" y="{bottom + 18:.1f}" text-anchor="middle" font-family="{font_family}" font-size="11" fill="{_svg_text(theme.muted)}">{_svg_text(label[:18])}</text>'
         )
     svg.append("</svg>")
     return "".join(svg)
 
 
-def _render_plotly_radar_svg(fig: dict[str, Any], title: str) -> str | None:
+def _render_plotly_radar_svg(
+    fig: dict[str, Any], title: str, theme: ChartTheme | None = None
+) -> str | None:
+    theme = theme or DEFAULT_CHART_THEME
     traces = [
         trace
         for trace in cast(list[dict[str, Any]], fig.get("data", []))
@@ -1790,7 +2356,8 @@ def _render_plotly_radar_svg(fig: dict[str, Any], title: str) -> str | None:
     cx = 390
     cy = 345
     radius = 210
-    colors = ["#2563eb", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"]
+    colors = theme.series
+    font_family = _svg_text(theme.font_family)
     first_theta = [str(item) for item in _as_list(traces[0].get("theta"))]
     categories = (
         first_theta[:-1]
@@ -1807,8 +2374,8 @@ def _render_plotly_radar_svg(fig: dict[str, Any], title: str) -> str | None:
 
     svg = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
-        '<rect width="100%" height="100%" fill="white"/>',
-        f'<text x="{width / 2}" y="38" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700" fill="#111827">{_svg_text(title)}</text>',
+        f'<rect width="100%" height="100%" fill="{_svg_text(theme.bg)}"/>',
+        f'<text x="{width / 2}" y="38" text-anchor="middle" font-family="{font_family}" font-size="24" font-weight="700" fill="{_svg_text(theme.text)}">{_svg_text(title)}</text>',
     ]
     for pct in [20, 40, 60, 80, 100]:
         points = " ".join(
@@ -1816,16 +2383,16 @@ def _render_plotly_radar_svg(fig: dict[str, Any], title: str) -> str | None:
             for i in range(len(categories))
         )
         svg.append(
-            f'<polygon points="{points}" fill="none" stroke="#e5e7eb" stroke-width="1"/>'
+            f'<polygon points="{points}" fill="none" stroke="{_svg_text(theme.grid)}" stroke-width="1"/>'
         )
     for i, category in enumerate(categories):
         x, y = point(i, 108)
         ax, ay = point(i, 100)
         svg.append(
-            f'<line x1="{cx}" y1="{cy}" x2="{ax:.1f}" y2="{ay:.1f}" stroke="#e5e7eb" stroke-width="1"/>'
+            f'<line x1="{cx}" y1="{cy}" x2="{ax:.1f}" y2="{ay:.1f}" stroke="{_svg_text(theme.grid)}" stroke-width="1"/>'
         )
         svg.append(
-            f'<text x="{x:.1f}" y="{y:.1f}" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="12" fill="#374151">{_svg_text(category).replace("&#x27;", "&apos;")}</text>'
+            f'<text x="{x:.1f}" y="{y:.1f}" text-anchor="middle" font-family="{font_family}" font-size="12" fill="{_svg_text(theme.muted)}">{_svg_text(category).replace("&#x27;", "&apos;")}</text>'
         )
     for index, trace in enumerate(traces[:5]):
         values = [_as_float(item) for item in _as_list(trace.get("r"))]
@@ -1859,18 +2426,18 @@ def _render_plotly_radar_svg(fig: dict[str, Any], title: str) -> str | None:
             f'<rect x="{legend_x}" y="{y - 11}" width="14" height="14" rx="3" fill="{_svg_text(str(color))}"/>'
         )
         svg.append(
-            f'<text x="{legend_x + 22}" y="{y}" font-family="Inter, Arial, sans-serif" font-size="13" fill="#111827">{_svg_text(name)}</text>'
+            f'<text x="{legend_x + 22}" y="{y}" font-family="{font_family}" font-size="13" fill="{_svg_text(theme.text)}">{_svg_text(name)}</text>'
         )
     svg.append("</svg>")
     return "".join(svg)
 
 
 def _render_plotly_svg(
-    fig: dict[str, Any], fallback_title: str
+    fig: dict[str, Any], fallback_title: str, theme: ChartTheme | None = None
 ) -> tuple[str, str] | None:
     title = _plotly_title(fig, fallback_title)
-    svg = _render_plotly_radar_svg(fig, title) or _render_plotly_bar_svg(
-        fig, title
+    svg = _render_plotly_radar_svg(fig, title, theme) or _render_plotly_bar_svg(
+        fig, title, theme
     )
     if svg is None:
         return None
@@ -1897,8 +2464,12 @@ def _png_bytes(image: Any) -> bytes:
     return output.getvalue()
 
 
-def _render_plotly_bar_png(fig: dict[str, Any], title: str) -> bytes | None:
+def _render_plotly_bar_png(
+    fig: dict[str, Any], title: str, theme: ChartTheme | None = None
+) -> bytes | None:
     from PIL import Image, ImageDraw
+
+    theme = theme or DEFAULT_CHART_THEME
 
     traces = [
         trace
@@ -1910,16 +2481,16 @@ def _render_plotly_bar_png(fig: dict[str, Any], title: str) -> bytes | None:
 
     width = 900
     height = 560
-    image = Image.new("RGB", (width, height), "white")
+    image = Image.new("RGB", (width, height), theme.bg)
     draw = ImageDraw.Draw(image)
     title_font = _pil_font(24, bold=True)
     label_font = _pil_font(13)
     small_font = _pil_font(12)
     value_font = _pil_font(13, bold=True)
-    colors = ["#2563eb", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"]
+    colors = theme.series
 
     draw.text(
-        (width / 2, 30), title, fill="#111827", font=title_font, anchor="mm"
+        (width / 2, 30), title, fill=theme.text, font=title_font, anchor="mm"
     )
     if traces[0].get("orientation") == "h":
         margin_left = 230
@@ -1928,6 +2499,7 @@ def _render_plotly_bar_png(fig: dict[str, Any], title: str) -> bytes | None:
         margin_bottom = 70
         categories: list[str] = []
         series: list[tuple[str, dict[str, float], dict[str, str], str]] = []
+        single_trace = len(traces) == 1
         for index, trace in enumerate(traces):
             label = str(trace.get("name") or f"Series {index + 1}")
             ys = [str(item) for item in _as_list(trace.get("y"))]
@@ -1938,6 +2510,7 @@ def _render_plotly_bar_png(fig: dict[str, Any], title: str) -> bytes | None:
                 else None
             )
             default_color = colors[index % len(colors)]
+            rank_colors = ranked_series_colors(xs, colors) if single_trace and marker_color is None else []
             values: dict[str, float] = {}
             category_colors: dict[str, str] = {}
             for item_index, (category, value) in enumerate(
@@ -1946,8 +2519,10 @@ def _render_plotly_bar_png(fig: dict[str, Any], title: str) -> bytes | None:
                 if category not in categories:
                     categories.append(category)
                 values[category] = value
-                category_colors[category] = _plotly_marker_color(
-                    marker_color, item_index, default_color
+                category_colors[category] = (
+                    rank_colors[item_index]
+                    if rank_colors
+                    else _plotly_marker_color(marker_color, item_index, default_color)
                 )
             series.append((label, values, category_colors, default_color))
         all_values = [
@@ -1966,18 +2541,18 @@ def _render_plotly_bar_png(fig: dict[str, Any], title: str) -> bytes | None:
             tick_value = min_value + value_span * i / 5
             draw.line(
                 [(x, margin_top - 10), (x, height - margin_bottom + 8)],
-                fill="#e5e7eb",
+                fill=theme.grid,
             )
             draw.text(
                 (x, height - margin_bottom + 32),
                 f"{tick_value:.1f}",
-                fill="#6b7280",
+                fill=theme.axis,
                 font=small_font,
                 anchor="mm",
             )
         draw.line(
             [(zero_x, margin_top - 16), (zero_x, height - margin_bottom + 12)],
-            fill="#9ca3af",
+            fill=theme.axis,
             width=2,
         )
         for row, category in enumerate(categories):
@@ -1985,7 +2560,7 @@ def _render_plotly_bar_png(fig: dict[str, Any], title: str) -> bytes | None:
             draw.text(
                 (margin_left - 14, y + row_height / 2),
                 category,
-                fill="#111827",
+                fill=theme.text,
                 font=label_font,
                 anchor="rm",
             )
@@ -2001,7 +2576,8 @@ def _render_plotly_bar_png(fig: dict[str, Any], title: str) -> bytes | None:
             ) in enumerate(series):
                 value = values.get(category, 0.0)
                 color = category_colors.get(category, default_color)
-                bar_width = plot_width * abs(value) / value_span
+                raw_width = plot_width * abs(value) / value_span
+                bar_width = max(raw_width, 2.0) if value != 0 else 0.0
                 x0 = zero_x if value >= 0 else zero_x - bar_width
                 x1 = zero_x + bar_width if value >= 0 else zero_x
                 y0 = y + 8 + series_index * slot_height
@@ -2022,7 +2598,7 @@ def _render_plotly_bar_png(fig: dict[str, Any], title: str) -> bytes | None:
                     draw.text(
                         ((x0 + x1) / 2, (y0 + y1) / 2),
                         f"{value:.2f}",
-                        fill="white",
+                        fill=contrast_text(color),
                         font=small_font,
                         anchor="mm",
                     )
@@ -2031,13 +2607,13 @@ def _render_plotly_bar_png(fig: dict[str, Any], title: str) -> bytes | None:
                     draw.text(
                         (label_x, (y0 + y1) / 2),
                         f"{value:.2f}",
-                        fill="#111827",
+                        fill=theme.text,
                         font=small_font,
                         anchor="mm",
                     )
         return _png_bytes(image)
 
-    bars: list[tuple[str, float, str]] = []
+    pending_bars: list[tuple[str, float, str | None]] = []
     for index, trace in enumerate(traces):
         xs = [str(item) for item in _as_list(trace.get("x"))]
         ys = [_as_float(item) for item in _as_list(trace.get("y"))]
@@ -2048,17 +2624,24 @@ def _render_plotly_bar_png(fig: dict[str, Any], title: str) -> bytes | None:
         )
         default_color = colors[index % len(colors)]
         for item_index, (label, value) in enumerate(zip(xs, ys, strict=False)):
-            bars.append(
+            pending_bars.append(
                 (
                     label or str(trace.get("name") or ""),
                     value,
                     _plotly_marker_color(
                         marker_color, item_index, default_color
-                    ),
+                    )
+                    if marker_color is not None
+                    else None,
                 )
             )
-    if not bars:
+    if not pending_bars:
         return None
+    rank_colors = ranked_series_colors([value for _, value, _ in pending_bars], colors)
+    bars = [
+        (label, value, color or rank_colors[index])
+        for index, (label, value, color) in enumerate(pending_bars)
+    ]
 
     left = 70
     bottom = height - 88
@@ -2069,17 +2652,17 @@ def _render_plotly_bar_png(fig: dict[str, Any], title: str) -> bytes | None:
     bar_width = max(16, (plot_width - bar_gap * (len(bars) - 1)) / len(bars))
     for i in range(6):
         y = bottom - plot_height * i / 5
-        draw.line([(left, y), (left + plot_width, y)], fill="#e5e7eb")
+        draw.line([(left, y), (left + plot_width, y)], fill=theme.grid)
         draw.text(
             (left - 12, y),
             f"{max_value * i / 5:.0f}",
-            fill="#6b7280",
+            fill=theme.axis,
             font=small_font,
             anchor="rm",
         )
     for index, (label, value, color) in enumerate(bars):
         x = left + index * (bar_width + bar_gap)
-        h = plot_height * value / max_value
+        h = max(plot_height * value / max_value, 2.0) if value > 0 else 0.0
         draw.rounded_rectangle(
             [x, bottom - h, x + bar_width, bottom],
             radius=6,
@@ -2088,22 +2671,26 @@ def _render_plotly_bar_png(fig: dict[str, Any], title: str) -> bytes | None:
         draw.text(
             (x + bar_width / 2, bottom - h - 12),
             f"{value:.1f}",
-            fill="#111827",
+            fill=theme.text,
             font=value_font,
             anchor="mm",
         )
         draw.text(
             (x + bar_width / 2, bottom + 22),
             label[:18],
-            fill="#374151",
+            fill=theme.muted,
             font=small_font,
             anchor="mm",
         )
     return _png_bytes(image)
 
 
-def _render_plotly_radar_png(fig: dict[str, Any], title: str) -> bytes | None:
+def _render_plotly_radar_png(
+    fig: dict[str, Any], title: str, theme: ChartTheme | None = None
+) -> bytes | None:
     from PIL import Image, ImageDraw
+
+    theme = theme or DEFAULT_CHART_THEME
 
     traces = [
         trace
@@ -2127,14 +2714,14 @@ def _render_plotly_radar_png(fig: dict[str, Any], title: str) -> bytes | None:
     cx = 390
     cy = 345
     radius = 210
-    image = Image.new("RGB", (width, height), "white")
+    image = Image.new("RGB", (width, height), theme.bg)
     draw = ImageDraw.Draw(image, "RGBA")
     title_font = _pil_font(24, bold=True)
     label_font = _pil_font(12)
     legend_font = _pil_font(13)
-    colors = ["#2563eb", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"]
+    colors = theme.series
     draw.text(
-        (width / 2, 38), title, fill="#111827", font=title_font, anchor="mm"
+        (width / 2, 38), title, fill=theme.text, font=title_font, anchor="mm"
     )
 
     def point(index: int, value: float) -> tuple[float, float]:
@@ -2144,14 +2731,14 @@ def _render_plotly_radar_png(fig: dict[str, Any], title: str) -> bytes | None:
 
     for pct in [20, 40, 60, 80, 100]:
         draw.polygon(
-            [point(i, pct) for i in range(len(categories))], outline="#e5e7eb"
+            [point(i, pct) for i in range(len(categories))], outline=theme.grid
         )
     for index, category in enumerate(categories):
         axis_end = point(index, 100)
         label_point = point(index, 108)
-        draw.line([(cx, cy), axis_end], fill="#e5e7eb")
+        draw.line([(cx, cy), axis_end], fill=theme.grid)
         draw.text(
-            label_point, category, fill="#374151", font=label_font, anchor="mm"
+            label_point, category, fill=theme.muted, font=label_font, anchor="mm"
         )
     for index, trace in enumerate(traces[:5]):
         values = [_as_float(item) for item in _as_list(trace.get("r"))]
@@ -2176,17 +2763,17 @@ def _render_plotly_radar_png(fig: dict[str, Any], title: str) -> bytes | None:
         y = 125 + index * 26
         draw.rounded_rectangle([660, y - 11, 674, y + 3], radius=3, fill=color)
         draw.text(
-            (682, y), name, fill="#111827", font=legend_font, anchor="lm"
+            (682, y), name, fill=theme.text, font=legend_font, anchor="lm"
         )
     return _png_bytes(image)
 
 
 def _render_plotly_png(
-    fig: dict[str, Any], fallback_title: str
+    fig: dict[str, Any], fallback_title: str, theme: ChartTheme | None = None
 ) -> tuple[str, bytes] | None:
     title = _plotly_title(fig, fallback_title)
-    png = _render_plotly_radar_png(fig, title) or _render_plotly_bar_png(
-        fig, title
+    png = _render_plotly_radar_png(fig, title, theme) or _render_plotly_bar_png(
+        fig, title, theme
     )
     if png is None:
         return None
@@ -2199,12 +2786,13 @@ def _write_plotly_chart_artifacts(
     html_outputs: list[tuple[str, str]],
 ) -> list[AnalysisChart]:
     chart_dir = _chart_dir(app_state, record)
+    theme = ChartTheme.from_payload(record.theme)
     charts: list[AnalysisChart] = []
     for cell_id, raw_html in html_outputs:
         for figure in _plotly_figures_from_html(raw_html):
             try:
                 rendered = _render_plotly_png(
-                    figure, f"Notebook chart {len(charts) + 1}"
+                    figure, f"Notebook chart {len(charts) + 1}", theme
                 )
             except Exception as e:
                 LOGGER.warning(
@@ -2222,7 +2810,7 @@ def _write_plotly_chart_artifacts(
             charts.append(
                 AnalysisChart(
                     title=title,
-                    url=_chart_url(record, filename),
+                    url=_chart_url(app_state, record, filename),
                     caption=title,
                     alt_text=f"Chart from notebook cell {cell_id}: {title}",
                     include_in_comment=True,
@@ -2356,6 +2944,7 @@ def _write_result_fallback_chart_artifacts(
     parsed_rows.sort(key=lambda item: item[1], reverse=True)
 
     chart_dir = _chart_dir(app_state, record)
+    theme = ChartTheme.from_payload(record.theme)
     charts: list[AnalysisChart] = []
 
     ranking_figure = {
@@ -2365,18 +2954,12 @@ def _write_result_fallback_chart_artifacts(
                 "orientation": "h",
                 "y": [company for company, _, _ in parsed_rows],
                 "x": [score for _, score, _ in parsed_rows],
-                "marker": {
-                    "color": [
-                        "#10b981" if index == 0 else "#2563eb"
-                        for index, _ in enumerate(parsed_rows)
-                    ]
-                },
             }
         ],
         "layout": {"title": {"text": "Operating momentum composite ranking"}},
     }
     ranking_png = _render_plotly_bar_png(
-        ranking_figure, "Operating momentum composite ranking"
+        ranking_figure, "Operating momentum composite ranking", theme
     )
     if ranking_png:
         filename = f"{record.request_id}-fallback-ranking.png"
@@ -2385,7 +2968,7 @@ def _write_result_fallback_chart_artifacts(
         charts.append(
             AnalysisChart(
                 title="Operating momentum composite ranking",
-                url=_chart_url(record, filename),
+                url=_chart_url(app_state, record, filename),
                 caption=f"{winner} has the highest composite momentum score.",
                 alt_text=(
                     "Horizontal bar chart ranking companies by composite "
@@ -2404,7 +2987,7 @@ def _write_result_fallback_chart_artifacts(
     ]
     dimension_headers = dimension_headers[:4]
     dimension_traces = []
-    colors = ["#ef4444", "#f59e0b", "#10b981", "#2563eb"]
+    colors = list(theme.series)
     for index, header in enumerate(dimension_headers):
         values: list[float] = []
         for _, _, row in parsed_rows:
@@ -2430,7 +3013,7 @@ def _write_result_fallback_chart_artifacts(
             },
         }
         dimension_png = _render_plotly_bar_png(
-            dimension_figure, "Operating momentum dimension breakdown"
+            dimension_figure, "Operating momentum dimension breakdown", theme
         )
         if dimension_png:
             filename = f"{record.request_id}-fallback-dimensions.png"
@@ -2438,7 +3021,7 @@ def _write_result_fallback_chart_artifacts(
             charts.append(
                 AnalysisChart(
                     title="Operating momentum dimension breakdown",
-                    url=_chart_url(record, filename),
+                    url=_chart_url(app_state, record, filename),
                     caption=(
                         "Normalized comparison of the component momentum "
                         "dimensions from the final ranking table."
@@ -2461,6 +3044,12 @@ def _html_outputs_from_output_data(
     html_outputs: list[tuple[str, str]] = []
     for cell_id, data in output_data:
         raw_html = data.get("text/html")
+        if isinstance(raw_html, str):
+            html_outputs.append((cell_id, raw_html))
+        mimebundle = _load_sp_mimebundle(data.get("application/vnd.sp+mimebundle"))
+        if mimebundle is None:
+            continue
+        raw_html = mimebundle.get("text/html")
         if isinstance(raw_html, str):
             html_outputs.append((cell_id, raw_html))
     return html_outputs
@@ -2497,12 +3086,11 @@ def _fallback_chart_artifacts_from_session_cache(
             if not isinstance(data, dict):
                 continue
             output_data.append((cell_id, data))
-    charts = _write_plotly_chart_artifacts(
+    plotly_charts = _write_plotly_chart_artifacts(
         app_state, record, _html_outputs_from_output_data(output_data)
     )
-    if charts:
-        return charts
-    return _write_image_chart_artifacts(app_state, record, output_data)
+    image_charts = _write_image_chart_artifacts(app_state, record, output_data)
+    return _merge_chart_lists(plotly_charts, image_charts)
 
 
 def _fallback_chart_artifacts_from_session(
@@ -2521,15 +3109,15 @@ def _fallback_chart_artifacts_from_session(
         if not isinstance(output, CellOutput):
             continue
         output_data.append((str(cell_id), {output.mimetype: output.data}))
-    charts = _write_plotly_chart_artifacts(
+    plotly_charts = _write_plotly_chart_artifacts(
         app_state, record, _html_outputs_from_output_data(output_data)
     )
-    if charts:
+    image_charts = _write_image_chart_artifacts(app_state, record, output_data)
+    charts = _merge_chart_lists(plotly_charts, image_charts)
+    if len(charts) >= 2:
         return charts
-    charts = _write_image_chart_artifacts(app_state, record, output_data)
-    if charts:
-        return charts
-    return _fallback_chart_artifacts_from_session_cache(app_state, record)
+    cache_charts = _fallback_chart_artifacts_from_session_cache(app_state, record)
+    return _merge_chart_lists(charts, cache_charts)
 
 
 def _ensure_notion_chart_artifacts(
@@ -2542,35 +3130,27 @@ def _ensure_notion_chart_artifacts(
         for chart in (record.result.notion_charts or [])
         if chart.url.strip()
     ]
-    materialized = _materialize_existing_chart_artifacts(
-        app_state, record, existing_charts
-    )
-    if materialized:
-        record.result.notion_charts = materialized
-        return
-    generated = _fallback_chart_artifacts_from_session(app_state, record)
-    if generated:
-        record.result.notion_charts = generated
-    else:
-        generated = _write_result_fallback_chart_artifacts(app_state, record)
-        if generated:
-            record.result.notion_charts = generated
-            return
-    if generated:
-        return
-    elif existing_charts:
+    materialized = _materialize_existing_chart_artifacts(app_state, record, existing_charts)
+    session_charts = _fallback_chart_artifacts_from_session(app_state, record)
+    charts = _merge_chart_lists(materialized, session_charts)
+    if len(charts) < 2:
+        result_charts = _write_result_fallback_chart_artifacts(app_state, record)
+        charts = _merge_chart_lists(charts, result_charts)
+    if len(charts) < 2:
         external_charts = [
             chart
             for chart in existing_charts
             if urlparse(chart.url).scheme in {"http", "https"}
         ]
-        record.result.notion_charts = external_charts[:2]
-    else:
-        record.result.notion_charts = []
+        charts = _merge_chart_lists(charts, external_charts)
+    record.result.notion_charts = charts
 
 
 def _persist_record_completion_artifacts(
-    app_state: AppState, record: AnalysisRecord
+    app_state: AppState,
+    record: AnalysisRecord,
+    *,
+    checkpoint: bool = True,
 ) -> None:
     try:
         cache_path = _persist_record_session_cache(app_state, record)
@@ -2597,12 +3177,13 @@ def _persist_record_completion_artifacts(
         )
 
     _save_registry(app_state)
-    _checkpoint_analysis_files(
-        app_state,
-        record,
-        f"Checkpoint {record.source} analysis {record.request_id}",
-        include_parent_dir=True,
-    )
+    if checkpoint:
+        _checkpoint_analysis_files(
+            app_state,
+            record,
+            f"Checkpoint {record.source} analysis {record.request_id}",
+            include_parent_dir=True,
+        )
 
 
 async def _run_analysis(
@@ -2611,6 +3192,8 @@ async def _run_analysis(
     body: StartNotionAnalysisRequest,
     *,
     new_chat: bool,
+    allow_resume_session: bool = True,
+    checkpoint_completion: bool = True,
 ) -> None:
     from signalpilot._server.ai.chat_store import (
         ChatThread,
@@ -2626,7 +3209,7 @@ async def _run_analysis(
     record.status = "Analyzing"
     record.error = None
     _save_registry(app_state)
-    _ensure_session(app_state, record)
+    _ensure_session(app_state, record, allow_resume=allow_resume_session)
     project_root = _project_root(app_state)
     agent_cwd = str(project_root)
     LOGGER.info(
@@ -2643,7 +3226,12 @@ async def _run_analysis(
         body,
         project_root=project_root,
     )
-    prompt = _analysis_prompt(record, body, warm_context=warm_context)
+    prompt = _analysis_prompt(
+        record,
+        body,
+        warm_context=warm_context,
+        output_mode=record.output_mode,
+    )
     text_parts: list[str] = []
     store = get_gateway_chat_trace_store()
 
@@ -2693,12 +3281,14 @@ async def _run_analysis(
                 },
             },
         )
-        try:
+
+        async def stream_agent_once(agent_message: str, *, new_chat_for_run: bool) -> None:
             async with asyncio.timeout(_agent_timeout_seconds()):
                 async for event in run_notebook_agent(
-                    message=prompt,
+                    message=agent_message,
                     session_id=SessionId(record.session_id),
-                    new_chat=new_chat,
+                    model=_analysis_agent_model(),
+                    new_chat=new_chat_for_run,
                     thread_id=record.session_id,
                     notebook_mcp_app=app_state.request.app,
                     cwd=agent_cwd,
@@ -2716,10 +3306,19 @@ async def _run_analysis(
                         "turn": event.turn,
                     }
                     await append_trace_event(event_data)
-                    if event.type == "text" and event.content:
+                    if event.type in ("text", "text_delta") and event.content:
                         text_parts.append(event.content)
                     if event.type == "error":
+                        if event.content:
+                            text_parts.append(event.content)
                         raise RuntimeError(event.content or "Agent failed")
+
+        try:
+            try:
+                await stream_agent_once(prompt, new_chat_for_run=new_chat)
+            except RuntimeError as exc:
+                if not _is_transient_agent_overload(str(exc)):
+                    raise
         except TimeoutError:
             stop_agent(record.session_id)
             timeout_seconds = _agent_timeout_seconds()
@@ -2745,7 +3344,7 @@ async def _run_analysis(
                     },
                 },
             )
-            _persist_record_completion_artifacts(app_state, record)
+            _persist_record_completion_artifacts(app_state, record, checkpoint=checkpoint_completion)
             await store.upsert_thread(
                 ChatThread(
                     thread_id=record.session_id,
@@ -2778,65 +3377,40 @@ async def _run_analysis(
             return
 
         try:
-            record.result = _parse_result("".join(text_parts))
-        except Exception as parse_error:
-            repair_parts: list[str] = []
+            record.result = _parse_final_statement_result("".join(text_parts))
+        except Exception:
+            if not _is_transient_agent_overload("".join(text_parts)):
+                raise
+            LOGGER.warning(
+                "Retrying %s analysis %s after transient model overload",
+                record.source,
+                record.request_id,
+            )
             await append_trace_event(
                 {
                     "type": "text",
-                    "content": (
-                        "Formatting the completed analysis into the required "
-                        "Notion JSON response."
-                    ),
+                    "content": "Transient model overload detected. Retrying the analysis once.",
                     "tool_name": "",
                     "tool_input": None,
                     "tool_call_id": "",
                     "is_error": False,
                     "cost_usd": None,
                     "turn": 0,
+                    "metadata": {
+                        "request_id": record.request_id,
+                        "status": record.status,
+                    },
                 },
             )
-            try:
-                async with asyncio.timeout(
-                    min(120.0, _agent_timeout_seconds())
-                ):
-                    async for event in run_notebook_agent(
-                        message=_json_repair_prompt(
-                            body.prompt, "".join(text_parts)
-                        ),
-                        session_id=SessionId(record.session_id),
-                        new_chat=False,
-                        max_turns=3,
-                        thread_id=record.session_id,
-                        notebook_mcp_app=app_state.request.app,
-                        cwd=agent_cwd,
-                        disallow_file_edits=True,
-                        additional_disallowed_tools=["Agent"],
-                    ):
-                        event_data = {
-                            "type": event.type,
-                            "content": event.content,
-                            "tool_name": event.tool_name,
-                            "tool_input": event.tool_input,
-                            "tool_call_id": event.tool_call_id,
-                            "is_error": event.is_error,
-                            "cost_usd": event.cost_usd,
-                            "turn": event.turn,
-                        }
-                        await append_trace_event(event_data)
-                        if event.type == "text" and event.content:
-                            repair_parts.append(event.content)
-                        if event.type == "error":
-                            raise RuntimeError(
-                                event.content or "Agent JSON repair failed"
-                            )
-                text_parts.extend(repair_parts)
-                record.result = _parse_result("".join(repair_parts))
-            except Exception as repair_error:
-                raise parse_error from repair_error
+            text_parts.clear()
+            await stream_agent_once(
+                _agent_overload_retry_prompt(body.prompt),
+                new_chat_for_run=False,
+            )
+            record.result = _parse_final_statement_result("".join(text_parts))
         record.status = "Done"
         record.error = None
-        _persist_record_completion_artifacts(app_state, record)
+        _persist_record_completion_artifacts(app_state, record, checkpoint=checkpoint_completion)
         await store.upsert_thread(
             ChatThread(
                 thread_id=record.session_id,
@@ -2870,21 +3444,29 @@ async def _run_analysis(
         LOGGER.exception("Notion analysis %s failed", record.request_id)
         failed = False
         try:
-            record.result = _parse_result("".join(text_parts))
+            record.result = _parse_final_statement_result("".join(text_parts))
             record.status = "Done"
             record.error = None
         except Exception:
             if "".join(text_parts).strip():
-                record.result = _plain_text_failure_result(
-                    "".join(text_parts), e
-                )
-                record.status = "Done"
-                record.error = None
+                if _is_transient_agent_overload("".join(text_parts)):
+                    failed = True
+                    record.status = "Failed"
+                    record.error = (
+                        "The analysis model returned a transient overload response. "
+                        "Please retry the request."
+                    )
+                else:
+                    record.result = _plain_text_failure_result(
+                        "".join(text_parts), e
+                    )
+                    record.status = "Done"
+                    record.error = None
             else:
                 failed = True
                 record.status = "Failed"
                 record.error = str(e)
-        _persist_record_completion_artifacts(app_state, record)
+        _persist_record_completion_artifacts(app_state, record, checkpoint=checkpoint_completion)
         if failed:
             await store.upsert_thread(
                 ChatThread(
@@ -2951,11 +3533,12 @@ async def _run_analysis(
         _running_tasks.pop(record.request_id, None)
 
 
-def _record_response(record: AnalysisRecord) -> dict[str, Any]:
+def _record_response(record: AnalysisRecord, app_state: AppState | None = None) -> dict[str, Any]:
     result = record.result or AnalysisResult()
-    return {
+    response = {
         "requestId": record.request_id,
         "source": record.source,
+        "outputMode": record.output_mode,
         "sessionId": record.session_id,
         "notebookPath": record.notebook_path,
         "trailUrl": record.trail_url,
@@ -2978,8 +3561,39 @@ def _record_response(record: AnalysisRecord) -> dict[str, Any]:
             }
             for chart in (result.notion_charts or [])
         ],
+        "dataSnapshots": [
+            {
+                "name": snapshot.name,
+                "description": snapshot.description,
+                "columns": snapshot.columns or [],
+                "rowCount": snapshot.row_count,
+                "filename": snapshot.filename,
+                "url": snapshot.url,
+                "bytes": snapshot.bytes,
+            }
+            for snapshot in (record.data_snapshots or [])
+        ],
         "error": record.error,
     }
+    notebook_code = _record_notebook_code_for_response(record, app_state)
+    if notebook_code is not None:
+        response["notebookCode"] = notebook_code
+        response["notebookCodeSha256"] = hashlib.sha256(notebook_code.encode("utf-8")).hexdigest()
+    return response
+
+
+def _record_notebook_code_for_response(record: AnalysisRecord, app_state: AppState | None) -> str | None:
+    if record.output_mode != "deliverable" or record.status != "Done":
+        return None
+    try:
+        path = Path(record.notebook_path)
+        if not path.is_absolute():
+            if app_state is None:
+                return None
+            path = _resolve_notebook_path(app_state, record.notebook_path)
+        return path.read_text(encoding="utf-8")
+    except Exception:
+        return None
 
 
 def _mark_stale_analysis_failed(
@@ -3001,6 +3615,36 @@ def _mark_stale_analysis_failed(
         f"Checkpoint {record.source} analysis {record.request_id}",
         include_parent_dir=True,
     )
+
+
+async def _recover_completed_record_from_trace(
+    app_state: AppState, record: AnalysisRecord
+) -> bool:
+    if record.status != "Analyzing":
+        return False
+    try:
+        from signalpilot._server.ai.chat_store import (
+            get_gateway_chat_trace_store,
+        )
+
+        store = get_gateway_chat_trace_store()
+        thread = await store.get_thread(record.session_id)
+        if not isinstance(thread, dict) or thread.get("status") != "done":
+            return False
+        events = await store.get_events(record.session_id)
+        text = "".join(
+            str(event.get("content") or "")
+            for event in events
+            if event.get("type") in ("text", "text_delta")
+        )
+        record.result = _parse_final_statement_result(text)
+        record.status = "Done"
+        record.error = None
+        _save_registry(app_state)
+        return True
+    except Exception as exc:
+        LOGGER.debug("Could not recover completed analysis from trace: %s", exc)
+        return False
 
 
 @router.post("/start")
@@ -3028,7 +3672,60 @@ async def start_notion_analysis(*, request: Request) -> JSONResponse:
             )
         )
 
-    return JSONResponse(_record_response(record))
+    return JSONResponse(_record_response(record, app_state))
+
+
+@router.post("/refresh")
+async def refresh_notion_analysis(*, request: Request) -> JSONResponse:
+    app_state = AppState(request)
+    body = await parse_request(request, cls=RefreshNotionAnalysisRequest)
+    request_id = _refresh_request_id(body.ephemeral_run_id)
+    start_body = _refresh_start_body(body)
+    _load_registry(app_state)
+
+    record = _records_by_request_id.get(request_id)
+    if record is None:
+        notebook_path = _write_refresh_notebook(app_state, body, request_id)
+        session_id = str(_session_id(request_id))
+        record = AnalysisRecord(
+            request_id=request_id,
+            discussion_id=start_body.discussion_id,
+            session_id=session_id,
+            notebook_path=notebook_path,
+            trail_url=_record_trail_url(app_state, notebook_path, session_id, str(request.base_url)),
+            status="New",
+            headline=start_body.headline,
+            source_url=start_body.source_url,
+            created_at=start_body.created_at,
+            source=start_body.source,
+            output_mode=_output_mode(start_body.output_mode),
+            theme=start_body.theme,
+            data_snapshots=[],
+        )
+        _records_by_request_id[record.request_id] = record
+        _records_by_discussion_id[record.discussion_id] = record.request_id
+        _save_registry(app_state)
+    else:
+        _refresh_trail_url(app_state, record, str(request.base_url))
+
+    if record.status != "Analyzing":
+        record.status = "Analyzing"
+        record.error = None
+        _save_registry(app_state)
+
+    if record.request_id not in _running_tasks:
+        _running_tasks[record.request_id] = asyncio.create_task(
+            _run_analysis(
+                app_state,
+                record,
+                start_body,
+                new_chat=True,
+                allow_resume_session=False,
+                checkpoint_completion=False,
+            )
+        )
+
+    return JSONResponse(_record_response(record, app_state))
 
 
 @router.get("/chart/{request_id}/{filename:path}")
@@ -3039,23 +3736,59 @@ async def notion_analysis_chart(*, request: Request) -> FileResponse:
     filename = request.path_params["filename"]
     record = _records_by_request_id.get(request_id)
     if record is None:
-        raise HTTPException(
-            status_code=404, detail="Analysis request not found"
+        chart_path = _chart_file_from_project_registries(
+            request_id, filename
         )
-
-    chart_dir = _chart_dir(app_state, record).resolve(strict=True)
-    try:
-        chart_path = (chart_dir / filename).resolve(strict=True)
-        chart_path.relative_to(chart_dir)
-    except (OSError, ValueError):
-        raise HTTPException(
-            status_code=404, detail="Chart not found"
-        ) from None
+        if chart_path is None:
+            raise HTTPException(
+                status_code=404, detail="Analysis request not found"
+            )
+    else:
+        chart_dir = _chart_dir(app_state, record).resolve(strict=True)
+        try:
+            chart_path = (chart_dir / filename).resolve(strict=True)
+            chart_path.relative_to(chart_dir)
+        except (OSError, ValueError):
+            raise HTTPException(
+                status_code=404, detail="Chart not found"
+            ) from None
 
     media_type = mimetypes.guess_type(chart_path.name)[0] or "image/svg+xml"
     return FileResponse(
         chart_path,
         media_type=media_type,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@router.get("/snapshot/{request_id}/{filename:path}")
+async def notion_analysis_snapshot(*, request: Request) -> FileResponse:
+    app_state = AppState(request)
+    _load_registry(app_state)
+    request_id = request.path_params["request_id"]
+    filename = request.path_params["filename"]
+    record = _records_by_request_id.get(request_id)
+    if record is None:
+        snapshot_path = _snapshot_file_from_project_registries(
+            request_id, filename
+        )
+        if snapshot_path is None:
+            raise HTTPException(
+                status_code=404, detail="Analysis request not found"
+            )
+    else:
+        snapshot_dir = _snapshot_dir(app_state, record).resolve(strict=True)
+        try:
+            snapshot_path = (snapshot_dir / filename).resolve(strict=True)
+            snapshot_path.relative_to(snapshot_dir)
+        except (OSError, ValueError):
+            raise HTTPException(
+                status_code=404, detail="Snapshot not found"
+            ) from None
+
+    return FileResponse(
+        snapshot_path,
+        media_type="application/json",
         headers={"Cache-Control": "public, max-age=86400"},
     )
 
@@ -3073,8 +3806,9 @@ async def notion_analysis_status(*, request: Request) -> JSONResponse:
         )
     _refresh_trail_url(app_state, record, str(request.base_url))
     _ensure_session(app_state, record)
+    await _recover_completed_record_from_trace(app_state, record)
     _mark_stale_analysis_failed(app_state, record)
     if record.status == "Done":
         _persist_record_completion_artifacts(app_state, record)
         _save_registry(app_state)
-    return JSONResponse(_record_response(record))
+    return JSONResponse(_record_response(record, app_state))

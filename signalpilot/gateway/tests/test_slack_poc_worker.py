@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
 import os
 import time
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs
 
@@ -12,14 +14,17 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from gateway.analysis_delivery import DeliveryResult
+from gateway.db.models import SlackInstallation, SlackInstallationConfig
 from gateway.slack_poc import worker as worker_module
+from gateway.slack_poc.progress import COMPLETING_PROGRESS_TEXT, INITIAL_PROGRESS_TEXT
 from gateway.slack_poc.worker import (
     SlackApiClient,
     SlackPoCConfig,
     SlackPoCWorker,
     SlackRequest,
     _apply_local_runtime_defaults,
-    _final_slack_text,
+    _EventDeduper,
     _remove_bot_mention,
     create_http_app,
 )
@@ -29,25 +34,45 @@ def test_remove_bot_mention_removes_configured_mention_and_fallback_mentions() -
     assert _remove_bot_mention("<@U123> analyze revenue <@U999>", "U123") == "analyze revenue"
 
 
-def test_final_slack_text_includes_answer_trail_confidence_without_chart_links() -> None:
-    text = _final_slack_text(
-        {
-            "status": "Done",
-            "notionComment": "**Revenue grew** in Q2.\nCosts stayed flat.",
-            "confidenceScore": 0.83,
-            "notionCharts": [{"title": "Revenue trend", "url": "https://app.test/chart.png"}],
-        },
-        "https://app.test/projects?file=analysis.py",
+def test_event_deduper_bounds_size_and_expires_old_events() -> None:
+    deduper = _EventDeduper(max_size=2, ttl_seconds=10)
+
+    assert deduper.add("event-1", now=100)
+    assert not deduper.add("event-1", now=101)
+    assert deduper.add("event-2", now=102)
+    assert deduper.add("event-3", now=103)
+    assert len(deduper) == 2
+    assert deduper.add("event-1", now=104)
+
+    expiring = _EventDeduper(max_size=10, ttl_seconds=5)
+    assert expiring.add("event-1", now=100)
+    assert expiring.add("event-1", now=106)
+
+
+@pytest.mark.asyncio
+async def test_run_http_server_defaults_to_loopback_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeServer:
+        def __init__(self, config):
+            captured["host"] = config.host
+
+        async def serve(self) -> None:
+            captured["served"] = True
+
+    monkeypatch.delenv("SLACK_POC_HTTP_HOST", raising=False)
+    monkeypatch.setattr(worker_module.uvicorn, "Server", FakeServer)
+
+    await worker_module.run_http_server(
+        SlackPoCConfig(
+            bot_token="xoxb-test",
+            app_token="xapp-test",
+            signing_secret="test-secret",
+            bot_user_id="UBOT",
+        )
     )
 
-    assert "*SignalPilot analysis complete*" in text
-    assert "*Revenue grew* in Q2" in text
-    assert "**Revenue grew**" not in text
-    assert "*Confidence:* 0.83" in text
-    assert "<https://app.test/projects?file=analysis.py|Open authenticated notebook>" in text
-    assert "*Notebook trail:* https://" not in text
-    assert "https://app.test/chart.png" not in text
-    assert "*Charts:*" not in text
+    assert captured == {"host": worker_module.SLACK_POC_HTTP_DEFAULT_HOST, "served": True}
 
 
 @pytest.mark.asyncio
@@ -125,6 +150,57 @@ async def test_slack_read_methods_use_form_encoded_payloads() -> None:
         await slack.aclose()
 
 
+@pytest.mark.asyncio
+async def test_slack_update_message_uses_chat_update() -> None:
+    calls: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if request.url.path.endswith("/chat.update"):
+            body = json.loads(request.content.decode("utf-8"))
+            assert body["channel"] == "C1"
+            assert body["ts"] == "2.0"
+            assert body["text"] == "Querying database..."
+            assert body["mrkdwn"] is True
+            return httpx.Response(200, json={"ok": True})
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    slack = SlackApiClient("xoxb-test", "xapp-test", http_client=client)
+    try:
+        await slack.update_message(channel="C1", ts="2.0", text="Querying database...")
+    finally:
+        await slack.aclose()
+
+    assert [call.url.path for call in calls] == ["/api/chat.update"]
+
+
+@pytest.mark.asyncio
+async def test_slack_reactions_use_reactions_api_and_ignore_duplicate_remove_absence() -> None:
+    calls: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        body = json.loads(request.content.decode("utf-8"))
+        if request.url.path.endswith("/reactions.add"):
+            assert body == {"channel": "C1", "timestamp": "1.0", "name": "eyes"}
+            return httpx.Response(200, json={"ok": False, "error": "already_reacted"})
+        if request.url.path.endswith("/reactions.remove"):
+            assert body == {"channel": "C1", "timestamp": "1.0", "name": "eyes"}
+            return httpx.Response(200, json={"ok": False, "error": "no_reaction"})
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    slack = SlackApiClient("xoxb-test", "xapp-test", http_client=client)
+    try:
+        await slack.add_reaction(channel="C1", timestamp="1.0", name="eyes")
+        await slack.remove_reaction(channel="C1", timestamp="1.0", name="eyes")
+    finally:
+        await slack.aclose()
+
+    assert [call.url.path for call in calls] == ["/api/reactions.add", "/api/reactions.remove"]
+
+
 def test_cloud_mode_does_not_apply_local_notebook_direct_url(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
     monkeypatch.delenv("SP_NOTEBOOK_DIRECT_URL", raising=False)
@@ -165,6 +241,9 @@ async def test_worker_uses_notion_installation_user_when_user_id_unset(monkeypat
 @pytest.mark.asyncio
 async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[str] = []
+    progress_seen = asyncio.Event()
+    slack_events: list[tuple[str, str]] = []
+    render_api_keys: list[str | None] = []
 
     class SessionContext:
         async def __aenter__(self):
@@ -225,7 +304,8 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
     async def poll_analysis(*args, **kwargs):
         events.append("poll")
         assert events.index("db_exit") < events.index("start")
-        return {"status": "Done", "notionComment": "Done", "confidenceScore": 1.0}
+        await asyncio.wait_for(progress_seen.wait(), timeout=1)
+        return {"status": "Done", "notionComment": "Done", "confidenceScore": "high"}
 
     monkeypatch.setattr(worker_module.notebook_analysis, "resolve_analysis_route_for_defaults", resolve_route)
     monkeypatch.setattr(worker_module, "ensure_analysis_notebook_session", ensure_session)
@@ -236,8 +316,42 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
     monkeypatch.setattr(worker_module.notebook_analysis, "_public_signalpilot_url", lambda url, runtime: url)
     monkeypatch.setattr(worker_module.notebook_analysis, "_with_public_chart_urls", lambda status, runtime: status)
 
+    async def delivery_api_key_for_user(*args, **kwargs):
+        assert args == ("db",)
+        assert kwargs == {"org_id": "org-1", "user_id": "user-1"}
+        return "sk-ant-user"
+
+    async def render_delivery(packet, *, api_key=None, renderer=None):
+        del packet, renderer
+        render_api_keys.append(api_key)
+        return DeliveryResult(
+            summary="Done",
+            slack_message="- Done",
+            notion_comment="- Done",
+            final_answer="- Done",
+            confidence_score="high",
+        )
+
+    monkeypatch.setattr(worker_module, "delivery_api_key_for_user", delivery_api_key_for_user)
+    monkeypatch.setattr(worker_module, "render_delivery", render_delivery)
+
     slack = AsyncMock(spec=SlackApiClient)
     slack.thread_messages.return_value = []
+    slack.add_reaction.return_value = None
+    slack.remove_reaction.return_value = None
+
+    async def post_message(**kwargs):
+        text = kwargs["text"]
+        slack_events.append(("post", text))
+        if text == INITIAL_PROGRESS_TEXT:
+            return "progress-ts"
+        return f"ts-{len(slack_events)}"
+
+    async def update_message(**kwargs):
+        slack_events.append(("update", kwargs["text"]))
+
+    slack.post_message.side_effect = post_message
+    slack.update_message.side_effect = update_message
     worker = SlackPoCWorker(
         SlackPoCConfig(
             bot_token="xoxb-test",
@@ -256,6 +370,18 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
         return {"requestId": "req-1", "trailUrl": "https://app.test/notebook/session-1"}
 
     monkeypatch.setattr(worker, "_start_analysis", start_analysis)
+
+    async def run_progress_reporter(*, stop_event, thread_id, source_prompt, channel_id, message_ts, user_id):
+        assert thread_id == "session-slack-req-1"
+        assert source_prompt == "analyze revenue"
+        assert channel_id == "C1"
+        assert message_ts == "progress-ts"
+        assert user_id == "user-1"
+        await slack.update_message(channel=channel_id, ts=message_ts, text="Querying database...")
+        progress_seen.set()
+        await stop_event.wait()
+
+    monkeypatch.setattr(worker, "_run_progress_reporter", run_progress_reporter)
 
     await worker._process_request(
         SlackRequest(
@@ -284,8 +410,61 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
         "db_enter",
         "update",
         "db_exit",
+        "db_enter",
+        "db_exit",
     ]
-    assert slack.post_message.await_count == 2
+    assert slack_events[0] == ("post", INITIAL_PROGRESS_TEXT)
+    assert ("update", "Querying database...") in slack_events[1:]
+    assert ("update", COMPLETING_PROGRESS_TEXT) in slack_events[1:]
+    assert slack_events[-1][0] == "update"
+    assert "*Analysis complete*" in slack_events[-1][1]
+    assert slack.post_message.await_count == 1
+    assert render_api_keys == ["sk-ant-user"]
+    slack.add_reaction.assert_any_await(channel="C1", timestamp="1.0", name="eyes")
+    slack.add_reaction.assert_any_await(channel="C1", timestamp="1.0", name="white_check_mark")
+    slack.remove_reaction.assert_any_await(channel="C1", timestamp="1.0", name="eyes")
+    slack.remove_reaction.assert_any_await(channel="C1", timestamp="1.0", name="x")
+
+
+@pytest.mark.asyncio
+async def test_worker_adds_error_reaction_when_analysis_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    slack.post_message.return_value = "progress-ts"
+    slack.add_reaction.return_value = None
+    slack.remove_reaction.return_value = None
+
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", org_id="org-1", user_id="user-1"),
+        slack,
+        AsyncMock(),
+    )
+
+    async def fail_previous_messages(_request):
+        raise RuntimeError("notebook auth missing")
+
+    monkeypatch.setattr(worker, "_previous_thread_messages", fail_previous_messages)
+
+    await worker._process_request(
+        SlackRequest(
+            event_id="Ev1",
+            team_id="T1",
+            channel_id="C1",
+            user_id="U1",
+            text="analyze revenue",
+            event_ts="1.0",
+            thread_ts="1.0",
+            source_url="https://slack.test/archives/C1/p10",
+        )
+    )
+
+    slack.add_reaction.assert_any_await(channel="C1", timestamp="1.0", name="eyes")
+    slack.add_reaction.assert_any_await(channel="C1", timestamp="1.0", name="x")
+    added_reactions = [call.kwargs["name"] for call in slack.add_reaction.await_args_list]
+    assert "white_check_mark" not in added_reactions
+    slack.remove_reaction.assert_any_await(channel="C1", timestamp="1.0", name="eyes")
+    slack.remove_reaction.assert_any_await(channel="C1", timestamp="1.0", name="white_check_mark")
+    slack.update_message.assert_awaited_once()
+    assert "could not complete the analysis" in slack.update_message.call_args.kwargs["text"]
 
 
 @pytest.mark.asyncio
@@ -325,9 +504,7 @@ async def test_worker_uploads_chart_images_as_slack_thread_files(monkeypatch: py
         AsyncMock(),
     )
 
-    slack.fetch_bytes.assert_awaited_once_with(
-        "http://notebook.test/api/notion-analysis/chart/notion-1/chart.png"
-    )
+    slack.fetch_bytes.assert_awaited_once_with("http://notebook.test/api/notion-analysis/chart/notion-1/chart.png")
     slack.upload_file.assert_awaited_once_with(
         channel="C1",
         thread_ts="1.0",
@@ -336,6 +513,50 @@ async def test_worker_uploads_chart_images_as_slack_thread_files(monkeypatch: py
         content=b"png-bytes",
         content_type="image/png",
     )
+
+
+@pytest.mark.asyncio
+async def test_worker_omits_placeholder_chart_file_titles(monkeypatch: pytest.MonkeyPatch) -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    slack.fetch_bytes.return_value = (b"png-bytes", "image/png")
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT"),
+        slack,
+        AsyncMock(),
+    )
+
+    monkeypatch.setattr(
+        "gateway.slack_poc.worker.notebook_analysis._internal_signalpilot_url",
+        lambda url, runtime: f"http://notebook.test{url}",
+    )
+
+    await worker._post_chart_attachments(
+        SlackRequest(
+            event_id="Ev1",
+            team_id="T1",
+            channel_id="C1",
+            user_id="U1",
+            text="analyze revenue",
+            event_ts="1.0",
+            thread_ts="1.0",
+            source_url="slack://channel/C1/p10",
+        ),
+        {
+            "notionCharts": [
+                {
+                    "title": "Notebook image 1",
+                    "fileName": "notebook-image-1.png",
+                    "url": "/api/notion-analysis/chart/notion-1/image-1.png",
+                }
+            ]
+        },
+        AsyncMock(),
+    )
+
+    slack.upload_file.assert_awaited_once()
+    kwargs = slack.upload_file.await_args.kwargs
+    assert kwargs["title"] is None
+    assert kwargs["filename"] == "chart-1.png"
     slack.post_message.assert_not_called()
 
 
@@ -395,6 +616,160 @@ def test_http_events_rejects_invalid_signature() -> None:
 
 
 @pytest.mark.asyncio
+async def test_self_serve_dispatch_uses_stored_installation(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime.now(UTC)
+    install = SlackInstallation(
+        id="slack-install-1",
+        org_id="org-1",
+        user_id="user-1",
+        team_id="T1",
+        team_name="Demo",
+        app_id="A1",
+        bot_user_id="UBOT",
+        bot_access_token_enc=b"encrypted",
+        scopes=["app_mentions:read", "chat:write"],
+        status="active",
+        created_at=now,
+        updated_at=now,
+    )
+    config = SlackInstallationConfig(
+        installation_id="slack-install-1",
+        enabled=True,
+        default_project_id="project-1",
+        default_branch="main",
+        analysis_branch_mode="per_request",
+        allowed_channel_ids=["C1"],
+    )
+    captured: list[SlackPoCConfig] = []
+
+    class Factory:
+        def __call__(self):
+            return self
+
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    async def records(_db, team_id: str):
+        assert team_id == "T1"
+        return [(install, config, "installed-bot-token")]
+
+    async def handle(self, payload):
+        captured.append(self.config)
+        assert payload["event"]["text"] == "<@UBOT> analyze revenue"
+
+    async def drain(self):
+        return None
+
+    monkeypatch.setattr(worker_module, "get_session_factory", lambda: Factory())
+    monkeypatch.setattr(worker_module.slack_store, "list_active_installation_records_for_team", records)
+    monkeypatch.setattr(SlackPoCWorker, "handle_events_api_payload", handle)
+    monkeypatch.setattr(SlackPoCWorker, "drain", drain)
+
+    await worker_module._dispatch_self_serve_payload(
+        {
+            "event_id": "Ev1",
+            "team_id": "T1",
+            "event": {
+                "type": "app_mention",
+                "team": "T1",
+                "channel": "C1",
+                "user": "U1",
+                "text": "<@UBOT> analyze revenue",
+                "ts": "1.0",
+            },
+        },
+        SlackPoCConfig(signing_secret="secret", ack_text="I'm on it."),
+    )
+
+    assert len(captured) == 1
+    assert captured[0].bot_token == "installed-bot-token"
+    assert captured[0].org_id == "org-1"
+    assert captured[0].user_id == "user-1"
+    assert captured[0].bot_user_id == "UBOT"
+    assert captured[0].default_project_id == "project-1"
+    assert captured[0].allowed_channel_ids == frozenset({"C1"})
+
+
+@pytest.mark.asyncio
+async def test_self_serve_dispatch_rejects_ambiguous_installations(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime.now(UTC)
+    install_1 = SlackInstallation(
+        id="slack-install-1",
+        org_id="org-1",
+        user_id="user-1",
+        team_id="T1",
+        app_id="A1",
+        bot_user_id="UBOT1",
+        bot_access_token_enc=b"encrypted",
+        scopes=[],
+        status="active",
+        created_at=now,
+        updated_at=now,
+    )
+    install_2 = SlackInstallation(
+        id="slack-install-2",
+        org_id="org-2",
+        user_id="user-2",
+        team_id="T1",
+        app_id="A1",
+        bot_user_id="UBOT2",
+        bot_access_token_enc=b"encrypted",
+        scopes=[],
+        status="active",
+        created_at=now,
+        updated_at=now,
+    )
+    config = SlackInstallationConfig(
+        installation_id="slack-install-1",
+        enabled=True,
+        default_project_id="project-1",
+        default_branch="main",
+        analysis_branch_mode="per_request",
+        allowed_channel_ids=[],
+    )
+
+    class Factory:
+        def __call__(self):
+            return self
+
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    async def records(_db, team_id: str):
+        assert team_id == "T1"
+        return [(install_1, config, "bot-token-1"), (install_2, config, "bot-token-2")]
+
+    async def fail_handle(self, payload):
+        raise AssertionError("ambiguous install should not dispatch")
+
+    monkeypatch.setattr(worker_module, "get_session_factory", lambda: Factory())
+    monkeypatch.setattr(worker_module.slack_store, "list_active_installation_records_for_team", records)
+    monkeypatch.setattr(SlackPoCWorker, "handle_events_api_payload", fail_handle)
+
+    await worker_module._dispatch_self_serve_payload(
+        {
+            "event_id": "Ev1",
+            "team_id": "T1",
+            "event": {
+                "type": "app_mention",
+                "team": "T1",
+                "channel": "C1",
+                "user": "U1",
+                "text": "<@UBOT> analyze revenue",
+                "ts": "1.0",
+            },
+        },
+        SlackPoCConfig(signing_secret="secret"),
+    )
+
+
+@pytest.mark.asyncio
 async def test_worker_ignores_non_mention_channel_message() -> None:
     slack = AsyncMock(spec=SlackApiClient)
     worker = SlackPoCWorker(
@@ -446,6 +821,74 @@ async def test_worker_posts_empty_prompt_guidance_for_bare_mention() -> None:
 
     slack.post_message.assert_called_once()
     assert "Ask me a data question" in slack.post_message.call_args.kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_worker_preflight_direct_greeting_does_not_spawn_analysis(monkeypatch: pytest.MonkeyPatch) -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    slack.permalink.return_value = "https://slack.test/archives/C1/p1000"
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT"),
+        slack,
+        AsyncMock(),
+    )
+
+    async def fail_process_request(_request):
+        raise AssertionError("greeting should not spawn analysis")
+
+    monkeypatch.setattr(worker, "_process_request", fail_process_request)
+
+    await worker.handle_events_api_payload(
+        {
+            "event_id": "Ev1",
+            "team_id": "T1",
+            "event": {
+                "type": "app_mention",
+                "channel": "C1",
+                "user": "U1",
+                "text": "<@UBOT> hi",
+                "ts": "1.0",
+            },
+        }
+    )
+    await worker.drain()
+
+    slack.post_message.assert_awaited_once()
+    assert "specific data question" in slack.post_message.call_args.kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_worker_preflight_ambiguous_data_prompt_does_not_spawn_analysis(monkeypatch: pytest.MonkeyPatch) -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    slack.permalink.return_value = "https://slack.test/archives/C1/p1000"
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT"),
+        slack,
+        AsyncMock(),
+    )
+
+    async def fail_process_request(_request):
+        raise AssertionError("ambiguous prompt should not spawn analysis")
+
+    monkeypatch.setattr(worker, "_process_request", fail_process_request)
+
+    await worker.handle_events_api_payload(
+        {
+            "event_id": "Ev1",
+            "team_id": "T1",
+            "event": {
+                "type": "app_mention",
+                "channel": "C1",
+                "user": "U1",
+                "text": "<@UBOT> revenue",
+                "ts": "1.0",
+            },
+        }
+    )
+    await worker.drain()
+
+    slack.post_message.assert_awaited_once()
+    assert "fresh, specific analysis request" in slack.post_message.call_args.kwargs["text"]
 
 
 @pytest.mark.asyncio

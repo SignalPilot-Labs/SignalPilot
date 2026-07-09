@@ -107,55 +107,8 @@ async def route_comment_event(
                 installation.org_id,
             )
             continue
-        belongs = await notion_client.page_belongs_to_scope(
-            access_token,
-            str(page_id),
-            parent_page_id=config.parent_page_id,
-            trigger_page_id=config.trigger_page_id,
-            requests_data_source_id=config.requests_data_source_id,
-            requests_database_page_id=config.requests_database_page_id,
-        )
-        if belongs:
-            matched.append(RoutedNotionInstallation(installation, config, access_token))
-        else:
-            logger.info(
-                "Notion webhook route skipped candidate: workspace_id=%s page_id=%s installation_id=%s "
-                "org_id=%s reason=page_outside_scope",
-                workspace_id,
-                page_id,
-                installation.id,
-                installation.org_id,
-            )
+        matched.append(RoutedNotionInstallation(installation, config, access_token))
 
     if len(matched) > 1:
-        matched_by_mention = await _filter_by_trigger_page_mention(matched, payload)
-        if len(matched_by_mention) == 1:
-            return matched_by_mention[0]
-        if len(matched_by_mention) > 1:
-            raise AmbiguousNotionInstallation(
-                f"Notion event mentioned trigger pages for {len(matched_by_mention)} active installations"
-            )
         raise AmbiguousNotionInstallation(f"Notion event matched {len(matched)} active installations")
     return matched[0] if matched else None
-
-
-async def _filter_by_trigger_page_mention(
-    candidates: list[RoutedNotionInstallation],
-    payload: dict,
-) -> list[RoutedNotionInstallation]:
-    comment_id = (payload.get("entity") or {}).get("id")
-    page_id = (payload.get("data") or {}).get("page_id")
-    parent_block_id = ((payload.get("data") or {}).get("parent") or {}).get("id")
-    if not comment_id or not page_id:
-        return []
-
-    result: list[RoutedNotionInstallation] = []
-    for candidate in candidates:
-        block_id = parent_block_id or page_id
-        comments = await notion_client.list_comments(candidate.access_token, str(block_id))
-        comment = next((item for item in comments if item.get("id") == comment_id), None)
-        if comment is None:
-            comment = await notion_client.retrieve_comment(candidate.access_token, str(comment_id))
-        if notion_client.comment_has_page_mention(comment, candidate.config.trigger_page_id or ""):
-            result.append(candidate)
-    return result

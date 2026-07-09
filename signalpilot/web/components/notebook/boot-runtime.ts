@@ -7,6 +7,7 @@ import {
   isNotionTrailParams,
   notionRequestIdFromSessionId,
 } from "@/core/notion/trail";
+import { isGeneratedAnalysisTrailNotebook } from "./analysis-trails";
 import type { NotebookConfig } from "./notebook-context";
 
 export type BootPhase = "health" | "notion" | "syncing" | "sessions" | "ready";
@@ -269,19 +270,45 @@ export async function bootRuntime(
 
   // ── Phase 5: Fetch notebook static data (file content + session) ──
   const staticData: NotebookStaticData = { filename: config.file, gatewayToken: bootToken ?? "" };
+  const isGeneratedAnalysisTrail = isGeneratedAnalysisTrailNotebook({
+    project: config.project,
+    branch: config.branch,
+    file: config.file,
+  });
 
   if (config.file) {
     try {
-      const detailsResp = await fetch(`${runtimeUrl}/api/files/file_details`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ path: config.file }),
-        signal,
-      });
-      if (detailsResp.ok) {
-        const details = (await detailsResp.json()) as { contents?: string };
-        if (details.contents) {
-          staticData.code = details.contents;
+      if (isGeneratedAnalysisTrail) {
+        const staticResp = await fetch(
+          `${runtimeUrl}/api/notebook/static?file=${encodeURIComponent(config.file)}`,
+          { headers, signal },
+        );
+        if (staticResp.ok) {
+          const payload = (await staticResp.json()) as {
+            code?: string;
+            filename?: string;
+            session?: unknown;
+            notebook?: unknown;
+          };
+          staticData.code = payload.code;
+          staticData.filename = payload.filename || config.file;
+          staticData.session = payload.session;
+          staticData.notebook = payload.notebook;
+        }
+      }
+
+      if (!staticData.code) {
+        const detailsResp = await fetch(`${runtimeUrl}/api/files/file_details`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ path: config.file }),
+          signal,
+        });
+        if (detailsResp.ok) {
+          const details = (await detailsResp.json()) as { contents?: string };
+          if (details.contents) {
+            staticData.code = details.contents;
+          }
         }
       }
     } catch (err) {

@@ -8,6 +8,9 @@
 services:
   # ─── Notebook Server (replaces K8s pods) ─────────────────────────
   notebook:
+    env_file:
+      - path: ./.slack.local.env
+        required: false
     build:
       context: ./signalpilot/notebook-server
       dockerfile: Dockerfile
@@ -21,8 +24,7 @@ services:
       SP_GATEWAY_INTERNAL_URL: http://gateway:3300
       SP_WEB_URL: ${SP_WEB_URL:-http://localhost:3200}
       CLAUDE_CONFIG_DIR: ${CLAUDE_CONFIG_DIR:-/home/notebook/.claude}
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      SIGNALPILOT_ANALYSIS_AGENT_MODEL: ${SIGNALPILOT_ANALYSIS_AGENT_MODEL:-claude-sonnet-4-5-20250929}
     volumes:
       - signalpilot-workspace:/workspace
       - signalpilot-shared:/shared:ro
@@ -37,11 +39,15 @@ services:
 
   # ─── Override gateway to use local notebook instead of K8s ───────
   gateway:
+    env_file:
+      - path: ./.slack.local.env
+        required: false
     environment:
       SP_NOTEBOOK_UPSTREAM_MODE: direct
       SP_NOTEBOOK_DIRECT_URL: http://notebook:2718
       SP_K8S_HOST: ""
       KUBECONFIG: ""
+      SIGNALPILOT_DELIVERY_MODEL: ${SIGNALPILOT_DELIVERY_MODEL:-claude-sonnet-4-5-20250929}
     depends_on:
       db:
         condition: service_healthy

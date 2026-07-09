@@ -10,9 +10,9 @@ import uuid
 
 from fastapi import APIRouter, HTTPException
 
-from ..models.reports import Report, ReportCreate, ReportSummary
+from ..models.reports import Report, ReportCreate, ReportSummary, ReportUpdate
 from ..security.scope_guard import RequireScope
-from ..store.reports import ReportSizeExceeded
+from ..store.reports import ReportNotFound, ReportSizeExceeded
 from .deps import StoreD
 
 router = APIRouter(prefix="/api")
@@ -38,6 +38,17 @@ async def create_report(payload: ReportCreate, store: StoreD):
     """Create a new HTML report (admin only)."""
     try:
         return await store.insert_report(payload, user_id=store.user_id)
+    except ReportSizeExceeded as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+
+
+@router.patch("/reports/{report_id}", response_model=Report, dependencies=[RequireScope("admin")])
+async def update_report(report_id: uuid.UUID, payload: ReportUpdate, store: StoreD):
+    """Update rendered HTML report content or associated data JSON."""
+    try:
+        return await store.update_report_html(str(report_id), payload)
+    except ReportNotFound as exc:
+        raise HTTPException(status_code=404, detail=f"Report '{report_id}' not found") from exc
     except ReportSizeExceeded as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
 

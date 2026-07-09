@@ -32,6 +32,7 @@ from .connections import (
     SSHTunnelConfig,
     SSLConfig,
 )
+from .deliverable_theme import DeliverableTheme, ThemeColors
 from .knowledge import (
     KnowledgeCategory,
     KnowledgeDoc,
@@ -83,6 +84,7 @@ __all__ = [
     "ConnectionInfo",
     "ConnectionUpdate",
     "DBType",
+    "DeliverableTheme",
     "ExecuteRequest",
     "ExecuteResult",
     "GatewaySettings",
@@ -101,6 +103,7 @@ __all__ = [
     "SandboxCreate",
     "SandboxInfo",
     "SandboxProvider",
+    "ThemeColors",
     "KnowledgeCategory",
     "KnowledgeDoc",
     "KnowledgeDocCreate",

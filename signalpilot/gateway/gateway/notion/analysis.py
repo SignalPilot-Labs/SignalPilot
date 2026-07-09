@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import logging
 import os
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -876,6 +878,17 @@ def _existing_report_payload(report: Any) -> dict[str, Any]:
     }
 
 
+def _freeze_deliverable_context(context: Any) -> Any:
+    return SimpleNamespace(
+        project_id=getattr(context, "project_id", None),
+        branch=getattr(context, "branch", None),
+        base_notebook_code=getattr(context, "base_notebook_code", None),
+        base_chat_events=getattr(context, "base_chat_events", None),
+        base_final_packet=getattr(context, "base_final_packet", None),
+        base_notebook_path=getattr(context, "base_notebook_path", None),
+    )
+
+
 def _packet_from_status(prompt: str, status: dict[str, Any], trail_url: str = "") -> DeliveryPacket:
     return load_delivery_packet_from_events(
         [],
@@ -1310,6 +1323,38 @@ async def _comment_deliverable_followup(
     )
 
 
+async def _release_db_session(db: AsyncSession) -> None:
+    """End an idle transaction before long external work can outlive its DB connection."""
+    rollback = getattr(db, "rollback", None)
+    if rollback is None:
+        return
+    try:
+        result = rollback()
+        if inspect.isawaitable(result):
+            await result
+    except Exception:
+        logger.debug("Could not release DB session before external Notion deliverable work", exc_info=True)
+
+
+async def _mark_deliverable_update_failed_best_effort(
+    db: AsyncSession,
+    *,
+    update_id: str | None,
+    deliverable_id: str,
+    error: str,
+) -> None:
+    try:
+        await notion_store.mark_deliverable_update_failed(
+            db,
+            update_id=update_id,
+            deliverable_id=deliverable_id,
+            error=error,
+        )
+    except Exception:
+        logger.warning("Could not mark Notion deliverable update failed", exc_info=True)
+        await _release_db_session(db)
+
+
 def _followup_refresh_route(context: Any, ephemeral_run_id: str) -> AnalysisRoute:
     project_id = _text(getattr(context, "project_id", None))
     branch = _text(getattr(context, "branch", None)) or "main"
@@ -1351,7 +1396,8 @@ async def _load_refresh_delivery_packet(
 async def _run_ephemeral_deliverable_refresh(
     *,
     db: AsyncSession,
-    routed: RoutedNotionInstallation,
+    org_id: str,
+    user_id: str | None,
     context: Any,
     deliverable_id: str,
     ephemeral_run_id: str,
@@ -1363,18 +1409,19 @@ async def _run_ephemeral_deliverable_refresh(
         raise RuntimeError("Refresh context is missing project_id; rebuild the deliverable once before refreshing.")
     runtime = await ensure_analysis_notebook_session(
         db,
-        org_id=routed.installation.org_id,
+        org_id=org_id,
         source=route.source,
         request_id=route.request_id,
         project_id=route.project_id,
         branch=route.branch,
-        credential_user_id=routed.installation.user_id,
+        credential_user_id=user_id,
     )
+    await _release_db_session(db)
     start = await _call_notebook(
         runtime,
         "/api/notion-analysis/refresh",
-        routed.installation.org_id,
-        routed.installation.user_id,
+        org_id,
+        user_id,
         {
             "method": "POST",
             "json": {
@@ -1397,8 +1444,8 @@ async def _run_ephemeral_deliverable_refresh(
     status = await _poll_analysis(
         str(start.get("requestId") or ephemeral_run_id),
         runtime,
-        routed.installation.org_id,
-        routed.installation.user_id,
+        org_id,
+        user_id,
         route,
     )
     if status.get("status") != "Done" or status.get("error"):
@@ -1407,13 +1454,14 @@ async def _run_ephemeral_deliverable_refresh(
     trail_url = _public_signalpilot_url(public_status.get("trailUrl") or "", runtime)
     packet = await _load_refresh_delivery_packet(
         db,
-        org_id=routed.installation.org_id,
-        user_id=routed.installation.user_id or route.analysis_user_id,
+        org_id=org_id,
+        user_id=user_id or route.analysis_user_id,
         thread_id=f"session-{ephemeral_run_id}",
         prompt=data_instruction,
         status=public_status,
         trail_url=trail_url,
     )
+    await _release_db_session(db)
     return packet, runtime
 
 
@@ -1426,6 +1474,13 @@ async def _process_deliverable_followup(
     discussion_id: str,
     prompt: str,
 ) -> NotionCommentProcessResult:
+    org_id = routed.installation.org_id
+    user_id = routed.installation.user_id
+    deliverable_id = deliverable.id
+    report_id = deliverable.report_id
+    embed_block_id = deliverable.embed_block_id
+    file_upload_id = getattr(deliverable, "file_upload_id", None)
+
     plan = plan_deliverable_followup(prompt)
     if plan.mode == "clarify":
         await _comment_deliverable_followup(
@@ -1437,8 +1492,8 @@ async def _process_deliverable_followup(
 
     report = await reports_store.get_report(
         db,
-        org_id=routed.installation.org_id,
-        report_id=deliverable.report_id,
+        org_id=org_id,
+        report_id=report_id,
     )
     if report is None:
         await _comment_deliverable_followup(
@@ -1447,14 +1502,14 @@ async def _process_deliverable_followup(
             "I found this dashboard/report block, but its saved SignalPilot report is missing.",
         )
         return NotionCommentProcessResult(status="processed")
-    if not deliverable.embed_block_id:
+    if not embed_block_id:
         await _comment_deliverable_followup(
             token,
             discussion_id,
             "I can edit saved reports, but this older deliverable does not have a replaceable Notion embed block.",
         )
         return NotionCommentProcessResult(status="processed")
-    if not getattr(deliverable, "file_upload_id", None):
+    if not file_upload_id:
         await _comment_deliverable_followup(
             token,
             discussion_id,
@@ -1466,17 +1521,19 @@ async def _process_deliverable_followup(
         )
         return NotionCommentProcessResult(status="processed")
 
-    theme = await _org_deliverable_theme(db, routed.installation.org_id)
+    existing_report = _existing_report_payload(report)
+    report_data_json = report.data_json
+    theme = await _org_deliverable_theme(db, org_id)
     ephemeral_run_id = f"notion-refresh-{uuid4().hex[:16]}" if plan.requires_ephemeral_run else None
     update = await notion_store.create_deliverable_update(
         db,
-        deliverable_id=deliverable.id,
-        org_id=routed.installation.org_id,
+        deliverable_id=deliverable_id,
+        org_id=org_id,
         mode=plan.mode,
         prompt=prompt,
         data_instruction=plan.data_instruction,
         render_instruction=plan.render_instruction,
-        old_file_upload_id=deliverable.file_upload_id,
+        old_file_upload_id=file_upload_id,
         ephemeral_run_id=ephemeral_run_id,
     )
 
@@ -1484,25 +1541,28 @@ async def _process_deliverable_followup(
         runtime: NotebookRuntime | None = None
         packet: DeliveryPacket | None = None
         if plan.requires_ephemeral_run:
-            context = await notion_store.latest_deliverable_context_snapshot(db, deliverable_id=deliverable.id)
+            context = await notion_store.latest_deliverable_context_snapshot(db, deliverable_id=deliverable_id)
             if context is None or not context.base_notebook_code:
                 message = (
                     "I can edit this dashboard/report, but refresh requires a rebuild once with "
                     "captured SignalPilot context. Rebuild it once, then refresh will be available."
                 )
-                await notion_store.mark_deliverable_update_failed(
+                await _mark_deliverable_update_failed_best_effort(
                     db,
                     update_id=update.id,
-                    deliverable_id=deliverable.id,
+                    deliverable_id=deliverable_id,
                     error=message,
                 )
                 await _comment_deliverable_followup(token, discussion_id, message)
                 return NotionCommentProcessResult(status="processed")
+            context = _freeze_deliverable_context(context)
+            await _release_db_session(db)
             packet, runtime = await _run_ephemeral_deliverable_refresh(
                 db=db,
-                routed=routed,
+                org_id=org_id,
+                user_id=user_id,
                 context=context,
-                deliverable_id=deliverable.id,
+                deliverable_id=deliverable_id,
                 ephemeral_run_id=ephemeral_run_id or f"notion-refresh-{uuid4().hex[:16]}",
                 data_instruction=plan.data_instruction,
                 theme=theme,
@@ -1517,12 +1577,13 @@ async def _process_deliverable_followup(
         )
         delivery_api_key = await delivery_api_key_for_user(
             db,
-            org_id=routed.installation.org_id,
-            user_id=routed.installation.user_id,
+            org_id=org_id,
+            user_id=user_id,
         )
+        await _release_db_session(db)
         html_result = await render_followup(
             plan.render_instruction,
-            _existing_report_payload(report),
+            existing_report,
             packet,
             "refresh_data" if plan.requires_ephemeral_run else "edit_existing",
             api_key=delivery_api_key or None,
@@ -1531,25 +1592,25 @@ async def _process_deliverable_followup(
         )
         replaced = await notion_dashboards.replace_html_deliverable(
             token,
-            embed_block_id=deliverable.embed_block_id,
+            embed_block_id=embed_block_id,
             title=html_result.title,
             html=html_result.html,
-            report_id=deliverable.report_id,
+            report_id=report_id,
         )
         await reports_store.update_report_html(
             db,
-            org_id=routed.installation.org_id,
-            report_id=deliverable.report_id,
+            org_id=org_id,
+            report_id=report_id,
             payload=ReportUpdate(
                 title=html_result.title,
                 html=html_result.html,
-                data_json=html_result.data_json if html_result.data_json is not None else report.data_json,
+                data_json=html_result.data_json if html_result.data_json is not None else report_data_json,
             ),
         )
         await notion_store.mark_deliverable_update_succeeded(
             db,
             update_id=update.id,
-            deliverable_id=deliverable.id,
+            deliverable_id=deliverable_id,
             new_file_upload_id=replaced.file_upload_id,
             html_bytes=len(html_result.html.encode("utf-8")),
         )
@@ -1564,10 +1625,11 @@ async def _process_deliverable_followup(
     except Exception as exc:
         logger.info("Could not update Notion HTML deliverable follow-up", exc_info=True)
         message = str(exc) or exc.__class__.__name__
-        await notion_store.mark_deliverable_update_failed(
+        await _release_db_session(db)
+        await _mark_deliverable_update_failed_best_effort(
             db,
             update_id=update.id,
-            deliverable_id=deliverable.id,
+            deliverable_id=deliverable_id,
             error=message,
         )
         await _comment_deliverable_followup(

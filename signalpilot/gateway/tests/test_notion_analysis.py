@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -1224,6 +1224,70 @@ async def test_patch_failure_does_not_update_report_or_success_pointers(
     assert result.status == "processed"
     assert calls == ["comment", "replace", "failed", "comment"]
     assert deliverable.file_upload_id == "file-old"
+
+
+@pytest.mark.asyncio
+async def test_followup_posts_original_failure_when_failed_status_write_loses_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+    routed = _routed_installation_for_followup()
+    deliverable = SimpleNamespace(
+        id="deliverable-1",
+        report_id="report-1",
+        embed_block_id="embed-block-1",
+        file_upload_id="file-old",
+    )
+    report = SimpleNamespace(id="report-1", kind="dashboard", title="Dashboard", html="<html>old</html>", data_json={})
+    db = MagicMock()
+    db.rollback = AsyncMock()
+
+    async def list_comments(*args, **kwargs):
+        return [{"id": "comment-1", "discussion_id": "discussion-1", "rich_text": []}]
+
+    async def create_update(*args, **kwargs):
+        return SimpleNamespace(id="update-1")
+
+    async def find_deliverable(*args, **kwargs):
+        return deliverable
+
+    async def get_report(*args, **kwargs):
+        return report
+
+    async def delivery_api_key(*args, **kwargs):
+        return ""
+
+    async def render_followup(*args, **kwargs):
+        raise TimeoutError("HTML orchestrator exceeded tool loop limit (8)")
+
+    async def mark_failed(*args, **kwargs):
+        calls.append(("failed", kwargs["error"]))
+        raise RuntimeError("connection is closed")
+
+    async def create_comment(*args, **kwargs):
+        calls.append(("comment", _rich_text_content(kwargs["rich_text"])))
+
+    monkeypatch.setattr(notion_client, "list_comments", list_comments)
+    monkeypatch.setattr(notion_client, "create_comment", create_comment)
+    monkeypatch.setattr(notion_client, "is_bot_comment", lambda _comment: False)
+    monkeypatch.setattr(notion_client, "comment_has_page_mention", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(notion_client, "extract_comment_text", lambda _comment: "make it shorter")
+    monkeypatch.setattr(notion_analysis.notion_store, "find_deliverable_by_embed_block", find_deliverable)
+    monkeypatch.setattr(notion_analysis.reports_store, "get_report", get_report)
+    monkeypatch.setattr(notion_analysis.notion_store, "create_deliverable_update", create_update)
+    monkeypatch.setattr(notion_analysis, "delivery_api_key_for_user", delivery_api_key)
+    monkeypatch.setattr(notion_analysis, "render_followup", render_followup)
+    monkeypatch.setattr(notion_analysis.notion_store, "mark_deliverable_update_failed", mark_failed)
+
+    result = await notion_analysis.process_routed_comment_event(routed, _followup_payload(), db=db)
+
+    assert result.status == "processed"
+    comments = [payload for name, payload in calls if name == "comment"]
+    assert comments[0] == "Updating this dashboard/report."
+    assert "HTML orchestrator exceeded tool loop limit (8)" in comments[-1]
+    assert "connection is closed" not in comments[-1]
+    assert ("failed", "HTML orchestrator exceeded tool loop limit (8)") in calls
+    assert db.rollback.await_count >= 2
 
 
 def test_public_signalpilot_url_rewrites_internal_notebooks_trail_to_app_origin() -> None:

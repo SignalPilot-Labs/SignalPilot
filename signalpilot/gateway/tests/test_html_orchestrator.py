@@ -504,3 +504,15 @@ def test_html_orchestrator_timeout_reads_env(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("SIGNALPILOT_ORCHESTRATOR_TIMEOUT_SECONDS", "120")
 
     assert HtmlOrchestrator(api_key="key").timeout_seconds == 120.0
+
+
+def test_html_orchestrator_tool_loop_limit_defaults_to_eight(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SIGNALPILOT_ORCHESTRATOR_TOOL_LOOP_LIMIT", raising=False)
+
+    assert HtmlOrchestrator(api_key="key").tool_loop_limit == 8
+
+
+def test_html_orchestrator_tool_loop_limit_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SIGNALPILOT_ORCHESTRATOR_TOOL_LOOP_LIMIT", "12")
+
+    assert HtmlOrchestrator(api_key="key").tool_loop_limit == 12

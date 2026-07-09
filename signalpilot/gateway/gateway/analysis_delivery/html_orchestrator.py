@@ -25,6 +25,7 @@ _ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 _ANTHROPIC_VERSION = "2023-06-01"
 _DEFAULT_TIMEOUT_SECONDS = 240.0
 _DEFAULT_MAX_TOKENS = 20_000
+_DEFAULT_TOOL_LOOP_LIMIT = 8
 _DELIVERABLE_TOOL_NAMES = {"create_dashboard", "create_report", "edit_dashboard", "edit_report"}
 _COMPONENT_LAYOUT_GUARD_ID = "sp-component-layout-guard"
 _COMPONENT_LAYOUT_GUARD = f"""<style id="{_COMPONENT_LAYOUT_GUARD_ID}">
@@ -885,6 +886,7 @@ class HtmlOrchestrator:
         self.model = (model or os.getenv("SIGNALPILOT_ORCHESTRATOR_MODEL") or DEFAULT_DELIVERY_MODEL).strip()
         self.timeout_seconds = _timeout_seconds(timeout_seconds)
         self.max_tokens = _max_tokens()
+        self.tool_loop_limit = _tool_loop_limit()
         self.api_key = api_key if api_key is not None else os.getenv("ANTHROPIC_API_KEY")
         self._http_client = http_client
         self._fetch_snapshot = fetch_snapshot
@@ -929,7 +931,7 @@ class HtmlOrchestrator:
         ]
         fetched_snapshots: dict[str, Any] = {}
         tool_choice = _tool_choice_for_payload(payload)
-        for _ in range(4):
+        for _ in range(self.tool_loop_limit):
             response = await self._anthropic_request(
                 messages,
                 allow_fetch_snapshot=packet is not None,
@@ -949,7 +951,7 @@ class HtmlOrchestrator:
                 raise ValueError("HTML orchestrator did not return a deliverable")
             messages.append({"role": "assistant", "content": content})
             messages.append({"role": "user", "content": tool_results})
-        raise TimeoutError("HTML orchestrator exceeded tool loop limit")
+        raise TimeoutError(f"HTML orchestrator exceeded tool loop limit ({self.tool_loop_limit})")
 
     async def _anthropic_request(
         self,
@@ -1168,6 +1170,16 @@ def _max_tokens() -> int:
         except ValueError:
             LOGGER.warning("Invalid SIGNALPILOT_ORCHESTRATOR_MAX_TOKENS=%r; using default", raw)
     return _DEFAULT_MAX_TOKENS
+
+
+def _tool_loop_limit() -> int:
+    raw = os.getenv("SIGNALPILOT_ORCHESTRATOR_TOOL_LOOP_LIMIT", "").strip()
+    if raw:
+        try:
+            return max(int(raw), 2)
+        except ValueError:
+            LOGGER.warning("Invalid SIGNALPILOT_ORCHESTRATOR_TOOL_LOOP_LIMIT=%r; using default", raw)
+    return _DEFAULT_TOOL_LOOP_LIMIT
 
 
 def _tool_choice_for_payload(payload: dict[str, Any]) -> str | None:

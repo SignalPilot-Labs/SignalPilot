@@ -8,8 +8,9 @@ import time
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, update as sa_update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select
+from sqlalchemy import update as sa_update
+from sqlalchemy.exc import DBAPIError, IntegrityError, InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.db.models import (
@@ -32,6 +33,31 @@ from gateway.models.notion import (
 from gateway.store.crypto import _decrypt_with_migration, _encrypt
 
 logger = logging.getLogger(__name__)
+
+
+def _looks_like_closed_connection(exc: BaseException) -> bool:
+    if isinstance(exc, DBAPIError) and getattr(exc, "connection_invalidated", False):
+        return True
+    message = str(exc).lower()
+    return (
+        "connection is closed" in message
+        or "connection was closed" in message
+        or "connection has been closed" in message
+    )
+
+
+async def _run_with_closed_connection_retry(session: AsyncSession, operation, description: str):
+    try:
+        return await operation()
+    except (InterfaceError, OperationalError, DBAPIError) as exc:
+        if not _looks_like_closed_connection(exc):
+            raise
+        logger.warning("Stale DB connection during %s; retrying once", description, exc_info=True)
+        try:
+            await session.rollback()
+        except Exception:
+            logger.debug("Rollback after stale DB connection failed", exc_info=True)
+        return await operation()
 
 
 def _normalize_notion_id(value: str | None) -> str:
@@ -468,21 +494,30 @@ async def mark_deliverable_update_succeeded(
     new_file_upload_id: str | None,
     html_bytes: int,
 ) -> NotionDeliverableUpdate | None:
-    update = await session.get(NotionDeliverableUpdate, update_id)
-    deliverable = await session.get(NotionDeliverable, deliverable_id)
-    if update is None:
-        return None
-    update.status = "succeeded"
-    update.error = None
-    update.new_file_upload_id = new_file_upload_id
-    update.html_bytes = html_bytes
-    if deliverable is not None:
+    now = datetime.now(UTC)
+
+    async def _write() -> bool:
+        result = await session.execute(
+            sa_update(NotionDeliverableUpdate)
+            .where(NotionDeliverableUpdate.id == update_id)
+            .values(
+                status="succeeded",
+                error=None,
+                new_file_upload_id=new_file_upload_id,
+                html_bytes=html_bytes,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session="fetch")
+        )
+        if not result.rowcount:
+            await session.commit()
+            return False
         values: dict[str, object | None] = {
             "latest_file_upload_id": new_file_upload_id,
             "latest_html_bytes": html_bytes,
             "status": "active",
             "error": None,
-            "updated_at": datetime.now(UTC),
+            "updated_at": now,
         }
         if new_file_upload_id:
             values["file_upload_id"] = new_file_upload_id
@@ -490,14 +525,20 @@ async def mark_deliverable_update_succeeded(
             sa_update(NotionDeliverable)
             .where(
                 NotionDeliverable.id == deliverable_id,
-                NotionDeliverable.latest_update_id == update.id,
+                NotionDeliverable.latest_update_id == update_id,
             )
             .values(**values)
-            .execution_options(synchronize_session=False)
+            .execution_options(synchronize_session="fetch")
         )
-    await session.commit()
-    await session.refresh(update)
-    return update
+        await session.commit()
+        return True
+
+    updated = await _run_with_closed_connection_retry(
+        session,
+        _write,
+        "mark Notion deliverable update succeeded",
+    )
+    return await session.get(NotionDeliverableUpdate, update_id) if updated else None
 
 
 async def mark_deliverable_update_failed(
@@ -507,32 +548,48 @@ async def mark_deliverable_update_failed(
     deliverable_id: str,
     error: str,
 ) -> NotionDeliverableUpdate | None:
-    update = await session.get(NotionDeliverableUpdate, update_id) if update_id else None
-    deliverable = await session.get(NotionDeliverable, deliverable_id)
-    if update is not None:
-        update.status = "failed"
-        update.error = error
-    if deliverable is not None and update is not None:
-        await session.execute(
-            sa_update(NotionDeliverable)
-            .where(
-                NotionDeliverable.id == deliverable_id,
-                NotionDeliverable.latest_update_id == update.id,
+    now = datetime.now(UTC)
+
+    async def _write() -> bool:
+        if update_id is not None:
+            result = await session.execute(
+                sa_update(NotionDeliverableUpdate)
+                .where(NotionDeliverableUpdate.id == update_id)
+                .values(status="failed", error=error, updated_at=now)
+                .execution_options(synchronize_session="fetch")
             )
-            .values(
-                status="failed",
-                error=error,
-                updated_at=datetime.now(UTC),
+            if not result.rowcount:
+                await session.commit()
+                return False
+            await session.execute(
+                sa_update(NotionDeliverable)
+                .where(
+                    NotionDeliverable.id == deliverable_id,
+                    NotionDeliverable.latest_update_id == update_id,
+                )
+                .values(
+                    status="failed",
+                    error=error,
+                    updated_at=now,
+                )
+                .execution_options(synchronize_session="fetch")
             )
-            .execution_options(synchronize_session=False)
-        )
-    elif deliverable is not None and update_id is None:
-        deliverable.status = "failed"
-        deliverable.error = error
-    await session.commit()
-    if update is not None:
-        await session.refresh(update)
-    return update
+        else:
+            await session.execute(
+                sa_update(NotionDeliverable)
+                .where(NotionDeliverable.id == deliverable_id)
+                .values(status="failed", error=error, updated_at=now)
+                .execution_options(synchronize_session="fetch")
+            )
+        await session.commit()
+        return True
+
+    updated = await _run_with_closed_connection_retry(
+        session,
+        _write,
+        "mark Notion deliverable update failed",
+    )
+    return await session.get(NotionDeliverableUpdate, update_id) if update_id and updated else None
 
 
 async def upsert_oauth_installation(

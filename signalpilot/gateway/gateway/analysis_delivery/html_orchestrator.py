@@ -25,7 +25,9 @@ _ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 _ANTHROPIC_VERSION = "2023-06-01"
 _DEFAULT_TIMEOUT_SECONDS = 240.0
 _DEFAULT_MAX_TOKENS = 20_000
+_MAX_TOKENS_RETRY_FLOOR = 8_192
 _DEFAULT_TOOL_LOOP_LIMIT = 8
+_ANTHROPIC_ERROR_BODY_MAX_CHARS = 2_000
 _DELIVERABLE_TOOL_NAMES = {"create_dashboard", "create_report", "edit_dashboard", "edit_report"}
 _COMPONENT_LAYOUT_GUARD_ID = "sp-component-layout-guard"
 _COMPONENT_LAYOUT_GUARD = f"""<style id="{_COMPONENT_LAYOUT_GUARD_ID}">
@@ -977,11 +979,15 @@ class HtmlOrchestrator:
         }
         if self._http_client is not None:
             response = await self._http_client.post(_ANTHROPIC_MESSAGES_URL, headers=headers, json=request_body)
-            response.raise_for_status()
+            if await _should_retry_anthropic_request_with_lower_max_tokens(response, request_body):
+                response = await self._http_client.post(_ANTHROPIC_MESSAGES_URL, headers=headers, json=request_body)
+            _raise_anthropic_for_status(response, request_body)
             return response.json()
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             response = await client.post(_ANTHROPIC_MESSAGES_URL, headers=headers, json=request_body)
-            response.raise_for_status()
+            if await _should_retry_anthropic_request_with_lower_max_tokens(response, request_body):
+                response = await client.post(_ANTHROPIC_MESSAGES_URL, headers=headers, json=request_body)
+            _raise_anthropic_for_status(response, request_body)
             return response.json()
 
     async def _result_from_content(
@@ -1170,6 +1176,66 @@ def _max_tokens() -> int:
         except ValueError:
             LOGGER.warning("Invalid SIGNALPILOT_ORCHESTRATOR_MAX_TOKENS=%r; using default", raw)
     return _DEFAULT_MAX_TOKENS
+
+
+async def _should_retry_anthropic_request_with_lower_max_tokens(response: Any, request_body: dict[str, Any]) -> bool:
+    status_code = int(getattr(response, "status_code", 0) or 0)
+    max_tokens = request_body.get("max_tokens")
+    if status_code != 400 or not isinstance(max_tokens, int) or max_tokens <= _MAX_TOKENS_RETRY_FLOOR:
+        return False
+    body = _anthropic_error_body(response).lower()
+    if "max_tokens" not in body:
+        return False
+    request_body["max_tokens"] = _MAX_TOKENS_RETRY_FLOOR
+    LOGGER.warning(
+        "Anthropic HTML orchestrator rejected max_tokens=%s; retrying with max_tokens=%s",
+        max_tokens,
+        _MAX_TOKENS_RETRY_FLOOR,
+    )
+    return True
+
+
+def _raise_anthropic_for_status(response: Any, request_body: dict[str, Any]) -> None:
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        body = _anthropic_error_body(response)
+        payload_chars = _request_body_chars(request_body)
+        status_code = getattr(response, "status_code", None)
+        raise RuntimeError(
+            "Anthropic HTML orchestrator request failed "
+            f"(status={status_code}, model={request_body.get('model')}, "
+            f"max_tokens={request_body.get('max_tokens')}, payload_chars={payload_chars}): {body}"
+        ) from exc
+
+
+def _anthropic_error_body(response: Any) -> str:
+    text = ""
+    try:
+        payload = response.json()
+    except Exception:
+        payload = None
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            message = _string(error.get("message"))
+            error_type = _string(error.get("type"))
+            text = f"{error_type}: {message}" if error_type else message
+        else:
+            text = _string(payload)
+    if not text:
+        text = _string(getattr(response, "text", ""))
+    text = text.strip() or "<empty response body>"
+    if len(text) > _ANTHROPIC_ERROR_BODY_MAX_CHARS:
+        text = f"{text[:_ANTHROPIC_ERROR_BODY_MAX_CHARS]}..."
+    return text
+
+
+def _request_body_chars(request_body: dict[str, Any]) -> int:
+    try:
+        return len(json.dumps(request_body, ensure_ascii=True, separators=(",", ":")))
+    except Exception:
+        return -1
 
 
 def _tool_loop_limit() -> int:

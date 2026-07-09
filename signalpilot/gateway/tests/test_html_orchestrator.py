@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 
+import httpx
 import pytest
 
 from gateway.analysis_delivery.html_orchestrator import (
@@ -38,8 +40,24 @@ class _Client:
         self.requests = []
 
     async def post(self, url, *, headers, json):
-        self.requests.append({"url": url, "headers": headers, "json": json})
-        return _Response(self.payloads.pop(0))
+        self.requests.append({"url": url, "headers": headers, "json": deepcopy(json)})
+        payload = self.payloads.pop(0)
+        return payload if hasattr(payload, "raise_for_status") else _Response(payload)
+
+
+class _ErrorResponse:
+    def __init__(self, payload, *, status_code: int = 400):
+        self._payload = payload
+        self.status_code = status_code
+        self.text = json.dumps(payload)
+
+    def raise_for_status(self) -> None:
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        response = httpx.Response(self.status_code, text=self.text, request=request)
+        raise httpx.HTTPStatusError("bad request", request=request, response=response)
+
+    def json(self):
+        return self._payload
 
 
 @pytest.mark.asyncio
@@ -279,6 +297,82 @@ async def test_html_orchestrator_renders_followup_with_existing_report_payload()
     assert "fetch_snapshot" not in tool_names
     assert client.requests[0]["json"]["tool_choice"] == {"type": "tool", "name": "edit_dashboard"}
     assert client.requests[0]["json"]["max_tokens"] == 20_000
+
+
+@pytest.mark.asyncio
+async def test_html_orchestrator_retries_lower_max_tokens_when_anthropic_rejects() -> None:
+    client = _Client(
+        _ErrorResponse(
+            {
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "max_tokens: Input should be less than or equal to 8192",
+                }
+            }
+        ),
+        {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "edit-1",
+                    "name": "edit_dashboard",
+                    "input": {
+                        "report_id": "report-1",
+                        "title": "Revenue Dashboard",
+                        "html": '<!doctype html><html><body><script type="application/json" id="sp-data">{}</script></body></html>',
+                    },
+                }
+            ]
+        },
+    )
+
+    result = await HtmlOrchestrator(api_key="key", http_client=client).render_followup(
+        instruction="Make the title shorter.",
+        existing={
+            "report_id": "report-1",
+            "kind": "dashboard",
+            "title": "Revenue Dashboard",
+            "html": "<html>old</html>",
+            "data_json": {},
+        },
+        packet=None,
+        mode="edit_existing",
+    )
+
+    assert result.title == "Revenue Dashboard"
+    assert [request["json"]["max_tokens"] for request in client.requests] == [20_000, 8_192]
+
+
+@pytest.mark.asyncio
+async def test_html_orchestrator_surfaces_anthropic_error_body() -> None:
+    client = _Client(
+        _ErrorResponse(
+            {
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "messages.0.content: Input is too long for the model context window",
+                }
+            }
+        )
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await HtmlOrchestrator(api_key="key", http_client=client).render_followup(
+            instruction="Make the title shorter.",
+            existing={
+                "report_id": "report-1",
+                "kind": "dashboard",
+                "title": "Revenue Dashboard",
+                "html": "<html>old</html>",
+                "data_json": {},
+            },
+            packet=None,
+            mode="edit_existing",
+        )
+
+    message = str(exc_info.value)
+    assert "invalid_request_error: messages.0.content: Input is too long" in message
+    assert "payload_chars=" in message
 
 
 def test_malformed_tool_args_return_none() -> None:

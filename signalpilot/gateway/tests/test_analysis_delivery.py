@@ -261,6 +261,96 @@ def test_trace_control_markers_are_redacted_into_metadata_for_delivery() -> None
     assert packet.final_statement.handoff_notes == ["Used notebook SDK."]
 
 
+def test_trace_loader_uses_final_statement_metadata_with_empty_content() -> None:
+    packet = load_delivery_packet_from_events(
+        [
+            {
+                "idx": 1,
+                "type": "done",
+                "content": "",
+                "metadata": {
+                    "control_markers": [
+                        {
+                            "marker": "FINAL_STATEMENT",
+                            "payload": {
+                                "statement": "Revenue increased.",
+                                "confidenceScore": "high",
+                                "caveats": ["Excludes refunds"],
+                                "handoffNotes": ["Used notebook SDK."],
+                            },
+                        }
+                    ],
+                    "result": {"summary": "Revenue increased."},
+                },
+            }
+        ],
+        status_payload={"status": "Done"},
+        thread_status="done",
+    )
+
+    assert packet.final_statement is not None
+    assert packet.final_statement.statement == "Revenue increased."
+    assert packet.final_statement.confidence_score == "high"
+    assert packet.final_statement.caveats == ["Excludes refunds"]
+    assert packet.final_statement.handoff_notes == ["Used notebook SDK."]
+
+
+def test_trace_loader_falls_back_to_done_result_final_statement() -> None:
+    packet = load_delivery_packet_from_events(
+        [
+            {
+                "idx": 1,
+                "type": "done",
+                "content": "",
+                "metadata": {
+                    "result": {
+                        "final_answer": "Legacy result completed.",
+                        "confidence_score": "medium",
+                        "gotchas": ["Limited rows"],
+                        "analysis_method": "Used notebook SDK.",
+                    }
+                },
+            }
+        ],
+        status_payload={"status": "Done"},
+        thread_status="done",
+    )
+
+    assert packet.final_statement is not None
+    assert packet.final_statement.statement == "Legacy result completed."
+    assert packet.final_statement.confidence_score == "medium"
+    assert packet.final_statement.caveats == ["Limited rows"]
+    assert packet.final_statement.handoff_notes == ["Used notebook SDK."]
+
+
+def test_markdown_wrapped_trace_marker_is_compatibility_parsed() -> None:
+    content, metadata = redact_trace_control_markers(
+        '**FINAL_STATEMENT: {"statement":"Revenue increased.",'
+        '"confidenceScore":"high","caveats":[],"handoffNotes":[]}**'
+    )
+
+    assert content == ""
+    assert metadata is not None
+    assert metadata["control_markers"][0]["payload"]["statement"] == "Revenue increased."
+
+    packet = load_delivery_packet_from_events(
+        [
+            {
+                "idx": 1,
+                "type": "text",
+                "content": (
+                    '**FINAL_STATEMENT: {"statement":"Revenue increased.",'
+                    '"confidenceScore":"high","caveats":[],"handoffNotes":[]}**'
+                ),
+            }
+        ],
+        status_payload={"status": "Done"},
+    )
+
+    assert packet.final_statement is not None
+    assert packet.final_statement.statement == "Revenue increased."
+
+
 def test_slack_progress_waits_for_worker_plan_then_uses_exact_steps() -> None:
     no_plan = load_delivery_packet_from_events([], user_request="Analyze revenue")
 

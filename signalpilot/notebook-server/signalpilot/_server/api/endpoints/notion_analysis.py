@@ -67,6 +67,8 @@ OutputMode = Literal["answer", "deliverable"]
 DEFAULT_ANALYSIS_AGENT_MODEL = "claude-sonnet-4-5-20250929"
 DEFAULT_SNAPSHOT_MAX_BYTES = 1_000_000
 MAX_DATA_SNAPSHOTS = 5
+CONTROL_MARKERS_METADATA_KEY = "control_markers"
+FINAL_STATEMENT_MARKER = "FINAL_STATEMENT"
 _ANALYSIS_AGENT_MODEL_ENV_NAMES = (
     "SIGNALPILOT_ANALYSIS_AGENT_MODEL",
     "SIGNALPILOT_WORKER_AGENT_MODEL",
@@ -1278,37 +1280,124 @@ def _parse_result(text: str) -> AnalysisResult:
     )
 
 
-def _parse_final_statement_result(text: str) -> AnalysisResult:
-    data = _extract_marker_json(text, "FINAL_STATEMENT")
+def _canonical_final_statement_payload(text: str) -> dict[str, Any]:
+    return _canonical_final_statement_payload_from_data(
+        _extract_marker_json(text, FINAL_STATEMENT_MARKER)
+    )
+
+
+def _canonical_final_statement_payload_from_data(
+    data: dict[str, Any]
+) -> dict[str, Any]:
     statement = str(data.get("statement", "")).strip()
     if not statement:
         raise ValueError("Agent did not emit FINAL_STATEMENT.statement")
+    return {
+        "statement": statement,
+        "confidenceScore": _confidence_label(
+            data.get("confidenceScore", data.get("confidence_score"))
+        ),
+        "caveats": _string_list(data.get("caveats")),
+        "handoffNotes": _string_list(
+            data.get("handoffNotes", data.get("handoff_notes"))
+        ),
+    }
+
+
+def _final_statement_payload_from_result(
+    result: dict[str, Any]
+) -> dict[str, Any] | None:
+    statement = str(
+        result.get("finalAnswer")
+        or result.get("final_answer")
+        or result.get("summary")
+        or result.get("notionComment")
+        or result.get("notion_comment")
+        or ""
+    ).strip()
+    if not statement:
+        return None
+    return {
+        "statement": statement,
+        "confidenceScore": _confidence_label(
+            result.get("confidenceScore", result.get("confidence_score"))
+        ),
+        "caveats": _string_list(result.get("gotchas", result.get("caveats"))),
+        "handoffNotes": _string_list(
+            result.get(
+                "handoffNotes",
+                result.get(
+                    "handoff_notes",
+                    result.get("analysisMethod", result.get("analysis_method")),
+                ),
+            )
+        ),
+    }
+
+
+def _analysis_result_from_final_statement_payload(
+    payload: dict[str, Any]
+) -> AnalysisResult:
+    statement = str(payload.get("statement", "")).strip()
+    if not statement:
+        raise ValueError("Agent did not emit FINAL_STATEMENT.statement")
     confidence = _confidence_label(
-        data.get("confidenceScore", data.get("confidence_score"))
+        payload.get("confidenceScore", payload.get("confidence_score"))
     )
-    caveats = data.get("caveats") or []
-    if not isinstance(caveats, list):
-        caveats = [str(caveats)]
-    handoff_notes = (
-        data.get("handoffNotes", data.get("handoff_notes", [])) or []
+    caveats = _string_list(payload.get("caveats"))
+    handoff_notes = _string_list(
+        payload.get("handoffNotes", payload.get("handoff_notes"))
     )
-    if not isinstance(handoff_notes, list):
-        handoff_notes = [str(handoff_notes)]
     return AnalysisResult(
         summary=statement[:500],
         confidence_score=confidence,
         final_answer=statement,
-        gotchas=[str(item) for item in caveats],
-        analysis_method="; ".join(str(item) for item in handoff_notes),
+        gotchas=caveats,
+        analysis_method="; ".join(handoff_notes),
         notion_comment=statement[:1200],
         notion_charts=[],
     )
 
 
+def _parse_final_statement_result(text: str) -> AnalysisResult:
+    return _analysis_result_from_final_statement_payload(
+        _canonical_final_statement_payload(text)
+    )
+
+
+def _done_trace_metadata(
+    record: AnalysisRecord,
+    final_statement_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "request_id": record.request_id,
+        "status": record.status,
+        "result": asdict(record.result) if record.result else None,
+    }
+    if final_statement_payload is not None:
+        metadata[CONTROL_MARKERS_METADATA_KEY] = [
+            {
+                "marker": FINAL_STATEMENT_MARKER,
+                "payload": dict(final_statement_payload),
+            }
+        ]
+    return metadata
+
+
+def _string_list(value: Any) -> list[str]:
+    if value in (None, ""):
+        return []
+    items = value if isinstance(value, list) else [value]
+    return [text for item in items if (text := str(item).strip())]
+
+
 def _extract_marker_json(text: str, marker: str) -> dict[str, Any]:
     decoder = json.JSONDecoder()
     latest: dict[str, Any] | None = None
-    for match in re.finditer(rf"(?m)^\s*{re.escape(marker)}\s*:\s*", text):
+    for match in re.finditer(
+        rf"(?m)^\s*(?:\*\*)?{re.escape(marker)}\s*:\s*",
+        text,
+    ):
         try:
             parsed, _ = decoder.raw_decode(text[match.end() :].lstrip())
         except json.JSONDecodeError:
@@ -3233,6 +3322,7 @@ async def _run_analysis(
         output_mode=record.output_mode,
     )
     text_parts: list[str] = []
+    final_statement_payload: dict[str, Any] | None = None
     store = get_gateway_chat_trace_store()
 
     async def append_trace_event(event_data: dict[str, Any]) -> int:
@@ -3367,17 +3457,18 @@ async def _run_analysis(
                     "is_error": False,
                     "cost_usd": None,
                     "turn": 0,
-                    "metadata": {
-                        "request_id": record.request_id,
-                        "status": record.status,
-                        "result": asdict(record.result),
-                    },
+                    "metadata": _done_trace_metadata(record),
                 },
             )
             return
 
         try:
-            record.result = _parse_final_statement_result("".join(text_parts))
+            final_statement_payload = _canonical_final_statement_payload(
+                "".join(text_parts)
+            )
+            record.result = _analysis_result_from_final_statement_payload(
+                final_statement_payload
+            )
         except Exception:
             if not _is_transient_agent_overload("".join(text_parts)):
                 raise
@@ -3407,7 +3498,12 @@ async def _run_analysis(
                 _agent_overload_retry_prompt(body.prompt),
                 new_chat_for_run=False,
             )
-            record.result = _parse_final_statement_result("".join(text_parts))
+            final_statement_payload = _canonical_final_statement_payload(
+                "".join(text_parts)
+            )
+            record.result = _analysis_result_from_final_statement_payload(
+                final_statement_payload
+            )
         record.status = "Done"
         record.error = None
         _persist_record_completion_artifacts(app_state, record, checkpoint=checkpoint_completion)
@@ -3433,18 +3529,22 @@ async def _run_analysis(
                 "is_error": False,
                 "cost_usd": None,
                 "turn": 0,
-                "metadata": {
-                    "request_id": record.request_id,
-                    "status": record.status,
-                    "result": asdict(record.result) if record.result else None,
-                },
+                "metadata": _done_trace_metadata(
+                    record, final_statement_payload
+                ),
             },
         )
     except Exception as e:
         LOGGER.exception("Notion analysis %s failed", record.request_id)
         failed = False
+        final_statement_payload = None
         try:
-            record.result = _parse_final_statement_result("".join(text_parts))
+            final_statement_payload = _canonical_final_statement_payload(
+                "".join(text_parts)
+            )
+            record.result = _analysis_result_from_final_statement_payload(
+                final_statement_payload
+            )
             record.status = "Done"
             record.error = None
         except Exception:
@@ -3519,13 +3619,9 @@ async def _run_analysis(
                     "is_error": False,
                     "cost_usd": None,
                     "turn": 0,
-                    "metadata": {
-                        "request_id": record.request_id,
-                        "status": record.status,
-                        "result": asdict(record.result)
-                        if record.result
-                        else None,
-                    },
+                    "metadata": _done_trace_metadata(
+                        record, final_statement_payload
+                    ),
                 },
             )
     finally:
@@ -3617,6 +3713,47 @@ def _mark_stale_analysis_failed(
     )
 
 
+def _trace_event_metadata(event: dict[str, Any]) -> dict[str, Any]:
+    metadata = event.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = event.get("metadata_json")
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _final_statement_payload_from_trace_events(
+    events: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    latest_marker_payload: dict[str, Any] | None = None
+    latest_result_payload: dict[str, Any] | None = None
+    for event in events:
+        metadata = _trace_event_metadata(event)
+        raw_markers = metadata.get(CONTROL_MARKERS_METADATA_KEY)
+        if isinstance(raw_markers, list):
+            for item in raw_markers:
+                if not isinstance(item, dict):
+                    continue
+                marker = str(item.get("marker") or "").strip().upper()
+                payload = item.get("payload")
+                if marker != FINAL_STATEMENT_MARKER or not isinstance(payload, dict):
+                    continue
+                try:
+                    latest_marker_payload = (
+                        _canonical_final_statement_payload_from_data(payload)
+                    )
+                except ValueError:
+                    continue
+
+        if str(event.get("type") or "").lower() == "done":
+            result = metadata.get("result")
+            if isinstance(result, dict):
+                latest_result_payload = (
+                    _final_statement_payload_from_result(result)
+                    or latest_result_payload
+                )
+
+    return latest_marker_payload or latest_result_payload
+
+
 async def _recover_completed_record_from_trace(
     app_state: AppState, record: AnalysisRecord
 ) -> bool:
@@ -3632,6 +3769,15 @@ async def _recover_completed_record_from_trace(
         if not isinstance(thread, dict) or thread.get("status") != "done":
             return False
         events = await store.get_events(record.session_id)
+        payload = _final_statement_payload_from_trace_events(events)
+        if payload is not None:
+            record.result = _analysis_result_from_final_statement_payload(
+                payload
+            )
+            record.status = "Done"
+            record.error = None
+            _save_registry(app_state)
+            return True
         text = "".join(
             str(event.get("content") or "")
             for event in events

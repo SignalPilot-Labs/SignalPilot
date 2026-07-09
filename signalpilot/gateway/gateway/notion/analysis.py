@@ -239,25 +239,60 @@ def _analysis_detail_blocks(status: dict[str, Any]) -> list[dict[str, Any]]:
     return blocks[: notion_formatting.NOTION_BLOCK_CHILD_LIMIT]
 
 
+_INCOMPLETE_ANALYSIS_FALLBACK_FIELDS = (
+    "summary",
+    "finalAnswer",
+    "notionComment",
+    "analysisMethod",
+)
+_INCOMPLETE_ANALYSIS_FALLBACK_MARKERS = (
+    "analysis could not be completed",
+    "did not emit the required final_statement marker",
+    "api error: overloaded",
+    "transient overload response",
+)
+
+
+def _incomplete_analysis_fallback_match(
+    status: dict[str, Any]
+) -> dict[str, str] | None:
+    for field in _INCOMPLETE_ANALYSIS_FALLBACK_FIELDS:
+        raw = str(status.get(field) or "")
+        text = raw.lower()
+        for marker in _INCOMPLETE_ANALYSIS_FALLBACK_MARKERS:
+            index = text.find(marker)
+            if index == -1:
+                continue
+            return {
+                "field": field,
+                "marker": marker,
+                "snippet": _matched_status_snippet(raw, index),
+            }
+    return None
+
+
 def _is_incomplete_analysis_fallback(status: dict[str, Any]) -> bool:
-    text = "\n".join(
-        str(status.get(key) or "")
-        for key in (
-            "summary",
-            "finalAnswer",
-            "notionComment",
-            "analysisMethod",
-        )
-    ).lower()
-    return any(
-        marker in text
-        for marker in (
-            "analysis could not be completed",
-            "did not emit the required final_statement marker",
-            "api error: overloaded",
-            "transient overload response",
-        )
+    return _incomplete_analysis_fallback_match(status) is not None
+
+
+def _log_incomplete_analysis_fallback_skip(
+    request_id: str,
+    match: dict[str, str],
+) -> None:
+    logger.info(
+        "Skipping Notion HTML deliverable for incomplete analysis fallback: "
+        "request_id=%s field=%s marker=%s snippet=%s",
+        request_id,
+        match["field"],
+        match["marker"],
+        match["snippet"],
     )
+
+
+def _matched_status_snippet(value: str, index: int, limit: int = 180) -> str:
+    start = max(index - 40, 0)
+    end = min(index + limit, len(value))
+    return re.sub(r"\s+", " ", value[start:end]).strip()
 
 
 def _analysis_request_id(source: str, discussion_id: str) -> str:
@@ -1943,10 +1978,10 @@ async def process_routed_comment_event(
         delivery = await render_delivery(packet, api_key=delivery_api_key)
         rendered_status = delivery_result_to_status(delivery, packet, base_status=public_status)
         html_delivery_error: str | None = None
-        if html_deliverable and _is_incomplete_analysis_fallback(final_status):
-            logger.info(
-                "Skipping Notion HTML deliverable for incomplete analysis fallback: request_id=%s",
-                route.request_id,
+        incomplete_fallback_match = _incomplete_analysis_fallback_match(final_status)
+        if html_deliverable and incomplete_fallback_match:
+            _log_incomplete_analysis_fallback_skip(
+                route.request_id, incomplete_fallback_match
             )
             html_deliverable = False
         if html_deliverable:

@@ -60,8 +60,15 @@ class DeliveryRenderer:
             return fallback
         try:
             rendered = await self._anthropic_render(packet)
-        except Exception as exc:
-            LOGGER.info("Analysis delivery renderer unavailable; using FINAL_STATEMENT fallback: %s", exc)
+        except Exception:
+            LOGGER.info(
+                "Analysis delivery renderer unavailable; using FINAL_STATEMENT fallback "
+                "model=%s packet_status=%s has_final_statement=%s",
+                self.model,
+                packet.status,
+                packet.final_statement is not None,
+                exc_info=True,
+            )
             return fallback
         return rendered or fallback
 

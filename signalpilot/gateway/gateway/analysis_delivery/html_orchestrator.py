@@ -953,26 +953,79 @@ class HtmlOrchestrator:
         ]
         fetched_snapshots: dict[str, Any] = {}
         tool_choice = _tool_choice_for_payload(payload)
-        for _ in range(self.tool_loop_limit):
+        last_iteration_summary: dict[str, Any] = {}
+        for iteration in range(1, self.tool_loop_limit + 1):
             response = await self._anthropic_request(
                 messages,
                 allow_fetch_snapshot=packet is not None,
                 tool_choice=tool_choice,
             )
             content = response.get("content") or []
+            last_iteration_summary = _anthropic_iteration_summary(content, response)
             result = await self._result_from_content(packet, content, fetched_snapshots, theme)
             if result is not None:
                 return result
             tool_results = await self._tool_results(packet, content, fetched_snapshots)
             if not tool_results:
                 text = _anthropic_text(response)
+                LOGGER.error(
+                    "HTML orchestrator iteration did not produce deliverable and has no tool feedback path "
+                    "iteration=%s/%s model=%s max_tokens=%s tool_choice=%s allow_fetch_snapshot=%s messages=%s "
+                    "content_types=%s tool_uses=%s text_chars=%s stop_reason=%s fetched_snapshots=%s",
+                    iteration,
+                    self.tool_loop_limit,
+                    self.model,
+                    self.max_tokens,
+                    tool_choice or "",
+                    packet is not None,
+                    len(messages),
+                    last_iteration_summary["content_types"],
+                    last_iteration_summary["tool_uses"],
+                    last_iteration_summary["text_chars"],
+                    last_iteration_summary["stop_reason"],
+                    len(fetched_snapshots),
+                )
                 parsed = _parse_json_object(text)
                 result = _html_result_from_payload(parsed)
                 if result is not None:
                     return _normalize_html_result(result, fetched_snapshots, theme=theme)
                 raise ValueError("HTML orchestrator did not return a deliverable")
+            LOGGER.info(
+                "HTML orchestrator iteration did not produce deliverable; sending tool feedback "
+                "iteration=%s/%s model=%s max_tokens=%s tool_choice=%s allow_fetch_snapshot=%s messages=%s "
+                "content_types=%s tool_uses=%s tool_results=%s text_chars=%s stop_reason=%s fetched_snapshots=%s",
+                iteration,
+                self.tool_loop_limit,
+                self.model,
+                self.max_tokens,
+                tool_choice or "",
+                packet is not None,
+                len(messages),
+                last_iteration_summary["content_types"],
+                last_iteration_summary["tool_uses"],
+                _tool_result_summary(tool_results),
+                last_iteration_summary["text_chars"],
+                last_iteration_summary["stop_reason"],
+                len(fetched_snapshots),
+            )
             messages.append({"role": "assistant", "content": content})
             messages.append({"role": "user", "content": tool_results})
+        LOGGER.error(
+            "HTML orchestrator exceeded tool loop limit loop_limit=%s model=%s max_tokens=%s tool_choice=%s "
+            "allow_fetch_snapshot=%s messages=%s fetched_snapshots=%s last_content_types=%s last_tool_uses=%s "
+            "last_text_chars=%s last_stop_reason=%s",
+            self.tool_loop_limit,
+            self.model,
+            self.max_tokens,
+            tool_choice or "",
+            packet is not None,
+            len(messages),
+            len(fetched_snapshots),
+            last_iteration_summary.get("content_types", ""),
+            last_iteration_summary.get("tool_uses", ""),
+            last_iteration_summary.get("text_chars", 0),
+            last_iteration_summary.get("stop_reason", ""),
+        )
         raise TimeoutError(f"HTML orchestrator exceeded tool loop limit ({self.tool_loop_limit})")
 
     async def _anthropic_request(
@@ -1295,6 +1348,79 @@ def _request_body_chars(request_body: dict[str, Any]) -> int:
         return len(json.dumps(request_body, ensure_ascii=True, separators=(",", ":")))
     except Exception:
         return -1
+
+
+def _anthropic_iteration_summary(content: list[Any], response: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "content_types": _anthropic_content_types(content),
+        "tool_uses": _anthropic_tool_use_summary(content),
+        "text_chars": _anthropic_content_text_chars(content),
+        "stop_reason": _string(response.get("stop_reason")),
+    }
+
+
+def _anthropic_content_types(content: list[Any]) -> str:
+    counts: dict[str, int] = {}
+    for item in content:
+        content_type = _string(item.get("type")) if isinstance(item, dict) else type(item).__name__
+        content_type = content_type or "<empty>"
+        counts[content_type] = counts.get(content_type, 0) + 1
+    return ",".join(f"{key}:{value}" for key, value in counts.items())
+
+
+def _anthropic_content_text_chars(content: list[Any]) -> int:
+    return sum(
+        len(item.get("text"))
+        for item in content
+        if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str)
+    )
+
+
+def _anthropic_tool_use_summary(content: list[Any]) -> str:
+    tool_uses: list[str] = []
+    for item in content:
+        if not isinstance(item, dict) or item.get("type") != "tool_use":
+            continue
+        name = _string(item.get("name")) or "<unnamed>"
+        args = _tool_args_dict(item)
+        if args is None:
+            tool_uses.append(f"{name}(input=invalid)")
+            continue
+        if name in _DELIVERABLE_TOOL_NAMES:
+            html = _string(args.get("html")).strip()
+            title = _string(args.get("title")).strip()
+            report_id = _string(args.get("report_id") or args.get("reportId")).strip()
+            data_json = args.get("data_json", args.get("dataJson"))
+            tool_uses.append(
+                f"{name}(title={bool(title)},html_chars={len(html)},"
+                f"data_json={data_json is not None},report_id={bool(report_id)})"
+            )
+            continue
+        if name == "fetch_snapshot":
+            snapshot_name = _string(args.get("name")).strip()
+            url = _string(args.get("url")).strip()
+            tool_uses.append(f"{name}(name={bool(snapshot_name)},url={bool(url)})")
+            continue
+        tool_uses.append(f"{name}(args={len(args)})")
+    return ",".join(tool_uses)
+
+
+def _tool_result_summary(tool_results: list[dict[str, Any]]) -> str:
+    summaries: list[str] = []
+    for index, item in enumerate(tool_results):
+        tool_use_id = _string(item.get("tool_use_id")) or str(index)
+        status = "payload"
+        try:
+            payload = json.loads(_string(item.get("content")))
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            if payload.get("error"):
+                status = "error"
+            elif payload.get("ok") is True:
+                status = "ok"
+        summaries.append(f"{tool_use_id}:{status}")
+    return ",".join(summaries)
 
 
 def _tool_loop_limit() -> int:

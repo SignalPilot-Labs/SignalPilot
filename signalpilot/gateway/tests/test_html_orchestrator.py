@@ -388,6 +388,71 @@ async def test_html_orchestrator_surfaces_and_logs_anthropic_error_body(caplog: 
     assert "invalid_request_error: messages.0.content: Input is too long" in log_text
 
 
+@pytest.mark.asyncio
+async def test_html_orchestrator_logs_loop_limit_context(caplog: pytest.LogCaptureFixture) -> None:
+    client = _Client(
+        {
+            "stop_reason": "tool_use",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "edit-1",
+                    "name": "edit_dashboard",
+                    "input": {
+                        "report_id": "report-1",
+                        "title": "Revenue Dashboard",
+                        "html": "",
+                        "data_json": {},
+                    },
+                }
+            ],
+        },
+        {
+            "stop_reason": "tool_use",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "edit-2",
+                    "name": "edit_dashboard",
+                    "input": {
+                        "report_id": "report-1",
+                        "title": "Revenue Dashboard",
+                        "data_json": {},
+                    },
+                }
+            ],
+        },
+    )
+    orchestrator = HtmlOrchestrator(api_key="key", http_client=client)
+    orchestrator.tool_loop_limit = 2
+
+    with caplog.at_level(logging.INFO, logger="gateway.analysis_delivery.html_orchestrator"):
+        with pytest.raises(TimeoutError):
+            await orchestrator.render_followup(
+                instruction="Make the title shorter.",
+                existing={
+                    "report_id": "report-1",
+                    "kind": "dashboard",
+                    "title": "Revenue Dashboard",
+                    "html": "<html>old</html>",
+                    "data_json": {},
+                },
+                packet=None,
+                mode="edit_existing",
+            )
+
+    log_text = "\n".join(record.getMessage() for record in caplog.records)
+    assert "HTML orchestrator iteration did not produce deliverable; sending tool feedback" in log_text
+    assert "iteration=1/2" in log_text
+    assert "tool_choice=edit_dashboard" in log_text
+    assert "content_types=tool_use:1" in log_text
+    assert "tool_uses=edit_dashboard(title=True,html_chars=0,data_json=True,report_id=True)" in log_text
+    assert "tool_results=edit-1:error" in log_text
+    assert "HTML orchestrator exceeded tool loop limit" in log_text
+    assert "loop_limit=2" in log_text
+    assert "last_tool_uses=edit_dashboard(title=True,html_chars=0,data_json=True,report_id=True)" in log_text
+
+
 def test_malformed_tool_args_return_none() -> None:
     assert _tool_args_dict({"type": "tool_use", "input": "not-json"}) is None
 

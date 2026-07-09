@@ -162,6 +162,9 @@ def load_delivery_packet_from_events(
     if status_payload.get("error"):
         _append_unique(known_errors, _string(status_payload.get("error")), 8)
 
+    if final_statement is None and latest_result:
+        final_statement = _parse_final_statement_from_result(latest_result)
+
     status = _status_from_sources(thread_status, status_payload, known_errors)
     return DeliveryPacket(
         user_request=user_request,
@@ -219,6 +222,38 @@ def _parse_final_statement(payload: dict[str, Any]) -> FinalStatement | None:
         confidence_score=confidence,
         caveats=caveats,
         handoff_notes=notes,
+    )
+
+
+def _parse_final_statement_from_result(
+    result: dict[str, Any]
+) -> FinalStatement | None:
+    statement = _string(
+        result.get("finalAnswer")
+        or result.get("final_answer")
+        or result.get("summary")
+        or result.get("notionComment")
+        or result.get("notion_comment")
+    ).strip()
+    if not statement:
+        return None
+    caveats = result.get("gotchas", result.get("caveats", []))
+    if caveats not in (None, "") and not isinstance(caveats, list):
+        caveats = [caveats]
+    handoff_notes = result.get("handoffNotes", result.get("handoff_notes"))
+    if handoff_notes in (None, ""):
+        handoff_notes = result.get("analysisMethod", result.get("analysis_method"))
+    if handoff_notes not in (None, "") and not isinstance(handoff_notes, list):
+        handoff_notes = [handoff_notes]
+    return _parse_final_statement(
+        {
+            "statement": statement,
+            "confidenceScore": result.get(
+                "confidenceScore", result.get("confidence_score")
+            ),
+            "caveats": caveats,
+            "handoffNotes": handoff_notes or [],
+        }
     )
 
 

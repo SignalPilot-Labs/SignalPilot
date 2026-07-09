@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -1660,6 +1661,35 @@ def test_incomplete_analysis_fallback_skips_html_deliverable() -> None:
             "finalAnswer": "Portfolio revenue grew and margin expanded.",
         }
     )
+
+
+def test_incomplete_analysis_fallback_log_includes_match_context(caplog: pytest.LogCaptureFixture) -> None:
+    status = {
+        "status": "Done",
+        "summary": "Portfolio revenue grew.",
+        "finalAnswer": (
+            "The agent did not emit the required FINAL_STATEMENT marker. "
+            "API Error: Overloaded"
+        ),
+    }
+
+    match = notion_analysis._incomplete_analysis_fallback_match(status)
+
+    assert match is not None
+    assert match["field"] == "finalAnswer"
+    assert match["marker"] == "did not emit the required final_statement marker"
+    assert "FINAL_STATEMENT marker" in match["snippet"]
+
+    with caplog.at_level(logging.INFO, logger=notion_analysis.logger.name):
+        notion_analysis._log_incomplete_analysis_fallback_skip(
+            "notion-test", match
+        )
+
+    logged = caplog.text
+    assert "request_id=notion-test" in logged
+    assert "field=finalAnswer" in logged
+    assert "marker=did not emit the required final_statement marker" in logged
+    assert "FINAL_STATEMENT marker" in logged
 
 
 @pytest.mark.asyncio

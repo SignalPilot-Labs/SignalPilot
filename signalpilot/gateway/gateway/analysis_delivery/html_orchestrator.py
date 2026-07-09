@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 from collections.abc import Awaitable, Callable
@@ -24,11 +25,25 @@ LOGGER = logging.getLogger(__name__)
 _ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 _ANTHROPIC_VERSION = "2023-06-01"
 _DEFAULT_TIMEOUT_SECONDS = 240.0
-_DEFAULT_MAX_TOKENS = 20_000
-_MAX_TOKENS_RETRY_FLOOR = 8_192
+_ANTHROPIC_MAX_OUTPUT_TOKENS = 8_192
+_DEFAULT_MAX_TOKENS = _ANTHROPIC_MAX_OUTPUT_TOKENS
+_MAX_TOKENS_RETRY_FLOOR = _ANTHROPIC_MAX_OUTPUT_TOKENS
 _DEFAULT_TOOL_LOOP_LIMIT = 8
 _ANTHROPIC_ERROR_BODY_MAX_CHARS = 2_000
 _DELIVERABLE_TOOL_NAMES = {"create_dashboard", "create_report", "edit_dashboard", "edit_report"}
+_DIV_TAG_RE = re.compile(r"</?div\b[^>]*>", flags=re.IGNORECASE)
+_CLASS_ATTR_RE = re.compile(r"\bclass=[\"']([^\"']*)[\"']", flags=re.IGNORECASE)
+_SVG_RE = re.compile(r"<svg\b(?P<attrs>[^>]*)>(?P<body>.*?)</svg>", flags=re.IGNORECASE | re.DOTALL)
+_VIEWBOX_RE = re.compile(
+    r"\bviewBox=[\"']\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s*[\"']",
+    flags=re.IGNORECASE,
+)
+_PATH_TAG_RE = re.compile(r"<path\b(?P<attrs>[^>]*)>(?P<body>\s*</path>)?", flags=re.IGNORECASE)
+_PATH_D_ATTR_RE = re.compile(r"\s+d=([\"']).*?\1", flags=re.IGNORECASE | re.DOTALL)
+_LEGEND_PERCENT_RE = re.compile(
+    r"\b(?:legend-value|sp-pie-legend-value|sp-donut-legend-value)\b[^>]*>\s*([+-]?\d+(?:\.\d+)?)\s*%",
+    flags=re.IGNORECASE,
+)
 _COMPONENT_LAYOUT_GUARD_ID = "sp-component-layout-guard"
 _COMPONENT_LAYOUT_GUARD = f"""<style id="{_COMPONENT_LAYOUT_GUARD_ID}">
 .sp-dashboard,
@@ -885,7 +900,12 @@ class HtmlOrchestrator:
         fetch_snapshot: SnapshotFetcher | None = None,
     ) -> None:
         self.provider = (provider or "anthropic").strip().lower()
-        self.model = (model or os.getenv("SIGNALPILOT_ORCHESTRATOR_MODEL") or DEFAULT_DELIVERY_MODEL).strip()
+        self.model = (
+            model
+            or os.getenv("SIGNALPILOT_ORCHESTRATOR_MODEL")
+            or os.getenv("SIGNALPILOT_DELIVERY_MODEL")
+            or DEFAULT_DELIVERY_MODEL
+        ).strip()
         self.timeout_seconds = _timeout_seconds(timeout_seconds)
         self.max_tokens = _max_tokens()
         self.tool_loop_limit = _tool_loop_limit()
@@ -1172,7 +1192,7 @@ def _max_tokens() -> int:
     raw = os.getenv("SIGNALPILOT_ORCHESTRATOR_MAX_TOKENS", "").strip()
     if raw:
         try:
-            return max(int(raw), 1024)
+            return min(max(int(raw), 1024), _ANTHROPIC_MAX_OUTPUT_TOKENS)
         except ValueError:
             LOGGER.warning("Invalid SIGNALPILOT_ORCHESTRATOR_MAX_TOKENS=%r; using default", raw)
     return _DEFAULT_MAX_TOKENS
@@ -1188,9 +1208,16 @@ async def _should_retry_anthropic_request_with_lower_max_tokens(response: Any, r
         return False
     request_body["max_tokens"] = _MAX_TOKENS_RETRY_FLOOR
     LOGGER.warning(
-        "Anthropic HTML orchestrator rejected max_tokens=%s; retrying with max_tokens=%s",
+        "Anthropic HTML orchestrator rejected max_tokens=%s; retrying with max_tokens=%s "
+        "(status=%s, model=%s, payload_chars=%s, messages=%s, tool_choice=%s, error=%s)",
         max_tokens,
         _MAX_TOKENS_RETRY_FLOOR,
+        status_code,
+        request_body.get("model"),
+        _request_body_chars(request_body),
+        _message_count(request_body),
+        _tool_choice_name(request_body),
+        _anthropic_error_body(response),
     )
     return True
 
@@ -1202,11 +1229,43 @@ def _raise_anthropic_for_status(response: Any, request_body: dict[str, Any]) -> 
         body = _anthropic_error_body(response)
         payload_chars = _request_body_chars(request_body)
         status_code = getattr(response, "status_code", None)
+        LOGGER.error(
+            "Anthropic HTML orchestrator request failed "
+            "status=%s model=%s max_tokens=%s payload_chars=%s messages=%s tools=%s tool_choice=%s error=%s",
+            status_code,
+            request_body.get("model"),
+            request_body.get("max_tokens"),
+            payload_chars,
+            _message_count(request_body),
+            _tool_names(request_body),
+            _tool_choice_name(request_body),
+            body,
+        )
         raise RuntimeError(
             "Anthropic HTML orchestrator request failed "
             f"(status={status_code}, model={request_body.get('model')}, "
             f"max_tokens={request_body.get('max_tokens')}, payload_chars={payload_chars}): {body}"
         ) from exc
+
+
+def _message_count(request_body: dict[str, Any]) -> int:
+    messages = request_body.get("messages")
+    return len(messages) if isinstance(messages, list) else 0
+
+
+def _tool_names(request_body: dict[str, Any]) -> str:
+    tools = request_body.get("tools")
+    if not isinstance(tools, list):
+        return ""
+    names = [_string(tool.get("name")) for tool in tools if isinstance(tool, dict) and tool.get("name")]
+    return ",".join(names)
+
+
+def _tool_choice_name(request_body: dict[str, Any]) -> str:
+    tool_choice = request_body.get("tool_choice")
+    if not isinstance(tool_choice, dict):
+        return ""
+    return _string(tool_choice.get("name"))
 
 
 def _anthropic_error_body(response: Any) -> str:
@@ -1391,6 +1450,7 @@ def _normalize_html_result(
 ) -> HtmlDeliverableResult:
     data_json = _merged_data_json(result.data_json, fetched_snapshots)
     html = _inject_data_island(result.html, data_json)
+    html = _normalize_pie_slice_geometry(html)
     html = _stabilize_common_chart_layouts(html, theme=theme)
     if html == result.html and data_json is result.data_json:
         return result
@@ -1480,6 +1540,133 @@ def _uses_chart_or_table_components(html: str) -> bool:
             flags=re.IGNORECASE,
         )
     )
+
+
+def _normalize_pie_slice_geometry(html: str) -> str:
+    replacements: list[tuple[int, int, str]] = []
+    for start, end in _div_blocks_with_class(html, "sp-pie-chart"):
+        block = html[start:end]
+        normalized = _normalize_pie_block(block)
+        if normalized != block:
+            replacements.append((start, end, normalized))
+    if not replacements:
+        return html
+    updated = html
+    for start, end, replacement in reversed(replacements):
+        updated = updated[:start] + replacement + updated[end:]
+    return updated
+
+
+def _div_blocks_with_class(html: str, class_name: str) -> list[tuple[int, int]]:
+    blocks: list[tuple[int, int]] = []
+    tags = list(_DIV_TAG_RE.finditer(html))
+    index = 0
+    while index < len(tags):
+        tag = tags[index]
+        text = tag.group(0)
+        if text.startswith("</") or not _tag_has_class(text, class_name):
+            index += 1
+            continue
+        depth = 1
+        cursor = index + 1
+        while cursor < len(tags):
+            next_tag = tags[cursor].group(0)
+            depth += -1 if next_tag.startswith("</") else 1
+            if depth == 0:
+                blocks.append((tag.start(), tags[cursor].end()))
+                index = cursor
+                break
+            cursor += 1
+        index += 1
+    return blocks
+
+
+def _tag_has_class(tag: str, class_name: str) -> bool:
+    match = _CLASS_ATTR_RE.search(tag)
+    if match is None:
+        return False
+    return class_name in match.group(1).split()
+
+
+def _normalize_pie_block(block: str) -> str:
+    svg_match = _SVG_RE.search(block)
+    if svg_match is None:
+        return block
+    percentages = [float(match.group(1)) for match in _LEGEND_PERCENT_RE.finditer(block)]
+    if len(percentages) < 2 or sum(value for value in percentages if value > 0) <= 0:
+        return block
+    svg = svg_match.group(0)
+    path_matches = list(_PATH_TAG_RE.finditer(svg))
+    if len(path_matches) != len(percentages):
+        return block
+    viewbox = _svg_viewbox(svg_match.group("attrs"))
+    if viewbox is None:
+        return block
+    x, y, width, height = viewbox
+    cx = x + width / 2
+    cy = y + height / 2
+    radius = min(width, height) * 0.45
+    paths = _pie_paths_from_values(percentages, cx=cx, cy=cy, radius=radius)
+    rewritten_svg = svg
+    for path_match, path in reversed(list(zip(path_matches, paths, strict=True))):
+        rewritten = _replace_path_d(path_match.group(0), path)
+        rewritten_svg = rewritten_svg[: path_match.start()] + rewritten + rewritten_svg[path_match.end() :]
+    return block[: svg_match.start()] + rewritten_svg + block[svg_match.end() :]
+
+
+def _svg_viewbox(attrs: str) -> tuple[float, float, float, float] | None:
+    match = _VIEWBOX_RE.search(attrs)
+    if match is None:
+        return None
+    x, y, width, height = match.groups()
+    return float(x), float(y), float(width), float(height)
+
+
+def _pie_paths_from_values(values: list[float], *, cx: float, cy: float, radius: float) -> list[str]:
+    positive_values = [max(value, 0.0) for value in values]
+    total = sum(positive_values)
+    if total <= 0:
+        return []
+    paths: list[str] = []
+    angle = -math.pi / 2
+    for value in positive_values:
+        share = value / total
+        next_angle = angle + (share * math.tau)
+        start_x = cx + radius * math.cos(angle)
+        start_y = cy + radius * math.sin(angle)
+        end_x = cx + radius * math.cos(next_angle)
+        end_y = cy + radius * math.sin(next_angle)
+        large_arc = 1 if share > 0.5 else 0
+        paths.append(
+            "M "
+            f"{_fmt_svg_number(cx)} {_fmt_svg_number(cy)} "
+            "L "
+            f"{_fmt_svg_number(start_x)} {_fmt_svg_number(start_y)} "
+            "A "
+            f"{_fmt_svg_number(radius)} {_fmt_svg_number(radius)} 0 {large_arc} 1 "
+            f"{_fmt_svg_number(end_x)} {_fmt_svg_number(end_y)} Z"
+        )
+        angle = next_angle
+    return paths
+
+
+def _replace_path_d(path_tag: str, d: str) -> str:
+    attrs_match = _PATH_TAG_RE.fullmatch(path_tag)
+    if attrs_match is None:
+        return path_tag
+    attrs = attrs_match.group("attrs")
+    body = attrs_match.group("body") or "</path>"
+    if attrs.rstrip().endswith("/"):
+        attrs = attrs.rstrip()[:-1]
+    attrs = _PATH_D_ATTR_RE.sub("", attrs, count=1)
+    return f'<path d="{d}"{attrs}>{body.lstrip()}'
+
+
+def _fmt_svg_number(value: float) -> str:
+    if abs(value) < 0.000001:
+        value = 0.0
+    formatted = f"{value:.2f}".rstrip("0").rstrip(".")
+    return formatted or "0"
 
 
 def _inject_head_style(html: str, *, style_id: str, style: str) -> str:

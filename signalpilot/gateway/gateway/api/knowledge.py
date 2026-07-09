@@ -86,8 +86,13 @@ async def get_knowledge_usage(store: StoreD):
     dependencies=[RequireScope("read")],
 )
 async def get_knowledge_doc(doc_id: uuid.UUID, store: StoreD):
-    """Get a single knowledge doc by ID, including body."""
-    doc = await store.get_knowledge_doc(str(doc_id), include_body=True, bump_view=True)
+    """Get a single knowledge doc by ID, including body.
+
+    Note: bump_view=False — view_count is reserved for agent pulls via MCP
+    (get_knowledge / search_knowledge). Opening a doc in the web UI must not
+    inflate that signal, so humans browsing the KB don't skew "most pulled".
+    """
+    doc = await store.get_knowledge_doc(str(doc_id), include_body=True, bump_view=False)
     if doc is None:
         raise HTTPException(status_code=404, detail=f"Knowledge doc '{doc_id}' not found")
     return doc

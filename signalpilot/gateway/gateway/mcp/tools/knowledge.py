@@ -11,8 +11,9 @@ from gateway.mcp.context import _require_mcp_admin_scope, _store_session
 from gateway.mcp.server import mcp
 from gateway.models.knowledge import KnowledgeCategory, KnowledgeDoc, KnowledgeDocCreate, KnowledgeScope
 
-_BASELINE_CATEGORIES = ("understanding", "conventions")
-_TASK_SEARCH_CATEGORIES = ("decisions", "domain-rules", "debugging", "quirks")
+# context = the "God Doc": always injected into every agent's baseline.
+_BASELINE_CATEGORIES = ("context",)
+_TASK_SEARCH_CATEGORIES = ("decisions", "rules", "troubleshooting")
 _MAX_BASELINE_PROJECTS = 50
 _MAX_KEYWORDS = 12
 _OUTPUT_CAP_BYTES = 200 * 1024  # 200 KB

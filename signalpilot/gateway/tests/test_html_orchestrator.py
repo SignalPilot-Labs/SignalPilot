@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
+from copy import deepcopy
 
+import httpx
 import pytest
 
 from gateway.analysis_delivery.html_orchestrator import (
@@ -38,8 +41,24 @@ class _Client:
         self.requests = []
 
     async def post(self, url, *, headers, json):
-        self.requests.append({"url": url, "headers": headers, "json": json})
-        return _Response(self.payloads.pop(0))
+        self.requests.append({"url": url, "headers": headers, "json": deepcopy(json)})
+        payload = self.payloads.pop(0)
+        return payload if hasattr(payload, "raise_for_status") else _Response(payload)
+
+
+class _ErrorResponse:
+    def __init__(self, payload, *, status_code: int = 400):
+        self._payload = payload
+        self.status_code = status_code
+        self.text = json.dumps(payload)
+
+    def raise_for_status(self) -> None:
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        response = httpx.Response(self.status_code, text=self.text, request=request)
+        raise httpx.HTTPStatusError("bad request", request=request, response=response)
+
+    def json(self):
+        return self._payload
 
 
 @pytest.mark.asyncio
@@ -278,7 +297,95 @@ async def test_html_orchestrator_renders_followup_with_existing_report_payload()
     assert payload["freshAnalysis"] is None
     assert "fetch_snapshot" not in tool_names
     assert client.requests[0]["json"]["tool_choice"] == {"type": "tool", "name": "edit_dashboard"}
-    assert client.requests[0]["json"]["max_tokens"] == 20_000
+    assert client.requests[0]["json"]["max_tokens"] == 8_192
+
+
+@pytest.mark.asyncio
+async def test_html_orchestrator_retries_lower_max_tokens_when_anthropic_rejects() -> None:
+    client = _Client(
+        _ErrorResponse(
+            {
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "max_tokens: Input should be less than or equal to 8192",
+                }
+            }
+        ),
+        {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "edit-1",
+                    "name": "edit_dashboard",
+                    "input": {
+                        "report_id": "report-1",
+                        "title": "Revenue Dashboard",
+                        "html": '<!doctype html><html><body><script type="application/json" id="sp-data">{}</script></body></html>',
+                    },
+                }
+            ]
+        },
+    )
+
+    orchestrator = HtmlOrchestrator(api_key="key", http_client=client)
+    orchestrator.max_tokens = 20_000
+
+    result = await orchestrator.render_followup(
+        instruction="Make the title shorter.",
+        existing={
+            "report_id": "report-1",
+            "kind": "dashboard",
+            "title": "Revenue Dashboard",
+            "html": "<html>old</html>",
+            "data_json": {},
+        },
+        packet=None,
+        mode="edit_existing",
+    )
+
+    assert result.title == "Revenue Dashboard"
+    assert [request["json"]["max_tokens"] for request in client.requests] == [20_000, 8_192]
+
+
+@pytest.mark.asyncio
+async def test_html_orchestrator_surfaces_and_logs_anthropic_error_body(caplog: pytest.LogCaptureFixture) -> None:
+    client = _Client(
+        _ErrorResponse(
+            {
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "messages.0.content: Input is too long for the model context window",
+                }
+            }
+        )
+    )
+
+    with caplog.at_level(logging.ERROR, logger="gateway.analysis_delivery.html_orchestrator"):
+        with pytest.raises(RuntimeError) as exc_info:
+            await HtmlOrchestrator(api_key="key", http_client=client).render_followup(
+                instruction="Make the title shorter.",
+                existing={
+                    "report_id": "report-1",
+                    "kind": "dashboard",
+                    "title": "Revenue Dashboard",
+                    "html": "<html>old</html>",
+                    "data_json": {},
+                },
+                packet=None,
+                mode="edit_existing",
+            )
+
+    message = str(exc_info.value)
+    assert "invalid_request_error: messages.0.content: Input is too long" in message
+    assert "payload_chars=" in message
+    log_text = "\n".join(record.getMessage() for record in caplog.records)
+    assert "status=400" in log_text
+    assert "model=claude-sonnet-4-5-20250929" in log_text
+    assert "max_tokens=8192" in log_text
+    assert "payload_chars=" in log_text
+    assert "messages=1" in log_text
+    assert "tool_choice=edit_dashboard" in log_text
+    assert "invalid_request_error: messages.0.content: Input is too long" in log_text
 
 
 def test_malformed_tool_args_return_none() -> None:
@@ -492,6 +599,52 @@ def test_html_orchestrator_injects_ranked_chart_and_pie_styles() -> None:
     assert ".sp-pie-graphic" in result.html
     assert "aspect-ratio: 1 / 1;" in result.html
     assert ".sp-pie-slice-label" in result.html
+
+
+def test_html_orchestrator_normalizes_generated_pie_slice_geometry() -> None:
+    html = """<!doctype html><html><head></head><body>
+<main class="sp-report">
+  <section class="sp-chart-card">
+    <div class="sp-chart sp-pie-chart">
+      <div class="sp-pie-graphic">
+        <svg viewBox="0 0 200 200" preserveAspectRatio="xMidYMid meet">
+          <path d="M 100 100 L 100 10 A 90 90 0 0 1 177.94 64.95 Z" style="fill: var(--sp-chart-1);"></path>
+          <path d="M 100 100 L 177.94 64.95 A 90 90 0 0 1 164.95 157.94 Z" style="fill: var(--sp-chart-2);"></path>
+          <path d="M 100 100 L 164.95 157.94 A 90 90 0 0 1 35.05 157.94 Z" style="fill: var(--sp-chart-3);"></path>
+          <path d="M 100 100 L 35.05 157.94 A 90 90 0 0 1 100 10 Z" style="fill: var(--sp-chart-4);"></path>
+        </svg>
+      </div>
+      <div class="legend">
+        <div class="legend-item"><div class="legend-value">35%</div></div>
+        <div class="legend-item"><div class="legend-value">28%</div></div>
+        <div class="legend-item"><div class="legend-value">22%</div></div>
+        <div class="legend-item"><div class="legend-value">15%</div></div>
+      </div>
+    </div>
+  </section>
+</main>
+</body></html>"""
+
+    result = _normalize_html_result(
+        HtmlDeliverableResult(kind="dashboard", title="Customers", html=html),
+        {},
+    )
+
+    assert "L 177.94 64.95" not in result.html
+    assert "M 100 100 L 100 10 A 90 90 0 0 1 172.81 152.9 Z" in result.html
+    assert 'style="fill: var(--sp-chart-1);"' in result.html
+
+
+def test_html_orchestrator_default_max_tokens_uses_anthropic_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SIGNALPILOT_ORCHESTRATOR_MAX_TOKENS", raising=False)
+
+    assert HtmlOrchestrator(api_key="key").max_tokens == 8_192
+
+
+def test_html_orchestrator_caps_env_max_tokens_to_anthropic_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SIGNALPILOT_ORCHESTRATOR_MAX_TOKENS", "20000")
+
+    assert HtmlOrchestrator(api_key="key").max_tokens == 8_192
 
 
 def test_html_orchestrator_timeout_defaults_to_long_dashboard_window(monkeypatch: pytest.MonkeyPatch) -> None:

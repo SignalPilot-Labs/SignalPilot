@@ -1536,6 +1536,7 @@ async def _process_deliverable_followup(
         old_file_upload_id=file_upload_id,
         ephemeral_run_id=ephemeral_run_id,
     )
+    update_id = update.id
 
     try:
         runtime: NotebookRuntime | None = None
@@ -1549,7 +1550,7 @@ async def _process_deliverable_followup(
                 )
                 await _mark_deliverable_update_failed_best_effort(
                     db,
-                    update_id=update.id,
+                    update_id=update_id,
                     deliverable_id=deliverable_id,
                     error=message,
                 )
@@ -1609,7 +1610,7 @@ async def _process_deliverable_followup(
         )
         await notion_store.mark_deliverable_update_succeeded(
             db,
-            update_id=update.id,
+            update_id=update_id,
             deliverable_id=deliverable_id,
             new_file_upload_id=replaced.file_upload_id,
             html_bytes=len(html_result.html.encode("utf-8")),
@@ -1628,7 +1629,7 @@ async def _process_deliverable_followup(
         await _release_db_session(db)
         await _mark_deliverable_update_failed_best_effort(
             db,
-            update_id=update.id,
+            update_id=update_id,
             deliverable_id=deliverable_id,
             error=message,
         )

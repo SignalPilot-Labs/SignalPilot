@@ -297,7 +297,7 @@ async def test_html_orchestrator_renders_followup_with_existing_report_payload()
     assert payload["freshAnalysis"] is None
     assert "fetch_snapshot" not in tool_names
     assert client.requests[0]["json"]["tool_choice"] == {"type": "tool", "name": "edit_dashboard"}
-    assert client.requests[0]["json"]["max_tokens"] == 8_192
+    assert client.requests[0]["json"]["max_tokens"] == 30_000
 
 
 @pytest.mark.asyncio
@@ -307,7 +307,7 @@ async def test_html_orchestrator_retries_lower_max_tokens_when_anthropic_rejects
             {
                 "error": {
                     "type": "invalid_request_error",
-                    "message": "max_tokens: Input should be less than or equal to 8192",
+                    "message": "max_tokens: Input should be less than or equal to 30000",
                 }
             }
         ),
@@ -328,7 +328,7 @@ async def test_html_orchestrator_retries_lower_max_tokens_when_anthropic_rejects
     )
 
     orchestrator = HtmlOrchestrator(api_key="key", http_client=client)
-    orchestrator.max_tokens = 20_000
+    orchestrator.max_tokens = 64_000
 
     result = await orchestrator.render_followup(
         instruction="Make the title shorter.",
@@ -344,7 +344,7 @@ async def test_html_orchestrator_retries_lower_max_tokens_when_anthropic_rejects
     )
 
     assert result.title == "Revenue Dashboard"
-    assert [request["json"]["max_tokens"] for request in client.requests] == [20_000, 8_192]
+    assert [request["json"]["max_tokens"] for request in client.requests] == [64_000, 30_000]
 
 
 @pytest.mark.asyncio
@@ -381,7 +381,7 @@ async def test_html_orchestrator_surfaces_and_logs_anthropic_error_body(caplog: 
     log_text = "\n".join(record.getMessage() for record in caplog.records)
     assert "status=400" in log_text
     assert "model=claude-sonnet-4-5-20250929" in log_text
-    assert "max_tokens=8192" in log_text
+    assert "max_tokens=30000" in log_text
     assert "payload_chars=" in log_text
     assert "messages=1" in log_text
     assert "tool_choice=edit_dashboard" in log_text
@@ -700,16 +700,16 @@ def test_html_orchestrator_normalizes_generated_pie_slice_geometry() -> None:
     assert 'style="fill: var(--sp-chart-1);"' in result.html
 
 
-def test_html_orchestrator_default_max_tokens_uses_anthropic_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_html_orchestrator_default_max_tokens_uses_fixed_output_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SIGNALPILOT_ORCHESTRATOR_MAX_TOKENS", raising=False)
 
-    assert HtmlOrchestrator(api_key="key").max_tokens == 8_192
+    assert HtmlOrchestrator(api_key="key").max_tokens == 30_000
 
 
-def test_html_orchestrator_caps_env_max_tokens_to_anthropic_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_html_orchestrator_ignores_env_max_tokens_for_fixed_output_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SIGNALPILOT_ORCHESTRATOR_MAX_TOKENS", "20000")
 
-    assert HtmlOrchestrator(api_key="key").max_tokens == 8_192
+    assert HtmlOrchestrator(api_key="key").max_tokens == 30_000
 
 
 def test_html_orchestrator_timeout_defaults_to_long_dashboard_window(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -25,9 +25,9 @@ LOGGER = logging.getLogger(__name__)
 _ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 _ANTHROPIC_VERSION = "2023-06-01"
 _DEFAULT_TIMEOUT_SECONDS = 240.0
-_ANTHROPIC_MAX_OUTPUT_TOKENS = 8_192
-_DEFAULT_MAX_TOKENS = _ANTHROPIC_MAX_OUTPUT_TOKENS
-_MAX_TOKENS_RETRY_FLOOR = _ANTHROPIC_MAX_OUTPUT_TOKENS
+_HTML_ORCHESTRATOR_OUTPUT_TOKENS = 30_000
+_DEFAULT_MAX_TOKENS = _HTML_ORCHESTRATOR_OUTPUT_TOKENS
+_MAX_TOKENS_RETRY_FLOOR = _HTML_ORCHESTRATOR_OUTPUT_TOKENS
 _DEFAULT_TOOL_LOOP_LIMIT = 8
 _ANTHROPIC_ERROR_BODY_MAX_CHARS = 2_000
 _DELIVERABLE_TOOL_NAMES = {"create_dashboard", "create_report", "edit_dashboard", "edit_report"}
@@ -1242,12 +1242,6 @@ def _timeout_seconds(value: float | None) -> float:
 
 
 def _max_tokens() -> int:
-    raw = os.getenv("SIGNALPILOT_ORCHESTRATOR_MAX_TOKENS", "").strip()
-    if raw:
-        try:
-            return min(max(int(raw), 1024), _ANTHROPIC_MAX_OUTPUT_TOKENS)
-        except ValueError:
-            LOGGER.warning("Invalid SIGNALPILOT_ORCHESTRATOR_MAX_TOKENS=%r; using default", raw)
     return _DEFAULT_MAX_TOKENS
 
 

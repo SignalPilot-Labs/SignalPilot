@@ -928,6 +928,97 @@ async def test_edit_only_followup_does_not_call_notebook_refresh(monkeypatch: py
 
 
 @pytest.mark.asyncio
+async def test_followup_freezes_update_id_before_releasing_db_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, object]] = []
+    routed = _routed_installation_for_followup()
+    deliverable = SimpleNamespace(
+        id="deliverable-1",
+        report_id="report-1",
+        embed_block_id="embed-block-1",
+        file_upload_id="file-old",
+    )
+    report = SimpleNamespace(
+        id="report-1",
+        kind="dashboard",
+        title="Revenue Dashboard",
+        html="<html>old</html>",
+        data_json={},
+    )
+
+    class ExpiringUpdate:
+        expired = False
+
+        @property
+        def id(self) -> str:
+            if self.expired:
+                raise AssertionError("update id should not be read after DB session release")
+            return "update-1"
+
+    update = ExpiringUpdate()
+
+    async def rollback():
+        update.expired = True
+
+    db = MagicMock()
+    db.rollback = AsyncMock(side_effect=rollback)
+
+    async def list_comments(*args, **kwargs):
+        return [{"id": "comment-1", "discussion_id": "discussion-1", "rich_text": []}]
+
+    async def create_update(*args, **kwargs):
+        return update
+
+    async def find_deliverable(*args, **kwargs):
+        return deliverable
+
+    async def get_report(*args, **kwargs):
+        return report
+
+    async def delivery_api_key(*args, **kwargs):
+        return ""
+
+    async def render_followup(*args, **kwargs):
+        return HtmlDeliverableResult(kind="dashboard", title="Revenue Dashboard", html="<html>edited</html>")
+
+    async def replace_html(*args, **kwargs):
+        return SimpleNamespace(block_id=kwargs["embed_block_id"], file_upload_id="file-new")
+
+    async def update_report(*args, **kwargs):
+        return None
+
+    async def mark_success(*args, **kwargs):
+        calls.append(("success", kwargs["update_id"]))
+
+    async def create_comment(*args, **kwargs):
+        calls.append(("comment", _rich_text_content(kwargs["rich_text"])))
+
+    monkeypatch.setattr(notion_client, "list_comments", list_comments)
+    monkeypatch.setattr(notion_client, "create_comment", create_comment)
+    monkeypatch.setattr(notion_client, "is_bot_comment", lambda _comment: False)
+    monkeypatch.setattr(notion_client, "comment_has_page_mention", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(notion_client, "extract_comment_text", lambda _comment: "make the title shorter")
+    monkeypatch.setattr(notion_analysis.notion_store, "find_deliverable_by_embed_block", find_deliverable)
+    monkeypatch.setattr(notion_analysis.reports_store, "get_report", get_report)
+    monkeypatch.setattr(notion_analysis.notion_store, "create_deliverable_update", create_update)
+    monkeypatch.setattr(
+        notion_analysis,
+        "_run_ephemeral_deliverable_refresh",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("refresh should not run")),
+    )
+    monkeypatch.setattr(notion_analysis, "delivery_api_key_for_user", delivery_api_key)
+    monkeypatch.setattr(notion_analysis, "render_followup", render_followup)
+    monkeypatch.setattr(notion_analysis.notion_dashboards, "replace_html_deliverable", replace_html)
+    monkeypatch.setattr(notion_analysis.reports_store, "update_report_html", update_report)
+    monkeypatch.setattr(notion_analysis.notion_store, "mark_deliverable_update_succeeded", mark_success)
+
+    result = await notion_analysis.process_routed_comment_event(routed, _followup_payload(), db=db)
+
+    assert result.status == "processed"
+    assert ("success", "update-1") in calls
+    assert db.rollback.await_count >= 1
+
+
+@pytest.mark.asyncio
 async def test_followup_refuses_fallback_link_deliverable_before_render_or_patch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

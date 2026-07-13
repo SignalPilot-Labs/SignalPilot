@@ -1,5 +1,7 @@
 FROM python:3.12-slim
 
+# Deploy timing probe: keep this comment-only change rebuild-visible.
+
 # AWS CLI arch is selected from uname so the image is correct on amd64 and arm64.
 RUN apt-get update && apt-get install -y git curl unzip && \
     case "$(uname -m)" in aarch64|arm64) AWSARCH=aarch64 ;; *) AWSARCH=x86_64 ;; esac && \

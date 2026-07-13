@@ -25,7 +25,7 @@ services:
       POSTGRES_PASSWORD: changeme_dev_only
       POSTGRES_DB: signalpilot
     ports:
-      - "127.0.0.1:5601:5432"
+      - "127.0.0.1:${SP_DB_PORT:-5601}:5432"
     volumes:
       - signalpilot-pg-data:/var/lib/postgresql/data
     healthcheck:
@@ -41,27 +41,29 @@ services:
       context: ./signalpilot/gateway
       dockerfile: ../../Dockerfile.gateway
     ports:
-      - "3300:3300"
+      - "${SP_GATEWAY_HOST:-0.0.0.0}:${SP_GATEWAY_PORT:-3300}:3300"
     env_file:
       - path: ./.slack.local.env
+        required: false
+      - path: ./.env
         required: false
     environment:
       DATABASE_URL: postgresql+asyncpg://signalpilot:changeme_dev_only@db:5432/signalpilot
       SP_DATA_DIR: /data
       SP_DEPLOYMENT_MODE: local
       SP_ENCRYPTION_KEY: 5d1aa5ETRcln8vkPWrzDkdfSEuqAua5xcZCWMLMDXmc=
-      SP_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:3200,http://localhost:3300,http://localhost:2718
+      SP_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:${SP_WEB_PORT:-3200},http://localhost:${SP_GATEWAY_PORT:-3300},http://localhost:${SP_NOTEBOOK_PORT:-2718}
       # Notebook: direct mode (no K8s)
       SP_NOTEBOOK_DIRECT_URL: http://notebook:2718
       SP_NOTEBOOK_UPSTREAM_MODE: direct
       SP_NOTEBOOK_IMAGE: signalpilot-notebook:latest
       SP_NOTEBOOK_NETWORK_POLICY: "false"
-      SP_PUBLIC_GATEWAY_URL: http://localhost:3300
-      SP_PUBLIC_GATEWAY_PORT: "3300"
+      SP_PUBLIC_GATEWAY_URL: http://localhost:${SP_GATEWAY_PORT:-3300}
+      SP_PUBLIC_GATEWAY_PORT: "${SP_GATEWAY_PORT:-3300}"
       SP_REPOS_DIR: /repos
-      SP_WEB_URL: http://localhost:3200
+      SP_WEB_URL: http://localhost:${SP_WEB_PORT:-3200}
       SIGNALPILOT_NOTEBOOK_INTERNAL_URL: http://notebook:2718
-      SIGNALPILOT_NOTEBOOK_PUBLIC_URL: http://localhost:3200/notebook
+      SIGNALPILOT_NOTEBOOK_PUBLIC_URL: http://localhost:${SP_WEB_PORT:-3200}/notebook
       SIGNALPILOT_DELIVERY_MODEL: ${SIGNALPILOT_DELIVERY_MODEL:-claude-sonnet-4-5-20250929}
       # Sandbox
       SP_SANDBOX_MANAGER_URL: http://sandbox:8080
@@ -78,7 +80,7 @@ services:
       - signalpilot-gateway-secrets:/gateway-secrets
       - signalpilot-repos:/repos
     command: >
-      sh -c "python3 -c 'from gateway.store import get_local_api_key; k=get_local_api_key(); open(\"/shared/local_api_key\",\"w\").write(k) if k else None' &&
+      sh -c "python3 -m gateway.dev_local_api_key /shared/local_api_key &&
              uvicorn gateway.main:app --host 0.0.0.0 --port 3300"
     depends_on:
       db:
@@ -87,6 +89,12 @@ services:
         condition: service_healthy
       sandbox:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3300/health', timeout=2).read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
     restart: unless-stopped
 
   # ─── Notebook Server ──────────────────────────────────────────
@@ -95,9 +103,11 @@ services:
       context: ./signalpilot/notebook-server
       dockerfile: Dockerfile
     ports:
-      - "127.0.0.1:2718:2718"
+      - "127.0.0.1:${SP_NOTEBOOK_PORT:-2718}:2718"
     env_file:
       - path: ./.slack.local.env
+        required: false
+      - path: ./.env
         required: false
     entrypoint:
       - sh
@@ -107,14 +117,14 @@ services:
         exec python -m signalpilot edit \
           --host 0.0.0.0 --port 2718 --headless \
           --no-token --no-skew-protection \
-          --allow-origins http://localhost:3200,http://localhost:3300 \
+          --allow-origins http://localhost:${SP_WEB_PORT:-3200},http://localhost:${SP_GATEWAY_PORT:-3300} \
           /workspace
     environment:
       SP_LOG_DIR: /tmp/sp-logs
       SP_LOG_LEVEL: "10"
       SP_GATEWAY_URL: http://gateway:3300
       SP_GATEWAY_INTERNAL_URL: http://gateway:3300
-      SP_WEB_URL: ${SP_WEB_URL:-http://localhost:3200}
+      SP_WEB_URL: http://localhost:${SP_WEB_PORT:-3200}
       CLAUDE_CONFIG_DIR: ${CLAUDE_CONFIG_DIR:-/home/notebook/.claude}
       SIGNALPILOT_ANALYSIS_AGENT_MODEL: ${SIGNALPILOT_ANALYSIS_AGENT_MODEL:-claude-sonnet-4-5-20250929}
     volumes:
@@ -135,13 +145,20 @@ services:
       context: .
       dockerfile: Dockerfile.web
     ports:
-      - "3200:3200"
+      - "${SP_WEB_HOST:-0.0.0.0}:${SP_WEB_PORT:-3200}:3200"
     environment:
       SP_GATEWAY_INTERNAL_URL: http://gateway:3300
     volumes:
       - signalpilot-shared:/shared:ro
     depends_on:
-      - gateway
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3200').then(r=>process.exit(r.status < 500 ? 0 : 1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
     restart: unless-stopped
 
   # ─── Sandbox (gVisor code execution) ──────────────────────────

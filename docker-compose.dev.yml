@@ -1,0 +1,76 @@
+# SignalPilot — Hot-reload development overlay
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+#
+# Keep docker-compose.yml as the reproducible/prod-like stack. This overlay is
+# for day-to-day code edits: source is bind-mounted, dependency/build artifacts
+# stay inside Linux containers, and long-running services reload or restart.
+
+services:
+  gateway:
+    env_file:
+      - path: ./.slack.local.env
+        required: false
+      - path: ./.env
+        required: false
+    volumes:
+      - ./signalpilot/gateway/gateway:/app/gateway:cached
+      - ./scripts/dev-watch-notebook.py:/usr/local/bin/dev-watch-notebook.py:ro
+    command: >
+      sh -c "/app/.venv/bin/python -m gateway.dev_local_api_key /shared/local_api_key && exec /app/.venv/bin/python /usr/local/bin/dev-watch-notebook.py --watch /app/gateway --interval 1 -- /app/.venv/bin/uvicorn gateway.main:app --host 0.0.0.0 --port 3300"
+
+  notebook:
+    env_file:
+      - path: ./.slack.local.env
+        required: false
+      - path: ./.env
+        required: false
+    volumes:
+      - ./signalpilot/notebook-server/signalpilot:/opt/sp-notebook/signalpilot:cached
+      - ./scripts/dev-watch-notebook.py:/usr/local/bin/dev-watch-notebook.py:ro
+    entrypoint:
+      - sh
+      - -c
+      - |
+        export SP_API_KEY=$$(cat /shared/local_api_key 2>/dev/null || echo '')
+        exec /opt/sp-notebook/.venv/bin/python /usr/local/bin/dev-watch-notebook.py \
+          --watch /opt/sp-notebook/signalpilot \
+          --interval 1 \
+          -- /opt/sp-notebook/.venv/bin/python -m signalpilot --development-mode edit \
+            --host 0.0.0.0 --port 2718 --headless \
+            --no-token --no-skew-protection \
+            --allow-origins http://localhost:${SP_WEB_PORT:-3200},http://localhost:${SP_GATEWAY_PORT:-3300} \
+            /workspace
+
+  web:
+    build:
+      target: dev
+    environment:
+      NODE_ENV: development
+      NEXT_TELEMETRY_DISABLED: "1"
+      NEXT_PUBLIC_DEPLOYMENT_MODE: local
+      NEXT_PUBLIC_GATEWAY_URL: http://localhost:${SP_GATEWAY_PORT:-3300}
+      SP_GATEWAY_INTERNAL_URL: http://gateway:3300
+      WATCHPACK_POLLING: "true"
+      CHOKIDAR_USEPOLLING: "true"
+    volumes:
+      - ./signalpilot/web:/app/signalpilot/web:cached
+      - signalpilot-web-node-modules:/app/signalpilot/web/node_modules
+      - signalpilot-web-next:/app/signalpilot/web/.next
+      - signalpilot-shared:/shared:ro
+    command: >
+      sh -c 'i=0;
+             while [ ! -f /shared/local_api_key ] && [ "$$i" -lt 30 ]; do
+               sleep 1;
+               i=$$((i+1));
+             done;
+             if [ -f /shared/local_api_key ]; then
+               export SP_LOCAL_API_KEY="$$(cat /shared/local_api_key)";
+             fi;
+             rm -rf .next/dev;
+             exec npm run dev -- --hostname 0.0.0.0'
+
+volumes:
+  signalpilot-web-node-modules:
+  signalpilot-web-next:

@@ -1,26 +1,40 @@
-FROM node:22-slim AS builder
+FROM node:22-slim AS deps
+WORKDIR /app
+
+# Install dependencies before copying the full source so Docker can cache them.
+# npm ci installs exactly from the lockfile (reproducible); legacy-peer-deps
+# matches how the lock is generated.
+COPY signalpilot/web/package.json signalpilot/web/package-lock.json signalpilot/web/.npmrc signalpilot/web/
+RUN cd signalpilot/web && npm ci --legacy-peer-deps
+RUN cd signalpilot/web && \
+    case "$(uname -m)" in \
+      aarch64) npm install --legacy-peer-deps --no-save lightningcss-linux-arm64-gnu@1.32.0 @tailwindcss/oxide-linux-arm64-gnu@4.2.4 ;; \
+      x86_64) npm install --legacy-peer-deps --no-save lightningcss-linux-x64-gnu@1.32.0 @tailwindcss/oxide-linux-x64-gnu@4.2.4 ;; \
+    esac
+
+FROM deps AS dev
+WORKDIR /app/signalpilot/web
+
+ENV NODE_ENV=development
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_PUBLIC_DEPLOYMENT_MODE=local
+ENV NEXT_PUBLIC_GATEWAY_URL=http://localhost:3300
+ENV SP_GATEWAY_INTERNAL_URL=http://gateway:3300
+
+EXPOSE 3200
+CMD ["npm", "run", "dev", "--", "--hostname", "0.0.0.0"]
+
+FROM deps AS builder
 WORKDIR /app
 
 ARG NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
 ARG NEXT_PUBLIC_DEPLOYMENT_MODE=local
 ARG NEXT_PUBLIC_GATEWAY_URL=http://localhost:3300
+ARG SP_GATEWAY_INTERNAL_URL=http://gateway:3300
 
 ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
 ENV NEXT_PUBLIC_DEPLOYMENT_MODE=$NEXT_PUBLIC_DEPLOYMENT_MODE
 ENV NEXT_PUBLIC_GATEWAY_URL=$NEXT_PUBLIC_GATEWAY_URL
-
-# Install dependencies before copying the full source so Docker can cache them.
-# npm ci installs exactly from the lockfile (reproducible); legacy-peer-deps
-# matches how the lock is generated.
-COPY signalpilot/web/package.json signalpilot/web/package-lock.json signalpilot/web/
-RUN cd signalpilot/web && npm ci --legacy-peer-deps
-RUN cd signalpilot/web && \
-    case "$(uname -m)" in \
-      aarch64) npm install --legacy-peer-deps --no-save lightningcss-linux-arm64-musl@1.32.0 @tailwindcss/oxide-linux-arm64-musl@4.2.4 ;; \
-      x86_64) npm install --legacy-peer-deps --no-save lightningcss-linux-x64-musl@1.32.0 @tailwindcss/oxide-linux-x64-musl@4.2.4 ;; \
-    esac
-
-ARG SP_GATEWAY_INTERNAL_URL=http://gateway:3300
 ENV SP_GATEWAY_INTERNAL_URL=$SP_GATEWAY_INTERNAL_URL
 
 # Copy web app source

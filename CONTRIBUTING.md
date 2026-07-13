@@ -65,7 +65,90 @@ cd signalpilot
 git remote add upstream https://github.com/SignalPilot-Labs/signalpilot.git
 ```
 
-### Run the full stack
+### Run the hot-reload development stack
+
+Use the dev overlay for day-to-day work. It keeps the app isolated in Docker,
+but bind-mounts the source tree and runs reload-capable commands so code edits
+do not require image rebuilds.
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
+
+If another local stack is already using a default port, override only the host
+port and keep the in-container network unchanged:
+
+```bash
+SP_GATEWAY_PORT=3310 docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
+
+Put durable local overrides in the root `.env` file:
+
+```bash
+cp .env.example .env
+```
+
+Do not use `signalpilot/web/.env.local` for Docker port wiring. The dev compose
+file sets the web container environment directly and clears `.next/dev` on boot
+so a stale Next.js dev bundle cannot keep an old gateway URL.
+
+After the first build, normal source edits should only need:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+```
+
+| Service | Port | Development behavior |
+|---------|------|----------------------|
+| Web UI (Next.js) | 3200 | `next dev` with source bind-mounted, `.next` and `node_modules` in Docker volumes |
+| Gateway (FastAPI + MCP) | 3300 | source bind-mounted; Uvicorn auto-restarts on Python edits using polling |
+| Notebook server | 2718 | source bind-mounted; server auto-restarts on Python edits using polling |
+| PostgreSQL | 5601 | persisted Docker volume |
+
+The hot-reload overlay covers the main local product path: web, gateway,
+notebook server, sandbox, and Postgres. It does not run the K8s pod-orchestration
+mode, benchmark harnesses, plugin test images, or older workspaces/Notion-worker
+services.
+
+Rebuild only when dependencies, lockfiles, Dockerfiles, or system packages
+change.
+
+Useful checks:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml ps
+docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f gateway web
+docker compose -f docker-compose.yml -f docker-compose.dev.yml down --remove-orphans
+```
+
+If Next.js exits after an interrupted build with a Turbopack cache error, restart
+the web service; the dev overlay clears the corrupt cache path before `next dev`
+starts.
+
+### Optional local credentials
+
+The core Docker stack runs without external credentials. You can open the web
+app, use the gateway, start notebooks, and use local Postgres/Sandbox without
+Claude, Slack, or Notion keys.
+
+Add optional integration credentials to the root `.env` file. Existing machines
+that already use `.slack.local.env` still work, but `.env` is the preferred file
+for new local setups.
+
+| Integration | Required only for | Local variables |
+|-------------|-------------------|-----------------|
+| Claude / Anthropic | notebook AI chat, AI delivery rendering, Slack/Notion analysis agents | `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`; alternatively set `CLAUDE_HOST_CONFIG_DIR` to a host directory containing Claude Code credentials |
+| Slack OAuth / Events | installing Slack, receiving Slack events, Slack progress/delivery | `SLACK_OAUTH_CLIENT_ID`, `SLACK_OAUTH_CLIENT_SECRET`, `SLACK_OAUTH_REDIRECT_URI`, `SLACK_SIGNING_SECRET`; Socket Mode additionally uses `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` |
+| Notion OAuth / webhooks | installing Notion, receiving Notion comments, Notion delivery | `NOTION_OAUTH_CLIENT_ID`, `NOTION_OAUTH_CLIENT_SECRET`, `NOTION_OAUTH_REDIRECT_URI`, `NOTION_WEBHOOK_VERIFICATION_TOKEN` |
+
+Slack and Notion callback/webhook URLs must be reachable by those providers. For
+local development, point the redirect/webhook variables at a tunnel such as
+ngrok or cloudflared that forwards to the gateway on `SP_GATEWAY_PORT`.
+
+### Run the production-like local stack
+
+Use the base compose file when you want to test the standalone image path rather
+than the hot-reload workflow.
 
 ```bash
 docker compose up --build
@@ -85,13 +168,12 @@ Connect the MCP server to Claude Code:
 claude mcp add --transport http signalpilot http://localhost:3300/mcp
 ```
 
-### Iterating on a single service
+### Rebuilding a single service
 
 ```bash
-# Rebuild just the gateway after backend changes
+# Only needed after dependency, lockfile, or Dockerfile changes
 docker compose build gateway && docker compose up -d gateway
 
-# Rebuild the web UI
 docker compose build web && docker compose up -d web
 ```
 

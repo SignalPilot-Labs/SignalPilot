@@ -13,6 +13,8 @@ sp is designed to be:
     5. fun
 """
 
+# Deploy timing probe: source-level touch for notebook image rebuilds.
+
 __all__ = [  # noqa: RUF022
     # Core API
     "App",

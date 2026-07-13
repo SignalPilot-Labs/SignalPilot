@@ -3,12 +3,11 @@
 **/*.pyc
 **/*.pyo
 **/.venv/
+**/.pytest_cache/
 **/.ruff_cache/
 **/.mypy_cache/
-**/.pytest_cache/
-test/
-tests/
-*.egg-info
+**/.next/
+**/.turbo/
+**/node_modules/
 **/dist/
 **/build/
-**/node_modules/

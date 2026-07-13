@@ -1,6 +1,5 @@
+# syntax=docker/dockerfile:1.7
 FROM python:3.12-slim
-
-# Deploy timing probe: keep this comment-only change rebuild-visible.
 
 # AWS CLI arch is selected from uname so the image is correct on amd64 and arm64.
 RUN apt-get update && apt-get install -y git curl unzip && \
@@ -16,16 +15,24 @@ RUN apt-get update && apt-get install -y git curl unzip && \
 # download a managed interpreter.
 ENV UV_PYTHON_DOWNLOADS=never \
     UV_PYTHON_PREFERENCE=only-system \
-    UV_PROJECT_ENVIRONMENT=/app/.venv
+    UV_PROJECT_ENVIRONMENT=/app/.venv \
+    UV_LINK_MODE=copy
 
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
-COPY gateway/ gateway/
 
 # Core deps + commonly used optional connectors, pinned by the lockfile.
-RUN uv sync --frozen --no-dev \
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project \
       --extra snowflake --extra bigquery --extra clickhouse
+
+COPY --chown=10001:10001 gateway/ gateway/
+
+# Install only the local package after copying source, so source edits do not
+# invalidate the expensive dependency layer above.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --python /app/.venv/bin/python --no-deps -e .
 
 # uv installs into .venv — put it first on PATH so uvicorn/python resolve to it.
 ENV PATH="/app/.venv/bin:$PATH"
@@ -33,7 +40,8 @@ ENV PATH="/app/.venv/bin:$PATH"
 # Run as non-root for defense-in-depth
 RUN groupadd -g 10001 appuser && \
     useradd -r -u 10001 -g appuser appuser
-RUN mkdir -p /data /shared /gateway-secrets /repos && chown -R appuser:appuser /app /data /shared /gateway-secrets /repos
+RUN mkdir -p /data /shared /gateway-secrets /repos && \
+    chown -R appuser:appuser /data /shared /gateway-secrets /repos
 
 USER appuser
 

@@ -1,5 +1,7 @@
 FROM python:3.13-slim
 
+# Deploy timing probe: keep this comment-only change rebuild-visible.
+
 RUN groupadd -g 10001 notebook && \
     useradd -r -u 10001 -g notebook notebook && \
     mkdir -p /workspace /home/notebook/.sp && \

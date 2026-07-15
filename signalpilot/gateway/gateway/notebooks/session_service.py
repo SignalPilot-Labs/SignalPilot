@@ -18,12 +18,12 @@ from gateway.notebook_proxy.constants import POD_PORT
 from gateway.orchestrator import NotebookOrchestrator
 from gateway.orchestrator.jwt_secret_lifecycle import create_jwt_secret_with_owner_ref
 from gateway.store import notebook_sessions as ns
-from gateway.store import user_secrets as user_secrets_store
+from gateway.store import org_secrets as org_secrets_store
 
 logger = logging.getLogger(__name__)
 
 OrchestratorFactory = Callable[[], Awaitable[NotebookOrchestrator]]
-_AI_CREDENTIAL_ENV_NAMES = ("CLAUDE_CODE_OAUTH_TOKEN", "OAUTH_TOKEN", "ANTHROPIC_API_KEY")
+_AI_CREDENTIAL_ENV_NAMES = ("CLAUDE_CODE_OAUTH_TOKEN", "OAUTH_TOKEN")
 _NOTEBOOK_MODEL_ENV_NAMES = ("SIGNALPILOT_ANALYSIS_AGENT_MODEL", "SIGNALPILOT_WORKER_AGENT_MODEL")
 _DEFAULT_CLOUD_WEB_URL = "https://app.signalpilot.ai"
 
@@ -110,7 +110,6 @@ async def _pod_extra_env(
     session: AsyncSession,
     *,
     org_id: str,
-    user_id: str,
     extra_env: dict[str, str] | None,
 ) -> dict[str, str] | None:
     env: dict[str, str] = {
@@ -123,7 +122,7 @@ async def _pod_extra_env(
     if web_url:
         env["SP_WEB_URL"] = web_url
 
-    anthropic_key = await user_secrets_store.get_user_anthropic_key(session, org_id, user_id)
+    anthropic_key = await org_secrets_store.resolve_anthropic_key(session, org_id)
     if anthropic_key:
         env["ANTHROPIC_API_KEY"] = anthropic_key
 
@@ -297,7 +296,6 @@ async def ensure_notebook_session(
     pod_extra_env = await _pod_extra_env(
         session,
         org_id=org_id,
-        user_id=credential_user_id or user_id,
         extra_env=extra_env,
     )
     session_jwt = mint_session_jwt(

@@ -222,20 +222,15 @@ async def test_worker_uses_explicit_config_user_id_before_notion_installation() 
 
 
 @pytest.mark.asyncio
-async def test_worker_uses_notion_installation_user_when_user_id_unset(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def latest_notion_user_id(db, org_id: str) -> str:
-        assert db == "db"
-        assert org_id == "org-1"
-        return "user-from-notion"
-
-    monkeypatch.setattr(worker_module, "_latest_notion_installation_user_id", latest_notion_user_id)
+async def test_worker_returns_none_when_user_id_unset() -> None:
     worker = SlackPoCWorker(
         SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", org_id="org-1"),
         AsyncMock(spec=SlackApiClient),
         AsyncMock(),
     )
 
-    assert await worker._analysis_user_id("db") == "user-from-notion"
+    assert await worker._analysis_user_id("db") is None
+    assert not hasattr(worker_module, "_latest_notion_installation_user_id")
 
 
 @pytest.mark.asyncio
@@ -276,7 +271,7 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
         request_id: str,
         project_id: str,
         branch: str,
-        credential_user_id: str,
+        credential_user_id: str | None,
     ):
         assert db == "db"
         assert org_id == "org-1"
@@ -284,7 +279,7 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
         assert request_id == "slack-req-1"
         assert project_id == "project-1"
         assert branch == "analysis/slack/slack-req-1-analyze-revenue"
-        assert credential_user_id == "user-1"
+        assert credential_user_id is None
         events.append("ensure_session")
         return worker_module.NotebookRuntime(
             session_id="session-1",
@@ -315,11 +310,12 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
     monkeypatch.setattr(worker_module.notebook_analysis, "_poll_analysis", poll_analysis)
     monkeypatch.setattr(worker_module.notebook_analysis, "_public_signalpilot_url", lambda url, runtime: url)
     monkeypatch.setattr(worker_module.notebook_analysis, "_with_public_chart_urls", lambda status, runtime: status)
+    monkeypatch.setattr(worker_module, "resolve_anthropic_key", AsyncMock(return_value="sk-ant-org"))
 
-    async def delivery_api_key_for_user(*args, **kwargs):
+    async def delivery_api_key_for_org(*args, **kwargs):
         assert args == ("db",)
-        assert kwargs == {"org_id": "org-1", "user_id": "user-1"}
-        return "sk-ant-user"
+        assert kwargs == {"org_id": "org-1"}
+        return "sk-ant-org"
 
     async def render_delivery(packet, *, api_key=None, renderer=None):
         del packet, renderer
@@ -332,7 +328,7 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
             confidence_score="high",
         )
 
-    monkeypatch.setattr(worker_module, "delivery_api_key_for_user", delivery_api_key_for_user)
+    monkeypatch.setattr(worker_module, "delivery_api_key_for_org", delivery_api_key_for_org)
     monkeypatch.setattr(worker_module, "render_delivery", render_delivery)
 
     slack = AsyncMock(spec=SlackApiClient)
@@ -357,7 +353,6 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
             bot_token="xoxb-test",
             app_token="xapp-test",
             org_id="org-1",
-            user_id="user-1",
             default_project_id="project-1",
         ),
         slack,
@@ -376,7 +371,7 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
         assert source_prompt == "analyze revenue"
         assert channel_id == "C1"
         assert message_ts == "progress-ts"
-        assert user_id == "user-1"
+        assert user_id == "analysis:slack:slack-req-1"
         await slack.update_message(channel=channel_id, ts=message_ts, text="Querying database...")
         progress_seen.set()
         await stop_event.wait()
@@ -397,6 +392,8 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
     )
 
     assert events == [
+        "db_enter",
+        "db_exit",
         "db_enter",
         "resolve_route",
         "ensure_session",
@@ -419,7 +416,7 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
     assert slack_events[-1][0] == "update"
     assert "*Analysis complete*" in slack_events[-1][1]
     assert slack.post_message.await_count == 1
-    assert render_api_keys == ["sk-ant-user"]
+    assert render_api_keys == ["sk-ant-org"]
     slack.add_reaction.assert_any_await(channel="C1", timestamp="1.0", name="eyes")
     slack.add_reaction.assert_any_await(channel="C1", timestamp="1.0", name="white_check_mark")
     slack.remove_reaction.assert_any_await(channel="C1", timestamp="1.0", name="eyes")
@@ -428,6 +425,13 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
 
 @pytest.mark.asyncio
 async def test_worker_adds_error_reaction_when_analysis_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    class SessionContext:
+        async def __aenter__(self):
+            return "db"
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
     slack = AsyncMock(spec=SlackApiClient)
     slack.post_message.return_value = "progress-ts"
     slack.add_reaction.return_value = None
@@ -436,13 +440,14 @@ async def test_worker_adds_error_reaction_when_analysis_fails(monkeypatch: pytes
     worker = SlackPoCWorker(
         SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", org_id="org-1", user_id="user-1"),
         slack,
-        AsyncMock(),
+        lambda: SessionContext(),
     )
 
     async def fail_previous_messages(_request):
         raise RuntimeError("notebook auth missing")
 
     monkeypatch.setattr(worker, "_previous_thread_messages", fail_previous_messages)
+    monkeypatch.setattr(worker_module, "resolve_anthropic_key", AsyncMock(return_value="sk-ant-org"))
 
     await worker._process_request(
         SlackRequest(
@@ -465,6 +470,54 @@ async def test_worker_adds_error_reaction_when_analysis_fails(monkeypatch: pytes
     slack.remove_reaction.assert_any_await(channel="C1", timestamp="1.0", name="white_check_mark")
     slack.update_message.assert_awaited_once()
     assert "could not complete the analysis" in slack.update_message.call_args.kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_worker_posts_admin_nudge_when_org_key_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    class SessionContext:
+        async def __aenter__(self):
+            return "db"
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    slack = AsyncMock(spec=SlackApiClient)
+    slack.post_message.return_value = "nudge-ts"
+    slack.add_reaction.return_value = None
+    slack.remove_reaction.return_value = None
+    monkeypatch.setenv("SP_WEB_URL", "https://app.test")
+    monkeypatch.setattr(worker_module, "resolve_anthropic_key", AsyncMock(return_value=None))
+
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", org_id="org-1"),
+        slack,
+        lambda: SessionContext(),
+    )
+    previous_messages = AsyncMock()
+    monkeypatch.setattr(worker, "_previous_thread_messages", previous_messages)
+
+    await worker._process_request(
+        SlackRequest(
+            event_id="Ev1",
+            team_id="T1",
+            channel_id="C1",
+            user_id="U1",
+            text="analyze revenue",
+            event_ts="1.0",
+            thread_ts="1.0",
+            source_url="https://slack.test/archives/C1/p10",
+        )
+    )
+
+    slack.post_message.assert_awaited_once()
+    message = slack.post_message.await_args.kwargs["text"]
+    assert message == (
+        "SignalPilot needs an Anthropic API key. "
+        "Ask your admin to add it on the integrations page: https://app.test/integrations"
+    )
+    assert "Notion" not in message
+    previous_messages.assert_not_awaited()
+    slack.add_reaction.assert_any_await(channel="C1", timestamp="1.0", name="x")
 
 
 @pytest.mark.asyncio

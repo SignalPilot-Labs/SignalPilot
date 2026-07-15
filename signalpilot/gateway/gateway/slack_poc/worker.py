@@ -29,7 +29,7 @@ from gateway.analysis_delivery import (
     AnalysisPreflightKind,
     SlackTraceProgressReporter,
     classify_analysis_request,
-    delivery_api_key_for_user,
+    delivery_api_key_for_org,
     delivery_result_to_status,
     load_delivery_packet,
     load_delivery_packet_from_events,
@@ -45,6 +45,7 @@ from gateway.slack_poc.progress import (
     INITIAL_PROGRESS_TEXT,
 )
 from gateway.store import slack as slack_store
+from gateway.store.org_secrets import resolve_anthropic_key
 from gateway.string_utils import string_value as _string
 
 LOGGER = logging.getLogger(__name__)
@@ -60,6 +61,11 @@ SLACK_POC_HTTP_DEFAULT_HOST = "127.0.0.1"
 _PLACEHOLDER_CHART_TITLE_RE = re.compile(
     r"(?:notebook\s+)?(?:chart|image|figure|visualization)(?:\s+\d+)?",
     flags=re.I,
+)
+_DEFAULT_WEB_URL = "https://app.signalpilot.ai"
+_MISSING_ANTHROPIC_KEY_TEMPLATE = (
+    "SignalPilot needs an Anthropic API key. "
+    "Ask your admin to add it on the integrations page: {url}"
 )
 
 
@@ -410,6 +416,20 @@ class SlackPoCWorker:
         progress_task: asyncio.Task[None] | None = None
         await self._add_request_reaction(request, SLACK_ACK_REACTION)
         try:
+            async with self.session_factory() as db:
+                has_org_anthropic_key = bool(await resolve_anthropic_key(db, self.config.org_id))
+        except Exception as exc:
+            LOGGER.info("Could not load org Anthropic key for Slack analysis: %s", exc, exc_info=True)
+            has_org_anthropic_key = False
+        if not has_org_anthropic_key:
+            await self.slack.post_message(
+                channel=request.channel_id,
+                thread_ts=request.thread_ts,
+                text=_missing_anthropic_key_text(),
+            )
+            await self._mark_request_failed(request)
+            return
+        try:
             progress_ts = await self.slack.post_message(
                 channel=request.channel_id,
                 thread_ts=request.thread_ts,
@@ -420,7 +440,7 @@ class SlackPoCWorker:
         try:
             previous_messages = await self._previous_thread_messages(request)
             async with self.session_factory() as db:
-                analysis_user_id = await self._analysis_user_id(db)
+                credential_user_id = await self._analysis_user_id(db)
                 discussion_id = _discussion_id(request)
                 request_id = notebook_analysis._analysis_request_id("slack", discussion_id)
                 defaults = self._analysis_defaults(request)
@@ -434,6 +454,7 @@ class SlackPoCWorker:
                     default_branch=defaults.default_branch,
                     analysis_branch_mode=defaults.analysis_branch_mode,
                 )
+                analysis_user_id = credential_user_id or route.analysis_user_id
                 runtime = await ensure_analysis_notebook_session(
                     db,
                     org_id=self.config.org_id,
@@ -441,7 +462,7 @@ class SlackPoCWorker:
                     request_id=route.request_id,
                     project_id=route.project_id,
                     branch=route.branch,
-                    credential_user_id=analysis_user_id,
+                    credential_user_id=credential_user_id,
                 )
                 await notebook_analysis.upsert_analysis_trail_seed(
                     db,
@@ -513,10 +534,9 @@ class SlackPoCWorker:
             delivery_api_key = ""
             try:
                 async with self.session_factory() as db:
-                    delivery_api_key = await delivery_api_key_for_user(
+                    delivery_api_key = await delivery_api_key_for_org(
                         db,
                         org_id=self.config.org_id,
-                        user_id=analysis_user_id,
                     )
                     packet = await load_delivery_packet(
                         db,
@@ -665,16 +685,11 @@ class SlackPoCWorker:
         except Exception as exc:
             LOGGER.info("Could not update Slack progress message: %s", exc, exc_info=True)
 
-    async def _analysis_user_id(self, db: AsyncSession) -> str:
+    async def _analysis_user_id(self, db: AsyncSession) -> str | None:
+        del db
         if self.config.user_id:
             return self.config.user_id
-        user_id = await _latest_notion_installation_user_id(db, self.config.org_id)
-        if user_id:
-            return user_id
-        raise RuntimeError(
-            "SLACK_POC_USER_ID is unset and no connected Notion installation user_id "
-            f"was found for org {self.config.org_id!r}."
-        )
+        return None
 
     def _analysis_defaults(self, request: SlackRequest) -> SlackAnalysisDefaults:
         defaults = self.config.channel_defaults.get(request.channel_id)
@@ -1101,25 +1116,6 @@ async def _dispatch_self_serve_payload(payload: dict[str, Any], base_config: Sla
         await slack.aclose()
 
 
-async def _latest_notion_installation_user_id(db: AsyncSession, org_id: str) -> str | None:
-    from sqlalchemy import select
-
-    from gateway.db.models import NotionInstallation
-
-    result = await db.execute(
-        select(NotionInstallation.user_id)
-        .where(
-            NotionInstallation.org_id == org_id,
-            NotionInstallation.status == "connected",
-            NotionInstallation.user_id.is_not(None),
-        )
-        .order_by(NotionInstallation.updated_at.desc())
-        .limit(1)
-    )
-    value = result.scalar_one_or_none()
-    return str(value) if value else None
-
-
 def load_config_from_env() -> SlackPoCConfig:
     _load_local_env()
     bot_token = _required_env("SLACK_BOT_TOKEN")
@@ -1266,6 +1262,15 @@ def _remove_bot_mention(text: str, bot_user_id: str | None) -> str:
     if bot_user_id:
         text = re.sub(rf"<@{re.escape(bot_user_id)}>\s*", "", text)
     return re.sub(r"<@[A-Z0-9]+>\s*", "", text).strip()
+
+
+def _integrations_url() -> str:
+    web_url = os.getenv("SIGNALPILOT_WEB_URL") or os.getenv("SP_WEB_URL") or _DEFAULT_WEB_URL
+    return f"{web_url.rstrip('/')}/integrations" if web_url else "/integrations"
+
+
+def _missing_anthropic_key_text() -> str:
+    return _MISSING_ANTHROPIC_KEY_TEMPLATE.format(url=_integrations_url())
 
 
 def _clip_text(text: str) -> str:

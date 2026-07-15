@@ -207,27 +207,31 @@ def _get_auth_config() -> dict[str, str]:
     if credentials_path.is_file() and credentials_path.stat().st_size > 0:
         return {"type": "config_dir", "token": ""}
 
-    # Try fetching from gateway user secrets
+    # Check gateway org secrets. The full key is never returned through GET;
+    # it should already be injected into ANTHROPIC_API_KEY by the gateway.
     try:
-        from signalpilot._server.gateway_client import gateway_headers, gateway_url
         import httpx
+
+        from signalpilot._server.gateway_client import (
+            gateway_headers,
+            gateway_url,
+        )
         resp = httpx.get(
-            f"{gateway_url()}/api/user/secrets",
+            f"{gateway_url()}/api/org/secrets",
             headers=gateway_headers(),
             timeout=5.0,
         )
         if resp.status_code == 200:
             data = resp.json()
-            if data.get("has_anthropic_key"):
-                # The full key isn't returned via GET for security.
-                # It should be injected as env var by the gateway.
+            if data.get("has_key"):
                 pass
     except Exception:
         pass
 
     raise ValueError(
         "No AI credentials configured. Set CLAUDE_CODE_OAUTH_TOKEN or "
-        "ANTHROPIC_API_KEY, or add your Anthropic API key in Settings."
+        "ANTHROPIC_API_KEY, or ask your admin to add the Anthropic API key "
+        "on the integrations page."
     )
 
 

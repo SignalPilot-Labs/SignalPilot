@@ -23,7 +23,7 @@ from gateway.analysis_delivery import (
     AnalysisPreflightKind,
     DeliveryPacket,
     classify_analysis_request,
-    delivery_api_key_for_user,
+    delivery_api_key_for_org,
     delivery_result_to_status,
     load_delivery_packet,
     load_delivery_packet_from_events,
@@ -1611,10 +1611,9 @@ async def _process_deliverable_followup(
             if plan.requires_ephemeral_run
             else "Updating this dashboard/report.",
         )
-        delivery_api_key = await delivery_api_key_for_user(
+        delivery_api_key = await delivery_api_key_for_org(
             db,
             org_id=org_id,
-            user_id=user_id,
         )
         await _release_db_session(db)
         html_result = await render_followup(
@@ -1951,10 +1950,9 @@ async def process_routed_comment_event(
         public_status = _with_public_snapshot_urls(_with_public_chart_urls(final_status, runtime), runtime)
         public_trail_url = _public_signalpilot_url(public_status.get("trailUrl") or start_trail_url, runtime)
         delivery_user_id = routed.installation.user_id or route.analysis_user_id
-        delivery_api_key = await delivery_api_key_for_user(
+        delivery_api_key = await delivery_api_key_for_org(
             db,
             org_id=routed.installation.org_id,
-            user_id=delivery_user_id,
         )
         try:
             packet = await load_delivery_packet(

@@ -25,6 +25,7 @@ from .metrics import router as metrics_router
 from .notebook_sessions import router as notebook_sessions_router
 from .notion import router as notion_router
 from .notion import webhook_router as notion_webhook_router
+from .org_secrets import router as org_secrets_router
 from .projects import router as projects_router
 from .query import router as query_router
 from .reports import router as reports_router
@@ -63,6 +64,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(reports_router)
     app.include_router(notion_router)
     app.include_router(notion_webhook_router)
+    app.include_router(org_secrets_router)
     app.include_router(slack_router)
     app.include_router(workspace_projects_router)
     app.include_router(chat_router)

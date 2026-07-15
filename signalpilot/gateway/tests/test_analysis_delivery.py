@@ -10,7 +10,7 @@ from gateway.analysis_delivery import (
     AnalysisPreflightKind,
     DeliveryRenderer,
     classify_analysis_request,
-    delivery_api_key_for_user,
+    delivery_api_key_for_org,
     delivery_result_to_status,
     load_delivery_packet,
     load_delivery_packet_from_events,
@@ -378,25 +378,25 @@ def test_slack_progress_waits_for_worker_plan_then_uses_exact_steps() -> None:
 
 
 @pytest.mark.asyncio
-async def test_delivery_api_key_for_user_reads_stored_account_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    get_user_anthropic_key = AsyncMock(return_value="sk-ant-user")
-    monkeypatch.setattr(credentials_module.user_secrets_store, "get_user_anthropic_key", get_user_anthropic_key)
+async def test_delivery_api_key_for_org_reads_stored_org_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    resolve_anthropic_key = AsyncMock(return_value="sk-ant-org")
+    monkeypatch.setattr(credentials_module.org_secrets_store, "resolve_anthropic_key", resolve_anthropic_key)
 
-    api_key = await delivery_api_key_for_user(AsyncMock(), org_id="org-1", user_id="user-1")
+    api_key = await delivery_api_key_for_org(AsyncMock(), org_id="org-1")
 
-    assert api_key == "sk-ant-user"
-    get_user_anthropic_key.assert_awaited_once()
-    assert get_user_anthropic_key.await_args.args[1:] == ("org-1", "user-1")
+    assert api_key == "sk-ant-org"
+    resolve_anthropic_key.assert_awaited_once()
+    assert resolve_anthropic_key.await_args.args[1:] == ("org-1",)
 
 
 @pytest.mark.asyncio
-async def test_delivery_api_key_for_user_disables_model_delivery_without_account_key(
+async def test_delivery_api_key_for_org_disables_model_delivery_without_org_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    get_user_anthropic_key = AsyncMock(return_value=None)
-    monkeypatch.setattr(credentials_module.user_secrets_store, "get_user_anthropic_key", get_user_anthropic_key)
+    resolve_anthropic_key = AsyncMock(return_value=None)
+    monkeypatch.setattr(credentials_module.org_secrets_store, "resolve_anthropic_key", resolve_anthropic_key)
 
-    api_key = await delivery_api_key_for_user(AsyncMock(), org_id="org-1", user_id="user-1")
+    api_key = await delivery_api_key_for_org(AsyncMock(), org_id="org-1")
 
     assert api_key == ""
 

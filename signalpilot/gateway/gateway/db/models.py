@@ -958,6 +958,21 @@ class GatewayUserSecrets(GatewayBase):
     )
 
 
+class GatewayOrgSecrets(GatewayBase):
+    """Org-scoped secrets — encrypted at rest."""
+
+    __tablename__ = "gateway_org_secrets"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    anthropic_api_key_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        Index("ix_gw_orgsecrets_org_id", "org_id"),
+    )
+
+
 class GatewayGitHubInstallation(GatewayBase):
     """GitHub App installation linked to an org."""
 

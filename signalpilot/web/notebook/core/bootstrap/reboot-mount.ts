@@ -1,4 +1,7 @@
-import { mountOptionsSchema, applyMountConfigDeltas } from "@/mount";
+import {
+  applyMountConfigDeltas,
+  mountOptionsSchema,
+} from "@/core/bootstrap/mount-store";
 import { fetchMountConfig, MountConfigError } from "./fetch-mount-config";
 import { SPA_NAVIGATE_EVENT } from "@/core/router/spa-navigate";
 import { Logger } from "@/utils/Logger";

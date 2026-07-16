@@ -49,7 +49,7 @@ import {
 /* ── API Key Setup ── */
 const ApiKeySetup: React.FC = () => {
   return (
-    <div className="flex flex-col items-center justify-center h-full p-6 text-center gap-4">
+    <div className="flex flex-col items-center justify-center h-full bg-background p-6 text-center gap-4">
       <KeyRoundIcon className="h-10 w-10 text-muted-foreground opacity-30" />
       <div>
         <h3 className="text-sm font-semibold text-foreground mb-1">Set up AI Agent</h3>
@@ -136,7 +136,7 @@ const AgentChatPanel: React.FC = () => {
 
   if (aiConfigured === null) {
     return (
-      <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+      <div className="flex items-center justify-center h-full bg-background text-muted-foreground text-sm">
         <Loader2 className="h-4 w-4 animate-spin mr-2" />
         Checking AI configuration...
       </div>
@@ -341,7 +341,7 @@ const AgentChatPanelInner: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100%-53px)]">
+    <div className="flex flex-col h-[calc(100%-53px)] bg-background text-foreground">
       {/* Header */}
       <div className="flex border-b px-3 py-2 justify-between shrink-0 items-center">
         <div className="flex items-center gap-2">

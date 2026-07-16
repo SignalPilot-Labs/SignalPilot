@@ -46,6 +46,8 @@ services:
   web:
     build:
       target: dev
+    healthcheck:
+      disable: true
     environment:
       NODE_ENV: development
       NEXT_TELEMETRY_DISABLED: "1"
@@ -56,7 +58,11 @@ services:
       CHOKIDAR_USEPOLLING: "true"
     volumes:
       - ./signalpilot/web:/app/signalpilot/web:cached
-      - signalpilot-web-node-modules:/app/signalpilot/web/node_modules
+      - type: volume
+        source: signalpilot-web-node-modules
+        target: /app/signalpilot/web/node_modules
+        volume:
+          nocopy: true
       - signalpilot-web-next:/app/signalpilot/web/.next
       - signalpilot-shared:/shared:ro
     command: >
@@ -68,8 +74,35 @@ services:
              if [ -f /shared/local_api_key ]; then
                export SP_LOCAL_API_KEY="$$(cat /shared/local_api_key)";
              fi;
+             if [ ! -d node_modules/next ]; then
+               npm ci --legacy-peer-deps;
+             fi;
+             case "$$(uname -m)" in
+               aarch64)
+                 if [ ! -e node_modules/lightningcss-linux-arm64-gnu/lightningcss.linux-arm64-gnu.node ]; then
+                   npm install --legacy-peer-deps --no-save lightningcss-linux-arm64-gnu@1.32.0 @tailwindcss/oxide-linux-arm64-gnu@4.2.4;
+                 fi
+                 ;;
+               x86_64)
+                 if [ ! -e node_modules/lightningcss-linux-x64-gnu/lightningcss.linux-x64-gnu.node ]; then
+                   npm install --legacy-peer-deps --no-save lightningcss-linux-x64-gnu@1.32.0 @tailwindcss/oxide-linux-x64-gnu@4.2.4;
+                 fi
+                 ;;
+             esac;
+             bundler_flag="--webpack";
+             case "$${NEXT_DEV_BUNDLER:-webpack}" in
+               turbo|turbopack)
+                 bundler_flag="--turbopack";
+                 ;;
+               webpack|"")
+                 bundler_flag="--webpack";
+                 ;;
+               *)
+                 echo "Unknown NEXT_DEV_BUNDLER=$${NEXT_DEV_BUNDLER}; using webpack";
+                 ;;
+             esac;
              rm -rf .next/dev;
-             exec npm run dev -- --hostname 0.0.0.0'
+             exec npm run dev -- --hostname 0.0.0.0 "$$bundler_flag"'
 
 volumes:
   signalpilot-web-node-modules:

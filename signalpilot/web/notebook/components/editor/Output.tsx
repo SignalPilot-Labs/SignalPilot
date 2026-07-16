@@ -18,30 +18,30 @@ import {
   ChevronsUpDownIcon,
   ExpandIcon,
 } from "lucide-react";
-import { tooltipHandler } from "@/components/charts/tooltip";
 import { useExpandedOutput } from "@/core/cells/outputs";
 import { viewStateAtom } from "@/core/mode";
 import { useIframeCapabilities } from "@/hooks/useIframeCapabilities";
 import { useOverflowDetection } from "@/hooks/useOverflowDetection";
 import { renderHTML } from "@/plugins/core/RenderHTML";
 import { Banner } from "@/plugins/impl/common/error-banner";
-import type { TopLevelFacetedUnitSpec } from "@/plugins/impl/data-explorer/queries/types";
-import { getContainerWidth } from "@/plugins/impl/vega/utils";
-import { useTheme } from "@/theme/useTheme";
 import { Events } from "@/utils/events";
 import { invariant } from "@/utils/invariant";
 import { processMimeBundle } from "@/utils/mime-types";
 import { Objects } from "@/utils/objects";
-import { LazyVegaEmbed } from "../charts/lazy";
-import { ChartLoadingState } from "../data-table/charts/components/chart-states";
 import { Button } from "../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { Tooltip } from "../ui/tooltip";
-import { CsvViewer } from "./file-tree/renderers";
 import { SpTracebackOutput } from "./output/SpTracebackOutput";
 import { renderMimeIcon } from "./renderMimeIcon";
 
 const METADATA_KEY = "__metadata__";
+
+const LazyCsvViewer = React.lazy(() =>
+  import("./file-tree/renderers").then((module) => ({
+    default: module.CsvViewer,
+  })),
+);
+const LazyVegaOutput = React.lazy(() => import("./output/VegaOutput"));
 
 export type MimeType = OutputMessage["mimetype"];
 
@@ -69,7 +69,6 @@ export const OutputRenderer: React.FC<{
     metadata,
     renderFallback,
   } = props;
-  const { theme } = useTheme();
 
   // Memoize parsing the json data
   const parsedJsonData = useMemo(() => {
@@ -179,7 +178,11 @@ export const OutputRenderer: React.FC<{
         typeof data === "string",
         `Expected string data for mime=${mimetype}. Got ${typeof data}`,
       );
-      return <CsvViewer contents={data} />;
+      return (
+        <Suspense fallback={<TextOutput channel={channel} text="Loading CSV..." />}>
+          <LazyCsvViewer contents={data} />
+        </Suspense>
+      );
     case "text/latex":
     case "text/markdown":
       invariant(
@@ -194,17 +197,8 @@ export const OutputRenderer: React.FC<{
     case "application/vnd.vegalite.v6+json":
     case "application/vnd.vega.v6+json":
       return (
-        <Suspense fallback={<ChartLoadingState />}>
-          <LazyVegaEmbed
-            spec={parsedJsonData as TopLevelFacetedUnitSpec}
-            data-container-width={getContainerWidth(parsedJsonData)}
-            options={{
-              theme: theme === "dark" ? "dark" : undefined,
-              mode: "vega-lite",
-              tooltip: tooltipHandler.call,
-              renderer: "canvas",
-            }}
-          />
+        <Suspense fallback={<TextOutput channel={channel} text="Loading chart..." />}>
+          <LazyVegaOutput spec={parsedJsonData} />
         </Suspense>
       );
     case "application/vnd.sp+mimebundle":

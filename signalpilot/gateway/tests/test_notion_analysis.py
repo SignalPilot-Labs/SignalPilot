@@ -481,10 +481,10 @@ async def test_process_routed_comment_event_uses_user_secret_for_delivery_render
         assert kwargs["user_id"] == "user-1"
         return DeliveryPacket(user_request="Analyze revenue by month", status="done")
 
-    async def delivery_api_key_for_user(*args, **kwargs):
+    async def delivery_api_key_for_org(*args, **kwargs):
         assert args == (db,)
-        assert kwargs == {"org_id": "org-1", "user_id": "user-1"}
-        return "sk-ant-user"
+        assert kwargs == {"org_id": "org-1"}
+        return "sk-ant-org"
 
     async def render_delivery(packet, *, api_key=None, renderer=None):
         del packet, renderer
@@ -520,7 +520,7 @@ async def test_process_routed_comment_event_uses_user_secret_for_delivery_render
     monkeypatch.setattr(notion_analysis, "_with_public_chart_urls", lambda status, runtime: status)
     monkeypatch.setattr(notion_analysis, "_upload_chart_images_to_notion", upload_chart_images_to_notion)
     monkeypatch.setattr(notion_analysis, "load_delivery_packet", load_delivery_packet)
-    monkeypatch.setattr(notion_analysis, "delivery_api_key_for_user", delivery_api_key_for_user)
+    monkeypatch.setattr(notion_analysis, "delivery_api_key_for_org", delivery_api_key_for_org)
     monkeypatch.setattr(notion_analysis, "render_delivery", render_delivery)
 
     result = await notion_analysis.process_routed_comment_event(routed, payload, db=db)
@@ -528,7 +528,7 @@ async def test_process_routed_comment_event_uses_user_secret_for_delivery_render
     assert result.status == "processed"
     assert notebook_requests[0]["json"]["theme"]["chartSeries"][0] == "#087a3d"
     assert notebook_requests[0]["json"]["theme"]["bg"] == "#050505"
-    assert render_api_keys == ["sk-ant-user"]
+    assert render_api_keys == ["sk-ant-org"]
     confidence_updates = [update["Confidence score"] for update in property_updates if "Confidence score" in update]
     assert confidence_updates
     assert "number" not in confidence_updates[-1]
@@ -824,7 +824,7 @@ async def test_refresh_followup_bypasses_generic_preflight_and_replaces_same_blo
     monkeypatch.setattr(notion_analysis.notion_store, "create_deliverable_update", create_update)
     monkeypatch.setattr(notion_analysis.notion_store, "latest_deliverable_context_snapshot", latest_context)
     monkeypatch.setattr(notion_analysis, "_run_ephemeral_deliverable_refresh", run_refresh)
-    monkeypatch.setattr(notion_analysis, "delivery_api_key_for_user", delivery_api_key)
+    monkeypatch.setattr(notion_analysis, "delivery_api_key_for_org", delivery_api_key)
     monkeypatch.setattr(notion_analysis, "render_followup", render_followup)
     monkeypatch.setattr(notion_analysis.notion_dashboards, "replace_html_deliverable", replace_html)
     monkeypatch.setattr(notion_analysis.reports_store, "update_report_html", update_report)
@@ -911,7 +911,7 @@ async def test_edit_only_followup_does_not_call_notebook_refresh(monkeypatch: py
         "_run_ephemeral_deliverable_refresh",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("refresh should not run")),
     )
-    monkeypatch.setattr(notion_analysis, "delivery_api_key_for_user", delivery_api_key)
+    monkeypatch.setattr(notion_analysis, "delivery_api_key_for_org", delivery_api_key)
     monkeypatch.setattr(notion_analysis, "render_followup", render_followup)
     monkeypatch.setattr(notion_analysis.notion_dashboards, "replace_html_deliverable", replace_html)
     monkeypatch.setattr(notion_analysis.reports_store, "update_report_html", update_report)
@@ -1006,7 +1006,7 @@ async def test_followup_freezes_update_id_before_releasing_db_session(monkeypatc
         "_run_ephemeral_deliverable_refresh",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("refresh should not run")),
     )
-    monkeypatch.setattr(notion_analysis, "delivery_api_key_for_user", delivery_api_key)
+    monkeypatch.setattr(notion_analysis, "delivery_api_key_for_org", delivery_api_key)
     monkeypatch.setattr(notion_analysis, "render_followup", render_followup)
     monkeypatch.setattr(notion_analysis.notion_dashboards, "replace_html_deliverable", replace_html)
     monkeypatch.setattr(notion_analysis.reports_store, "update_report_html", update_report)
@@ -1160,7 +1160,7 @@ async def test_followup_reply_routes_by_discussion_when_parent_is_not_embed(
         "_run_ephemeral_deliverable_refresh",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("refresh should not run")),
     )
-    monkeypatch.setattr(notion_analysis, "delivery_api_key_for_user", delivery_api_key)
+    monkeypatch.setattr(notion_analysis, "delivery_api_key_for_org", delivery_api_key)
     monkeypatch.setattr(notion_analysis, "render_followup", render_followup)
     monkeypatch.setattr(notion_analysis.notion_dashboards, "replace_html_deliverable", replace_html)
     monkeypatch.setattr(notion_analysis.reports_store, "update_report_html", update_report)
@@ -1304,7 +1304,7 @@ async def test_patch_failure_does_not_update_report_or_success_pointers(
     monkeypatch.setattr(notion_analysis.notion_store, "find_deliverable_by_embed_block", find_deliverable)
     monkeypatch.setattr(notion_analysis.reports_store, "get_report", get_report)
     monkeypatch.setattr(notion_analysis.notion_store, "create_deliverable_update", create_update)
-    monkeypatch.setattr(notion_analysis, "delivery_api_key_for_user", delivery_api_key)
+    monkeypatch.setattr(notion_analysis, "delivery_api_key_for_org", delivery_api_key)
     monkeypatch.setattr(notion_analysis, "render_followup", render_followup)
     monkeypatch.setattr(notion_analysis.notion_dashboards, "replace_html_deliverable", replace_html)
     monkeypatch.setattr(notion_analysis.reports_store, "update_report_html", fail_update_report)
@@ -1367,7 +1367,7 @@ async def test_followup_posts_original_failure_when_failed_status_write_loses_co
     monkeypatch.setattr(notion_analysis.notion_store, "find_deliverable_by_embed_block", find_deliverable)
     monkeypatch.setattr(notion_analysis.reports_store, "get_report", get_report)
     monkeypatch.setattr(notion_analysis.notion_store, "create_deliverable_update", create_update)
-    monkeypatch.setattr(notion_analysis, "delivery_api_key_for_user", delivery_api_key)
+    monkeypatch.setattr(notion_analysis, "delivery_api_key_for_org", delivery_api_key)
     monkeypatch.setattr(notion_analysis, "render_followup", render_followup)
     monkeypatch.setattr(notion_analysis.notion_store, "mark_deliverable_update_failed", mark_failed)
 

@@ -800,6 +800,17 @@ export type NotionOAuthInstallation = {
   config: NotionOAuthInstallationConfig | null;
 };
 export type NotionPageOption = { id: string; title: string; url: string | null };
+export type OrgSecretsResponse = {
+  has_key: boolean;
+  key_preview: string | null;
+  updated_at: number | null;
+};
+export type OrgSecretsUpdate = {
+  anthropic_api_key: string | null;
+};
+export const getOrgSecrets = () => request<OrgSecretsResponse>("/api/org/secrets");
+export const updateOrgSecrets = (payload: OrgSecretsUpdate) =>
+  request<OrgSecretsResponse>("/api/org/secrets", { method: "PUT", body: JSON.stringify(payload) });
 export const getNotionIntegrations = () => request<NotionIntegration[]>("/api/integrations/notion");
 export const createNotionIntegration = (payload: { name: string; api_key: string; search_page_ids: string[]; report_parent_page_id?: string }) =>
   request<NotionIntegration>("/api/integrations/notion", { method: "POST", body: JSON.stringify(payload) });

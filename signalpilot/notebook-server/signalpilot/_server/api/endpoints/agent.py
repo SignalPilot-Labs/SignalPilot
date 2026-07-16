@@ -61,6 +61,7 @@ async def agent_auth_status(*, request: Request) -> Response:
     import os
     from pathlib import Path
 
+    del request
     has_oauth = bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("OAUTH_TOKEN"))
     has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
     config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
@@ -73,18 +74,24 @@ async def agent_auth_status(*, request: Request) -> Response:
         credentials_path.is_file() and credentials_path.stat().st_size > 0
     )
 
-    # Also check gateway user secrets
+    # Also check gateway org secrets. GET never returns the raw key; pod env
+    # injection is still responsible for providing ANTHROPIC_API_KEY.
     has_gateway_key = False
     try:
-        from signalpilot._server.gateway_client import gateway_headers, gateway_url
         import httpx
-        resp = httpx.get(
-            f"{gateway_url()}/api/user/secrets",
-            headers=gateway_headers(),
-            timeout=5.0,
+
+        from signalpilot._server.gateway_client import (
+            gateway_headers,
+            gateway_url,
         )
+
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{gateway_url()}/api/org/secrets",
+                headers=gateway_headers(),
+            )
         if resp.status_code == 200:
-            has_gateway_key = resp.json().get("has_anthropic_key", False)
+            has_gateway_key = resp.json().get("has_key", False)
     except Exception:
         pass
 
@@ -110,49 +117,6 @@ async def agent_auth_status(*, request: Request) -> Response:
         }),
         media_type="application/json",
     )
-
-
-@router.post("/save-api-key")
-async def save_api_key(*, request: Request) -> Response:
-    """Save Anthropic API key to gateway user secrets."""
-    body = await request.json()
-    api_key = body.get("api_key", "").strip()
-    if not api_key:
-        return Response(
-            content=json.dumps({"error": "API key required"}),
-            media_type="application/json",
-            status_code=400,
-        )
-
-    import os
-    try:
-        from signalpilot._server.gateway_client import gateway_headers, gateway_url
-        import httpx
-        resp = httpx.put(
-            f"{gateway_url()}/api/user/secrets",
-            headers={**gateway_headers(), "Content-Type": "application/json"},
-            json={"anthropic_api_key": api_key},
-            timeout=10.0,
-        )
-        if resp.status_code == 200:
-            # Also set it locally for immediate use
-            os.environ["ANTHROPIC_API_KEY"] = api_key
-            return Response(
-                content=json.dumps({"success": True}),
-                media_type="application/json",
-            )
-        return Response(
-            content=json.dumps({"error": f"Gateway error: {resp.status_code}"}),
-            media_type="application/json",
-            status_code=500,
-        )
-    except Exception as e:
-        # Fallback: just set locally
-        os.environ["ANTHROPIC_API_KEY"] = api_key
-        return Response(
-            content=json.dumps({"success": True, "local_only": True}),
-            media_type="application/json",
-        )
 
 
 @router.post("/create")

@@ -1,12 +1,6 @@
-import {
-  createSignalpilotClient,
-  type SignalpilotClient,
-} from "@/embed";
+import { createSignalpilotClient } from "@/embed/createSignalpilotClient";
+import type { SignalpilotClient } from "@/embed/types";
 import { Logger } from "@/utils/Logger";
-import {
-  isNotionTrailParams,
-  notionRequestIdFromSessionId,
-} from "@/core/notion/trail";
 import { isGeneratedAnalysisTrailNotebook } from "./analysis-trails";
 import type { NotebookConfig } from "./notebook-context";
 
@@ -33,6 +27,32 @@ export interface BootResult {
   client: SignalpilotClient;
   syncResult?: { localDir: string; fileCount: number };
   staticData: NotebookStaticData;
+}
+
+function isNotionTrailParams({
+  file,
+  sessionId,
+}: {
+  file?: string | null;
+  sessionId?: string | null;
+}): boolean {
+  return Boolean(
+    sessionId?.startsWith("session-notion-") ||
+      sessionId?.startsWith("session-slack-") ||
+      file?.startsWith("signalpilot-notion-analyses/"),
+  );
+}
+
+function notionRequestIdFromSessionId(
+  sessionId: string | null | undefined,
+): string | undefined {
+  if (
+    !sessionId?.startsWith("session-notion-") &&
+    !sessionId?.startsWith("session-slack-")
+  ) {
+    return undefined;
+  }
+  return sessionId.slice("session-".length);
 }
 
 function resolveRuntimeBase(config: NotebookConfig): string {

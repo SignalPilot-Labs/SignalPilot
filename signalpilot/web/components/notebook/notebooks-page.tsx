@@ -7,22 +7,16 @@ import {
   Check,
   Code,
   ExternalLink,
-  Github,
   Loader2,
   Share2,
-  RefreshCw,
   Square,
 } from "lucide-react";
 import {
   createNotebookSession,
-  getGitHubInstallations,
   getNotebookSession,
-  getNotionOAuthInstallations,
-  getProjects,
   deleteNotebookSession,
   pingNotebookSession,
   getGatewayAuthToken,
-  getWorkspaceProjects,
   resolveAnalysisTrail,
   type AnalysisTrail,
   type NotebookSession,
@@ -34,28 +28,7 @@ import {
   type NotebookConfig,
 } from "~/components/notebook/notebook-context";
 import { NotebooksProjectsPaywall } from "~/components/billing/notebooks-projects-paywall";
-import { NotionIcon } from "~/components/branding/notion-icon";
 import { useSubscription } from "~/lib/subscription-context";
-import { DbtProjectActions } from "@/components/home/dbt-project-actions";
-import { DbtProjectList } from "@/components/home/dbt-project-list";
-import { Header } from "@/components/home/components";
-import { Button } from "@/components/ui/button";
-import { dbtProjectDirAtom } from "@/components/editor/dbt/use-dbt";
-import { gatewayBranchIdAtom as persistedGatewayBranchIdAtom } from "@/core/branch/branch-state";
-import { KnownQueryParams } from "@/core/constants";
-import {
-  GATEWAY_BRANCH_STORAGE_KEY,
-  GATEWAY_PROJECT_STORAGE_KEY,
-  gatewayBranchIdAtom,
-  gatewayProjectIdAtom,
-} from "@/core/network/gateway-state";
-import {
-  setGatewayBranchId,
-  setGatewayProjectId,
-} from "@/core/network/api";
-import { isNotionTrailParams } from "@/core/notion/trail";
-import { SPA_NAVIGATE_EVENT } from "@/core/router/spa-navigate";
-import { store } from "@/core/state/jotai";
 
 const PAID_TIERS = ["pro", "team", "enterprise", "unlimited"];
 
@@ -65,7 +38,7 @@ const NotebookBoot = dynamic(
     ssr: false,
     loading: () => (
       <div className="flex-1 flex items-center justify-center">
-        <Loader2 className="w-6 h-6 animate-spin text-[var(--color-text-dim)]" />
+        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
       </div>
     ),
   }
@@ -76,6 +49,15 @@ const NOTEBOOK_PROXY_URL = process.env.NEXT_PUBLIC_NOTEBOOK_PROXY_URL ?? "";
 const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 const NOTION_THREAD_EVENT = "sp:notion-thread-resolved";
 const NOTION_THREAD_STORAGE_PREFIX = "sp:notion-thread:";
+const SPA_NAVIGATE_EVENT = "spa:navigate";
+const GATEWAY_PROJECT_STORAGE_KEY = "sp:gateway-project-id";
+const GATEWAY_BRANCH_STORAGE_KEY = "sp:gateway-branch-id";
+const KnownQueryParams = {
+  project: "project",
+  branch: "branch",
+  filePath: "file",
+  sessionId: "session_id",
+} as const;
 
 type NotionThreadWindow = Window & {
   __signalPilotNotionThreadId?: string;
@@ -83,16 +65,6 @@ type NotionThreadWindow = Window & {
 };
 
 type AppState = "loading" | "no-session" | "booting" | "ready";
-
-type NotionConversation = {
-  id: string;
-  title: string;
-  source?: string;
-  status?: string;
-  notebook_path?: string;
-  created_at?: number;
-  updated_at?: number;
-};
 
 type ChatTraceThread = {
   thread_id: string;
@@ -109,14 +81,6 @@ type ResolvedTrail = Pick<AnalysisTrail, "project_id" | "branch" | "thread_id" |
 
 type RuntimeMode = "project" | "notion-trail" | "notebook";
 type RuntimeProduct = "projects" | "notebooks";
-
-type OverviewState = {
-  loading: boolean;
-  projectCount: number;
-  githubConnected: boolean;
-  notionConnected: boolean;
-  error: string | null;
-};
 
 const BOOT_PHASE_LABELS: Record<string, string> = {
   health: "connecting to runtime...",
@@ -140,23 +104,17 @@ function resolveRuntimeMode({
   return "notebook";
 }
 
-function hasUsableNotionInstallation(
-  installations: Array<{ status?: string; config?: { enabled?: boolean } | null }>,
-): boolean {
-  return installations.some(
-    (installation) => installation.status !== "disconnected" && installation.config?.enabled === true,
-  );
-}
-
-function hasUsableGitHubInstallation(data: unknown): boolean {
-  const installations = Array.isArray(data)
-    ? data
-    : (data as { installations?: unknown[] } | null)?.installations ?? [];
-  return installations.some(
-    (installation) =>
-      installation !== null &&
-      typeof installation === "object" &&
-      (installation as { status?: string }).status !== "disconnected",
+function isNotionTrailParams({
+  file,
+  sessionId,
+}: {
+  file?: string | null;
+  sessionId?: string | null;
+}): boolean {
+  return Boolean(
+    sessionId?.startsWith("session-notion-") ||
+      sessionId?.startsWith("session-slack-") ||
+      file?.startsWith("signalpilot-notion-analyses/"),
   );
 }
 
@@ -175,10 +133,10 @@ function IDEHeader({
   right?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg)]">
+    <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-background">
       <div className="flex items-center gap-3">
-        <Code className="w-4 h-4 text-[var(--color-text)]" />
-        <span className="text-xs font-bold uppercase tracking-wider text-[var(--color-text)]">
+        <Code className="w-4 h-4 text-foreground" />
+        <span className="text-xs font-bold uppercase tracking-wider text-foreground">
           SignalPilot notebook
         </span>
         {children}
@@ -227,19 +185,7 @@ export default function NotebooksPage() {
   const [notebookConfig, setNotebookConfig] = useState<NotebookConfig | null>(null);
   const [, setActiveNotebookSession] =
     useState<NotebookSession | null>(null);
-  const [notionConversations, setNotionConversations] = useState<
-    NotionConversation[]
-  >([]);
-  const [overview, setOverview] = useState<OverviewState>({
-    loading: true,
-    projectCount: 0,
-    githubConnected: false,
-    notionConnected: false,
-    error: null,
-  });
-  const [overviewLoading, setOverviewLoading] = useState(false);
-  const [overviewError, setOverviewError] = useState<string | null>(null);
-  const [projectListRefreshNonce, setProjectListRefreshNonce] = useState(0);
+  const [notionConnected, setNotionConnected] = useState(false);
   const [copied, setCopied] = useState(false);
   const [bootPhase, setBootPhase] = useState<string>("health");
   const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -284,12 +230,6 @@ export default function NotebooksPage() {
       return;
     }
 
-    setGatewayProjectId(null);
-    setGatewayBranchId(null);
-    store.set(gatewayProjectIdAtom, null);
-    store.set(gatewayBranchIdAtom, null);
-    store.set(persistedGatewayBranchIdAtom, null);
-    store.set(dbtProjectDirAtom, null);
     window.localStorage.removeItem(GATEWAY_PROJECT_STORAGE_KEY);
     window.localStorage.removeItem(GATEWAY_BRANCH_STORAGE_KEY);
     window.localStorage.removeItem("sp:dbt-project-dir");
@@ -315,9 +255,6 @@ export default function NotebooksPage() {
     nextUrl.searchParams.set(KnownQueryParams.filePath, trail.notebook_path || urlFile);
     nextUrl.searchParams.delete(KnownQueryParams.sessionId);
 
-    store.set(gatewayProjectIdAtom, trail.project_id);
-    store.set(gatewayBranchIdAtom, trail.branch || "main");
-    store.set(persistedGatewayBranchIdAtom, trail.branch || "main");
     window.localStorage.setItem(GATEWAY_PROJECT_STORAGE_KEY, trail.project_id);
     window.localStorage.setItem(GATEWAY_BRANCH_STORAGE_KEY, trail.branch || "main");
 
@@ -459,18 +396,6 @@ export default function NotebooksPage() {
     };
   }, []);
 
-  function toNotionConversation(thread: ChatTraceThread): NotionConversation {
-    return {
-      id: thread.thread_id,
-      title: thread.title || "Notion request",
-      source: thread.source,
-      status: thread.status,
-      notebook_path: thread.notebook_path,
-      created_at: thread.created_at,
-      updated_at: thread.updated_at,
-    };
-  }
-
   async function fetchNotionTraceThreads() {
     const token = await getGatewayAuthToken();
     const headers: Record<string, string> = {};
@@ -481,9 +406,7 @@ export default function NotebooksPage() {
     });
   }
 
-  async function resolveNotionThreadId(
-    notionConnected = overview.notionConnected,
-  ): Promise<string | undefined> {
+  async function resolveNotionThreadId(): Promise<string | undefined> {
     if (isTrailSessionId(urlSessionId)) {
       return urlSessionId;
     }
@@ -494,13 +417,11 @@ export default function NotebooksPage() {
     if (remembered) {
       return remembered;
     }
-    if (!notionConnected) {
-      return undefined;
-    }
 
     try {
       const resp = await fetchNotionTraceThreads();
       if (!resp.ok) {return undefined;}
+      setNotionConnected(true);
       const data = (await resp.json()) as {
         threads?: ChatTraceThread[];
       };
@@ -562,12 +483,12 @@ export default function NotebooksPage() {
         project: urlProject || undefined,
         branch: urlProject ? activeBranch : undefined,
         file: urlFile || undefined,
-        notionConnected: overview.notionConnected,
+        notionConnected,
       };
     }
 
     const resolvedTrail = trail ?? await resolveTrailMetadata();
-    const kernelSessionId = resolvedTrail?.thread_id ?? await resolveNotionThreadId(overview.notionConnected);
+    const kernelSessionId = resolvedTrail?.thread_id ?? await resolveNotionThreadId();
     const trailFile = resolvedTrail?.notebook_path || urlFile;
     const isProjectBackedTrail = Boolean(resolvedTrail?.project_id);
     if (!isProjectBackedTrail && isNotionTrail(trailFile, kernelSessionId || urlSessionId)) {
@@ -590,79 +511,8 @@ export default function NotebooksPage() {
       project: resolvedTrail?.project_id,
       branch: resolvedTrail?.branch,
       file: trailFile || undefined,
-      notionConnected: overview.notionConnected,
+      notionConnected: notionConnected || Boolean(kernelSessionId),
     };
-  }
-
-  async function loadNotionConversations(
-    notionConnected = overview.notionConnected,
-  ) {
-    if (!notionConnected) {
-      setOverviewError(null);
-      setNotionConversations([]);
-      return;
-    }
-    setOverviewLoading(true);
-    setOverviewError(null);
-    try {
-      const resp = await fetchNotionTraceThreads();
-      if (!resp.ok) {
-        throw new Error(`HTTP ${resp.status}`);
-      }
-      const data = (await resp.json()) as {
-        threads?: ChatTraceThread[];
-      };
-      setNotionConversations(
-        (data.threads ?? []).map(toNotionConversation).filter(
-          (conversation) =>
-            conversation.source === "notion" ||
-            isTrailSessionId(conversation.id),
-        ),
-      );
-    } catch (err) {
-      setOverviewError(err instanceof Error ? err.message : String(err));
-      setNotionConversations([]);
-    } finally {
-      setOverviewLoading(false);
-    }
-  }
-
-  async function loadOverview() {
-    setOverview((prev) => ({ ...prev, loading: true, error: null }));
-
-    const [projectsResult, githubResult, notionResult] = await Promise.allSettled([
-      getWorkspaceProjects("active")
-        .then((result) => result.total)
-        .catch(() => getProjects().then((projects) => projects.length)),
-      getGitHubInstallations(),
-      getNotionOAuthInstallations(),
-    ]);
-
-    const nextOverview: OverviewState = {
-      loading: false,
-      projectCount:
-        projectsResult.status === "fulfilled" ? projectsResult.value : 0,
-      githubConnected:
-        githubResult.status === "fulfilled" &&
-        hasUsableGitHubInstallation(githubResult.value),
-      notionConnected:
-        notionResult.status === "fulfilled" &&
-        hasUsableNotionInstallation(notionResult.value),
-      error:
-        projectsResult.status === "rejected" &&
-        githubResult.status === "rejected" &&
-        notionResult.status === "rejected"
-          ? "Could not load workspace overview"
-          : null,
-    };
-
-    setOverview(nextOverview);
-    if (nextOverview.notionConnected) {
-      await loadNotionConversations(true);
-    } else {
-      setOverviewError(null);
-      setNotionConversations([]);
-    }
   }
 
   useEffect(() => {
@@ -733,7 +583,6 @@ export default function NotebooksPage() {
           } else {
             setActiveNotebookSession(session);
             setState("no-session");
-            void loadOverview();
             return;
           }
         }
@@ -745,7 +594,6 @@ export default function NotebooksPage() {
         await launch(apiKey);
       } else if (!cancelled) {
         setState("no-session");
-        void loadOverview();
       }
     }
 
@@ -788,7 +636,7 @@ export default function NotebooksPage() {
         newBranch !== notebookConfig.branch ||
         newFile !== notebookConfig.file ||
         newKernelSessionId !== notebookConfig.kernelSessionId ||
-        overview.notionConnected !== notebookConfig.notionConnected
+        notionConnected !== notebookConfig.notionConnected
       ) {
         setNotebookConfig((prev) =>
           prev
@@ -799,13 +647,13 @@ export default function NotebooksPage() {
                 branch: newBranch,
                 file: newFile,
                 kernelSessionId: newKernelSessionId,
-                notionConnected: overview.notionConnected,
+                notionConnected,
               }
             : prev,
         );
       }
     }
-  }, [urlProject, urlBranch, urlFile, urlSessionId, state, overview.notionConnected]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [urlProject, urlBranch, urlFile, urlSessionId, state, notionConnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const kernelSessionId = notebookConfig?.kernelSessionId;
@@ -873,8 +721,6 @@ export default function NotebooksPage() {
     setState("no-session");
     setNotebookConfig(null);
     setActiveNotebookSession(null);
-    setNotionConversations([]);
-    void loadOverview();
     if (pingRef.current) { clearInterval(pingRef.current); pingRef.current = null; }
   }
 
@@ -931,15 +777,6 @@ export default function NotebooksPage() {
     return `/notebook${qs ? `?${qs}` : ""}`;
   }
 
-  async function refreshOverview() {
-    await loadOverview();
-  }
-
-  async function refreshProjectsSurface() {
-    setProjectListRefreshNonce((nonce) => nonce + 1);
-    await loadOverview();
-  }
-
   // ─── Render: Paywall (free-tier cloud users) ──────────────────
   if (gated) {
     return <NotebooksProjectsPaywall />;
@@ -948,14 +785,14 @@ export default function NotebooksPage() {
   // ─── Render: Loading ──────────────────────────────────────────
   if (state === "loading") {
     return (
-      <div className="flex flex-col h-screen">
+      <div className="flex flex-col h-screen bg-background text-foreground">
         <IDEHeader>
-          <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--color-text-dim)]" />
-          <span className="text-[11px] text-[var(--color-text-dim)]">{launchStatus}</span>
+          <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
+          <span className="text-[11px] text-muted-foreground">{launchStatus}</span>
         </IDEHeader>
         <div className="flex-1 flex flex-col items-center justify-center gap-4">
-          <Loader2 className="w-8 h-8 animate-spin text-[var(--color-text-dim)]" />
-          <span className="text-xs text-[var(--color-text-dim)] tracking-wider uppercase">
+          <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+          <span className="text-xs text-muted-foreground tracking-wider uppercase">
             {launchStatus}
           </span>
         </div>
@@ -975,13 +812,13 @@ export default function NotebooksPage() {
       effectiveNotebookConfig.kernelSessionId ?? "",
     ].join(":");
     return (
-      <div className="flex flex-col h-screen">
+      <div className="flex flex-col h-screen bg-background text-foreground">
         <IDEHeader
           right={
             <>
               <button
                 onClick={handleShare}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-muted-foreground border border-border hover:border-muted-foreground hover:text-foreground transition-all tracking-wider uppercase"
               >
                 {copied ? <Check className="w-3 h-3" /> : <Share2 className="w-3 h-3" />}
                 {copied ? "copied" : "share"}
@@ -991,14 +828,14 @@ export default function NotebooksPage() {
                   href={notebookPopoutHref(effectiveNotebookConfig)}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase"
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-muted-foreground border border-border hover:border-muted-foreground hover:text-foreground transition-all tracking-wider uppercase"
                 >
                   <ExternalLink className="w-3 h-3" /> external
                 </a>
               )}
               <button
                 onClick={stop}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-error)] hover:text-[var(--color-error)] transition-all tracking-wider uppercase"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-muted-foreground border border-border hover:border-destructive hover:text-destructive transition-all tracking-wider uppercase"
               >
                 <Square className="w-3 h-3" /> stop
               </button>
@@ -1007,15 +844,15 @@ export default function NotebooksPage() {
         >
           {state === "booting" ? (
             <>
-              <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--color-text-dim)]" />
-              <span className="text-[11px] text-[var(--color-text-dim)]">
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
+              <span className="text-[11px] text-muted-foreground">
                 {BOOT_PHASE_LABELS[bootPhase] || bootPhase}
               </span>
             </>
           ) : (
             <>
               <StatusDot status="healthy" size={4} pulse />
-              <span className="text-[11px] text-[var(--color-success)]">running</span>
+              <span className="text-[11px] text-green-500">running</span>
             </>
           )}
         </IDEHeader>
@@ -1033,186 +870,28 @@ export default function NotebooksPage() {
     <div className="p-8 animate-fade-in">
       <div className="max-w-6xl mx-auto mt-16">
         <div className="flex items-center gap-3 mb-6">
-          <Code className="w-6 h-6 text-[var(--color-text)]" />
-          <h1 className="text-lg font-bold uppercase tracking-wider text-[var(--color-text)]">
+          <Code className="w-6 h-6 text-foreground" />
+          <h1 className="text-lg font-bold uppercase tracking-wider text-foreground">
             SignalPilot IDE
           </h1>
         </div>
         <div className="flex flex-wrap items-center gap-3 mb-8">
           <button
             onClick={() => launch(undefined, "notebooks")}
-            className="flex items-center gap-3 px-5 py-3 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90"
+            className="flex items-center gap-3 px-5 py-3 bg-primary text-primary-foreground text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90"
           >
             <Code className="w-4 h-4" />
             <span>open notebook runtime</span>
           </button>
           <a
-            href="/settings/github"
-            className="flex items-center gap-3 px-5 py-3 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase"
+            href="/projects"
+            className="flex items-center gap-3 px-5 py-3 text-xs text-muted-foreground border border-border hover:border-muted-foreground hover:text-foreground transition-all tracking-wider uppercase"
           >
-            <Github className="w-4 h-4" />
-            <span>connect github</span>
-          </a>
-          <a
-            href="/integrations"
-            className="flex items-center gap-3 px-5 py-3 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase"
-          >
-            <NotionIcon className="w-4 h-4" />
-            <span>connect notion</span>
+            <ExternalLink className="w-4 h-4" />
+            <span>back to projects</span>
           </a>
         </div>
-
-        {overview.error && (
-          <div className="mb-4 border border-[var(--color-error)]/40 px-5 py-4 text-xs text-[var(--color-error)]">
-            {overview.error}
-          </div>
-        )}
-
-        <div className="mb-8">
-          <div className="mb-4">
-            <DbtProjectActions
-              onProjectCreated={refreshProjectsSurface}
-              openProjectOnComplete={false}
-            />
-          </div>
-          <DbtProjectList
-            key={projectListRefreshNonce}
-            onRefresh={refreshProjectsSurface}
-          />
-        </div>
-
-        {overview.loading ? (
-          <div className="border border-[var(--color-border)] px-5 py-10 flex items-center justify-center gap-3 text-xs text-[var(--color-text-dim)] uppercase tracking-wider">
-            <Loader2 className="w-4 h-4 animate-spin" />
-            checking integrations...
-          </div>
-        ) : overview.notionConnected ? (
-          <>
-            <div className="mb-3">
-              <Header
-                Icon={NotionIcon}
-                control={
-                  <Button
-                    variant="text"
-                    size="xs"
-                    onClick={refreshOverview}
-                    disabled={overviewLoading}
-                    title="Refresh Notion requests"
-                  >
-                    {overviewLoading ? (
-                      <Loader2 size={14} className="animate-spin" />
-                    ) : (
-                      <RefreshCw size={14} />
-                    )}
-                  </Button>
-                }
-              >
-                Notion requests
-              </Header>
-            </div>
-            <NotionConversationList
-              conversations={notionConversations}
-              loading={overviewLoading}
-              error={overviewError}
-            />
-          </>
-        ) : (
-          <div className="border border-[var(--color-border)] px-5 py-10 text-sm text-[var(--color-text-dim)]">
-            <p>Connect Notion to generate notebook-backed requests from Notion comments.</p>
-            <a
-              href="/integrations"
-              className="inline-flex items-center gap-2 mt-4 px-4 py-2 text-[12px] text-[var(--color-bg)] bg-[var(--color-text)] hover:opacity-90 transition-all tracking-wider uppercase"
-            >
-              <NotionIcon className="w-3.5 h-3.5" />
-              connect notion
-            </a>
-          </div>
-        )}
       </div>
     </div>
   );
-}
-
-function NotionConversationList({
-  conversations,
-  loading,
-  error,
-}: {
-  conversations: NotionConversation[];
-  loading: boolean;
-  error: string | null;
-}) {
-  if (loading && conversations.length === 0) {
-    return (
-      <div className="border border-[var(--color-border)] px-5 py-10 flex items-center justify-center gap-3 text-xs text-[var(--color-text-dim)] uppercase tracking-wider">
-        <Loader2 className="w-4 h-4 animate-spin" />
-        loading notion requests...
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="border border-[var(--color-error)]/40 px-5 py-4 text-xs text-[var(--color-error)]">
-        Could not load Notion requests: {error}
-      </div>
-    );
-  }
-
-  if (conversations.length === 0) {
-    return (
-      <div className="py-8 text-center text-muted-foreground text-sm">
-        <NotionIcon className="mx-auto mb-2 h-6 w-6 opacity-40" />
-        <p>No Notion requests found.</p>
-        <p className="text-xs mt-1">@ SignalPilot in your Notion workspace.</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
-      {conversations.map((conversation) => {
-        const file = conversation.notebook_path || "";
-        const href = file
-          ? `/projects?file=${encodeURIComponent(file)}&session_id=${encodeURIComponent(conversation.id)}`
-          : `/projects?session_id=${encodeURIComponent(conversation.id)}`;
-        const status = conversation.status || "saved";
-        return (
-          <a
-            key={conversation.id}
-            href={href}
-            className="flex items-center gap-4 px-5 py-4 hover:bg-[var(--color-bg-hover)] transition-colors"
-          >
-            <div className="min-w-0 flex-1">
-              <div className="text-sm text-[var(--color-text)] truncate">
-                {conversation.title || "Notion request"}
-              </div>
-              <div className="text-[11px] text-[var(--color-text-dim)] font-mono truncate mt-1">
-                {file || conversation.id}
-              </div>
-            </div>
-            <div className="flex items-center gap-3 shrink-0">
-              <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-dim)] border border-[var(--color-border)] px-2 py-1">
-                {status}
-              </span>
-              <span className="text-[11px] text-[var(--color-text-dim)]">
-                {formatConversationTime(conversation.updated_at)}
-              </span>
-              <ExternalLink className="w-4 h-4 text-[var(--color-text-dim)]" />
-            </div>
-          </a>
-        );
-      })}
-    </div>
-  );
-}
-
-function formatConversationTime(value?: number): string {
-  if (!value) return "";
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value * 1000));
 }

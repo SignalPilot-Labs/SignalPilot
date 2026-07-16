@@ -121,7 +121,7 @@ export function ThemeEditor() {
     <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-5">
         <div>
-          <p className="text-[13px] text-[var(--color-text)] tracking-wider">HTML deliverable theme</p>
+          <p className="text-[13px] text-[var(--color-text)] tracking-wider">AI generations theme</p>
           {adminLocked && <p className="mt-1 text-[11px] text-[var(--color-error)] tracking-wider">org admin required</p>}
         </div>
         <div className="flex items-center gap-2">
@@ -144,7 +144,7 @@ export function ThemeEditor() {
         </div>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_460px]">
+      <div className="flex flex-col gap-5">
         <div className="space-y-5">
           <label className="block max-w-md">
             <span className="block text-[11px] text-[var(--color-text-dim)] tracking-wider uppercase mb-1.5">main color</span>

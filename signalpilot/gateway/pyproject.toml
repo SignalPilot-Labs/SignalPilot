@@ -8,22 +8,22 @@ version = "0.1.0"
 description = "SignalPilot Gateway — governed MCP server for AI database access"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.34.0",
+    "fastapi>=0.139.2",
+    "uvicorn[standard]>=0.51.0",
     "httpx>=0.28.0",
-    "sqlglot>=25.0.0",
+    "sqlglot>=30.12.0",
     "asyncpg>=0.30.0",
     "aiofiles>=24.1.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "cryptography>=44.0.0",
     "python-multipart>=0.0.9",
-    "typer>=0.15.0",
-    "mcp>=1.0.0",
+    "typer>=0.27.0",
+    "mcp>=1.28.1",
     "pyyaml>=6.0.0",
     "PyJWT>=2.8.0",
-    "sqlalchemy[asyncio]>=2.0.0",
-    "websockets>=16.0",
+    "sqlalchemy[asyncio]>=2.0.51",
+    "websockets>=16.1.1",
     # Database connectors
     "pymysql>=1.1.0",
     "pymssql>=2.3.0",
@@ -31,29 +31,29 @@ dependencies = [
     "sshtunnel>=0.4.0",
     "python-dotenv>=1.0.0",
     # File-based connectors (installed in Dockerfile, needed for local dev without sandbox)
-    "duckdb>=1.0.0",
+    "duckdb>=1.5.4",
     # AWS SDK — BYOK KMS + connector IAM auth (Redshift/RDS)
-    "boto3>=1.34.0",
+    "boto3>=1.43.51",
     # Kubernetes orchestrator (K3s locally, EKS in production)
     # Pinned to >=32,<33 — uses kubernetes_asyncio.stream.WsApiClient (S9).
-    "kubernetes-asyncio>=32,<33",
+    "kubernetes-asyncio>=36.1.0,<37",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0.0", "pytest-asyncio>=0.24.0", "httpx>=0.28.0", "aiosqlite>=0.20.0", "moto[kms]>=5.0.0", "boto3>=1.34.0", "ruff>=0.7.0"]
-aws = ["boto3>=1.34.0"]
-snowflake = ["snowflake-connector-python>=3.6.0"]
-bigquery = ["google-cloud-bigquery>=3.20.0"]
-clickhouse = ["clickhouse-driver>=0.2.7", "clickhouse-connect>=0.7.0"]
-databricks = ["databricks-sql-connector>=3.0.0"]
-trino = ["trino>=0.330.0"]
+dev = ["pytest>=9.1.1", "pytest-asyncio>=0.24.0", "httpx>=0.28.0", "aiosqlite>=0.20.0", "moto[kms]>=5.2.2", "boto3>=1.43.51", "ruff>=0.15.22"]
+aws = ["boto3>=1.43.51"]
+snowflake = ["snowflake-connector-python>=4.7.1"]
+bigquery = ["google-cloud-bigquery>=3.42.2"]
+clickhouse = ["clickhouse-driver>=0.2.11", "clickhouse-connect>=1.5.0"]
+databricks = ["databricks-sql-connector>=4.3.0"]
+trino = ["trino>=0.338.0"]
 all-connectors = [
-    "snowflake-connector-python>=3.6.0",
-    "google-cloud-bigquery>=3.20.0",
-    "clickhouse-driver>=0.2.7",
-    "clickhouse-connect>=0.7.0",
-    "databricks-sql-connector>=3.0.0",
-    "trino>=0.330.0",
+    "snowflake-connector-python>=4.7.1",
+    "google-cloud-bigquery>=3.42.2",
+    "clickhouse-driver>=0.2.11",
+    "clickhouse-connect>=1.5.0",
+    "databricks-sql-connector>=4.3.0",
+    "trino>=0.338.0",
 ]
 
 [project.scripts]

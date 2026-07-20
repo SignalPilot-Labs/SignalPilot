@@ -7,36 +7,19 @@ from unittest.mock import AsyncMock
 import pytest
 
 from gateway.analysis_delivery import (
-    AnalysisPreflightKind,
     DeliveryRenderer,
-    classify_analysis_request,
     delivery_api_key_for_org,
     delivery_result_to_status,
     load_delivery_packet,
     load_delivery_packet_from_events,
     render_slack_final_message,
     render_slack_progress_message,
-    wants_html_deliverable,
 )
 from gateway.analysis_delivery import credentials as credentials_module
 from gateway.analysis_delivery import trace_loader as trace_loader_module
 from gateway.analysis_delivery.html_orchestrator import _html_model_payload
 from gateway.analysis_delivery.renderer import fallback_delivery
 from gateway.trace_markers import redact_trace_control_markers
-
-
-def test_preflight_gates_greetings_and_ambiguous_data_prompts() -> None:
-    assert classify_analysis_request("hi").kind == AnalysisPreflightKind.DIRECT
-    assert classify_analysis_request("hello").kind == AnalysisPreflightKind.DIRECT
-    assert classify_analysis_request("thanks").kind == AnalysisPreflightKind.DIRECT
-
-    ambiguous = classify_analysis_request("revenue")
-
-    assert ambiguous.kind == AnalysisPreflightKind.AMBIGUOUS
-    assert "fresh, specific analysis request" in (ambiguous.response or "")
-    assert classify_analysis_request("Analyze revenue by product for Q2").kind == AnalysisPreflightKind.ANALYZE
-    assert classify_analysis_request("Build a dashboard for revenue by product").kind == AnalysisPreflightKind.ANALYZE
-    assert wants_html_deliverable("Create a scorecard for Q2 pipeline")
 
 
 def test_trace_loader_extracts_latest_worker_plan_progress_and_final_statement() -> None:

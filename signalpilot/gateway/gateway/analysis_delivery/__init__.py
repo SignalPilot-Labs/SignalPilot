@@ -1,18 +1,25 @@
 """Shared orchestration helpers for notebook-backed external analysis."""
 
 from .credentials import delivery_api_key_for_org
-from .followups import DeliverableFollowupPlan, plan_deliverable_followup
 from .html_orchestrator import (
     HtmlDeliverableResult,
     HtmlOrchestrator,
     render_followup,
     render_html_deliverable,
 )
-from .preflight import (
-    AnalysisPreflightDecision,
-    AnalysisPreflightKind,
-    classify_analysis_request,
-    wants_html_deliverable,
+from .intake_actions import (
+    IntakeActionResult,
+    IntakeTerminalAction,
+    analysis_status_for_source_thread,
+    validate_terminal_action,
+)
+from .intake_agent import (
+    IntakeAgent,
+    IntakeAgentError,
+    IntakeAgentResult,
+    IntakeSession,
+    IntakeToolCall,
+    run_intake_agent,
 )
 from .progress import (
     ANALYSIS_INITIAL_PROGRESS_TEXT,
@@ -37,19 +44,23 @@ from .trace_loader import (
 
 __all__ = [
     "ANALYSIS_INITIAL_PROGRESS_TEXT",
-    "AnalysisPreflightDecision",
-    "AnalysisPreflightKind",
     "DeliveryPacket",
     "DeliveryRenderer",
     "DeliveryResult",
-    "DeliverableFollowupPlan",
     "FinalStatement",
     "HtmlDeliverableResult",
     "HtmlOrchestrator",
+    "IntakeActionResult",
+    "IntakeAgent",
+    "IntakeAgentError",
+    "IntakeAgentResult",
+    "IntakeSession",
+    "IntakeTerminalAction",
+    "IntakeToolCall",
     "SlackTraceProgressReporter",
     "WorkerPlan",
     "WorkerProgress",
-    "classify_analysis_request",
+    "analysis_status_for_source_thread",
     "delivery_api_key_for_org",
     "delivery_result_to_status",
     "load_delivery_packet",
@@ -59,6 +70,6 @@ __all__ = [
     "render_html_deliverable",
     "render_slack_final_message",
     "render_slack_progress_message",
-    "wants_html_deliverable",
-    "plan_deliverable_followup",
+    "run_intake_agent",
+    "validate_terminal_action",
 ]

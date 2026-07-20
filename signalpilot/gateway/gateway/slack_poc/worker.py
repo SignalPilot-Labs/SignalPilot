@@ -12,7 +12,7 @@ import re
 import signal
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -26,9 +26,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from gateway.analysis_delivery import (
-    AnalysisPreflightKind,
     SlackTraceProgressReporter,
-    classify_analysis_request,
     delivery_api_key_for_org,
     delivery_result_to_status,
     load_delivery_packet,
@@ -37,6 +35,8 @@ from gateway.analysis_delivery import (
     render_slack_final_message,
 )
 from gateway.analysis_delivery.design_system import theme_token_map
+from gateway.analysis_delivery.intake_actions import analysis_status_for_source_thread
+from gateway.analysis_delivery.intake_agent import IntakeSession, run_intake_agent
 from gateway.db.engine import close_db, get_session_factory, init_db
 from gateway.notebooks.session_service import NotebookRuntime, ensure_analysis_notebook_session
 from gateway.notion import analysis as notebook_analysis
@@ -62,6 +62,7 @@ SLACK_BUSY_TEXT = (
     "Resend this after I post the result and I'll build on it."
 )
 SLACK_RESET_CONFIRMATION_TEXT = "Starting fresh. I will use a new conversation for the next analysis."
+SLACK_INTAKE_OPERATIONAL_FAILURE_TEXT = "I could not safely decide how to handle that. Try again in a moment."
 SLACK_ACTIVE_TRAIL_STALE_SECONDS = 30 * 60
 SLACK_EVENT_DEDUPE_MAX_SIZE = 10_000
 SLACK_EVENT_DEDUPE_TTL_SECONDS = 6 * 60 * 60
@@ -85,6 +86,10 @@ _SLACK_DM_RESET_EPOCHS: dict[tuple[str, str, str], str] = {}
 
 class SlackApiError(RuntimeError):
     """Raised when Slack Web API returns ok=false or a non-2xx response."""
+
+
+class SlackIntakeConfigurationError(RuntimeError):
+    """Raised when Slack intake cannot run because org credentials are missing."""
 
 
 class _EventDeduper:
@@ -179,6 +184,7 @@ class SlackRequest:
     channel_type: str = ""
     is_continuation: bool = False
     discussion_id: str = ""
+    output_mode: str = "answer"
 
 
 class SlackApiClient:
@@ -363,9 +369,10 @@ class SlackPoCWorker:
         if not self._seen_event_ids.add(request.event_id):
             LOGGER.info("Ignoring duplicate Slack event_id=%s", request.event_id)
             return
-        if await self._handle_preflight(request):
+        request_to_process = await self._handle_intake(request)
+        if request_to_process is None:
             return
-        task = asyncio.create_task(self._process_request(request), name=f"slack-poc-{request.event_id}")
+        task = asyncio.create_task(self._process_request(request_to_process), name=f"slack-poc-{request.event_id}")
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
@@ -472,19 +479,121 @@ class SlackPoCWorker:
             discussion_id=discussion_id,
         )
 
-    async def _handle_preflight(self, request: SlackRequest) -> bool:
-        decision = classify_analysis_request(request.text)
-        if decision.kind == AnalysisPreflightKind.ANALYZE:
-            return False
-        if request.is_continuation:
-            await self._add_request_reaction(request, SLACK_CONTINUATION_ACK_REACTION)
-            return True
+    async def _handle_intake(self, request: SlackRequest) -> SlackRequest | None:
+        try:
+            action = (await self._run_intake_for_request(request)).action
+        except SlackIntakeConfigurationError:
+            await self.slack.post_message(
+                channel=request.channel_id,
+                thread_ts=_reply_thread_ts(request),
+                text=_missing_anthropic_key_text(),
+            )
+            return None
+        except Exception as exc:
+            LOGGER.info("Slack intake failed: event_id=%s error=%s", request.event_id, exc, exc_info=True)
+            await self.slack.post_message(
+                channel=request.channel_id,
+                thread_ts=_reply_thread_ts(request),
+                text=SLACK_INTAKE_OPERATIONAL_FAILURE_TEXT,
+            )
+            return None
+
+        if action.name == "respond_to_user":
+            await self.slack.post_message(channel=request.channel_id, thread_ts=_reply_thread_ts(request), text=action.text)
+            return None
+        if action.name == "react_or_ignore":
+            if action.reaction_mode == "react":
+                await self._add_request_reaction(
+                    request,
+                    action.reaction or (SLACK_CONTINUATION_ACK_REACTION if request.is_continuation else SLACK_ACK_REACTION),
+                )
+            return None
+        if action.name == "start_notebook_analysis":
+            return replace(request, text=action.prompt, output_mode=action.output_mode)
+        if action.name == "update_notebook_analysis":
+            update_status = await self._notebook_update_status(request)
+            if update_status == "busy":
+                await self.slack.post_message(
+                    channel=request.channel_id,
+                    thread_ts=_reply_thread_ts(request),
+                    text=SLACK_BUSY_TEXT,
+                )
+                return None
+            if update_status == "not_found":
+                await self.slack.post_message(
+                    channel=request.channel_id,
+                    thread_ts=_reply_thread_ts(request),
+                    text="I could not find an earlier SignalPilot analysis in this thread to update.",
+                )
+                return None
+            if update_status != "safe_to_update":
+                await self.slack.post_message(
+                    channel=request.channel_id,
+                    thread_ts=_reply_thread_ts(request),
+                    text=SLACK_INTAKE_OPERATIONAL_FAILURE_TEXT,
+                )
+                return None
+            return replace(request, text=action.prompt, output_mode=action.output_mode)
+
         await self.slack.post_message(
             channel=request.channel_id,
             thread_ts=_reply_thread_ts(request),
-            text=decision.response or "Send me a specific data question and I will run it through SignalPilot.",
+            text=SLACK_INTAKE_OPERATIONAL_FAILURE_TEXT,
         )
-        return True
+        return None
+
+    async def _run_intake_for_request(self, request: SlackRequest):
+        previous_messages = await self._previous_thread_messages(request)
+        api_key = await self._intake_api_key_for_org()
+        if not api_key:
+            raise SlackIntakeConfigurationError("missing org Anthropic key for Slack intake")
+        session = IntakeSession(
+            source="slack",
+            surface=_slack_surface(request),
+            org_id=self.config.org_id,
+            user_id=self.config.user_id or request.user_id,
+            prompt=request.text,
+            source_thread_id=_discussion_id(request),
+            source_url=request.source_url,
+            previous_messages=previous_messages,
+            continuation_state={
+                "isContinuation": request.is_continuation,
+                "channelType": request.channel_type,
+                "teamId": request.team_id,
+                "channelId": request.channel_id,
+            },
+            available_terminal_actions=(
+                "respond_to_user",
+                "react_or_ignore",
+                "start_notebook_analysis",
+                "update_notebook_analysis",
+            ),
+            active_stale_seconds=SLACK_ACTIVE_TRAIL_STALE_SECONDS,
+        )
+        return await run_intake_agent(session, session_factory=self.session_factory, api_key=api_key)
+
+    async def _intake_api_key_for_org(self) -> str:
+        try:
+            async with self.session_factory() as db:
+                return await resolve_anthropic_key(db, self.config.org_id) or ""
+        except Exception as exc:
+            LOGGER.info("Could not load org Anthropic key for Slack intake: %s", exc, exc_info=True)
+            return ""
+
+    async def _notebook_update_status(self, request: SlackRequest) -> str:
+        try:
+            async with self.session_factory() as db:
+                status = await analysis_status_for_source_thread(
+                    db,
+                    org_id=self.config.org_id,
+                    source="slack",
+                    source_thread_id=_discussion_id(request),
+                    active_stale_seconds=SLACK_ACTIVE_TRAIL_STALE_SECONDS,
+                )
+        except Exception as exc:
+            LOGGER.info("Could not load Slack trail for intake update action: %s", exc, exc_info=True)
+            return "failed"
+        return status.status
 
     async def _process_request(self, request: SlackRequest) -> None:
         if await self._post_busy_reply_if_active(request):
@@ -943,6 +1052,7 @@ class SlackPoCWorker:
                     "requester": [request.user_id],
                     "headline": notebook_analysis._headline_from_prompt(request.text),
                     "prompt": request.text,
+                    "outputMode": request.output_mode,
                     "previousMessages": previous_messages,
                     "createdAt": created_at,
                     "theme": theme_token_map(theme),
@@ -1427,6 +1537,12 @@ def _is_dm_channel_type(channel_type: str) -> bool:
 
 def _is_dm_request(request: SlackRequest) -> bool:
     return _is_dm_channel_type(request.channel_type)
+
+
+def _slack_surface(request: SlackRequest) -> str:
+    if _is_dm_request(request):
+        return "slack_dm"
+    return "slack_thread" if request.is_continuation else "slack_mention"
 
 
 def _reply_thread_ts(request: SlackRequest) -> str | None:

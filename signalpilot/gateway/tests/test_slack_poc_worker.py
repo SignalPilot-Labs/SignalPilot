@@ -15,7 +15,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from gateway.analysis_delivery import DeliveryResult
+from gateway.analysis_delivery import DeliveryResult, IntakeTerminalAction
 from gateway.db.models import SlackInstallation, SlackInstallationConfig
 from gateway.slack_poc import worker as worker_module
 from gateway.slack_poc.progress import COMPLETING_PROGRESS_TEXT, INITIAL_PROGRESS_TEXT
@@ -36,6 +36,23 @@ def clear_slack_dm_reset_epochs():
     worker_module._SLACK_DM_RESET_EPOCHS.clear()
     yield
     worker_module._SLACK_DM_RESET_EPOCHS.clear()
+
+
+@pytest.fixture(autouse=True)
+def stub_slack_intake(monkeypatch: pytest.MonkeyPatch):
+    async def intake_api_key(_self):
+        return "sk-ant-test"
+
+    async def run_intake_agent(session, **_kwargs):
+        return SimpleNamespace(
+            action=IntakeTerminalAction(
+                name="start_notebook_analysis",
+                arguments={"prompt": session.prompt, "output_mode": "answer"},
+            )
+        )
+
+    monkeypatch.setattr(worker_module.SlackPoCWorker, "_intake_api_key_for_org", intake_api_key)
+    monkeypatch.setattr(worker_module, "run_intake_agent", run_intake_agent)
 
 
 def test_remove_bot_mention_removes_configured_mention_and_fallback_mentions() -> None:
@@ -895,7 +912,7 @@ async def test_worker_posts_empty_prompt_guidance_for_bare_mention() -> None:
 
 
 @pytest.mark.asyncio
-async def test_worker_preflight_direct_greeting_does_not_spawn_analysis(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_worker_intake_direct_reply_does_not_spawn_analysis(monkeypatch: pytest.MonkeyPatch) -> None:
     slack = AsyncMock(spec=SlackApiClient)
     slack.permalink.return_value = "https://slack.test/archives/C1/p1000"
     worker = SlackPoCWorker(
@@ -904,9 +921,15 @@ async def test_worker_preflight_direct_greeting_does_not_spawn_analysis(monkeypa
         AsyncMock(),
     )
 
-    async def fail_process_request(_request):
-        raise AssertionError("greeting should not spawn analysis")
+    async def run_intake_agent(_session, **_kwargs):
+        return SimpleNamespace(
+            action=IntakeTerminalAction(name="respond_to_user", arguments={"text": "Hi. What should I check?"})
+        )
 
+    async def fail_process_request(_request):
+        raise AssertionError("direct reply should not spawn analysis")
+
+    monkeypatch.setattr(worker_module, "run_intake_agent", run_intake_agent)
     monkeypatch.setattr(worker, "_process_request", fail_process_request)
 
     await worker.handle_events_api_payload(
@@ -925,23 +948,24 @@ async def test_worker_preflight_direct_greeting_does_not_spawn_analysis(monkeypa
     await worker.drain()
 
     slack.post_message.assert_awaited_once()
-    assert "specific data question" in slack.post_message.call_args.kwargs["text"]
+    assert slack.post_message.call_args.kwargs["text"] == "Hi. What should I check?"
 
 
 @pytest.mark.asyncio
-async def test_worker_preflight_ambiguous_data_prompt_does_not_spawn_analysis(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_worker_intake_can_start_analysis_for_old_ambiguous_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
     slack = AsyncMock(spec=SlackApiClient)
     slack.permalink.return_value = "https://slack.test/archives/C1/p1000"
+    processed = []
     worker = SlackPoCWorker(
         SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT"),
         slack,
         AsyncMock(),
     )
 
-    async def fail_process_request(_request):
-        raise AssertionError("ambiguous prompt should not spawn analysis")
+    async def process_request(request):
+        processed.append(request)
 
-    monkeypatch.setattr(worker, "_process_request", fail_process_request)
+    monkeypatch.setattr(worker, "_process_request", process_request)
 
     await worker.handle_events_api_payload(
         {
@@ -958,8 +982,9 @@ async def test_worker_preflight_ambiguous_data_prompt_does_not_spawn_analysis(mo
     )
     await worker.drain()
 
-    slack.post_message.assert_awaited_once()
-    assert "fresh, specific analysis request" in slack.post_message.call_args.kwargs["text"]
+    assert len(processed) == 1
+    assert processed[0].text == "revenue"
+    slack.post_message.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1386,7 +1411,7 @@ async def test_worker_busy_gate_allows_done_and_stale_active_trails(monkeypatch:
 
 
 @pytest.mark.asyncio
-async def test_worker_continuation_non_analysis_preflight_reacts_only() -> None:
+async def test_worker_continuation_react_action_reacts_only(monkeypatch: pytest.MonkeyPatch) -> None:
     slack = AsyncMock(spec=SlackApiClient)
     worker = SlackPoCWorker(
         SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT"),
@@ -1394,7 +1419,17 @@ async def test_worker_continuation_non_analysis_preflight_reacts_only() -> None:
         AsyncMock(),
     )
 
-    handled = await worker._handle_preflight(
+    async def run_intake_agent(_session, **_kwargs):
+        return SimpleNamespace(
+            action=IntakeTerminalAction(
+                name="react_or_ignore",
+                arguments={"mode": "react", "reaction": "+1"},
+            )
+        )
+
+    monkeypatch.setattr(worker_module, "run_intake_agent", run_intake_agent)
+
+    request_to_process = await worker._handle_intake(
         SlackRequest(
             event_id="Ev2",
             team_id="T1",
@@ -1409,9 +1444,50 @@ async def test_worker_continuation_non_analysis_preflight_reacts_only() -> None:
         )
     )
 
-    assert handled is True
+    assert request_to_process is None
     slack.add_reaction.assert_awaited_once_with(channel="C1", timestamp="2.0", name="+1")
     slack.post_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_worker_update_notebook_action_preserves_discussion_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT"),
+        slack,
+        AsyncMock(),
+    )
+
+    async def run_intake_agent(_session, **_kwargs):
+        return SimpleNamespace(
+            action=IntakeTerminalAction(
+                name="update_notebook_analysis",
+                arguments={"prompt": "Add a product breakdown", "output_mode": "answer"},
+            )
+        )
+
+    monkeypatch.setattr(worker_module, "run_intake_agent", run_intake_agent)
+    monkeypatch.setattr(worker, "_notebook_update_status", AsyncMock(return_value="safe_to_update"))
+
+    request = SlackRequest(
+        event_id="Ev2",
+        team_id="T1",
+        channel_id="C1",
+        user_id="U1",
+        text="add product breakdown",
+        event_ts="2.0",
+        thread_ts="1.0",
+        source_url="https://slack.test/archives/C1/p20",
+        is_continuation=True,
+        discussion_id="slack:T1:C1:1.0",
+    )
+
+    request_to_process = await worker._handle_intake(request)
+
+    assert request_to_process is not None
+    assert request_to_process.text == "Add a product breakdown"
+    assert request_to_process.discussion_id == "slack:T1:C1:1.0"
+    assert request_to_process.output_mode == "answer"
 
 
 @pytest.mark.asyncio

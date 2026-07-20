@@ -44,6 +44,7 @@ from gateway.slack_poc.progress import (
     COMPLETING_PROGRESS_TEXT,
     INITIAL_PROGRESS_TEXT,
 )
+from gateway.store import analysis_trails
 from gateway.store import slack as slack_store
 from gateway.store.org_secrets import resolve_anthropic_key
 from gateway.string_utils import string_value as _string
@@ -53,13 +54,25 @@ SLACK_API_BASE = "https://slack.com/api"
 SLACK_TEXT_LIMIT = 35000
 SLACK_CHART_LIMIT = 3
 SLACK_ACK_REACTION = "eyes"
+SLACK_CONTINUATION_ACK_REACTION = "+1"
 SLACK_DONE_REACTION = "white_check_mark"
 SLACK_ERROR_REACTION = "x"
+SLACK_BUSY_TEXT = (
+    "Still working on the earlier question in this thread. "
+    "Resend this after I post the result and I'll build on it."
+)
+SLACK_RESET_CONFIRMATION_TEXT = "Starting fresh. I will use a new conversation for the next analysis."
+SLACK_ACTIVE_TRAIL_STALE_SECONDS = 30 * 60
 SLACK_EVENT_DEDUPE_MAX_SIZE = 10_000
 SLACK_EVENT_DEDUPE_TTL_SECONDS = 6 * 60 * 60
 SLACK_POC_HTTP_DEFAULT_HOST = "127.0.0.1"
+SLACK_RESET_COMMANDS = ("reset", "new analysis", "start over", "new conversation")
 _PLACEHOLDER_CHART_TITLE_RE = re.compile(
     r"(?:notebook\s+)?(?:chart|image|figure|visualization)(?:\s+\d+)?",
+    flags=re.I,
+)
+_RESET_COMMAND_PREFIX_RE = re.compile(
+    r"^\s*(new\s+conversation|new\s+analysis|start\s+over|reset)\b(?P<rest>.*)$",
     flags=re.I,
 )
 _DEFAULT_WEB_URL = "https://app.signalpilot.ai"
@@ -67,6 +80,7 @@ _MISSING_ANTHROPIC_KEY_TEMPLATE = (
     "SignalPilot needs an Anthropic API key. "
     "Ask your admin to add it on the integrations page: {url}"
 )
+_SLACK_DM_RESET_EPOCHS: dict[tuple[str, str, str], str] = {}
 
 
 class SlackApiError(RuntimeError):
@@ -162,6 +176,9 @@ class SlackRequest:
     event_ts: str
     thread_ts: str
     source_url: str
+    channel_type: str = ""
+    is_continuation: bool = False
+    discussion_id: str = ""
 
 
 class SlackApiClient:
@@ -268,7 +285,7 @@ class SlackApiClient:
         self,
         *,
         channel: str,
-        thread_ts: str,
+        thread_ts: str | None,
         filename: str,
         title: str | None,
         content: bytes,
@@ -293,17 +310,25 @@ class SlackApiClient:
         file_payload = {"id": file_id}
         if title:
             file_payload["title"] = title
-        await self._api_form(
-            "files.completeUploadExternal",
-            {
-                "files": json.dumps([file_payload]),
-                "channel_id": channel,
-                "thread_ts": thread_ts,
-            },
-        )
+        complete_payload = {
+            "files": json.dumps([file_payload]),
+            "channel_id": channel,
+        }
+        if thread_ts:
+            complete_payload["thread_ts"] = thread_ts
+        await self._api_form("files.completeUploadExternal", complete_payload)
 
     async def thread_messages(self, *, channel: str, thread_ts: str) -> list[dict[str, Any]]:
         data = await self._api_form("conversations.replies", {"channel": channel, "ts": thread_ts, "limit": "20"})
+        messages = data.get("messages")
+        return messages if isinstance(messages, list) else []
+
+    async def channel_messages(self, *, channel: str, latest: str | None = None) -> list[dict[str, Any]]:
+        payload = {"channel": channel, "limit": "20"}
+        if latest:
+            payload["latest"] = latest
+            payload["inclusive"] = "true"
+        data = await self._api_form("conversations.history", payload)
         messages = data.get("messages")
         return messages if isinstance(messages, list) else []
 
@@ -329,6 +354,7 @@ class SlackPoCWorker:
         self.session_factory = session_factory
         self._seen_event_ids = _EventDeduper()
         self._tasks: set[asyncio.Task[None]] = set()
+        self._dm_reset_epochs = _SLACK_DM_RESET_EPOCHS
 
     async def handle_events_api_payload(self, payload: dict[str, Any]) -> None:
         request = await self._request_from_payload(payload)
@@ -354,6 +380,8 @@ class SlackPoCWorker:
 
         event_type = event.get("type")
         channel_id = _string(event.get("channel"))
+        channel_type = _string(event.get("channel_type"))
+        is_dm = _is_dm_channel_type(channel_type)
         if self.config.allowed_channel_ids and channel_id not in self.config.allowed_channel_ids:
             LOGGER.info("Ignoring Slack event in non-allowed channel=%s", channel_id)
             return None
@@ -368,22 +396,66 @@ class SlackPoCWorker:
         text = _string(event.get("text")).strip()
         if event_type == "app_mention":
             text = _remove_bot_mention(text, self.config.bot_user_id).strip()
-        elif event_type == "message" and event.get("channel_type") == "im":
-            pass
-        else:
-            return None
-
-        if not text:
-            await self.slack.post_message(
-                channel=channel_id,
-                thread_ts=_string(event.get("thread_ts")) or _string(event.get("ts")),
-                text="Ask me a data question after the mention and I'll run it through SignalPilot.",
-            )
+        elif event_type != "message":
             return None
 
         event_ts = _string(event.get("ts") or event.get("event_ts"))
         thread_ts = _string(event.get("thread_ts")) or event_ts
         team_id = _string(event.get("team") or payload.get("team_id") or _first_authorization_team_id(payload))
+        discussion_id = _thread_discussion_id(team_id, channel_id, thread_ts)
+        is_continuation = False
+
+        if is_dm:
+            dm_key = (self.config.org_id, team_id, channel_id)
+            reset_requested, remaining_text = _parse_reset_command(text)
+            if reset_requested:
+                self._dm_reset_epochs[dm_key] = event_ts
+                discussion_id = _dm_discussion_id(team_id, channel_id, event_ts)
+                if not remaining_text:
+                    await self.slack.post_message(
+                        channel=channel_id,
+                        text=SLACK_RESET_CONFIRMATION_TEXT,
+                    )
+                    return None
+                text = remaining_text
+            else:
+                latest_dm_trail = await self._latest_slack_trail_for_source_thread_prefix(
+                    _dm_discussion_prefix(team_id, channel_id)
+                )
+                reset_epoch = self._dm_reset_epochs.get(dm_key)
+                latest_epoch = (
+                    _dm_epoch_from_discussion_id(latest_dm_trail.source_thread_id)
+                    if latest_dm_trail is not None and latest_dm_trail.source_thread_id
+                    else ""
+                )
+                if reset_epoch and (not latest_epoch or _slack_ts_value(reset_epoch) > _slack_ts_value(latest_epoch)):
+                    discussion_id = _dm_discussion_id(team_id, channel_id, reset_epoch)
+                elif latest_dm_trail is not None and latest_dm_trail.source_thread_id:
+                    discussion_id = latest_dm_trail.source_thread_id
+                    is_continuation = True
+                else:
+                    discussion_id = _dm_discussion_id(team_id, channel_id, event_ts)
+        elif event_type == "message":
+            if not _string(event.get("thread_ts")):
+                return None
+            existing_trail = await self._latest_slack_trail_for_source_thread_id(discussion_id)
+            if existing_trail is None:
+                return None
+            is_continuation = True
+        else:
+            existing_trail = None
+            if _string(event.get("thread_ts")):
+                existing_trail = await self._latest_slack_trail_for_source_thread_id(discussion_id)
+            is_continuation = existing_trail is not None
+
+        if not text:
+            await self.slack.post_message(
+                channel=channel_id,
+                thread_ts=_reply_thread_ts_for_channel(channel_type, thread_ts),
+                text="Ask me a data question after the mention and I'll run it through SignalPilot.",
+            )
+            return None
+
         source_url = await self.slack.permalink(channel=channel_id, message_ts=event_ts)
 
         return SlackRequest(
@@ -395,20 +467,29 @@ class SlackPoCWorker:
             event_ts=event_ts,
             thread_ts=thread_ts,
             source_url=source_url,
+            channel_type=channel_type,
+            is_continuation=is_continuation,
+            discussion_id=discussion_id,
         )
 
     async def _handle_preflight(self, request: SlackRequest) -> bool:
         decision = classify_analysis_request(request.text)
         if decision.kind == AnalysisPreflightKind.ANALYZE:
             return False
+        if request.is_continuation:
+            await self._add_request_reaction(request, SLACK_CONTINUATION_ACK_REACTION)
+            return True
         await self.slack.post_message(
             channel=request.channel_id,
-            thread_ts=request.thread_ts,
+            thread_ts=_reply_thread_ts(request),
             text=decision.response or "Send me a specific data question and I will run it through SignalPilot.",
         )
         return True
 
     async def _process_request(self, request: SlackRequest) -> None:
+        if await self._post_busy_reply_if_active(request):
+            return
+
         trail_url: str | None = None
         route: notebook_analysis.AnalysisRoute | None = None
         progress_ts = ""
@@ -424,7 +505,7 @@ class SlackPoCWorker:
         if not has_org_anthropic_key:
             await self.slack.post_message(
                 channel=request.channel_id,
-                thread_ts=request.thread_ts,
+                thread_ts=_reply_thread_ts(request),
                 text=_missing_anthropic_key_text(),
             )
             await self._mark_request_failed(request)
@@ -432,7 +513,7 @@ class SlackPoCWorker:
         try:
             progress_ts = await self.slack.post_message(
                 channel=request.channel_id,
-                thread_ts=request.thread_ts,
+                thread_ts=_reply_thread_ts(request),
                 text=INITIAL_PROGRESS_TEXT,
             )
         except Exception as exc:
@@ -560,7 +641,7 @@ class SlackPoCWorker:
             slack_status = delivery_result_to_status(delivery, packet, base_status=public_status)
             await self._update_or_post_result_message(
                 channel=request.channel_id,
-                thread_ts=request.thread_ts,
+                thread_ts=_reply_thread_ts(request),
                 message_ts=progress_ts,
                 text=render_slack_final_message(packet, delivery, trail_url=trail_url),
             )
@@ -585,7 +666,7 @@ class SlackPoCWorker:
                     LOGGER.debug("Could not mark Slack analysis trail failed", exc_info=True)
             await self._update_or_post_result_message(
                 channel=request.channel_id,
-                thread_ts=request.thread_ts,
+                thread_ts=_reply_thread_ts(request),
                 message_ts=progress_ts,
                 text=_failure_slack_text(str(exc), trail_url),
             )
@@ -593,6 +674,58 @@ class SlackPoCWorker:
         finally:
             await self._stop_progress_reporter(progress_stop, progress_task)
             await self._remove_request_reaction(request, SLACK_ACK_REACTION)
+
+    async def _latest_slack_trail_for_source_thread_id(self, source_thread_id: str):
+        try:
+            async with self.session_factory() as db:
+                return await analysis_trails.latest_trail_for_source_thread_id(
+                    db,
+                    org_id=self.config.org_id,
+                    source="slack",
+                    source_thread_id=source_thread_id,
+                )
+        except Exception as exc:
+            LOGGER.info("Could not load Slack trail for source_thread_id=%s: %s", source_thread_id, exc, exc_info=True)
+            return None
+
+    async def _latest_slack_trail_for_source_thread_prefix(self, prefix: str):
+        try:
+            async with self.session_factory() as db:
+                return await analysis_trails.latest_trail_for_source_thread_prefix(
+                    db,
+                    org_id=self.config.org_id,
+                    source="slack",
+                    prefix=prefix,
+                )
+        except Exception as exc:
+            LOGGER.info("Could not load Slack trail for source_thread_id prefix=%s: %s", prefix, exc, exc_info=True)
+            return None
+
+    async def _post_busy_reply_if_active(self, request: SlackRequest) -> bool:
+        request_id = notebook_analysis._analysis_request_id("slack", _discussion_id(request))
+        try:
+            async with self.session_factory() as db:
+                trail = await analysis_trails.get_trail(
+                    db,
+                    org_id=self.config.org_id,
+                    source="slack",
+                    request_id=request_id,
+                )
+        except Exception as exc:
+            LOGGER.info("Could not load Slack active trail for busy gate: %s", exc, exc_info=True)
+            return False
+
+        if trail is None or trail.status != "active":
+            return False
+        if trail.updated_at < time.time() - SLACK_ACTIVE_TRAIL_STALE_SECONDS:
+            return False
+
+        await self.slack.post_message(
+            channel=request.channel_id,
+            thread_ts=_reply_thread_ts(request),
+            text=SLACK_BUSY_TEXT,
+        )
+        return True
 
     async def _add_request_reaction(self, request: SlackRequest, name: str) -> None:
         if not request.event_ts:
@@ -626,7 +759,7 @@ class SlackPoCWorker:
         self,
         *,
         channel: str,
-        thread_ts: str,
+        thread_ts: str | None,
         message_ts: str,
         text: str,
     ) -> None:
@@ -730,7 +863,7 @@ class SlackPoCWorker:
                     raise RuntimeError(f"chart response is not an image: {content_type}")
                 await self.slack.upload_file(
                     channel=request.channel_id,
-                    thread_ts=request.thread_ts,
+                    thread_ts=_reply_thread_ts(request),
                     filename=_chart_filename(chart, index, content_type),
                     title=title,
                     content=content,
@@ -751,7 +884,7 @@ class SlackPoCWorker:
         if errors and attached == 0:
             await self.slack.post_message(
                 channel=request.channel_id,
-                thread_ts=request.thread_ts,
+                thread_ts=_reply_thread_ts(request),
                 text=(
                     "I finished the analysis, but could not attach the chart images. "
                     "If Slack says `missing_scope`, add the bot scope `files:write` "
@@ -762,7 +895,11 @@ class SlackPoCWorker:
 
     async def _previous_thread_messages(self, request: SlackRequest) -> list[str]:
         try:
-            messages = await self.slack.thread_messages(channel=request.channel_id, thread_ts=request.thread_ts)
+            if _is_dm_request(request):
+                messages = await self.slack.channel_messages(channel=request.channel_id, latest=request.event_ts)
+                messages = list(reversed(messages))
+            else:
+                messages = await self.slack.thread_messages(channel=request.channel_id, thread_ts=request.thread_ts)
         except Exception as exc:
             LOGGER.info("Could not load Slack thread context: event_id=%s error=%s", request.event_id, exc)
             return []
@@ -1284,8 +1421,69 @@ def _status_charts(status: dict[str, Any]) -> list[dict[str, Any]]:
     return [chart for chart in charts if isinstance(chart, dict)] if isinstance(charts, list) else []
 
 
+def _is_dm_channel_type(channel_type: str) -> bool:
+    return channel_type == "im"
+
+
+def _is_dm_request(request: SlackRequest) -> bool:
+    return _is_dm_channel_type(request.channel_type)
+
+
+def _reply_thread_ts(request: SlackRequest) -> str | None:
+    return _reply_thread_ts_for_channel(request.channel_type, request.thread_ts)
+
+
+def _reply_thread_ts_for_channel(channel_type: str, thread_ts: str) -> str | None:
+    return None if _is_dm_channel_type(channel_type) else thread_ts
+
+
+def _thread_discussion_id(team_id: str, channel_id: str, thread_ts: str) -> str:
+    return f"slack:{team_id}:{channel_id}:{thread_ts}"
+
+
+def _dm_discussion_prefix(team_id: str, channel_id: str) -> str:
+    return f"slack:{team_id}:{channel_id}:dm-"
+
+
+def _dm_discussion_id(team_id: str, channel_id: str, event_ts: str) -> str:
+    return f"{_dm_discussion_prefix(team_id, channel_id)}{event_ts}"
+
+
+def _dm_epoch_from_discussion_id(discussion_id: str) -> str:
+    marker = ":dm-"
+    if marker not in discussion_id:
+        return ""
+    return discussion_id.rsplit(marker, 1)[-1]
+
+
+def _slack_ts_value(ts: str) -> float:
+    try:
+        return float(ts)
+    except ValueError:
+        return 0.0
+
+
 def _discussion_id(request: SlackRequest) -> str:
-    return f"slack:{request.team_id}:{request.channel_id}:{request.thread_ts}"
+    return request.discussion_id or _thread_discussion_id(request.team_id, request.channel_id, request.thread_ts)
+
+
+def _parse_reset_command(text: str) -> tuple[bool, str]:
+    if _normalize_reset_command(text) in SLACK_RESET_COMMANDS:
+        return True, ""
+
+    match = _RESET_COMMAND_PREFIX_RE.match(text)
+    if match is None:
+        return False, text
+
+    remaining = re.sub(r"^[\s:;,.!?/\\-]+", "", match.group("rest")).strip()
+    remaining = re.sub(r"^(?:and|then)\s+", "", remaining, flags=re.I).strip()
+    if not remaining:
+        return True, ""
+    return True, remaining
+
+
+def _normalize_reset_command(text: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", text.lower()))
 
 
 def _chart_value(chart: dict[str, Any], *keys: str) -> str:

@@ -7,6 +7,7 @@ import json
 import os
 import time
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs
 
@@ -28,6 +29,13 @@ from gateway.slack_poc.worker import (
     _remove_bot_mention,
     create_http_app,
 )
+
+
+@pytest.fixture(autouse=True)
+def clear_slack_dm_reset_epochs():
+    worker_module._SLACK_DM_RESET_EPOCHS.clear()
+    yield
+    worker_module._SLACK_DM_RESET_EPOCHS.clear()
 
 
 def test_remove_bot_mention_removes_configured_mention_and_fallback_mentions() -> None:
@@ -139,6 +147,12 @@ async def test_slack_read_methods_use_form_encoded_payloads() -> None:
             assert body["ts"] == ["1.0"]
             assert body["limit"] == ["20"]
             return httpx.Response(200, json={"ok": True, "messages": [{"text": "hello"}]})
+        if request.url.path.endswith("/conversations.history"):
+            assert body["channel"] == ["D1"]
+            assert body["latest"] == ["2.0"]
+            assert body["inclusive"] == ["true"]
+            assert body["limit"] == ["20"]
+            return httpx.Response(200, json={"ok": True, "messages": [{"text": "dm hello"}]})
         raise AssertionError(f"unexpected request: {request.url}")
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -146,6 +160,7 @@ async def test_slack_read_methods_use_form_encoded_payloads() -> None:
     try:
         assert await slack.permalink(channel="C1", message_ts="1.0") == "https://slack.test/p1"
         assert await slack.thread_messages(channel="C1", thread_ts="1.0") == [{"text": "hello"}]
+        assert await slack.channel_messages(channel="D1", latest="2.0") == [{"text": "dm hello"}]
     finally:
         await slack.aclose()
 
@@ -365,6 +380,7 @@ async def test_worker_releases_db_session_before_long_notebook_analysis(monkeypa
         return {"requestId": "req-1", "trailUrl": "https://app.test/notebook/session-1"}
 
     monkeypatch.setattr(worker, "_start_analysis", start_analysis)
+    monkeypatch.setattr(worker, "_post_busy_reply_if_active", AsyncMock(return_value=False))
 
     async def run_progress_reporter(*, stop_event, thread_id, source_prompt, channel_id, message_ts, user_id):
         assert thread_id == "session-slack-req-1"
@@ -447,6 +463,7 @@ async def test_worker_adds_error_reaction_when_analysis_fails(monkeypatch: pytes
         raise RuntimeError("notebook auth missing")
 
     monkeypatch.setattr(worker, "_previous_thread_messages", fail_previous_messages)
+    monkeypatch.setattr(worker, "_post_busy_reply_if_active", AsyncMock(return_value=False))
     monkeypatch.setattr(worker_module, "resolve_anthropic_key", AsyncMock(return_value="sk-ant-org"))
 
     await worker._process_request(
@@ -495,6 +512,7 @@ async def test_worker_posts_admin_nudge_when_org_key_missing(monkeypatch: pytest
     )
     previous_messages = AsyncMock()
     monkeypatch.setattr(worker, "_previous_thread_messages", previous_messages)
+    monkeypatch.setattr(worker, "_post_busy_reply_if_active", AsyncMock(return_value=False))
 
     await worker._process_request(
         SlackRequest(
@@ -978,6 +996,531 @@ async def test_worker_schedules_valid_app_mention(monkeypatch: pytest.MonkeyPatc
     assert len(processed) == 1
     assert processed[0].text == "analyze revenue"
     assert processed[0].thread_ts == "1.0"
+
+
+@pytest.mark.asyncio
+async def test_worker_dm_first_message_creates_epoch_discussion_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    slack.permalink.return_value = "https://slack.test/archives/D1/p1000"
+    processed = []
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT"),
+        slack,
+        AsyncMock(),
+    )
+
+    async def latest_dm_prefix(prefix: str):
+        assert prefix == "slack:T1:D1:dm-"
+        return
+
+    async def process_request(request):
+        processed.append(request)
+
+    monkeypatch.setattr(worker, "_latest_slack_trail_for_source_thread_prefix", latest_dm_prefix)
+    monkeypatch.setattr(worker, "_process_request", process_request)
+
+    await worker.handle_events_api_payload(
+        {
+            "event_id": "Ev1",
+            "team_id": "T1",
+            "event": {
+                "type": "message",
+                "channel_type": "im",
+                "channel": "D1",
+                "user": "U1",
+                "text": "analyze revenue by month",
+                "ts": "1.0",
+            },
+        }
+    )
+    await worker.drain()
+
+    assert len(processed) == 1
+    assert processed[0].discussion_id == "slack:T1:D1:dm-1.0"
+    assert processed[0].channel_type == "im"
+    assert processed[0].is_continuation is False
+
+
+@pytest.mark.asyncio
+async def test_worker_dm_followup_reuses_latest_dm_trail(monkeypatch: pytest.MonkeyPatch) -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    slack.permalink.return_value = "https://slack.test/archives/D1/p2000"
+    processed = []
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT"),
+        slack,
+        AsyncMock(),
+    )
+
+    async def latest_dm_prefix(_prefix: str):
+        return SimpleNamespace(source_thread_id="slack:T1:D1:dm-1.0")
+
+    async def process_request(request):
+        processed.append(request)
+
+    monkeypatch.setattr(worker, "_latest_slack_trail_for_source_thread_prefix", latest_dm_prefix)
+    monkeypatch.setattr(worker, "_process_request", process_request)
+
+    await worker.handle_events_api_payload(
+        {
+            "event_id": "Ev2",
+            "team_id": "T1",
+            "event": {
+                "type": "message",
+                "channel_type": "im",
+                "channel": "D1",
+                "user": "U1",
+                "text": "show revenue by month",
+                "ts": "2.0",
+            },
+        }
+    )
+    await worker.drain()
+
+    assert len(processed) == 1
+    assert processed[0].discussion_id == "slack:T1:D1:dm-1.0"
+    assert processed[0].is_continuation is True
+
+
+@pytest.mark.asyncio
+async def test_worker_dm_reset_only_posts_confirmation_without_analysis(monkeypatch: pytest.MonkeyPatch) -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT"),
+        slack,
+        AsyncMock(),
+    )
+
+    async def fail_process_request(_request):
+        raise AssertionError("reset-only command should not spawn analysis")
+
+    monkeypatch.setattr(worker, "_process_request", fail_process_request)
+
+    await worker.handle_events_api_payload(
+        {
+            "event_id": "Ev1",
+            "team_id": "T1",
+            "event": {
+                "type": "message",
+                "channel_type": "im",
+                "channel": "D1",
+                "user": "U1",
+                "text": "RESET!!!",
+                "ts": "3.0",
+            },
+        }
+    )
+    await worker.drain()
+
+    slack.post_message.assert_awaited_once()
+    assert slack.post_message.await_args.kwargs == {
+        "channel": "D1",
+        "text": worker_module.SLACK_RESET_CONFIRMATION_TEXT,
+    }
+    slack.permalink.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_worker_dm_reset_only_rotates_epoch_for_next_question(monkeypatch: pytest.MonkeyPatch) -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    slack.permalink.return_value = "https://slack.test/archives/D1/p5000"
+    processed = []
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT"),
+        slack,
+        AsyncMock(),
+    )
+
+    async def latest_dm_prefix(_prefix: str):
+        return SimpleNamespace(source_thread_id="slack:T1:D1:dm-1.0")
+
+    async def process_request(request):
+        processed.append(request)
+
+    monkeypatch.setattr(worker, "_latest_slack_trail_for_source_thread_prefix", latest_dm_prefix)
+    monkeypatch.setattr(worker, "_process_request", process_request)
+
+    await worker.handle_events_api_payload(
+        {
+            "event_id": "Ev-reset",
+            "team_id": "T1",
+            "event": {
+                "type": "message",
+                "channel_type": "im",
+                "channel": "D1",
+                "user": "U1",
+                "text": "new conversation.",
+                "ts": "5.0",
+            },
+        }
+    )
+    await worker.handle_events_api_payload(
+        {
+            "event_id": "Ev-question",
+            "team_id": "T1",
+            "event": {
+                "type": "message",
+                "channel_type": "im",
+                "channel": "D1",
+                "user": "U1",
+                "text": "analyze revenue by month",
+                "ts": "6.0",
+            },
+        }
+    )
+    await worker.drain()
+
+    assert len(processed) == 1
+    assert processed[0].discussion_id == "slack:T1:D1:dm-5.0"
+    assert processed[0].is_continuation is False
+
+
+@pytest.mark.asyncio
+async def test_worker_dm_reset_plus_question_rotates_epoch(monkeypatch: pytest.MonkeyPatch) -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    slack.permalink.return_value = "https://slack.test/archives/D1/p4000"
+    processed = []
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT"),
+        slack,
+        AsyncMock(),
+    )
+
+    async def fail_latest_dm_prefix(_prefix: str):
+        raise AssertionError("reset plus question should not reuse the old DM trail")
+
+    async def process_request(request):
+        processed.append(request)
+
+    monkeypatch.setattr(worker, "_latest_slack_trail_for_source_thread_prefix", fail_latest_dm_prefix)
+    monkeypatch.setattr(worker, "_process_request", process_request)
+
+    await worker.handle_events_api_payload(
+        {
+            "event_id": "Ev1",
+            "team_id": "T1",
+            "event": {
+                "type": "message",
+                "channel_type": "im",
+                "channel": "D1",
+                "user": "U1",
+                "text": "Start over: analyze revenue by month",
+                "ts": "4.0",
+            },
+        }
+    )
+    await worker.drain()
+
+    assert len(processed) == 1
+    assert processed[0].text == "analyze revenue by month"
+    assert processed[0].discussion_id == "slack:T1:D1:dm-4.0"
+    assert processed[0].is_continuation is False
+
+
+@pytest.mark.asyncio
+async def test_worker_accepts_plain_thread_reply_when_slack_trail_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    slack.permalink.return_value = "https://slack.test/archives/C1/p2000"
+    processed = []
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT"),
+        slack,
+        AsyncMock(),
+    )
+
+    async def latest_thread(source_thread_id: str):
+        assert source_thread_id == "slack:T1:C1:1.0"
+        return SimpleNamespace(source_thread_id=source_thread_id)
+
+    async def process_request(request):
+        processed.append(request)
+
+    monkeypatch.setattr(worker, "_latest_slack_trail_for_source_thread_id", latest_thread)
+    monkeypatch.setattr(worker, "_process_request", process_request)
+
+    await worker.handle_events_api_payload(
+        {
+            "event_id": "Ev2",
+            "team_id": "T1",
+            "event": {
+                "type": "message",
+                "channel_type": "channel",
+                "channel": "C1",
+                "user": "U1",
+                "text": "show revenue by month",
+                "thread_ts": "1.0",
+                "ts": "2.0",
+            },
+        }
+    )
+    await worker.drain()
+
+    assert len(processed) == 1
+    assert processed[0].discussion_id == "slack:T1:C1:1.0"
+    assert processed[0].is_continuation is True
+
+
+@pytest.mark.asyncio
+async def test_worker_ignores_plain_thread_reply_without_slack_trail(monkeypatch: pytest.MonkeyPatch) -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT"),
+        slack,
+        AsyncMock(),
+    )
+
+    async def no_thread(_source_thread_id: str):
+        return None
+
+    async def fail_process_request(_request):
+        raise AssertionError("thread without SignalPilot trail should be silent")
+
+    monkeypatch.setattr(worker, "_latest_slack_trail_for_source_thread_id", no_thread)
+    monkeypatch.setattr(worker, "_process_request", fail_process_request)
+
+    await worker.handle_events_api_payload(
+        {
+            "event_id": "Ev2",
+            "team_id": "T1",
+            "event": {
+                "type": "message",
+                "channel_type": "channel",
+                "channel": "C1",
+                "user": "U1",
+                "text": "show revenue by month",
+                "thread_ts": "1.0",
+                "ts": "2.0",
+            },
+        }
+    )
+    await worker.drain()
+
+    slack.post_message.assert_not_called()
+    slack.permalink.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_worker_busy_active_trail_posts_busy_reply_without_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SessionContext:
+        async def __aenter__(self):
+            return "db"
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    slack = AsyncMock(spec=SlackApiClient)
+    slack.post_message.return_value = "busy-ts"
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", org_id="org-1"),
+        slack,
+        lambda: SessionContext(),
+    )
+    monkeypatch.setattr(
+        worker_module.analysis_trails,
+        "get_trail",
+        AsyncMock(return_value=SimpleNamespace(status="active", updated_at=time.time())),
+    )
+    monkeypatch.setattr(worker_module, "resolve_anthropic_key", AsyncMock(side_effect=AssertionError("duplicate")))
+
+    await worker._process_request(
+        SlackRequest(
+            event_id="Ev2",
+            team_id="T1",
+            channel_id="C1",
+            user_id="U1",
+            text="show revenue by month",
+            event_ts="2.0",
+            thread_ts="1.0",
+            source_url="https://slack.test/archives/C1/p20",
+            channel_type="channel",
+            is_continuation=True,
+            discussion_id="slack:T1:C1:1.0",
+        )
+    )
+
+    slack.post_message.assert_awaited_once_with(
+        channel="C1",
+        thread_ts="1.0",
+        text=worker_module.SLACK_BUSY_TEXT,
+    )
+    slack.add_reaction.assert_not_called()
+    slack.update_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_worker_busy_gate_allows_done_and_stale_active_trails(monkeypatch: pytest.MonkeyPatch) -> None:
+    class SessionContext:
+        async def __aenter__(self):
+            return "db"
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    slack = AsyncMock(spec=SlackApiClient)
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", org_id="org-1"),
+        slack,
+        lambda: SessionContext(),
+    )
+    request = SlackRequest(
+        event_id="Ev2",
+        team_id="T1",
+        channel_id="C1",
+        user_id="U1",
+        text="show revenue by month",
+        event_ts="2.0",
+        thread_ts="1.0",
+        source_url="https://slack.test/archives/C1/p20",
+        discussion_id="slack:T1:C1:1.0",
+    )
+    get_trail = AsyncMock(return_value=SimpleNamespace(status="done", updated_at=time.time()))
+    monkeypatch.setattr(worker_module.analysis_trails, "get_trail", get_trail)
+
+    assert await worker._post_busy_reply_if_active(request) is False
+    get_trail.return_value = SimpleNamespace(status="active", updated_at=time.time() - 31 * 60)
+    assert await worker._post_busy_reply_if_active(request) is False
+
+    slack.post_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_worker_continuation_non_analysis_preflight_reacts_only() -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT"),
+        slack,
+        AsyncMock(),
+    )
+
+    handled = await worker._handle_preflight(
+        SlackRequest(
+            event_id="Ev2",
+            team_id="T1",
+            channel_id="C1",
+            user_id="U1",
+            text="thanks",
+            event_ts="2.0",
+            thread_ts="1.0",
+            source_url="https://slack.test/archives/C1/p20",
+            is_continuation=True,
+            discussion_id="slack:T1:C1:1.0",
+        )
+    )
+
+    assert handled is True
+    slack.add_reaction.assert_awaited_once_with(channel="C1", timestamp="2.0", name="+1")
+    slack.post_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_worker_previous_messages_uses_history_for_dm_and_replies_for_threads() -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    slack.channel_messages.return_value = [
+        {"ts": "3.0", "user": "U1", "text": "show revenue by month"},
+        {"ts": "2.0", "user": "UBOT", "text": "working"},
+        {"ts": "1.0", "user": "U1", "text": "<@UBOT> analyze revenue"},
+    ]
+    slack.thread_messages.return_value = [
+        {"ts": "1.0", "user": "U1", "text": "<@UBOT> analyze revenue"},
+        {"ts": "2.0", "user": "U1", "text": "show revenue by month"},
+    ]
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT"),
+        slack,
+        AsyncMock(),
+    )
+
+    dm_messages = await worker._previous_thread_messages(
+        SlackRequest(
+            event_id="Ev3",
+            team_id="T1",
+            channel_id="D1",
+            user_id="U1",
+            text="show revenue by month",
+            event_ts="3.0",
+            thread_ts="3.0",
+            source_url="https://slack.test/archives/D1/p30",
+            channel_type="im",
+            discussion_id="slack:T1:D1:dm-1.0",
+        )
+    )
+    thread_messages = await worker._previous_thread_messages(
+        SlackRequest(
+            event_id="Ev2",
+            team_id="T1",
+            channel_id="C1",
+            user_id="U1",
+            text="show revenue by month",
+            event_ts="2.0",
+            thread_ts="1.0",
+            source_url="https://slack.test/archives/C1/p20",
+            channel_type="channel",
+            discussion_id="slack:T1:C1:1.0",
+        )
+    )
+
+    assert dm_messages == ["analyze revenue"]
+    assert thread_messages == ["analyze revenue"]
+    slack.channel_messages.assert_awaited_once_with(channel="D1", latest="3.0")
+    slack.thread_messages.assert_awaited_once_with(channel="C1", thread_ts="1.0")
+
+
+@pytest.mark.asyncio
+async def test_worker_missing_key_reply_omits_thread_ts_for_dm_and_includes_it_for_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SessionContext:
+        async def __aenter__(self):
+            return "db"
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    slack = AsyncMock(spec=SlackApiClient)
+    slack.post_message.return_value = "nudge-ts"
+    slack.add_reaction.return_value = None
+    slack.remove_reaction.return_value = None
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", org_id="org-1"),
+        slack,
+        lambda: SessionContext(),
+    )
+    monkeypatch.setattr(worker, "_post_busy_reply_if_active", AsyncMock(return_value=False))
+    monkeypatch.setattr(worker_module, "resolve_anthropic_key", AsyncMock(return_value=None))
+
+    await worker._process_request(
+        SlackRequest(
+            event_id="Ev1",
+            team_id="T1",
+            channel_id="D1",
+            user_id="U1",
+            text="analyze revenue",
+            event_ts="1.0",
+            thread_ts="1.0",
+            source_url="https://slack.test/archives/D1/p10",
+            channel_type="im",
+            discussion_id="slack:T1:D1:dm-1.0",
+        )
+    )
+    await worker._process_request(
+        SlackRequest(
+            event_id="Ev2",
+            team_id="T1",
+            channel_id="C1",
+            user_id="U1",
+            text="analyze revenue",
+            event_ts="2.0",
+            thread_ts="1.0",
+            source_url="https://slack.test/archives/C1/p20",
+            channel_type="channel",
+            discussion_id="slack:T1:C1:1.0",
+        )
+    )
+
+    assert slack.post_message.await_args_list[0].kwargs["thread_ts"] is None
+    assert slack.post_message.await_args_list[1].kwargs["thread_ts"] == "1.0"
 
 
 def _slack_signature(signing_secret: str, timestamp: str, raw_body: bytes) -> str:

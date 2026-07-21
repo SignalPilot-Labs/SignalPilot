@@ -55,6 +55,12 @@ async def clear_org_anthropic_key(session: AsyncSession, org_id: str) -> Gateway
     return row
 
 
+async def get_anthropic_key_updated_at(session: AsyncSession, org_id: str) -> float | None:
+    """Return when the org Anthropic secret row was last changed."""
+    row = await _org_secrets_row(session, org_id)
+    return row.updated_at if row else None
+
+
 async def resolve_anthropic_key(session: AsyncSession, org_id: str) -> str | None:
     """Resolve the Anthropic key for analysis. Org secrets are the only source."""
     return await get_org_anthropic_key(session, org_id)

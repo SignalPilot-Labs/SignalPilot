@@ -207,8 +207,9 @@ def _get_auth_config() -> dict[str, str]:
     if credentials_path.is_file() and credentials_path.stat().st_size > 0:
         return {"type": "config_dir", "token": ""}
 
-    # Check gateway org secrets. The full key is never returned through GET;
-    # it should already be injected into ANTHROPIC_API_KEY by the gateway.
+    # Check gateway org secrets. In cloud pods this should already be injected
+    # into ANTHROPIC_API_KEY at pod creation; local direct-mode notebooks fetch
+    # it over the runtime-authenticated gateway channel instead.
     try:
         import httpx
 
@@ -217,14 +218,15 @@ def _get_auth_config() -> dict[str, str]:
             gateway_url,
         )
         resp = httpx.get(
-            f"{gateway_url()}/api/org/secrets",
+            f"{gateway_url()}/api/org/secrets/anthropic-key",
             headers=gateway_headers(),
             timeout=5.0,
         )
         if resp.status_code == 200:
             data = resp.json()
-            if data.get("has_key"):
-                pass
+            key = data.get("anthropic_api_key", "")
+            if isinstance(key, str) and key:
+                return {"type": "api_key", "token": key}
     except Exception:
         pass
 

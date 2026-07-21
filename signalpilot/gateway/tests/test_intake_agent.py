@@ -15,7 +15,12 @@ from gateway.analysis_delivery.intake_actions import (
     analysis_status_for_source_thread,
     validate_terminal_action,
 )
-from gateway.analysis_delivery.intake_agent import IntakeAgent, IntakeAgentError, IntakeSession
+from gateway.analysis_delivery.intake_agent import (
+    IntakeAgent,
+    IntakeAgentError,
+    IntakeSession,
+    _intake_system_prompt,
+)
 
 
 class FakeToolRunner:
@@ -188,6 +193,29 @@ def test_terminal_action_validation_rejects_invalid_args() -> None:
 
     with pytest.raises(IntakeActionValidationError, match="requires output_mode"):
         validate_terminal_action("start_notebook_analysis", {"prompt": "Analyze revenue"})
+
+    with pytest.raises(IntakeActionValidationError, match="fresh must be a boolean"):
+        validate_terminal_action(
+            "start_notebook_analysis",
+            {"prompt": "Analyze revenue", "output_mode": "answer", "fresh": "yes"},
+        )
+
+
+def test_start_notebook_action_exposes_explicit_fresh_semantics() -> None:
+    action = validate_terminal_action(
+        "start_notebook_analysis",
+        {"prompt": "Analyze revenue", "output_mode": "answer", "fresh": True},
+    )
+
+    assert action.fresh is True
+
+
+def test_intake_prompt_routes_followups_to_update_unless_fresh_is_explicit() -> None:
+    prompt = _intake_system_prompt(_session())
+
+    assert "rerun with latest data" in prompt
+    assert "choose update_notebook_analysis when a safe trail exists" in prompt
+    assert "start_notebook_analysis with fresh=true" in prompt
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,7 @@ import pytest
 
 from gateway.analysis_delivery import (
     DeliveryRenderer,
+    DeliveryResult,
     delivery_api_key_for_org,
     delivery_result_to_status,
     load_delivery_packet,
@@ -358,6 +359,23 @@ def test_slack_progress_waits_for_worker_plan_then_uses_exact_steps() -> None:
     assert "- [x] Inspect schema" in rendered
     assert "- [ ] Run revenue query (current)" in rendered
     assert "querying fin-db" in rendered
+
+
+def test_slack_final_message_converts_standard_markdown_to_mrkdwn() -> None:
+    packet = load_delivery_packet_from_events([], status_payload={"status": "Done"})
+    delivery = DeliveryResult(
+        summary="Revenue increased.",
+        slack_message="# Summary\n- **Revenue** increased. See [report](https://app.test/report).",
+        notion_comment="",
+        final_answer="",
+    )
+
+    rendered = render_slack_final_message(packet, delivery)
+
+    assert "*Summary*" in rendered
+    assert "*Revenue*" in rendered
+    assert "<https://app.test/report|report>" in rendered
+    assert "**Revenue**" not in rendered
 
 
 @pytest.mark.asyncio

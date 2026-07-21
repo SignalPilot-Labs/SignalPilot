@@ -56,7 +56,7 @@ async def test_agent_auth_status_checks_gateway_org_secrets(monkeypatch: pytest.
         async def get(self, url: str, **kwargs: object) -> _Response:
             calls.append(url)
             assert "headers" in kwargs
-            return _Response({"has_key": True})
+            return _Response({"anthropic_api_key": "sk-ant-runtime"})
 
     monkeypatch.setattr("httpx.AsyncClient", AsyncClient)
 
@@ -65,7 +65,7 @@ async def test_agent_auth_status_checks_gateway_org_secrets(monkeypatch: pytest.
     response = await agent_auth_status(request=object())
     body = json.loads(response.body)
 
-    assert calls == ["https://gateway.test/api/org/secrets"]
+    assert calls == ["https://gateway.test/api/org/secrets/anthropic-key"]
     assert body == {"configured": True, "method": "gateway"}
 
 
@@ -79,13 +79,13 @@ def test_claude_auth_config_checks_org_secrets_but_does_not_fetch_raw_key(
     def get(url: str, **kwargs: object):
         calls.append(url)
         assert kwargs["timeout"] == 5.0
-        return _Response({"has_key": True})
+        return _Response({"anthropic_api_key": "sk-ant-runtime"})
 
     monkeypatch.setattr("httpx.get", get)
 
     from signalpilot._server.ai.claude_agent import _get_auth_config
 
-    with pytest.raises(ValueError, match="integrations page"):
-        _get_auth_config()
+    auth = _get_auth_config()
 
-    assert calls == ["https://gateway.test/api/org/secrets"]
+    assert auth == {"type": "api_key", "token": "sk-ant-runtime"}
+    assert calls == ["https://gateway.test/api/org/secrets/anthropic-key"]

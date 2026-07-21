@@ -13,6 +13,15 @@ from gateway.orchestrator import PodInfo
 from gateway.store.notebook_sessions import NotebookSessionInternal
 
 
+@pytest.fixture(autouse=True)
+def _default_org_secret_freshness(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        session_service.org_secrets_store,
+        "get_anthropic_key_updated_at",
+        AsyncMock(return_value=None),
+    )
+
+
 def _info(
     *,
     session_id: str = "session-1",
@@ -23,6 +32,7 @@ def _info(
     pod_name: str | None = "nb-test",
     pod_ip: str | None = None,
     status: str = "creating",
+    created_at: float | None = None,
 ) -> NotebookSessionInfo:
     return NotebookSessionInfo(
         id=session_id,
@@ -35,7 +45,7 @@ def _info(
         access_token=None,
         status=status,
         last_ping=time.time(),
-        created_at=time.time(),
+        created_at=created_at if created_at is not None else time.time(),
     )
 
 
@@ -279,6 +289,42 @@ async def test_ensure_notion_session_reuses_matching_running_session(monkeypatch
     assert runtime.internal_base_url == "http://10.2.3.4:2718/notebook/session-1"
     session_service.ns.create_session.assert_not_awaited()
     session_service.ns.mark_stopped.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ensure_notebook_session_recreates_when_org_secret_changed_after_session_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SP_NOTEBOOK_DIRECT_URL", "http://notebook:2718")
+    existing = _info(status="running", pod_ip="notebook:2718", created_at=100.0)
+    created = _info(session_id="session-2", status="creating", created_at=201.0)
+
+    monkeypatch.setattr(session_service.ns, "get_active_session", AsyncMock(return_value=existing))
+    monkeypatch.setattr(session_service.ns, "mark_stopped", AsyncMock())
+    monkeypatch.setattr(session_service.ns, "delete_stopped", AsyncMock())
+    monkeypatch.setattr(session_service.ns, "create_session", AsyncMock(return_value=created))
+    monkeypatch.setattr(session_service.ns, "update_session_status", AsyncMock())
+    monkeypatch.setattr(
+        session_service.org_secrets_store,
+        "get_anthropic_key_updated_at",
+        AsyncMock(return_value=200.0),
+    )
+
+    result = await session_service.ensure_notebook_session(
+        AsyncMock(),
+        org_id="org-1",
+        user_id="user-1",
+        project_id=None,
+        branch="main",
+    )
+
+    assert result.id == "session-2"
+    session_service.ns.mark_stopped.assert_awaited_once_with(
+        ANY,
+        session_id="session-1",
+        org_id="org-1",
+    )
+    session_service.ns.create_session.assert_awaited_once()
 
 
 @pytest.mark.asyncio

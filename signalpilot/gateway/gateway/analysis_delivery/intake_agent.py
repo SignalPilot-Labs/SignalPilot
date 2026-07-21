@@ -274,6 +274,10 @@ def _intake_system_prompt(session: IntakeSession) -> str:
         "analysis status, trace, or deliverable context is needed. "
         "Answer directly only from adapter-provided facts or read-tool results. "
         "If live data work, SQL, charts, or metric computation is needed, choose a notebook action. "
+        "For requests such as update the results, rerun with latest data, try again, or what changed, "
+        "read analysis status and choose update_notebook_analysis when a safe trail exists. "
+        "When the user explicitly asks to start fresh, start over, or rerun as a new analysis, "
+        "choose start_notebook_analysis with fresh=true. Otherwise do not set fresh. "
         "For low-value acknowledgements or noise, choose react_or_ignore. "
         "For known Notion HTML deliverables, choose update_notion_deliverable when the user asks to edit or refresh it. "
         "You must end by calling exactly one terminal action tool and no more. "
@@ -454,6 +458,10 @@ _TERMINAL_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
             "properties": {
                 "prompt": {"type": "string", "minLength": 1},
                 "output_mode": {"type": "string", "enum": ["answer", "deliverable"]},
+                "fresh": {
+                    "type": "boolean",
+                    "description": "True only when the user explicitly requests a new notebook identity.",
+                },
             },
             "required": ["prompt", "output_mode"],
             "additionalProperties": False,

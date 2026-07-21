@@ -36,16 +36,17 @@ from gateway.analysis_delivery import (
     render_slack_final_message,
 )
 from gateway.analysis_delivery.design_system import theme_token_map
-from gateway.analysis_delivery.intake_actions import analysis_status_for_source_thread
+from gateway.analysis_delivery.intake_actions import IntakeAnalysisStatus, analysis_status_for_source_thread
 from gateway.analysis_delivery.intake_agent import IntakeSession, run_intake_agent
 from gateway.db.engine import close_db, get_session_factory, init_db
+from gateway.models.analysis_trails import AnalysisTrailInfo, AnalysisTrailUpdate
 from gateway.notebooks.session_service import NotebookRuntime, ensure_analysis_notebook_session
 from gateway.notion import analysis as notebook_analysis
 from gateway.slack_poc.progress import (
     COMPLETING_PROGRESS_TEXT,
     INITIAL_PROGRESS_TEXT,
 )
-from gateway.store import analysis_trails, slack_thread_watches
+from gateway.store import analysis_trails, chat_traces, slack_thread_watches
 from gateway.store import slack as slack_store
 from gateway.store.org_secrets import resolve_anthropic_key
 from gateway.string_utils import string_value as _string
@@ -64,6 +65,14 @@ SLACK_BUSY_TEXT = (
 )
 SLACK_RESET_CONFIRMATION_TEXT = "Starting fresh. I will use a new conversation for the next analysis."
 SLACK_INTAKE_OPERATIONAL_FAILURE_TEXT = "I could not safely decide how to handle that. Try again in a moment."
+SLACK_INCOMPLETE_UPDATE_ROUTE_TEXT = (
+    "I found the previous analysis, but its notebook route is incomplete. "
+    "I can rerun it fresh from the thread context."
+)
+SLACK_MISMATCHED_UPDATE_ROUTE_TEXT = (
+    "I found a previous analysis, but it does not belong to this Slack conversation. "
+    "I can rerun it fresh from the thread context."
+)
 SLACK_ACTIVE_TRAIL_STALE_SECONDS = 30 * 60
 SLACK_EVENT_DEDUPE_MAX_SIZE = 10_000
 SLACK_EVENT_DEDUPE_TTL_SECONDS = 6 * 60 * 60
@@ -189,6 +198,8 @@ class SlackRequest:
     discussion_id: str = ""
     output_mode: str = "answer"
     ack_reaction_added: bool = False
+    analysis_action: str = "start_notebook_analysis"
+    update_trail: AnalysisTrailInfo | None = None
 
 
 @dataclass(frozen=True)
@@ -576,14 +587,22 @@ class SlackPoCWorker:
                 channel_id=channel_id,
                 discussion_id=discussion_id,
             )
-            existing_trail = await self._latest_slack_trail_for_source_thread_id(discussion_id)
+            existing_trail = await self._latest_slack_trail_for_source_thread_prefix(f"{discussion_id}:run-")
+            if existing_trail is None:
+                existing_trail = await self._latest_slack_trail_for_source_thread_id(discussion_id)
             if existing_trail is None and not is_known_thread and not is_pending_thread:
                 return None
+            if existing_trail is not None and existing_trail.source_thread_id:
+                discussion_id = existing_trail.source_thread_id
             is_continuation = True
         else:
             existing_trail = None
             if has_parent_thread_ts:
-                existing_trail = await self._latest_slack_trail_for_source_thread_id(discussion_id)
+                existing_trail = await self._latest_slack_trail_for_source_thread_prefix(f"{discussion_id}:run-")
+                if existing_trail is None:
+                    existing_trail = await self._latest_slack_trail_for_source_thread_id(discussion_id)
+                if existing_trail is not None and existing_trail.source_thread_id:
+                    discussion_id = existing_trail.source_thread_id
             is_continuation = existing_trail is not None
 
         if not text:
@@ -640,31 +659,60 @@ class SlackPoCWorker:
                 )
             return None
         if action.name == "start_notebook_analysis":
-            return replace(request, text=action.prompt, output_mode=action.output_mode)
+            if action.fresh:
+                request = self._fresh_analysis_request(request)
+            return replace(
+                request,
+                text=action.prompt,
+                output_mode=action.output_mode,
+                analysis_action=action.name,
+            )
         if action.name == "update_notebook_analysis":
             update_status = await self._notebook_update_status(request)
-            if update_status == "busy":
-                await self.slack.post_message(
-                    channel=request.channel_id,
-                    thread_ts=_reply_thread_ts(request),
-                    text=SLACK_BUSY_TEXT,
-                )
-                return None
-            if update_status == "not_found":
-                await self.slack.post_message(
-                    channel=request.channel_id,
-                    thread_ts=_reply_thread_ts(request),
-                    text="I could not find an earlier SignalPilot analysis in this thread to update.",
-                )
-                return None
-            if update_status != "safe_to_update":
+            if update_status is None:
                 await self.slack.post_message(
                     channel=request.channel_id,
                     thread_ts=_reply_thread_ts(request),
                     text=SLACK_INTAKE_OPERATIONAL_FAILURE_TEXT,
                 )
                 return None
-            return replace(request, text=action.prompt, output_mode=action.output_mode)
+            if update_status.status == "busy":
+                await self.slack.post_message(
+                    channel=request.channel_id,
+                    thread_ts=_reply_thread_ts(request),
+                    text=SLACK_BUSY_TEXT,
+                )
+                return None
+            if update_status.status == "not_found":
+                await self.slack.post_message(
+                    channel=request.channel_id,
+                    thread_ts=_reply_thread_ts(request),
+                    text="I could not find an earlier SignalPilot analysis in this thread to update.",
+                )
+                return None
+            if update_status.status != "safe_to_update" or update_status.trail is None:
+                await self.slack.post_message(
+                    channel=request.channel_id,
+                    thread_ts=_reply_thread_ts(request),
+                    text=SLACK_INTAKE_OPERATIONAL_FAILURE_TEXT,
+                )
+                return None
+            trail = update_status.trail
+            route_error = self._update_route_error(request, trail)
+            if route_error:
+                await self.slack.post_message(
+                    channel=request.channel_id,
+                    thread_ts=_reply_thread_ts(request),
+                    text=route_error,
+                )
+                return None
+            return replace(
+                request,
+                text=action.prompt,
+                output_mode=action.output_mode,
+                analysis_action=action.name,
+                update_trail=trail,
+            )
 
         await self.slack.post_message(
             channel=request.channel_id,
@@ -711,7 +759,7 @@ class SlackPoCWorker:
             LOGGER.info("Could not load org Anthropic key for Slack intake: %s", exc, exc_info=True)
             return ""
 
-    async def _notebook_update_status(self, request: SlackRequest) -> str:
+    async def _notebook_update_status(self, request: SlackRequest) -> IntakeAnalysisStatus | None:
         try:
             async with self.session_factory() as db:
                 status = await analysis_status_for_source_thread(
@@ -723,10 +771,42 @@ class SlackPoCWorker:
                 )
         except Exception as exc:
             LOGGER.info("Could not load Slack trail for intake update action: %s", exc, exc_info=True)
-            return "failed"
-        return status.status
+            return None
+        return status
+
+    def _fresh_analysis_request(self, request: SlackRequest) -> SlackRequest:
+        if _is_dm_request(request):
+            self._dm_reset_epochs[(self.config.org_id, request.team_id, request.channel_id)] = request.event_ts
+            discussion_id = _dm_discussion_id(request.team_id, request.channel_id, request.event_ts)
+        else:
+            base_discussion_id = _thread_discussion_id(request.team_id, request.channel_id, request.thread_ts)
+            discussion_id = f"{base_discussion_id}:run-{request.event_ts}"
+        return replace(request, discussion_id=discussion_id, is_continuation=False)
+
+    @staticmethod
+    def _update_route_error(request: SlackRequest, trail: Any) -> str | None:
+        if not all(
+            _string(getattr(trail, field_name, "")).strip()
+            for field_name in ("request_id", "project_id", "branch", "notebook_path")
+        ):
+            return SLACK_INCOMPLETE_UPDATE_ROUTE_TEXT
+        expected_request_id = notebook_analysis._analysis_request_id("slack", _discussion_id(request))
+        if _string(getattr(trail, "request_id", "")) != expected_request_id:
+            return SLACK_MISMATCHED_UPDATE_ROUTE_TEXT
+        return None
 
     async def _process_request(self, request: SlackRequest) -> None:
+        if request.update_trail is not None:
+            route_error = self._update_route_error(request, request.update_trail)
+            if route_error:
+                await self.slack.post_message(
+                    channel=request.channel_id,
+                    thread_ts=_reply_thread_ts(request),
+                    text=route_error,
+                )
+                if request.ack_reaction_added:
+                    await self._remove_request_reaction(request, SLACK_ACK_REACTION)
+                return
         if await self._post_busy_reply_if_active(request):
             if request.ack_reaction_added:
                 await self._remove_request_reaction(request, SLACK_ACK_REACTION)
@@ -762,47 +842,104 @@ class SlackPoCWorker:
         except Exception as exc:
             LOGGER.info("Could not post Slack progress message: %s", exc, exc_info=True)
         try:
+            discussion_id = _discussion_id(request)
             previous_messages = await self._previous_thread_messages(request)
+            route_origin = "existing_trail" if request.update_trail is not None else "fresh_resolution"
+            selected_notebook_path = ""
+            if request.update_trail is not None:
+                selected_notebook_path = request.update_trail.notebook_path
+                previous_messages.extend(await self._prior_analysis_trace_messages(request.update_trail))
             async with self.session_factory() as db:
                 credential_user_id = await self._analysis_user_id(db)
-                discussion_id = _discussion_id(request)
-                request_id = notebook_analysis._analysis_request_id("slack", discussion_id)
                 defaults = self._analysis_defaults(request)
-                route = await notebook_analysis.resolve_analysis_route_for_defaults(
-                    db,
-                    org_id=self.config.org_id,
-                    source="slack",
-                    request_id=request_id,
-                    headline=notebook_analysis._headline_from_prompt(request.text),
-                    default_project_id=defaults.default_project_id,
-                    default_branch=defaults.default_branch,
-                    analysis_branch_mode=defaults.analysis_branch_mode,
-                )
-                analysis_user_id = credential_user_id or route.analysis_user_id
-                runtime = await ensure_analysis_notebook_session(
-                    db,
-                    org_id=self.config.org_id,
-                    source=route.source,
-                    request_id=route.request_id,
-                    project_id=route.project_id,
-                    branch=route.branch,
-                    credential_user_id=credential_user_id,
-                )
-                await notebook_analysis.upsert_analysis_trail_seed(
-                    db,
-                    org_id=self.config.org_id,
-                    route=route,
-                    runtime=runtime,
-                    headline=notebook_analysis._headline_from_prompt(request.text),
-                    source_url=request.source_url,
-                    source_thread_id=discussion_id,
-                    source_request_id=request.event_id,
-                    analysis_user_id=analysis_user_id,
-                )
+                if request.update_trail is not None:
+                    update_trail = request.update_trail
+                    route = notebook_analysis.AnalysisRoute(
+                        source="slack",
+                        request_id=update_trail.request_id,
+                        project_id=update_trail.project_id,
+                        branch=update_trail.branch,
+                        default_branch=update_trail.default_branch or defaults.default_branch,
+                        analysis_user_id=(
+                            update_trail.analysis_user_id
+                            or f"analysis:slack:{update_trail.request_id}"
+                        ),
+                    )
+                    analysis_user_id = route.analysis_user_id
+                else:
+                    request_id = notebook_analysis._analysis_request_id("slack", discussion_id)
+                    route = await notebook_analysis.resolve_analysis_route_for_defaults(
+                        db,
+                        org_id=self.config.org_id,
+                        source="slack",
+                        request_id=request_id,
+                        headline=notebook_analysis._headline_from_prompt(request.text),
+                        default_project_id=defaults.default_project_id,
+                        default_branch=defaults.default_branch,
+                        analysis_branch_mode=defaults.analysis_branch_mode,
+                    )
+                    analysis_user_id = credential_user_id or route.analysis_user_id
+                runtime_kwargs: dict[str, Any] = {
+                    "org_id": self.config.org_id,
+                    "source": route.source,
+                    "request_id": route.request_id,
+                    "project_id": route.project_id,
+                    "branch": route.branch,
+                    "credential_user_id": credential_user_id,
+                }
+                if request.update_trail is not None:
+                    runtime_kwargs.update(
+                        runtime_session_id=getattr(request.update_trail, "runtime_session_id", None),
+                        analysis_user_id=route.analysis_user_id,
+                    )
+                runtime = await ensure_analysis_notebook_session(db, **runtime_kwargs)
+                if request.update_trail is not None:
+                    await analysis_trails.update_trail(
+                        db,
+                        org_id=self.config.org_id,
+                        source=route.source,
+                        request_id=route.request_id,
+                        update=AnalysisTrailUpdate(
+                            runtime_session_id=runtime.session_id,
+                            status="active",
+                        ),
+                    )
+                else:
+                    await notebook_analysis.upsert_analysis_trail_seed(
+                        db,
+                        org_id=self.config.org_id,
+                        route=route,
+                        runtime=runtime,
+                        headline=notebook_analysis._headline_from_prompt(request.text),
+                        source_url=request.source_url,
+                        source_thread_id=discussion_id,
+                        source_request_id=request.event_id,
+                        analysis_user_id=analysis_user_id,
+                    )
+
+            LOGGER.info(
+                "Slack analysis route selected action=%s source_thread_id=%s request_id=%s "
+                "project_id=%s branch=%s route_origin=%s notebook_path=%s runtime_session_id=%s",
+                request.analysis_action,
+                discussion_id,
+                route.request_id,
+                route.project_id,
+                route.branch,
+                route_origin,
+                selected_notebook_path,
+                runtime.session_id,
+            )
 
             trace_thread_id = f"session-{route.request_id}"
             start = await self._start_analysis(runtime, request, previous_messages, analysis_user_id, route)
             trail_url = notebook_analysis._public_signalpilot_url(_string(start.get("trailUrl")), runtime)
+            recovery_notice = _string(start.get("recoveryNotice")).strip()
+            if recovery_notice:
+                await self.slack.post_message(
+                    channel=request.channel_id,
+                    thread_ts=_reply_thread_ts(request),
+                    text=recovery_notice,
+                )
             async with self.session_factory() as db:
                 await notebook_analysis.upsert_analysis_trail_from_status(
                     db,
@@ -895,9 +1032,6 @@ class SlackPoCWorker:
             if route is not None:
                 try:
                     async with self.session_factory() as db:
-                        from gateway.models.analysis_trails import AnalysisTrailUpdate
-                        from gateway.store import analysis_trails
-
                         await analysis_trails.update_trail(
                             db,
                             org_id=self.config.org_id,
@@ -911,7 +1045,7 @@ class SlackPoCWorker:
                 channel=request.channel_id,
                 thread_ts=_reply_thread_ts(request),
                 message_ts=progress_ts,
-                text=_failure_slack_text(str(exc), trail_url),
+                text=_failure_slack_text(_safe_analysis_error(exc), trail_url),
             )
             await self._mark_request_failed(request)
         finally:
@@ -920,7 +1054,7 @@ class SlackPoCWorker:
 
     async def _latest_slack_trail_for_source_thread_id(self, source_thread_id: str):
         try:
-            async with self.session_factory() as db:
+            async with self._session_context() as db:
                 return await analysis_trails.latest_trail_for_source_thread_id(
                     db,
                     org_id=self.config.org_id,
@@ -933,7 +1067,7 @@ class SlackPoCWorker:
 
     async def _latest_slack_trail_for_source_thread_prefix(self, prefix: str):
         try:
-            async with self.session_factory() as db:
+            async with self._session_context() as db:
                 return await analysis_trails.latest_trail_for_source_thread_prefix(
                     db,
                     org_id=self.config.org_id,
@@ -1264,6 +1398,41 @@ class SlackPoCWorker:
                 previous.append(_remove_bot_mention(text, self.config.bot_user_id).strip())
         return [message for message in previous if message]
 
+    async def _prior_analysis_trace_messages(self, trail: AnalysisTrailInfo) -> list[str]:
+        thread_id = _string(getattr(trail, "thread_id", "")).strip()
+        if not thread_id:
+            return []
+        try:
+            async with self.session_factory() as db:
+                events = await chat_traces.get_events(
+                    db,
+                    org_id=self.config.org_id,
+                    user_id=(
+                        _string(getattr(trail, "analysis_user_id", "")).strip()
+                        or f"analysis:slack:{trail.request_id}"
+                    ),
+                    thread_id=thread_id,
+                    require_thread=False,
+                )
+        except Exception as exc:
+            LOGGER.info(
+                "Could not load prior Slack analysis trace request_id=%s: %s",
+                getattr(trail, "request_id", ""),
+                exc,
+                exc_info=True,
+            )
+            return []
+
+        summaries: list[str] = []
+        for event in events[-12:]:
+            content = _string(getattr(event, "content", "")).strip()
+            if not content or getattr(event, "type", "") not in {"user", "text", "text_delta", "error"}:
+                continue
+            summaries.append(content[:500])
+        if not summaries:
+            return []
+        return ["Prior analysis trace summary:\n" + "\n".join(summaries)[-3000:]]
+
     async def _start_analysis(
         self,
         runtime: NotebookRuntime,
@@ -1292,6 +1461,11 @@ class SlackPoCWorker:
                     "prompt": request.text,
                     "outputMode": request.output_mode,
                     "previousMessages": previous_messages,
+                    "existingNotebookPath": (
+                        request.update_trail.notebook_path
+                        if request.update_trail is not None
+                        else None
+                    ),
                     "createdAt": created_at,
                     "theme": theme_token_map(theme),
                 },
@@ -1925,6 +2099,24 @@ def _failure_slack_text(error: str, trail_url: str | None) -> str:
     if trail_url:
         text += f"\n\nNotebook trail: <{trail_url.replace('>', '%3E')}|Open notebook>"
     return _clip_text(text)
+
+
+def _safe_analysis_error(exc: Exception) -> str:
+    if isinstance(exc, httpx.HTTPStatusError):
+        status_code = exc.response.status_code
+        if status_code == 404:
+            return (
+                "The previous analysis notebook could not be reopened. "
+                "Start a fresh analysis from the Slack thread context."
+            )
+        return f"The notebook service could not complete the request (HTTP {status_code})."
+    message = " ".join(str(exc).split()).strip()
+    if "404 Not Found" in message or "Analysis request not found" in message:
+        return (
+            "The previous analysis notebook could not be reopened. "
+            "Start a fresh analysis from the Slack thread context."
+        )
+    return message or "The notebook service could not complete the request."
 
 
 def main() -> None:

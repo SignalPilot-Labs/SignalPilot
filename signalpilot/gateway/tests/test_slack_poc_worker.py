@@ -8,6 +8,7 @@ import os
 import time
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs
 
@@ -19,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from gateway.analysis_delivery import DeliveryResult, IntakeTerminalAction
+from gateway.analysis_delivery.intake_actions import IntakeAnalysisStatus
 from gateway.db.models import GatewayBase, GatewaySlackThreadWatch, SlackInstallation, SlackInstallationConfig
 from gateway.slack_poc import worker as worker_module
 from gateway.slack_poc.progress import COMPLETING_PROGRESS_TEXT, INITIAL_PROGRESS_TEXT
@@ -1967,7 +1969,19 @@ async def test_worker_update_notebook_action_preserves_discussion_id(monkeypatch
         )
 
     monkeypatch.setattr(worker_module, "run_intake_agent", run_intake_agent)
-    monkeypatch.setattr(worker, "_notebook_update_status", AsyncMock(return_value="safe_to_update"))
+    trail = SimpleNamespace(
+        request_id=worker_module.notebook_analysis._analysis_request_id("slack", "slack:T1:C1:1.0"),
+        project_id="project-1",
+        branch="analysis/slack/original",
+        default_branch="main",
+        notebook_path="notebooks/slack/original.py",
+        analysis_user_id="analysis-user-1",
+    )
+    monkeypatch.setattr(
+        worker,
+        "_notebook_update_status",
+        AsyncMock(return_value=IntakeAnalysisStatus(status="safe_to_update", trail=trail)),
+    )
 
     request = SlackRequest(
         event_id="Ev2",
@@ -1988,6 +2002,336 @@ async def test_worker_update_notebook_action_preserves_discussion_id(monkeypatch
     assert request_to_process.text == "Add a product breakdown"
     assert request_to_process.discussion_id == "slack:T1:C1:1.0"
     assert request_to_process.output_mode == "answer"
+    assert request_to_process.update_trail is trail
+    assert request_to_process.analysis_action == "update_notebook_analysis"
+
+
+@pytest.mark.asyncio
+async def test_worker_update_uses_existing_trail_route_and_notebook_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SessionContext:
+        async def __aenter__(self):
+            return "db"
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    discussion_id = "slack:T1:C1:1.0"
+    request_id = worker_module.notebook_analysis._analysis_request_id("slack", discussion_id)
+    trail = SimpleNamespace(
+        request_id=request_id,
+        thread_id=f"session-{request_id}",
+        runtime_session_id="runtime-original",
+        project_id="project-original",
+        branch="analysis/slack/original-branch",
+        default_branch="main",
+        notebook_path="notebooks/slack/original.py",
+        analysis_user_id="analysis-user-original",
+    )
+    slack = AsyncMock(spec=SlackApiClient)
+    slack.post_message.return_value = "progress-ts"
+    worker = SlackPoCWorker(
+        SlackPoCConfig(
+            bot_token="xoxb-test",
+            app_token="xapp-test",
+            org_id="org-1",
+            default_project_id="project-new",
+            progress_enabled=False,
+        ),
+        slack,
+        lambda: SessionContext(),
+    )
+    resolve_route = AsyncMock(side_effect=AssertionError("update route must not be re-resolved"))
+    captured: dict[str, Any] = {}
+
+    async def ensure_session(_db, **kwargs):
+        captured["session"] = kwargs
+        return worker_module.NotebookRuntime(
+            session_id="runtime-original",
+            internal_base_url="http://notebook.internal",
+            public_base_url="https://app.test/notebook/runtime-original",
+        )
+
+    async def call_notebook(_runtime, path, _org_id, user_id, init):
+        captured["path"] = path
+        captured["user_id"] = user_id
+        captured["init"] = init
+        return {
+            "requestId": request_id,
+            "sessionId": f"session-{request_id}",
+            "notebookPath": trail.notebook_path,
+            "trailUrl": "https://app.test/notebook/runtime-original",
+            "status": "Analyzing",
+        }
+
+    monkeypatch.setattr(worker_module, "resolve_anthropic_key", AsyncMock(return_value="sk-ant-org"))
+    monkeypatch.setattr(worker_module.notebook_analysis, "resolve_analysis_route_for_defaults", resolve_route)
+    monkeypatch.setattr(worker_module, "ensure_analysis_notebook_session", ensure_session)
+    monkeypatch.setattr(worker_module.analysis_trails, "update_trail", AsyncMock())
+    monkeypatch.setattr(worker_module.notebook_analysis, "_call_notebook", call_notebook)
+    monkeypatch.setattr(
+        worker_module.notebook_analysis,
+        "upsert_analysis_trail_from_status",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        worker_module.notebook_analysis,
+        "update_analysis_trail_from_status",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        worker_module.notebook_analysis,
+        "_poll_analysis",
+        AsyncMock(return_value={"status": "Done", "notionComment": "Done"}),
+    )
+    monkeypatch.setattr(worker_module.notebook_analysis, "_public_signalpilot_url", lambda url, _runtime: url)
+    monkeypatch.setattr(worker_module.notebook_analysis, "_with_public_chart_urls", lambda status, _runtime: status)
+    monkeypatch.setattr(worker, "_post_busy_reply_if_active", AsyncMock(return_value=False))
+    monkeypatch.setattr(worker, "_previous_thread_messages", AsyncMock(return_value=["original prompt"]))
+    monkeypatch.setattr(
+        worker,
+        "_prior_analysis_trace_messages",
+        AsyncMock(return_value=["Prior analysis trace summary: revenue increased"]),
+    )
+    monkeypatch.setattr(worker, "_analysis_user_id", AsyncMock(return_value="credential-user"))
+    monkeypatch.setattr(worker_module, "delivery_api_key_for_org", AsyncMock(return_value="sk-ant-org"))
+    monkeypatch.setattr(worker_module, "load_delivery_packet", AsyncMock(return_value=object()))
+    monkeypatch.setattr(
+        worker_module,
+        "render_delivery",
+        AsyncMock(
+            return_value=DeliveryResult(
+                summary="Done",
+                slack_message="Done",
+                notion_comment="Done",
+                final_answer="Done",
+                confidence_score="high",
+            )
+        ),
+    )
+    monkeypatch.setattr(worker_module, "delivery_result_to_status", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(worker_module, "render_slack_final_message", lambda *_args, **_kwargs: "Done")
+    monkeypatch.setattr(worker, "_update_or_post_result_message", AsyncMock())
+    monkeypatch.setattr(worker, "_update_progress_message", AsyncMock())
+    monkeypatch.setattr(worker, "_mark_request_done", AsyncMock())
+    monkeypatch.setattr(worker, "_post_chart_attachments", AsyncMock())
+
+    await worker._process_request(
+        SlackRequest(
+            event_id="Ev2",
+            team_id="T1",
+            channel_id="C1",
+            user_id="U1",
+            text="what changed?",
+            event_ts="2.0",
+            thread_ts="1.0",
+            source_url="https://slack.test/archives/C1/p20",
+            is_continuation=True,
+            discussion_id=discussion_id,
+            analysis_action="update_notebook_analysis",
+            update_trail=trail,
+        )
+    )
+
+    resolve_route.assert_not_awaited()
+    assert captured["session"]["project_id"] == trail.project_id
+    assert captured["session"]["branch"] == trail.branch
+    assert captured["session"]["runtime_session_id"] == trail.runtime_session_id
+    assert captured["session"]["analysis_user_id"] == trail.analysis_user_id
+    assert captured["user_id"] == trail.analysis_user_id
+    assert captured["init"]["headers"]["X-Gateway-Branch-Id"] == trail.branch
+    assert captured["init"]["json"]["existingNotebookPath"] == trail.notebook_path
+    assert captured["init"]["json"]["discussionId"] == discussion_id
+
+
+@pytest.mark.asyncio
+async def test_worker_update_notebook_action_rejects_incomplete_trail(monkeypatch: pytest.MonkeyPatch) -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT"),
+        slack,
+        AsyncMock(),
+    )
+
+    async def run_intake_agent(_session, **_kwargs):
+        return SimpleNamespace(
+            action=IntakeTerminalAction(
+                name="update_notebook_analysis",
+                arguments={"prompt": "Update it", "output_mode": "answer"},
+            )
+        )
+
+    trail = SimpleNamespace(
+        request_id=worker_module.notebook_analysis._analysis_request_id("slack", "slack:T1:C1:1.0"),
+        project_id="project-1",
+        branch="",
+        default_branch="main",
+        notebook_path="notebooks/slack/original.py",
+        analysis_user_id=None,
+    )
+    monkeypatch.setattr(worker_module, "run_intake_agent", run_intake_agent)
+    monkeypatch.setattr(
+        worker,
+        "_notebook_update_status",
+        AsyncMock(return_value=IntakeAnalysisStatus(status="safe_to_update", trail=trail)),
+    )
+
+    result = await worker._handle_intake(
+        SlackRequest(
+            event_id="Ev2",
+            team_id="T1",
+            channel_id="C1",
+            user_id="U1",
+            text="update it",
+            event_ts="2.0",
+            thread_ts="1.0",
+            source_url="https://slack.test/archives/C1/p20",
+            is_continuation=True,
+            discussion_id="slack:T1:C1:1.0",
+        )
+    )
+
+    assert result is None
+    assert "notebook route is incomplete" in slack.post_message.await_args.kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_worker_update_notebook_action_without_trail_does_not_start_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT"),
+        slack,
+        AsyncMock(),
+    )
+
+    async def run_intake_agent(_session, **_kwargs):
+        return SimpleNamespace(
+            action=IntakeTerminalAction(
+                name="update_notebook_analysis",
+                arguments={"prompt": "Update it", "output_mode": "answer"},
+            )
+        )
+
+    monkeypatch.setattr(worker_module, "run_intake_agent", run_intake_agent)
+    monkeypatch.setattr(
+        worker,
+        "_notebook_update_status",
+        AsyncMock(return_value=IntakeAnalysisStatus(status="not_found")),
+    )
+
+    result = await worker._handle_intake(
+        SlackRequest(
+            event_id="Ev2",
+            team_id="T1",
+            channel_id="C1",
+            user_id="U1",
+            text="update it",
+            event_ts="2.0",
+            thread_ts="1.0",
+            source_url="https://slack.test/archives/C1/p20",
+            is_continuation=True,
+            discussion_id="slack:T1:C1:1.0",
+        )
+    )
+
+    assert result is None
+    assert "could not find an earlier SignalPilot analysis" in slack.post_message.await_args.kwargs["text"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("channel_type", "expected_discussion_id"),
+    [
+        ("im", "slack:T1:D1:dm-2.0"),
+        ("channel", "slack:T1:D1:1.0:run-2.0"),
+    ],
+)
+async def test_worker_explicit_fresh_analysis_rotates_notebook_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    channel_type: str,
+    expected_discussion_id: str,
+) -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT", org_id="org-1"),
+        slack,
+        AsyncMock(),
+    )
+
+    async def run_intake_agent(_session, **_kwargs):
+        return SimpleNamespace(
+            action=IntakeTerminalAction(
+                name="start_notebook_analysis",
+                arguments={"prompt": "Start fresh", "output_mode": "answer", "fresh": True},
+            )
+        )
+
+    monkeypatch.setattr(worker_module, "run_intake_agent", run_intake_agent)
+    request = SlackRequest(
+        event_id="Ev2",
+        team_id="T1",
+        channel_id="D1",
+        user_id="U1",
+        text="start fresh",
+        event_ts="2.0",
+        thread_ts="1.0",
+        source_url="https://slack.test/archives/D1/p20",
+        channel_type=channel_type,
+        is_continuation=True,
+        discussion_id="slack:T1:D1:dm-1.0" if channel_type == "im" else "slack:T1:D1:1.0",
+    )
+
+    result = await worker._handle_intake(request)
+
+    assert result is not None
+    assert result.discussion_id == expected_discussion_id
+    assert result.analysis_action == "start_notebook_analysis"
+
+
+@pytest.mark.asyncio
+async def test_worker_channel_followup_reuses_latest_fresh_run_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    slack.permalink.return_value = "https://slack.test/archives/C1/p300"
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT"),
+        slack,
+        AsyncMock(),
+    )
+    latest_fresh = SimpleNamespace(source_thread_id="slack:T1:C1:1.0:run-2.0")
+    monkeypatch.setattr(
+        worker,
+        "_latest_slack_trail_for_source_thread_prefix",
+        AsyncMock(return_value=latest_fresh),
+    )
+    exact_lookup = AsyncMock()
+    monkeypatch.setattr(worker, "_latest_slack_trail_for_source_thread_id", exact_lookup)
+    monkeypatch.setattr(worker, "_is_thread_watched", AsyncMock(return_value=True))
+    monkeypatch.setattr(worker, "_has_pending_thread_dispatch", AsyncMock(return_value=False))
+
+    request = await worker._request_from_payload(
+        {
+            "event_id": "Ev3",
+            "team_id": "T1",
+            "event": {
+                "type": "message",
+                "channel_type": "channel",
+                "channel": "C1",
+                "user": "U1",
+                "text": "what changed now?",
+                "ts": "3.0",
+                "thread_ts": "1.0",
+            },
+        }
+    )
+
+    assert request is not None
+    assert request.discussion_id == latest_fresh.source_thread_id
+    exact_lookup.assert_not_awaited()
 
 
 @pytest.mark.asyncio

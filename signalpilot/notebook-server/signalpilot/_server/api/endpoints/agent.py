@@ -74,8 +74,9 @@ async def agent_auth_status(*, request: Request) -> Response:
         credentials_path.is_file() and credentials_path.stat().st_size > 0
     )
 
-    # Also check gateway org secrets. GET never returns the raw key; pod env
-    # injection is still responsible for providing ANTHROPIC_API_KEY.
+    # Also check gateway org secrets. Cloud pods normally get the raw key via
+    # env injection; local direct-mode notebooks fetch it over the authenticated
+    # gateway channel.
     has_gateway_key = False
     try:
         import httpx
@@ -87,11 +88,12 @@ async def agent_auth_status(*, request: Request) -> Response:
 
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(
-                f"{gateway_url()}/api/org/secrets",
+                f"{gateway_url()}/api/org/secrets/anthropic-key",
                 headers=gateway_headers(),
             )
         if resp.status_code == 200:
-            has_gateway_key = resp.json().get("has_key", False)
+            key = resp.json().get("anthropic_api_key", "")
+            has_gateway_key = isinstance(key, str) and bool(key)
     except Exception:
         pass
 

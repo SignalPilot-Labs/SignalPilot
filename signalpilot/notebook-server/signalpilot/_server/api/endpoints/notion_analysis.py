@@ -95,6 +95,7 @@ class StartNotionAnalysisRequest(msgspec.Struct, rename="camel"):
     previous_messages: list[str] = msgspec.field(default_factory=list)
     output_mode: OutputMode = "answer"
     theme: dict[str, Any] | None = None
+    existing_notebook_path: str | None = None
 
 
 class RefreshNotionAnalysisRequest(msgspec.Struct, rename="camel"):
@@ -160,6 +161,8 @@ class AnalysisRecord:
     latest_commit_sha: str | None = None
     error: str | None = None
     result: AnalysisResult | None = None
+    recovery_mode: Literal["restored", "rerun"] | None = None
+    recovery_notice: str | None = None
 
 
 @dataclass
@@ -817,6 +820,8 @@ def _load_registry(app_state: AppState) -> None:
             latest_commit_sha=item.get("latest_commit_sha"),
             error=item.get("error"),
             result=_analysis_result_from_dict(result) if result else None,
+            recovery_mode=item.get("recovery_mode"),
+            recovery_notice=item.get("recovery_notice"),
         )
         record = _records_by_request_id.get(disk_record.request_id)
         if record is None or disk_record.request_id not in _running_tasks:
@@ -1040,6 +1045,70 @@ def _(sp):
     path.write_text(text, encoding="utf-8")
 
 
+def _existing_notebook_target(app_state: AppState, notebook_path: str) -> tuple[Path, str]:
+    root = _project_root(app_state).resolve()
+    target = _resolve_notebook_path(app_state, notebook_path).resolve(strict=False)
+    try:
+        file_key = str(target.relative_to(root))
+    except ValueError:
+        raise ValueError("existingNotebookPath must stay inside the project checkout") from None
+    if target.suffix != ".py":
+        raise ValueError("existingNotebookPath must point to a Python notebook")
+    return target, file_key
+
+
+def _restored_notebook_template(
+    record: AnalysisRecord,
+    body: StartNotionAnalysisRequest,
+) -> str:
+    template = _notebook_template(body)
+    result = record.result or AnalysisResult()
+    prior_completion = {
+        "summary": result.summary,
+        "finalAnswer": result.final_answer,
+        "confidenceScore": result.confidence_score,
+        "gotchas": result.gotchas or [],
+        "analysisMethod": result.analysis_method,
+    }
+    context = (
+        "## Restored prior completion artifacts\n\n"
+        "The original notebook file was unavailable. SignalPilot restored its durable "
+        "completion packet before applying this follow-up.\n\n"
+        f"```json\n{json.dumps(prior_completion, ensure_ascii=False, indent=2)}\n```"
+    )
+    context_json = json.dumps(context)
+    recovery_cell = f'''\n\n
+@app.cell(hide_code=True)
+def _(sp):
+    sp.md({context_json})
+'''
+    marker = '\n\nif __name__ == "__main__":\n'
+    return template.replace(marker, recovery_cell + marker, 1)
+
+
+def _recover_missing_notebook(
+    app_state: AppState,
+    record: AnalysisRecord,
+    body: StartNotionAnalysisRequest,
+) -> None:
+    path = _resolve_notebook_path(app_state, record.notebook_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if record.result is not None:
+        path.write_text(_restored_notebook_template(record, body), encoding="utf-8")
+        record.recovery_mode = "restored"
+        record.recovery_notice = (
+            "I restored the previous analysis from its saved completion artifacts "
+            "and am applying your follow-up on the same notebook route."
+        )
+        return
+    path.write_text(_notebook_template(body), encoding="utf-8")
+    record.recovery_mode = "rerun"
+    record.recovery_notice = (
+        "I could not reopen the earlier notebook, so I am rerunning the analysis "
+        "on the same route from the Slack thread and prior trace context."
+    )
+
+
 def _checkpoint_analysis_files(
     app_state: AppState,
     record: AnalysisRecord,
@@ -1125,9 +1194,19 @@ def _ensure_record(
     if existing_id:
         record = _records_by_request_id[existing_id]
         record.output_mode = _output_mode(body.output_mode)
+        if body.existing_notebook_path:
+            _, record.notebook_path = _existing_notebook_target(
+                app_state, body.existing_notebook_path
+            )
         _refresh_trail_url(app_state, record, request_base_url)
         if record.status != "Analyzing":
-            _append_followup_to_notebook(app_state, record, body)
+            if _resolve_notebook_path(app_state, record.notebook_path).exists():
+                record.recovery_mode = None
+                record.recovery_notice = None
+                _append_followup_to_notebook(app_state, record, body)
+            else:
+                _recover_missing_notebook(app_state, record, body)
+                _save_registry(app_state)
             _checkpoint_analysis_files(
                 app_state, record, f"Append {record.source} analysis follow-up"
             )
@@ -1135,16 +1214,19 @@ def _ensure_record(
 
     source = _analysis_source(body.source)
     request_id = _request_id(body.discussion_id, source)
-    filename = f"{_slugify(body.headline)}-{request_id[-6:]}.py"
-    notebook_path = _records_dir(app_state, source) / filename
-    notebook_path.write_text(_notebook_template(body), encoding="utf-8")
-
-    root = _project_root(app_state)
-    file_key = (
-        str(notebook_path.relative_to(root))
-        if notebook_path.is_relative_to(root)
-        else str(notebook_path)
-    )
+    if body.existing_notebook_path:
+        notebook_path, file_key = _existing_notebook_target(
+            app_state, body.existing_notebook_path
+        )
+    else:
+        filename = f"{_slugify(body.headline)}-{request_id[-6:]}.py"
+        notebook_path = _records_dir(app_state, source) / filename
+        root = _project_root(app_state)
+        file_key = (
+            str(notebook_path.relative_to(root))
+            if notebook_path.is_relative_to(root)
+            else str(notebook_path)
+        )
     session_id = str(_session_id(request_id))
     trail_url = _record_trail_url(
         app_state, file_key, session_id, request_base_url
@@ -1166,6 +1248,13 @@ def _ensure_record(
         theme=body.theme,
         data_snapshots=[],
     )
+    if body.existing_notebook_path:
+        if notebook_path.exists():
+            _append_followup_to_notebook(app_state, record, body)
+        else:
+            _recover_missing_notebook(app_state, record, body)
+    else:
+        notebook_path.write_text(_notebook_template(body), encoding="utf-8")
     _records_by_request_id[record.request_id] = record
     _records_by_discussion_id[record.discussion_id] = record.request_id
     _save_registry(app_state)
@@ -3275,6 +3364,28 @@ def _persist_record_completion_artifacts(
         )
 
 
+def _analysis_startup_error(exc: Exception) -> str:
+    message = " ".join(str(exc).split()).strip()
+    if isinstance(exc, FileNotFoundError) or "not found" in message.lower() or "404" in message:
+        return (
+            "The analysis notebook could not be reopened. "
+            "Start a fresh analysis from the thread context."
+        )
+    if not message:
+        return "The notebook session could not be started. Please retry the analysis."
+    return f"The notebook session could not be started: {message[:500]}"
+
+
+def _analysis_runtime_error(exc: Exception) -> str:
+    message = " ".join(str(exc).split()).strip()
+    if isinstance(exc, FileNotFoundError) or "not found" in message.lower() or "404" in message:
+        return (
+            "The analysis notebook could not be reopened. "
+            "Start a fresh analysis from the thread context."
+        )
+    return message[:1000] or "The notebook analysis failed. Please retry the request."
+
+
 async def _run_analysis(
     app_state: AppState,
     record: AnalysisRecord,
@@ -3298,32 +3409,97 @@ async def _run_analysis(
     record.status = "Analyzing"
     record.error = None
     _save_registry(app_state)
-    _ensure_session(app_state, record, allow_resume=allow_resume_session)
-    project_root = _project_root(app_state)
-    agent_cwd = str(project_root)
-    LOGGER.info(
-        "Starting %s analysis %s session=%s notebook=%s cwd=%s",
-        record.source,
-        record.request_id,
-        record.session_id,
-        record.notebook_path,
-        agent_cwd,
-    )
-
-    warm_context = _build_analysis_warm_context(
-        app_state,
-        body,
-        project_root=project_root,
-    )
-    prompt = _analysis_prompt(
-        record,
-        body,
-        warm_context=warm_context,
-        output_mode=record.output_mode,
-    )
     text_parts: list[str] = []
     final_statement_payload: dict[str, Any] | None = None
-    store = get_gateway_chat_trace_store()
+    store = None
+    try:
+        store = get_gateway_chat_trace_store()
+        _ensure_session(app_state, record, allow_resume=allow_resume_session)
+        project_root = _project_root(app_state)
+        agent_cwd = str(project_root)
+        LOGGER.info(
+            "Starting %s analysis %s session=%s notebook=%s cwd=%s",
+            record.source,
+            record.request_id,
+            record.session_id,
+            record.notebook_path,
+            agent_cwd,
+        )
+
+        warm_context = _build_analysis_warm_context(
+            app_state,
+            body,
+            project_root=project_root,
+        )
+        prompt = _analysis_prompt(
+            record,
+            body,
+            warm_context=warm_context,
+            output_mode=record.output_mode,
+        )
+        await store.upsert_thread(
+            ChatThread(
+                thread_id=record.session_id,
+                session_id=record.session_id,
+                source=record.source,
+                title=record.headline,
+                status="active",
+                notebook_path=record.notebook_path,
+                notion_request_page_id=record.notion_request_page_id,
+                notion_discussion_id=record.discussion_id,
+                metadata={
+                    "request_id": record.request_id,
+                    "source_url": record.source_url,
+                    "created_at": record.created_at,
+                },
+            )
+        )
+    except Exception as exc:
+        LOGGER.exception("Analysis %s failed during startup", record.request_id)
+        record.status = "Failed"
+        record.error = _analysis_startup_error(exc)
+        _save_registry(app_state)
+        if store is not None:
+            event_data = {
+                "type": "error",
+                "content": record.error,
+                "tool_name": "",
+                "tool_input": None,
+                "tool_call_id": "",
+                "is_error": True,
+                "cost_usd": None,
+                "turn": 0,
+                "metadata": {
+                    "request_id": record.request_id,
+                    "status": record.status,
+                    "phase": "startup",
+                },
+            }
+            try:
+                buffer_event(record.session_id, event_data, thread_id=record.session_id)
+                await store.upsert_thread(
+                    ChatThread(
+                        thread_id=record.session_id,
+                        session_id=record.session_id,
+                        source=record.source,
+                        title=record.headline,
+                        status="failed",
+                        notebook_path=record.notebook_path,
+                        notion_request_page_id=record.notion_request_page_id,
+                        notion_discussion_id=record.discussion_id,
+                    )
+                )
+                await store.append_event(record.session_id, event_data)
+            except Exception:
+                LOGGER.debug(
+                    "Could not append startup failure trace for %s",
+                    record.request_id,
+                    exc_info=True,
+                )
+        _running_tasks.pop(record.request_id, None)
+        return
+
+    assert store is not None
 
     async def append_trace_event(event_data: dict[str, Any]) -> int:
         buffer_event(
@@ -3333,23 +3509,6 @@ async def _run_analysis(
         )
         return await store.append_event(record.session_id, event_data)
 
-    await store.upsert_thread(
-        ChatThread(
-            thread_id=record.session_id,
-            session_id=record.session_id,
-            source=record.source,
-            title=record.headline,
-            status="active",
-            notebook_path=record.notebook_path,
-            notion_request_page_id=record.notion_request_page_id,
-            notion_discussion_id=record.discussion_id,
-            metadata={
-                "request_id": record.request_id,
-                "source_url": record.source_url,
-                "created_at": record.created_at,
-            },
-        )
-    )
     try:
         clear_event_buffer(record.session_id, thread_id=record.session_id)
         await store.clear_events(record.session_id)
@@ -3565,7 +3724,7 @@ async def _run_analysis(
             else:
                 failed = True
                 record.status = "Failed"
-                record.error = str(e)
+                record.error = _analysis_runtime_error(e)
         _persist_record_completion_artifacts(app_state, record, checkpoint=checkpoint_completion)
         if failed:
             await store.upsert_thread(
@@ -3583,7 +3742,7 @@ async def _run_analysis(
             await append_trace_event(
                 {
                     "type": "error",
-                    "content": str(e),
+                    "content": record.error or _analysis_runtime_error(e),
                     "tool_name": "",
                     "tool_input": None,
                     "tool_call_id": "",
@@ -3639,6 +3798,8 @@ def _record_response(record: AnalysisRecord, app_state: AppState | None = None) 
         "notebookPath": record.notebook_path,
         "trailUrl": record.trail_url,
         "status": record.status,
+        "recoveryMode": record.recovery_mode,
+        "recoveryNotice": record.recovery_notice,
         "latestCommitSha": record.latest_commit_sha,
         "summary": result.summary,
         "confidenceScore": result.confidence_score,
@@ -3799,7 +3960,7 @@ async def start_notion_analysis(*, request: Request) -> JSONResponse:
     body = await parse_request(request, cls=StartNotionAnalysisRequest)
     record = _ensure_record(app_state, body, str(request.base_url))
 
-    should_start_new_chat = record.status == "New"
+    should_start_new_chat = record.status == "New" or record.recovery_mode == "rerun"
     if record.status != "Analyzing":
         record.status = "Analyzing"
         record.error = None
@@ -3951,7 +4112,14 @@ async def notion_analysis_status(*, request: Request) -> JSONResponse:
             status_code=404,
         )
     _refresh_trail_url(app_state, record, str(request.base_url))
-    _ensure_session(app_state, record)
+    if record.status == "Analyzing":
+        try:
+            _ensure_session(app_state, record)
+        except Exception as exc:
+            record.status = "Failed"
+            record.error = _analysis_startup_error(exc)
+            _save_registry(app_state)
+            _running_tasks.pop(record.request_id, None)
     await _recover_completed_record_from_trace(app_state, record)
     _mark_stale_analysis_failed(app_state, record)
     if record.status == "Done":

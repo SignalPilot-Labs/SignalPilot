@@ -82,6 +82,24 @@ def _session_matches(session: NotebookSessionInfo, *, project_id: str | None, br
     return (session.project_id or None) == project_id and session.branch == branch
 
 
+async def _session_predates_org_secret_update(
+    session: AsyncSession,
+    session_info: NotebookSessionInfo,
+    *,
+    org_id: str,
+) -> bool:
+    try:
+        secret_updated_at = await org_secrets_store.get_anthropic_key_updated_at(session, org_id)
+    except Exception:
+        logger.warning(
+            "Could not check org Anthropic key freshness for notebook session %s",
+            session_info.id,
+            exc_info=True,
+        )
+        return False
+    return bool(secret_updated_at and session_info.created_at < secret_updated_at)
+
+
 def _pod_web_url() -> str | None:
     web_url = os.getenv("SP_WEB_URL") or os.getenv("SIGNALPILOT_WEB_URL")
     if web_url:
@@ -224,6 +242,14 @@ async def ensure_notebook_session(
 
     existing = await ns.get_active_session(session, org_id=org_id, user_id=user_id)
     if existing and not _session_matches(existing, project_id=project_id, branch=branch):
+        await ns.mark_stopped(session, session_id=existing.id, org_id=existing.org_id)
+        existing = None
+
+    if existing and await _session_predates_org_secret_update(session, existing, org_id=org_id):
+        logger.info(
+            "Recreating notebook session %s because org Anthropic key changed after it was created",
+            existing.id,
+        )
         await ns.mark_stopped(session, session_id=existing.id, org_id=existing.org_id)
         existing = None
 
@@ -404,8 +430,10 @@ async def ensure_analysis_notebook_session(
     project_id: str,
     branch: str,
     credential_user_id: str | None = None,
+    runtime_session_id: str | None = None,
+    analysis_user_id: str | None = None,
 ) -> NotebookRuntime:
-    analysis_user_id = f"analysis:{source}:{request_id}"
+    analysis_user_id = analysis_user_id or f"analysis:{source}:{request_id}"
     session_info = await ensure_notebook_session(
         session,
         org_id=org_id,
@@ -418,4 +446,11 @@ async def ensure_analysis_notebook_session(
             "SP_ANALYSIS_REQUEST_ID": request_id,
         },
     )
+    if runtime_session_id and session_info.id != runtime_session_id:
+        logger.info(
+            "Replaced unavailable analysis runtime session request_id=%s previous=%s selected=%s",
+            request_id,
+            runtime_session_id,
+            session_info.id,
+        )
     return await runtime_for_session(session, session_info)

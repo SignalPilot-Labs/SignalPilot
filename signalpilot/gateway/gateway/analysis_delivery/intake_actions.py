@@ -63,6 +63,10 @@ class IntakeTerminalAction:
         return "deliverable" if mode == "deliverable" else "answer"
 
     @property
+    def fresh(self) -> bool:
+        return self.arguments.get("fresh") is True
+
+    @property
     def reaction_mode(self) -> str:
         return _string(self.arguments.get("mode")).strip()
 
@@ -129,6 +133,8 @@ def validate_terminal_action(
             raise IntakeActionValidationError(f"{name} requires non-empty prompt")
         if _string(args.get("output_mode")).strip() not in {"answer", "deliverable"}:
             raise IntakeActionValidationError(f"{name} requires output_mode answer or deliverable")
+        if name == "start_notebook_analysis" and "fresh" in args and not isinstance(args["fresh"], bool):
+            raise IntakeActionValidationError("start_notebook_analysis fresh must be a boolean")
     elif name == "update_notion_deliverable":
         mode = _string(args.get("mode")).strip()
         if mode not in {"edit_existing", "refresh_data"}:

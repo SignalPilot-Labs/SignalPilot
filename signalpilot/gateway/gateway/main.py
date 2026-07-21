@@ -463,7 +463,15 @@ app.add_middleware(CookieAuthCsrfMiddleware, allowed_origins=_ALLOWED_ORIGINS, e
 app.add_middleware(RequestCorrelationMiddleware)
 app.add_middleware(RateLimitMiddleware, general_rpm=10000, expensive_rpm=1000, auth_rpm=100)
 app.add_middleware(SecurityHeadersMiddleware)
-app.add_middleware(RequestBodySizeLimitMiddleware, max_body_bytes=2_097_152)
+from gateway.config.uploads import get_eval_uploads_settings as _eval_uploads_settings
+
+app.add_middleware(
+    RequestBodySizeLimitMiddleware,
+    max_body_bytes=2_097_152,
+    # Eval zip uploads are capped by their own setting (default 8 GB); the
+    # extra 1 MB covers multipart form framing around the file bytes.
+    path_max_bytes={"/api/evals/upload": _eval_uploads_settings().max_bytes + 1_048_576},
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS,

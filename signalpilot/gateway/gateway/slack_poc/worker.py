@@ -68,6 +68,8 @@ SLACK_EVENT_DEDUPE_MAX_SIZE = 10_000
 SLACK_EVENT_DEDUPE_TTL_SECONDS = 6 * 60 * 60
 SLACK_POC_HTTP_DEFAULT_HOST = "127.0.0.1"
 SLACK_RESET_COMMANDS = ("reset", "new analysis", "start over", "new conversation")
+SLACK_AGENT_START_DELAY_SECONDS = 8.0
+SLACK_THREAD_WATCH_TTL_SECONDS = 30 * 60
 _PLACEHOLDER_CHART_TITLE_RE = re.compile(
     r"(?:notebook\s+)?(?:chart|image|figure|visualization)(?:\s+\d+)?",
     flags=re.I,
@@ -169,6 +171,7 @@ class SlackPoCConfig:
     progress_model_provider: str = "anthropic"
     progress_model: str | None = None
     progress_model_timeout_seconds: float = 8.0
+    agent_start_delay_seconds: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -185,6 +188,34 @@ class SlackRequest:
     is_continuation: bool = False
     discussion_id: str = ""
     output_mode: str = "answer"
+    ack_reaction_added: bool = False
+
+
+@dataclass(frozen=True)
+class SlackFileUpload:
+    filename: str
+    title: str | None
+    content: bytes
+    content_type: str
+
+
+@dataclass(frozen=True)
+class _PendingSlackDispatch:
+    request: SlackRequest
+    task: asyncio.Task[None]
+
+
+@dataclass(frozen=True)
+class _SlackChartBundle:
+    file_ids: tuple[str, ...]
+
+
+_SLACK_DEBOUNCE_PENDING: dict[str, _PendingSlackDispatch] = {}
+_SLACK_DEBOUNCE_LOCK = asyncio.Lock()
+_SLACK_WATCHED_THREADS: dict[str, float] = {}
+_SLACK_WATCHED_THREADS_LOCK = asyncio.Lock()
+_SLACK_CHART_BUNDLES: dict[str, _SlackChartBundle] = {}
+_SLACK_CHART_BUNDLE_LOCK = asyncio.Lock()
 
 
 class SlackApiClient:
@@ -247,7 +278,7 @@ class SlackApiClient:
     async def post_message(self, *, channel: str, text: str, thread_ts: str | None = None) -> str:
         payload: dict[str, Any] = {
             "channel": channel,
-            "text": _clip_text(text),
+            "text": _clip_text(_to_slack_mrkdwn(text)),
             "mrkdwn": True,
             "unfurl_links": False,
             "unfurl_media": False,
@@ -264,7 +295,7 @@ class SlackApiClient:
             {
                 "channel": channel,
                 "ts": ts,
-                "text": _clip_text(text),
+                "text": _clip_text(_to_slack_mrkdwn(text)),
                 "mrkdwn": True,
                 "unfurl_links": False,
                 "unfurl_media": False,
@@ -297,32 +328,63 @@ class SlackApiClient:
         content: bytes,
         content_type: str,
     ) -> None:
-        upload = await self._api_form(
-            "files.getUploadURLExternal",
-            {"filename": filename, "length": str(len(content))},
+        await self.upload_files(
+            channel=channel,
+            thread_ts=thread_ts,
+            files=[
+                SlackFileUpload(
+                    filename=filename,
+                    title=title,
+                    content=content,
+                    content_type=content_type,
+                )
+            ],
         )
-        upload_url = upload.get("upload_url")
-        file_id = upload.get("file_id")
-        if not isinstance(upload_url, str) or not isinstance(file_id, str):
-            raise SlackApiError("Slack files.getUploadURLExternal did not return upload_url and file_id")
 
-        response = await self._client.post(
-            upload_url,
-            content=content,
-            headers={"Content-Type": content_type, "Content-Length": str(len(content))},
-        )
-        response.raise_for_status()
+    async def upload_files(
+        self,
+        *,
+        channel: str,
+        thread_ts: str | None,
+        files: list[SlackFileUpload],
+    ) -> list[str]:
+        if not files:
+            return []
 
-        file_payload = {"id": file_id}
-        if title:
-            file_payload["title"] = title
+        complete_files: list[dict[str, str]] = []
+        for item in files:
+            upload = await self._api_form(
+                "files.getUploadURLExternal",
+                {"filename": item.filename, "length": str(len(item.content))},
+            )
+            upload_url = upload.get("upload_url")
+            file_id = upload.get("file_id")
+            if not isinstance(upload_url, str) or not isinstance(file_id, str):
+                raise SlackApiError("Slack files.getUploadURLExternal did not return upload_url and file_id")
+
+            response = await self._client.post(
+                upload_url,
+                content=item.content,
+                headers={"Content-Type": item.content_type, "Content-Length": str(len(item.content))},
+            )
+            response.raise_for_status()
+
+            file_payload = {"id": file_id}
+            if item.title:
+                file_payload["title"] = item.title
+            complete_files.append(file_payload)
+
         complete_payload = {
-            "files": json.dumps([file_payload]),
+            "files": json.dumps(complete_files),
             "channel_id": channel,
         }
         if thread_ts:
             complete_payload["thread_ts"] = thread_ts
         await self._api_form("files.completeUploadExternal", complete_payload)
+        return [item["id"] for item in complete_files]
+
+    async def delete_file(self, *, file_id: str) -> None:
+        await self._api_form("files.delete", {"file": file_id})
 
     async def thread_messages(self, *, channel: str, thread_ts: str) -> list[dict[str, Any]]:
         data = await self._api_form("conversations.replies", {"channel": channel, "ts": thread_ts, "limit": "20"})
@@ -369,16 +431,61 @@ class SlackPoCWorker:
         if not self._seen_event_ids.add(request.event_id):
             LOGGER.info("Ignoring duplicate Slack event_id=%s", request.event_id)
             return
-        request_to_process = await self._handle_intake(request)
-        if request_to_process is None:
-            return
-        task = asyncio.create_task(self._process_request(request_to_process), name=f"slack-poc-{request.event_id}")
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        await self._schedule_request_after_typing_pause(request)
 
     async def drain(self) -> None:
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
+
+    async def _schedule_request_after_typing_pause(self, request: SlackRequest) -> None:
+        delay = max(float(self.config.agent_start_delay_seconds or 0.0), 0.0)
+        if delay <= 0:
+            await self._add_request_reaction(request, SLACK_ACK_REACTION)
+            request = replace(request, ack_reaction_added=True)
+            request_to_process = await self._handle_intake(request)
+            if request_to_process is None:
+                await self._remove_request_reaction(request, SLACK_ACK_REACTION)
+                return
+            task = asyncio.create_task(self._process_request(request_to_process), name=f"slack-poc-{request.event_id}")
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+            return
+
+        debounce_key = _debounce_key(request)
+        async with _SLACK_DEBOUNCE_LOCK:
+            previous = _SLACK_DEBOUNCE_PENDING.get(debounce_key)
+            if previous is not None:
+                previous.task.cancel()
+                if previous.request.event_ts != request.event_ts:
+                    await self._remove_request_reaction(previous.request, SLACK_ACK_REACTION)
+            await self._add_request_reaction(request, SLACK_ACK_REACTION)
+            request = replace(request, ack_reaction_added=True)
+            task = asyncio.create_task(
+                self._run_debounced_request(debounce_key, request, delay),
+                name=f"slack-poc-debounced-{request.event_id}",
+            )
+            _SLACK_DEBOUNCE_PENDING[debounce_key] = _PendingSlackDispatch(request=request, task=task)
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+
+    async def _run_debounced_request(self, debounce_key: str, request: SlackRequest, delay: float) -> None:
+        try:
+            await asyncio.sleep(delay)
+            async with _SLACK_DEBOUNCE_LOCK:
+                pending = _SLACK_DEBOUNCE_PENDING.get(debounce_key)
+                if pending is None or pending.task is not asyncio.current_task():
+                    return
+                _SLACK_DEBOUNCE_PENDING.pop(debounce_key, None)
+            request_to_process = await self._handle_intake(request)
+            if request_to_process is None:
+                await self._remove_request_reaction(request, SLACK_ACK_REACTION)
+                return
+            await self._process_request(request_to_process)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning("Slack debounced request failed: event_id=%s error=%s", request.event_id, exc, exc_info=True)
+            await self._mark_request_failed(request)
 
     async def _request_from_payload(self, payload: dict[str, Any]) -> SlackRequest | None:
         event = payload.get("event")
@@ -410,7 +517,11 @@ class SlackPoCWorker:
         thread_ts = _string(event.get("thread_ts")) or event_ts
         team_id = _string(event.get("team") or payload.get("team_id") or _first_authorization_team_id(payload))
         discussion_id = _thread_discussion_id(team_id, channel_id, thread_ts)
+        has_parent_thread_ts = bool(_string(event.get("thread_ts")))
         is_continuation = False
+
+        if not is_dm and event_type == "app_mention":
+            await self._watch_thread(team_id=team_id, channel_id=channel_id, thread_ts=thread_ts)
 
         if is_dm:
             dm_key = (self.config.org_id, team_id, channel_id)
@@ -443,15 +554,21 @@ class SlackPoCWorker:
                 else:
                     discussion_id = _dm_discussion_id(team_id, channel_id, event_ts)
         elif event_type == "message":
-            if not _string(event.get("thread_ts")):
+            if not has_parent_thread_ts:
                 return None
+            is_known_thread = await self._is_thread_watched(team_id=team_id, channel_id=channel_id, thread_ts=thread_ts)
+            is_pending_thread = await self._has_pending_thread_dispatch(
+                team_id=team_id,
+                channel_id=channel_id,
+                discussion_id=discussion_id,
+            )
             existing_trail = await self._latest_slack_trail_for_source_thread_id(discussion_id)
-            if existing_trail is None:
+            if existing_trail is None and not is_known_thread and not is_pending_thread:
                 return None
-            is_continuation = True
+            is_continuation = existing_trail is not None
         else:
             existing_trail = None
-            if _string(event.get("thread_ts")):
+            if has_parent_thread_ts:
                 existing_trail = await self._latest_slack_trail_for_source_thread_id(discussion_id)
             is_continuation = existing_trail is not None
 
@@ -597,6 +714,8 @@ class SlackPoCWorker:
 
     async def _process_request(self, request: SlackRequest) -> None:
         if await self._post_busy_reply_if_active(request):
+            if request.ack_reaction_added:
+                await self._remove_request_reaction(request, SLACK_ACK_REACTION)
             return
 
         trail_url: str | None = None
@@ -604,7 +723,8 @@ class SlackPoCWorker:
         progress_ts = ""
         progress_stop: asyncio.Event | None = None
         progress_task: asyncio.Task[None] | None = None
-        await self._add_request_reaction(request, SLACK_ACK_REACTION)
+        if not request.ack_reaction_added:
+            await self._add_request_reaction(request, SLACK_ACK_REACTION)
         try:
             async with self.session_factory() as db:
                 has_org_anthropic_key = bool(await resolve_anthropic_key(db, self.config.org_id))
@@ -810,6 +930,34 @@ class SlackPoCWorker:
             LOGGER.info("Could not load Slack trail for source_thread_id prefix=%s: %s", prefix, exc, exc_info=True)
             return None
 
+    async def _watch_thread(self, *, team_id: str, channel_id: str, thread_ts: str) -> None:
+        key = _thread_watch_key(self.config.org_id, team_id, channel_id, thread_ts)
+        if not key:
+            return
+        now = time.monotonic()
+        async with _SLACK_WATCHED_THREADS_LOCK:
+            _prune_watched_threads_locked(now)
+            _SLACK_WATCHED_THREADS[key] = now + SLACK_THREAD_WATCH_TTL_SECONDS
+
+    async def _is_thread_watched(self, *, team_id: str, channel_id: str, thread_ts: str) -> bool:
+        key = _thread_watch_key(self.config.org_id, team_id, channel_id, thread_ts)
+        if not key:
+            return False
+        now = time.monotonic()
+        async with _SLACK_WATCHED_THREADS_LOCK:
+            expires_at = _SLACK_WATCHED_THREADS.get(key)
+            if expires_at is None:
+                _prune_watched_threads_locked(now)
+                return False
+            if expires_at < now:
+                _SLACK_WATCHED_THREADS.pop(key, None)
+                return False
+            return True
+
+    async def _has_pending_thread_dispatch(self, *, team_id: str, channel_id: str, discussion_id: str) -> bool:
+        async with _SLACK_DEBOUNCE_LOCK:
+            return _thread_debounce_key(team_id, channel_id, discussion_id) in _SLACK_DEBOUNCE_PENDING
+
     async def _post_busy_reply_if_active(self, request: SlackRequest) -> bool:
         request_id = notebook_analysis._analysis_request_id("slack", _discussion_id(request))
         try:
@@ -956,9 +1104,10 @@ class SlackPoCWorker:
     ) -> None:
         charts = _status_charts(status)[:SLACK_CHART_LIMIT]
         if not charts:
+            await self._delete_previous_chart_bundle(request)
             return
 
-        attached = 0
+        uploads: list[SlackFileUpload] = []
         errors: list[str] = []
         for index, chart in enumerate(charts):
             title = _chart_attachment_title(chart)
@@ -970,15 +1119,14 @@ class SlackPoCWorker:
                 content, content_type = await self.slack.fetch_bytes(fetch_url)
                 if not content_type.startswith("image/"):
                     raise RuntimeError(f"chart response is not an image: {content_type}")
-                await self.slack.upload_file(
-                    channel=request.channel_id,
-                    thread_ts=_reply_thread_ts(request),
-                    filename=_chart_filename(chart, index, content_type),
-                    title=title,
-                    content=content,
-                    content_type=content_type,
+                uploads.append(
+                    SlackFileUpload(
+                        filename=_chart_filename(chart, index, content_type),
+                        title=title,
+                        content=content,
+                        content_type=content_type,
+                    )
                 )
-                attached += 1
             except Exception as exc:
                 LOGGER.warning(
                     "Could not attach Slack chart event_id=%s title=%s url=%s: %s",
@@ -990,7 +1138,35 @@ class SlackPoCWorker:
                 )
                 errors.append(str(exc))
 
-        if errors and attached == 0:
+        if not uploads:
+            if errors:
+                await self.slack.post_message(
+                    channel=request.channel_id,
+                    thread_ts=_reply_thread_ts(request),
+                    text=(
+                        "I finished the analysis, but could not attach the chart images. "
+                        "If Slack says `missing_scope`, add the bot scope `files:write` "
+                        "and reinstall the app.\n\n"
+                        f"```{errors[0][:1200]}```"
+                    ),
+                )
+            return
+
+        await self._delete_previous_chart_bundle(request)
+        try:
+            file_ids = await self.slack.upload_files(
+                channel=request.channel_id,
+                thread_ts=_reply_thread_ts(request),
+                files=uploads,
+            )
+            await self._remember_chart_bundle(request, file_ids)
+        except Exception as exc:
+            LOGGER.warning(
+                "Could not attach Slack chart bundle event_id=%s: %s",
+                request.event_id,
+                exc,
+                exc_info=True,
+            )
             await self.slack.post_message(
                 channel=request.channel_id,
                 thread_ts=_reply_thread_ts(request),
@@ -998,9 +1174,35 @@ class SlackPoCWorker:
                     "I finished the analysis, but could not attach the chart images. "
                     "If Slack says `missing_scope`, add the bot scope `files:write` "
                     "and reinstall the app.\n\n"
-                    f"```{errors[0][:1200]}```"
+                    f"```{str(exc)[:1200]}```"
                 ),
             )
+
+    async def _delete_previous_chart_bundle(self, request: SlackRequest) -> None:
+        key = _chart_bundle_key(self.config.org_id, request)
+        async with _SLACK_CHART_BUNDLE_LOCK:
+            previous = _SLACK_CHART_BUNDLES.pop(key, None)
+        if previous is None:
+            return
+
+        for file_id in previous.file_ids:
+            try:
+                await self.slack.delete_file(file_id=file_id)
+            except Exception as exc:
+                LOGGER.info(
+                    "Could not delete previous Slack chart file event_id=%s file_id=%s: %s",
+                    request.event_id,
+                    file_id,
+                    exc,
+                    exc_info=True,
+                )
+
+    async def _remember_chart_bundle(self, request: SlackRequest, file_ids: list[str]) -> None:
+        if not file_ids:
+            return
+        key = _chart_bundle_key(self.config.org_id, request)
+        async with _SLACK_CHART_BUNDLE_LOCK:
+            _SLACK_CHART_BUNDLES[key] = _SlackChartBundle(file_ids=tuple(file_ids))
 
     async def _previous_thread_messages(self, request: SlackRequest) -> list[str]:
         try:
@@ -1096,6 +1298,7 @@ async def run_worker(config: SlackPoCConfig) -> None:
             progress_model_provider=config.progress_model_provider,
             progress_model=config.progress_model,
             progress_model_timeout_seconds=config.progress_model_timeout_seconds,
+            agent_start_delay_seconds=config.agent_start_delay_seconds,
         )
         worker = SlackPoCWorker(config, slack, get_session_factory())
         stop_event = asyncio.Event()
@@ -1179,6 +1382,7 @@ def register_http_routes(
                     progress_model_provider=config.progress_model_provider,
                     progress_model=config.progress_model,
                     progress_model_timeout_seconds=config.progress_model_timeout_seconds,
+                    agent_start_delay_seconds=config.agent_start_delay_seconds,
                 )
                 app.state.slack_poc_worker = SlackPoCWorker(
                     resolved_config,
@@ -1354,6 +1558,7 @@ async def _dispatch_self_serve_payload(payload: dict[str, Any], base_config: Sla
         progress_model_provider=base_config.progress_model_provider,
         progress_model=base_config.progress_model,
         progress_model_timeout_seconds=base_config.progress_model_timeout_seconds,
+        agent_start_delay_seconds=base_config.agent_start_delay_seconds,
     )
     worker = SlackPoCWorker(worker_config, slack, factory)
     try:
@@ -1387,6 +1592,7 @@ def load_config_from_env() -> SlackPoCConfig:
         progress_model_provider=os.getenv("SLACK_PROGRESS_MODEL_PROVIDER") or "anthropic",
         progress_model=os.getenv("SLACK_PROGRESS_MODEL") or None,
         progress_model_timeout_seconds=_float_env("SLACK_PROGRESS_MODEL_TIMEOUT_SECONDS", 8.0),
+        agent_start_delay_seconds=_float_env("SLACK_AGENT_START_DELAY_SECONDS", SLACK_AGENT_START_DELAY_SECONDS),
     )
 
 
@@ -1412,6 +1618,7 @@ def load_http_config_from_env() -> SlackPoCConfig:
         progress_model_provider=os.getenv("SLACK_PROGRESS_MODEL_PROVIDER") or "anthropic",
         progress_model=os.getenv("SLACK_PROGRESS_MODEL") or None,
         progress_model_timeout_seconds=_float_env("SLACK_PROGRESS_MODEL_TIMEOUT_SECONDS", 8.0),
+        agent_start_delay_seconds=_float_env("SLACK_AGENT_START_DELAY_SECONDS", SLACK_AGENT_START_DELAY_SECONDS),
     )
 
 
@@ -1518,6 +1725,40 @@ def _integrations_url() -> str:
 
 def _missing_anthropic_key_text() -> str:
     return _MISSING_ANTHROPIC_KEY_TEMPLATE.format(url=_integrations_url())
+
+
+def _debounce_key(request: SlackRequest) -> str:
+    channel_key = f"{request.team_id}:{request.channel_id}"
+    if _is_dm_request(request):
+        return f"dm:{channel_key}"
+    return _thread_debounce_key(request.team_id, request.channel_id, _discussion_id(request))
+
+
+def _thread_debounce_key(team_id: str, channel_id: str, discussion_id: str) -> str:
+    return f"thread:{team_id}:{channel_id}:{discussion_id}"
+
+
+def _thread_watch_key(org_id: str, team_id: str, channel_id: str, thread_ts: str) -> str:
+    if not org_id or not team_id or not channel_id or not thread_ts:
+        return ""
+    return f"{org_id}:{team_id}:{channel_id}:{thread_ts}"
+
+
+def _chart_bundle_key(org_id: str, request: SlackRequest) -> str:
+    return f"{org_id}:{request.team_id}:{request.channel_id}:{_discussion_id(request)}"
+
+
+def _prune_watched_threads_locked(now: float) -> None:
+    for key, expires_at in list(_SLACK_WATCHED_THREADS.items()):
+        if expires_at < now:
+            _SLACK_WATCHED_THREADS.pop(key, None)
+
+
+def _to_slack_mrkdwn(text: str) -> str:
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", r"*\1*", text)
+    text = re.sub(r"\*\*([^*\n]+?)\*\*", r"*\1*", text)
+    text = re.sub(r"__([^_\n]+?)__", r"*\1*", text)
+    return re.sub(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)", r"<\2|\1>", text)
 
 
 def _clip_text(text: str) -> str:

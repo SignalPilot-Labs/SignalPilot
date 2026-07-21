@@ -32,6 +32,9 @@ class EvalUploadsSettings(_GatewaySettingsBase):
     # Generous cap so gigantic dbt projects fit; bounds worst-case abuse to ~8 GB.
     max_mb: int = Field(8192, alias="SP_EVAL_UPLOADS_MAX_MB")
     s3_endpoint: str = Field("", alias="SP_EVAL_UPLOADS_S3_ENDPOINT")
+    # Browser-reachable endpoint for presigned URLs (MinIO: localhost:9000
+    # while the gateway itself reaches it as minio:9000). Empty → s3_endpoint.
+    s3_public_endpoint: str = Field("", alias="SP_EVAL_UPLOADS_S3_PUBLIC_ENDPOINT")
     s3_region: str = Field("", alias="SP_EVAL_UPLOADS_S3_REGION")
     # Explicit credentials for the upload bucket only (MinIO locally). When
     # empty, boto3's default chain applies (IAM role in cloud) — kept separate

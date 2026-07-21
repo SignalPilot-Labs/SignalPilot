@@ -1,6 +1,6 @@
 # Task 1a — Conversation continuity (ship-today slice of Task 1)
 
-**Parent:** [01-follow-up-conversations.md](01-follow-up-conversations.md) · **Status:** Proposed · **Scope:** gateway only — no engine changes, no orchestrator, no new infra
+**Parent:** [01-follow-up-conversations.md](01-follow-up-conversations.md) · **Status:** Proposed · **Scope:** gateway + gateway-owned DB table — no engine changes, no orchestrator
 
 **User win:** SP stops feeling like a vending machine *today*: DM follow-ups keep context, plain thread replies continue the conversation, and a message sent mid-analysis gets an honest reply instead of dead air.
 
@@ -9,7 +9,7 @@
 | # | Feature | User-visible behavior |
 |---|---------|----------------------|
 | F1 | DM continuity | DM: "what's our MRR?" → answer → "and per month?" → answered with full context. "reset" / "new analysis" starts fresh. |
-| F2 | Thread replies without re-@mention | After SP answers in a channel thread, plain replies (no @SP) continue the conversation. |
+| F2 | Thread replies without re-@mention | After SP is mentioned in a channel thread, plain replies (no @SP) continue the conversation. |
 | F3 | Honest busy state | Message during a running analysis → "still working on the previous question…" reply, never silence, never a duplicate pipeline. |
 
 ## Verified code facts (grounding)
@@ -17,8 +17,9 @@
 - `_discussion_id` (worker.py:1287) = `slack:{team}:{channel}:{thread_ts}`; DM messages are unthreaded so `thread_ts` falls back to the message's own `ts` (worker.py:385) → **every DM message today = brand-new conversation**.
 - Engine resume already works: `_ensure_record` (notion_analysis.py:1118) maps `discussion_id → record`, appends follow-up to the notebook when `status != "Analyzing"`, resumes the agent session. We only need to feed it a stable `discussion_id`.
 - `request_id` is **deterministic**: `_analysis_request_id("slack", discussion_id)` = `slack-{uuid5(discussion_id)[:16]}` (gateway/notion/analysis.py:298). Any candidate `discussion_id` → computable `request_id` → trail lookup. No new state needed for existence checks.
-- Gateway **analysis-trail store** is the durable conversation index: `AnalysisTrailInfo` has `request_id`, `source_thread_id` (= our discussion_id), `status: active|done|failed` (models/analysis_trails.py). Seeded before every run (worker.py:467), status updated on completion.
-- **Constraint:** self-serve path builds a *fresh worker per event* (`_dispatch_self_serve_payload`, worker.py:1070-1116) → in-memory state does not survive between messages. All continuity/busy checks MUST go through the trail store (DB), not worker memory.
+- Gateway **analysis-trail store** is the durable analysis index: `AnalysisTrailInfo` has `request_id`, `source_thread_id` (= our discussion_id), `status: active|done|failed` (models/analysis_trails.py). Seeded before every run (worker.py:467), status updated on completion.
+- Gateway **Slack thread-watch store** is the durable invitation index: a mention creates `gateway_slack_thread_watches`, so async thread replies still route through intake even before an analysis trail exists.
+- **Constraint:** self-serve path builds a *fresh worker per event* (`_dispatch_self_serve_payload`, worker.py:1070-1116) → in-memory state does not survive between messages. All continuity/busy checks MUST go through durable stores (DB), not worker memory.
 - Mid-run duplicate bug (bonus fix by F3): a second message in an active thread today spawns a full duplicate `_process_request` — duplicate progress reporter + duplicate poll on the same engine record.
 
 ## Design
@@ -42,7 +43,7 @@ Requires one new store helper: `latest_trail_for_source_thread_prefix(db, org_id
 
 ### F2 — Thread replies without re-@mention
 
-**Acceptance rule.** In `_request_from_payload`: accept `message` events where `channel_type != "im"` AND `thread_ts` present AND SP already owns that conversation — i.e. trail exists for `request_id = _analysis_request_id("slack", f"slack:{team}:{channel}:{thread_ts}")`. Top-level channel messages still require @mention. Existing guards stay: allowlist (worker.py:357), `bot_id`/subtype/self filters (worker.py:361-365).
+**Acceptance rule.** In `_request_from_payload`: accept `message` events where `channel_type != "im"` AND `thread_ts` present AND SP already owns that conversation — i.e. either a durable thread-watch row exists for `org/team/channel/thread_ts` or a trail exists for `request_id = _analysis_request_id("slack", f"slack:{team}:{channel}:{thread_ts}")`. Top-level channel messages still require @mention. Existing guards stay: allowlist (worker.py:357), `bot_id`/subtype/self filters (worker.py:361-365).
 
 Note: acceptance check needs a DB lookup inside `_request_from_payload`, which is currently sync-shaped but already async — fine. Dedupe stays first-line (`event_id`).
 
@@ -68,6 +69,8 @@ Queueing the message as an automatic follow-up after completion is **out of scop
 |------|--------|
 | `gateway/gateway/slack_poc/worker.py` | `SlackRequest.channel_type` + `is_continuation`; DM discussion-id resolution + reset; F2 acceptance; DM history context; DM unthreaded replies; F3 busy gate; noise-guard branch in `_handle_preflight` |
 | `gateway/gateway/store/analysis_trails.py` | `latest_trail_for_source_thread_prefix` helper |
+| `gateway/gateway/store/slack_thread_watches.py` | durable Slack thread invitation/watch helper |
+| `gateway/gateway/db/models.py` | `gateway_slack_thread_watches` model |
 | `gateway/tests/test_slack_poc_worker.py` | new tests (below) |
 | Slack app manifest (dev + prod) | add `message.channels`, `message.groups` event subscriptions |
 
@@ -76,7 +79,7 @@ Engine (`notion_analysis.py`): untouched. Multi-client note: everything lands in
 ## Tests
 
 - DM discussion-id: unthreaded DM → prefix id; existing trail → same id reused; reset command → new epoch; reset+question → new epoch and analysis runs.
-- F2 acceptance matrix: thread reply with trail → accepted; without trail → ignored (no reply!); top-level channel message without mention → ignored; bot/self/subtype → ignored.
+- F2 acceptance matrix: thread reply with durable watch → accepted; thread reply with trail → accepted; without watch/trail → ignored (no reply!); top-level channel message without mention → ignored; bot/self/subtype → ignored.
 - F3: trail `active` → busy reply, no engine call; trail `done` → normal follow-up path; stale `active` (>30 min) → proceeds.
 - Noise guard: continuation + non-ANALYZE preflight → reaction, no canned text; fresh mention + non-ANALYZE → canned text (unchanged).
 - Store helper: prefix query returns latest by `created_at`.

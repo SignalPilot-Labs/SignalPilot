@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import inspect
 import json
 import logging
 import os
@@ -44,7 +45,7 @@ from gateway.slack_poc.progress import (
     COMPLETING_PROGRESS_TEXT,
     INITIAL_PROGRESS_TEXT,
 )
-from gateway.store import analysis_trails
+from gateway.store import analysis_trails, slack_thread_watches
 from gateway.store import slack as slack_store
 from gateway.store.org_secrets import resolve_anthropic_key
 from gateway.string_utils import string_value as _string
@@ -69,7 +70,6 @@ SLACK_EVENT_DEDUPE_TTL_SECONDS = 6 * 60 * 60
 SLACK_POC_HTTP_DEFAULT_HOST = "127.0.0.1"
 SLACK_RESET_COMMANDS = ("reset", "new analysis", "start over", "new conversation")
 SLACK_AGENT_START_DELAY_SECONDS = 8.0
-SLACK_THREAD_WATCH_TTL_SECONDS = 30 * 60
 _PLACEHOLDER_CHART_TITLE_RE = re.compile(
     r"(?:notebook\s+)?(?:chart|image|figure|visualization)(?:\s+\d+)?",
     flags=re.I,
@@ -212,8 +212,6 @@ class _SlackChartBundle:
 
 _SLACK_DEBOUNCE_PENDING: dict[str, _PendingSlackDispatch] = {}
 _SLACK_DEBOUNCE_LOCK = asyncio.Lock()
-_SLACK_WATCHED_THREADS: dict[str, float] = {}
-_SLACK_WATCHED_THREADS_LOCK = asyncio.Lock()
 _SLACK_CHART_BUNDLES: dict[str, _SlackChartBundle] = {}
 _SLACK_CHART_BUNDLE_LOCK = asyncio.Lock()
 
@@ -437,6 +435,15 @@ class SlackPoCWorker:
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
 
+    def _session_context(self):
+        context = self.session_factory()
+        if inspect.isawaitable(context):
+            close = getattr(context, "close", None)
+            if callable(close):
+                close()
+            raise TypeError("Slack session_factory must return an async context manager")
+        return context
+
     async def _schedule_request_after_typing_pause(self, request: SlackRequest) -> None:
         delay = max(float(self.config.agent_start_delay_seconds or 0.0), 0.0)
         if delay <= 0:
@@ -521,7 +528,14 @@ class SlackPoCWorker:
         is_continuation = False
 
         if not is_dm and event_type == "app_mention":
-            await self._watch_thread(team_id=team_id, channel_id=channel_id, thread_ts=thread_ts)
+            await self._watch_thread(
+                team_id=team_id,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                user_id=user_id,
+                event_ts=event_ts,
+                channel_type=channel_type,
+            )
 
         if is_dm:
             dm_key = (self.config.org_id, team_id, channel_id)
@@ -565,7 +579,7 @@ class SlackPoCWorker:
             existing_trail = await self._latest_slack_trail_for_source_thread_id(discussion_id)
             if existing_trail is None and not is_known_thread and not is_pending_thread:
                 return None
-            is_continuation = existing_trail is not None
+            is_continuation = True
         else:
             existing_trail = None
             if has_parent_thread_ts:
@@ -930,29 +944,51 @@ class SlackPoCWorker:
             LOGGER.info("Could not load Slack trail for source_thread_id prefix=%s: %s", prefix, exc, exc_info=True)
             return None
 
-    async def _watch_thread(self, *, team_id: str, channel_id: str, thread_ts: str) -> None:
+    async def _watch_thread(
+        self,
+        *,
+        team_id: str,
+        channel_id: str,
+        thread_ts: str,
+        user_id: str,
+        event_ts: str,
+        channel_type: str,
+    ) -> None:
         key = _thread_watch_key(self.config.org_id, team_id, channel_id, thread_ts)
         if not key:
             return
-        now = time.monotonic()
-        async with _SLACK_WATCHED_THREADS_LOCK:
-            _prune_watched_threads_locked(now)
-            _SLACK_WATCHED_THREADS[key] = now + SLACK_THREAD_WATCH_TTL_SECONDS
+        try:
+            async with self._session_context() as db:
+                await slack_thread_watches.upsert_thread_watch(
+                    db,
+                    org_id=self.config.org_id,
+                    team_id=team_id,
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                    source_thread_id=_thread_discussion_id(team_id, channel_id, thread_ts),
+                    user_id=user_id,
+                    event_ts=event_ts,
+                    metadata={"channel_type": channel_type} if channel_type else None,
+                )
+        except Exception as exc:
+            LOGGER.info("Could not persist Slack thread watch for key=%s: %s", key, exc, exc_info=True)
 
     async def _is_thread_watched(self, *, team_id: str, channel_id: str, thread_ts: str) -> bool:
         key = _thread_watch_key(self.config.org_id, team_id, channel_id, thread_ts)
         if not key:
             return False
-        now = time.monotonic()
-        async with _SLACK_WATCHED_THREADS_LOCK:
-            expires_at = _SLACK_WATCHED_THREADS.get(key)
-            if expires_at is None:
-                _prune_watched_threads_locked(now)
-                return False
-            if expires_at < now:
-                _SLACK_WATCHED_THREADS.pop(key, None)
-                return False
-            return True
+        try:
+            async with self._session_context() as db:
+                return await slack_thread_watches.active_thread_watch_exists(
+                    db,
+                    org_id=self.config.org_id,
+                    team_id=team_id,
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                )
+        except Exception as exc:
+            LOGGER.info("Could not load Slack thread watch for key=%s: %s", key, exc, exc_info=True)
+            return False
 
     async def _has_pending_thread_dispatch(self, *, team_id: str, channel_id: str, discussion_id: str) -> bool:
         async with _SLACK_DEBOUNCE_LOCK:
@@ -1746,12 +1782,6 @@ def _thread_watch_key(org_id: str, team_id: str, channel_id: str, thread_ts: str
 
 def _chart_bundle_key(org_id: str, request: SlackRequest) -> str:
     return f"{org_id}:{request.team_id}:{request.channel_id}:{_discussion_id(request)}"
-
-
-def _prune_watched_threads_locked(now: float) -> None:
-    for key, expires_at in list(_SLACK_WATCHED_THREADS.items()):
-        if expires_at < now:
-            _SLACK_WATCHED_THREADS.pop(key, None)
 
 
 def _to_slack_mrkdwn(text: str) -> str:

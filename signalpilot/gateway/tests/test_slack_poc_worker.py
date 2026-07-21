@@ -13,10 +13,13 @@ from urllib.parse import parse_qs
 
 import httpx
 import pytest
+import pytest_asyncio
 from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from gateway.analysis_delivery import DeliveryResult, IntakeTerminalAction
-from gateway.db.models import SlackInstallation, SlackInstallationConfig
+from gateway.db.models import GatewayBase, GatewaySlackThreadWatch, SlackInstallation, SlackInstallationConfig
 from gateway.slack_poc import worker as worker_module
 from gateway.slack_poc.progress import COMPLETING_PROGRESS_TEXT, INITIAL_PROGRESS_TEXT
 from gateway.slack_poc.worker import (
@@ -36,13 +39,23 @@ from gateway.slack_poc.worker import (
 def clear_slack_dm_reset_epochs():
     worker_module._SLACK_DM_RESET_EPOCHS.clear()
     worker_module._SLACK_DEBOUNCE_PENDING.clear()
-    worker_module._SLACK_WATCHED_THREADS.clear()
     worker_module._SLACK_CHART_BUNDLES.clear()
     yield
     worker_module._SLACK_DM_RESET_EPOCHS.clear()
     worker_module._SLACK_DEBOUNCE_PENDING.clear()
-    worker_module._SLACK_WATCHED_THREADS.clear()
     worker_module._SLACK_CHART_BUNDLES.clear()
+
+
+@pytest_asyncio.fixture
+async def gateway_session_factory():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(GatewayBase.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    try:
+        yield factory
+    finally:
+        await engine.dispose()
 
 
 @pytest.fixture(autouse=True)
@@ -1387,29 +1400,72 @@ async def test_worker_debounced_thread_react_or_ignore_clears_eye_reaction(
 
 
 @pytest.mark.asyncio
-async def test_worker_ignores_plain_thread_reply_after_watch_ttl_without_slack_trail(
+async def test_worker_accepts_plain_thread_reply_from_durable_watch_without_slack_trail(
     monkeypatch: pytest.MonkeyPatch,
+    gateway_session_factory,
 ) -> None:
     slack = AsyncMock(spec=SlackApiClient)
-    worker = SlackPoCWorker(
-        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT"),
+    slack.permalink.side_effect = lambda *, channel, message_ts: f"https://slack.test/archives/{channel}/p{message_ts}"
+    first_worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT", org_id="org-1"),
         slack,
-        AsyncMock(),
+        gateway_session_factory,
     )
-    worker_module._SLACK_WATCHED_THREADS[
-        worker_module._thread_watch_key("slack-poc", "T1", "C1", "1.0")
-    ] = time.monotonic() - 1
+    second_worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT", org_id="org-1"),
+        slack,
+        gateway_session_factory,
+    )
+    processed: list[SlackRequest] = []
 
     async def no_thread(_source_thread_id: str):
         return None
 
-    async def fail_process_request(_request):
-        raise AssertionError("expired watched thread without SignalPilot trail should be silent")
+    async def ignore_intake(_request: SlackRequest) -> None:
+        return None
 
-    monkeypatch.setattr(worker, "_latest_slack_trail_for_source_thread_id", no_thread)
-    monkeypatch.setattr(worker, "_process_request", fail_process_request)
+    async def handle_intake(request: SlackRequest) -> SlackRequest:
+        return request
 
-    await worker.handle_events_api_payload(
+    async def process_request(request: SlackRequest) -> None:
+        processed.append(request)
+
+    monkeypatch.setattr(first_worker, "_handle_intake", ignore_intake)
+    monkeypatch.setattr(second_worker, "_latest_slack_trail_for_source_thread_id", no_thread)
+    monkeypatch.setattr(second_worker, "_handle_intake", handle_intake)
+    monkeypatch.setattr(second_worker, "_process_request", process_request)
+
+    await first_worker.handle_events_api_payload(
+        {
+            "event_id": "Ev1",
+            "team_id": "T1",
+            "event": {
+                "type": "app_mention",
+                "channel_type": "channel",
+                "channel": "C1",
+                "user": "U1",
+                "text": "<@UBOT> analyze revenue",
+                "ts": "1.0",
+            },
+        }
+    )
+    await first_worker.drain()
+
+    async with gateway_session_factory() as db:
+        watch = (
+            await db.execute(
+                select(GatewaySlackThreadWatch).where(
+                    GatewaySlackThreadWatch.org_id == "org-1",
+                    GatewaySlackThreadWatch.team_id == "T1",
+                    GatewaySlackThreadWatch.channel_id == "C1",
+                    GatewaySlackThreadWatch.thread_ts == "1.0",
+                )
+            )
+        ).scalar_one()
+        assert watch.status == "active"
+        assert watch.source_thread_id == "slack:T1:C1:1.0"
+
+    await second_worker.handle_events_api_payload(
         {
             "event_id": "Ev2",
             "team_id": "T1",
@@ -1424,10 +1480,11 @@ async def test_worker_ignores_plain_thread_reply_after_watch_ttl_without_slack_t
             },
         }
     )
-    await worker.drain()
+    await second_worker.drain()
 
-    slack.post_message.assert_not_called()
-    slack.permalink.assert_not_called()
+    assert [request.event_id for request in processed] == ["Ev2"]
+    assert processed[0].discussion_id == "slack:T1:C1:1.0"
+    assert processed[0].is_continuation is True
 
 
 @pytest.mark.asyncio

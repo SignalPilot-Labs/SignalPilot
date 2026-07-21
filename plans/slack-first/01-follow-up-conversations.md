@@ -19,7 +19,7 @@ Additionally, the idle-time gate is a regex preflight (`analysis_delivery/prefli
 ### A. Conversation identity
 
 - DM `discussion_id` = the DM channel (`slack:{team}:{channel}`), not message ts → a DM is one rolling conversation. Explicit "reset"/"new analysis" rotates an epoch suffix.
-- Channel thread replies where SP already participated (record exists for that `discussion_id`) are accepted without re-@mention. Top-level channel messages still require @mention. Allowlist still applies. No new scopes needed.
+- Channel thread replies where SP was explicitly mentioned/invited are accepted without re-@mention. A durable thread-watch row covers pre-analysis replies; the analysis trail covers completed analysis follow-ups. Top-level channel messages still require @mention. Allowlist still applies. No new scopes needed.
 
 ### B. Orchestrator agent (generalizes the Notion follow-up planner; replaces the regex preflight)
 
@@ -55,7 +55,7 @@ Guardrails: read-only MCP subset (no `query_database` at tier 1 initially — sc
 
 ### Ship order (thin slices, each demoable)
 
-1. A — DM continuity + thread replies (biggest win, no new infra)
+1. A — DM continuity + thread replies (biggest win, one small gateway-owned DB table)
 2. B idle-side — orchestrator replaces regex preflight; tier-1 answers from MCP tools (kills canned refusals, adds instant answers)
 3. C — stop/interrupt (safety valve users expect)
 4. B busy-side + C injection — steer and question mid-run (the Claude Tag moment)

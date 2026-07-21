@@ -9,6 +9,7 @@ Class A vars managed here:
     SP_EVAL_UPLOADS_NOTIFY_FROM     — From: address for notifications
     SP_EVAL_UPLOADS_MAX_MB          — upload size cap in MB
     SP_EVAL_UPLOADS_S3_ENDPOINT     — S3 endpoint override (MinIO in local testing)
+    SP_EVAL_UPLOADS_S3_REGION       — bucket region (falls back to boto3 default chain)
     SP_EVAL_UPLOADS_SMTP_HOST/PORT  — when set, notify via plain SMTP instead of SES
                                       (local testing with Mailpit; production uses SES)
 """
@@ -28,8 +29,10 @@ class EvalUploadsSettings(_GatewaySettingsBase):
     bucket: str = Field("", alias="SP_EVAL_UPLOADS_BUCKET")
     notify_email: str = Field("", alias="SP_EVAL_UPLOADS_NOTIFY_EMAIL")
     notify_from: str = Field("eval-uploads@signalpilot.dev", alias="SP_EVAL_UPLOADS_NOTIFY_FROM")
-    max_mb: int = Field(500, alias="SP_EVAL_UPLOADS_MAX_MB")
+    # Generous cap so gigantic dbt projects fit; bounds worst-case abuse to ~8 GB.
+    max_mb: int = Field(8192, alias="SP_EVAL_UPLOADS_MAX_MB")
     s3_endpoint: str = Field("", alias="SP_EVAL_UPLOADS_S3_ENDPOINT")
+    s3_region: str = Field("", alias="SP_EVAL_UPLOADS_S3_REGION")
     # Explicit credentials for the upload bucket only (MinIO locally). When
     # empty, boto3's default chain applies (IAM role in cloud) — kept separate
     # from global AWS_* env so local MinIO creds can't leak into BYOK/Redshift.

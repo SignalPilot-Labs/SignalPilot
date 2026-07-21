@@ -17,7 +17,8 @@ import {
 import { uploadEval, type EvalUploadResult } from "~/lib/api";
 import { PageHeader } from "~/components/ui/page-header";
 
-const MAX_MB = 500;
+const MAX_MB = 8192;
+const MAX_LABEL = MAX_MB >= 1024 ? `${MAX_MB / 1024} GB` : `${MAX_MB} MB`;
 
 type Phase =
   | { state: "ready" }
@@ -35,7 +36,7 @@ function validate(file: File): string | null {
     return `"${file.name}" isn't a .zip file — please zip your eval materials first.`;
   }
   if (file.size > MAX_MB * 1024 * 1024) {
-    return `That file is ${Math.round(file.size / (1024 * 1024))} MB — the limit is ${MAX_MB} MB. Try excluding data files, or reach out to us.`;
+    return `That file is ${Math.round(file.size / (1024 * 1024))} MB — the limit is ${MAX_LABEL}. Try excluding data files, or reach out to us.`;
   }
   return null;
 }
@@ -171,7 +172,7 @@ export default function EvalUploadPage() {
                 <div className="flex flex-col items-center gap-2 text-[var(--color-text-muted)]">
                   <UploadCloud className="w-7 h-7 text-[var(--color-text-dim)]" strokeWidth={1.25} />
                   <p className="text-sm">Drag a .zip here or click to browse</p>
-                  <p className="text-xs text-[var(--color-text-dim)]">Max {MAX_MB} MB · .zip only</p>
+                  <p className="text-xs text-[var(--color-text-dim)]">Max {MAX_LABEL} · .zip only</p>
                 </div>
               )}
             </div>

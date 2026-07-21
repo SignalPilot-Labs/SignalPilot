@@ -40,10 +40,12 @@ def _s3_client(cfg: EvalUploadsSettings):
     kwargs: dict = {"config": Config(s3={"addressing_style": "path"})}
     if cfg.s3_endpoint:
         kwargs["endpoint_url"] = cfg.s3_endpoint
+    if cfg.s3_region:
+        kwargs["region_name"] = cfg.s3_region
     if cfg.s3_access_key and cfg.s3_secret_key:
         kwargs["aws_access_key_id"] = cfg.s3_access_key
         kwargs["aws_secret_access_key"] = cfg.s3_secret_key
-        kwargs["region_name"] = "us-east-1"
+        kwargs.setdefault("region_name", "us-east-1")
     return boto3.client("s3", **kwargs)
 
 

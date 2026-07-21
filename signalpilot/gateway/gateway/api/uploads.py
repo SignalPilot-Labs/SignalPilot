@@ -103,7 +103,15 @@ def _notify(cfg: EvalUploadsSettings, *, user_id: str, filename: str, size_mb: f
     else:
         import boto3
 
-        boto3.client("ses").send_email(
+        # Same scoped credentials/region as the S3 client — the container has
+        # no ambient AWS region or role, so the default chain NoRegionErrors.
+        ses_kwargs: dict = {}
+        if cfg.s3_region:
+            ses_kwargs["region_name"] = cfg.s3_region
+        if cfg.s3_access_key and cfg.s3_secret_key:
+            ses_kwargs["aws_access_key_id"] = cfg.s3_access_key
+            ses_kwargs["aws_secret_access_key"] = cfg.s3_secret_key
+        boto3.client("ses", **ses_kwargs).send_email(
             Source=cfg.notify_from,
             Destination={"ToAddresses": [cfg.notify_email]},
             Message={

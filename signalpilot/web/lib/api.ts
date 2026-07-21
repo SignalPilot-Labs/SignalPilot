@@ -153,6 +153,40 @@ export async function request<T>(path: string, options?: RequestInit, _retried =
   return res.json();
 }
 
+// Eval uploads (hidden /evals/upload page)
+// XHR instead of fetch: upload progress events aren't exposed on fetch requests.
+export type EvalUploadResult = { reference_id: string; expires_at: string };
+
+export async function uploadEval(
+  file: File,
+  notes: string,
+  onProgress?: (pct: number) => void,
+): Promise<EvalUploadResult> {
+  const headers = await getAuthHeaders();
+  const form = new FormData();
+  form.append("file", file);
+  if (notes) form.append("notes", notes);
+  return new Promise<EvalUploadResult>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${GATEWAY_URL}/api/evals/upload`);
+    for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(JSON.parse(xhr.responseText) as EvalUploadResult);
+      } else {
+        let detail = "";
+        try { detail = (JSON.parse(xhr.responseText) as { detail?: string })?.detail ?? ""; } catch {}
+        reject(Object.assign(new Error(detail || `Upload failed (${xhr.status})`), { status: xhr.status }));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Network error — upload did not complete"));
+    xhr.send(form);
+  });
+}
+
 // Settings
 export const getSettings = () => request<import("./types").GatewaySettings>("/api/settings");
 export const updateSettings = (s: import("./types").GatewaySettings) =>

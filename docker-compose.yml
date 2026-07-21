@@ -74,6 +74,16 @@ services:
       SP_K8S_NAMESPACE: default
       SP_GATEWAY_NAMESPACE: signalpilot
       SP_GATEWAY_POD_SELECTOR: "app=signalpilot-gateway"
+      # Eval uploads (hidden /evals/upload page) — MinIO as fake S3 + Mailpit
+      # as fake email locally; in production point at a real bucket + SES.
+      SP_EVAL_UPLOADS_BUCKET: sp-eval-uploads
+      SP_EVAL_UPLOADS_S3_ENDPOINT: http://minio:9000
+      SP_EVAL_UPLOADS_S3_ACCESS_KEY: minioadmin
+      SP_EVAL_UPLOADS_S3_SECRET_KEY: minioadmin
+      SP_EVAL_UPLOADS_NOTIFY_EMAIL: evals@signalpilot.dev
+      SP_EVAL_UPLOADS_SMTP_HOST: mailpit
+      SP_EVAL_UPLOADS_SMTP_PORT: "1025"
+      SP_EVAL_UPLOADS_MAX_MB: "500"
     volumes:
       - signalpilot-data:/data
       - signalpilot-shared:/shared
@@ -89,6 +99,10 @@ services:
         condition: service_healthy
       sandbox:
         condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3300/health', timeout=2).read()"]
       interval: 5s
@@ -161,6 +175,48 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  # ─── Eval uploads: fake S3 + fake email inbox ─────────────────
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "127.0.0.1:9000:9000"   # S3 API
+      - "127.0.0.1:9001:9001"   # console (minioadmin/minioadmin)
+    volumes:
+      - signalpilot-minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # Creates the eval-uploads bucket and its 7-day expiry lifecycle rule, then
+  # exits — the local stand-in for the one-time AWS setup.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc mb --ignore-existing local/sp-eval-uploads &&
+        if ! mc ilm rule ls local/sp-eval-uploads 2>/dev/null | grep -q uploads/; then
+          mc ilm rule add local/sp-eval-uploads --prefix "uploads/" --expire-days 7
+        fi || true
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "127.0.0.1:8025:8025"   # inbox UI
+    restart: unless-stopped
+
   # ─── Sandbox (gVisor code execution) ──────────────────────────
   sandbox:
     build:
@@ -199,6 +255,7 @@ services:
 
 volumes:
   signalpilot-pg-data:
+  signalpilot-minio-data:
   signalpilot-data:
   signalpilot-shared:
   signalpilot-gateway-secrets:

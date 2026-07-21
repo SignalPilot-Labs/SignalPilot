@@ -60,6 +60,12 @@ Guardrails: read-only MCP subset (no `query_database` at tier 1 initially — sc
 3. C — stop/interrupt (safety valve users expect)
 4. B busy-side + C injection — steer and question mid-run (the Claude Tag moment)
 
+### Active implementation slices
+
+- [Task 1a - Conversation continuity](01a-conversation-continuity.md)
+- [Task 1b - Agentic intake routing](01b-agentic-intake-routing.md)
+- [Task 1c - Reliable notebook follow-ups](01c-reliable-notebook-followups.md)
+
 Out of scope: durable chat-session storage (accept warm-pod resume + D-fallback), channel-wide context, Block Kit buttons, pause-and-resume-later semantics (stop = stop; "pause" maps to stop with a friendlier confirmation).
 
 ## Definition of done

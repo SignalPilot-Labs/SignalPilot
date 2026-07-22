@@ -120,6 +120,18 @@ function NavIconKnowledge({ active }: { active: boolean }) {
   );
 }
 
+function NavIconReports({ active }: { active: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <path d="M3 1h5l3 3v9H3z" stroke="currentColor" strokeWidth="1" />
+      <path d="M8 1v3h3" stroke="currentColor" strokeWidth="1" />
+      <line x1="5" y1="8" x2="9" y2="8" stroke="currentColor" strokeWidth="0.75" />
+      <line x1="5" y1="10.5" x2="8.5" y2="10.5" stroke="currentColor" strokeWidth="0.75" />
+      {active && <rect x="9.5" y="9.5" width="2" height="2" fill="var(--color-success)" />}
+    </svg>
+  );
+}
+
 function NavIconGitHub({ active }: { active: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -139,6 +151,7 @@ const nav: { href: string; label: string; icon: NavIconComponent; shortcut: stri
   { href: "/query", label: "query", icon: NavIconQuery, shortcut: "6" },
   { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "7" },
   { href: "/knowledge", label: "library", icon: NavIconKnowledge, shortcut: "8" },
+  { href: "/reports", label: "reports", icon: NavIconReports, shortcut: "9" },
   { href: "/health", label: "health", icon: NavIconHealth, shortcut: "H" },
   { href: "/settings", label: "settings", icon: NavIconSettings, shortcut: "0" },
 ];

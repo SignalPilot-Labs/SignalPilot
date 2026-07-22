@@ -298,18 +298,25 @@ class SlackApiClient:
         ts = data.get("ts")
         return str(ts) if ts else ""
 
-    async def update_message(self, *, channel: str, ts: str, text: str) -> None:
-        await self._api(
-            "chat.update",
-            {
-                "channel": channel,
-                "ts": ts,
-                "text": _clip_text(_to_slack_mrkdwn(text)),
-                "mrkdwn": True,
-                "unfurl_links": False,
-                "unfurl_media": False,
-            },
-        )
+    async def update_message(
+        self,
+        *,
+        channel: str,
+        ts: str,
+        text: str,
+        file_ids: list[str] | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "channel": channel,
+            "ts": ts,
+            "text": _clip_text(_to_slack_mrkdwn(text)),
+            "mrkdwn": True,
+            "unfurl_links": False,
+            "unfurl_media": False,
+        }
+        if file_ids:
+            payload["file_ids"] = file_ids
+        await self._api("chat.update", payload)
 
     async def add_reaction(self, *, channel: str, timestamp: str, name: str) -> None:
         try:
@@ -353,7 +360,7 @@ class SlackApiClient:
     async def upload_files(
         self,
         *,
-        channel: str,
+        channel: str | None,
         thread_ts: str | None,
         files: list[SlackFileUpload],
     ) -> list[str]:
@@ -383,10 +390,9 @@ class SlackApiClient:
                 file_payload["title"] = item.title
             complete_files.append(file_payload)
 
-        complete_payload = {
-            "files": json.dumps(complete_files),
-            "channel_id": channel,
-        }
+        complete_payload = {"files": json.dumps(complete_files)}
+        if channel:
+            complete_payload["channel_id"] = channel
         if thread_ts:
             complete_payload["thread_ts"] = thread_ts
         await self._api_form("files.completeUploadExternal", complete_payload)
@@ -1019,14 +1025,22 @@ class SlackPoCWorker:
                 )
             delivery = await render_delivery(packet, api_key=delivery_api_key)
             slack_status = delivery_result_to_status(delivery, packet, base_status=public_status)
-            await self._update_or_post_result_message(
-                channel=request.channel_id,
-                thread_ts=_reply_thread_ts(request),
+            final_message = render_slack_final_message(packet, delivery, trail_url=trail_url)
+            result_updated_with_charts = await self._post_chart_attachments(
+                request,
+                slack_status,
+                runtime,
                 message_ts=progress_ts,
-                text=render_slack_final_message(packet, delivery, trail_url=trail_url),
+                message_text=final_message,
             )
+            if not result_updated_with_charts:
+                await self._update_or_post_result_message(
+                    channel=request.channel_id,
+                    thread_ts=_reply_thread_ts(request),
+                    message_ts=progress_ts,
+                    text=final_message,
+                )
             await self._mark_request_done(request)
-            await self._post_chart_attachments(request, slack_status, runtime)
         except Exception as exc:
             LOGGER.warning("Slack PoC request failed: event_id=%s error=%s", request.event_id, exc, exc_info=True)
             if route is not None:
@@ -1271,11 +1285,14 @@ class SlackPoCWorker:
         request: SlackRequest,
         status: dict[str, Any],
         runtime: NotebookRuntime,
-    ) -> None:
+        *,
+        message_ts: str = "",
+        message_text: str = "",
+    ) -> bool:
         charts = _status_charts(status)[:SLACK_CHART_LIMIT]
         if not charts:
             await self._delete_previous_chart_bundle(request)
-            return
+            return False
 
         uploads: list[SlackFileUpload] = []
         errors: list[str] = []
@@ -1320,16 +1337,25 @@ class SlackPoCWorker:
                         f"```{errors[0][:1200]}```"
                     ),
                 )
-            return
+            return False
 
-        await self._delete_previous_chart_bundle(request)
+        file_ids: list[str] = []
         try:
             file_ids = await self.slack.upload_files(
-                channel=request.channel_id,
-                thread_ts=_reply_thread_ts(request),
+                channel=None if message_ts else request.channel_id,
+                thread_ts=None if message_ts else _reply_thread_ts(request),
                 files=uploads,
             )
+            if message_ts:
+                await self.slack.update_message(
+                    channel=request.channel_id,
+                    ts=message_ts,
+                    text=message_text,
+                    file_ids=file_ids,
+                )
+            await self._delete_previous_chart_bundle(request)
             await self._remember_chart_bundle(request, file_ids)
+            return bool(message_ts)
         except Exception as exc:
             LOGGER.warning(
                 "Could not attach Slack chart bundle event_id=%s: %s",
@@ -1337,6 +1363,16 @@ class SlackPoCWorker:
                 exc,
                 exc_info=True,
             )
+            for file_id in file_ids:
+                try:
+                    await self.slack.delete_file(file_id=file_id)
+                except Exception:
+                    LOGGER.info(
+                        "Could not delete unattached Slack chart file event_id=%s file_id=%s",
+                        request.event_id,
+                        file_id,
+                        exc_info=True,
+                    )
             await self.slack.post_message(
                 channel=request.channel_id,
                 thread_ts=_reply_thread_ts(request),
@@ -1347,6 +1383,7 @@ class SlackPoCWorker:
                     f"```{str(exc)[:1200]}```"
                 ),
             )
+            return False
 
     async def _delete_previous_chart_bundle(self, request: SlackRequest) -> None:
         key = _chart_bundle_key(self.config.org_id, request)

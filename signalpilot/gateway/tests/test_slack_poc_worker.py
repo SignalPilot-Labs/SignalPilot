@@ -258,6 +258,57 @@ async def test_slack_upload_files_completes_multiple_files_in_one_call() -> None
 
 
 @pytest.mark.asyncio
+async def test_slack_upload_files_can_prepare_private_files_for_message_update() -> None:
+    calls: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if request.url.path.endswith("/files.getUploadURLExternal"):
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "upload_url": "https://upload.slack.test/chart",
+                    "file_id": "F-chart",
+                },
+            )
+        if request.url.host == "upload.slack.test":
+            return httpx.Response(200, text="OK")
+        if request.url.path.endswith("/files.completeUploadExternal"):
+            body = parse_qs(request.content.decode("utf-8"))
+            assert json.loads(body["files"][0]) == [{"id": "F-chart", "title": "Revenue"}]
+            assert "channel_id" not in body
+            assert "thread_ts" not in body
+            return httpx.Response(200, json={"ok": True})
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    slack = SlackApiClient("xoxb-test", "xapp-test", http_client=client)
+    try:
+        file_ids = await slack.upload_files(
+            channel=None,
+            thread_ts=None,
+            files=[
+                SlackFileUpload(
+                    filename="revenue.png",
+                    title="Revenue",
+                    content=b"png-bytes",
+                    content_type="image/png",
+                )
+            ],
+        )
+    finally:
+        await slack.aclose()
+
+    assert file_ids == ["F-chart"]
+    assert [call.url.path for call in calls] == [
+        "/api/files.getUploadURLExternal",
+        "/chart",
+        "/api/files.completeUploadExternal",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_slack_read_methods_use_form_encoded_payloads() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         body = parse_qs(request.content.decode("utf-8"))
@@ -307,6 +358,36 @@ async def test_slack_update_message_uses_chat_update() -> None:
     slack = SlackApiClient("xoxb-test", "xapp-test", http_client=client)
     try:
         await slack.update_message(channel="C1", ts="2.0", text="Querying database...")
+    finally:
+        await slack.aclose()
+
+    assert [call.url.path for call in calls] == ["/api/chat.update"]
+
+
+@pytest.mark.asyncio
+async def test_slack_update_message_attaches_uploaded_files() -> None:
+    calls: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if request.url.path.endswith("/chat.update"):
+            body = json.loads(request.content.decode("utf-8"))
+            assert body["channel"] == "C1"
+            assert body["ts"] == "2.0"
+            assert body["text"] == "*Analysis complete*"
+            assert body["file_ids"] == ["F-revenue", "F-margin"]
+            return httpx.Response(200, json={"ok": True})
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    slack = SlackApiClient("xoxb-test", "xapp-test", http_client=client)
+    try:
+        await slack.update_message(
+            channel="C1",
+            ts="2.0",
+            text="**Analysis complete**",
+            file_ids=["F-revenue", "F-margin"],
+        )
     finally:
         await slack.aclose()
 
@@ -747,6 +828,70 @@ async def test_worker_uploads_chart_images_as_slack_thread_files(monkeypatch: py
             content_type="image/png",
         )
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("channel_id", "channel_type", "thread_ts"),
+    [("C1", "channel", "1.0"), ("D1", "im", "")],
+)
+async def test_worker_attaches_charts_when_updating_final_progress(
+    monkeypatch: pytest.MonkeyPatch,
+    channel_id: str,
+    channel_type: str,
+    thread_ts: str,
+) -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    slack.fetch_bytes.return_value = (b"png-bytes", "image/png")
+    slack.upload_files.return_value = ["F-revenue"]
+    worker = SlackPoCWorker(
+        SlackPoCConfig(bot_token="xoxb-test", app_token="xapp-test", bot_user_id="UBOT"),
+        slack,
+        AsyncMock(),
+    )
+
+    monkeypatch.setattr(
+        "gateway.slack_poc.worker.notebook_analysis._internal_signalpilot_url",
+        lambda url, runtime: f"http://notebook.test{url}",
+    )
+
+    attached = await worker._post_chart_attachments(
+        SlackRequest(
+            event_id="Ev1",
+            team_id="T1",
+            channel_id=channel_id,
+            user_id="U1",
+            text="analyze revenue",
+            event_ts="1.0",
+            thread_ts=thread_ts,
+            source_url=f"slack://channel/{channel_id}/p10",
+            channel_type=channel_type,
+        ),
+        {
+            "notionCharts": [
+                {
+                    "title": "Revenue trend",
+                    "url": "/api/notion-analysis/chart/notion-1/chart.png",
+                }
+            ]
+        },
+        AsyncMock(),
+        message_ts="progress-ts",
+        message_text="Analysis complete",
+    )
+
+    assert attached is True
+    slack.upload_files.assert_awaited_once()
+    upload = slack.upload_files.await_args.kwargs
+    assert upload["channel"] is None
+    assert upload["thread_ts"] is None
+    slack.update_message.assert_awaited_once_with(
+        channel=channel_id,
+        ts="progress-ts",
+        text="Analysis complete",
+        file_ids=["F-revenue"],
+    )
+    slack.post_message.assert_not_called()
 
 
 @pytest.mark.asyncio

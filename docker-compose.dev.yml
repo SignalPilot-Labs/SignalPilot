@@ -1,11 +1,14 @@
 # SignalPilot — Hot-reload development overlay
 #
 # Usage:
-#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build db gateway notebook sandbox
+#   cd signalpilot/web && pnpm exec next dev --port 3200 --hostname 0.0.0.0 --webpack
 #
 # Keep docker-compose.yml as the reproducible/prod-like stack. This overlay is
 # for day-to-day code edits: source is bind-mounted, dependency/build artifacts
 # stay inside Linux containers, and long-running services reload or restart.
+# The web app runs on the host by default for faster local iteration. Enable the
+# docker-web profile if you specifically need the containerized Next.js service.
 
 services:
   gateway:
@@ -44,6 +47,8 @@ services:
             /workspace
 
   web:
+    profiles:
+      - docker-web
     build:
       target: dev
     healthcheck:

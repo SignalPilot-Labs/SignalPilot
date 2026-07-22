@@ -106,4 +106,4 @@ docs:
 .PHONY: docs-serve
 # 📚 Serve docs
 docs-serve:
-	uv run --group docs mkdocs serve --clean
+	uv run --group docs mkdocs serve --clean --livereload

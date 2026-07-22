@@ -7,7 +7,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from gateway.analysis_delivery import DeliveryPacket, DeliveryResult, HtmlDeliverableResult, WorkerPlan, WorkerProgress
+from gateway.analysis_delivery import (
+    DeliveryPacket,
+    DeliveryResult,
+    HtmlDeliverableResult,
+    IntakeTerminalAction,
+    WorkerPlan,
+    WorkerProgress,
+)
 from gateway.db.models import GatewayBase, NotionDeliverable, NotionInstallation, NotionInstallationConfig
 from gateway.notebooks.session_service import NotebookRuntime
 from gateway.notion import analysis as notion_analysis
@@ -62,6 +69,27 @@ def _followup_payload(parent_block_id: str = "embed-block-1") -> dict:
         "data": {"page_id": "page-1", "parent": {"id": parent_block_id}},
         "authors": [{"id": "user-1", "type": "person"}],
     }
+
+
+@pytest.fixture(autouse=True)
+def stub_notion_intake(monkeypatch: pytest.MonkeyPatch):
+    async def run_notion_intake(*, surface: str, prompt: str, **_kwargs):
+        if surface == "notion_deliverable_followup":
+            mode = "refresh_data" if "refresh" in prompt.lower() else "edit_existing"
+            arguments = {
+                "mode": mode,
+                "render_instruction": prompt,
+                "data_instruction": prompt if mode == "refresh_data" else None,
+            }
+            return SimpleNamespace(action=IntakeTerminalAction(name="update_notion_deliverable", arguments=arguments))
+        return SimpleNamespace(
+            action=IntakeTerminalAction(
+                name="start_notebook_analysis",
+                arguments={"prompt": prompt, "output_mode": "answer"},
+            )
+        )
+
+    monkeypatch.setattr(notion_analysis, "_run_notion_intake", run_notion_intake)
 
 
 @pytest.mark.asyncio
@@ -276,7 +304,7 @@ async def test_missing_default_project_posts_setup_required_failure(monkeypatch:
 
 
 @pytest.mark.asyncio
-async def test_notion_preflight_greeting_posts_direct_reply_without_request_page(
+async def test_notion_intake_direct_reply_posts_comment_without_request_page(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
@@ -311,7 +339,12 @@ async def test_notion_preflight_greeting_posts_direct_reply_without_request_page
         raise AssertionError("greeting should not create a request page")
 
     async def fail_call_notebook(*args, **kwargs):
-        raise AssertionError("greeting should not call notebook")
+        raise AssertionError("direct reply should not call notebook")
+
+    async def run_notion_intake(**_kwargs):
+        return SimpleNamespace(
+            action=IntakeTerminalAction(name="respond_to_user", arguments={"text": "Hi. What should I check?"})
+        )
 
     monkeypatch.setattr(notion_client, "list_comments", list_comments)
     monkeypatch.setattr(notion_client, "create_comment", create_comment)
@@ -320,11 +353,101 @@ async def test_notion_preflight_greeting_posts_direct_reply_without_request_page
     monkeypatch.setattr(notion_client, "comment_has_page_mention", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(notion_client, "extract_comment_text", lambda _comment: "hi")
     monkeypatch.setattr(notion_analysis, "_call_notebook", fail_call_notebook)
+    monkeypatch.setattr(notion_analysis, "_run_notion_intake", run_notion_intake)
 
     result = await notion_analysis.process_routed_comment_event(routed, payload, db=MagicMock())
 
     assert result.status == "processed"
-    assert calls == ["comment:Hi. Send me a specific data question and I will run it through SignalPilot."]
+    assert calls == ["comment:Hi. What should I check?"]
+
+
+@pytest.mark.asyncio
+async def test_notion_start_notebook_uses_intake_output_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    install = NotionInstallation(
+        id="install-1",
+        org_id="org-1",
+        user_id="user-1",
+        workspace_id="workspace-1",
+        bot_id="bot-1",
+        access_token_enc=b"encrypted",
+        status="active",
+    )
+    config = NotionInstallationConfig(
+        installation_id="install-1",
+        parent_page_id=None,
+        trigger_page_id="trigger-1",
+        requests_data_source_id="ds-1",
+        requests_database_page_id="db-1",
+        enabled=True,
+        default_project_id="project-1",
+        default_branch="main",
+    )
+    routed = RoutedNotionInstallation(installation=install, config=config, access_token="token-1")
+    payload = {
+        "id": "event-1",
+        "entity": {"id": "comment-1"},
+        "data": {"page_id": "page-1"},
+        "authors": [{"id": "user-1", "type": "person"}],
+    }
+    comment = {"id": "comment-1", "discussion_id": "discussion-1", "rich_text": []}
+
+    async def run_notion_intake(**_kwargs):
+        return SimpleNamespace(
+            action=IntakeTerminalAction(
+                name="start_notebook_analysis",
+                arguments={"prompt": "plain request selected by agent", "output_mode": "deliverable"},
+            )
+        )
+
+    async def resolve_route(*args, **kwargs):
+        return notion_analysis.AnalysisRoute(
+            source="notion",
+            request_id="notion-req-1",
+            project_id="project-1",
+            branch="analysis/notion/notion-req-1-plain",
+            default_branch="main",
+            analysis_user_id="analysis:notion:notion-req-1",
+        )
+
+    async def ensure_runtime(*args, **kwargs):
+        return NotebookRuntime(
+            session_id="session-1",
+            internal_base_url="http://10.0.0.5:2718/notebook/session-1",
+            public_base_url="https://app.test/notebook/session-1",
+        )
+
+    async def call_notebook(*args, **kwargs):
+        captured["call"] = args
+        raise RuntimeError("stop after notebook start")
+
+    monkeypatch.setattr(notion_client, "list_comments", AsyncMock(return_value=[comment]))
+    monkeypatch.setattr(notion_client, "query_request_page_by_source", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        notion_client,
+        "create_request_page",
+        AsyncMock(return_value={"id": "request-page-1", "url": "https://notion.test/request-page-1"}),
+    )
+    monkeypatch.setattr(notion_client, "update_page_properties", AsyncMock())
+    monkeypatch.setattr(notion_client, "append_page_blocks", AsyncMock())
+    monkeypatch.setattr(notion_client, "create_comment", AsyncMock())
+    monkeypatch.setattr(notion_client, "is_bot_comment", lambda _comment: False)
+    monkeypatch.setattr(notion_client, "extract_comment_text", lambda _comment: "plain request")
+    monkeypatch.setattr(notion_analysis.notion_store, "find_deliverable_by_embed_block", AsyncMock(return_value=None))
+    monkeypatch.setattr(notion_analysis, "_run_notion_intake", run_notion_intake)
+    monkeypatch.setattr(notion_analysis, "resolve_configured_analysis_route", resolve_route)
+    monkeypatch.setattr(notion_analysis, "ensure_analysis_notebook_session", ensure_runtime)
+    monkeypatch.setattr(notion_analysis, "upsert_analysis_trail_seed", AsyncMock())
+    monkeypatch.setattr(notion_analysis, "_call_notebook", call_notebook)
+
+    with pytest.raises(RuntimeError, match="stop after notebook start"):
+        await notion_analysis.process_routed_comment_event(routed, payload, db=MagicMock())
+
+    request_payload = captured["call"][4]["json"]  # type: ignore[index]
+    assert request_payload["prompt"] == "plain request selected by agent"
+    assert request_payload["outputMode"] == "deliverable"
 
 
 def test_start_comment_links_request_details_without_raw_url() -> None:
@@ -815,11 +938,6 @@ async def test_refresh_followup_bypasses_generic_preflight_and_replaces_same_blo
     monkeypatch.setattr(notion_client, "comment_has_page_mention", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(notion_client, "extract_comment_text", lambda _comment: "refresh this")
     monkeypatch.setattr(notion_analysis.notion_store, "find_deliverable_by_embed_block", find_deliverable)
-    monkeypatch.setattr(
-        notion_analysis,
-        "classify_analysis_request",
-        lambda _prompt: (_ for _ in ()).throw(AssertionError("preflight should not run")),
-    )
     monkeypatch.setattr(notion_analysis.reports_store, "get_report", get_report)
     monkeypatch.setattr(notion_analysis.notion_store, "create_deliverable_update", create_update)
     monkeypatch.setattr(notion_analysis.notion_store, "latest_deliverable_context_snapshot", latest_context)
@@ -1148,11 +1266,6 @@ async def test_followup_reply_routes_by_discussion_when_parent_is_not_embed(
     )
     monkeypatch.setattr(notion_analysis.notion_store, "find_deliverable_by_embed_block", find_by_embed)
     monkeypatch.setattr(notion_analysis.notion_store, "find_deliverable_by_discussion", find_by_discussion)
-    monkeypatch.setattr(
-        notion_analysis,
-        "classify_analysis_request",
-        lambda _prompt: (_ for _ in ()).throw(AssertionError("preflight should not run")),
-    )
     monkeypatch.setattr(notion_analysis.reports_store, "get_report", get_report)
     monkeypatch.setattr(notion_analysis.notion_store, "create_deliverable_update", create_update)
     monkeypatch.setattr(
@@ -1987,6 +2100,11 @@ async def test_comment_without_trigger_page_mention_is_processed(monkeypatch: py
     async def fail_create_request_page(*args, **kwargs):
         raise AssertionError("greeting should not create a request page")
 
+    async def run_notion_intake(**_kwargs):
+        return SimpleNamespace(
+            action=IntakeTerminalAction(name="respond_to_user", arguments={"text": "Hi. What should I check?"})
+        )
+
     monkeypatch.setattr(notion_client, "list_comments", list_comments)
     monkeypatch.setattr(notion_client, "create_comment", create_comment)
     monkeypatch.setattr(notion_client, "create_request_page", fail_create_request_page)
@@ -1997,11 +2115,12 @@ async def test_comment_without_trigger_page_mention_is_processed(monkeypatch: py
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trigger page mention should not be checked")),
     )
     monkeypatch.setattr(notion_client, "extract_comment_text", lambda _comment: "hi")
+    monkeypatch.setattr(notion_analysis, "_run_notion_intake", run_notion_intake)
 
     result = await notion_analysis.process_routed_comment_event(routed, payload, db=MagicMock())
 
     assert result.status == "processed"
-    assert calls == ["comment:Hi. Send me a specific data question and I will run it through SignalPilot."]
+    assert calls == ["comment:Hi. What should I check?"]
 
 
 @pytest.mark.asyncio

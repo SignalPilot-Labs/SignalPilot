@@ -7,36 +7,20 @@ from unittest.mock import AsyncMock
 import pytest
 
 from gateway.analysis_delivery import (
-    AnalysisPreflightKind,
     DeliveryRenderer,
-    classify_analysis_request,
+    DeliveryResult,
     delivery_api_key_for_org,
     delivery_result_to_status,
     load_delivery_packet,
     load_delivery_packet_from_events,
     render_slack_final_message,
     render_slack_progress_message,
-    wants_html_deliverable,
 )
 from gateway.analysis_delivery import credentials as credentials_module
 from gateway.analysis_delivery import trace_loader as trace_loader_module
 from gateway.analysis_delivery.html_orchestrator import _html_model_payload
 from gateway.analysis_delivery.renderer import fallback_delivery
 from gateway.trace_markers import redact_trace_control_markers
-
-
-def test_preflight_gates_greetings_and_ambiguous_data_prompts() -> None:
-    assert classify_analysis_request("hi").kind == AnalysisPreflightKind.DIRECT
-    assert classify_analysis_request("hello").kind == AnalysisPreflightKind.DIRECT
-    assert classify_analysis_request("thanks").kind == AnalysisPreflightKind.DIRECT
-
-    ambiguous = classify_analysis_request("revenue")
-
-    assert ambiguous.kind == AnalysisPreflightKind.AMBIGUOUS
-    assert "fresh, specific analysis request" in (ambiguous.response or "")
-    assert classify_analysis_request("Analyze revenue by product for Q2").kind == AnalysisPreflightKind.ANALYZE
-    assert classify_analysis_request("Build a dashboard for revenue by product").kind == AnalysisPreflightKind.ANALYZE
-    assert wants_html_deliverable("Create a scorecard for Q2 pipeline")
 
 
 def test_trace_loader_extracts_latest_worker_plan_progress_and_final_statement() -> None:
@@ -375,6 +359,23 @@ def test_slack_progress_waits_for_worker_plan_then_uses_exact_steps() -> None:
     assert "- [x] Inspect schema" in rendered
     assert "- [ ] Run revenue query (current)" in rendered
     assert "querying fin-db" in rendered
+
+
+def test_slack_final_message_converts_standard_markdown_to_mrkdwn() -> None:
+    packet = load_delivery_packet_from_events([], status_payload={"status": "Done"})
+    delivery = DeliveryResult(
+        summary="Revenue increased.",
+        slack_message="# Summary\n- **Revenue** increased. See [report](https://app.test/report).",
+        notion_comment="",
+        final_answer="",
+    )
+
+    rendered = render_slack_final_message(packet, delivery)
+
+    assert "*Summary*" in rendered
+    assert "*Revenue*" in rendered
+    assert "<https://app.test/report|report>" in rendered
+    assert "**Revenue**" not in rendered
 
 
 @pytest.mark.asyncio

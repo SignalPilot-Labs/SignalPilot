@@ -144,6 +144,50 @@ async def get_trail(
     return _to_info(row) if row else None
 
 
+async def latest_trail_for_source_thread_id(
+    session: AsyncSession,
+    *,
+    org_id: str,
+    source: str,
+    source_thread_id: str,
+) -> AnalysisTrailInfo | None:
+    row = (
+        await session.execute(
+            select(GatewayAnalysisTrail)
+            .where(
+                GatewayAnalysisTrail.org_id == org_id,
+                GatewayAnalysisTrail.source == source,
+                GatewayAnalysisTrail.source_thread_id == source_thread_id,
+            )
+            .order_by(GatewayAnalysisTrail.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return _to_info(row) if row else None
+
+
+async def latest_trail_for_source_thread_prefix(
+    session: AsyncSession,
+    *,
+    org_id: str,
+    source: str,
+    prefix: str,
+) -> AnalysisTrailInfo | None:
+    row = (
+        await session.execute(
+            select(GatewayAnalysisTrail)
+            .where(
+                GatewayAnalysisTrail.org_id == org_id,
+                GatewayAnalysisTrail.source == source,
+                GatewayAnalysisTrail.source_thread_id.like(f"{prefix}%"),
+            )
+            .order_by(GatewayAnalysisTrail.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return _to_info(row) if row else None
+
+
 async def resolve_trail(
     session: AsyncSession,
     *,

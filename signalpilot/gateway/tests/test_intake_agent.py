@@ -33,6 +33,16 @@ class FakeToolRunner:
         return json.dumps({"ok": True, "tool": name}, ensure_ascii=True)
 
 
+class FakeModelClient:
+    def __init__(self, responses: list[dict[str, Any]]) -> None:
+        self.responses = responses
+        self.requests: list[dict[str, Any]] = []
+
+    async def create_message(self, request_body: dict[str, Any]) -> dict[str, Any]:
+        self.requests.append(request_body)
+        return self.responses.pop(0)
+
+
 def _session(**overrides: Any) -> IntakeSession:
     values: dict[str, Any] = {
         "source": "slack",
@@ -182,6 +192,87 @@ async def test_intake_agent_rejects_non_allowlisted_read_tool() -> None:
         await client.aclose()
 
     assert runner.calls == []
+
+
+@pytest.mark.asyncio
+async def test_intake_agent_uses_injected_model_client_abstraction() -> None:
+    model_client = FakeModelClient(
+        [
+            {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu-1",
+                        "name": "respond_to_user",
+                        "input": {"text": "The shared model client handled this call."},
+                    }
+                ]
+            }
+        ]
+    )
+
+    result = await IntakeAgent(api_key="sk-ant-test", model_client=model_client).run(  # type: ignore[arg-type]
+        _session(),
+        FakeToolRunner(),
+    )
+
+    assert result.action.text == "The shared model client handled this call."
+    assert model_client.requests[0]["model"]
+    assert model_client.requests[0]["tools"]
+
+
+@pytest.mark.asyncio
+async def test_intake_agent_bounds_parallel_reads_by_total_tool_call_budget() -> None:
+    client = _client_for_responses(
+        [
+            {
+                "content": [
+                    {"type": "tool_use", "id": "toolu-1", "name": "get_current_conversation", "input": {}},
+                    {"type": "tool_use", "id": "toolu-2", "name": "get_analysis_status", "input": {}},
+                    {"type": "tool_use", "id": "toolu-3", "name": "get_deliverable_context", "input": {}},
+                ]
+            }
+        ]
+    )
+    runner = FakeToolRunner()
+    try:
+        with pytest.raises(TimeoutError, match=r"total tool call limit \(3\)"):
+            await IntakeAgent(
+                api_key="sk-ant-test",
+                http_client=client,
+                max_tool_calls=3,
+            ).run(_session(), runner)  # type: ignore[arg-type]
+    finally:
+        await client.aclose()
+
+    assert runner.calls == []
+
+
+@pytest.mark.asyncio
+async def test_intake_agent_rejects_terminal_action_mixed_with_read_tools() -> None:
+    client = _client_for_responses(
+        [
+            {
+                "content": [
+                    {"type": "tool_use", "id": "toolu-1", "name": "get_current_conversation", "input": {}},
+                    {
+                        "type": "tool_use",
+                        "id": "toolu-2",
+                        "name": "respond_to_user",
+                        "input": {"text": "Done"},
+                    },
+                ]
+            }
+        ]
+    )
+    try:
+        with pytest.raises(IntakeAgentError, match="terminal action with additional tools"):
+            await IntakeAgent(api_key="sk-ant-test", http_client=client).run(  # type: ignore[arg-type]
+                _session(),
+                FakeToolRunner(),
+            )
+    finally:
+        await client.aclose()
 
 
 def test_terminal_action_validation_rejects_invalid_args() -> None:

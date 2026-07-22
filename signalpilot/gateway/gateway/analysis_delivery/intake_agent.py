@@ -17,12 +17,11 @@ from gateway.analysis_delivery.intake_actions import (
     validate_terminal_action,
 )
 from gateway.analysis_delivery.intake_tools import INTAKE_READ_TOOL_NAMES, IntakeToolRunner
+from gateway.analysis_delivery.model_client import AnthropicMessagesClient, MessagesModelClient
 from gateway.string_utils import string_value as _string
 
 LOGGER = logging.getLogger(__name__)
 
-_ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
-_ANTHROPIC_VERSION = "2023-06-01"
 DEFAULT_INTAKE_MODEL = "claude-sonnet-4-5-20250929"
 DEFAULT_INTAKE_TIMEOUT_SECONDS = 12.0
 DEFAULT_INTAKE_MAX_TOOL_CALLS = 6
@@ -87,6 +86,7 @@ class IntakeAgent:
         max_tool_calls: int | None = None,
         api_key: str | None = None,
         http_client: httpx.AsyncClient | None = None,
+        model_client: MessagesModelClient | None = None,
     ) -> None:
         self.provider = (provider or "anthropic").strip().lower()
         self.model = (
@@ -105,7 +105,11 @@ class IntakeAgent:
             DEFAULT_INTAKE_MAX_TOOL_CALLS,
         )
         self.api_key = api_key or ""
-        self._http_client = http_client
+        self._model_client = model_client or AnthropicMessagesClient(
+            api_key=self.api_key,
+            timeout_seconds=self.timeout_seconds,
+            http_client=http_client,
+        )
 
     async def run(self, session: IntakeSession, tool_runner: IntakeToolRunner) -> IntakeAgentResult:
         if self.provider != "anthropic" or not self.model or not self.api_key:
@@ -130,6 +134,10 @@ class IntakeAgent:
             if terminal_calls:
                 if len(terminal_calls) != 1:
                     raise IntakeAgentError("Intake agent called more than one terminal action")
+                if len(_all_tool_uses(content)) != 1:
+                    raise IntakeAgentError("Intake agent called a terminal action with additional tools")
+                if read_tool_calls + 1 > self.max_tool_calls:
+                    raise _tool_call_limit_error(self.max_tool_calls)
                 item = terminal_calls[0]
                 name = _string(item.get("name"))
                 args = _tool_args_dict(item)
@@ -149,13 +157,23 @@ class IntakeAgent:
                 )
                 return IntakeAgentResult(action=action, tool_calls=transcript)
 
+            read_calls = [
+                item
+                for item in _read_tool_uses(content)
+                if _string(item.get("id")) and _tool_args_dict(item) is not None
+            ]
+            # Reserve one call for the required terminal action. This makes the
+            # configured limit a real total budget even when one model turn
+            # emits several parallel read tools.
+            if read_calls and read_tool_calls + len(read_calls) >= self.max_tool_calls:
+                raise _tool_call_limit_error(self.max_tool_calls)
+
             tool_results: list[dict[str, Any]] = []
-            for item in _read_tool_uses(content):
+            for item in read_calls:
                 tool_use_id = _string(item.get("id"))
                 name = _string(item.get("name"))
                 args = _tool_args_dict(item)
-                if not tool_use_id or args is None:
-                    continue
+                assert tool_use_id and args is not None
                 result = await _safe_read_tool_result(tool_runner, name, args)
                 transcript.append(IntakeToolCall(name=name, arguments=args, result=result))
                 read_tool_calls += 1
@@ -170,7 +188,7 @@ class IntakeAgent:
                 raise IntakeAgentError("Intake agent did not call a terminal action")
             messages.append({"role": "assistant", "content": content})
             messages.append({"role": "user", "content": tool_results})
-        raise TimeoutError(f"Intake agent exceeded tool call limit ({self.max_tool_calls})")
+        raise _tool_call_limit_error(self.max_tool_calls)
 
     async def _anthropic_request(self, messages: list[dict[str, Any]], session: IntakeSession) -> dict[str, Any]:
         request_body = {
@@ -181,19 +199,7 @@ class IntakeAgent:
             "tools": _intake_tools(session.available_terminal_actions),
             "messages": messages,
         }
-        headers = {
-            "x-api-key": self.api_key,
-            "anthropic-version": _ANTHROPIC_VERSION,
-            "content-type": "application/json",
-        }
-        if self._http_client is not None:
-            response = await self._http_client.post(_ANTHROPIC_MESSAGES_URL, headers=headers, json=request_body)
-            response.raise_for_status()
-            return response.json()
-        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-            response = await client.post(_ANTHROPIC_MESSAGES_URL, headers=headers, json=request_body)
-            response.raise_for_status()
-            return response.json()
+        return await self._model_client.create_message(request_body)
 
 
 async def run_intake_agent(
@@ -234,6 +240,10 @@ def _terminal_tool_uses(content: Any) -> list[dict[str, Any]]:
     ]
 
 
+def _all_tool_uses(content: Any) -> list[dict[str, Any]]:
+    return [item for item in content if isinstance(item, dict) and item.get("type") == "tool_use"]
+
+
 def _read_tool_uses(content: Any) -> list[dict[str, Any]]:
     return [
         item
@@ -247,6 +257,10 @@ def _read_tool_uses(content: Any) -> list[dict[str, Any]]:
 def _tool_args_dict(item: dict[str, Any]) -> dict[str, Any] | None:
     args = item.get("input")
     return args if isinstance(args, dict) else None
+
+
+def _tool_call_limit_error(limit: int) -> TimeoutError:
+    return TimeoutError(f"Intake agent exceeded total tool call limit ({limit})")
 
 
 def _float_env(name: str, explicit: float | None, default: float) -> float:

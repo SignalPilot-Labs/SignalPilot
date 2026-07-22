@@ -395,6 +395,11 @@ class SlackApiClient:
             complete_payload["channel_id"] = channel
         if thread_ts:
             complete_payload["thread_ts"] = thread_ts
+        # When these files will be attached to an existing message through
+        # chat.update(file_ids=...), intentionally omit channel_id/thread_ts.
+        # Slack then keeps the completed files private until chat.update shares
+        # them on that exact message; providing a channel here would create a
+        # separate file-share message in addition to the updated message.
         await self._api_form("files.completeUploadExternal", complete_payload)
         return [item["id"] for item in complete_files]
 
@@ -463,18 +468,6 @@ class SlackPoCWorker:
 
     async def _schedule_request_after_typing_pause(self, request: SlackRequest) -> None:
         delay = max(float(self.config.agent_start_delay_seconds or 0.0), 0.0)
-        if delay <= 0:
-            await self._add_request_reaction(request, SLACK_ACK_REACTION)
-            request = replace(request, ack_reaction_added=True)
-            request_to_process = await self._handle_intake(request)
-            if request_to_process is None:
-                await self._remove_request_reaction(request, SLACK_ACK_REACTION)
-                return
-            task = asyncio.create_task(self._process_request(request_to_process), name=f"slack-poc-{request.event_id}")
-            self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
-            return
-
         debounce_key = _debounce_key(request)
         async with _SLACK_DEBOUNCE_LOCK:
             previous = _SLACK_DEBOUNCE_PENDING.get(debounce_key)
@@ -486,7 +479,11 @@ class SlackPoCWorker:
             request = replace(request, ack_reaction_added=True)
             task = asyncio.create_task(
                 self._run_debounced_request(debounce_key, request, delay),
-                name=f"slack-poc-debounced-{request.event_id}",
+                name=(
+                    f"slack-poc-debounced-{request.event_id}"
+                    if delay > 0
+                    else f"slack-poc-{request.event_id}"
+                ),
             )
             _SLACK_DEBOUNCE_PENDING[debounce_key] = _PendingSlackDispatch(request=request, task=task)
             self._tasks.add(task)

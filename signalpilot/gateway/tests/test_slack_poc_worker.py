@@ -258,7 +258,7 @@ async def test_slack_upload_files_completes_multiple_files_in_one_call() -> None
 
 
 @pytest.mark.asyncio
-async def test_slack_upload_files_can_prepare_private_files_for_message_update() -> None:
+async def test_slack_upload_files_finalizes_private_files_for_chat_update() -> None:
     calls: list[httpx.Request] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -280,6 +280,12 @@ async def test_slack_upload_files_can_prepare_private_files_for_message_update()
             assert "channel_id" not in body
             assert "thread_ts" not in body
             return httpx.Response(200, json={"ok": True})
+        if request.url.path.endswith("/chat.update"):
+            body = json.loads(request.content.decode("utf-8"))
+            assert body["channel"] == "C1"
+            assert body["ts"] == "progress-ts"
+            assert body["file_ids"] == ["F-chart"]
+            return httpx.Response(200, json={"ok": True})
         raise AssertionError(f"unexpected request: {request.url}")
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -297,6 +303,12 @@ async def test_slack_upload_files_can_prepare_private_files_for_message_update()
                 )
             ],
         )
+        await slack.update_message(
+            channel="C1",
+            ts="progress-ts",
+            text="Analysis complete",
+            file_ids=file_ids,
+        )
     finally:
         await slack.aclose()
 
@@ -305,6 +317,7 @@ async def test_slack_upload_files_can_prepare_private_files_for_message_update()
         "/api/files.getUploadURLExternal",
         "/chart",
         "/api/files.completeUploadExternal",
+        "/api/chat.update",
     ]
 
 
@@ -1299,6 +1312,51 @@ async def test_worker_intake_direct_reply_does_not_spawn_analysis(monkeypatch: p
 
     slack.post_message.assert_awaited_once()
     assert slack.post_message.call_args.kwargs["text"] == "Hi. What should I check?"
+
+
+@pytest.mark.asyncio
+async def test_worker_zero_delay_intake_runs_outside_event_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    slack = AsyncMock(spec=SlackApiClient)
+    slack.permalink.return_value = "https://slack.test/archives/C1/p1000"
+    intake_started = asyncio.Event()
+    release_intake = asyncio.Event()
+    worker = SlackPoCWorker(
+        SlackPoCConfig(
+            bot_token="xoxb-test",
+            app_token="xapp-test",
+            bot_user_id="UBOT",
+            agent_start_delay_seconds=0,
+        ),
+        slack,
+        AsyncMock(),
+    )
+
+    async def handle_intake(_request: SlackRequest) -> None:
+        intake_started.set()
+        await release_intake.wait()
+
+    monkeypatch.setattr(worker, "_handle_intake", handle_intake)
+
+    await asyncio.wait_for(
+        worker.handle_events_api_payload(
+            {
+                "event_id": "Ev-zero-delay",
+                "team_id": "T1",
+                "event": {
+                    "type": "app_mention",
+                    "channel": "C1",
+                    "user": "U1",
+                    "text": "<@UBOT> hello",
+                    "ts": "1.0",
+                },
+            }
+        ),
+        timeout=0.1,
+    )
+    await asyncio.wait_for(intake_started.wait(), timeout=0.1)
+
+    release_intake.set()
+    await worker.drain()
 
 
 @pytest.mark.asyncio

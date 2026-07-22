@@ -237,6 +237,9 @@ class MCPAuthMiddleware:
                     mcp_raw_key_var.set(None)
                     mcp_client_ip_var.set(_extract_client_ip(scope))
                     mcp_user_agent_var.set(_extract_user_agent(scope))
+                    from ..mcp import mcp_eval_doc_ids_var
+
+                    mcp_eval_doc_ids_var.set(_extract_eval_doc_ids(scope))
                     if "state" not in scope:
                         scope["state"] = {}
                     from ..models import VALID_API_KEY_SCOPES
@@ -300,6 +303,9 @@ class MCPAuthMiddleware:
                 mcp_raw_key_var.set(raw_key)
                 mcp_client_ip_var.set(_extract_client_ip(scope))
                 mcp_user_agent_var.set(_extract_user_agent(scope))
+                from ..mcp import mcp_eval_doc_ids_var
+
+                mcp_eval_doc_ids_var.set(_extract_eval_doc_ids(scope))
 
                 # Per-key / per-org rate limit (MCP traffic bypasses FastAPI middleware)
                 from ..http import check_principal_rate_limit
@@ -352,6 +358,20 @@ def _extract_bearer_key(scope: dict[str, Any]) -> str | None:
             decoded = value.decode("latin-1")
             if decoded.startswith(_BEARER_PREFIX):
                 return decoded[len(_BEARER_PREFIX) :].strip()
+    return None
+
+
+def _extract_eval_doc_ids(scope: dict[str, Any]) -> list[str] | None:
+    """Extract proposed-knowledge doc IDs from the X-SP-Eval-Docs header.
+
+    Set by the eval runner's MCP config so knowledge tools overlay these
+    pending docs during an "Evaluate Change" run. Capped defensively.
+    """
+    headers: list[tuple[bytes, bytes]] = scope.get("headers", [])
+    for name, value in headers:
+        if name.lower() == b"x-sp-eval-docs":
+            ids = [p.strip() for p in value.decode("latin-1").split(",") if p.strip()]
+            return ids[:20] or None
     return None
 
 

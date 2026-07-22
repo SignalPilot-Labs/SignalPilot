@@ -26,6 +26,7 @@ from gateway.mcp.context import (
     _store_session,
     mcp_audit_id_var,
     mcp_client_ip_var,
+    mcp_eval_doc_ids_var,
     mcp_org_id_var,
     mcp_raw_key_var,
     mcp_scopes_var,
@@ -88,6 +89,7 @@ __all__ = [
     "mcp_audit_id_var",
     "mcp_client_ip_var",
     "mcp_user_agent_var",
+    "mcp_eval_doc_ids_var",
     # Session helper
     "_store_session",
     # Validation helper used by tests

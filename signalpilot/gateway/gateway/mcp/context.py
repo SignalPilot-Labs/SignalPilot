@@ -19,6 +19,12 @@ mcp_audit_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("m
 mcp_client_ip_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_client_ip", default=None)
 mcp_user_agent_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_user_agent", default=None)
 mcp_scopes_var: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar("mcp_scopes", default=None)
+# Eval mode: doc IDs from the X-SP-Eval-Docs header. When set, knowledge tools
+# serve these proposed (pending) docs alongside active ones so an eval run can
+# test the system with a knowledge change before it is approved.
+mcp_eval_doc_ids_var: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
+    "mcp_eval_doc_ids", default=None
+)
 
 _is_cloud = _os.environ.get("SP_DEPLOYMENT_MODE") == "cloud"
 

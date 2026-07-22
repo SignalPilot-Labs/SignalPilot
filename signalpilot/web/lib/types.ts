@@ -43,9 +43,10 @@ export interface KnowledgeDoc {
   org_id: string;
   scope: "org" | "project" | "connection";
   scope_ref: string | null;
-  category: "understanding" | "conventions" | "decisions" | "domain-rules" | "debugging" | "quirks";
+  category: "context" | "decisions" | "rules" | "troubleshooting";
   title: string;
   body: string | null;
+  excerpt?: string | null;
   status: "active" | "pending" | "archived";
   bytes: number;
   view_count: number;

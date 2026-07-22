@@ -153,6 +153,257 @@ export async function request<T>(path: string, options?: RequestInit, _retried =
   return res.json();
 }
 
+// Eval uploads (hidden /evals/upload page)
+// Industry-standard direct-to-S3 multipart: the gateway presigns per-part PUT
+// URLs, the browser uploads parts straight to S3 in parallel with per-part
+// retry, then asks the gateway to complete. File bytes never pass through the
+// gateway. XHR (not fetch) for the part PUTs: fetch has no upload progress.
+export type EvalUploadResult = { reference_id: string; expires_at: string };
+
+type EvalUploadInitiate = {
+  key: string;
+  upload_id: string;
+  reference_id: string;
+  part_size: number;
+  part_urls: string[];
+};
+
+const PART_CONCURRENCY = 4;
+const PART_RETRIES = 3;
+
+function putPart(
+  url: string,
+  blob: Blob,
+  onBytes: (loaded: number) => void,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", url);
+    xhr.upload.onprogress = (e) => onBytes(e.loaded);
+    xhr.onload = () => {
+      const etag = xhr.getResponseHeader("ETag");
+      if (xhr.status >= 200 && xhr.status < 300 && etag) {
+        onBytes(blob.size);
+        resolve(etag);
+      } else {
+        reject(new Error(`Part upload failed (${xhr.status}${etag ? "" : ", no ETag"})`));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Network error during part upload"));
+    xhr.send(blob);
+  });
+}
+
+async function putPartWithRetry(
+  url: string,
+  blob: Blob,
+  onBytes: (loaded: number) => void,
+): Promise<string> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < PART_RETRIES; attempt++) {
+    try {
+      return await putPart(url, blob, onBytes);
+    } catch (err) {
+      lastErr = err;
+      onBytes(0);
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+    }
+  }
+  throw lastErr;
+}
+
+export async function uploadEval(
+  file: File,
+  notes: string,
+  onProgress?: (pct: number) => void,
+): Promise<EvalUploadResult> {
+  let init: EvalUploadInitiate;
+  try {
+    init = await request<EvalUploadInitiate>("/api/evals/upload/initiate", {
+      method: "POST",
+      body: JSON.stringify({ filename: file.name, size_bytes: file.size, notes }),
+    });
+  } catch (err) {
+    // request() throws Error("<status>: <body>"); surface status + detail so
+    // the page can show the server's friendly 413/415 messages.
+    const m = /^(\d{3}): (.*)$/s.exec((err as Error).message ?? "");
+    if (m) {
+      let detail = "";
+      try { detail = (JSON.parse(m[2]) as { detail?: string })?.detail ?? ""; } catch {}
+      throw Object.assign(new Error(detail || m[2]), { status: Number(m[1]) });
+    }
+    throw err;
+  }
+
+  const partCount = init.part_urls.length;
+  const loaded = new Array<number>(partCount).fill(0);
+  const report = () => {
+    if (onProgress) {
+      const total = loaded.reduce((a, b) => a + b, 0);
+      onProgress(Math.min(99, Math.round((total / file.size) * 100)));
+    }
+  };
+
+  const etags = new Array<string>(partCount);
+  let next = 0;
+  try {
+    const worker = async () => {
+      while (next < partCount) {
+        const i = next++;
+        const blob = file.slice(i * init.part_size, Math.min((i + 1) * init.part_size, file.size));
+        etags[i] = await putPartWithRetry(init.part_urls[i], blob, (n) => {
+          loaded[i] = n;
+          report();
+        });
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(PART_CONCURRENCY, partCount) }, worker),
+    );
+  } catch (err) {
+    // Best-effort abort; the bucket lifecycle rule is the backstop.
+    request("/api/evals/upload/abort", {
+      method: "POST",
+      body: JSON.stringify({ key: init.key, upload_id: init.upload_id }),
+    }).catch(() => {});
+    throw err;
+  }
+
+  const result = await request<EvalUploadResult>("/api/evals/upload/complete", {
+    method: "POST",
+    body: JSON.stringify({
+      key: init.key,
+      upload_id: init.upload_id,
+      parts: etags.map((etag, i) => ({ part_number: i + 1, etag })),
+      notes,
+    }),
+  });
+  if (onProgress) onProgress(100);
+  return result;
+}
+
+// Eval runs (Evaluate Change on knowledge entries — /evals page)
+export type EvalConfig = {
+  enabled?: boolean;
+  runner_image?: string;
+  repo_url: string;
+  model: string;
+  max_questions: number;
+  prompt_preamble: string;
+};
+export type EvalGoldCheck = { name: string; value: number; tolerance: number };
+export type EvalCheckResult = EvalGoldCheck & { passed: boolean };
+export type EvalRunQuestion = {
+  id: string;
+  title: string;
+  gt: string;
+  kind?: string;
+  checks?: EvalGoldCheck[];
+  check_results?: EvalCheckResult[];
+  status: "pending" | "running" | "done";
+  verdict: string | null;
+  answer?: string;
+  duration_s?: number;
+};
+export type EvalSetupPhase = {
+  state: string;
+  script: string;
+  status: "running" | "ok" | "failed";
+  exit_code: number | null;
+  duration_s: number | null;
+  error?: string;
+};
+export type EvalRun = {
+  id: string;
+  setup?: EvalSetupPhase[];
+  status: "preparing" | "running" | "completed" | "failed";
+  created_at: string;
+  doc_ids: string[];
+  doc_titles: string[];
+  repo_url: string;
+  model: string;
+  summary: { total?: number; correct?: number; partial?: number; off?: number; unknown?: number; ungraded?: number; error?: number };
+  questions: EvalRunQuestion[];
+  error: string | null;
+};
+
+export const getEvalConfig = () => request<EvalConfig>("/api/evals/config");
+export const putEvalConfig = (cfg: Omit<EvalConfig, "enabled" | "runner_image">) =>
+  request<EvalConfig>("/api/evals/config", { method: "PUT", body: JSON.stringify(cfg) });
+export const startEvalRun = (docIds: string[], questionIds?: string[]) =>
+  request<EvalRun>("/api/evals/runs", {
+    method: "POST",
+    body: JSON.stringify({ doc_ids: docIds, question_ids: questionIds ?? null }),
+  });
+export const listEvalRuns = () => request<{ runs: EvalRun[] }>("/api/evals/runs");
+export const getEvalRun = (runId: string) => request<EvalRun>(`/api/evals/runs/${runId}`);
+
+export type EvalQuestion = {
+  id: string;
+  kind: string;
+  state: string;
+  gt: string;
+  title: string;
+  why: string;
+  prompt: string;
+  doc: string;
+  checks: EvalGoldCheck[];
+};
+export type EvalSetInfo = {
+  name: string;
+  description: string;
+  setup: { image?: string; env_file?: string };
+  questions: EvalQuestion[];
+};
+export const listEvalQuestions = () => request<EvalSetInfo>("/api/evals/questions");
+export async function getEvalSetupLog(runId: string, state: string): Promise<string> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${GATEWAY_URL}/api/evals/runs/${runId}/setup/${encodeURIComponent(state)}/log`, { headers });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.text();
+}
+
+export async function getEvalTranscript(runId: string, questionId: string): Promise<string> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(
+    `${GATEWAY_URL}/api/evals/runs/${runId}/questions/${encodeURIComponent(questionId)}/transcript`,
+    { headers },
+  );
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.text();
+}
+
+// Chat traces (the /chats reader page)
+export type ChatTraceThread = {
+  thread_id: string;
+  session_id: string;
+  source: string;
+  title: string;
+  status: string;
+  notebook_path: string;
+  created_at: number;
+  updated_at: number;
+  metadata: Record<string, unknown>;
+};
+export type ChatTraceEvent = {
+  idx: number;
+  type: string;
+  role: string | null;
+  content: string;
+  tool_name: string;
+  tool_input: unknown;
+  is_error: boolean;
+  cost_usd: number | null;
+  turn: number;
+  created_at: number;
+};
+export const listChatThreads = (source?: string) =>
+  request<{ threads: ChatTraceThread[] }>(
+    `/api/chat/traces/threads?limit=200${source ? `&source=${encodeURIComponent(source)}` : ""}`,
+  );
+export const getChatThreadEvents = (threadId: string) =>
+  request<{ events: ChatTraceEvent[] }>(`/api/chat/traces/threads/${encodeURIComponent(threadId)}/events`);
+
 // Settings
 export const getSettings = () => request<import("./types").GatewaySettings>("/api/settings");
 export const updateSettings = (s: import("./types").GatewaySettings) =>

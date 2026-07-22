@@ -50,6 +50,14 @@ function applySecurityHeaders(
   } else {
     console.warn(`CSP: NEXT_PUBLIC_GATEWAY_URL is not a valid URL, omitting from connect-src: ${gatewayUrl}`);
   }
+  // Eval uploads PUT parts directly to S3 (presigned multipart) — the S3
+  // origin must be allowed in connect-src. Locally this is MinIO.
+  const evalUploadsS3Origin =
+    process.env.NEXT_PUBLIC_EVAL_UPLOADS_S3_ORIGIN ||
+    (IS_CLOUD_MODE ? "https://s3.us-east-2.amazonaws.com" : "http://localhost:9000");
+  if (isSafeUrl(evalUploadsS3Origin)) {
+    connectSrc += ` ${evalUploadsS3Origin}`;
+  }
   // CSP script-src: 'unsafe-inline' is required because Next.js injects inline
   // scripts for hydration/chunk preloading that cannot carry a nonce.
   // 'unsafe-eval' is required because Vega (used by Altair charts) compiles

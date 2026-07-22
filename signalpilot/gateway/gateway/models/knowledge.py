@@ -10,11 +10,26 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 _SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,118}[a-z0-9])?$")
 _SCOPE_REF_RE = re.compile(r"^[A-Za-z0-9_./:-]{1,200}$")
 
-# Category × scope whitelist
+# Category × scope whitelist.
+#   context        = the "God Doc" — always loaded into every agent (CLAUDE.md-style).
+#   decisions       = what the project does and why models are built this way.
+#   rules           = how to write models here + business rules in the data.
+#   troubleshooting = known errors, fixes, and database-specific quirks.
 _SCOPE_CATEGORIES: dict[str, set[str]] = {
-    "org": {"understanding", "conventions"},
-    "project": {"understanding", "conventions", "decisions", "domain-rules", "debugging"},
-    "connection": {"quirks"},
+    "org": {"context", "decisions", "rules"},
+    "project": {"context", "decisions", "rules", "troubleshooting"},
+    "connection": {"context", "troubleshooting"},
+}
+
+# Legacy category names (pre-consolidation) → new categories. Accepted on write so
+# in-flight agents/skills using the old six don't break.
+_LEGACY_CATEGORY: dict[str, str] = {
+    "understanding": "decisions",
+    "decisions": "decisions",
+    "conventions": "rules",
+    "domain-rules": "rules",
+    "debugging": "troubleshooting",
+    "quirks": "troubleshooting",
 }
 
 
@@ -25,12 +40,10 @@ class KnowledgeScope(str, Enum):  # noqa: UP042 — (str,Enum) keeps str(X.A)=='
 
 
 class KnowledgeCategory(str, Enum):  # noqa: UP042 — (str,Enum) keeps str(X.A)=='X.A'; StrEnum returns 'A' and breaks f-string/log output
-    understanding = "understanding"
-    conventions = "conventions"
+    context = "context"
     decisions = "decisions"
-    domain_rules = "domain-rules"
-    debugging = "debugging"
-    quirks = "quirks"
+    rules = "rules"
+    troubleshooting = "troubleshooting"
 
 
 class KnowledgeStatus(str, Enum):  # noqa: UP042 — (str,Enum) keeps str(X.A)=='X.A'; StrEnum returns 'A' and breaks f-string/log output
@@ -47,6 +60,7 @@ class KnowledgeDoc(BaseModel):
     category: KnowledgeCategory
     title: str
     body: str | None = None
+    excerpt: str | None = None  # short plain-text preview, returned even when body is omitted from list responses
     status: KnowledgeStatus
     bytes: int
     view_count: int
@@ -64,6 +78,13 @@ class KnowledgeDocCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=120)
     body: str = Field(..., min_length=1)
     status: KnowledgeStatus = KnowledgeStatus.active
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def map_legacy_category(cls, v: object) -> object:
+        if isinstance(v, str) and v in _LEGACY_CATEGORY:
+            return _LEGACY_CATEGORY[v]
+        return v
 
     @field_validator("title")
     @classmethod

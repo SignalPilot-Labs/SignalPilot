@@ -7,6 +7,7 @@ delegates to these functions via thin wrapper methods.
 from __future__ import annotations
 
 import logging
+import re
 import time
 import uuid
 
@@ -55,11 +56,23 @@ class KnowledgeStateConflict(Exception):
 
 # ── Auto-accept / review-required category sets ───────────────────────────────
 
-_AUTO_ACCEPT_CATEGORIES = {"understanding", "decisions", "debugging", "quirks", "conventions", "domain-rules"}
+_AUTO_ACCEPT_CATEGORIES = {"context", "decisions", "rules", "troubleshooting"}
 _REVIEW_REQUIRED_CATEGORIES: set[str] = set()
 
 
 # ── Internal row → DTO conversion ─────────────────────────────────────────────
+
+
+def _make_excerpt(body: str | None, limit: int = 200) -> str | None:
+    """A short plain-text preview of a markdown body for list rows."""
+    if not body:
+        return None
+    text = re.sub(r"```.*?```", " ", body, flags=re.DOTALL)  # drop code fences
+    text = re.sub(r"^#\s.*$", "", text, count=1, flags=re.MULTILINE)  # drop leading H1
+    text = re.sub(r"\[\[([a-z0-9-]+)\]\]", r"\1", text)  # unwrap wikilinks
+    text = re.sub(r"[#>*`|_-]", " ", text)  # strip md punctuation
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:limit] or None
 
 
 def _row_to_doc(row: GatewayKnowledgeDoc, *, include_body: bool) -> KnowledgeDoc:
@@ -71,6 +84,7 @@ def _row_to_doc(row: GatewayKnowledgeDoc, *, include_body: bool) -> KnowledgeDoc
         category=row.category,  # type: ignore[arg-type]
         title=row.title,
         body=row.body if include_body else None,
+        excerpt=_make_excerpt(row.body),
         status=row.status,  # type: ignore[arg-type]
         bytes=row.bytes,
         view_count=row.view_count,

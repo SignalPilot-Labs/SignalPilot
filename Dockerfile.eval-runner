@@ -1,0 +1,17 @@
+# Eval runner: minimal image with the claude CLI for "Evaluate Change" runs.
+# Spawned per eval question by the gateway (gateway/evals/runner.py) with MCP
+# wired back to the gateway (X-SP-Eval-Docs header overlays proposed KB docs).
+#
+# Build: docker build -f Dockerfile.eval-runner -t sp-eval-runner:latest .
+FROM node:22-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    npm install -g @anthropic-ai/claude-code
+
+RUN useradd -m -u 10002 evalrunner
+USER evalrunner
+WORKDIR /work
+
+# The gateway supplies the actual command; this is just a safety default.
+CMD ["claude", "--version"]

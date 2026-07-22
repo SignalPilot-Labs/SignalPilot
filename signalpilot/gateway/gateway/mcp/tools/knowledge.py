@@ -7,12 +7,13 @@ import json
 
 from gateway.errors.mcp import sanitize_mcp_error
 from gateway.mcp.audit import audited_tool
-from gateway.mcp.context import _require_mcp_admin_scope, _store_session
+from gateway.mcp.context import _require_mcp_admin_scope, _store_session, mcp_eval_doc_ids_var
 from gateway.mcp.server import mcp
 from gateway.models.knowledge import KnowledgeCategory, KnowledgeDoc, KnowledgeDocCreate, KnowledgeScope
 
-_BASELINE_CATEGORIES = ("understanding", "conventions")
-_TASK_SEARCH_CATEGORIES = ("decisions", "domain-rules", "debugging", "quirks")
+# context = the "God Doc": always injected into every agent's baseline.
+_BASELINE_CATEGORIES = ("context",)
+_TASK_SEARCH_CATEGORIES = ("decisions", "rules", "troubleshooting")
 _MAX_BASELINE_PROJECTS = 50
 _MAX_KEYWORDS = 12
 _OUTPUT_CAP_BYTES = 200 * 1024  # 200 KB
@@ -54,6 +55,27 @@ def _render_doc_section(doc: KnowledgeDoc, *, truncated: bool = False) -> str:
     if truncated:
         body = body[:500] + "\n[truncated]"
     return f"{header}\n## {doc.title}\n\n{body}\n"
+
+
+async def _eval_overlay_docs(store) -> list[KnowledgeDoc]:
+    """Return proposed docs named by the X-SP-Eval-Docs header (eval mode).
+
+    An "Evaluate Change" run tests the system as if these pending docs were
+    already approved. Empty outside eval mode. Docs that don't resolve
+    (deleted, wrong org) are silently skipped.
+    """
+    doc_ids = mcp_eval_doc_ids_var.get(None)
+    if not doc_ids:
+        return []
+    docs: list[KnowledgeDoc] = []
+    for doc_id in doc_ids:
+        try:
+            doc = await store.get_knowledge_doc(doc_id)
+        except Exception:
+            doc = None
+        if doc is not None and doc.status.value != "archived":
+            docs.append(doc)
+    return docs
 
 
 def _build_output(sections: list[str]) -> str:
@@ -112,6 +134,14 @@ async def get_knowledge(task_description: str | None = None) -> str:
 
             sections = [_render_doc_section(d) for d in baseline_docs]
 
+            # --- Eval mode: overlay proposed docs under evaluation ---
+            overlay = await _eval_overlay_docs(store)
+            baseline_ids = {d.id for d in baseline_docs}
+            for doc in overlay:
+                if doc.id in baseline_ids:
+                    continue
+                sections.append("[status: proposed]\n" + _render_doc_section(doc))
+
             # --- Task-specific search ---
             if task_description:
                 keywords = _extract_keywords(task_description)
@@ -169,6 +199,13 @@ async def search_knowledge(
                 limit=max(1, min(limit, 50)),
                 bump_view=True,
             )
+            # Eval mode: proposed docs matching the query rank as results too.
+            overlay = await _eval_overlay_docs(store)
+            found_ids = {d.id for d in docs}
+            for doc in overlay:
+                haystack = f"{doc.title}\n{doc.body or ''}".lower()
+                if doc.id not in found_ids and q.lower() in haystack:
+                    docs.append(doc)
 
         if not docs:
             return f'No knowledge docs found matching "{q}".'

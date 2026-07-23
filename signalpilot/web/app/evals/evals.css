@@ -1,13 +1,18 @@
-/* Eval management page — extends the app's terminal aesthetic. */
+/* Eval management page — scoped layer aligned with the UX.md design system:
+   warm-ink tokens (inherited), 10/14px radii, 0.08em micro-labels, mono for
+   evidence (SQL, tool names, transcripts). */
 
 .ev-card {
   border: 1px solid var(--color-border);
   background: var(--color-bg-card);
+  border-radius: 14px;
+  overflow: hidden;
 }
 
 .ev-qcard {
   border: 1px solid var(--color-border);
   background: var(--color-bg-card);
+  border-radius: 14px;
   padding: 1rem 1.1rem;
   cursor: pointer;
   text-align: left;
@@ -20,28 +25,18 @@
   border-color: var(--color-border-hover);
   transform: translateY(-1px);
 }
-.ev-qcard::after {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--color-border-hover), transparent);
-  opacity: 0;
-  transition: opacity 0.2s ease;
-}
-.ev-qcard:hover::after {
-  opacity: 1;
-}
+
 
 .ev-badge {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
   font-size: 10px;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  padding: 0.15rem 0.5rem;
+  padding: 0.15rem 0.55rem;
   border: 1px solid var(--color-border);
+  border-radius: 999px;
   color: var(--color-text-muted);
   white-space: nowrap;
 }
@@ -56,6 +51,7 @@
   padding: 0.2rem 0.55rem;
   background: var(--color-bg);
   border: 1px solid var(--color-border);
+  border-radius: 6px;
   font-family: var(--font-mono, ui-monospace, monospace);
   color: var(--color-text);
 }
@@ -79,6 +75,7 @@
   width: min(680px, 92vw);
   background: var(--color-bg-card);
   border-left: 1px solid var(--color-border-hover);
+  border-radius: 16px 0 0 16px;
   z-index: 61;
   overflow-y: auto;
   animation: ev-slide 0.2s ease;
@@ -88,20 +85,20 @@
 
 /* Markdown (question writeups, agent answers) */
 .emd { font-size: 13.5px; line-height: 1.65; color: var(--color-text-muted); }
-.emd h1 { font-size: 17px; font-weight: 400; letter-spacing: 0.02em; color: var(--color-text); margin: 0 0 0.75rem; }
-.emd h2 { font-size: 12px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-text); margin: 1.4rem 0 0.5rem; }
+.emd h1 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; color: var(--color-text); margin: 0 0 0.75rem; }
+.emd h2 { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-text); margin: 1.4rem 0 0.5rem; }
 .emd h3 { font-size: 13px; color: var(--color-text); margin: 1.1rem 0 0.4rem; }
 .emd p { margin: 0.5rem 0; }
 .emd strong { color: var(--color-text); font-weight: 500; }
-.emd code { font-size: 12px; background: var(--color-bg); border: 1px solid var(--color-border); padding: 0.05rem 0.3rem; color: var(--color-text); }
-.emd pre { background: var(--color-bg); border: 1px solid var(--color-border); padding: 0.7rem 0.9rem; overflow-x: auto; margin: 0.6rem 0; }
+.emd code { font-size: 12px; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: 6px; padding: 0.05rem 0.3rem; color: var(--color-text); }
+.emd pre { background: var(--color-bg); border: 1px solid var(--color-border); border-radius: 10px; padding: 0.7rem 0.9rem; overflow-x: auto; margin: 0.6rem 0; }
 .emd pre code { border: none; padding: 0; background: transparent; }
 .emd blockquote { border-left: 2px solid var(--color-border-hover); padding-left: 0.9rem; margin: 0.6rem 0; color: var(--color-text); font-style: italic; }
 .emd ul, .emd ol { padding-left: 1.3rem; margin: 0.5rem 0; }
 .emd li { margin: 0.2rem 0; }
 .emd table { border-collapse: collapse; margin: 0.7rem 0; font-size: 12px; }
 .emd th, .emd td { border: 1px solid var(--color-border); padding: 0.35rem 0.6rem; text-align: left; }
-.emd th { color: var(--color-text-dim); text-transform: uppercase; letter-spacing: 0.1em; font-size: 10px; font-weight: 500; }
+.emd th { color: var(--color-text-dim); text-transform: uppercase; letter-spacing: 0.08em; font-size: 10px; font-weight: 500; }
 .emd a { color: var(--color-success); text-decoration: underline; text-underline-offset: 2px; }
 
 /* Slide-over expansion to full page */
@@ -118,6 +115,7 @@
   max-width: 78%;
   border: 1px solid var(--color-border-hover);
   background: color-mix(in srgb, var(--color-success) 6%, var(--color-bg-card));
+  border-radius: 12px;
   padding: 0.7rem 1rem;
 }
 
@@ -133,7 +131,7 @@
 
 .tr-role {
   font-size: 10px;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--color-text-dim);
   margin-bottom: 0.35rem;
@@ -145,6 +143,7 @@
 .tr-card {
   border: 1px solid var(--color-border);
   background: var(--color-bg);
+  border-radius: 10px;
   overflow: hidden;
 }
 .tr-card--mcp { border-left: 2px solid var(--color-success); }
@@ -202,14 +201,14 @@
   padding-top: 0.8rem;
   border-top: 1px solid var(--color-border);
   font-size: 11px;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--color-text-dim);
 }
 .tr-footer b { color: var(--color-text); font-weight: 400; }
 
 /* Transcript viewer */
-.ev-turn { border: 1px solid var(--color-border); background: var(--color-bg); margin-top: 0.5rem; }
+.ev-turn { border: 1px solid var(--color-border); background: var(--color-bg); border-radius: 10px; overflow: hidden; margin-top: 0.5rem; }
 .ev-turn-head {
   display: flex;
   align-items: center;
@@ -217,7 +216,7 @@
   width: 100%;
   padding: 0.45rem 0.75rem;
   font-size: 10.5px;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--color-text-dim);
   cursor: pointer;

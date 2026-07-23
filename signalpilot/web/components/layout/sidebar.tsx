@@ -132,6 +132,16 @@ function NavIconReports({ active }: { active: boolean }) {
   );
 }
 
+function NavIconEvals({ active }: { active: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <path d="M5 1H9M6 1V5L2.5 11.5C2 12.4 2.6 13 3.4 13H10.6C11.4 13 12 12.4 11.5 11.5L8 5V1" stroke="currentColor" strokeWidth="1" strokeLinejoin="round" />
+      <line x1="4" y1="9.5" x2="10" y2="9.5" stroke="currentColor" strokeWidth="0.75" />
+      {active && <circle cx="7" cy="11" r="1" fill="var(--color-success)" />}
+    </svg>
+  );
+}
+
 function NavIconChats({ active }: { active: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -169,6 +179,7 @@ const navGroups: { label: string | null; items: NavItem[] }[] = [
       { href: "/chats", label: "Chats", icon: NavIconChats, shortcut: "" },
       { href: "/reports", label: "Reports", icon: NavIconReports, shortcut: "9" },
       { href: "/audit", label: "Audit", icon: NavIconAudit, shortcut: "7" },
+      { href: "/evals", label: "Evals", icon: NavIconEvals, shortcut: "" },
     ],
   },
   {
@@ -480,6 +491,16 @@ export default function Sidebar() {
   const router = useRouter();
   const { isCloudMode, isAuthenticated } = useAppAuth();
   const [projectCount, setProjectCount] = useState(0);
+  // Evals nav item only shows when the eval runner is configured on this
+  // gateway (the config endpoint 404s otherwise).
+  const [evalsEnabled, setEvalsEnabled] = useState(false);
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    import("~/lib/api")
+      .then(({ getEvalConfig }) => getEvalConfig())
+      .then(() => setEvalsEnabled(true))
+      .catch(() => setEvalsEnabled(false));
+  }, [isAuthenticated]);
 
   // Connection health from shared SWR cache (auto-refreshes every 15s)
   // Only fetch when authenticated (prevents 401s on login page)
@@ -578,7 +599,10 @@ export default function Sidebar() {
       {/* Navigation — grouped IA */}
       <nav className="flex-1 overflow-y-auto px-3 py-2">
         {navGroups.map((group, gi) => {
-          const items = group.items.filter(({ href }) => !(isCloudMode && href === "/settings"));
+          const items = group.items.filter(
+            ({ href }) =>
+              !(isCloudMode && href === "/settings") && !(href === "/evals" && !evalsEnabled)
+          );
           if (items.length === 0) return null;
           return (
             <div key={group.label ?? `g${gi}`} className={gi > 0 ? "mt-4" : undefined}>

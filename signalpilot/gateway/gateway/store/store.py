@@ -16,6 +16,7 @@ import gateway.store.audit_log as audit_log
 import gateway.store.byok_state as byok_state
 import gateway.store.endorsements as endorsements_mod
 import gateway.store.knowledge as knowledge_mod
+import gateway.store.knowledge_search as knowledge_search_mod
 import gateway.store.notion as notion_mod
 import gateway.store.paths as paths
 import gateway.store.projects as projects
@@ -1052,6 +1053,93 @@ class Store:
             for doc in docs:
                 asyncio.create_task(self.increment_knowledge_view(doc.id))
         return docs
+
+    async def search_knowledge_hybrid(
+        self,
+        *,
+        query: str,
+        source: str,
+        scope: str | None = None,
+        scope_ref: str | None = None,
+        category: str | None = None,
+        limit: int = 20,
+        log_events: bool = True,
+        bump_view: bool = False,
+    ) -> list[knowledge_search_mod.SearchHit]:
+        """Hybrid (FTS + lexical + vector) search with retrieval-event logging.
+
+        Falls back to plain ILIKE search on any hybrid failure so search never
+        regresses below the legacy behavior. Logging and view bumps for all
+        hits are batched into a single background task (one pool checkout).
+        """
+        oid = self._require_org_id()
+        try:
+            hits = await knowledge_search_mod.hybrid_search_knowledge(
+                self.session,
+                org_id=oid,
+                query=query,
+                scope=scope,
+                scope_ref=scope_ref,
+                category=category,
+                limit=limit,
+            )
+        except Exception as exc:
+            logger.warning("Hybrid knowledge search failed, falling back to ILIKE: %r", exc)
+            docs = await knowledge_mod.search_knowledge(
+                self.session,
+                org_id=oid,
+                query=query,
+                scope=scope,
+                scope_ref=scope_ref,
+                category=category,
+                limit=limit,
+            )
+            hits = [knowledge_search_mod.SearchHit(doc=d, score=0.0, arms=["lexical"]) for d in docs]
+
+        events = []
+        if log_events and hits:
+            events = [
+                knowledge_search_mod.RetrievalEvent(
+                    org_id=oid,
+                    doc_id=h.doc.id,
+                    source=source,
+                    query=query,
+                    user_id=self.user_id,
+                    rank=i + 1,
+                    score=h.score,
+                )
+                for i, h in enumerate(hits)
+            ]
+        bump_ids = [h.doc.id for h in hits] if bump_view else None
+        if events or bump_ids:
+            knowledge_search_mod.fire_and_forget(
+                knowledge_search_mod.log_retrieval_events(events, bump_view_ids=bump_ids)
+            )
+        return hits
+
+    async def log_knowledge_retrievals(
+        self, doc_ids: list[str], *, source: str, query: str | None = None, bump_view: bool = False
+    ) -> None:
+        """Fire-and-forget retrieval logging for non-search pulls (baseline docs)."""
+        oid = self._require_org_id()
+        events = [
+            knowledge_search_mod.RetrievalEvent(
+                org_id=oid, doc_id=d, source=source, query=query, user_id=self.user_id
+            )
+            for d in doc_ids
+        ]
+        knowledge_search_mod.fire_and_forget(
+            knowledge_search_mod.log_retrieval_events(events, bump_view_ids=doc_ids if bump_view else None)
+        )
+
+    async def knowledge_retrieval_stats(self, *, since_days: int = 30) -> dict:
+        oid = self._require_org_id()
+        return await knowledge_search_mod.retrieval_stats(self.session, org_id=oid, since_days=since_days)
+
+    async def sync_knowledge_embeddings(self) -> int:
+        """Reconcile this org's embeddings (admin sync endpoint)."""
+        oid = self._require_org_id()
+        return await knowledge_search_mod.sync_knowledge_embeddings(self.session, org_id=oid)
 
     async def get_knowledge_usage(self) -> KnowledgeUsage:
         oid = self._require_org_id()

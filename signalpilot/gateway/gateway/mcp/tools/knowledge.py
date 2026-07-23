@@ -128,9 +128,14 @@ async def get_knowledge(task_description: str | None = None) -> str:
                 if d.scope_ref in seen_refs and d.category.value in _BASELINE_CATEGORIES:
                     baseline_docs.append(d)
 
-            # Bump views fire-and-forget
-            for doc in baseline_docs:
-                asyncio.create_task(store.increment_knowledge_view(doc.id))
+            # Log retrievals + bump views in one batched background write
+            if baseline_docs:
+                await store.log_knowledge_retrievals(
+                    [d.id for d in baseline_docs],
+                    source="get_knowledge_baseline",
+                    query=task_description,
+                    bump_view=True,
+                )
 
             sections = [_render_doc_section(d) for d in baseline_docs]
 
@@ -143,26 +148,58 @@ async def get_knowledge(task_description: str | None = None) -> str:
                 sections.append("[status: proposed]\n" + _render_doc_section(doc))
 
             # --- Task-specific search ---
+            # Hybrid semantic search over the whole task description; the old
+            # per-keyword ILIKE loop remains as a recall backstop when the
+            # semantic pass surfaces nothing.
             if task_description:
-                keywords = _extract_keywords(task_description)
                 task_docs: list[KnowledgeDoc] = []
-                for kw in keywords:
-                    hits = await store.search_knowledge(
-                        query=kw,
-                        category=None,
-                        limit=5,
-                        bump_view=False,
+                try:
+                    # log_events=False: only the docs actually delivered to the
+                    # agent (post category-filter) are logged, below.
+                    hits = await store.search_knowledge_hybrid(
+                        query=task_description[:500],
+                        limit=15,
+                        source="get_knowledge_task",
+                        log_events=False,
                     )
-                    # Only include task-search categories
-                    for doc in hits:
-                        if doc.category.value in _TASK_SEARCH_CATEGORIES:
-                            if not any(td.id == doc.id for td in task_docs):
-                                task_docs.append(doc)
-                    if len(task_docs) >= 5:
-                        break
+                    task_docs = [
+                        h.doc for h in hits if h.doc.category.value in _TASK_SEARCH_CATEGORIES
+                    ][:5]
+                    if task_docs:
+                        await store.log_knowledge_retrievals(
+                            [d.id for d in task_docs],
+                            source="get_knowledge_task",
+                            query=task_description,
+                            bump_view=True,
+                        )
+                except Exception:
+                    task_docs = []
 
-                for doc in task_docs[:5]:
-                    asyncio.create_task(store.increment_knowledge_view(doc.id))
+                if not task_docs:
+                    keywords = _extract_keywords(task_description)
+                    for kw in keywords:
+                        kw_hits = await store.search_knowledge(
+                            query=kw,
+                            category=None,
+                            limit=5,
+                            bump_view=False,
+                        )
+                        for doc in kw_hits:
+                            if doc.category.value in _TASK_SEARCH_CATEGORIES:
+                                if not any(td.id == doc.id for td in task_docs):
+                                    task_docs.append(doc)
+                        if len(task_docs) >= 5:
+                            break
+                    task_docs = task_docs[:5]
+                    if task_docs:
+                        await store.log_knowledge_retrievals(
+                            [d.id for d in task_docs],
+                            source="get_knowledge_task",
+                            query=task_description,
+                            bump_view=True,
+                        )
+
+                for doc in task_docs:
                     sections.append(_render_doc_section(doc))
 
             if not sections:
@@ -191,14 +228,16 @@ async def search_knowledge(
             return "Error: query exceeds 200 character limit"
 
         async with _store_session() as store:
-            docs = await store.search_knowledge(
+            hits = await store.search_knowledge_hybrid(
                 query=q,
                 scope=scope,
                 scope_ref=scope_ref,
                 category=category,
                 limit=max(1, min(limit, 50)),
+                source="search_knowledge",
                 bump_view=True,
             )
+            docs = [h.doc for h in hits]
             # Eval mode: proposed docs matching the query rank as results too.
             overlay = await _eval_overlay_docs(store)
             found_ids = {d.id for d in docs}
@@ -227,6 +266,41 @@ async def search_knowledge(
                 f"  snippet: {snippet!r}\n"
             )
         return "\n".join(lines)
+
+    except Exception as exc:
+        return f"Error: {sanitize_mcp_error(str(exc))}"
+
+
+@audited_tool(mcp)
+async def read_knowledge(doc_ids: list[str]) -> str:
+    """Read full knowledge docs by id (from search_knowledge results).
+
+    Use search_knowledge to find candidate docs cheaply, then read the ones
+    that matter. Reading logs a strong usage signal for the knowledge base.
+    """
+    try:
+        ids = [d.strip() for d in (doc_ids or []) if d and d.strip()]
+        if not ids:
+            return "Error: doc_ids must not be empty"
+        if len(ids) > 10:
+            return "Error: at most 10 docs per call"
+
+        async with _store_session() as store:
+            sections: list[str] = []
+            found_ids: list[str] = []
+            for doc_id in ids:
+                doc = await store.get_knowledge_doc(doc_id, include_body=True, bump_view=False)
+                if doc is None or doc.status.value == "archived":
+                    sections.append(f"[not found: {doc_id}]")
+                    continue
+                found_ids.append(doc.id)
+                sections.append(_render_doc_section(doc))
+            if found_ids:
+                await store.log_knowledge_retrievals(
+                    found_ids, source="read_knowledge", bump_view=True
+                )
+
+        return _build_output(sections) if sections else "No docs found."
 
     except Exception as exc:
         return f"Error: {sanitize_mcp_error(str(exc))}"

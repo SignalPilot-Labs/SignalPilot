@@ -341,12 +341,44 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("JWT-secret GC error: %s", e)
 
+    async def _knowledge_embedding_loop():
+        """Reconcile stale/missing KB embeddings and prune old retrieval events.
+
+        Runs across all orgs (embedding rows carry their own org_id). Interval
+        via SP_EMBEDDINGS_SYNC_INTERVAL; 0 disables the loop entirely.
+        """
+        from .config.embeddings import get_embeddings_settings
+        from .store.knowledge_search import prune_retrieval_events, sync_knowledge_embeddings
+
+        cfg = get_embeddings_settings()
+        # Retrieval events are written regardless of embedding config, so the
+        # pruning half of this loop always runs; only the sync half is gated.
+        sync_enabled = cfg.enabled and cfg.sync_interval > 0
+        interval = max(30, cfg.sync_interval) if sync_enabled else 3600
+        # First pass shortly after startup so a fresh deploy indexes quickly.
+        await asyncio.sleep(10)
+        while True:
+            try:
+                factory = get_session_factory()
+                async with factory() as session:
+                    if sync_enabled:
+                        embedded = await sync_knowledge_embeddings(session)
+                        if embedded:
+                            logger.info("Knowledge embedding sync: embedded %d doc(s)", embedded)
+                    pruned = await prune_retrieval_events(session)
+                    if pruned:
+                        logger.info("Pruned %d old knowledge retrieval event(s)", pruned)
+            except Exception as e:
+                logger.warning("Knowledge embedding loop error: %s", e)
+            await asyncio.sleep(interval)
+
     health_flush_task = asyncio.create_task(_health_flush_loop())
     health_cleanup_task = asyncio.create_task(_health_cleanup_loop())
     health_ping_task = asyncio.create_task(_health_ping_loop())
     cleanup_task = asyncio.create_task(_pool_cleanup_loop())
     refresh_task = asyncio.create_task(_schema_refresh_loop())
     notebook_cleanup_task = asyncio.create_task(_notebook_cleanup_loop())
+    knowledge_embedding_task = asyncio.create_task(_knowledge_embedding_loop())
 
     # Start MCP session manager if mounted
     mcp_ctx = None
@@ -398,6 +430,7 @@ async def lifespan(app: FastAPI):
         cleanup_task.cancel()
         refresh_task.cancel()
         notebook_cleanup_task.cancel()
+        knowledge_embedding_task.cancel()
         await pool_manager.close_all()
         dek_cache.clear()
         await close_db()

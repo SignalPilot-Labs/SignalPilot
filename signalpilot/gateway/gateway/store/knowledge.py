@@ -75,6 +75,11 @@ def _make_excerpt(body: str | None, limit: int = 200) -> str | None:
     return text[:limit] or None
 
 
+def row_to_doc(row: GatewayKnowledgeDoc, *, include_body: bool) -> KnowledgeDoc:
+    """Public row → DTO conversion (also used by knowledge_search)."""
+    return _row_to_doc(row, include_body=include_body)
+
+
 def _row_to_doc(row: GatewayKnowledgeDoc, *, include_body: bool) -> KnowledgeDoc:
     return KnowledgeDoc(
         id=row.id,

@@ -321,6 +321,20 @@ async def _ensure_knowledge_columns(engine) -> None:
     except Exception:
         logger.info("Could not create trigram index on knowledge docs — pg_trgm likely unavailable")
 
+    # FTS expression index: matches the hybrid-search FTS arm's expression so
+    # ranking doesn't re-tokenize every doc per query. Best-effort.
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_knowledge_fts "
+                    "ON gateway_knowledge_docs USING gin "
+                    "(to_tsvector('english', title || ' ' || body))"
+                )
+            )
+    except Exception:
+        logger.info("Could not create FTS index on knowledge docs")
+
     logger.info("Ensured knowledge doc indexes")
 
 

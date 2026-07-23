@@ -55,14 +55,18 @@ async def list_knowledge(
             raise HTTPException(status_code=422, detail="query parameter 'q' must not be empty after trimming")
         if len(q) > 200:
             raise HTTPException(status_code=422, detail="query parameter 'q' must be <= 200 characters")
-        return await store.search_knowledge(
+        # Hybrid semantic search; retrieval events are not logged for human
+        # browsing so the agent-usage heat-map signal stays clean.
+        hits = await store.search_knowledge_hybrid(
             query=q,
             scope=scope,
             scope_ref=scope_ref,
             category=category,
             limit=200,
-            bump_view=False,
+            source="api_search",
+            log_events=False,
         )
+        return [h.doc for h in hits]
     return await store.list_knowledge_docs(
         scope=scope,
         scope_ref=scope_ref,
@@ -72,6 +76,23 @@ async def list_knowledge(
         limit=200,
         offset=0,
     )
+
+
+@router.get("/knowledge/retrievals", dependencies=[RequireScope("read")])
+async def get_knowledge_retrievals(store: StoreD, since_days: int = 30):
+    """Per-doc retrieval stats for the heat-map UI (agent pulls only)."""
+    return await store.knowledge_retrieval_stats(since_days=max(1, min(since_days, 365)))
+
+
+@router.post("/knowledge/embeddings/sync", dependencies=[RequireScope("admin")])
+async def sync_knowledge_embeddings_endpoint(store: StoreD):
+    """Force an embedding reconcile pass for this org (admin only).
+
+    The background loop does this automatically; this endpoint exists for
+    testing and for immediate re-index after provider config changes.
+    """
+    embedded = await store.sync_knowledge_embeddings()
+    return {"embedded": embedded}
 
 
 @router.get("/knowledge/usage", response_model=KnowledgeUsage, dependencies=[RequireScope("read")])

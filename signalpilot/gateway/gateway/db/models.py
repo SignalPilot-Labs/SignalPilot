@@ -660,6 +660,38 @@ class GatewayKnowledgeRetrieval(GatewayBase):
     )
 
 
+class GatewaySchemaWatch(GatewayBase):
+    """Scheduled schema-diff watch: introspect a connection on an interval and
+    open a GitHub PR documenting any structural drift.
+
+    The last snapshot is stored inline (schema JSON + fingerprint) so diffs
+    survive gateway restarts — unlike the in-memory schema_cache history.
+    """
+
+    __tablename__ = "gateway_schema_watches"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    connection_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    interval_s: Mapped[int] = mapped_column(Integer, nullable=False, default=86400)
+    github_repo: Mapped[str] = mapped_column(String(200), nullable=False)  # owner/name
+    github_base_branch: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_schema: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    last_run_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_change_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_pr_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "connection_name", "github_repo", name="uq_gw_schema_watch"),
+        Index("idx_schema_watch_org", "org_id"),
+    )
+
+
 class GatewayReport(GatewayBase):
     """Rendered HTML reports — org-scoped, optionally grouped by project (scope_ref)."""
 

@@ -372,6 +372,19 @@ async def lifespan(app: FastAPI):
                 logger.warning("Knowledge embedding loop error: %s", e)
             await asyncio.sleep(interval)
 
+    async def _schema_watch_loop():
+        """Execute due schema-diff watches (drift → GitHub PR) every minute."""
+        from .schema_watch.runner import run_due_watches
+
+        while True:
+            await asyncio.sleep(60)
+            try:
+                ran = await run_due_watches(get_session_factory())
+                if ran:
+                    logger.info("Schema watch loop: ran %d watch(es)", ran)
+            except Exception as e:
+                logger.warning("Schema watch loop error: %s", e)
+
     health_flush_task = asyncio.create_task(_health_flush_loop())
     health_cleanup_task = asyncio.create_task(_health_cleanup_loop())
     health_ping_task = asyncio.create_task(_health_ping_loop())
@@ -379,6 +392,7 @@ async def lifespan(app: FastAPI):
     refresh_task = asyncio.create_task(_schema_refresh_loop())
     notebook_cleanup_task = asyncio.create_task(_notebook_cleanup_loop())
     knowledge_embedding_task = asyncio.create_task(_knowledge_embedding_loop())
+    schema_watch_task = asyncio.create_task(_schema_watch_loop())
 
     # Start MCP session manager if mounted
     mcp_ctx = None
@@ -431,6 +445,7 @@ async def lifespan(app: FastAPI):
         refresh_task.cancel()
         notebook_cleanup_task.cancel()
         knowledge_embedding_task.cancel()
+        schema_watch_task.cancel()
         await pool_manager.close_all()
         dek_cache.clear()
         await close_db()

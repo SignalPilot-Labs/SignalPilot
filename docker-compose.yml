@@ -96,6 +96,11 @@ services:
       # gateway by its compose-network alias.
       SP_MCP_ALLOWED_HOSTS: gateway
       SP_EVAL_CLAUDE_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # PipelineProof PR bot — PAT + default verification connection for local
+      # testing (production uses GitHub App installation tokens instead).
+      SP_GITHUB_BOT_TOKEN: ${SP_GITHUB_BOT_TOKEN:-}
+      SP_GITHUB_BOT_CONNECTION: ${SP_GITHUB_BOT_CONNECTION:-perf_nala_pg}
+      SP_GITHUB_WEBHOOK_SECRET: ${SP_GITHUB_WEBHOOK_SECRET:-}
       # Setup-state containers: host paths for bind mounts (docker binds
       # resolve on the HOST). SP_EVAL_HOST_ROOT comes from .env.
       SP_EVAL_PROJECTS_HOST_DIR: ${SP_EVAL_HOST_ROOT:-}/demo-generator/trap-arena/projects

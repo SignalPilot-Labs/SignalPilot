@@ -246,3 +246,50 @@ async def delete_repo_link(session: AsyncSession, *, org_id: str, link_id: str) 
     )
     await session.commit()
     return True
+
+
+async def _resolve_repo_link(session: AsyncSession, repo_full_name: str) -> GatewayGitHubRepoLink | None:
+    """Oldest active link for a repo. repo_full_name is not unique across
+    orgs/projects — the oldest-link tie-break keeps webhook attribution
+    deterministic and lives only here."""
+    result = await session.execute(
+        select(GatewayGitHubRepoLink)
+        .where(
+            GatewayGitHubRepoLink.repo_full_name == repo_full_name,
+            GatewayGitHubRepoLink.status == "active",
+        )
+        .order_by(GatewayGitHubRepoLink.created_at)
+    )
+    return result.scalars().first()
+
+
+async def get_token_for_repo(session: AsyncSession, *, repo_full_name: str) -> str | None:
+    """Installation token for a repo linked anywhere in the deployment.
+
+    Used by the PR bot webhook path, where the org is derived from the repo
+    link rather than from request auth. Returns None when no active link or
+    installation covers the repo.
+    """
+    link = await _resolve_repo_link(session, repo_full_name)
+    if link is None:
+        return None
+    inst_result = await session.execute(
+        select(GatewayGitHubInstallation).where(
+            GatewayGitHubInstallation.id == link.installation_id,
+            GatewayGitHubInstallation.status == "active",
+        )
+    )
+    inst = inst_result.scalars().first()
+    if inst is None:
+        return None
+    try:
+        return await get_valid_token(session, inst)
+    except Exception as exc:
+        logger.warning("Could not resolve installation token for %s: %r", repo_full_name, exc)
+        return None
+
+
+async def get_org_for_repo(session: AsyncSession, *, repo_full_name: str) -> str | None:
+    """Org that owns the active link for a repo (webhook org resolution)."""
+    link = await _resolve_repo_link(session, repo_full_name)
+    return link.org_id if link else None

@@ -19,6 +19,7 @@ from .connections import router as connections_router
 from .eval_runs import router as eval_runs_router
 from .files import router as files_router
 from .github import router as github_router
+from .github_bot import router as github_bot_router
 from .health import router as health_router
 from .keys import router as keys_router
 from .knowledge import router as knowledge_router
@@ -73,6 +74,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(analysis_trails_router)
     app.include_router(notebook_sessions_router)
     app.include_router(github_router)
+    app.include_router(github_bot_router)
     app.include_router(uploads_router)
     app.include_router(eval_runs_router)
     app.include_router(user_secrets_router)

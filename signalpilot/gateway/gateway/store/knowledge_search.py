@@ -14,7 +14,6 @@ only 1+2 run; the search never fails because one arm does.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import logging
 import re
@@ -54,21 +53,7 @@ _STOPWORDS = frozenset(
     }
 )
 
-# Strong references to in-flight fire-and-forget tasks. The event loop keeps
-# only weak refs to tasks; without this set a pending logging task can be
-# garbage-collected before it runs.
-_bg_tasks: set[asyncio.Task] = set()
-
-
-def fire_and_forget(coro) -> None:
-    """Schedule a coroutine without awaiting it, holding a strong reference."""
-    try:
-        task = asyncio.create_task(coro)
-    except RuntimeError:  # no running loop (sync test context)
-        coro.close()
-        return
-    _bg_tasks.add(task)
-    task.add_done_callback(_bg_tasks.discard)
+from gateway.util.tasks import fire_and_forget  # re-export; shared helper
 
 
 def content_hash(title: str, body: str) -> str:

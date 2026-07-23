@@ -100,7 +100,7 @@ export function AuthShell({ title, subtitle, children }: AuthShellProps) {
             <p className="text-[13px] font-bold tracking-[0.2em] uppercase text-[var(--color-text)]">
               SignalPilot
             </p>
-            <p className="text-[11px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase mt-0.5">
+            <p className="text-[11px] text-[var(--color-text-dim)] tracking-[0.08em] uppercase mt-0.5">
               governed infra
             </p>
           </div>
@@ -118,7 +118,7 @@ export function AuthShell({ title, subtitle, children }: AuthShellProps) {
             </span>
           </div>
           <div className="p-6">
-            <p className="text-[11px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase mb-5">
+            <p className="text-[11px] text-[var(--color-text-dim)] tracking-[0.08em] uppercase mb-5">
               {subtitle}
             </p>
             {children}

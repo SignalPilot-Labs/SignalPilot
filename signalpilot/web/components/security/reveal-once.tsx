@@ -27,7 +27,7 @@ export function RevealOnce({ title, description, lines, onDismiss }: RevealOnceP
       <div className="flex items-start gap-2">
         <AlertTriangle className="w-3.5 h-3.5 text-[var(--color-warning)] flex-shrink-0 mt-0.5" strokeWidth={1.5} />
         <div>
-          <p id={titleId} className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em] mb-1">{title}</p>
+          <p id={titleId} className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.08em] mb-1">{title}</p>
           <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">{description}</p>
         </div>
       </div>

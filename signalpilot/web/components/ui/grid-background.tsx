@@ -1,20 +1,25 @@
 "use client";
 
 /**
- * Animated SVG grid background — subtle, developer-aesthetic backdrop
- * Renders an infinite grid with occasional highlight pulses at intersections.
+ * Barely-there backdrop — a wide-spaced grid at near-invisible opacity plus a
+ * faint radial mint glow, matching the landing page aesthetic. Static (no
+ * marquee/pulse animation) so it never competes with content.
  */
 export function GridBackground() {
   return (
-    <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden opacity-[0.035]" aria-hidden="true">
-      <svg width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
+    <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden" aria-hidden="true">
+      {/* Faint radial mint glow, top-center like the landing page hero */}
+      <div
+        className="absolute inset-0"
+        style={{
+          background:
+            "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(0,255,136,0.04), transparent 70%)",
+        }}
+      />
+      <svg width="100%" height="100%" xmlns="http://www.w3.org/2000/svg" className="opacity-[0.018]">
         <defs>
-          {/* Base grid pattern */}
-          <pattern id="grid-sm" width="24" height="24" patternUnits="userSpaceOnUse">
-            <path d="M24 0V24M0 24H24" stroke="currentColor" strokeWidth="0.5" fill="none" />
-          </pattern>
+          {/* Wide-spaced base grid */}
           <pattern id="grid-lg" width="96" height="96" patternUnits="userSpaceOnUse">
-            <rect width="96" height="96" fill="url(#grid-sm)" />
             <path d="M96 0V96M0 96H96" stroke="currentColor" strokeWidth="1" fill="none" />
           </pattern>
           {/* Radial fade mask so edges dissolve */}
@@ -27,32 +32,6 @@ export function GridBackground() {
           </mask>
         </defs>
         <rect width="100%" height="100%" fill="url(#grid-lg)" mask="url(#grid-mask)" />
-        {/* Occasional pulse dots at intersections */}
-        {[
-          { cx: "25%", cy: "20%", delay: "0s" },
-          { cx: "75%", cy: "35%", delay: "2s" },
-          { cx: "50%", cy: "60%", delay: "4s" },
-          { cx: "30%", cy: "80%", delay: "1s" },
-          { cx: "80%", cy: "70%", delay: "3s" },
-        ].map((dot, i) => (
-          <circle key={i} cx={dot.cx} cy={dot.cy} r="1" fill="currentColor">
-            <animate attributeName="r" values="1;3;1" dur="6s" begin={dot.delay} repeatCount="indefinite" />
-            <animate attributeName="opacity" values="0.3;0.8;0.3" dur="6s" begin={dot.delay} repeatCount="indefinite" />
-          </circle>
-        ))}
-        {/* Subtle data flow traces */}
-        {[
-          { path: "M0,192 L480,192 L480,384 L960,384", delay: "0s", dur: "8s" },
-          { path: "M0,480 L240,480 L240,288 L720,288 L720,576", delay: "3s", dur: "10s" },
-          { path: "M0,672 L360,672 L360,480 L840,480", delay: "6s", dur: "9s" },
-        ].map((trace, i) => (
-          <g key={`trace-${i}`} mask="url(#grid-mask)">
-            <path d={trace.path} stroke="currentColor" strokeWidth="0.5" fill="none" strokeDasharray="4 8" opacity="0">
-              <animate attributeName="stroke-dashoffset" from="48" to="0" dur="2s" repeatCount="indefinite" begin={trace.delay} />
-              <animate attributeName="opacity" values="0;0.5;0.5;0" dur={trace.dur} begin={trace.delay} repeatCount="indefinite" />
-            </path>
-          </g>
-        ))}
       </svg>
     </div>
   );
@@ -68,7 +47,7 @@ export function ScanlineOverlay() {
       <div
         className="absolute inset-0"
         style={{
-          background: "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.008) 2px, rgba(255,255,255,0.008) 4px)",
+          background: "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.003) 2px, rgba(255,255,255,0.003) 4px)",
         }}
       />
     </div>

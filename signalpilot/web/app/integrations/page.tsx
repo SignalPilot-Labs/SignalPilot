@@ -384,7 +384,7 @@ function IntegrationsContent() {
             <button
               onClick={handleConnectNotion}
               disabled={connecting}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-bg)] bg-[var(--color-text)] hover:opacity-90 transition-all tracking-wider uppercase disabled:opacity-30"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-bg)] bg-[var(--color-text)] rounded-[10px] hover:opacity-90 transition-opacity duration-150 disabled:opacity-30"
             >
               {connecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <NotionIcon className="w-3 h-3" />}
               connect notion
@@ -393,14 +393,14 @@ function IntegrationsContent() {
         </div>
 
         {loadError && (
-          <div className="border border-[var(--color-error)]/20 bg-[var(--color-bg-card)] p-8 text-center">
-            <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider mb-3">
+          <div className="border border-[var(--color-error)]/20 bg-[var(--color-bg-card)] rounded-[14px] p-8 text-center">
+            <p className="text-[12px] text-[var(--color-text-dim)] mb-3">
               failed to load integrations
             </p>
             <button
               disabled={loading}
               onClick={() => { setLoading(true); fetchIntegrations(); }}
-              className="px-4 py-2 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase disabled:opacity-30"
+              className="px-4 py-2 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-colors duration-150 disabled:opacity-30"
             >
               retry
             </button>
@@ -408,15 +408,15 @@ function IntegrationsContent() {
         )}
 
         {!loadError && visibleInstallations.length === 0 && (
-          <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-8 text-center">
+          <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] p-8 text-center">
             <Link className="w-6 h-6 text-[var(--color-text-dim)] mx-auto mb-3" strokeWidth={1} />
-            <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider mb-3">
+            <p className="text-[12px] text-[var(--color-text-dim)] mb-3">
               no oauth installs connected
             </p>
             <button
               onClick={handleConnectNotion}
               disabled={connecting}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] rounded-[10px] transition-opacity duration-150 hover:opacity-90 disabled:opacity-30"
             >
               {connecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <NotionIcon className="w-3 h-3" />}
               connect notion
@@ -430,18 +430,18 @@ function IntegrationsContent() {
           const triggerUrl = notionPageUrl(installation.config?.trigger_page_id);
           const requestsUrl = notionPageUrl(installation.config?.requests_database_page_id);
           return (
-            <div key={installation.id} className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 mb-3">
+            <div key={installation.id} className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] p-5 mb-3">
               <div className="flex items-start justify-between gap-4 mb-4">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-2">
                     <BookOpen className="w-3.5 h-3.5 text-[var(--color-text-dim)] flex-shrink-0" strokeWidth={1.5} />
-                    <span className="text-[13px] text-[var(--color-text)] tracking-wider font-medium">
+                    <span className="text-[13px] text-[var(--color-text)] font-medium">
                       {installation.workspace_name || installation.workspace_id}
                     </span>
                     <StatusDot status={status.tone} size={4} />
                     <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider uppercase">{status.label}</span>
                   </div>
-                  <div className="space-y-1 text-[11px] text-[var(--color-text-dim)] tracking-wider">
+                  <div className="space-y-1 text-[11px] text-[var(--color-text-dim)]">
                     <p className="flex items-center gap-1.5">
                       <span>
                         integration page:
@@ -497,13 +497,13 @@ function IntegrationsContent() {
 
                 {deletingOauthId === installation.id ? (
                   <div className="flex items-center gap-1.5">
-                    <button onClick={() => handleDeleteOAuth(installation.id)} className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-error)] border border-[var(--color-error)]/30 hover:border-[var(--color-error)] transition-all tracking-wider uppercase">confirm</button>
+                    <button onClick={() => handleDeleteOAuth(installation.id)} className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-error)] border border-[var(--color-error)]/30 rounded-[10px] hover:border-[var(--color-error)] transition-colors duration-150">confirm</button>
                     <button onClick={() => setDeletingOauthId(null)} className="p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"><X className="w-3 h-3" /></button>
                   </div>
                 ) : (
                   <button
                     onClick={() => setDeletingOauthId(installation.id)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-error)]/50 hover:text-[var(--color-error)] transition-all tracking-wider uppercase"
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-error)]/50 hover:text-[var(--color-error)] transition-colors duration-150"
                   >
                     <Trash2 className="w-3 h-3" />
                     disconnect
@@ -525,7 +525,7 @@ function IntegrationsContent() {
                 return (
                   <div className="border-t border-[var(--color-border)] pt-4 space-y-3">
                     <div>
-                      <label htmlFor={`notion-project-${installation.id}`} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">
+                      <label htmlFor={`notion-project-${installation.id}`} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">
                         default project
                         <span className="ml-1 text-[var(--color-error)]">*</span>
                       </label>
@@ -540,7 +540,7 @@ function IntegrationsContent() {
                             }));
                           }}
                           disabled={workspaceProjects.length === 0 || provisioningId === installation.id}
-                          className="min-w-0 flex-1 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none disabled:opacity-40"
+                          className="min-w-0 flex-1 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] text-xs focus:outline-none disabled:opacity-40"
                         >
                           <option value="">
                             {workspaceProjects.length === 0 && !selectedProjectId ? "no active projects" : "select a project..."}
@@ -557,7 +557,7 @@ function IntegrationsContent() {
                         <button
                           onClick={() => handleProvision(installation.id)}
                           disabled={!canSubmitProject}
-                          className="flex items-center justify-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
+                          className="flex items-center justify-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] rounded-[10px] transition-opacity duration-150 hover:opacity-90 disabled:opacity-30"
                         >
                           {provisioningId === installation.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Database className="w-3 h-3" />}
                           {installation.config?.enabled ? "save setup" : "provision integration"}
@@ -579,7 +579,7 @@ function IntegrationsContent() {
             <button
               onClick={handleConnectSlack}
               disabled={connectingSlack}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-bg)] bg-[var(--color-text)] hover:opacity-90 transition-all tracking-wider uppercase disabled:opacity-30"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-bg)] bg-[var(--color-text)] rounded-[10px] hover:opacity-90 transition-opacity duration-150 disabled:opacity-30"
             >
               {connectingSlack ? <Loader2 className="w-3 h-3 animate-spin" /> : <MessageSquare className="w-3 h-3" />}
               connect slack
@@ -588,15 +588,15 @@ function IntegrationsContent() {
         </div>
 
         {!loadError && visibleSlackInstallations.length === 0 && (
-          <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-8 text-center">
+          <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] p-8 text-center">
             <MessageSquare className="w-6 h-6 text-[var(--color-text-dim)] mx-auto mb-3" strokeWidth={1} />
-            <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider mb-3">
+            <p className="text-[12px] text-[var(--color-text-dim)] mb-3">
               no slack workspaces connected
             </p>
             <button
               onClick={handleConnectSlack}
               disabled={connectingSlack}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] rounded-[10px] transition-opacity duration-150 hover:opacity-90 disabled:opacity-30"
             >
               {connectingSlack ? <Loader2 className="w-3 h-3 animate-spin" /> : <MessageSquare className="w-3 h-3" />}
               connect slack
@@ -607,18 +607,18 @@ function IntegrationsContent() {
         {visibleSlackInstallations.map((installation) => {
           const status = slackStatus(installation);
           return (
-            <div key={installation.id} className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 mb-3">
+            <div key={installation.id} className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] p-5 mb-3">
               <div className="flex items-start justify-between gap-4 mb-4">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-2">
                     <MessageSquare className="w-3.5 h-3.5 text-[var(--color-text-dim)] flex-shrink-0" strokeWidth={1.5} />
-                    <span className="text-[13px] text-[var(--color-text)] tracking-wider font-medium">
+                    <span className="text-[13px] text-[var(--color-text)] font-medium">
                       {installation.team_name || installation.team_id}
                     </span>
                     <StatusDot status={status.tone} size={4} />
                     <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider uppercase">{status.label}</span>
                   </div>
-                  <div className="space-y-1 text-[11px] text-[var(--color-text-dim)] tracking-wider">
+                  <div className="space-y-1 text-[11px] text-[var(--color-text-dim)]">
                     <p className="flex items-center gap-1.5">
                       <span>team:</span>
                       <span className="text-[var(--color-text-muted)] font-mono">{installation.team_id}</span>
@@ -650,13 +650,13 @@ function IntegrationsContent() {
 
                 {deletingSlackId === installation.id ? (
                   <div className="flex items-center gap-1.5">
-                    <button onClick={() => handleDeleteSlackOAuth(installation.id)} className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-error)] border border-[var(--color-error)]/30 hover:border-[var(--color-error)] transition-all tracking-wider uppercase">confirm</button>
+                    <button onClick={() => handleDeleteSlackOAuth(installation.id)} className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-error)] border border-[var(--color-error)]/30 rounded-[10px] hover:border-[var(--color-error)] transition-colors duration-150">confirm</button>
                     <button onClick={() => setDeletingSlackId(null)} className="p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"><X className="w-3 h-3" /></button>
                   </div>
                 ) : (
                   <button
                     onClick={() => setDeletingSlackId(installation.id)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-error)]/50 hover:text-[var(--color-error)] transition-all tracking-wider uppercase"
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-error)]/50 hover:text-[var(--color-error)] transition-colors duration-150"
                   >
                     <Trash2 className="w-3 h-3" />
                     disconnect
@@ -676,7 +676,7 @@ function IntegrationsContent() {
 
                 return (
                   <div className="border-t border-[var(--color-border)] pt-4">
-                    <label htmlFor={`slack-project-${installation.id}`} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">
+                    <label htmlFor={`slack-project-${installation.id}`} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">
                       default project
                       <span className="ml-1 text-[var(--color-error)]">*</span>
                     </label>
@@ -691,7 +691,7 @@ function IntegrationsContent() {
                           }));
                         }}
                         disabled={workspaceProjects.length === 0 || provisioningSlackId === installation.id}
-                        className="min-w-0 flex-1 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none disabled:opacity-40"
+                        className="min-w-0 flex-1 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] text-xs focus:outline-none disabled:opacity-40"
                       >
                         <option value="">
                           {workspaceProjects.length === 0 && !selectedProjectId ? "no active projects" : "select a project..."}
@@ -708,7 +708,7 @@ function IntegrationsContent() {
                       <button
                         onClick={() => handleProvisionSlack(installation.id)}
                         disabled={!canSubmitProject}
-                        className="flex items-center justify-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
+                        className="flex items-center justify-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] rounded-[10px] transition-opacity duration-150 hover:opacity-90 disabled:opacity-30"
                       >
                         {provisioningSlackId === installation.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Database className="w-3 h-3" />}
                         {installation.config?.enabled ? "save project" : "enable workspace"}

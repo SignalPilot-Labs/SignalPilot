@@ -95,12 +95,12 @@ function ThreadReader({ thread }: { thread: ChatTraceThread }) {
   return (
     <div className="flex-1 min-w-0 flex flex-col">
       <div className="border-b border-[var(--color-border)] px-6 py-4">
-        <h2 className="text-lg font-light text-[var(--color-text)]">{threadTitle(thread)}</h2>
+        <h2 className="text-lg font-semibold tracking-[-0.01em] text-[var(--color-text)]">{threadTitle(thread)}</h2>
         <div className="mt-1 flex items-center gap-3 text-xs text-[var(--color-text-muted)]">
           <span className="ev-badge">{thread.source}</span>
           {thread.notebook_path && <code className="text-[var(--color-text-dim)]">{thread.notebook_path}</code>}
-          <span>{events.length} events</span>
-          {totalCost > 0 && <span>${totalCost.toFixed(3)}</span>}
+          <span className="font-mono tabular-nums">{events.length} events</span>
+          {totalCost > 0 && <span className="font-mono tabular-nums">${totalCost.toFixed(3)}</span>}
           <span>{relTime(thread.updated_at)}</span>
         </div>
       </div>
@@ -151,11 +151,11 @@ function ChatsPageInner() {
         description="read past agent conversations — full transcripts, tool calls, costs"
       />
 
-      <div className="flex flex-1 min-h-0 border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+      <div className="flex flex-1 min-h-0 rounded-[14px] overflow-hidden border border-[var(--color-border)] bg-[var(--color-bg-card)]">
         {/* Rail */}
         <div className="w-80 flex-shrink-0 flex flex-col min-h-0 border-r border-[var(--color-border)]">
           <div className="p-3 border-b border-[var(--color-border)] space-y-2">
-            <div className="flex items-center gap-2 border border-[var(--color-border)] px-2.5 py-1.5">
+            <div className="flex items-center gap-2 rounded-[10px] border border-[var(--color-border)] px-2.5 py-1.5">
               <Search className="w-3.5 h-3.5 flex-shrink-0 text-[var(--color-text-dim)]" />
               <input
                 value={searchQ}

@@ -119,13 +119,12 @@ const PIPELINE_STEPS: PipelineStep[] = [
 function PipelineConnectorSVG({ active }: { active: boolean }) {
   return (
     <svg width="40" height="40" viewBox="0 0 40 40" fill="none" className="flex-shrink-0">
-      {/* Dashed line with flow animation */}
+      {/* Dashed line */}
       <line
         x1="0" y1="20" x2="40" y2="20"
         stroke={active ? "var(--color-success)" : "var(--color-border-hover)"}
         strokeWidth="1"
         strokeDasharray="3 3"
-        className="pipeline-connector"
         opacity={active ? 0.6 : 0.3}
       />
       {/* Arrow head */}
@@ -138,10 +137,6 @@ function PipelineConnectorSVG({ active }: { active: boolean }) {
         strokeLinejoin="round"
         opacity={active ? 0.8 : 0.4}
       />
-      {/* Flow dot */}
-      <circle r="1.5" fill="var(--color-success)" opacity={active ? 0.8 : 0.3}>
-        <animateMotion dur="1.2s" repeatCount="indefinite" path="M0,20 L40,20" />
-      </circle>
     </svg>
   );
 }
@@ -159,26 +154,26 @@ export function GovernancePipeline() {
   }, []);
 
   return (
-    <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden" style={{ overflow: "hidden" }}>
+    <div className="rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden" style={{ overflow: "hidden" }}>
       {/* Header */}
       <div className="px-4 py-3 border-b border-[var(--color-border)] flex items-center justify-between">
         <div className="flex items-center gap-3">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
             <path d="M2 8h3l2-4 2 8 2-4h3" stroke="var(--color-success)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
-          <span className="text-[12px] uppercase tracking-[0.15em] text-[var(--color-text-dim)]">
+          <span className="text-[12px] text-[var(--color-text-dim)]">
             governance pipeline
           </span>
         </div>
         <div className="flex items-center gap-3">
-          <span className="flex items-center gap-1.5 text-[11px] text-[var(--color-success)] tracking-wider">
+          <span className="flex items-center gap-1.5 text-[11px] text-[var(--color-success)]">
             <span className="relative flex h-1.5 w-1.5">
-              <span className="animate-ping absolute inline-flex h-full w-full bg-[var(--color-success)] opacity-40" />
-              <span className="relative inline-flex h-1.5 w-1.5 bg-[var(--color-success)]" />
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--color-success)] opacity-40" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-[var(--color-success)]" />
             </span>
             active
           </span>
-          <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider px-2 py-0.5 border border-[var(--color-border)]">
+          <span className="text-[11px] text-[var(--color-text-dim)] px-2 py-0.5 rounded-[6px] border border-[var(--color-border)]">
             6 stages
           </span>
         </div>
@@ -210,25 +205,18 @@ export function GovernancePipeline() {
             return (
               <div key={step.id} className="flex items-center flex-shrink-0">
                 <div
-                  className="relative group cursor-default transition-all duration-200"
+                  className="relative group cursor-default transition-colors duration-150"
                   onMouseEnter={() => setHoveredStep(step.id)}
                   onMouseLeave={() => setHoveredStep(null)}
                 >
                   {/* Step card */}
-                  <div className={`relative px-3 py-2.5 border transition-all duration-300 ${
+                  <div className={`relative px-3 py-2.5 rounded-[10px] border transition-colors duration-150 ${
                     isActive
                       ? "border-[var(--color-success)]/40 bg-[var(--color-success)]/5"
                       : hoveredStep === step.id
                         ? "border-[var(--color-border-active)] bg-[var(--color-bg-hover)]"
                         : "border-[var(--color-border)] bg-[var(--color-bg)]"
                   }`}>
-                    {/* Active glow */}
-                    {isActive && (
-                      <div className="absolute inset-0 pointer-events-none overflow-hidden">
-                        <div className="absolute inset-0 border border-[var(--color-success)]/20 animate-pulse" style={{ animationDuration: "2s" }} />
-                      </div>
-                    )}
-
                     {/* Step header with icon */}
                     <div className="flex items-center gap-2 mb-1.5">
                       <span className={`transition-colors duration-300 ${
@@ -236,7 +224,7 @@ export function GovernancePipeline() {
                       }`}>
                         {step.icon}
                       </span>
-                      <span className={`text-[11px] tabular-nums tracking-wider transition-colors duration-300 ${
+                      <span className={`text-[11px] font-mono tabular-nums transition-colors duration-150 ${
                         isActive ? "text-[var(--color-success)]" : hoveredStep === step.id ? "text-[var(--color-text-muted)]" : "text-[var(--color-text-dim)]"
                       }`}>
                         {String(i + 1).padStart(2, "0")}
@@ -249,22 +237,22 @@ export function GovernancePipeline() {
                     </div>
 
                     {/* Step label */}
-                    <div className={`text-[12px] font-medium tracking-wide transition-colors duration-300 ${
-                      isActive ? "text-[var(--color-text)] glow-text" : hoveredStep === step.id ? "text-[var(--color-text)]" : "text-[var(--color-text-muted)]"
+                    <div className={`text-[12px] font-medium font-mono transition-colors duration-150 ${
+                      isActive ? "text-[var(--color-text)]" : hoveredStep === step.id ? "text-[var(--color-text)]" : "text-[var(--color-text-muted)]"
                     }`}>
                       {step.label}
                     </div>
 
                     {/* Description */}
-                    <div className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider max-w-[140px]">
+                    <div className="text-[11px] text-[var(--color-text-dim)] mt-1 max-w-[140px]">
                       {step.description}
                     </div>
                   </div>
 
                   {/* Hover tooltip with detail */}
                   {hoveredStep === step.id && (
-                    <div className="absolute top-full left-0 right-0 mt-1 p-2.5 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] z-10 animate-fade-in">
-                      <p className="text-[11px] text-[var(--color-text-muted)] tracking-wider leading-relaxed">
+                    <div className="absolute top-full left-0 right-0 mt-1 p-2.5 rounded-[10px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] z-10 animate-fade-in">
+                      <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">
                         {step.detail}
                       </p>
                     </div>
@@ -305,10 +293,10 @@ export function GovernancePipeline() {
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
             <path d="M6 1v10M1 6h10" stroke="var(--color-text-dim)" strokeWidth="1" strokeLinecap="round" />
           </svg>
-          <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
+          <span className="text-[11px] text-[var(--color-text-dim)]">
             every query passes through all 6 stages before results reach the agent
           </span>
-          <span className="ml-auto text-[11px] text-[var(--color-text-dim)] tracking-wider tabular-nums">
+          <span className="ml-auto text-[11px] text-[var(--color-text-dim)] font-mono tabular-nums">
             ~2ms overhead
           </span>
         </div>

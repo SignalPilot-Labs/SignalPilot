@@ -31,11 +31,6 @@ export function EmptyTerminal({ className = "" }: { className?: string }) {
         <animate attributeName="x2" values="10;25" dur="1.5s" begin="1s" fill="freeze" />
         <animate attributeName="opacity" values="0;0.2" dur="0.5s" begin="1s" fill="freeze" />
       </line>
-      {/* Scan line */}
-      <rect x="4" y="12" width="56" height="1" fill="var(--color-text-dim)" opacity="0">
-        <animate attributeName="y" values="12;44;12" dur="4s" repeatCount="indefinite" />
-        <animate attributeName="opacity" values="0;0.04;0" dur="4s" repeatCount="indefinite" />
-      </rect>
     </svg>
   );
 }
@@ -226,8 +221,8 @@ export function EmptyState({
           }}
         />
       </div>
-      <p className="text-xs text-[var(--color-text-muted)] mb-1.5 tracking-wider">{title}</p>
-      <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider max-w-xs leading-relaxed">{description}</p>
+      <p className="text-xs text-[var(--color-text-muted)] mb-1.5">{title}</p>
+      <p className="text-[12px] text-[var(--color-text-dim)] max-w-xs leading-relaxed">{description}</p>
       {action && <div className="mt-5">{action}</div>}
     </div>
   );

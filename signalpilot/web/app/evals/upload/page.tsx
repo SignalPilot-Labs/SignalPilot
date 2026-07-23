@@ -96,17 +96,17 @@ export default function EvalUploadPage() {
         description="send your eval materials to the SignalPilot team"
       />
 
-      <div className="max-w-xl mx-auto mt-8 border border-[var(--color-border)] bg-[var(--color-bg-card)] p-8">
+      <div className="max-w-xl mx-auto mt-8 border border-[var(--color-border)] rounded-[14px] bg-[var(--color-bg-card)] p-8">
         {phase.state === "done" ? (
           <div className="flex flex-col items-center text-center gap-4 py-6">
             <CheckCircle2 className="w-10 h-10 text-[var(--color-success)]" strokeWidth={1.25} />
             <div>
-              <p className="text-[var(--color-text)] text-lg font-light">
+              <p className="text-[var(--color-text)] text-lg font-semibold tracking-[-0.01em]">
                 Uploaded — the team has been notified.
               </p>
               <p className="mt-3 text-sm text-[var(--color-text-muted)]">
                 Reference ID:{" "}
-                <code className="text-[var(--color-text)] tracking-wider">
+                <code className="text-[var(--color-text)] font-mono">
                   {phase.result.reference_id}
                 </code>
               </p>
@@ -116,14 +116,14 @@ export default function EvalUploadPage() {
             </div>
             <button
               onClick={reset}
-              className="mt-2 px-4 py-2 text-sm border border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-colors"
+              className="mt-2 px-4 py-2 rounded-[10px] text-sm border border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-colors duration-150"
             >
               Upload another
             </button>
           </div>
         ) : (
           <>
-            <h2 className="text-[var(--color-text)] font-light tracking-wide mb-5">
+            <h2 className="text-[var(--color-text)] font-semibold tracking-[-0.01em] mb-5">
               Share your eval with the SignalPilot team
             </h2>
 
@@ -140,7 +140,7 @@ export default function EvalUploadPage() {
               role="button"
               tabIndex={0}
               onKeyDown={(e) => e.key === "Enter" && inputRef.current?.click()}
-              className={`border border-dashed px-6 py-8 text-center cursor-pointer transition-colors ${
+              className={`border border-dashed rounded-[14px] px-6 py-8 text-center cursor-pointer transition-colors duration-150 ${
                 dragOver
                   ? "border-[var(--color-success)] bg-[var(--color-bg)]"
                   : "border-[var(--color-border-hover)] hover:border-[var(--color-text-dim)]"
@@ -182,7 +182,7 @@ export default function EvalUploadPage() {
             )}
 
             {/* Notes */}
-            <label className="block mt-5 text-xs uppercase tracking-[0.15em] text-[var(--color-text-muted)]">
+            <label className="block mt-5 text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
               Notes for the team (optional)
             </label>
             <textarea
@@ -191,18 +191,18 @@ export default function EvalUploadPage() {
               disabled={phase.state === "uploading"}
               placeholder='e.g. "Snowflake dialect, see README inside for setup"'
               rows={3}
-              className="mt-2 w-full bg-transparent border border-[var(--color-border)] px-3 py-2 text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] focus:border-[var(--color-border-hover)] focus:outline-none resize-none"
+              className="mt-2 w-full bg-transparent border border-[var(--color-border)] rounded-[10px] px-3 py-2 text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] focus:border-[var(--color-border-hover)] focus:outline-none resize-none"
             />
 
             {/* Upload button / progress */}
             {phase.state === "uploading" ? (
               <div className="mt-5">
-                <div className="h-8 border border-[var(--color-border)] relative overflow-hidden">
+                <div className="h-8 border border-[var(--color-border)] rounded-[10px] relative overflow-hidden">
                   <div
                     className="absolute inset-y-0 left-0 bg-[var(--color-success)] opacity-25 transition-[width] duration-200"
                     style={{ width: `${phase.pct}%` }}
                   />
-                  <div className="absolute inset-0 flex items-center justify-center text-xs tracking-wider text-[var(--color-text)]">
+                  <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--color-text)]">
                     Uploading… {phase.pct}%
                   </div>
                 </div>
@@ -211,7 +211,7 @@ export default function EvalUploadPage() {
               <button
                 onClick={startUpload}
                 disabled={!file}
-                className="mt-5 w-full py-2.5 text-sm tracking-wide border border-[var(--color-border-hover)] text-[var(--color-text)] hover:bg-[var(--color-bg)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="mt-5 w-full py-2.5 rounded-[10px] text-sm border border-[var(--color-border-hover)] text-[var(--color-text)] hover:bg-[var(--color-bg)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 Upload eval
               </button>

@@ -8,7 +8,7 @@ import { KeyRound, CreditCard, Plug, BarChart3, Shield, Lock, Users, GitBranch, 
 import { Tooltip } from "~/components/ui/tooltip";
 import { useAppAuth } from "~/lib/auth-context";
 import { getProjects, getWorkspaceProjects } from "~/lib/api";
-import { useConnectionsHealth } from "~/lib/hooks/use-gateway-data";
+import { useConnectionsHealth, useKnowledgeDocs } from "~/lib/hooks/use-gateway-data";
 import { TierWordmark } from "~/components/branding/tier-wordmark";
 import { TierAccent } from "~/components/branding/tier-accent";
 import { TierSeal } from "~/components/branding/tier-seal";
@@ -153,20 +153,47 @@ function NavIconGitHub({ active }: { active: boolean }) {
 
 type NavIconComponent = React.FC<{ active: boolean }>;
 
-const nav: { href: string; label: string; icon: NavIconComponent; shortcut: string }[] = [
-  { href: "/dashboard", label: "dashboard", icon: NavIconDashboard, shortcut: "1" },
-  { href: "/connections", label: "connections", icon: NavIconDatabase, shortcut: "2" },
-  { href: "/integrations", label: "integrations", icon: NavIconIntegrations, shortcut: "3" },
-  { href: "/schema", label: "schema", icon: NavIconSchema, shortcut: "4" },
-  { href: "/projects", label: "projects", icon: NavIconProject, shortcut: "5" },
-  { href: "/query", label: "query", icon: NavIconQuery, shortcut: "6" },
-  { href: "/audit", label: "audit", icon: NavIconAudit, shortcut: "7" },
-  { href: "/knowledge", label: "library", icon: NavIconKnowledge, shortcut: "8" },
-  { href: "/chats", label: "chats", icon: NavIconChats, shortcut: "C" },
-  { href: "/reports", label: "reports", icon: NavIconReports, shortcut: "9" },
-  { href: "/health", label: "health", icon: NavIconHealth, shortcut: "H" },
-  { href: "/settings", label: "settings", icon: NavIconSettings, shortcut: "0" },
+type NavItem = { href: string; label: string; icon: NavIconComponent; shortcut: string };
+
+/* Grouped IA (see UX.md): trust loop first, then the data plane, then
+   workspace curation. Health merged into Connections — a sick database is a
+   property of a connection, not a place. */
+const navGroups: { label: string | null; items: NavItem[] }[] = [
+  {
+    label: null,
+    items: [{ href: "/dashboard", label: "Dashboard", icon: NavIconDashboard, shortcut: "1" }],
+  },
+  {
+    label: "Activity",
+    items: [
+      { href: "/chats", label: "Chats", icon: NavIconChats, shortcut: "" },
+      { href: "/reports", label: "Reports", icon: NavIconReports, shortcut: "9" },
+      { href: "/audit", label: "Audit", icon: NavIconAudit, shortcut: "7" },
+    ],
+  },
+  {
+    label: "Data",
+    items: [
+      { href: "/connections", label: "Connections", icon: NavIconDatabase, shortcut: "2" },
+      { href: "/schema", label: "Schema", icon: NavIconSchema, shortcut: "4" },
+      { href: "/query", label: "Query", icon: NavIconQuery, shortcut: "6" },
+    ],
+  },
+  {
+    label: "Workspace",
+    items: [
+      { href: "/projects", label: "Projects", icon: NavIconProject, shortcut: "5" },
+      { href: "/knowledge", label: "Library", icon: NavIconKnowledge, shortcut: "8" },
+      { href: "/integrations", label: "Integrations", icon: NavIconIntegrations, shortcut: "3" },
+    ],
+  },
+  {
+    label: null,
+    items: [{ href: "/settings", label: "Settings", icon: NavIconSettings, shortcut: "0" }],
+  },
 ];
+
+const nav: NavItem[] = navGroups.flatMap((g) => g.items);
 
 /** Routes where the sidebar should be hidden (auth + onboarding = locked flow) */
 const HIDDEN_SIDEBAR_PREFIXES = ["/sign-in", "/sign-up", "/onboarding", "/notebook"];
@@ -204,7 +231,7 @@ function NavBadge({ count, color = "var(--color-success)" }: { count: number; co
   if (count <= 0) return null;
   return (
     <span
-      className="flex items-center justify-center min-w-[14px] h-[14px] px-1 text-[10px] tabular-nums tracking-wider"
+      className="flex items-center justify-center min-w-[15px] h-[15px] px-1 rounded-full text-[10px] tabular-nums font-mono"
       style={{ backgroundColor: color, color: "var(--color-bg)" }}
     >
       {count}
@@ -237,7 +264,7 @@ function UserSection() {
     <div className="px-3 py-2 border-t border-[var(--color-border)]">
       <Link
         href="/sign-in"
-        className="flex items-center gap-2 px-3 py-1.5 text-[12px] tracking-wider uppercase text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all"
+        className="flex items-center gap-2 px-3 py-1.5 rounded-[10px] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors duration-150"
       >
         <KeyRound size={12} className="flex-shrink-0" />
         <span>sign in</span>
@@ -263,7 +290,7 @@ function ApiKeysNavLink({ pathname }: { pathname: string }) {
   return (
     <Link
       href="/settings/api-keys"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 text-sm transition-all ${
+      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
         active
           ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
           : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
@@ -286,7 +313,7 @@ function BillingNavLink({ pathname }: { pathname: string }) {
   return (
     <Link
       href="/settings/billing"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 text-sm transition-all ${
+      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
         active
           ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
           : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
@@ -310,7 +337,7 @@ function UsageNavLink({ pathname }: { pathname: string }) {
     <Link
       href="/settings/usage"
       aria-label="view usage analytics"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 text-sm transition-all ${
+      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
         active
           ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
           : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
@@ -329,7 +356,7 @@ function McpConnectNavLink({ pathname }: { pathname: string }) {
   return (
     <Link
       href="/settings/mcp-connect"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 text-sm transition-all ${
+      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
         active
           ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
           : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
@@ -348,7 +375,7 @@ function NotionConnectNavLink({ pathname }: { pathname: string }) {
   return (
     <Link
       href="/settings/notion-connect"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 text-sm transition-all ${
+      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
         active
           ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
           : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
@@ -371,7 +398,7 @@ function ByokNavLink({ pathname }: { pathname: string }) {
   return (
     <Link
       href="/settings/byok"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 text-sm transition-all ${
+      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
         active
           ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
           : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
@@ -394,7 +421,7 @@ function TeamNavLink({ pathname }: { pathname: string }) {
   return (
     <Link
       href="/settings/team"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 text-sm transition-all ${
+      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
         active
           ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
           : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
@@ -417,7 +444,7 @@ function AccountSecurityNavLink({ pathname }: { pathname: string }) {
   return (
     <Link
       href="/settings/account-security"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 text-sm transition-all ${
+      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
         active
           ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
           : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
@@ -436,7 +463,7 @@ function GitHubNavLink({ pathname }: { pathname: string }) {
   return (
     <Link
       href="/settings/github"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 text-sm transition-all ${
+      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
         active
           ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
           : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
@@ -457,6 +484,9 @@ export default function Sidebar() {
   // Connection health from shared SWR cache (auto-refreshes every 15s)
   // Only fetch when authenticated (prevents 401s on login page)
   const { data: healthData } = useConnectionsHealth(isAuthenticated);
+  // Pending agent proposals badge the Library item — "needs me" from anywhere.
+  const { data: pendingDocs } = useKnowledgeDocs(isAuthenticated ? { status: "pending" } : undefined);
+  const pendingCount = pendingDocs?.length ?? 0;
   const connHealth = useMemo(() => {
     const conns = healthData?.connections || [];
     return { total: conns.length, healthy: conns.filter((c) => c.status === "healthy").length };
@@ -477,6 +507,8 @@ export default function Sidebar() {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
         const key = e.key.toLowerCase();
+        // Never hijack clipboard/select-all chords
+        if (["c", "v", "x", "a"].includes(key)) return;
         const item = filteredNav.find((entry) => entry.shortcut.toLowerCase() === key);
         if (item) {
           e.preventDefault();
@@ -513,7 +545,7 @@ export default function Sidebar() {
               {showWordmark ? (
                 <TierWordmark variant="sidebar" />
               ) : (
-                <p className="text-[11px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">
+                <p className="text-[11px] text-[var(--color-text-dim)] tracking-[0.08em] uppercase">
                   governed infra
                 </p>
               )}
@@ -527,7 +559,7 @@ export default function Sidebar() {
       {/* Command palette hint */}
       <div className="px-3 pt-4 pb-2">
         <button
-          className="w-full flex items-center gap-2 px-3 py-1.5 border border-[var(--color-border)] hover:border-[var(--color-border-hover)] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] transition-all tracking-wider"
+          className="w-full flex items-center gap-2 px-3 py-1.5 rounded-[10px] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] bg-[var(--color-bg-card)] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] transition-all"
           onClick={() => {
             window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }));
           }}
@@ -537,37 +569,63 @@ export default function Sidebar() {
             <path d="M8 8L10.5 10.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
           </svg>
           <span className="flex-1 text-left">search</span>
-          <kbd className="px-1 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] font-mono">
+          <kbd className="px-1.5 py-0.5 rounded-[6px] bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] font-mono">
             ctrl+K
           </kbd>
         </button>
       </div>
 
-      {/* Navigation */}
-      <nav className="flex-1 px-3 py-2 space-y-0.5">
-        {filteredNav.map(({ href, label, icon: Icon, shortcut }) => {
-          const active = pathname.startsWith(href);
-          const badge = 0;
+      {/* Navigation — grouped IA */}
+      <nav className="flex-1 overflow-y-auto px-3 py-2">
+        {navGroups.map((group, gi) => {
+          const items = group.items.filter(({ href }) => !(isCloudMode && href === "/settings"));
+          if (items.length === 0) return null;
           return (
-            <Link
-              key={href}
-              href={href}
-              className={`group flex items-center gap-3 px-3 py-2 text-sm transition-all ${
-                active
-                  ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
-                  : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
-              }`}
-            >
-              <Icon active={active} />
-              <span className="flex-1 tracking-wide">{label}</span>
-              {badge > 0 ? (
-                <NavBadge count={badge} />
-              ) : (
-                <span className={`text-[11px] tracking-wider ${active ? "text-[var(--color-text-dim)]" : "text-transparent group-hover:text-[var(--color-text-dim)]"} transition-colors`}>
-                  ^{shortcut}
-                </span>
+            <div key={group.label ?? `g${gi}`} className={gi > 0 ? "mt-4" : undefined}>
+              {group.label && (
+                <div className="px-3 pb-1 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--color-text-dim)]">
+                  {group.label}
+                </div>
               )}
-            </Link>
+              <div className="space-y-0.5">
+                {items.map(({ href, label, icon: Icon, shortcut }) => {
+                  const active = pathname.startsWith(href);
+                  const showHealthDot =
+                    href === "/connections" && connHealth.total > 0 && connHealth.healthy < connHealth.total;
+                  return (
+                    <Link
+                      key={href}
+                      href={href}
+                      className={`group flex items-center gap-3 px-3 py-[7px] rounded-[10px] text-[13px] transition-colors duration-150 ${
+                        active
+                          ? "text-[var(--color-text)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)]"
+                          : "border border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
+                      }`}
+                    >
+                      <Icon active={active} />
+                      <span className="flex-1 font-medium">{label}</span>
+                      {showHealthDot && (
+                        <span
+                          className="w-1.5 h-1.5 rounded-full bg-[var(--color-warning)]"
+                          title={`${connHealth.healthy}/${connHealth.total} connections healthy`}
+                        />
+                      )}
+                      {href === "/knowledge" && pendingCount > 0 && (
+                        <NavBadge count={pendingCount} color="var(--color-warning)" />
+                      )}
+                      {active && !showHealthDot && (
+                        <span className="w-1 h-1 rounded-full bg-[var(--color-success)]" />
+                      )}
+                      {!active && !showHealthDot && shortcut && !(href === "/knowledge" && pendingCount > 0) && (
+                        <span className="text-[10.5px] font-mono text-transparent group-hover:text-[var(--color-text-dim)] transition-colors">
+                          ^{shortcut}
+                        </span>
+                      )}
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
           );
         })}
         {/* API Keys sub-link — cloud mode only */}
@@ -596,10 +654,10 @@ export default function Sidebar() {
         <Tooltip content="all governance guards are active" position="right">
           <div className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] cursor-default">
             <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full bg-[var(--color-success)] opacity-30" />
-              <span className="relative inline-flex h-2 w-2 bg-[var(--color-success)]" />
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--color-success)] opacity-30" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--color-success)]" />
             </span>
-            <span className="tracking-[0.15em] uppercase leading-none">governance active</span>
+            <span className="tracking-[0.08em] uppercase leading-none">governance active</span>
           </div>
         </Tooltip>
         {connHealth.total > 0 && (
@@ -609,11 +667,11 @@ export default function Sidebar() {
                 <ellipse cx="5" cy="3" rx="3.5" ry="1.5" stroke="currentColor" strokeWidth="0.75" fill="none" />
                 <path d="M1.5 3V7C1.5 8 3.1 9 5 9C6.9 9 8.5 8 8.5 7V3" stroke="currentColor" strokeWidth="0.75" />
               </svg>
-              <span className="tracking-[0.15em] uppercase leading-none">
+              <span className="tracking-[0.08em] uppercase leading-none">
                 db {connHealth.healthy}/{connHealth.total}
               </span>
               {connHealth.healthy < connHealth.total && (
-                <span className="w-1.5 h-1.5 bg-[var(--color-warning)]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-warning)]" />
               )}
             </Link>
           </Tooltip>
@@ -642,7 +700,7 @@ export default function Sidebar() {
             </div>
           </Tooltip>
           <Tooltip content="bring your own sandbox" position="left">
-            <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider px-1.5 py-0.5 border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-colors cursor-default">
+            <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider px-1.5 py-0.5 rounded-[6px] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-colors cursor-default">
               byos
             </span>
           </Tooltip>

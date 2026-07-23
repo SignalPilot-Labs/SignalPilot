@@ -297,11 +297,11 @@ export default function SandboxDetailPage() {
       <div className="p-8 animate-fade-in">
         <button
           onClick={() => router.push("/sandboxes")}
-          className="flex items-center gap-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] mb-4 tracking-wider"
+          className="flex items-center gap-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] mb-4"
         >
           <ArrowLeft className="w-3.5 h-3.5" /> back
         </button>
-        <div className="p-4 border border-[var(--color-error)]/30 bg-[var(--color-error)]/5">
+        <div className="p-4 border border-[var(--color-error)]/30 bg-[var(--color-error)]/5 rounded-[14px]">
           <p className="text-xs text-[var(--color-error)]">{error}</p>
         </div>
       </div>
@@ -335,10 +335,10 @@ export default function SandboxDetailPage() {
               { label: "sandboxes", href: "/sandboxes" },
               { label: sandbox.label || sandbox.id.slice(0, 8) },
             ]} />
-            <h1 className="text-xs font-medium tracking-wide">
+            <h1 className="text-xs font-semibold tracking-[-0.01em]">
               {sandbox.label || sandbox.id.slice(0, 8)}
             </h1>
-            <div className="flex items-center gap-3 text-[12px] text-[var(--color-text-dim)] tracking-wider">
+            <div className="flex items-center gap-3 text-[12px] text-[var(--color-text-dim)]">
               <span className="flex items-center gap-1.5">
                 <StatusDot
                   status={sandbox.status === "running" ? "healthy" : sandbox.status === "error" ? "error" : "idle"}
@@ -384,13 +384,13 @@ export default function SandboxDetailPage() {
 
           <div className="h-3 w-px bg-[var(--color-border)]" />
 
-          <span className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] tracking-wider">
+          <span className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)]">
             <Shield className="w-3 h-3 text-[var(--color-success)]" strokeWidth={1.5} />
             {sandbox.row_limit.toLocaleString()}
           </span>
 
           {sandbox.uptime_sec != null && sandbox.uptime_sec > 0 && (
-            <span className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] tabular-nums tracking-wider">
+            <span className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] tabular-nums font-mono">
               <Clock className="w-3 h-3" strokeWidth={1.5} />
               {sandbox.uptime_sec < 60 ? `${sandbox.uptime_sec.toFixed(0)}s` : `${(sandbox.uptime_sec / 60).toFixed(0)}m`}
             </span>
@@ -420,7 +420,7 @@ export default function SandboxDetailPage() {
           </button>
           <button
             onClick={handleKill}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-error)] hover:bg-[var(--color-error)]/5 transition-colors tracking-wider uppercase"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-[10px] text-[12px] text-[var(--color-error)] hover:bg-[var(--color-error)]/5 transition-colors duration-150"
           >
             <Trash2 className="w-3 h-3" /> kill
           </button>
@@ -428,9 +428,9 @@ export default function SandboxDetailPage() {
       </div>
 
       {/* Terminal status bar */}
-      <div className="flex items-center gap-4 px-4 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-bg)] text-[11px] text-[var(--color-text-dim)] tracking-wider flex-shrink-0">
+      <div className="flex items-center gap-4 px-4 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-bg)] text-[11px] text-[var(--color-text-dim)] flex-shrink-0">
         <span className="flex items-center gap-1.5">
-          <span className={`w-1.5 h-1.5 ${sandbox.status === "running" ? "bg-[var(--color-success)]" : "bg-[var(--color-text-dim)]"}`} />
+          <span className={`w-1.5 h-1.5 rounded-full ${sandbox.status === "running" ? "bg-[var(--color-success)]" : "bg-[var(--color-text-dim)]"}`} />
           {sandbox.status}
         </span>
         <span className="tabular-nums">{inputCount} cells</span>
@@ -451,7 +451,7 @@ export default function SandboxDetailPage() {
             {entry.type === "input" && (
               <div className="w-full">
                 <div className="flex items-center gap-2 text-[var(--color-text-muted)] mb-0.5">
-                  <span className="text-[12px] text-[var(--color-success)] tracking-wider">
+                  <span className="text-[12px] text-[var(--color-success)]">
                     In [{history.filter((h, j) => j <= i && h.type === "input").length}]:
                   </span>
                 </div>
@@ -461,11 +461,11 @@ export default function SandboxDetailPage() {
             {entry.type === "output" && (
               <div className="w-full">
                 <div className="flex items-center gap-2 mb-0.5">
-                  <span className="text-[12px] text-blue-400 tracking-wider">
+                  <span className="text-[12px] text-blue-400">
                     Out [{history.filter((h, j) => j <= i && h.type === "output").length}]:
                   </span>
                   {entry.execution_ms != null && (
-                    <span className="text-[12px] text-[var(--color-text-dim)] flex items-center gap-1 tabular-nums tracking-wider">
+                    <span className="text-[12px] text-[var(--color-text-dim)] flex items-center gap-1 tabular-nums">
                       <Clock className="w-2.5 h-2.5" strokeWidth={1.5} />
                       {entry.execution_ms.toFixed(0)}ms
                     </span>
@@ -480,9 +480,9 @@ export default function SandboxDetailPage() {
               <div className="w-full">
                 <div className="flex items-center gap-2 mb-1">
                   <ImageIcon className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-                  <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">image output</span>
+                  <span className="text-[12px] text-[var(--color-text-dim)] ">image output</span>
                 </div>
-                <div className="bg-white p-2 inline-block border border-[var(--color-border)]">
+                <div className="bg-white p-2 inline-block border border-[var(--color-border)] rounded-[10px]">
                   <img src={entry.imageData} alt="Sandbox output" className="max-w-full max-h-96" />
                 </div>
               </div>
@@ -491,11 +491,11 @@ export default function SandboxDetailPage() {
               <div className="w-full">
                 <div className="flex items-center gap-2 mb-1">
                   <FileText className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-                  <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">dataframe output</span>
+                  <span className="text-[12px] text-[var(--color-text-dim)] ">dataframe output</span>
                 </div>
-                <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] overflow-x-auto max-h-96">
+                <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-[10px] overflow-x-auto max-h-96">
                   <div
-                    className="sandbox-html-output text-[13px] [&_table]:w-full [&_table]:text-left [&_th]:px-3 [&_th]:py-2 [&_th]:text-[11px] [&_th]:text-[var(--color-text-dim)] [&_th]:uppercase [&_th]:tracking-widest [&_th]:border-b [&_th]:border-[var(--color-border)] [&_td]:px-3 [&_td]:py-1.5 [&_td]:text-[var(--color-text-muted)] [&_td]:border-b [&_td]:border-[var(--color-border)]/20 [&_tr:hover]:bg-[var(--color-bg-hover)]"
+                    className="sandbox-html-output text-[13px] [&_table]:w-full [&_table]:text-left [&_th]:px-3 [&_th]:py-2 [&_th]:text-[11px] [&_th]:text-[var(--color-text-dim)] [&_th]:border-b [&_th]:border-[var(--color-border)] [&_td]:px-3 [&_td]:py-1.5 [&_td]:text-[var(--color-text-muted)] [&_td]:border-b [&_td]:border-[var(--color-border)]/20 [&_tr:hover]:bg-[var(--color-bg-hover)]"
                     dangerouslySetInnerHTML={{ __html: entry.htmlContent }}
                   />
                 </div>
@@ -503,20 +503,20 @@ export default function SandboxDetailPage() {
             )}
             {entry.type === "error" && (
               <div className="w-full">
-                <pre className="whitespace-pre-wrap text-[var(--color-error)] bg-[var(--color-error)]/5 p-3 border border-[var(--color-error)]/20 text-[13px] leading-relaxed">
+                <pre className="whitespace-pre-wrap text-[var(--color-error)] bg-[var(--color-error)]/5 p-3 border border-[var(--color-error)]/20 rounded-[10px] text-[13px] leading-relaxed">
                   {entry.text}
                 </pre>
               </div>
             )}
             {entry.type === "system" && (
-              <div className="w-full text-[12px] text-[var(--color-text-dim)] py-1 tracking-wider border-l-2 border-[var(--color-border)] pl-3">
+              <div className="w-full text-[12px] text-[var(--color-text-dim)] py-1 border-l-2 border-[var(--color-border)] pl-3">
                 {entry.text}
               </div>
             )}
           </div>
         ))}
         {running && (
-          <div className="flex items-center gap-2 text-[var(--color-text-dim)] text-[12px] py-2 tracking-wider">
+          <div className="flex items-center gap-2 text-[var(--color-text-dim)] text-[12px] py-2">
             <Loader2 className="w-3 h-3 animate-spin" />
             <span>executing in isolated gvisor sandbox...</span>
           </div>
@@ -529,7 +529,7 @@ export default function SandboxDetailPage() {
         <div className="flex items-center gap-2 px-4 pt-3 pb-1">
           <button
             onClick={() => setShowSnippets(!showSnippets)}
-            className="flex items-center gap-1 text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] transition-colors tracking-wider"
+            className="flex items-center gap-1 text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)] transition-colors duration-150"
           >
             {showSnippets ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
             snippets
@@ -539,13 +539,13 @@ export default function SandboxDetailPage() {
               <button
                 key={idx}
                 onClick={() => setCode(snippet.code)}
-                className="px-2 py-0.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider"
+                className="px-2 py-0.5 rounded-[6px] text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-colors duration-150"
               >
                 {snippet.label}
               </button>
             ))}
           <div className="flex-1" />
-          <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider tabular-nums">
+          <span className="text-[11px] text-[var(--color-text-dim)] font-mono tabular-nums">
             [{inputCount}] cells executed
           </span>
         </div>
@@ -553,7 +553,7 @@ export default function SandboxDetailPage() {
         <div className="flex gap-3 p-4 pt-2">
           <div className="flex-1 relative">
             {/* Input prompt indicator */}
-            <div className="absolute left-3 top-3 text-[12px] text-[var(--color-success)] tracking-wider pointer-events-none select-none">
+            <div className="absolute left-3 top-3 text-[12px] text-[var(--color-success)] pointer-events-none select-none">
               In [{inputCount + 1}]:
             </div>
             <textarea
@@ -564,7 +564,7 @@ export default function SandboxDetailPage() {
               placeholder="python3"
               rows={expanded ? 12 : 4}
               spellCheck={false}
-              className="w-full pl-20 pr-4 py-3 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs font-mono focus:outline-none focus:border-[var(--color-text-dim)] resize-none placeholder:text-[var(--color-text-dim)] leading-relaxed tracking-wide"
+              className="w-full pl-20 pr-4 py-3 rounded-[10px] bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs font-mono focus:outline-none focus:border-[var(--color-text-dim)] resize-none placeholder:text-[var(--color-text-dim)] leading-relaxed"
               autoFocus
             />
           </div>
@@ -572,22 +572,22 @@ export default function SandboxDetailPage() {
             <button
               onClick={handleExecute}
               disabled={running || !code.trim()}
-              className="flex items-center gap-2 px-5 py-3 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
+              className="flex items-center gap-2 px-5 py-3 rounded-[10px] bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium transition-opacity duration-150 hover:opacity-90 disabled:opacity-30"
             >
               {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
               run
-              <kbd className="ml-1 px-1 py-0.5 bg-[var(--color-bg)]/20 text-[7px] opacity-50 border border-[var(--color-bg)]/30">
+              <kbd className="ml-1 px-1 py-0.5 rounded-[6px] bg-[var(--color-bg)]/20 text-[7px] opacity-50 border border-[var(--color-bg)]/30">
                 ⌃⏎
               </kbd>
             </button>
           </div>
         </div>
         <div className="flex items-center justify-between px-4 pb-3">
-          <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
+          <p className="text-[11px] text-[var(--color-text-dim)]">
             isolated gvisor sandbox · ctrl+enter to execute · tab to indent
           </p>
           {code.length > 0 && (
-            <span className="text-[11px] text-[var(--color-text-dim)] tabular-nums tracking-wider">
+            <span className="text-[11px] text-[var(--color-text-dim)] tabular-nums font-mono">
               {code.length} chars / {code.split("\n").length} lines
             </span>
           )}

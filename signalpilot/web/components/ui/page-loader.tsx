@@ -9,7 +9,7 @@ export function PageLoader({ label }: { label?: string }) {
       <div className="flex flex-col items-center gap-3">
         <Loader2 className="w-5 h-5 animate-spin text-[var(--color-text-dim)]" strokeWidth={1.5} />
         {label && (
-          <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider uppercase">{label}</p>
+          <p className="text-[11px] text-[var(--color-text-dim)] tracking-[0.08em] uppercase">{label}</p>
         )}
       </div>
     </div>
@@ -26,10 +26,10 @@ export function SkeletonBar({ width = "100%", height = 12 }: { width?: string | 
   );
 }
 
-/** Skeleton card matching the brutalist card style. */
+/** Skeleton card matching the card style. */
 export function SkeletonCard({ lines = 3 }: { lines?: number }) {
   return (
-    <div className="border border-[var(--color-border)] p-5 space-y-3">
+    <div className="rounded-[14px] border border-[var(--color-border)] p-5 space-y-3">
       <SkeletonBar width="40%" height={14} />
       {Array.from({ length: lines }).map((_, i) => (
         <SkeletonBar key={i} width={`${70 + Math.random() * 30}%`} height={10} />

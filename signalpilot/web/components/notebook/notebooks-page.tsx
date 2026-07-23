@@ -178,7 +178,7 @@ function IDEHeader({
     <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg)]">
       <div className="flex items-center gap-3">
         <Code className="w-4 h-4 text-[var(--color-text)]" />
-        <span className="text-xs font-bold uppercase tracking-wider text-[var(--color-text)]">
+        <span className="text-xs font-bold uppercase text-[var(--color-text)]">
           SignalPilot notebook
         </span>
         {children}
@@ -955,7 +955,7 @@ export default function NotebooksPage() {
         </IDEHeader>
         <div className="flex-1 flex flex-col items-center justify-center gap-4">
           <Loader2 className="w-8 h-8 animate-spin text-[var(--color-text-dim)]" />
-          <span className="text-xs text-[var(--color-text-dim)] tracking-wider uppercase">
+          <span className="text-xs text-[var(--color-text-dim)] uppercase">
             {launchStatus}
           </span>
         </div>
@@ -981,7 +981,7 @@ export default function NotebooksPage() {
             <>
               <button
                 onClick={handleShare}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors duration-150 uppercase"
               >
                 {copied ? <Check className="w-3 h-3" /> : <Share2 className="w-3 h-3" />}
                 {copied ? "copied" : "share"}
@@ -991,14 +991,14 @@ export default function NotebooksPage() {
                   href={notebookPopoutHref(effectiveNotebookConfig)}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase"
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors duration-150 uppercase"
                 >
                   <ExternalLink className="w-3 h-3" /> external
                 </a>
               )}
               <button
                 onClick={stop}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-error)] hover:text-[var(--color-error)] transition-all tracking-wider uppercase"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-error)] hover:text-[var(--color-error)] transition-colors duration-150 uppercase"
               >
                 <Square className="w-3 h-3" /> stop
               </button>
@@ -1034,28 +1034,28 @@ export default function NotebooksPage() {
       <div className="max-w-6xl mx-auto mt-16">
         <div className="flex items-center gap-3 mb-6">
           <Code className="w-6 h-6 text-[var(--color-text)]" />
-          <h1 className="text-lg font-bold uppercase tracking-wider text-[var(--color-text)]">
+          <h1 className="text-lg font-bold uppercase text-[var(--color-text)]">
             SignalPilot IDE
           </h1>
         </div>
         <div className="flex flex-wrap items-center gap-3 mb-8">
           <button
             onClick={() => launch(undefined, "notebooks")}
-            className="flex items-center gap-3 px-5 py-3 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90"
+            className="flex items-center gap-3 px-5 py-3 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium rounded-[10px] transition-colors duration-150 hover:opacity-90"
           >
             <Code className="w-4 h-4" />
             <span>open notebook runtime</span>
           </button>
           <a
             href="/settings/github"
-            className="flex items-center gap-3 px-5 py-3 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase"
+            className="flex items-center gap-3 px-5 py-3 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors duration-150 uppercase"
           >
             <Github className="w-4 h-4" />
             <span>connect github</span>
           </a>
           <a
             href="/integrations"
-            className="flex items-center gap-3 px-5 py-3 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase"
+            className="flex items-center gap-3 px-5 py-3 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors duration-150 uppercase"
           >
             <NotionIcon className="w-4 h-4" />
             <span>connect notion</span>
@@ -1082,7 +1082,7 @@ export default function NotebooksPage() {
         </div>
 
         {overview.loading ? (
-          <div className="border border-[var(--color-border)] px-5 py-10 flex items-center justify-center gap-3 text-xs text-[var(--color-text-dim)] uppercase tracking-wider">
+          <div className="border border-[var(--color-border)] px-5 py-10 flex items-center justify-center gap-3 text-xs text-[var(--color-text-dim)] uppercase">
             <Loader2 className="w-4 h-4 animate-spin" />
             checking integrations...
           </div>
@@ -1121,7 +1121,7 @@ export default function NotebooksPage() {
             <p>Connect Notion to generate notebook-backed requests from Notion comments.</p>
             <a
               href="/integrations"
-              className="inline-flex items-center gap-2 mt-4 px-4 py-2 text-[12px] text-[var(--color-bg)] bg-[var(--color-text)] hover:opacity-90 transition-all tracking-wider uppercase"
+              className="inline-flex items-center gap-2 mt-4 px-4 py-2 text-[12px] text-[var(--color-bg)] bg-[var(--color-text)] hover:opacity-90 transition-colors duration-150 uppercase"
             >
               <NotionIcon className="w-3.5 h-3.5" />
               connect notion
@@ -1144,7 +1144,7 @@ function NotionConversationList({
 }) {
   if (loading && conversations.length === 0) {
     return (
-      <div className="border border-[var(--color-border)] px-5 py-10 flex items-center justify-center gap-3 text-xs text-[var(--color-text-dim)] uppercase tracking-wider">
+      <div className="border border-[var(--color-border)] px-5 py-10 flex items-center justify-center gap-3 text-xs text-[var(--color-text-dim)] uppercase">
         <Loader2 className="w-4 h-4 animate-spin" />
         loading notion requests...
       </div>
@@ -1192,7 +1192,7 @@ function NotionConversationList({
               </div>
             </div>
             <div className="flex items-center gap-3 shrink-0">
-              <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-dim)] border border-[var(--color-border)] px-2 py-1">
+              <span className="text-[10px] uppercase text-[var(--color-text-dim)] border border-[var(--color-border)] px-2 py-1">
                 {status}
               </span>
               <span className="text-[11px] text-[var(--color-text-dim)]">

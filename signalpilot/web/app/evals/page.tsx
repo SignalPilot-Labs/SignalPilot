@@ -133,7 +133,7 @@ function ConfigForm({ onSaved }: { onSaved: () => void }) {
   }
 
   const inputCls =
-    "w-full bg-transparent border border-[var(--color-border)] px-3 py-2 text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] focus:border-[var(--color-border-hover)] focus:outline-none";
+    "w-full bg-transparent border border-[var(--color-border)] rounded-[10px] px-3 py-2 text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] focus:border-[var(--color-border-hover)] focus:outline-none";
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 pt-4 border-t border-[var(--color-border)]">
@@ -156,7 +156,7 @@ function ConfigForm({ onSaved }: { onSaved: () => void }) {
         <textarea className={`${inputCls} resize-none`} rows={2} value={form.prompt_preamble} onChange={(e) => setForm({ ...form, prompt_preamble: e.target.value })} placeholder='e.g. "Use the SignalPilot MCP tools with connection akasa_ro_conn."' />
       </div>
       <div>
-        <button onClick={save} disabled={savingCfg} className="inline-flex items-center gap-2 px-4 py-2 text-sm border border-[var(--color-border-hover)] text-[var(--color-text)] hover:bg-[var(--color-bg)] disabled:opacity-40 transition-colors">
+        <button onClick={save} disabled={savingCfg} className="inline-flex items-center gap-2 px-4 py-2 rounded-[10px] text-sm border border-[var(--color-border-hover)] text-[var(--color-text)] hover:bg-[var(--color-bg)] disabled:opacity-40 transition-colors">
           {savingCfg ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" strokeWidth={1.5} />}
           Save config
         </button>
@@ -181,7 +181,7 @@ function Hero({ questions, setName_, description, repoUrl, model, runnerEnabled,
         <div>
           <div className="flex items-center gap-3">
             <FlaskConical className="w-5 h-5 text-[var(--color-success)]" strokeWidth={1.25} />
-            <h2 className="text-2xl font-light tracking-wide text-[var(--color-text)]">{setName_ || setName(repoUrl)}</h2>
+            <h2 className="text-2xl font-semibold tracking-[-0.01em] text-[var(--color-text)]">{setName_ || setName(repoUrl)}</h2>
           </div>
           <p className="mt-1.5 text-xs text-[var(--color-text-muted)] font-mono">{repoUrl || "configure an eval repo to get started"}</p>
           {description && <p className="mt-1.5 text-sm text-[var(--color-text-muted)]">{description}</p>}
@@ -199,7 +199,7 @@ function Hero({ questions, setName_, description, repoUrl, model, runnerEnabled,
             <p className="mt-2 text-xs text-[#e5484d]">runner disabled — SP_EVAL_RUNNER_IMAGE unset on gateway</p>
           )}
         </div>
-        <button onClick={() => setConfigOpen(!configOpen)} className="inline-flex items-center gap-2 px-3 py-1.5 text-xs uppercase tracking-wider border border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-colors">
+        <button onClick={() => setConfigOpen(!configOpen)} className="inline-flex items-center gap-2 px-3 py-1.5 rounded-[10px] text-xs border border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-colors">
           <Settings2 className="w-3.5 h-3.5" strokeWidth={1.5} />
           {configOpen ? "Close" : "Configure"}
         </button>
@@ -277,12 +277,12 @@ function QuestionDetail({ q, onClose }: { q: EvalQuestion; onClose: () => void }
           )}
 
           <div>
-            <h3 className="text-xs uppercase tracking-[0.14em] text-[var(--color-text-dim)] mb-2">Prompt sent to the agent</h3>
-            <pre className="ev-raw border border-[var(--color-border)] bg-[var(--color-bg)] p-3">{q.prompt}</pre>
+            <h3 className="text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-dim)] mb-2">Prompt sent to the agent</h3>
+            <pre className="ev-raw border border-[var(--color-border)] rounded-[10px] bg-[var(--color-bg)] p-3">{q.prompt}</pre>
           </div>
 
           <div>
-            <h3 className="text-xs uppercase tracking-[0.14em] text-[var(--color-text-dim)] mb-2">Gold checks</h3>
+            <h3 className="text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-dim)] mb-2">Gold checks</h3>
             <table className="w-full text-left border-collapse text-sm">
               <thead>
                 <tr className="text-[10px] uppercase tracking-wider text-[var(--color-text-dim)]">
@@ -328,7 +328,7 @@ function SetupPhaseRow({ phase, runId }: { phase: import("~/lib/api").EvalSetupP
     }
   }
   return (
-    <div className="border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5">
+    <div className="border border-[var(--color-border)] rounded-[10px] bg-[var(--color-bg)] px-3 py-1.5">
       <div className="flex items-center gap-3 text-xs">
         {phase.status === "running" ? (
           <Loader2 className="w-3 h-3 animate-spin" style={{ color }} />
@@ -371,14 +371,14 @@ function RunQuestionRow({ q, runId }: { q: EvalRunQuestion; runId: string }) {
           )}
         </td>
         <td className="py-2.5 pr-4"><CheckChips results={q.check_results ?? []} /></td>
-        <td className="py-2.5 text-xs text-[var(--color-text-dim)] whitespace-nowrap">{q.duration_s ? `${q.duration_s}s` : ""}</td>
+        <td className="py-2.5 text-xs text-[var(--color-text-dim)] font-mono tabular-nums whitespace-nowrap">{q.duration_s ? `${q.duration_s}s` : ""}</td>
       </tr>
       {open && (
         <tr className="border-t border-[var(--color-border)]">
           <td />
           <td colSpan={4} className="py-3 pr-4">
             <div className="text-[10px] uppercase tracking-[0.14em] text-[var(--color-text-dim)] mb-1.5">final answer</div>
-            <div className="border border-[var(--color-border)] bg-[var(--color-bg)] px-4 py-3 max-h-72 overflow-y-auto">
+            <div className="border border-[var(--color-border)] rounded-[10px] bg-[var(--color-bg)] px-4 py-3 max-h-72 overflow-y-auto">
               <Md>{q.answer || "*(no answer captured yet)*"}</Md>
             </div>
             <button
@@ -415,7 +415,7 @@ function RunDetail({ runId }: { runId: string }) {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <div className="flex items-center gap-3">
-            <code className="text-sm text-[var(--color-text)] tracking-wider">{run.id}</code>
+            <code className="text-sm text-[var(--color-text)]">{run.id}</code>
             <StatusDot status={run.status} />
           </div>
           <p className="mt-1 text-xs text-[var(--color-text-muted)]">
@@ -514,7 +514,7 @@ function EvalsPageInner() {
         {selectedRun && <RunDetail runId={selectedRun} />}
 
         <div className="ev-card p-5">
-          <h2 className="text-sm uppercase tracking-[0.15em] text-[var(--color-text-muted)] mb-3">Runs</h2>
+          <h2 className="text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-muted)] mb-3">Runs</h2>
           {runs.length === 0 ? (
             <p className="text-sm text-[var(--color-text-dim)] flex items-center gap-2">
               <FlaskConical className="w-4 h-4" strokeWidth={1.5} />
@@ -528,7 +528,7 @@ function EvalsPageInner() {
                   <button
                     key={r.id}
                     onClick={() => setSelectedRun(r.id)}
-                    className={`w-full flex items-center justify-between py-2.5 px-2 text-left hover:bg-[var(--color-bg)] transition-colors ${selectedRun === r.id ? "bg-[var(--color-bg)]" : ""}`}
+                    className={`w-full flex items-center justify-between py-2.5 px-2 rounded-[10px] text-left hover:bg-[var(--color-bg)] transition-colors duration-150 ${selectedRun === r.id ? "bg-[var(--color-bg)]" : ""}`}
                   >
                     <div className="min-w-0">
                       <code className="text-sm text-[var(--color-text)]">{r.id}</code>

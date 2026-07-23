@@ -174,11 +174,11 @@ export default function GitHubConnectionsPage() {
       </TerminalBar>
 
       {githubErrorMessage && (
-        <div className="mb-6 border border-[var(--color-error)] bg-[var(--color-error)]/10 px-5 py-4 flex items-start justify-between gap-4">
+        <div className="mb-6 border border-[var(--color-error)] bg-[var(--color-error)]/10 rounded-[14px] px-5 py-4 flex items-start justify-between gap-4">
           <div className="flex items-start gap-3">
             <AlertTriangle className="w-4 h-4 mt-0.5 text-[var(--color-error)]" />
             <div>
-              <p className="text-xs font-bold text-[var(--color-text)] tracking-wider uppercase">
+              <p className="text-xs font-bold text-[var(--color-text)]">
                 GitHub connection failed
               </p>
               <p className="mt-1 text-xs text-[var(--color-text-dim)]">
@@ -191,7 +191,7 @@ export default function GitHubConnectionsPage() {
               type="button"
               onClick={handleConnectGitHub}
               disabled={connecting}
-              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text)] bg-[var(--color-bg-input)] border border-[var(--color-border)] hover:border-[var(--color-text-dim)] transition-all tracking-wider uppercase disabled:opacity-50"
+              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text)] bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-text-dim)] transition-colors duration-150 disabled:opacity-50"
             >
               {connecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plug className="w-3 h-3" />}
               retry
@@ -207,16 +207,16 @@ export default function GitHubConnectionsPage() {
       ) : (
         <>
           {/* Connected Accounts */}
-          <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] mb-6">
+          <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] mb-6">
             <div className="px-5 py-3 border-b border-[var(--color-border)] flex items-center justify-between">
-              <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+              <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
                 connected accounts
               </span>
               <button
                 type="button"
                 onClick={handleConnectGitHub}
                 disabled={connecting}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text)] bg-[var(--color-bg-input)] border border-[var(--color-border)] hover:border-[var(--color-text-dim)] transition-all tracking-wider uppercase disabled:opacity-50"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text)] bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-text-dim)] transition-colors duration-150 disabled:opacity-50"
               >
                 {connecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plug className="w-3 h-3" />}
                 connect github
@@ -240,13 +240,13 @@ export default function GitHubConnectionsPage() {
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => openRepoPicker(inst.id)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase"
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors duration-150"
                       >
                         <LinkIcon className="w-3 h-3" /> link repo
                       </button>
                       <button
                         onClick={() => handleDisconnect(inst.id)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-error)] hover:text-[var(--color-error)] transition-all tracking-wider uppercase"
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-error)] hover:text-[var(--color-error)] transition-colors duration-150"
                       >
                         <Unplug className="w-3 h-3" /> disconnect
                       </button>
@@ -259,25 +259,25 @@ export default function GitHubConnectionsPage() {
 
           {/* Repo Picker */}
           {pickerInstallId && (
-            <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] mb-6 animate-scale-in">
+            <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] mb-6 animate-scale-in">
               <div className="px-5 py-3 border-b border-[var(--color-border)] flex items-center justify-between">
-                <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+                <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
                   select repo & project
                 </span>
                 <button
                   onClick={() => { setPickerInstallId(null); setPickerRepos([]); }}
-                  className="text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] tracking-wider"
+                  className="text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors duration-150"
                 >
                   cancel
                 </button>
               </div>
               <div className="p-5">
                 <div className="mb-4">
-                  <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">project</label>
+                  <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">project</label>
                   <select
                     value={linkingProjectId}
                     onChange={(e) => setLinkingProjectId(e.target.value)}
-                    className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none"
+                    className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] text-xs focus:outline-none"
                   >
                     <option value="">select a project...</option>
                     {unlinkableProjects.map((p) => (
@@ -290,7 +290,7 @@ export default function GitHubConnectionsPage() {
                     <Loader2 className="w-3 h-3 animate-spin" /> loading repos...
                   </div>
                 ) : (
-                  <div className="max-h-64 overflow-y-auto divide-y divide-[var(--color-border)] border border-[var(--color-border)]">
+                  <div className="max-h-64 overflow-y-auto divide-y divide-[var(--color-border)] border border-[var(--color-border)] rounded-[10px]">
                     {pickerRepos.map((repo) => (
                       <div key={repo.id} className="flex items-center justify-between px-3 py-2 hover:bg-[var(--color-bg-hover)]">
                         <div>
@@ -301,7 +301,7 @@ export default function GitHubConnectionsPage() {
                         <button
                           onClick={() => handleLinkRepo(repo)}
                           disabled={!linkingProjectId}
-                          className="px-2 py-1 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase disabled:opacity-30"
+                          className="px-2 py-1 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] rounded-[6px] hover:border-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors duration-150 disabled:opacity-30"
                         >
                           link
                         </button>
@@ -315,9 +315,9 @@ export default function GitHubConnectionsPage() {
 
           {/* Linked Repos */}
           {repoLinks.length > 0 && (
-            <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+            <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px]">
               <div className="px-5 py-3 border-b border-[var(--color-border)]">
-                <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+                <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
                   linked repos
                 </span>
               </div>
@@ -339,7 +339,7 @@ export default function GitHubConnectionsPage() {
                       </div>
                       <button
                         onClick={() => handleUnlink(link.id)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-error)] hover:text-[var(--color-error)] transition-all tracking-wider uppercase"
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-error)] hover:text-[var(--color-error)] transition-colors duration-150"
                       >
                         <Unlink className="w-3 h-3" /> unlink
                       </button>

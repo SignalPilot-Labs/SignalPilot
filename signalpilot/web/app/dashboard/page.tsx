@@ -62,21 +62,21 @@ function MetricCard({
   actionLabel?: string;
 }) {
   return (
-    <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top group relative overflow-hidden">
+    <div className="rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 hover:border-[var(--color-border-hover)] transition-colors duration-150 group relative overflow-hidden">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <Icon className={`w-4 h-4 ${accentColor || "text-[var(--color-text-dim)]"} transition-transform group-hover:scale-110`} strokeWidth={1.5} />
-          <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">{label}</span>
+          <span className="text-[11px] text-[var(--color-text-muted)] uppercase tracking-[0.08em]">{label}</span>
         </div>
         {actionHref && (
-          <Link href={actionHref} className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider">
+          <Link href={actionHref} className="flex items-center gap-1 px-1.5 py-0.5 rounded-[6px] text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-colors duration-150">
             <Plus className="w-2.5 h-2.5" />{actionLabel || "add"}
           </Link>
         )}
       </div>
-      <p className="text-2xl font-light metric-value text-[var(--color-text)] animate-count-up">{value}</p>
+      <p className="text-2xl font-mono tabular-nums metric-value text-[var(--color-text)] animate-count-up">{value}</p>
       {subtext && (
-        <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider">{subtext}</p>
+        <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5">{subtext}</p>
       )}
       {/* Background sparkline on hover */}
       {sparkValues && sparkValues.length >= 3 && (
@@ -92,13 +92,13 @@ function MetricCard({
 function StatusBadge({ ok }: { ok: boolean | null }) {
   if (ok === null) return <Loader2 className="w-3 h-3 animate-spin text-[var(--color-text-dim)]" />;
   return ok ? (
-    <span className="flex items-center gap-1.5 text-[12px] text-[var(--color-success)] tracking-wider">
-      <span className="w-1.5 h-1.5 bg-[var(--color-success)] pulse-dot" />
+    <span className="flex items-center gap-1.5 text-[12px] text-[var(--color-success)]">
+      <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] pulse-dot" />
       healthy
     </span>
   ) : (
-    <span className="flex items-center gap-1.5 text-[12px] text-[var(--color-error)] tracking-wider">
-      <span className="w-1.5 h-1.5 bg-[var(--color-error)]" />
+    <span className="flex items-center gap-1.5 text-[12px] text-[var(--color-error)]">
+      <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-error)]" />
       offline
     </span>
   );
@@ -138,32 +138,32 @@ function CloudStatusContent({ keyCount }: { keyCount: number | null }) {
   const showUpgrade = planTier === "free" || planTier === "pro";
 
   return (
-    <div className="grid grid-cols-3 gap-px mb-4 bg-[var(--color-border)] border border-[var(--color-border)]">
+    <div className="grid grid-cols-3 gap-3 mb-4">
       {/* Card 1: Subscription */}
-      <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
+      <div className="rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 hover:border-[var(--color-border-hover)] transition-colors duration-150">
         <div className="flex items-center gap-2 mb-3">
           <CreditCard className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-          <span className="text-[12px] leading-none text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
+          <span className="text-[11px] leading-none text-[var(--color-text-muted)] uppercase tracking-[0.08em]">
             subscription
           </span>
         </div>
         <div className="mb-1.5">
           {planTier === "free" ? (
             <span className="inline-flex items-center gap-1.5">
-              <span className="inline-block w-[5px] h-[5px] flex-shrink-0 bg-[var(--color-text-dim)]" aria-hidden="true" />
-              <span className="text-[11px] leading-none tracking-[0.15em] uppercase text-[var(--color-text-dim)]">free</span>
+              <span className="inline-block w-[5px] h-[5px] rounded-full flex-shrink-0 bg-[var(--color-text-dim)]" aria-hidden="true" />
+              <span className="text-[11px] leading-none tracking-[0.08em] uppercase text-[var(--color-text-dim)]">free</span>
             </span>
           ) : (
             <TierBadge />
           )}
         </div>
-        <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider">
+        <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5">
           {statusLabel}
         </p>
         {showUpgrade && (
           <Link
             href="/settings/billing"
-            className="inline-flex items-center gap-1 mt-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+            className="inline-flex items-center gap-1 mt-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
           >
             upgrade <ArrowRight className="w-3 h-3" />
           </Link>
@@ -171,14 +171,14 @@ function CloudStatusContent({ keyCount }: { keyCount: number | null }) {
       </div>
 
       {/* Card 2: API Keys */}
-      <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
+      <div className="rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 hover:border-[var(--color-border-hover)] transition-colors duration-150">
         <div className="flex items-center gap-2 mb-3">
           <Key className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-          <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
+          <span className="text-[11px] text-[var(--color-text-muted)] uppercase tracking-[0.08em]">
             api keys
           </span>
         </div>
-        <p className="text-2xl font-light metric-value text-[var(--color-text)]">
+        <p className="text-2xl font-mono tabular-nums metric-value text-[var(--color-text)]">
           {keyCount === null ? (
             <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)] inline-block" />
           ) : keyCount === -1 ? (
@@ -187,22 +187,22 @@ function CloudStatusContent({ keyCount }: { keyCount: number | null }) {
             keyCount
           )}
         </p>
-        <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider">
+        <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5">
           of {maxApiKeys} allowed
         </p>
         <Link
           href="/settings/api-keys"
-          className="inline-flex items-center gap-1 mt-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+          className="inline-flex items-center gap-1 mt-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
         >
           manage <ArrowRight className="w-3 h-3" />
         </Link>
       </div>
 
       {/* Card 3: MCP Endpoint */}
-      <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
+      <div className="rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 hover:border-[var(--color-border-hover)] transition-colors duration-150">
         <div className="flex items-center gap-2 mb-3">
           <Plug className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-          <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
+          <span className="text-[11px] text-[var(--color-text-muted)] uppercase tracking-[0.08em]">
             mcp endpoint
           </span>
         </div>
@@ -212,18 +212,18 @@ function CloudStatusContent({ keyCount }: { keyCount: number | null }) {
             size={4}
             pulse={mcpConfigured}
           />
-          <span className={`text-[12px] tracking-wider ${mcpConfigured ? "text-[var(--color-success)]" : "text-[var(--color-text-dim)]"}`}>
+          <span className={`text-[12px] ${mcpConfigured ? "text-[var(--color-success)]" : "text-[var(--color-text-dim)]"}`}>
             {mcpConfigured ? "configured" : "not configured"}
           </span>
         </div>
         {mcpDisplay && (
-          <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider font-mono truncate">
+          <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 font-mono truncate">
             {mcpDisplay}
           </p>
         )}
         <Link
           href="/settings/mcp-connect"
-          className="inline-flex items-center gap-1 mt-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+          className="inline-flex items-center gap-1 mt-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
         >
           connect <ArrowRight className="w-3 h-3" />
         </Link>
@@ -247,16 +247,16 @@ function UsageAnalyticsContent({
 
   return (
     <div className="mb-4">
-      <div className="grid grid-cols-3 gap-px bg-[var(--color-border)] border border-[var(--color-border)]">
+      <div className="grid grid-cols-3 gap-3">
         {/* Card 1: Total requests (7d) */}
-        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
+        <div className="rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 hover:border-[var(--color-border-hover)] transition-colors duration-150">
           <div className="flex items-center gap-2 mb-3">
             <BarChart3 className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-            <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
+            <span className="text-[11px] text-[var(--color-text-muted)] uppercase tracking-[0.08em]">
               requests (7d)
             </span>
           </div>
-          <p className="text-2xl font-light metric-value text-[var(--color-text)] tabular-nums">
+          <p className="text-2xl font-mono tabular-nums metric-value text-[var(--color-text)] tabular-nums">
             {last7DaysTotal === null ? (
               <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)] inline-block" />
             ) : last7DaysTotal.toLocaleString()}
@@ -275,28 +275,28 @@ function UsageAnalyticsContent({
         </div>
 
         {/* Card 2: Active keys */}
-        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
+        <div className="rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 hover:border-[var(--color-border-hover)] transition-colors duration-150">
           <div className="flex items-center gap-2 mb-3">
             <Key className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-            <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
+            <span className="text-[11px] text-[var(--color-text-muted)] uppercase tracking-[0.08em]">
               active keys
             </span>
           </div>
-          <p className="text-2xl font-light metric-value text-[var(--color-text)] tabular-nums">
+          <p className="text-2xl font-mono tabular-nums metric-value text-[var(--color-text)] tabular-nums">
             {activeKeys === null ? (
               <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)] inline-block" />
             ) : activeKeys}
           </p>
-          <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider">
+          <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5">
             {summary !== null ? `of ${summary.active_keys} active (7d)` : ""}
           </p>
         </div>
 
         {/* Card 3: Last activity */}
-        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
+        <div className="rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 hover:border-[var(--color-border-hover)] transition-colors duration-150">
           <div className="flex items-center gap-2 mb-3">
             <Clock className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-            <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
+            <span className="text-[11px] text-[var(--color-text-muted)] uppercase tracking-[0.08em]">
               last activity
             </span>
           </div>
@@ -305,10 +305,10 @@ function UsageAnalyticsContent({
           ) : latestActivity ? (
             <TimeAgo
               timestamp={new Date(latestActivity).getTime()}
-              className="text-lg font-light text-[var(--color-text)] tracking-wider"
+              className="text-lg font-mono text-[var(--color-text)]"
             />
           ) : (
-            <p className="text-lg font-light text-[var(--color-text-dim)] tracking-wider">—</p>
+            <p className="text-lg font-mono text-[var(--color-text-dim)]">—</p>
           )}
         </div>
       </div>
@@ -318,7 +318,7 @@ function UsageAnalyticsContent({
         <Link
           href="/settings/usage"
           aria-label="view full usage analytics"
-          className="inline-flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+          className="inline-flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
         >
           view details <ArrowRight className="w-3 h-3" />
         </Link>
@@ -433,7 +433,7 @@ function UserGreeting() {
   const showTierPrefix = b.enabled && b.tier !== "free";
 
   return (
-    <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider mb-4">
+    <p className="text-[12px] text-[var(--color-text-dim)] mb-4">
       {showTierPrefix && (
         <>
           <TierWordmark variant="header" />
@@ -583,13 +583,13 @@ function DashboardContent() {
           )}
           {latencyValues.length > 3 && (
             <div className="flex items-center gap-2 ml-auto">
-              <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">latency:</span>
+              <span className="text-[12px] text-[var(--color-text-dim)]">latency:</span>
               <Sparkline values={latencyValues} color="var(--color-success)" width={60} height={16} />
             </div>
           )}
           <div className={`${latencyValues.length <= 3 ? "ml-auto" : ""} flex items-center gap-2`}>
             <Shield className="w-3 h-3 text-[var(--color-success)]" strokeWidth={1.5} />
-            <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
+            <span className="text-[12px] text-[var(--color-text-dim)]">
               governance: active
             </span>
           </div>
@@ -597,7 +597,7 @@ function DashboardContent() {
       </TerminalBar>
 
       {/* ── Metric cards — top row ── */}
-      <div className={`grid ${isCloudMode ? "grid-cols-2" : "grid-cols-4"} gap-px mb-px bg-[var(--color-border)] border border-[var(--color-border)] stagger-fade-in`}>
+      <div className={`grid ${isCloudMode ? "grid-cols-2" : "grid-cols-4"} gap-3 mb-3 stagger-fade-in`}>
         {!isCloudMode && (
           <MetricCard
             label="active sandboxes"
@@ -630,7 +630,7 @@ function DashboardContent() {
       </div>
 
       {/* ── Stats cards — second row ── */}
-      <div className="grid grid-cols-4 gap-px mb-8 bg-[var(--color-border)] stagger-fade-in">
+      <div className="grid grid-cols-4 gap-3 mb-8 stagger-fade-in">
         <MetricCard
           label="queries"
           value={auditStats.queries}
@@ -663,20 +663,20 @@ function DashboardContent() {
       {/* ── Latency + Distribution row ── */}
       {latencyValues.length > 3 && (
         <div className="grid grid-cols-3 gap-4 mb-8 stagger-fade-in">
-          <div className="col-span-2 border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 card-accent-top">
+          <div className="col-span-2 rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <Clock className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-                <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">query latency</span>
+                <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">query latency</span>
               </div>
-              <span className="text-[12px] tabular-nums text-[var(--color-text-dim)]">last {latencyValues.length} ops</span>
+              <span className="text-[12px] font-mono tabular-nums text-[var(--color-text-dim)]">last {latencyValues.length} ops</span>
             </div>
             <ResponsiveAreaChart values={latencyValues} height={80} color="var(--color-success)" />
           </div>
-          <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 card-accent-top">
+          <div className="rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4">
             <div className="flex items-center gap-2 mb-3">
               <BarChart3 className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-              <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">operation mix</span>
+              <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">operation mix</span>
             </div>
             <div className="space-y-3">
               <StackedBar
@@ -688,10 +688,10 @@ function DashboardContent() {
                 width={200}
                 height={8}
               />
-              <div className="flex items-center gap-4 text-[11px] text-[var(--color-text-dim)] tracking-wider">
-                <span className="flex items-center gap-1"><span className="w-2 h-2 bg-[var(--color-success)]" />queries</span>
-                <span className="flex items-center gap-1"><span className="w-2 h-2 bg-blue-400" />exec</span>
-                <span className="flex items-center gap-1"><span className="w-2 h-2 bg-[var(--color-error)]" />blocked</span>
+              <div className="flex items-center gap-4 text-[11px] text-[var(--color-text-dim)]">
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-[var(--color-success)]" />queries</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-400" />exec</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-[var(--color-error)]" />blocked</span>
               </div>
               <div className="pt-2 border-t border-[var(--color-border)] space-y-1.5">
                 {[
@@ -700,8 +700,8 @@ function DashboardContent() {
                   { label: "blocked", value: auditStats.blocks, total: auditStats.total, color: "text-[var(--color-error)]" },
                 ].map(row => (
                   <div key={row.label} className="flex items-center justify-between">
-                    <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">{row.label}</span>
-                    <span className={`text-[12px] tabular-nums ${row.color}`}>
+                    <span className="text-[11px] text-[var(--color-text-dim)]">{row.label}</span>
+                    <span className={`text-[12px] font-mono tabular-nums ${row.color}`}>
                       {row.value} <span className="text-[var(--color-text-dim)]">/ {row.total > 0 ? ((row.value / row.total) * 100).toFixed(0) : 0}%</span>
                     </span>
                   </div>
@@ -729,17 +729,17 @@ function DashboardContent() {
       {/* ── Two-column layout ── */}
       <div className="grid grid-cols-3 gap-4">
         {/* Recent activity — takes 2 cols */}
-        <div className="col-span-2 border border-[var(--color-border)] bg-[var(--color-bg-card)] card-radial-glow">
+        <div className="col-span-2 rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
             <div className="flex items-center gap-2">
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
                 <path d="M2 6h2l1.5-3 1.5 6 1.5-3H11" stroke="var(--color-text-dim)" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
-              <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+              <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
                 recent activity
               </span>
             </div>
-            <Link href="/audit" className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+            <Link href="/audit" className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors">
               view all <ArrowRight className="w-3 h-3" />
             </Link>
           </div>
@@ -756,10 +756,10 @@ function DashboardContent() {
                 return (
                   <div
                     key={entry.id}
-                    className="group/row hover:bg-[var(--color-bg-hover)] transition-all"
+                    className="group/row hover:bg-[var(--color-bg-hover)] transition-colors duration-150"
                   >
                     <div className="flex items-center gap-3 px-4 py-2.5">
-                      <span className={`text-[11px] font-medium uppercase tracking-[0.15em] w-8 ${
+                      <span className={`text-[11px] font-mono font-medium w-8 ${
                         entry.blocked ? "text-[var(--color-error)]" : cfg.color
                       }`}>
                         {cfg.label}
@@ -772,17 +772,17 @@ function DashboardContent() {
                             : entry.connection_name || "—"}</span>}
                       </span>
                       {entry.blocked && (
-                        <span className="text-[11px] px-1.5 py-0.5 border border-[var(--color-error)]/30 text-[var(--color-error)] tracking-wider uppercase">
+                        <span className="text-[11px] px-1.5 py-0.5 rounded-[6px] border border-[var(--color-error)]/30 text-[var(--color-error)]">
                           blocked
                         </span>
                       )}
                       {entry.rows_returned != null && (
-                        <span className="text-[12px] tabular-nums text-[var(--color-text-dim)]">
+                        <span className="text-[12px] font-mono tabular-nums text-[var(--color-text-dim)]">
                           {entry.rows_returned}r
                         </span>
                       )}
                       {entry.duration_ms != null && (
-                        <span className="text-[12px] tabular-nums text-[var(--color-text-dim)]">
+                        <span className="text-[12px] font-mono tabular-nums text-[var(--color-text-dim)]">
                           {entry.duration_ms.toFixed(0)}ms
                         </span>
                       )}
@@ -795,10 +795,10 @@ function DashboardContent() {
                     {/* Hover-reveal detail row */}
                     <div className="grid grid-cols-[2rem_1fr] gap-3 px-4 max-h-0 overflow-hidden opacity-0 group-hover/row:max-h-16 group-hover/row:opacity-100 group-hover/row:pb-2.5 transition-all duration-200 ease-out">
                       <span />
-                      <div className="flex items-center gap-4 text-[11px] text-[var(--color-text-dim)] tracking-wider">
+                      <div className="flex items-center gap-4 text-[11px] text-[var(--color-text-dim)]">
                         {entry.connection_name && (
                           <span className="flex items-center gap-1">
-                            <span className="w-1 h-1 bg-[var(--color-text-dim)] opacity-40" />
+                            <span className="w-1 h-1 rounded-full bg-[var(--color-text-dim)] opacity-40" />
                             {entry.connection_name}
                           </span>
                         )}
@@ -832,19 +832,19 @@ function DashboardContent() {
         {/* Right column — Connections + Cache */}
         <div className="space-y-4">
           {/* Connections overview */}
-          <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] card-radial-glow">
+          <div className="rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
               <div className="flex items-center gap-2">
                 <Database className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-                <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+                <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
                   connections
                 </span>
               </div>
               <div className="flex items-center gap-3">
-                <Link href="/connections?action=new" className="flex items-center gap-1 px-2 py-0.5 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider">
+                <Link href="/connections?action=new" className="flex items-center gap-1 px-2 py-0.5 rounded-[6px] text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-colors duration-150">
                   <Plus className="w-3 h-3" /> add
                 </Link>
-                <Link href="/connections" className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+                <Link href="/connections" className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors">
                   manage <ArrowRight className="w-3 h-3" />
                 </Link>
               </div>
@@ -853,7 +853,7 @@ function DashboardContent() {
               {connections.length === 0 ? (
                 <div className="px-4 py-10 text-center">
                   <Database className="w-5 h-5 mx-auto mb-2 text-[var(--color-text-dim)] opacity-20" strokeWidth={1} />
-                  <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
+                  <p className="text-[12px] text-[var(--color-text-dim)]">
                     no connections
                   </p>
                 </div>
@@ -891,12 +891,12 @@ function DashboardContent() {
                               height={3}
                               color={health.latency_p50_ms < 50 ? "var(--color-success)" : health.latency_p50_ms < 150 ? "var(--color-warning)" : "var(--color-error)"}
                             />
-                            <span className="text-[12px] tabular-nums text-[var(--color-text-dim)]">
+                            <span className="text-[12px] font-mono tabular-nums text-[var(--color-text-dim)]">
                               {health.latency_p50_ms.toFixed(0)}ms
                             </span>
                           </div>
                         )}
-                        <span className="text-[11px] px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-dim)] tracking-wider">
+                        <span className="text-[11px] px-1.5 py-0.5 rounded-[6px] border border-[var(--color-border)] text-[var(--color-text-dim)]">
                           {conn.db_type}
                         </span>
                       </div>
@@ -908,11 +908,11 @@ function DashboardContent() {
           </div>
 
           {/* Query Cache Stats */}
-          <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] card-radial-glow">
+          <div className="rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
             <div className="px-4 py-3 border-b border-[var(--color-border)]">
               <div className="flex items-center gap-2">
                 <Zap className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-                <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+                <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
                   query cache
                 </span>
               </div>
@@ -929,27 +929,27 @@ function DashboardContent() {
                       color={cacheStats.hit_rate > 0.7 ? "var(--color-success)" : cacheStats.hit_rate > 0.3 ? "var(--color-warning)" : "var(--color-error)"}
                     />
                     <div>
-                      <p className={`text-lg font-light tabular-nums ${
+                      <p className={`text-lg font-mono tabular-nums ${
                         cacheStats.hit_rate > 0.7 ? "text-[var(--color-success)]" :
                         cacheStats.hit_rate > 0.3 ? "text-[var(--color-warning)]" : "text-[var(--color-text)]"
                       }`}>
                         {(cacheStats.hit_rate * 100).toFixed(1)}%
                       </p>
-                      <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider">hit rate</p>
+                      <p className="text-[11px] text-[var(--color-text-dim)]">hit rate</p>
                     </div>
                   </div>
                   <div className="grid grid-cols-3 gap-3 pt-1">
                     <div>
-                      <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">hits</p>
-                      <p className="text-xs font-light tabular-nums text-[var(--color-success)]">{cacheStats.hits}</p>
+                      <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">hits</p>
+                      <p className="text-xs font-mono tabular-nums text-[var(--color-success)]">{cacheStats.hits}</p>
                     </div>
                     <div>
-                      <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">miss</p>
-                      <p className="text-xs font-light tabular-nums text-[var(--color-text-muted)]">{cacheStats.misses}</p>
+                      <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">miss</p>
+                      <p className="text-xs font-mono tabular-nums text-[var(--color-text-muted)]">{cacheStats.misses}</p>
                     </div>
                     <div>
-                      <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">size</p>
-                      <p className="text-xs font-light tabular-nums">{cacheStats.entries}/{cacheStats.max_entries}</p>
+                      <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">size</p>
+                      <p className="text-xs font-mono tabular-nums">{cacheStats.entries}/{cacheStats.max_entries}</p>
                     </div>
                   </div>
                 </>

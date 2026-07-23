@@ -8,7 +8,7 @@ export function NotebooksProjectsPaywall() {
       <div className="max-w-md mx-auto mt-24">
         <div className="flex items-center gap-3 mb-6">
           <Code className="w-6 h-6 text-[var(--color-text)]" />
-          <h1 className="text-lg font-bold uppercase tracking-wider text-[var(--color-text)]">
+          <h1 className="text-lg font-bold uppercase text-[var(--color-text)]">
             SignalPilot IDE
           </h1>
         </div>
@@ -22,7 +22,7 @@ export function NotebooksProjectsPaywall() {
           </p>
           <a
             href="/settings/billing"
-            className="inline-flex items-center gap-2 px-5 py-3 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90"
+            className="inline-flex items-center gap-2 px-5 py-3 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium rounded-[10px] transition-colors duration-150 hover:opacity-90"
           >
             Upgrade plan
           </a>

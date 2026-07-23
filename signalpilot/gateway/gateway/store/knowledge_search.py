@@ -30,7 +30,7 @@ from gateway.db.models import (
     GatewayKnowledgeRetrieval,
 )
 from gateway.models.knowledge import KnowledgeDoc, KnowledgeStatus
-from gateway.store.kb_rank import bm25_rank
+from gateway.store.kb_rank import Bm25Index
 from gateway.store.knowledge import row_to_doc
 
 logger = logging.getLogger(__name__)
@@ -53,10 +53,6 @@ _STOPWORDS = frozenset(
 )
 
 from gateway.util.tasks import fire_and_forget  # re-export; shared helper
-
-
-def content_hash(title: str, body: str) -> str:
-    return hashlib.sha256(f"{title}\n{body}".encode()).hexdigest()
 
 
 def _is_postgres(session: AsyncSession) -> bool:
@@ -202,6 +198,46 @@ async def _lexical_arm(
     return [doc_id for _, doc_id in scored[:_ARM_CANDIDATES]]
 
 
+# Per-org BM25 index cache: build the inverted index once per corpus state,
+# query it until any active doc changes. Key includes the engine identity so
+# separate databases (tests, replicas) never share entries; the signature
+# (active-doc count, max updated_at) changes on every insert/edit/archive.
+_BM25_CACHE_MAX = 16
+_bm25_cache: dict[tuple[int, str], tuple[tuple, Bm25Index]] = {}
+
+
+async def _bm25_index_for_org(session: AsyncSession, org_id: str) -> Bm25Index:
+    key = (id(session.get_bind()), org_id)
+    sig_row = (
+        await session.execute(
+            select(func.count(), func.max(GatewayKnowledgeDoc.updated_at)).where(
+                GatewayKnowledgeDoc.org_id == org_id,
+                GatewayKnowledgeDoc.status == KnowledgeStatus.active.value,
+            )
+        )
+    ).one()
+    signature = (sig_row[0], sig_row[1])
+    cached = _bm25_cache.get(key)
+    if cached is not None and cached[0] == signature:
+        return cached[1]
+
+    rows = (
+        await session.execute(
+            select(
+                GatewayKnowledgeDoc.id, GatewayKnowledgeDoc.title, GatewayKnowledgeDoc.body
+            ).where(
+                GatewayKnowledgeDoc.org_id == org_id,
+                GatewayKnowledgeDoc.status == KnowledgeStatus.active.value,
+            )
+        )
+    ).fetchall()
+    index = Bm25Index([(r[0], r[1], r[2]) for r in rows])
+    if len(_bm25_cache) >= _BM25_CACHE_MAX and key not in _bm25_cache:
+        _bm25_cache.pop(next(iter(_bm25_cache)))
+    _bm25_cache[key] = (signature, index)
+    return index
+
+
 async def _bm25_arm(
     session: AsyncSession,
     *,
@@ -213,27 +249,31 @@ async def _bm25_arm(
 ) -> list[str]:
     """Ranked doc IDs from in-process BM25 over the org's active docs.
 
-    The corpus is quota-capped to megabytes, so fetching (id, title, body)
-    and scoring per query is cheap — no persistent index, no models.
+    Uses the cached whole-org inverted index; scope/category filters are
+    applied by restricting rankable ids (a cheap id-only query) rather than
+    rebuilding an index per filter combination.
     """
-    stmt = select(
-        GatewayKnowledgeDoc.id, GatewayKnowledgeDoc.title, GatewayKnowledgeDoc.body
-    ).where(
-        GatewayKnowledgeDoc.org_id == org_id,
-        GatewayKnowledgeDoc.status == KnowledgeStatus.active.value,
-    )
-    if scope is not None:
-        stmt = stmt.where(GatewayKnowledgeDoc.scope == scope)
-    if scope_ref is not None:
-        stmt = stmt.where(GatewayKnowledgeDoc.scope_ref == scope_ref)
-    if category is not None:
-        stmt = stmt.where(GatewayKnowledgeDoc.category == category)
     try:
-        rows = (await session.execute(stmt)).fetchall()
+        index = await _bm25_index_for_org(session, org_id)
+        allowed_ids: set[str] | None = None
+        if scope is not None or scope_ref is not None or category is not None:
+            stmt = select(GatewayKnowledgeDoc.id).where(
+                GatewayKnowledgeDoc.org_id == org_id,
+                GatewayKnowledgeDoc.status == KnowledgeStatus.active.value,
+            )
+            if scope is not None:
+                stmt = stmt.where(GatewayKnowledgeDoc.scope == scope)
+            if scope_ref is not None:
+                stmt = stmt.where(GatewayKnowledgeDoc.scope_ref == scope_ref)
+            if category is not None:
+                stmt = stmt.where(GatewayKnowledgeDoc.category == category)
+            allowed_ids = {r[0] for r in (await session.execute(stmt)).fetchall()}
+            if not allowed_ids:
+                return []
     except Exception as exc:
         logger.debug("BM25 arm failed (query=%r): %r", query, exc)
         return []
-    scored = bm25_rank(query, [(r[0], r[1], r[2]) for r in rows], limit=_ARM_CANDIDATES)
+    scored = index.rank(query, limit=_ARM_CANDIDATES, allowed_ids=allowed_ids)
     return [doc_id for doc_id, _ in scored]
 
 

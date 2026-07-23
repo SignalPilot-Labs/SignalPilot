@@ -310,3 +310,53 @@ class TestRetrievalStats:
     def test_retrieval_event_dataclass_defaults(self):
         ev = RetrievalEvent(org_id=ORG, doc_id="d", source="search_knowledge")
         assert ev.query is None and ev.rank is None
+
+
+# ── BM25 index cache invalidation ────────────────────────────────────────────
+
+
+class TestIndexCacheInvalidation:
+    @pytest.mark.asyncio
+    async def test_new_doc_found_after_cached_search(self, session):
+        """The per-org index must rebuild when a doc is added (count changes)."""
+        await _seed(session, [_doc("first doc", "original zebra content")])
+        assert (await hybrid_search_knowledge(
+            session, org_id=ORG, query="zebra", scope=None, scope_ref=None, category=None, limit=5
+        ))  # warms the cache
+        await _seed(session, [_doc("second doc", "fresh pangolin content")])
+        hits = await hybrid_search_knowledge(
+            session, org_id=ORG, query="pangolin", scope=None, scope_ref=None, category=None, limit=5
+        )
+        assert hits and hits[0].doc.title == "second doc"
+
+    @pytest.mark.asyncio
+    async def test_edited_doc_reindexed(self, session):
+        """Editing a body (updated_at bump) must invalidate the cached index."""
+        [doc] = await _seed(session, [_doc("doc", "original zebra content")])
+        await hybrid_search_knowledge(
+            session, org_id=ORG, query="zebra", scope=None, scope_ref=None, category=None, limit=5
+        )
+        doc.body = "now about pangolin instead"
+        doc.updated_at = time.time() + 1  # ensure signature moves even on coarse clocks
+        await session.commit()
+        hits = await hybrid_search_knowledge(
+            session, org_id=ORG, query="pangolin", scope=None, scope_ref=None, category=None, limit=5
+        )
+        assert hits and hits[0].doc.id == doc.id
+        stale = await hybrid_search_knowledge(
+            session, org_id=ORG, query="zebra", scope=None, scope_ref=None, category=None, limit=5
+        )
+        assert stale == []
+
+    @pytest.mark.asyncio
+    async def test_archived_doc_leaves_index(self, session):
+        [doc] = await _seed(session, [_doc("doc", "quagga sighting log")])
+        await hybrid_search_knowledge(
+            session, org_id=ORG, query="quagga", scope=None, scope_ref=None, category=None, limit=5
+        )
+        doc.status = "archived"
+        doc.updated_at = time.time() + 1
+        await session.commit()
+        assert await hybrid_search_knowledge(
+            session, org_id=ORG, query="quagga", scope=None, scope_ref=None, category=None, limit=5
+        ) == []

@@ -72,7 +72,7 @@ async def get_connection_detail(name: str, store: StoreD):
     return conn
 
 
-@router.delete("/connections/{name}", status_code=204, dependencies=[RequireScope("write")])
+@router.delete("/connections/{name}", status_code=204, response_model=None, dependencies=[RequireScope("write")])
 async def remove_connection(name: str, store: StoreD, _role: OrgAdmin, request: Request):
     if not await store.delete_connection(name):
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")

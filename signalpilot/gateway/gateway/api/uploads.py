@@ -292,7 +292,7 @@ async def complete_eval_upload(user_id: UserID, req: CompleteRequest):
     return {"reference_id": reference_id, "expires_at": expires}
 
 
-@router.post("/evals/upload/abort", status_code=204, dependencies=[RequireScope("write")])
+@router.post("/evals/upload/abort", status_code=204, response_model=None, dependencies=[RequireScope("write")])
 async def abort_eval_upload(req: AbortRequest) -> None:
     """Best-effort cleanup when the client gives up; lifecycle rules are the backstop."""
     cfg = _require_enabled()

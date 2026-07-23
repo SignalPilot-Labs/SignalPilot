@@ -1136,11 +1136,6 @@ class Store:
         oid = self._require_org_id()
         return await knowledge_search_mod.retrieval_stats(self.session, org_id=oid, since_days=since_days)
 
-    async def sync_knowledge_embeddings(self) -> int:
-        """Reconcile this org's embeddings (admin sync endpoint)."""
-        oid = self._require_org_id()
-        return await knowledge_search_mod.sync_knowledge_embeddings(self.session, org_id=oid)
-
     async def get_knowledge_usage(self) -> KnowledgeUsage:
         oid = self._require_org_id()
         limits = await self._knowledge_limits()

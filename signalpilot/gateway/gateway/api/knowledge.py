@@ -91,17 +91,6 @@ async def get_knowledge_retrievals(store: StoreD, since_days: int = 30):
     return await store.knowledge_retrieval_stats(since_days=max(1, min(since_days, 365)))
 
 
-@router.post("/knowledge/embeddings/sync", dependencies=[RequireScope("admin")])
-async def sync_knowledge_embeddings_endpoint(store: StoreD):
-    """Force an embedding reconcile pass for this org (admin only).
-
-    The background loop does this automatically; this endpoint exists for
-    testing and for immediate re-index after provider config changes.
-    """
-    embedded = await store.sync_knowledge_embeddings()
-    return {"embedded": embedded}
-
-
 @router.get("/knowledge/usage", response_model=KnowledgeUsage, dependencies=[RequireScope("read")])
 async def get_knowledge_usage(store: StoreD):
     """Return org-level knowledge storage usage and quota."""

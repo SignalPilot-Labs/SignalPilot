@@ -13,11 +13,8 @@ switches only you can flip.
    set a **webhook URL** (needs a public gateway URL or smee.io relay in dev) and
    `SP_GITHUB_WEBHOOK_SECRET`, and link repos via the existing /settings/github flow.
    Also set `SP_GITHUB_BOT_CONNECTION` per deployment (compose default: perf_nala_pg).
-2. **Embeddings provider decision (KB semantic search).** Default is the offline
-   `hash` provider (works, lexical-semantic). For true semantic quality set
-   `SP_EMBEDDINGS_PROVIDER=openai|voyage` + `SP_EMBEDDINGS_API_KEY` (or point
-   `SP_EMBEDDINGS_BASE_URL` at an Ollama/vLLM box). One env change + restart;
-   re-index happens automatically (provider-tagged staleness).
+2. ~~Embeddings provider decision~~ — resolved: embeddings were removed entirely in
+   favor of pure-Python BM25 (`gateway/store/kb_rank.py`). Nothing to configure.
 3. **Snowflake account with Semantic Views + Databricks workspace with Metric
    Views** to live-validate MetricProof (Feature 6). All parsing/SQL construction is
    tested against documented formats; the two MCP tools are registered. A free-trial

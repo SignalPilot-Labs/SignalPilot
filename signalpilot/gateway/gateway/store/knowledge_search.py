@@ -1,20 +1,21 @@
-"""Hybrid semantic search + retrieval-event logging for the knowledge base.
+"""Hybrid search + retrieval-event logging for the knowledge base.
 
 Three retrieval arms, fused with Reciprocal Rank Fusion (RRF):
 
     1. Postgres full-text search  (websearch_to_tsquery + ts_rank_cd)
     2. Lexical keyword search     (tokenized OR'd ILIKE, term-coverage ranked)
-    3. Vector similarity          (cosine over stored embeddings, in-process)
+    3. BM25                       (pure-Python Okapi BM25, store/kb_rank.py)
 
-RRF avoids score normalization across heterogeneous arms: each arm ranks its
-candidates and a doc's fused score is Σ weight/(K + rank). Arms degrade
-independently — on SQLite (tests) only arms 2+3 run; with embeddings disabled
-only 1+2 run; the search never fails because one arm does.
+No embedding models anywhere — BM25 with word + char-4-gram tokens covers the
+fuzzy/variant matching an embedder would, entirely in-process. RRF avoids
+score normalization across heterogeneous arms: each arm ranks its candidates
+and a doc's fused score is Σ weight/(K + rank). Arms degrade independently —
+on SQLite (tests) only arms 2+3 run; the search never fails because one arm
+does.
 """
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
 import time
@@ -26,20 +27,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.db.models import (
     GatewayKnowledgeDoc,
-    GatewayKnowledgeEmbedding,
     GatewayKnowledgeRetrieval,
 )
-from gateway.embeddings import cosine_similarity, get_embedding_provider
 from gateway.models.knowledge import KnowledgeDoc, KnowledgeStatus
+from gateway.store.kb_rank import bm25_rank
 from gateway.store.knowledge import row_to_doc
 
 logger = logging.getLogger(__name__)
 
 _RRF_K = 60
-_ARM_WEIGHTS = {"fts": 1.0, "vector": 1.0, "lexical": 0.7}
+_ARM_WEIGHTS = {"fts": 1.0, "bm25": 1.0, "lexical": 0.7}
 _ARM_CANDIDATES = 50
 _RETRIEVAL_RETENTION_DAYS = 90
-_EMBED_BATCH = 16
 _MAX_LEXICAL_KEYWORDS = 8
 
 _STOPWORDS = frozenset(
@@ -203,7 +202,7 @@ async def _lexical_arm(
     return [doc_id for _, doc_id in scored[:_ARM_CANDIDATES]]
 
 
-async def _vector_arm(
+async def _bm25_arm(
     session: AsyncSession,
     *,
     org_id: str,
@@ -211,25 +210,17 @@ async def _vector_arm(
     scope: str | None,
     scope_ref: str | None,
     category: str | None,
-) -> list[tuple[str, float]]:
-    """(doc_id, cosine) ranked by similarity. Empty when embeddings disabled."""
-    provider = get_embedding_provider()
-    if provider is None:
-        return []
-    try:
-        [qvec] = await provider.embed([query])
-    except Exception as exc:
-        logger.warning("Query embedding failed: %r", exc)
-        return []
+) -> list[str]:
+    """Ranked doc IDs from in-process BM25 over the org's active docs.
 
-    stmt = (
-        select(GatewayKnowledgeEmbedding.doc_id, GatewayKnowledgeEmbedding.embedding)
-        .join(GatewayKnowledgeDoc, GatewayKnowledgeDoc.id == GatewayKnowledgeEmbedding.doc_id)
-        .where(
-            GatewayKnowledgeEmbedding.org_id == org_id,
-            GatewayKnowledgeEmbedding.provider == provider.provider_id,
-            GatewayKnowledgeDoc.status == KnowledgeStatus.active.value,
-        )
+    The corpus is quota-capped to megabytes, so fetching (id, title, body)
+    and scoring per query is cheap — no persistent index, no models.
+    """
+    stmt = select(
+        GatewayKnowledgeDoc.id, GatewayKnowledgeDoc.title, GatewayKnowledgeDoc.body
+    ).where(
+        GatewayKnowledgeDoc.org_id == org_id,
+        GatewayKnowledgeDoc.status == KnowledgeStatus.active.value,
     )
     if scope is not None:
         stmt = stmt.where(GatewayKnowledgeDoc.scope == scope)
@@ -237,14 +228,13 @@ async def _vector_arm(
         stmt = stmt.where(GatewayKnowledgeDoc.scope_ref == scope_ref)
     if category is not None:
         stmt = stmt.where(GatewayKnowledgeDoc.category == category)
-    result = await session.execute(stmt)
-    scored = [
-        (doc_id, cosine_similarity(qvec, vec))
-        for doc_id, vec in result.fetchall()
-        if isinstance(vec, list)
-    ]
-    scored.sort(key=lambda p: p[1], reverse=True)
-    return scored[:_ARM_CANDIDATES]
+    try:
+        rows = (await session.execute(stmt)).fetchall()
+    except Exception as exc:
+        logger.debug("BM25 arm failed (query=%r): %r", query, exc)
+        return []
+    scored = bm25_rank(query, [(r[0], r[1], r[2]) for r in rows], limit=_ARM_CANDIDATES)
+    return [doc_id for doc_id, _ in scored]
 
 
 # ── Fusion ────────────────────────────────────────────────────────────────────
@@ -267,16 +257,13 @@ async def hybrid_search_knowledge(
     lex_ids = await _lexical_arm(
         session, org_id=org_id, query=query, scope=scope, scope_ref=scope_ref, category=category
     )
-    vec_pairs = await _vector_arm(
+    bm25_ids = await _bm25_arm(
         session, org_id=org_id, query=query, scope=scope, scope_ref=scope_ref, category=category
     )
-    # Drop weak vector matches so unrelated docs can't ride in on rank alone
-    # when the query shares no real signal with the corpus.
-    vec_ids = [doc_id for doc_id, sim in vec_pairs if sim > 0.05]
 
     fused: dict[str, float] = {}
     arms_by_doc: dict[str, list[str]] = {}
-    for arm_name, ranked in (("fts", fts_ids), ("lexical", lex_ids), ("vector", vec_ids)):
+    for arm_name, ranked in (("fts", fts_ids), ("lexical", lex_ids), ("bm25", bm25_ids)):
         weight = _ARM_WEIGHTS[arm_name]
         for rank, doc_id in enumerate(ranked):
             fused[doc_id] = fused.get(doc_id, 0.0) + weight / (_RRF_K + rank + 1)
@@ -300,102 +287,6 @@ async def hybrid_search_knowledge(
         if doc_id in rows
     ]
     return hits
-
-
-# ── Embedding sync ────────────────────────────────────────────────────────────
-
-
-async def sync_knowledge_embeddings(session: AsyncSession, *, org_id: str | None = None) -> int:
-    """Embed docs whose embedding is missing or stale. Returns count embedded.
-
-    Stale = provider_id changed (model/config swap) or content_hash changed
-    (doc edited). The staleness scan selects only light columns — doc bodies
-    are needed for hashing but embedding vectors are never loaded here.
-    """
-    provider = get_embedding_provider()
-    if provider is None:
-        return 0
-
-    scan = (
-        select(
-            GatewayKnowledgeDoc.id,
-            GatewayKnowledgeDoc.org_id,
-            GatewayKnowledgeDoc.title,
-            GatewayKnowledgeDoc.body,
-            GatewayKnowledgeEmbedding.provider,
-            GatewayKnowledgeEmbedding.content_hash,
-        )
-        .outerjoin(GatewayKnowledgeEmbedding, GatewayKnowledgeEmbedding.doc_id == GatewayKnowledgeDoc.id)
-        .where(GatewayKnowledgeDoc.status == KnowledgeStatus.active.value)
-    )
-    if org_id is not None:
-        scan = scan.where(GatewayKnowledgeDoc.org_id == org_id)
-    result = await session.execute(scan)
-
-    pending: list[tuple[str, str, str, str, str]] = []  # (doc_id, org, title, body, chash)
-    for doc_id, doc_org, title, body, emb_provider, emb_hash in result.fetchall():
-        chash = content_hash(title, body)
-        if emb_provider != provider.provider_id or emb_hash != chash:
-            pending.append((doc_id, doc_org, title, body, chash))
-
-    embedded = 0
-    for i in range(0, len(pending), _EMBED_BATCH):
-        batch = pending[i : i + _EMBED_BATCH]
-        try:
-            vectors = await provider.embed([f"{title}\n\n{body}" for _, _, title, body, _ in batch])
-        except Exception as exc:
-            logger.warning("Embedding batch failed (%d docs): %r", len(batch), exc)
-            break
-        if len(vectors) != len(batch):
-            logger.warning(
-                "Embedding provider returned %d vectors for %d inputs; skipping batch",
-                len(vectors),
-                len(batch),
-            )
-            break
-        now = time.time()
-        batch_ids = [doc_id for doc_id, *_ in batch]
-        existing_rows = {
-            row.doc_id: row
-            for row in (
-                await session.execute(
-                    select(GatewayKnowledgeEmbedding).where(GatewayKnowledgeEmbedding.doc_id.in_(batch_ids))
-                )
-            ).scalars()
-        }
-        for (doc_id, doc_org, _title, _body, chash), vec in zip(batch, vectors):
-            emb = existing_rows.get(doc_id)
-            if emb is None:
-                session.add(
-                    GatewayKnowledgeEmbedding(
-                        doc_id=doc_id,
-                        org_id=doc_org,
-                        provider=provider.provider_id,
-                        content_hash=chash,
-                        dim=len(vec),
-                        embedding=vec,
-                        updated_at=now,
-                    )
-                )
-            else:
-                emb.provider = provider.provider_id
-                emb.content_hash = chash
-                emb.dim = len(vec)
-                emb.embedding = vec
-                emb.updated_at = now
-            embedded += 1
-        await session.commit()
-
-    # Drop embeddings for docs that no longer exist or were archived
-    active_ids = select(GatewayKnowledgeDoc.id).where(
-        GatewayKnowledgeDoc.status == KnowledgeStatus.active.value
-    )
-    cleanup = delete(GatewayKnowledgeEmbedding).where(~GatewayKnowledgeEmbedding.doc_id.in_(active_ids))
-    if org_id is not None:
-        cleanup = cleanup.where(GatewayKnowledgeEmbedding.org_id == org_id)
-    await session.execute(cleanup)
-    await session.commit()
-    return embedded
 
 
 # ── Retrieval-event logging ───────────────────────────────────────────────────

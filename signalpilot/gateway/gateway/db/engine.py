@@ -335,6 +335,14 @@ async def _ensure_knowledge_columns(engine) -> None:
     except Exception:
         logger.info("Could not create FTS index on knowledge docs")
 
+    # The embedding-based search experiment was replaced by in-process BM25;
+    # drop its table on deployments that created it (best-effort).
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("DROP TABLE IF EXISTS gateway_knowledge_embeddings"))
+    except Exception:
+        pass
+
     logger.info("Ensured knowledge doc indexes")
 
 

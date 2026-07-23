@@ -91,3 +91,16 @@ which findings were applied.
   `provider`-tagged rows make a later pgvector migration a pure storage swap.
 - Chunking long docs: docs are capped small; single-vector-per-doc is adequate.
 - True semantic default: needs an API key decision (human) — see final human-task list.
+
+## Addendum (2026-07-23): embeddings replaced by pure-Python BM25
+
+Per review feedback the embedding machinery was judged too fancy for a KB-sized
+corpus and removed wholesale: no providers, no `gateway_knowledge_embeddings`
+table (dropped by migration), no background sync loop, no `SP_EMBEDDINGS_*`
+config, no sync endpoint. The vector arm is now **Okapi BM25** implemented in
+one dependency-free module (`gateway/store/kb_rank.py`, ~100 lines): word
+tokens + character 4-grams (typo/variant tolerance — the British-spelling
+live test still ranks correctly), title tokens triple-weighted, IDF-weighted
+scoring computed in-process at query time. RRF fusion, retrieval logging, and
+all API/MCP surfaces are unchanged apart from the removed sync endpoint.
+126 sprint tests green after the swap; live docker verification repeated.

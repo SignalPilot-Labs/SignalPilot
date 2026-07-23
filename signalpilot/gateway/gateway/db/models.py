@@ -611,29 +611,6 @@ class GatewayKnowledgeDoc(GatewayBase):
     )
 
 
-class GatewayKnowledgeEmbedding(GatewayBase):
-    """One embedding vector per knowledge doc.
-
-    provider + content_hash decide staleness: when either differs from the
-    doc's current (provider_id, sha256(title+body)) the row is re-embedded by
-    the background sync loop. Vectors are stored as JSON float lists — KB
-    corpora are small (org quota is MBs), so similarity is computed in-process
-    and no vector extension is required.
-    """
-
-    __tablename__ = "gateway_knowledge_embeddings"
-
-    doc_id: Mapped[str] = mapped_column(String, primary_key=True)
-    org_id: Mapped[str] = mapped_column(String, nullable=False)
-    provider: Mapped[str] = mapped_column(String(120), nullable=False)
-    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    dim: Mapped[int] = mapped_column(Integer, nullable=False)
-    embedding: Mapped[list] = mapped_column(JSON, nullable=False)
-    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
-
-    __table_args__ = (Index("idx_knowledge_emb_org", "org_id"),)
-
-
 class GatewayKnowledgeRetrieval(GatewayBase):
     """Per-retrieval event log: which docs agents actually pull, and how.
 

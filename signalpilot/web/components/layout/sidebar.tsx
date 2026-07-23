@@ -183,7 +183,7 @@ const navGroups: { label: string | null; items: NavItem[] }[] = [
     label: "Workspace",
     items: [
       { href: "/projects", label: "Projects", icon: NavIconProject, shortcut: "5" },
-      { href: "/knowledge", label: "Library", icon: NavIconKnowledge, shortcut: "8" },
+      { href: "/knowledge", label: "Knowledge Base", icon: NavIconKnowledge, shortcut: "8" },
       { href: "/integrations", label: "Integrations", icon: NavIconIntegrations, shortcut: "3" },
     ],
   },

@@ -13,7 +13,7 @@ const NAV_SHORTCUTS = [
   { key: "5", label: "projects", path: "/projects" },
   { key: "6", label: "query", path: "/query" },
   { key: "7", label: "audit", path: "/audit" },
-  { key: "8", label: "library", path: "/knowledge" },
+  { key: "8", label: "knowledge base", path: "/knowledge" },
   { key: "9", label: "reports", path: "/reports" },
   { key: "0", label: "settings", path: "/settings" },
 ];

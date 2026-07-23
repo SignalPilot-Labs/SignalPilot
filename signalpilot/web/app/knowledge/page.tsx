@@ -24,6 +24,7 @@ import { ConfirmDialog } from "~/components/ui/confirm-dialog";
 
 import "./knowledge.css";
 import { CategoryNav, type NavState, type ScopeFilter } from "./_components/CategoryNav";
+import { RetrievalHeatmap } from "./_components/RetrievalHeatmap";
 import { DocList, type SortKey } from "./_components/DocList";
 import { QuickPick } from "./_components/QuickPick";
 import { DocumentView, resolveWikilink } from "./_components/DocumentView";
@@ -142,7 +143,7 @@ function KnowledgePage() {
     setNav({ kind: "category", cat });
     setSearchQ(""); setFilters(new Set());
   }
-  function selectManage(kind: "pending" | "archived") {
+  function selectManage(kind: "pending" | "archived" | "usage") {
     setNav({ kind } as NavState);
     setSearchQ(""); setFilters(new Set());
   }
@@ -150,6 +151,16 @@ function KnowledgePage() {
     if (editMode && editBuffer !== (selectedDoc?.body ?? "")) {
       setPendingSelectId(id); setDirtyConfirm(true); return;
     }
+    setEditMode(false); setSelectedId(id); syncEntry(id);
+  }
+  // Heat-map click: leave the usage view for the doc's category, honoring the
+  // dirty-edit guard (nav must not switch when the select is vetoed).
+  function handleHeatSelect(id: string) {
+    if (editMode && editBuffer !== (selectedDoc?.body ?? "")) {
+      setPendingSelectId(id); setDirtyConfirm(true); return;
+    }
+    const doc = active.find((d) => d.id === id);
+    if (doc) setNav({ kind: "category", cat: doc.category });
     setEditMode(false); setSelectedId(id); syncEntry(id);
   }
   function toggleFilter(f: string) {
@@ -321,6 +332,11 @@ function KnowledgePage() {
           onScopeFilter={setScopeFilter}
         />
 
+        {/* Usage heat-map replaces list+reader when selected */}
+        {nav.kind === "usage" && !searchQ ? (
+          <RetrievalHeatmap docs={active} onSelect={handleHeatSelect} />
+        ) : (
+        <>
         {/* List column */}
         <DocList
           icon={listIcon}
@@ -408,6 +424,8 @@ function KnowledgePage() {
             </>
           )}
         </div>
+        </>
+        )}
       </div>
 
       {historyOpen && selectedDoc && (

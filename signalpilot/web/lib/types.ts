@@ -76,6 +76,21 @@ export interface KnowledgeUsage {
   storage_limit_mb: number;
 }
 
+export interface RetrievalDocStats {
+  doc_id: string;
+  total: number;
+  by_source: Record<string, number>;
+  last_retrieved_at: number | null;
+  series: number[]; // oldest → newest buckets
+}
+
+export interface RetrievalStats {
+  since_days: number;
+  bucket_days: number;
+  generated_at: number;
+  docs: RetrievalDocStats[];
+}
+
 export interface ReportSummary {
   id: string;
   org_id: string;

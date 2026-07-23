@@ -16,6 +16,7 @@ import {
   setApiKey,
   listKnowledge,
   getKnowledgeUsage,
+  getKnowledgeRetrievals,
   listKnowledgeEdits,
   listReports,
   getReport,
@@ -28,6 +29,7 @@ import type {
   KnowledgeDoc,
   KnowledgeEdit,
   KnowledgeUsage,
+  RetrievalStats,
   Report,
   ReportSummary,
 } from "~/lib/types";
@@ -49,6 +51,7 @@ export const SWR_KEYS = {
   healthHistory: (name: string) => `/api/connections/${name}/health/history`,
   knowledge: (qs?: string) => `/api/knowledge${qs ? `?${qs}` : ""}`,
   knowledgeUsage: "/api/knowledge/usage",
+  knowledgeRetrievals: (days: number) => `/api/knowledge/retrievals?since_days=${days}`,
   knowledgeDoc: (id: string) => `/api/knowledge/${id}`,
   knowledgeEdits: (id: string) => `/api/knowledge/${id}/edits`,
   reports: (qs?: string) => `/api/reports${qs ? `?${qs}` : ""}`,
@@ -195,6 +198,15 @@ export function useKnowledgeUsage() {
   return useSWR<KnowledgeUsage>(
     SWR_KEYS.knowledgeUsage,
     () => getKnowledgeUsage(),
+    { dedupingInterval: 30_000 },
+  );
+}
+
+/** Per-doc agent-retrieval stats (heat-map) — 30s cache. */
+export function useKnowledgeRetrievals(sinceDays: number) {
+  return useSWR<RetrievalStats>(
+    SWR_KEYS.knowledgeRetrievals(sinceDays),
+    () => getKnowledgeRetrievals(sinceDays),
     { dedupingInterval: 30_000 },
   );
 }

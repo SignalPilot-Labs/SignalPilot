@@ -985,7 +985,7 @@ export const browseFiles = (path?: string, pattern = "*.duckdb") => {
 };
 
 // Knowledge Base
-import type { KnowledgeDoc, KnowledgeEdit, KnowledgeUsage } from "./types";
+import type { KnowledgeDoc, KnowledgeEdit, KnowledgeUsage, RetrievalStats } from "./types";
 import type { GitHubInstallation, GitHubRepo, GitHubRepoLink, GitCredentials } from "./types";
 
 export const listKnowledge = (params?: { scope?: string; scope_ref?: string; category?: string; status?: string }) => {
@@ -995,6 +995,8 @@ export const listKnowledge = (params?: { scope?: string; scope_ref?: string; cat
   return request<KnowledgeDoc[]>(`/api/knowledge${qs ? `?${qs}` : ""}`);
 };
 export const getKnowledgeUsage = () => request<KnowledgeUsage>("/api/knowledge/usage");
+export const getKnowledgeRetrievals = (sinceDays = 30) =>
+  request<RetrievalStats>(`/api/knowledge/retrievals?since_days=${sinceDays}`);
 export const getKnowledgeDoc = (id: string) => request<KnowledgeDoc>(`/api/knowledge/${id}`);
 export const createKnowledgeDoc = (payload: {
   scope: KnowledgeDoc["scope"];

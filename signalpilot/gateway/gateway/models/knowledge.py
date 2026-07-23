@@ -140,3 +140,20 @@ class KnowledgeUsage(BaseModel):
     active_bytes: int
     storage_limit_bytes: int  # 0 = unlimited
     storage_limit_mb: int  # 0 = unlimited
+
+
+class RetrievalDocStats(BaseModel):
+    """Per-doc agent-retrieval aggregate for the heat-map UI."""
+
+    doc_id: str
+    total: int
+    by_source: dict[str, int]
+    last_retrieved_at: float | None
+    series: list[int]  # oldest → newest buckets
+
+
+class RetrievalStats(BaseModel):
+    since_days: int
+    bucket_days: int
+    generated_at: float
+    docs: list[RetrievalDocStats]

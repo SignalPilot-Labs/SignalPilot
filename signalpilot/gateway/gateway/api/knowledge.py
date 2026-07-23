@@ -10,7 +10,14 @@ import uuid
 
 from fastapi import APIRouter, HTTPException
 
-from ..models.knowledge import KnowledgeDoc, KnowledgeDocCreate, KnowledgeDocUpdate, KnowledgeEdit, KnowledgeUsage
+from ..models.knowledge import (
+    KnowledgeDoc,
+    KnowledgeDocCreate,
+    KnowledgeDocUpdate,
+    KnowledgeEdit,
+    KnowledgeUsage,
+    RetrievalStats,
+)
 from ..security.scope_guard import RequireScope
 from ..store.knowledge import (
     KnowledgeDuplicate,
@@ -78,7 +85,7 @@ async def list_knowledge(
     )
 
 
-@router.get("/knowledge/retrievals", dependencies=[RequireScope("read")])
+@router.get("/knowledge/retrievals", response_model=RetrievalStats, dependencies=[RequireScope("read")])
 async def get_knowledge_retrievals(store: StoreD, since_days: int = 30):
     """Per-doc retrieval stats for the heat-map UI (agent pulls only)."""
     return await store.knowledge_retrieval_stats(since_days=max(1, min(since_days, 365)))
@@ -146,7 +153,7 @@ async def update_knowledge_doc(doc_id: uuid.UUID, body_update: KnowledgeDocUpdat
         raise _map_knowledge_exc(exc) from exc
 
 
-@router.delete("/knowledge/{doc_id}", status_code=204, dependencies=[RequireScope("admin")])
+@router.delete("/knowledge/{doc_id}", status_code=204, response_model=None, dependencies=[RequireScope("admin")])
 async def archive_knowledge_doc(doc_id: uuid.UUID, store: StoreD):
     """Archive a knowledge doc (admin only)."""
     archived = await store.archive_knowledge_doc(str(doc_id))

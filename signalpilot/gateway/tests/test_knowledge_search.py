@@ -249,6 +249,12 @@ class TestHybridSearch:
 
 class TestRetrievalStats:
     async def _log(self, session, doc_id: str, source: str, ts: float):
+        # Stats join to active docs — ensure a doc row exists for the id.
+        existing = await session.get(GatewayKnowledgeDoc, doc_id)
+        if existing is None:
+            d = _doc(f"doc {doc_id}", f"body {doc_id}")
+            d.id = doc_id
+            session.add(d)
         session.add(
             GatewayKnowledgeRetrieval(
                 id=str(uuid.uuid4()), org_id=ORG, doc_id=doc_id, source=source, query="q", ts=ts
@@ -290,6 +296,16 @@ class TestRetrievalStats:
     def test_retrieval_event_dataclass_defaults(self):
         ev = RetrievalEvent(org_id=ORG, doc_id="d", source="search_knowledge")
         assert ev.query is None and ev.rank is None
+
+    @pytest.mark.asyncio
+    async def test_archived_doc_events_excluded_from_stats(self, session):
+        now = time.time()
+        await self._log(session, "gone", "search_knowledge", now - 10)
+        doc = await session.get(GatewayKnowledgeDoc, "gone")
+        doc.status = "archived"
+        await session.commit()
+        stats = await retrieval_stats(session, org_id=ORG, since_days=30)
+        assert stats["docs"] == []
 
     @pytest.mark.asyncio
     async def test_bucket_placement_oldest_and_newest(self, session):

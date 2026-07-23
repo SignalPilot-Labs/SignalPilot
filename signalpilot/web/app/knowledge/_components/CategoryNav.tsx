@@ -16,7 +16,8 @@ const SCOPES: { key: ScopeFilter; label: string }[] = [
 export type NavState =
   | { kind: "category"; cat: KnowledgeDoc["category"] }
   | { kind: "pending" }
-  | { kind: "archived" };
+  | { kind: "archived" }
+  | { kind: "usage" };
 
 export function CategoryNav({
   docs,
@@ -37,7 +38,7 @@ export function CategoryNav({
   search: string;
   onSearch: (q: string) => void;
   onCategory: (cat: KnowledgeDoc["category"]) => void;
-  onManage: (kind: "pending" | "archived") => void;
+  onManage: (kind: "pending" | "archived" | "usage") => void;
   scopeFilter: ScopeFilter;
   onScopeFilter: (s: ScopeFilter) => void;
 }) {
@@ -90,6 +91,12 @@ export function CategoryNav({
           </button>
         );
       })}
+
+      <div className="kb-nav-label">Insights</div>
+      <button className={`kb-nav-item${nav.kind === "usage" ? " sel" : ""}`} onClick={() => onManage("usage")}>
+        <span className="rico"><KbIcon name="pull" /></span>
+        <span className="nm" style={{ textTransform: "none" }}>Retrieval heat</span>
+      </button>
 
       <div className="kb-nav-label">Manage</div>
       <button

@@ -515,9 +515,13 @@ async def retrieval_stats(
             func.count().label("n"),
             func.max(GatewayKnowledgeRetrieval.ts).label("last_ts"),
         )
+        # Join docs so events for since-archived/deleted docs don't inflate
+        # totals the heat-map UI can't attribute to a visible row.
+        .join(GatewayKnowledgeDoc, GatewayKnowledgeDoc.id == GatewayKnowledgeRetrieval.doc_id)
         .where(
             GatewayKnowledgeRetrieval.org_id == org_id,
             GatewayKnowledgeRetrieval.ts >= since,
+            GatewayKnowledgeDoc.status == KnowledgeStatus.active.value,
         )
         .group_by(GatewayKnowledgeRetrieval.doc_id, GatewayKnowledgeRetrieval.source, bucket_expr)
     )

@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+from .version_parse import parse_dbt_version
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -126,15 +127,9 @@ def parse_dbt_project_yml(project_dir: str) -> DbtProjectInfo:
                 text=True,
                 timeout=10,
             )
-            for line in result.stdout.splitlines():
-                if "installed" in line.lower() or "core" in line.lower():
-                    parts = line.strip().split()
-                    for part in parts:
-                        if part and part[0].isdigit():
-                            info.dbt_version = part
-                            break
-                    if info.dbt_version:
-                        break
+            parsed = parse_dbt_version(result.stdout)
+            if parsed:
+                info.dbt_version = parsed
         except Exception:
             pass
 
@@ -158,7 +153,7 @@ def run_dbt_command_sync(
             success=False,
             exit_code=-1,
             stdout="",
-            stderr="dbt executable not found. Install dbt-core: pip install dbt-core",
+            stderr="dbt executable not found. Install dbt (pip install dbt-core, or the dbt Fusion CLI)",
             duration_ms=0,
             project_dir=project_dir,
         )

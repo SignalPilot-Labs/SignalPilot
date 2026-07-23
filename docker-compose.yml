@@ -45,6 +45,9 @@ services:
     env_file:
       - path: ./.slack.local.env
         required: false
+      # CLAUDE_KEY_1 for eval-run containers (Evaluate Change on KB entries)
+      - path: ./benchmark/.env
+        required: false
     environment:
       DATABASE_URL: postgresql+asyncpg://signalpilot:changeme_dev_only@db:5432/signalpilot
       SP_DATA_DIR: /data
@@ -72,11 +75,41 @@ services:
       SP_K8S_NAMESPACE: default
       SP_GATEWAY_NAMESPACE: signalpilot
       SP_GATEWAY_POD_SELECTOR: "app=signalpilot-gateway"
+      # Eval uploads (hidden /eval page) — MinIO as fake S3 + Mailpit as fake
+      # email locally; in production point at a real bucket + SES instead.
+      SP_EVAL_UPLOADS_BUCKET: sp-eval-uploads
+      SP_EVAL_UPLOADS_S3_ENDPOINT: http://minio:9000
+      # Presigned part URLs must be reachable from the browser, not compose DNS
+      SP_EVAL_UPLOADS_S3_PUBLIC_ENDPOINT: http://localhost:9000
+      SP_EVAL_UPLOADS_S3_ACCESS_KEY: minioadmin
+      SP_EVAL_UPLOADS_S3_SECRET_KEY: minioadmin
+      SP_EVAL_UPLOADS_NOTIFY_EMAIL: evals@signalpilot.dev
+      SP_EVAL_UPLOADS_SMTP_HOST: mailpit
+      SP_EVAL_UPLOADS_SMTP_PORT: "1025"
+      SP_EVAL_UPLOADS_MAX_MB: "500"
+      # Eval runs (Evaluate Change on knowledge entries) — spawns claude CLI
+      # containers via the docker socket, MCP wired back to this gateway.
+      SP_EVAL_RUNNER_IMAGE: sp-eval-runner:latest
+      SP_EVAL_DOCKER_NETWORK: signalpilot_default
+      SP_EVAL_MCP_URL: http://gateway:3300/mcp
+      # MCP DNS-rebinding protection allowlist — eval containers reach the
+      # gateway by its compose-network alias.
+      SP_MCP_ALLOWED_HOSTS: gateway
+      SP_EVAL_CLAUDE_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # Setup-state containers: host paths for bind mounts (docker binds
+      # resolve on the HOST). SP_EVAL_HOST_ROOT comes from .env.
+      SP_EVAL_PROJECTS_HOST_DIR: ${SP_EVAL_HOST_ROOT:-}/demo-generator/trap-arena/projects
+      SP_EVAL_SETUP_HOST_ROOT: ${SP_EVAL_HOST_ROOT:-}
+    group_add:
+      - "0"  # docker socket access (root group inside Docker Desktop VM)
     volumes:
       - signalpilot-data:/data
       - signalpilot-shared:/shared
       - signalpilot-gateway-secrets:/gateway-secrets
       - signalpilot-repos:/repos
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Local eval sets (trap-arena format) usable as repo_url paths
+      - ./demo-generator/trap-arena/projects:/eval-projects:ro
     command: >
       sh -c "python3 -c 'from gateway.store import get_local_api_key; k=get_local_api_key(); open(\"/shared/local_api_key\",\"w\").write(k) if k else None' &&
              uvicorn gateway.main:app --host 0.0.0.0 --port 3300"
@@ -87,6 +120,10 @@ services:
         condition: service_healthy
       sandbox:
         condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   # ─── Notebook Server ──────────────────────────────────────────
@@ -144,6 +181,46 @@ services:
       - gateway
     restart: unless-stopped
 
+  # ─── Eval uploads: fake S3 + fake email inbox ─────────────────
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "127.0.0.1:9000:9000"   # S3 API
+      - "127.0.0.1:9001:9001"   # console (minioadmin/minioadmin)
+    volumes:
+      - signalpilot-minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # Creates the eval-uploads bucket and its 7-day expiry lifecycle rule, then
+  # exits — the local stand-in for the one-time AWS setup (eval-upload-spec.md §3.2).
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc mb --ignore-existing local/sp-eval-uploads &&
+        mc ilm rule add local/sp-eval-uploads --prefix "uploads/" --expire-days 7 || true
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "127.0.0.1:8025:8025"   # inbox UI
+    restart: unless-stopped
+
   # ─── Sandbox (gVisor code execution) ──────────────────────────
   sandbox:
     build:
@@ -182,6 +259,7 @@ services:
 
 volumes:
   signalpilot-pg-data:
+  signalpilot-minio-data:
   signalpilot-data:
   signalpilot-shared:
   signalpilot-gateway-secrets:

@@ -25,11 +25,27 @@ class RequestBodySizeLimitMiddleware:
     without reading any body bytes.
     For chunked/streaming bodies without Content-Length: wrap the receive
     callable and count cumulative body bytes, rejecting when the limit is hit.
+
+    path_max_bytes maps path prefixes to per-path limits, for endpoints that
+    legitimately accept large bodies (e.g. eval zip uploads) without widening
+    the global cap.
     """
 
-    def __init__(self, app: ASGIApp, max_body_bytes: int = _MAX_BODY_BYTES_DEFAULT) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        max_body_bytes: int = _MAX_BODY_BYTES_DEFAULT,
+        path_max_bytes: dict[str, int] | None = None,
+    ) -> None:
         self.app = app
         self.max_body_bytes = max_body_bytes
+        self.path_max_bytes = path_max_bytes or {}
+
+    def _limit_for(self, path: str) -> int:
+        for prefix, limit in self.path_max_bytes.items():
+            if path.startswith(prefix):
+                return limit
+        return self.max_body_bytes
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -46,6 +62,8 @@ class RequestBodySizeLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
+        limit = self._limit_for(path)
+
         # Check Content-Length header for early rejection
         headers: dict[bytes, bytes] = dict(scope.get("headers", []))
         content_length_raw = headers.get(b"content-length")
@@ -56,7 +74,7 @@ class RequestBodySizeLimitMiddleware:
                 # Unparseable Content-Length — reject as malformed
                 await self._send_413(send)
                 return
-            if content_length > self.max_body_bytes:
+            if content_length > limit:
                 await self._send_413(send)
                 return
 
@@ -71,7 +89,7 @@ class RequestBodySizeLimitMiddleware:
             if message.get("type") == "http.request":
                 chunk = message.get("body", b"")
                 bytes_received[0] += len(chunk)
-                if bytes_received[0] > self.max_body_bytes and not response_started[0]:
+                if bytes_received[0] > limit and not response_started[0]:
                     await self._send_413(send)
                     return {"type": "http.disconnect"}
             return message

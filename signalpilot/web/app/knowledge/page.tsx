@@ -1,14 +1,15 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
-import { Plus, RefreshCw, Loader2 } from "lucide-react";
+import { Plus, RefreshCw, Loader2, FlaskConical } from "lucide-react";
 import {
   updateKnowledgeDoc,
   archiveKnowledgeDoc,
   approveKnowledgeDoc,
   getKnowledgeDoc,
+  startEvalRun,
 } from "~/lib/api";
 import {
   useKnowledgeDocs,
@@ -37,6 +38,8 @@ const SORT_CYCLE: SortKey[] = ["views", "recent", "alpha", "least"];
 function KnowledgePage() {
   const { toast } = useToast();
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const [evaluating, setEvaluating] = useState(false);
 
   // ── UI state ──
   const [nav, setNav] = useState<NavState>({ kind: "category", cat: "decisions" });
@@ -190,6 +193,19 @@ function KnowledgePage() {
       const msg = err instanceof Error ? err.message : "unknown error";
       toast(msg.includes("403") ? "admin scope required" : `approve failed: ${msg}`, "error");
     }
+  }
+  async function handleEvaluate(id: string) {
+    setEvaluating(true);
+    try {
+      const run = await startEvalRun([id]);
+      toast("eval run started", "success");
+      router.push(`/evals?run=${run.id}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown error";
+      if (msg.includes("400")) toast("no eval repo configured — set one on the Evals page", "error");
+      else if (msg.includes("404")) toast("eval runs are not enabled on this gateway", "error");
+      else toast(`eval failed to start: ${msg}`, "error");
+    } finally { setEvaluating(false); }
   }
   async function handleRevert(edit: KnowledgeEdit) {
     if (!selectedId) return;
@@ -364,6 +380,15 @@ function KnowledgePage() {
                   {selectedDoc.status === "pending" ? (
                     <>
                       <button className="kb-btn kb-btn-danger" onClick={() => setConfirmArchive(true)}><KbIcon name="slash" size={14} />Deny</button>
+                      <button
+                        className="kb-btn"
+                        onClick={() => selectedId && handleEvaluate(selectedId)}
+                        disabled={evaluating}
+                        title="Run the eval suite in docker with this proposed entry active"
+                      >
+                        {evaluating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FlaskConical className="w-3.5 h-3.5" strokeWidth={1.5} />}
+                        {evaluating ? "Starting…" : "Evaluate Change"}
+                      </button>
                       <button className="kb-btn kb-btn-primary" onClick={() => setConfirmApprove(true)}><KbIcon name="check" size={14} />Approve</button>
                     </>
                   ) : (

@@ -26,6 +26,15 @@ except ImportError:
     HAS_DATABRICKS = False
 
 
+# Schema-introspection cost knobs: DESCRIBE DETAIL per-table cap, the size
+# ceiling for COUNT(*) row-count backfill, its batch size, and per-batch
+# timeout. The COUNT backfill can never exceed the DETAIL cap.
+_DETAIL_TABLE_CAP = 50
+_COUNT_SIZE_LIMIT_MB = 100
+_COUNT_BATCH = 20
+_COUNT_TIMEOUT_S = 60
+
+
 class DatabricksConnector(BaseConnector):
     def __init__(self):
         super().__init__()
@@ -385,8 +394,8 @@ class DatabricksConnector(BaseConnector):
 
                 logging.getLogger(__name__).debug("FK query not supported: %s", e)
 
-            # Row counts via DESCRIBE DETAIL (Delta tables — batch up to 50 tables)
-            tables_to_detail = [(k, v) for k, v in schema.items() if v.get("type") != "view"][:50]
+            # Size/file metadata via DESCRIBE DETAIL (Delta tables — cap 50 tables)
+            tables_to_detail = [(k, v) for k, v in schema.items() if v.get("type") != "view"][:_DETAIL_TABLE_CAP]
             for _key, table_data in tables_to_detail:
                 try:
                     rc_cursor = self._conn.cursor()
@@ -402,11 +411,69 @@ class DatabricksConnector(BaseConnector):
                         row_dict = dict(zip(col_names, detail, strict=False))
                         if "numFiles" in row_dict:
                             table_data["num_files"] = row_dict["numFiles"]
-                        if "sizeInBytes" in row_dict:
-                            size_bytes = row_dict["sizeInBytes"] or 0
-                            table_data["size_mb"] = round(size_bytes / (1024 * 1024), 2)
+                        # NULL sizeInBytes = non-Delta/unknown size: leave
+                        # size_mb absent so the COUNT backfill skips it — an
+                        # external multi-TB Parquet table must not get scanned.
+                        if row_dict.get("sizeInBytes") is not None:
+                            table_data["size_mb"] = round(row_dict["sizeInBytes"] / (1024 * 1024), 2)
+                        if row_dict.get("partitionColumns"):
+                            table_data["partition_columns"] = row_dict["partitionColumns"]
+                        if row_dict.get("clusteringColumns"):
+                            table_data["clustering_columns"] = row_dict["clusteringColumns"]
+                        if row_dict.get("lastModified"):
+                            table_data["last_modified"] = str(row_dict["lastModified"])
                 except Exception:
                     pass
+
+            # Row counts: DESCRIBE DETAIL has no rowCount, so every table used
+            # to report 0. Backfill with batched COUNT(*) for small tables
+            # (≤_COUNT_SIZE_LIMIT_MB per DESCRIBE DETAIL; unknown sizes
+            # excluded) — cheap on Delta, and grain/fan-out tooling depends on
+            # non-zero counts. Effective cap is the DESCRIBE DETAIL cap above.
+            def _esc_lit(s: str) -> str:
+                return s.replace("'", "''")
+
+            def _esc_id(s: str) -> str:
+                return s.replace("`", "``")
+
+            small_tables = [
+                (k, v)
+                for k, v in tables_to_detail
+                if v.get("size_mb") is not None and v["size_mb"] <= _COUNT_SIZE_LIMIT_MB
+            ]
+            for i in range(0, len(small_tables), _COUNT_BATCH):
+                batch = small_tables[i : i + _COUNT_BATCH]
+                union_sql = " UNION ALL ".join(
+                    f"SELECT '{_esc_lit(key)}' AS tkey, COUNT(*) AS n "
+                    f"FROM `{_esc_id(v['schema'])}`.`{_esc_id(v['name'])}`"
+                    for key, v in batch
+                )
+
+                def _run_batch(sql=union_sql):
+                    cnt_cursor = self._conn.cursor()
+                    try:
+                        cnt_cursor.execute(sql)
+                        return cnt_cursor.fetchall()
+                    finally:
+                        cnt_cursor.close()
+
+                try:
+                    t0 = _time.monotonic()
+                    cnt_rows = await self._run_in_thread(
+                        _run_batch, timeout=_COUNT_TIMEOUT_S, label="Databricks"
+                    )
+                    await self._audit_sql(union_sql[:500], len(cnt_rows), (_time.monotonic() - t0) * 1000)
+                    for row in cnt_rows:
+                        key, n = row[0], row[1]
+                        if key in schema:
+                            schema[key]["row_count"] = int(n or 0)
+                except Exception as exc:
+                    # size metadata still present; this batch's counts stay 0
+                    import logging
+
+                    logging.getLogger(__name__).debug(
+                        "Databricks COUNT backfill batch failed (%d tables): %s", len(batch), exc
+                    )
 
             return schema
         except Exception as e:

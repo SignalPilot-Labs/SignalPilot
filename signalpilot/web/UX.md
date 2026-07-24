@@ -35,9 +35,9 @@ Sidebar regrouped from one flat list into four labeled groups:
 | Group | Items | Notes |
 |---|---|---|
 | *(brand)* | Dashboard | trust summary |
-| **Activity** | Chats, Reports, Evals*, Audit | what agents did; evals stays hidden unless enabled |
+| **Activity** | Chats, Reports, Audit | what agents did |
 | **Data** | Connections *(absorbs Health)*, Schema, Query, Notebooks, Sandboxes | exploring + wiring the data plane |
-| **Workspace** | Projects, Knowledge, Integrations | building + curating |
+| **Workspace** | Projects, Knowledge Base, Evals*, Integrations | building + curating; evals hidden unless enabled |
 | **Settings** | Settings (keys, MCP, GitHub under it as today) | footer area |
 
 Page moves/merges:

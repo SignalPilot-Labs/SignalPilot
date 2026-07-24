@@ -179,7 +179,6 @@ const navGroups: { label: string | null; items: NavItem[] }[] = [
       { href: "/chats", label: "Chats", icon: NavIconChats, shortcut: "" },
       { href: "/reports", label: "Reports", icon: NavIconReports, shortcut: "9" },
       { href: "/audit", label: "Audit", icon: NavIconAudit, shortcut: "7" },
-      { href: "/evals", label: "Evals", icon: NavIconEvals, shortcut: "" },
     ],
   },
   {
@@ -195,6 +194,7 @@ const navGroups: { label: string | null; items: NavItem[] }[] = [
     items: [
       { href: "/projects", label: "Projects", icon: NavIconProject, shortcut: "5" },
       { href: "/knowledge", label: "Knowledge Base", icon: NavIconKnowledge, shortcut: "8" },
+      { href: "/evals", label: "Evals", icon: NavIconEvals, shortcut: "" },
       { href: "/integrations", label: "Integrations", icon: NavIconIntegrations, shortcut: "3" },
     ],
   },

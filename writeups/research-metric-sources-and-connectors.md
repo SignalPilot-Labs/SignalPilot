@@ -80,3 +80,55 @@ is the licensor's FAQ interpretation, not binding license text. DataHub notion/s
 extras' content depth is documented risk, not hands-on tested — a 1-day spike
 (ingest a Notion workspace + one Metabase instance into a file sink) is the cheap
 next step before committing.
+
+
+---
+
+# Addendum (2026-07-24): the source-available tier ("closed license but still OSS")
+
+Follow-up question: what exists as *source-available* — code you can read/self-host but
+under restrictive (ELv2/BSL/fair-code) terms. Licenses verified against the actual
+LICENSE files in each repo, not blog posts.
+
+| Project | License (verified) | Our-list coverage | Can we embed it? |
+|---|---|---|---|
+| **Nango** | ELv2 — core, SDKs, *and* integration-templates all ELv2 (no MIT escape hatch) | **10/11** — Notion, GDocs, GDrive, Slack, Looker, Tableau, PowerBI, Metabase, Snowflake, Databricks (✗ Superset, dbt) | **Yes** — ELv2 permits embedding/self-hosting inside our product; forbidden only to resell Nango-as-a-service or bypass license keys. Active (pushed 2026-07-24, 11k★). |
+| **Estuary Flow** | BSL 1.1 (→ Apache per-version after ~4y; next conversion 2029). Connectors repo LICENSE says BSL-by-default, README claims MIT/Apache — **contradictory; needs written confirmation** | Notion, GDrive, Slack, Looker, Snowflake CDC + Snowflake/Databricks materializations (✗ Tableau, PowerBI, Metabase, Superset, dbt, GDocs) | Yes for hidden plumbing; the BSL grant bars offering a "Data Processing Service" (customers building pipelines). |
+| **Airbyte** | ELv2 core AND maintained connectors (the "connectors are MIT" belief is dead since 2024) | Broadest ELT catalog overall | Yes per their FAQ (embed for customer data movement); no reselling as ELT / exposing its UI-API. Heavy server platform. |
+| **n8n** | Sustainable Use License (fair-code) + `.ee.` files needing Enterprise license | Notion, Slack, **GDocs + GDrive**, Metabase, Snowflake, Databricks (✗ Looker, Tableau, PowerBI, Superset, dbt) | **No, not for our shape** — explicitly forbidden to pass end-user credentials through an embedded n8n or derive product value substantially from it; that's their paid "n8n Embed" agreement. |
+| **CloudQuery** | MPL-2.0 core, but flagship plugins (incl. Notion, Slack, Databricks) went **proprietary + row-metered** via their Hub (Dec 2024); joining env0 | Residual open plugins are warehouse *destinations* only | Core embeddable, but the plugins we'd want aren't open — defeats the purpose. |
+| **OpenMetadata** | Recent releases: Collate Community License (was Apache) | Wide connector set | Server-required sink + license shift — disqualified earlier, unchanged. |
+| Panora | AGPL-3.0, **repo archived** | irrelevant | Dead. |
+| Supaglue | MIT, **archived** (team → Stripe 2024) | CRM only | Dead. |
+
+Also checked (the truly-open agent-connector wave, for contrast):
+- **Airweave** — MIT, clean, active: Notion/GDocs/GDrive/Slack sync-into-search for
+  agents. Zero BI/warehouse/dbt.
+- **Klavis** — Apache-2.0: ~90 self-hostable MCP servers (notion, google_docs,
+  google_drive, slack, postgres…). Zero BI/dbt/Databricks.
+- **Composio** — MIT SDK only; the tool catalog/runtime is their hosted proprietary
+  platform (9/11 coverage but it's a paid API dependency, not embeddable software).
+- ACI.dev (Apache-2.0, weaker momentum), Arcade (MIT SDK, commercial runtime).
+
+## What this changes
+
+The headline finding: **Nango is the sleeper in the source-available tier** — the only
+project anywhere with Looker + Tableau + PowerBI + Metabase OAuth/API access in one
+catalog (10/11 of our list), ELv2 terms that expressly allow our embed shape, and
+real momentum. But note what Nango *is*: an OAuth/auth + API-proxy layer (it gets you
+authenticated API access), not a metadata extractor — we'd still write the "pull
+LookML/dashboards/docs and normalize into KB entries" logic per source.
+
+So the stack picture refines to three complementary tiers:
+1. **Metadata extraction (batch onboarding): acryl-datahub** — unchanged
+   recommendation, Apache-2.0, extracts actual dashboards/lineage/dbt/warehouse
+   metadata.
+2. **OAuth + live API access (the connect-your-tools UX): Nango (ELv2)** is the
+   partnership/embed candidate if we want one-click OAuth across the BI+docs tier
+   instead of building per-provider OAuth ourselves.
+3. **Docs/chat content depth: dlt (Apache) or Airweave (MIT)** as truly-open options.
+
+ELv2 exposure note for us specifically: SignalPilot itself is a governed gateway —
+if we ever expose an embedded ELv2 component's own API surface to customers we edge
+toward the forbidden zone; keeping Nango/Airbyte as internal plumbing behind our API
+is the safe pattern. Counsel review before any ELv2 embed ships.

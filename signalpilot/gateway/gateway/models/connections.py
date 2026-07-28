@@ -157,6 +157,14 @@ class ConnectionCreate(BaseModel):
     xata_organization: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_-]{1,64}$")  # org id, e.g. 0psl2d
     xata_project: str | None = Field(default=None, max_length=128, pattern=r"^[A-Za-z0-9_-]{1,128}$")      # project id, e.g. prj_...
     xata_database: str | None = Field(default=None, max_length=128, pattern=r"^[A-Za-z0-9_-]{1,128}$")     # database name (default: xata)
+    # ─── Server-held credentials (shared demo warehouses) ──────────
+    # Instead of copying an org-wide control-plane key into every workspace's
+    # encrypted extras, a connection may name a secret the gateway holds
+    # (see gateway.connectors.xata_creds). Paired with xata_pinned, which locks
+    # the connection to its own project + branch so a shared key can never be
+    # used to reach another project or another user's branch.
+    xata_credential_ref: str | None = Field(default=None, max_length=32, pattern=r"^[a-z0-9_-]{1,32}$")
+    xata_pinned: bool = False
     # ─── Snowflake key-pair auth ───────────────────────────────────
     private_key: str | None = Field(default=None, max_length=16384)  # PEM-encoded private key
     private_key_passphrase: str | None = Field(default=None, max_length=1024)
@@ -240,9 +248,14 @@ class ConnectionCreate(BaseModel):
         if self.db_type != DBType.xata:
             return self
 
-        # New Xata (xata.tech): API key + org + project; region/database are resolved
-        # server-side. Legacy Xata (xata.sh): require region + database.
-        if self.xata_api_key:
+        # A pin is only meaningful alongside the project + branch it pins to.
+        if self.xata_pinned and not (self.xata_project and self.branch):
+            raise ValueError("'xata_pinned' requires both 'xata_project' and 'branch'")
+
+        # New Xata (xata.tech): API key (inline, or a server-held credential ref)
+        # + org + project; region/database are resolved server-side.
+        # Legacy Xata (xata.sh): require region + database.
+        if self.xata_api_key or self.xata_credential_ref:
             if not self.xata_organization or not self.xata_organization.strip():
                 raise ValueError("Xata connections require 'xata_organization' and 'xata_project'")
             if not self.xata_project or not self.xata_project.strip():

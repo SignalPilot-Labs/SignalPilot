@@ -16,6 +16,7 @@ from gateway.auth import OrgAdmin
 from gateway.common.ip import request_meta
 from gateway.connectors.pool_manager import pool_manager
 from gateway.connectors.schema_cache import schema_cache
+from gateway.connectors.xata_creds import is_pinned
 from gateway.models import AuditEntry, ConnectionCreate, ConnectionUpdate
 from gateway.security.scope_guard import RequireScope
 from gateway.store import CredentialEncryptionError
@@ -36,6 +37,34 @@ _SECRET_FIELDS: frozenset[str] = frozenset({
     "private_key_passphrase",
     "ssh_tunnel",
 })
+
+# A pinned connection (a demo sandbox) is defined by *where it points*: its
+# project, its one branch, and the control-plane it talks to. Those are enforced
+# on every request against the connection's stored extras, so allowing an edit
+# to move them would hand back everything the pin exists to prevent — a user
+# could repoint at another user's branch and pull write credentials for it, or
+# repoint xata_api_url at a host of their choosing and be handed the org key as
+# a Bearer token. Only cosmetic fields stay editable.
+_PINNED_EDITABLE_FIELDS: frozenset[str] = frozenset({
+    "description",
+    "tags",
+    "schema_filter_include",
+    "schema_filter_exclude",
+})
+
+# Xata identity lives in the encrypted extras, not on ConnectionInfo, so it has
+# to be folded back in to revalidate an edit — without it the rebuilt
+# ConnectionCreate looks like a connection with no project and no key.
+_XATA_IDENTITY_EXTRAS: tuple[str, ...] = (
+    "branch",
+    "xata_api_key",
+    "xata_api_url",
+    "xata_organization",
+    "xata_project",
+    "xata_database",
+    "xata_credential_ref",
+    "xata_pinned",
+)
 
 
 @router.get("/connections", dependencies=[RequireScope("read")])
@@ -74,9 +103,18 @@ async def get_connection_detail(name: str, store: StoreD):
 
 @router.delete("/connections/{name}", status_code=204, response_model=None, dependencies=[RequireScope("write")])
 async def remove_connection(name: str, store: StoreD, _role: OrgAdmin, request: Request):
+    # Demo connections own a private Xata branch: capture the cleanup (with the
+    # connection's stored credentials) BEFORE the row is deleted, run it after.
+    from gateway.api.demo import prepare_demo_branch_cleanup
+
+    demo_cleanup = await prepare_demo_branch_cleanup(store, name)
+
     if not await store.delete_connection(name):
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
     schema_cache.invalidate(name)
+
+    if demo_cleanup is not None:
+        await demo_cleanup()
 
     client_ip, user_agent = request_meta(request)
     # Audit-DB failure must not block the completed deletion; best-effort observability.
@@ -102,15 +140,29 @@ async def edit_connection(name: str, update: ConnectionUpdate, store: StoreD, _r
     if not existing:
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
 
+    stored_extras = await store.get_credential_extras(name) or {}
+
     update_data = update.model_dump(exclude_none=True)
+    if is_pinned(stored_extras):
+        moved = sorted(update_data.keys() - _PINNED_EDITABLE_FIELDS)
+        if moved:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "This is a fixed sandbox connection; "
+                    f"{', '.join(moved)} cannot be changed. Remove it and add it again instead."
+                ),
+            )
+
     if update_data:
         merged_db_type = update_data.get("db_type", existing.db_type)
+        identity = {k: stored_extras[k] for k in _XATA_IDENTITY_EXTRAS if k in stored_extras}
         merged = ConnectionCreate(
             name=name,
             db_type=merged_db_type,
             **{
                 k: v
-                for k, v in {**existing.model_dump(), **update_data}.items()
+                for k, v in {**existing.model_dump(), **identity, **update_data}.items()
                 if k not in ("id", "created_at", "last_used", "status", "name", "db_type")
             },
         )

@@ -3,7 +3,9 @@
 import { useState } from "react";
 import { Copy, CheckCircle2 } from "lucide-react";
 
-export function CopyButton({ text }: { text: string }) {
+/** `label` defaults to "copy key" — this started life on the API-keys page.
+ *  Pass it when the payload is not a key (a command, a URL, a snippet). */
+export function CopyButton({ text, label = "copy key" }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false);
 
   function handleCopy() {
@@ -26,7 +28,7 @@ export function CopyButton({ text }: { text: string }) {
       ) : (
         <>
           <Copy className="w-3 h-3" />
-          copy key
+          {label}
         </>
       )}
     </button>

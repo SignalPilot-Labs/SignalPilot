@@ -159,6 +159,14 @@ def _extract_credential_extras(conn: ConnectionCreate) -> dict:
         # ._resolve_endpoint reads.
         if conn.xata_api_key:
             extras["xata_api_key"] = conn.xata_api_key
+        # Shared demo warehouses store a *reference* to a gateway-held secret
+        # rather than the org key itself — resolved at use time by
+        # gateway.connectors.xata_creds.resolve_xata_extras(). Nothing secret
+        # goes to rest here.
+        if conn.xata_credential_ref:
+            extras["xata_credential_ref"] = conn.xata_credential_ref
+        if conn.xata_pinned:
+            extras["xata_pinned"] = True
         if conn.xata_api_url:
             extras["xata_api_url"] = conn.xata_api_url
         org = conn.xata_organization or conn.xata_org

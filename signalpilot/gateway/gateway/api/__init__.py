@@ -16,6 +16,7 @@ from .cache import router as cache_router
 from .chat import router as chat_router
 from .chat_traces import router as chat_traces_router
 from .connections import router as connections_router
+from .demo import router as demo_router
 from .eval_runs import router as eval_runs_router
 from .files import router as files_router
 from .github import router as github_router
@@ -48,6 +49,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(health_router)
     app.include_router(settings_router)
     app.include_router(connections_router)
+    app.include_router(demo_router)
     app.include_router(schema_router)
     if not is_cloud_mode():
         app.include_router(sandboxes_router)

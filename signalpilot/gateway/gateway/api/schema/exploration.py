@@ -20,6 +20,7 @@ from gateway.api.schema._router import router
 from gateway.api.schema._scoring import _fuzzy_match
 from gateway.connectors.pool_manager import pool_manager
 from gateway.connectors.schema_cache import _compute_schema_diff, schema_cache
+from gateway.connectors.xata_creds import is_pinned
 from gateway.schema.utils import _infer_implicit_joins
 from gateway.security.scope_guard import RequireScope
 
@@ -475,6 +476,9 @@ async def get_xata_branch_diff(
 
     info = await require_connection(store, name)
     extras = await store.get_credential_extras(name)
+    # A pinned connection can only see its own branch, so there is nothing to diff.
+    _require_xata_scope(extras, branch=base)
+    _require_xata_scope(extras, branch=compare)
     try:
         base_cs = await XataConnector._resolve_endpoint({**extras, "branch": base})
         compare_cs = await XataConnector._resolve_endpoint({**extras, "branch": compare})
@@ -495,6 +499,21 @@ async def get_xata_branch_diff(
 # are reachable only through the governed MCP query path. Override/extend per connection
 # with a comma-separated `xata_protected_branches` credential extra.
 _PROTECTED_BRANCHES = {"main", "master", "staging", "prod", "production", "default"}
+
+
+def _require_xata_scope(extras: dict, *, project: str | None = None, branch: str | None = None) -> None:
+    """403 if a pinned connection (e.g. a demo sandbox) is addressed off-scope.
+
+    Demo connections are backed by an org-wide control-plane key, so without
+    this the caller-supplied project/branch would let one workspace reach every
+    project in the org and every other user's demo branch.
+    """
+    from gateway.connectors.xata_creds import XataScopeError, enforce_xata_scope
+
+    try:
+        enforce_xata_scope(extras, project=project, branch=branch)
+    except XataScopeError as e:
+        raise HTTPException(status_code=403, detail=str(e))
 
 
 def _resolve_protected(extras: dict) -> set[str]:
@@ -530,6 +549,10 @@ async def get_xata_dbt_profile(
     if "xata" not in (info.db_type or "").lower():
         raise HTTPException(status_code=400, detail=f"Connection '{name}' is not a Xata connection")
     extras = await store.get_credential_extras(name)
+    # Pinned (demo) connections may only ever be handed credentials for their own
+    # branch — branch names are enumerable, so without this one demo user could
+    # pull write credentials for another's sandbox.
+    _require_xata_scope(extras, branch=branch)
     if branch.lower() in _resolve_protected(extras):
         raise HTTPException(
             status_code=403,
@@ -621,6 +644,14 @@ def _xata_control_from_extras(conn_str: str | None, extras: dict) -> Any:
     from urllib.parse import urlparse
 
     from gateway.connectors.xata_control import XataControlClient, XataControlConfig
+    from gateway.connectors.xata_creds import XataCredentialError, resolve_xata_extras
+
+    # Demo connections reference the server-side secret instead of storing the
+    # org key; materialize it here so the rest of this function is unchanged.
+    try:
+        extras = resolve_xata_extras(extras)
+    except XataCredentialError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
     api_url = extras.get("xata_api_url") or "https://api.xata.tech"
     org = extras.get("xata_organization") or extras.get("xata_org")
@@ -672,6 +703,7 @@ async def list_xata_branches(
     info = await require_connection(store, name)
     conn_str = await store.get_connection_string(name)
     extras = await store.get_credential_extras(name)
+    _require_xata_scope(extras, project=project)
     try:
         async with _xata_control_from_extras(conn_str, extras) as client:
             return {"branches": await client.list_branches(project)}
@@ -692,6 +724,14 @@ async def create_xata_branch(
     info = await require_connection(store, name)
     conn_str = await store.get_connection_string(name)
     extras = await store.get_credential_extras(name)
+    _require_xata_scope(extras, project=project)
+    if is_pinned(extras):
+        # A pinned connection owns exactly one branch; forking more would create
+        # branches nothing tracks or cleans up.
+        raise HTTPException(
+            status_code=403,
+            detail="This connection is a fixed sandbox branch and cannot create further branches.",
+        )
     try:
         async with _xata_control_from_extras(conn_str, extras) as client:
             return await client.create_child_branch(project, body.branch_name, body.parent_id)
@@ -716,6 +756,14 @@ async def delete_xata_branch(
     info = await require_connection(store, name)
     conn_str = await store.get_connection_string(name)
     extras = await store.get_credential_extras(name)
+    _require_xata_scope(extras, project=project)
+    if is_pinned(extras):
+        # The demo branch's lifecycle is owned by the connection: it is deleted
+        # when the connection is removed, not by the agent.
+        raise HTTPException(
+            status_code=403,
+            detail="This connection is a fixed sandbox branch; remove the connection to delete it.",
+        )
     if branch.lower() in _resolve_protected(extras):
         raise HTTPException(
             status_code=403,

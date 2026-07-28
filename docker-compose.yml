@@ -105,6 +105,18 @@ services:
       # resolve on the HOST). SP_EVAL_HOST_ROOT comes from .env.
       SP_EVAL_PROJECTS_HOST_DIR: ${SP_EVAL_HOST_ROOT:-}/demo-generator/trap-arena/projects
       SP_EVAL_SETUP_HOST_ROOT: ${SP_EVAL_HOST_ROOT:-}
+      # Demo connector (hidden /demo-db page) - forks a Xata branch
+      # of a shared demo warehouse per workspace. Values come from the root .env.
+      # XATA_KEY is org-wide: the gateway holds it and resolves it per request;
+      # it is never written into a workspace's connection record.
+      XATA_KEY: ${XATA_KEY:-}
+      SP_DEMO_XATA_ORG: ${SP_DEMO_XATA_ORG:-}
+      SP_DEMO_CATALOG: ${SP_DEMO_CATALOG:-}
+      SP_DEMO_XATA_API_URL: ${SP_DEMO_XATA_API_URL:-https://api.xata.tech}
+      # Legacy single-warehouse fallback (used only when SP_DEMO_CATALOG is unset).
+      SP_DEMO_XATA_PROJECT: ${SP_DEMO_XATA_PROJECT:-}
+      SP_DEMO_XATA_PARENT_BRANCH: ${SP_DEMO_XATA_PARENT_BRANCH:-main}
+      SP_DEMO_REPO_URL: ${SP_DEMO_REPO_URL:-}
     group_add:
       - "0"  # docker socket access (root group inside Docker Desktop VM)
     volumes:

@@ -193,6 +193,31 @@ export interface ConnectionInfo {
   schema_filter_exclude: string[] | null;
 }
 
+/** One shared demo warehouse, plus whether this workspace has cloned it. */
+export interface DemoWarehouse {
+  slug: string;
+  title: string;
+  description: string;
+  repo_url: string | null;
+  parent_branch: string;
+  exists: boolean;
+  branch: string | null;
+  connection_name: string;
+}
+
+export interface DemoConnectorStatus {
+  enabled: boolean;
+  demos: DemoWarehouse[];
+}
+
+export interface DemoConnectorCreated {
+  connection: ConnectionInfo;
+  demo: string;
+  title: string;
+  branch: string;
+  repo_url: string | null;
+}
+
 export interface ProjectInfo {
   id: string;
   name: string;

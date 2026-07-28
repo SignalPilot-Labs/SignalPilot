@@ -417,6 +417,15 @@ export const updateConnection = (name: string, updates: Record<string, unknown>)
   request<import("./types").ConnectionInfo>(`/api/connections/${name}`, { method: "PUT", body: JSON.stringify(updates) });
 export const deleteConnection = (name: string) =>
   request<void>(`/api/connections/${name}`, { method: "DELETE" });
+
+// Demo connector (hidden /demo-db page)
+export const getDemoConnector = () =>
+  request<import("./types").DemoConnectorStatus>("/api/demo/connector");
+export const createDemoConnector = (demo: string) =>
+  request<import("./types").DemoConnectorCreated>("/api/demo/connector", {
+    method: "POST",
+    body: JSON.stringify({ demo }),
+  });
 export const refreshConnectionSchema = (name: string) =>
   request<{ connection_name: string; table_count: number; message: string; refreshed_at?: number; next_refresh_in?: number | null }>(
     `/api/connections/${name}/schema/refresh`, { method: "POST" }

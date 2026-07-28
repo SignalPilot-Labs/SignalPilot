@@ -51,3 +51,36 @@ switches only you can flip.
     unwanted.
 11. Local pip installed `aiosqlite` into the sp-dev-work conda env (test dependency
     that was missing locally; it's already in the gateway's dev extras).
+
+## Demo connector (added 2026-07-23)
+
+Items 12–13 (Xata billing, loading parallax) are **DONE as of 2026-07-27** —
+billing is active, both warehouses are provisioned and loaded, and the whole
+journey was verified live. What is left:
+
+12. **`XATA_KEY` must go into AWS Secrets Manager before this ships.** It is the
+    org-wide Xata control-plane key. The gateway now resolves it per request and
+    never writes it into a workspace's connection record (connections store
+    `xata_credential_ref: "demo"` instead — see
+    `gateway/connectors/xata_creds.py`), so the only copy in production is
+    whatever the secret store holds. Inject it as the `XATA_KEY` env var.
+13. **`SP_DEMO_CATALOG` is the one config knob** (root `.env` +
+    `signalpilot/gateway/.env.local` + docker-compose passthrough). JSON array,
+    one object per demo warehouse: `slug`, `project`, `title`, `description`,
+    `repo_url`. Keep it ASCII — docker-compose's env parsing mangles non-ASCII
+    (em-dashes came through as mojibake). `SP_DEMO_XATA_PROJECT` and friends are
+    now only a legacy fallback used when the catalog is unset.
+14. **AKASA has no companion dbt repo yet.** `kiwi0401/parallax-demo` exists and
+    is wired up; the AKASA card on `/demo-db` simply omits the clone
+    step until a public repo exists. Publish the pg-compatible project from
+    `demo-3/akasa_dbt` (synthetic data only) and add `"repo_url"` to its catalog
+    entry — no code change needed.
+15. **Demo warehouse running costs**: each `main` base branch is a live
+    `xata.small` Postgres (us-east-1, ~$0.024/hr ≈ $17/mo each, plus $0.28/GB
+    storage). User forks are copy-on-write, so they cost almost nothing until
+    written to, but nothing reaps abandoned ones — a user who never clicks
+    "remove" leaves a branch behind forever. Consider a TTL sweeper before any
+    public launch.
+16. **The demo `main` branches hold only the `raw` layer** (`raw.client_blob`,
+    ~2M rows each) by design — the point is for the user to build staging/marts
+    themselves with dbt. If a demo needs pre-built marts, load them separately.

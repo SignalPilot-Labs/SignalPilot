@@ -127,5 +127,22 @@ Negative claims mislead future runs into skipping required steps. Only
 propose POSITIVE facts you observed and can cite evidence for.
 
 ### Every entry must have evidence
-Every proposed entry MUST include an EVIDENCE line citing the specific
+Every proposed entry MUST include an **Evidence:** line citing the specific
 table, column, query result, or file that supports the claim.
+
+### Bodies must be markdown-safe
+The KB UI renders bodies as markdown. Wrap every table, column, model, and
+SQL fragment in backtick code spans (`days_quoted__c`,
+`user_pseudo_id || ':' || ga_session_id`); multi-line SQL in fenced blocks.
+Use bold labels (`**What:**`, `**Evidence:**`) rather than ALLCAPS prose
+labels, and bullet lists for list-like prose. Never leave `_`, `__`, `|`,
+`||`, or `*` bare outside a code span — they mangle the renderer.
+
+### Prioritize non-derivable knowledge
+The highest-value entries are facts a future agent cannot get by reading the
+code: ground-truth totals and the approved definitions behind them, business
+meaning of flags and vocabularies, mart-level caveats (known issues,
+superseded models, which columns to trust), and decision history — what was
+chosen while building a model, alternatives rejected, the verification
+numbers that settled it, and any user corrections, written as dated decision
+entries. Restating what the SQL already shows is low-value.

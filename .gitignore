@@ -117,5 +117,38 @@ signalpilot/web/enterprise-connections.md
 signalpilot/notebook-server/signalpilot/_lsp/copilot/
 
 # Local demo / scratch content (not part of the product)
+demo/
 demo-2/
 demo-2.zip
+demo-3/
+demo-4/
+demo-5/
+demo-6/
+demo-7/
+demo-8/
+demo-9/
+benchmark-demo-1/
+demo-generator/
+dbt-playground/
+akasa_dbt.zip
+nala-demo.zip
+
+# Planning / research / customer docs (never commit)
+research-7-20/
+research-7-24/
+presentations/
+AGENTS.md
+cc.md
+dh.json
+eval-format.md
+eval-upload-spec.md
+five-customer-problems.md
+knowledge-base-redesign.md
+xata-partnership.md
+.codex/
+codex-signalpilot-plugin/
+redshift_export/
+redshift_nala_load.py
+
+# Credentials — never commit
+.redshift-nala-creds.txt

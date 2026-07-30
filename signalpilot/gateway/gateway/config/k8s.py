@@ -37,6 +37,13 @@ class K8sSettings(_GatewaySettingsBase):
     sp_gateway_service_account: str = Field(
         "signalpilot-gateway", alias="SP_GATEWAY_SERVICE_ACCOUNT"
     )
+    # SP-SEC-009: extra Kubernetes Groups to add as subjects of the per-namespace
+    # RoleBinding. Required ONLY when the gateway runs off-cluster (EC2 authenticating
+    # through an EKS access entry): that identity is a Group, not the ServiceAccount,
+    # so without it the gateway holds nothing in the tenant namespace. Must match the
+    # group in the access entry and in deploy/k8s/gateway-runtime-rbac.yaml
+    # (default there: "signalpilot-gateway-ec2"). Comma-separated; empty in-cluster.
+    sp_gateway_runtime_groups: str = Field("", alias="SP_GATEWAY_RUNTIME_GROUPS")
     # Optional S3 (or other external) egress CIDR. Validated as a valid IP network.
     sp_notebook_egress_cidr: str | None = Field(None, alias="SP_NOTEBOOK_EGRESS_CIDR")
     # The public port the gateway listens on — used as the egress NetworkPolicy destination port.
@@ -76,6 +83,27 @@ class K8sSettings(_GatewaySettingsBase):
                 "SP_NOTEBOOK_RUNTIME_CLASS must be set explicitly in cloud mode "
                 "(recommended value: 'gvisor'). Empty string is only allowed in local mode."
             )
+        return v
+
+    @field_validator("sp_gateway_runtime_groups", mode="after")
+    @classmethod
+    def _validate_runtime_groups(cls, v: str) -> str:
+        """Reject system: groups — they would widen the tenant RoleBinding to everyone.
+
+        `system:authenticated` or `system:masters` as a subject would hand every
+        authenticated principal the notebook workload verbs (including Secrets) in
+        every tenant namespace. Only named, operator-provisioned groups are allowed.
+        """
+        for raw in v.split(","):
+            group = raw.strip()
+            if not group:
+                continue
+            if group.startswith("system:"):
+                raise ValueError(
+                    f"SP_GATEWAY_RUNTIME_GROUPS must not contain a 'system:' group. "
+                    f"Got: {group!r}. Use the dedicated group from the EKS access "
+                    "entry (e.g. 'signalpilot-gateway-ec2')."
+                )
         return v
 
     @field_validator("sp_public_gateway_url", mode="after")

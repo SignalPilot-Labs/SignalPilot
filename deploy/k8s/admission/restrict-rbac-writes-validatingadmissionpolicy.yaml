@@ -1,0 +1,123 @@
+---
+# SP-SEC-009: Confine the gateway's RBAC bootstrap capability —
+# ValidatingAdmissionPolicy form (default path).
+#
+# DEFAULT install path — apply this on k8s >= 1.30 with the
+# ValidatingAdmissionPolicy GA feature gate enabled (default since 1.30).
+# Use the Kyverno form (restrict-rbac-writes-kyverno.yaml) ONLY if your cluster is
+# < 1.30 or VAP is disabled. Do NOT install both — see README.md.
+#
+# Why this exists
+#
+# The gateway creates tenant notebook namespaces dynamically, so it cannot be given a
+# purely static namespaced Role. Its one retained cluster-wide write capability is
+# "create a RoleBinding" (deploy/k8s/gateway-runtime-rbac.yaml, ClusterRole
+# signalpilot-gateway-runtime-bootstrap), which it uses to bind the ClusterRole
+# signalpilot-gateway-notebook-workload into the sp-nb-* namespace it just created.
+#
+# RBAC alone pins WHAT may be bound (`bind` on clusterroles with resourceNames), but
+# it cannot pin WHERE: a compromised gateway could create the same RoleBinding in
+# kube-system and thereby grant itself Secrets read there. This policy supplies the
+# missing constraint, and unlike require-gvisor and restrict-pod-exec it deliberately
+# matches ALL namespaces — scoping it with a namespaceSelector would leave exactly
+# the unrelated namespaces this is meant to protect unconstrained.
+#
+# Defense-in-depth layer over:
+#   - RBAC `bind` resourceNames pin (gateway-runtime-rbac.yaml)
+#   - Absence of any ClusterRoleBinding for the workload ClusterRole in this repo
+#   - Fixed names in code (namespaces.py GATEWAY_WORKLOAD_CLUSTER_ROLE /
+#     GATEWAY_ORG_BINDING_NAME)
+#
+# The policy is SA-agnostic and group-agnostic: it constrains the OBJECT, not the
+# caller, so operators using a non-default SP_GATEWAY_SERVICE_ACCOUNT or a non-default
+# EKS access-entry group need zero policy edits. Cluster-admins are also bound by it —
+# intentionally, since a stray ClusterRoleBinding is the regression being prevented.
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: restrict-rbac-writes-signalpilot
+  labels:
+    app.kubernetes.io/managed-by: signalpilot
+    signalpilot.dev/component: admission
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["rolebindings", "clusterrolebindings"]
+  variables:
+    # The one ClusterRole the gateway is allowed to bind, and the only name its
+    # RoleBinding may carry. Keep in sync with namespaces.py.
+    - name: workloadRole
+      expression: "'signalpilot-gateway-notebook-workload'"
+    - name: bindingName
+      expression: "'signalpilot-gateway-org-binding'"
+    # True only for writes that reference the workload ClusterRole; every other RBAC
+    # write in the cluster passes untouched.
+    - name: bindsWorkloadRole
+      expression: >-
+        object.roleRef.kind == 'ClusterRole' &&
+        object.roleRef.name == variables.workloadRole
+    - name: isNamespaced
+      expression: "request.resource.resource == 'rolebindings'"
+  validations:
+    # Rule 1 — the workload ClusterRole must NEVER be granted cluster-wide. This is
+    # the exact SP-SEC-009 regression: one ClusterRoleBinding here and pods, exec, and
+    # Secrets are back in every namespace.
+    - expression: "!(variables.bindsWorkloadRole && !variables.isNamespaced)"
+      message: >-
+        signalpilot-gateway-notebook-workload must never be bound by a
+        ClusterRoleBinding (SP-SEC-009). Bind it per-namespace with a RoleBinding.
+    # Rule 2 — a RoleBinding to it may exist only in a labeled tenant notebook
+    # namespace. Blocks binding it into kube-system, the gateway's own namespace, or
+    # any other unrelated namespace.
+    - expression: >-
+        !(variables.bindsWorkloadRole && variables.isNamespaced) ||
+        (has(namespaceObject.metadata.labels) &&
+         'signalpilot.dev/tenant' in namespaceObject.metadata.labels &&
+         namespaceObject.metadata.labels['signalpilot.dev/tenant'] == 'user')
+      message: >-
+        signalpilot-gateway-notebook-workload may only be bound in namespaces labeled
+        signalpilot.dev/tenant=user (tenant notebook namespaces).
+    # Rule 3 — fixed binding name. Keeps the capability to a single, auditable object
+    # per namespace instead of an unbounded set of gateway-minted bindings.
+    - expression: >-
+        !(variables.bindsWorkloadRole && variables.isNamespaced) ||
+        object.metadata.name == variables.bindingName
+      message: >-
+        A RoleBinding to signalpilot-gateway-notebook-workload must be named
+        signalpilot-gateway-org-binding.
+    # Rule 4 — subjects may only be ServiceAccounts or named Groups. `User` subjects
+    # and any `system:` group (system:authenticated, system:masters, ...) are rejected:
+    # either would hand the notebook workload verbs, Secrets included, to principals
+    # far wider than the gateway.
+    # `subjects` is optional on a RoleBinding, so guard the field access — an absent
+    # or empty subject list grants nobody anything and is allowed through.
+    - expression: >-
+        !variables.bindsWorkloadRole || !has(object.subjects) ||
+        object.subjects.all(s,
+          (s.kind == 'ServiceAccount' && has(s.namespace)) ||
+          (s.kind == 'Group' && !s.name.startsWith('system:')))
+      message: >-
+        Subjects of signalpilot-gateway-org-binding must be namespaced
+        ServiceAccounts or named Groups. User subjects and system:* groups are denied.
+
+---
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: restrict-rbac-writes-signalpilot-binding
+  labels:
+    app.kubernetes.io/managed-by: signalpilot
+    signalpilot.dev/component: admission
+spec:
+  policyName: restrict-rbac-writes-signalpilot
+  validationActions: [Deny]
+  # matchResources is deliberately omitted: no namespaceSelector, no objectSelector.
+  # The policy must cover EVERY namespace, including the unrelated ones a compromised
+  # gateway would target — scoping it to signalpilot.dev/tenant=user would reproduce the
+  # gap SP-SEC-009 called out in the neighbouring policies.

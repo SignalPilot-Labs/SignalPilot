@@ -1,0 +1,116 @@
+---
+# Resources for the restrict-rbac-writes Kyverno test (SP-SEC-009).
+# RBAC objects referencing the gateway's notebook workload ClusterRole.
+
+# Case A: the legitimate gateway binding — correct name, tenant namespace,
+# ServiceAccount + Group subjects.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: signalpilot-gateway-org-binding
+  namespace: sp-nb-tenant-labeled
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: signalpilot-gateway-notebook-workload
+subjects:
+  - kind: ServiceAccount
+    name: signalpilot-gateway
+    namespace: signalpilot
+  - kind: Group
+    name: signalpilot-gateway-ec2
+    apiGroup: rbac.authorization.k8s.io
+---
+# Case B: correct roleRef but an unpinned binding name.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: attacker-extra-binding
+  namespace: sp-nb-tenant-labeled
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: signalpilot-gateway-notebook-workload
+subjects:
+  - kind: ServiceAccount
+    name: signalpilot-gateway
+    namespace: signalpilot
+---
+# Case C: the SP-SEC-009 regression — the workload role bound cluster-wide.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: signalpilot-gateway-runtime-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: signalpilot-gateway-notebook-workload
+subjects:
+  - kind: Group
+    name: signalpilot-gateway-ec2
+    apiGroup: rbac.authorization.k8s.io
+---
+# Case D: correct name and namespace, but a User subject.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: signalpilot-gateway-org-binding
+  namespace: sp-nb-user-subject
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: signalpilot-gateway-notebook-workload
+subjects:
+  - kind: User
+    name: alice@example.com
+    apiGroup: rbac.authorization.k8s.io
+---
+# Case G: correct name, namespace and subject KIND (Group), but the group is
+# system:authenticated — i.e. every authenticated principal on the cluster would get
+# pods/exec and Secrets in this namespace. Must be denied by the subject-group rule.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: signalpilot-gateway-org-binding
+  namespace: sp-nb-system-group
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: signalpilot-gateway-notebook-workload
+subjects:
+  - kind: Group
+    name: system:authenticated
+    apiGroup: rbac.authorization.k8s.io
+---
+# Case F: the correctly-named gateway binding with valid subjects, but landing in a
+# namespace that carries no signalpilot.dev/tenant=user label. This is the "bind the
+# workload role into kube-system" attack that RBAC alone cannot prevent — only
+# restrict-workload-binding-namespace stops it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: signalpilot-gateway-org-binding
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: signalpilot-gateway-notebook-workload
+subjects:
+  - kind: ServiceAccount
+    name: signalpilot-gateway
+    namespace: signalpilot
+---
+# Case E: an unrelated RoleBinding — the policy must not interfere with it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: some-team-view
+  namespace: sp-nb-tenant-labeled
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - kind: Group
+    name: platform-team
+    apiGroup: rbac.authorization.k8s.io

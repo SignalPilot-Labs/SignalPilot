@@ -1,0 +1,44 @@
+---
+# Kyverno CLI values/context mocks for restrict-rbac-writes.test.yaml (SP-SEC-009).
+#
+# NOTE on schema: ValuesSpec is INLINED into the Value object (kyverno CLI
+# apis/v1alpha1/values.go), so these fields sit at the top level — a `spec:` wrapper
+# is silently ignored and the mocks never load.
+#
+# Two things are supplied here:
+#
+# 1. namespaceSelector — namespace labels for the engine. The restrict-rbac-writes
+#    policy itself has no namespaceSelector match, so these are informational for the
+#    RBAC test, but the CLI needs a namespace entry to resolve namespaced resources.
+#
+# 2. policies[].rules[].values.tenantLabel — the mocked result of rule
+#    restrict-workload-binding-namespace's context apiCall. The CLI cannot perform an
+#    apiCall, so the ALLOW path (tenantLabel=user) is asserted here.
+#
+#    Resource-level overrides are keyed by NAME ONLY (apis/v1alpha1/resource.go has no
+#    namespace field), and Cases A, D and F all legitimately share the name
+#    signalpilot-gateway-org-binding — so the DENY path for this one rule cannot be
+#    expressed in the same CLI test. It is instead validated against live Kyverno in a
+#    kind cluster by deploy/k8s/validate-admission-policies.sh (case F), where the real
+#    apiCall runs. See admission/README.md.
+apiVersion: cli.kyverno.io/v1alpha1
+kind: Value
+metadata:
+  name: restrict-rbac-writes-values
+namespaceSelector:
+  - name: sp-nb-tenant-labeled
+    labels:
+      signalpilot.dev/tenant: user
+  - name: sp-nb-user-subject
+    labels:
+      signalpilot.dev/tenant: user
+  - name: kube-system
+    labels:
+      kubernetes.io/metadata.name: kube-system
+policies:
+  - name: restrict-rbac-writes-signalpilot
+    rules:
+      - name: restrict-workload-binding-namespace
+        values:
+          # Mocked apiCall result: the namespace carries signalpilot.dev/tenant=user.
+          tenantLabel: user

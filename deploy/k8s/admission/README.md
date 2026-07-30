@@ -91,10 +91,176 @@ label used by `require-gvisor-kyverno.yaml`). Operators using a non-default
 ### Test
 
 ```bash
-kyverno test deploy/k8s/admission/
+deploy/k8s/validate-admission-policies.sh --e2e --with-kyverno
 ```
 
-Should exit 0 with all cases passing.
+Note that the Kyverno CLI **cannot** evaluate these two rules: the policy matches
+`operations: [CONNECT]` and the CLI only ever simulates CREATE, so every resource comes
+back `Pass / Excluded` regardless of what the test declares. `restrict-pod-exec.test.yaml`
+therefore asserts only that the policy loads and is valid; the actual exec ALLOW/DENY
+behaviour is proven by the live `kubectl exec` checks in Phase B7 of the wrapper script.
+See "Validation findings" below.
+
+---
+
+## RBAC bootstrap confinement (SP-SEC-009)
+
+### Why RBAC is insufficient
+
+The gateway creates tenant notebook namespaces on demand, so it cannot be given a
+purely static namespaced Role. Its one retained cluster-wide write capability is
+"create a RoleBinding" (`ClusterRole signalpilot-gateway-runtime-bootstrap` /
+`signalpilot-gateway-rbac-provisioner`), which it uses to bind the ClusterRole
+`signalpilot-gateway-notebook-workload` into the `sp-nb-*` namespace it just created.
+
+RBAC pins **what** may be bound - `bind` on `clusterroles` with
+`resourceNames: [signalpilot-gateway-notebook-workload]` - but it cannot pin **where**.
+Without an admission policy, a compromised gateway could create the same RoleBinding in
+`kube-system` and read every Secret there. That is the SP-SEC-009 escalation path.
+
+### Install - ValidatingAdmissionPolicy (default, k8s >= 1.30)
+
+```bash
+kubectl apply -f restrict-rbac-writes-validatingadmissionpolicy.yaml
+```
+
+### Install - Kyverno (fallback, k8s < 1.30 or VAP disabled)
+
+```bash
+kubectl apply -f restrict-rbac-writes-kyverno.yaml
+```
+
+Do NOT install both. The Kyverno namespace-label rule needs `get` on namespaces for the
+Kyverno SA (granted by the default `kyverno:background-controller` aggregation).
+
+### What the policy enforces
+
+For any RBAC object whose `roleRef` is `signalpilot-gateway-notebook-workload`:
+
+1. **deny-clusterwide-workload-binding** - it may never be the target of a
+   `ClusterRoleBinding`. This is the exact regression that produced SP-SEC-009.
+2. **restrict-workload-binding-namespace** - a `RoleBinding` to it may only exist in a
+   namespace labeled `signalpilot.dev/tenant: user`.
+3. **restrict-workload-binding-name** - that RoleBinding must be named
+   `signalpilot-gateway-org-binding`, so the capability is one auditable object per
+   namespace rather than an unbounded set.
+4. **restrict-workload-binding-subject-kinds** / **-subject-groups** - subjects may only
+   be namespaced ServiceAccounts or named Groups. `User` subjects and any `system:*`
+   group are denied (`system:authenticated` would hand the workload verbs, Secrets
+   included, to every authenticated principal).
+
+   In the Kyverno form this is deliberately **two rules**, not one. `deny.conditions`
+   accepts either a flat `all:` list or a flat `any:` list; nesting an `any:` block as an
+   element of `all:` is not valid Kyverno and invalidates the whole ClusterPolicy. The
+   VAP form expresses both checks in a single CEL expression, where boolean nesting is
+   fine.
+
+**Scope:** unlike the two policies above, this one has **no `namespaceSelector`** - it
+matches every namespace on purpose, because the namespaces it must protect are the
+unrelated ones. It is also **caller-agnostic**: it constrains the object, not the
+requester, so a non-default `SP_GATEWAY_SERVICE_ACCOUNT` or EKS access-entry group needs
+no policy edit, and cluster-admins are bound by it too.
+
+### Test
+
+```bash
+# Kyverno CLI unit tests only (no cluster needed)
+deploy/k8s/validate-admission-policies.sh
+
+# ...plus a throwaway kind cluster: real CEL compilation, rule-by-rule ALLOW/DENY,
+# the migration script, and `kubectl auth can-i`
+deploy/k8s/validate-admission-policies.sh --e2e
+
+# ...and additionally install Kyverno in that cluster to exercise the fallback path
+deploy/k8s/validate-admission-policies.sh --e2e --with-kyverno
+```
+
+Do **not** run a bare `kyverno test deploy/k8s/admission/`. The CLI only auto-discovers
+files literally named `kyverno-test.yaml`; against this repo's `<policy>.test.yaml`
+convention it prints `No test yamls available` and **exits 0**. Use the wrapper, or pass
+`--file-name <policy>.test.yaml` explicitly.
+
+`restrict-rbac-writes.test.yaml` covers rules 1, 3, 4a and 4b, plus the ALLOW path of
+rule 2. The DENY path of rule 2 resolves the target namespace's label with a context
+`apiCall` that the CLI cannot serve, so it is asserted against live Kyverno in the
+`--e2e --with-kyverno` run instead.
+
+---
+
+## Validation findings
+
+Everything below was found by actually running the policies (Kyverno CLI 1.18.2, kind
+0.32.0, k8s 1.34.0) rather than by reading them, and is fixed in-tree. They are recorded
+because each one is invisible to a YAML-parse check and each failed **open**.
+
+1. **The `restrict-rbac-writes` Kyverno ClusterPolicy was structurally invalid.**
+   Rule 4 nested an `any:` block inside `all:`; Kyverno parses that as a condition with
+   no `operator` and rejects the entire object:
+   `path: spec.rules[3].validate.foreach.deny.conditions.any[1].: entered value of
+   'operator' is invalid`. Because a ClusterPolicy is one object, `kubectl apply` failed
+   outright and **none of the four rules were installed** — the whole fallback path was a
+   no-op. Fixed by splitting rule 4 into two flat-`all:` rules.
+
+2. **The `restrict-pod-exec` Kyverno ClusterPolicy (F-21) was invalid for the same class
+   of reason.** It used `operator: NotMatch`, which does not exist in Kyverno — the valid
+   set is `Equals/NotEquals/In/NotIn/AnyIn/AllIn/AnyNotIn/AllNotIn` plus the numeric and
+   `Duration` comparators. Regex matching is done with the JMESPath `regex_match()`
+   function. Same consequence: policy rejected, `pods/exec` entirely unrestricted. Fixed.
+
+3. **`kyverno test` reports success on an invalid policy.** With either defect above in
+   place the suite printed `Test Summary: 48 tests passed and 0 tests failed` while every
+   individual row read `Skip / Invalid Policy`. `validate-admission-policies.sh`
+   therefore greps for `Invalid Policy` and fails the run explicitly; do not rely on the
+   summary line alone.
+
+4. **`resourceSpecs:` in a test result is silently ignored unless `resources:` is also
+   set**, and a result with no effective resource filter is asserted against *every*
+   loaded resource. In `commands/test/output.go` the `ResourceSpecs` loop sits inside
+   `if test.Resources != nil`, and `if len(resources) == 0` then falls through to "check
+   all". Use `resources: [<namespace>/<name>]`, which disambiguates by namespace.
+
+5. **A resource the policy does not match is reported as `Pass`, whatever the test
+   declared.** `output.go` sets `Result = Pass; Reason = "Excluded"` unconditionally when
+   a resource produced no rule response. Consequence: `restrict-pod-exec` cannot be
+   tested by `kyverno test` at all — it matches `operations: [CONNECT]` and the CLI only
+   simulates CREATE, so a `result: fail` assertion there is a false green. Those rules are
+   validated only by the live `kubectl exec` checks in Phase B7.
+
+6. **The previous `*.test.yaml` files had never executed.** Both used a top-level
+   `namespaces:` key and `resource:` / `namespace:` keys on results. None of those exist
+   in the `cli.kyverno.io/v1alpha1` Test schema and the decoder is strict, so both files
+   failed to load: `json: unknown field "namespaces"`. Namespace labels belong in a Value
+   file (`<policy>-values.yaml`), whose `ValuesSpec` is **inlined** — a `spec:` wrapper is
+   ignored.
+
+### Kyverno namespace exclusions — the fallback path does NOT protect kube-system by default
+
+This one is an install-time property of Kyverno, not of the policy, and it defeats the
+policy's primary purpose if left alone.
+
+The Kyverno Helm chart ships `config.webhooks.namespaceSelector` excluding `kube-system`,
+and `config.resourceFilters` blanket-excluding `kube-system`, `kube-public` and
+`kube-node-lease`. The generated `ValidatingWebhookConfiguration` therefore never sees
+RoleBinding writes in those namespaces. Verified on a live cluster: with a default
+Kyverno install, binding `signalpilot-gateway-notebook-workload` into `kube-system` was
+**ALLOWED** — precisely the escalation this policy exists to stop, and the example named
+in its own rationale.
+
+The `ValidatingAdmissionPolicy` form has no such carve-out and denies it correctly. **This
+is a further reason to prefer the VAP path.** If you must use Kyverno, install it with the
+exclusions cleared (verified to close the gap):
+
+```bash
+helm install kyverno kyverno/kyverno -n kyverno --create-namespace \
+  --set-json 'config.webhooks.namespaceSelector.matchExpressions=[]' \
+  --set-json 'config.resourceFiltersExcludeNamespaces=["kube-system","kube-public","kube-node-lease"]'
+```
+
+Kyverno still excludes its own namespace (`config.excludeKyvernoNamespace`, default
+`true`); that is fine and should be left alone. Review the operability trade-off Kyverno
+documents at <https://kyverno.io/docs/installation/#security-vs-operability> before
+clearing exclusions on a production cluster — evaluating every `kube-system` write adds
+the admission webhook to that path.
 
 ---
 
@@ -113,4 +279,30 @@ kubectl run test-gvisor --image=busybox \
   --namespace=<a-tenant-namespace> \
   --restart=Never \
   --overrides='{"spec":{"runtimeClassName":"gvisor"}}' -- sleep 1
+```
+
+For `restrict-rbac-writes` (SP-SEC-009). Run these as the gateway identity where
+possible (`kubectl --as=...`); as cluster-admin they still exercise the policy, since it
+is caller-agnostic:
+
+```bash
+# Should be DENIED — workload ClusterRole bound cluster-wide
+kubectl create clusterrolebinding sp-escalate-test \
+  --clusterrole=signalpilot-gateway-notebook-workload \
+  --group=signalpilot-gateway-ec2
+
+# Should be DENIED — bound into an unlabeled namespace
+kubectl -n kube-system create rolebinding signalpilot-gateway-org-binding \
+  --clusterrole=signalpilot-gateway-notebook-workload \
+  --group=signalpilot-gateway-ec2
+
+# Should be DENIED — wrong binding name in a real tenant namespace
+kubectl -n <a-tenant-namespace> create rolebinding sp-extra-binding \
+  --clusterrole=signalpilot-gateway-notebook-workload \
+  --group=signalpilot-gateway-ec2
+
+# Should be ALLOWED — this is exactly what the gateway creates itself
+kubectl -n <a-tenant-namespace> create rolebinding signalpilot-gateway-org-binding \
+  --clusterrole=signalpilot-gateway-notebook-workload \
+  --group=signalpilot-gateway-ec2
 ```

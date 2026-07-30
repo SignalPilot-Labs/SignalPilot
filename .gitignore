@@ -138,10 +138,16 @@ demo-9/
 benchmark-demo-1/
 demo-generator/
 dbt-playground/
-akasa_dbt.zip
-nala-demo.zip
+*.zip
 
 # Planning / research / customer docs (never commit)
+# Default-deny for root-level markdown: scratch planning notes land here and
+# their filenames alone can name customers or partners, so the allowlist below
+# is the public part rather than an inventory of internal work.
+/*.md
+!/README.md
+!/CONTRIBUTING.md
+!/SECURITY.md
 research-7-20/
 research-7-24/
 presentations/
@@ -150,13 +156,16 @@ cc.md
 dh.json
 eval-format.md
 eval-upload-spec.md
-five-customer-problems.md
 knowledge-base-redesign.md
-xata-partnership.md
 .codex/
 codex-signalpilot-plugin/
 redshift_export/
-redshift_nala_load.py
+redshift_*.py
 
 # Credentials — never commit
-.redshift-nala-creds.txt
+# Broad on purpose: a credentials filename can name the environment it
+# belongs to, and this list is public even when the files are not.
+/*creds*
+/*credentials*
+/.*creds*
+/.*credentials*

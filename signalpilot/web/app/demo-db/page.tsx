@@ -46,12 +46,12 @@ const DEMO_PROMPTS: Record<
   string,
   { title: string; hint: string; prompt: string }[]
 > = {
-  parallax: [
+  contoso: [
     {
       title: "build the warehouse on your branch",
       hint: "governed credential handoff + 180-model build + post-build verification",
       prompt:
-        "Use the SignalPilot get_dbt_profile tool to wire dbt to my parallax-demo connection, then run dbt build from the parallax-demo repo. When it finishes, tell me the total attributed revenue by client, in USD.",
+        "Use the SignalPilot get_dbt_profile tool to wire dbt to my contoso-demo connection, then run dbt build from the contoso-demo repo. When it finishes, tell me the total attributed revenue by client, in USD.",
     },
     {
       title: "investigate a number before you report it",
@@ -63,15 +63,15 @@ const DEMO_PROMPTS: Record<
       title: "load the knowledge base, then use it",
       hint: "map the project into the KB; add an org policy in Knowledge, then ask a policy question",
       prompt:
-        "Explore and map out this dbt project for my knowledge base. The project is parallax-demo. Research every model, source table, macro, and data pattern. Populate the knowledge base with everything a future agent would need to build models correctly in this project.",
+        "Explore and map out this dbt project for my knowledge base. The project is contoso-demo. Research every model, source table, macro, and data pattern. Populate the knowledge base with everything a future agent would need to build models correctly in this project.",
     },
   ],
-  akasa: [
+  northwind: [
     {
       title: "build the revenue-cycle marts on your branch",
       hint: "9 hospital clients, 4 encounter dialects, money-unit + denial-code landmines",
       prompt:
-        "Use the SignalPilot get_dbt_profile tool to wire dbt to my akasa-demo connection and build the staging models from raw.client_blob. Then tell me total billed charges by client, in USD.",
+        "Use the SignalPilot get_dbt_profile tool to wire dbt to my northwind-demo connection and build the staging models from raw.client_blob. Then tell me total billed charges by client, in USD.",
     },
     {
       title: "investigate a number before you report it",
@@ -83,7 +83,7 @@ const DEMO_PROMPTS: Record<
       title: "load the knowledge base, then use it",
       hint: "map the project into the KB; add reporting policies (fiscal year, KPI definitions), then ask",
       prompt:
-        "Explore and map out this dbt project for my knowledge base. The project is akasa-demo. Research every model, source table, macro, and data pattern. Populate the knowledge base with everything a future agent would need to build models correctly in this project.",
+        "Explore and map out this dbt project for my knowledge base. The project is northwind-demo. Research every model, source table, macro, and data pattern. Populate the knowledge base with everything a future agent would need to build models correctly in this project.",
     },
   ],
 };

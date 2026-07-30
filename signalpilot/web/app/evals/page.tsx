@@ -141,7 +141,7 @@ function ConfigForm({ onSaved }: { onSaved: () => void }) {
         <label className="block text-xs text-[var(--color-text-muted)] mb-1.5">
           Repo — public git URL, or a local path under /eval-projects (format: eval-format.md)
         </label>
-        <input className={inputCls} value={form.repo_url} onChange={(e) => setForm({ ...form, repo_url: e.target.value })} placeholder="https://github.com/org/eval-set.git  ·  /eval-projects/akasa" />
+        <input className={inputCls} value={form.repo_url} onChange={(e) => setForm({ ...form, repo_url: e.target.value })} placeholder="https://github.com/org/eval-set.git  ·  /eval-projects/northwind" />
       </div>
       <div>
         <label className="block text-xs text-[var(--color-text-muted)] mb-1.5">Model</label>
@@ -153,7 +153,7 @@ function ConfigForm({ onSaved }: { onSaved: () => void }) {
       </div>
       <div className="md:col-span-2">
         <label className="block text-xs text-[var(--color-text-muted)] mb-1.5">Prompt preamble — prepended to every question (connection to use, output rules)</label>
-        <textarea className={`${inputCls} resize-none`} rows={2} value={form.prompt_preamble} onChange={(e) => setForm({ ...form, prompt_preamble: e.target.value })} placeholder='e.g. "Use the SignalPilot MCP tools with connection akasa_ro_conn."' />
+        <textarea className={`${inputCls} resize-none`} rows={2} value={form.prompt_preamble} onChange={(e) => setForm({ ...form, prompt_preamble: e.target.value })} placeholder='e.g. "Use the SignalPilot MCP tools with connection northwind_ro_conn."' />
       </div>
       <div>
         <button onClick={save} disabled={savingCfg} className="inline-flex items-center gap-2 px-4 py-2 rounded-[10px] text-sm border border-[var(--color-border-hover)] text-[var(--color-text)] hover:bg-[var(--color-bg)] disabled:opacity-40 transition-colors">

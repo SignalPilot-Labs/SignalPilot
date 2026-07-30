@@ -16,7 +16,7 @@ KEY = os.environ["MCPKEY"]
 
 # (display label, real connection name)
 CONNS = [
-    ("Postgres (local)", "perf_nala_pg"),
+    ("Postgres (local)", "perf_adventureworks_pg"),
     ("Redshift Serverless", "perf_redshift"),
 ]
 TABLE = "raw_core_transfers.transfers"

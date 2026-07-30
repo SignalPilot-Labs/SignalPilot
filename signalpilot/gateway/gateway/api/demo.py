@@ -110,9 +110,9 @@ def _catalog() -> list[Demo]:
     SP_DEMO_CATALOG is a JSON array so it survives a single AWS secret /
     parameter cleanly:
 
-        [{"slug": "parallax",
+        [{"slug": "contoso",
           "project": "prj_...",
-          "title": "Parallax",
+          "title": "Contoso",
           "description": "experimentation platform warehouse",
           "repo_url": "https://github.com/..."}]
 
@@ -160,7 +160,7 @@ def _catalog() -> list[Demo]:
     project = os.getenv("SP_DEMO_XATA_PROJECT", "").strip()
     if not project:
         return []
-    name = os.getenv("SP_DEMO_CONNECTION_NAME", "parallax-demo").strip()
+    name = os.getenv("SP_DEMO_CONNECTION_NAME", "contoso-demo").strip()
     return [
         Demo(
             slug="demo",

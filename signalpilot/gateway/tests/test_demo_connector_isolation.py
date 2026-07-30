@@ -33,8 +33,8 @@ from gateway.models import ConnectionCreate, DBType
 from gateway.store.connection_strings import _build_connection_string, _extract_credential_extras
 
 ORG = "0psl2d"
-PROJECT = "prj_demoparallax"
-OTHER_PROJECT = "prj_demoakasa"
+PROJECT = "prj_democontoso"
+OTHER_PROJECT = "prj_demonorthwind"
 BRANCH = "demo-a1b2c3d4"
 OTHER_BRANCH = "demo-99887766"
 FAKE_KEY = "xau_test_key_do_not_use"
@@ -43,7 +43,7 @@ FAKE_KEY = "xau_test_key_do_not_use"
 def _demo_connection(**overrides) -> ConnectionCreate:
     """A connection shaped exactly like the one the demo connector creates."""
     kwargs = dict(
-        name="parallax-demo",
+        name="contoso-demo",
         db_type=DBType.xata,
         branch=BRANCH,
         xata_credential_ref="demo",
@@ -51,7 +51,7 @@ def _demo_connection(**overrides) -> ConnectionCreate:
         xata_organization=ORG,
         xata_project=PROJECT,
         xata_database="xata",
-        tags=["sp-demo", "demo:parallax"],
+        tags=["sp-demo", "demo:contoso"],
     )
     kwargs.update(overrides)
     return ConnectionCreate(**kwargs)
@@ -189,15 +189,15 @@ def test_catalog_parses_multiple_warehouses(monkeypatch):
         monkeypatch,
         json.dumps(
             [
-                {"slug": "parallax", "project": PROJECT, "title": "Parallax", "repo_url": "https://x/y"},
-                {"slug": "akasa", "project": OTHER_PROJECT, "title": "AKASA"},
+                {"slug": "contoso", "project": PROJECT, "title": "Contoso", "repo_url": "https://x/y"},
+                {"slug": "northwind", "project": OTHER_PROJECT, "title": "NORTHWIND"},
             ]
         ),
     )
     demos = demo._catalog()
 
-    assert [d.slug for d in demos] == ["parallax", "akasa"]
-    assert [d.connection_name for d in demos] == ["parallax-demo", "akasa-demo"]
+    assert [d.slug for d in demos] == ["contoso", "northwind"]
+    assert [d.connection_name for d in demos] == ["contoso-demo", "northwind-demo"]
     assert demos[0].parent_branch == "main"
 
 
@@ -210,11 +210,11 @@ def test_catalog_survives_a_bad_entry(monkeypatch):
                 {"slug": "Bad Slug!", "project": PROJECT},
                 {"slug": "no-project"},
                 "not-an-object",
-                {"slug": "akasa", "project": OTHER_PROJECT, "title": "AKASA"},
+                {"slug": "northwind", "project": OTHER_PROJECT, "title": "NORTHWIND"},
             ]
         ),
     )
-    assert [d.slug for d in demo._catalog()] == ["akasa"]
+    assert [d.slug for d in demo._catalog()] == ["northwind"]
 
 
 def test_catalog_drops_duplicate_slugs(monkeypatch):
@@ -222,8 +222,8 @@ def test_catalog_drops_duplicate_slugs(monkeypatch):
         monkeypatch,
         json.dumps(
             [
-                {"slug": "akasa", "project": PROJECT, "title": "First"},
-                {"slug": "akasa", "project": OTHER_PROJECT, "title": "Second"},
+                {"slug": "northwind", "project": PROJECT, "title": "First"},
+                {"slug": "northwind", "project": OTHER_PROJECT, "title": "Second"},
             ]
         ),
     )
@@ -235,20 +235,20 @@ def test_catalog_drops_duplicate_slugs(monkeypatch):
 def test_malformed_catalog_disables_the_demo_rather_than_crashing(monkeypatch):
     _set_catalog(monkeypatch, "{not json")
     assert demo._catalog() == []
-    _set_catalog(monkeypatch, json.dumps({"slug": "parallax"}))
+    _set_catalog(monkeypatch, json.dumps({"slug": "contoso"}))
     assert demo._catalog() == []
 
 
 def test_legacy_single_project_config_still_works(monkeypatch):
     monkeypatch.delenv("SP_DEMO_CATALOG", raising=False)
     monkeypatch.setenv("SP_DEMO_XATA_PROJECT", PROJECT)
-    monkeypatch.setenv("SP_DEMO_CONNECTION_NAME", "parallax-demo")
-    monkeypatch.setenv("SP_DEMO_REPO_URL", "https://github.com/kiwi0401/parallax-demo")
+    monkeypatch.setenv("SP_DEMO_CONNECTION_NAME", "contoso-demo")
+    monkeypatch.setenv("SP_DEMO_REPO_URL", "https://github.com/kiwi0401/contoso-demo")
 
     demos = demo._catalog()
     assert len(demos) == 1
     assert demos[0].project == PROJECT
-    assert demos[0].connection_name == "parallax-demo"
+    assert demos[0].connection_name == "contoso-demo"
 
 
 def test_demo_disabled_without_configuration(monkeypatch):

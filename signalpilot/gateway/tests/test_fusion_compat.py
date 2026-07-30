@@ -118,7 +118,7 @@ class TestDegradationMode:
         assert mode == "parse_failed"  # DependencyNotFound is a parse-stage code
 
     def test_core_profile_missing_still_detected(self):
-        out = "Runtime Error\n  Could not find profile named 'nala'"
+        out = "Runtime Error\n  Could not find profile named 'adventureworks'"
         assert _detect_degradation_mode(out, 1, pathlib.Path(".")) == "profile_missing"
 
 

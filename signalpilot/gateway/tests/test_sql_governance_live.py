@@ -10,7 +10,7 @@ Databases exercised:
   payloads are rejected by governance BEFORE any bytes reach the server, and
   that a legitimate governed query still returns rows.
 * **PostgreSQL warehouses** — the trap-arena demo warehouses
-  (akasa 5603 / parallax 5608 / keystone 5604 / nala 5602). Proves the
+  (northwind 5603 / contoso 5608 / fabrikam 5604 / adventureworks 5602). Proves the
   dblink / pg_read_file family is rejected, that a legitimate query executes,
   and that the LIMIT cap actually truncates a real result set end to end.
 * **DuckDB** — exercised in-process against a temporary file database. Proves
@@ -183,7 +183,7 @@ class TestMSSQLLiveGovernance:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _PROJECT_ENV_DIR = Path(__file__).resolve().parents[3] / "demo-generator" / "trap-arena" / "projects"
-_PG_PROJECT_ORDER = ("akasa", "parallax", "keystone", "nala")
+_PG_PROJECT_ORDER = ("northwind", "contoso", "fabrikam", "adventureworks")
 
 
 def _read_project_env_url(project: str) -> str | None:

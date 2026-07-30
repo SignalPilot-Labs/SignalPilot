@@ -183,7 +183,17 @@ class TestMSSQLLiveGovernance:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _PROJECT_ENV_DIR = Path(__file__).resolve().parents[3] / "demo-generator" / "trap-arena" / "projects"
-_PG_PROJECT_ORDER = ("northwind", "contoso", "fabrikam", "adventureworks")
+# Local harness project directories to probe, in order. Overridable so a machine
+# whose trap-arena tree uses different directory names can point at them without
+# those names living in the repo:
+#   SP_TEST_PG_PROJECTS=one,two,three
+_PG_PROJECT_ORDER = tuple(
+    p.strip()
+    for p in os.environ.get(
+        "SP_TEST_PG_PROJECTS", "northwind,contoso,fabrikam,adventureworks"
+    ).split(",")
+    if p.strip()
+)
 
 
 def _read_project_env_url(project: str) -> str | None:

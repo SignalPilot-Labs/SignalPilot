@@ -31,6 +31,19 @@ class GatewayBase(DeclarativeBase):
     pass
 
 
+# TLS material lives only in the encrypted credential extras. These fields are
+# stripped before the ssl_config metadata column is written and redacted again on
+# read so rows written by earlier releases cannot leak through a response.
+SSL_SECRET_FIELDS = ("ca_cert", "client_cert", "client_key")
+
+
+def strip_ssl_secrets(ssl_config: dict | None) -> dict | None:
+    """Return ssl_config with certificate/key material removed."""
+    if not ssl_config:
+        return ssl_config
+    return {k: v for k, v in ssl_config.items() if k not in SSL_SECRET_FIELDS}
+
+
 class GatewayConnection(GatewayBase):
     __tablename__ = "gateway_connections"
 
@@ -98,7 +111,7 @@ class GatewayConnection(GatewayBase):
             "database": self.database,
             "username": self.username,
             "ssl": self.ssl,
-            "ssl_config": self.ssl_config,
+            "ssl_config": strip_ssl_secrets(self.ssl_config),
             "ssh_tunnel": self.ssh_tunnel,
             "account": self.account,
             "warehouse": self.warehouse,
@@ -1029,6 +1042,10 @@ class GatewayGitHubInstallation(GatewayBase):
     access_token_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
     token_expires_at: Mapped[float | None] = mapped_column(Float)
     permissions: Mapped[dict | None] = mapped_column(JSON)
+    # SP-SEC-005: repository ids the authorizing user could reach at install
+    # time. Installation tokens are minted restricted to this set, including on
+    # refresh. NULL means "legacy row, installed before repository scoping".
+    authorized_repository_ids: Mapped[list | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     created_by: Mapped[str | None] = mapped_column(String)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)

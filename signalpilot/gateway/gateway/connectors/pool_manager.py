@@ -8,19 +8,25 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import json
 import logging
-import os
 import random
 import time
 from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
+from ..common.credential_identity import CREDENTIAL_IDENTITY_KEY
 from .base import BaseConnector
 from .registry import get_connector
 from .ssh_tunnel import SSHTunnel
 
 logger = logging.getLogger(__name__)
+
+# Pool keys are "{db_type}:{connection_string}" followed by scope segments. The
+# separator is a control character so it can never collide with a DSN.
+_KEY_SCOPE_SEP = "\x1f"
 
 # DB types that use host:port connections and can benefit from SSH tunnels
 _TUNNEL_CAPABLE_DB_TYPES = {"postgres", "mysql", "redshift", "clickhouse", "mssql", "trino"}
@@ -46,14 +52,138 @@ _URI_SCHEMES: dict[str, list[str]] = {
 }
 
 
+def _split_pool_key(key: str) -> tuple[str, list[str]]:
+    """Split a pool key into its ``db_type:connection_string`` head and scope tail."""
+    head, _, tail = key.partition(_KEY_SCOPE_SEP)
+    return head, [seg for seg in tail.split(_KEY_SCOPE_SEP) if seg]
+
+
+def _pool_key_scope(key: str) -> str:
+    """Return the ``org=…`` segment of a pool key, or "" when unscoped."""
+    for segment in _split_pool_key(key)[1]:
+        if segment.startswith("org="):
+            return segment[len("org=") :]
+    return ""
+
+
+def _make_pool_key(
+    db_type: str,
+    connection_string: str,
+    org_id: str | None,
+    credential_identity: str | None,
+) -> str:
+    """Build a pool key scoped by org and credential identity.
+
+    Both scope segments are non-secret: org_id is a tenant identifier and
+    credential_identity is a digest supplied by the store (see
+    CREDENTIAL_IDENTITY_KEY). Without them, two tenants whose connection strings
+    look identical but whose credential extras differ — service-account JSON, TLS
+    key, SSH tunnel, token — would share one connector.
+    """
+    return _KEY_SCOPE_SEP.join(
+        (
+            f"{db_type}:{connection_string}",
+            f"org={org_id or ''}",
+            f"cred={credential_identity or ''}",
+        )
+    )
+
+
+def _current_org_id() -> str | None:
+    from ..governance.context import current_org_id_var
+
+    return current_org_id_var.get()
+
+
+# Extras fields that are identifiers rather than secrets, safe to fold into a
+# pool key verbatim. Secret-bearing fields contribute their presence only.
+_NON_SECRET_EXTRAS_FIELDS = (
+    "account",
+    "authenticator",
+    "branch",
+    "catalog",
+    "dataset",
+    "http_path",
+    "location",
+    "project",
+    "region",
+    "role",
+    "schema_name",
+    "snowflake_host",
+    "snowflake_protocol",
+    "username",
+    "warehouse",
+    "workspace",
+    "xata_credential_ref",
+    "xata_database",
+    "xata_organization",
+    "xata_project",
+)
+_NON_SECRET_SSH_FIELDS = ("host", "port", "username", "auth_method", "proxy_host", "proxy_port")
+_NON_SECRET_SSL_FIELDS = ("enabled", "mode")
+# Non-secret identifiers inside a GCP service-account blob.
+_NON_SECRET_SA_FIELDS = ("client_email", "private_key_id", "project_id")
+
+
+def _extras_shape_identity(credential_extras: dict) -> str:
+    """Fallback identity for extras that did not come with a store marker.
+
+    Built from field names and identifier values only — never from secret values,
+    and never logged. Residual: extras whose sole distinguishing content is an
+    opaque token (access_token, motherduck_token) are indistinguishable here, so
+    for those the isolation rests on the org segment of the pool key.
+    """
+    parts: list[str] = []
+    for key in sorted(credential_extras):
+        parts.append(f"k:{key}")
+        value = credential_extras[key]
+        if key in _NON_SECRET_EXTRAS_FIELDS and isinstance(value, (str, int, bool)):
+            parts.append(f"{key}={value}")
+        elif key == "ssh_tunnel" and isinstance(value, dict):
+            parts += [f"ssh.{f}={value.get(f)}" for f in _NON_SECRET_SSH_FIELDS]
+            parts += [f"ssh.{f}?{bool(value.get(f))}" for f in ("password", "private_key")]
+        elif key == "ssl_config" and isinstance(value, dict):
+            parts += [f"ssl.{f}={value.get(f)}" for f in _NON_SECRET_SSL_FIELDS]
+            parts += [f"ssl.{f}?{bool(value.get(f))}" for f in ("ca_cert", "client_cert", "client_key")]
+        elif key == "credentials_json" and isinstance(value, str):
+            try:
+                blob = json.loads(value)
+            except Exception:
+                blob = {}
+            parts += [f"sa.{f}={blob.get(f)}" for f in _NON_SECRET_SA_FIELDS]
+    return "shape." + hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+
+
+def _pop_credential_identity(credential_extras: dict | None) -> tuple[dict | None, str | None]:
+    """Detach the store-supplied credential identity from the extras.
+
+    Connectors must never see it, so it is removed from a copy before use. Callers
+    that hand-build extras instead of taking them from the store get the shape
+    identity below.
+    """
+    if not credential_extras:
+        return credential_extras, None
+    if CREDENTIAL_IDENTITY_KEY not in credential_extras:
+        return credential_extras, _extras_shape_identity(credential_extras)
+    remaining = {k: v for k, v in credential_extras.items() if k != CREDENTIAL_IDENTITY_KEY}
+    return (remaining or None), credential_extras[CREDENTIAL_IDENTITY_KEY]
+
+
 def _safe_pool_key_for_log(key: str) -> str:
     """Return a log-safe representation of a pool key.
 
-    Pool keys have the format ``db_type:connection_string``. If the connection
-    string looks like a URL (contains ``://``), parse it and return only the
-    host and port — never the credentials. Non-URL formats (bare project IDs,
-    file paths) are returned as-is since they do not contain embedded passwords.
+    Pool keys have the format ``db_type:connection_string`` plus non-secret scope
+    segments. If the connection string looks like a URL (contains ``://``), parse
+    it and return only the host and port — never the credentials. Non-URL formats
+    (bare project IDs, file paths) are kept as-is since they do not contain
+    embedded passwords.
     """
+    key, scope = _split_pool_key(key)
+    suffix = (" " + " ".join(scope)) if scope else ""
+    return _safe_pool_key_head_for_log(key) + suffix
+
+
+def _safe_pool_key_head_for_log(key: str) -> str:
     colon_idx = key.find(":")
     if colon_idx == -1:
         return key
@@ -150,6 +280,33 @@ def _extract_host_port(connection_string: str, db_type: str) -> tuple[str, int]:
         return "localhost", default_port
 
 
+def _validate_destination(db_type: str, connection_string: str) -> None:
+    """Re-validate a TCP destination immediately before connecting.
+
+    Gating mirrors network.validation.validate_connection_params: only TCP
+    db_types, and only in cloud mode — loopback is unconditionally blocked by the
+    resolver, so local deployments pointed at 127.0.0.1 warehouses would otherwise
+    stop working. resolve_and_validate honours SP_ALLOW_PRIVATE_CONNECTIONS and
+    raises ValueError on a blocked or unresolvable address.
+
+    The validated IPs are deliberately not substituted into the connection string:
+    connecting by IP breaks TLS hostname verification (sslmode=verify-full) and
+    SNI-based routing for several drivers.
+
+    Not called for SSH-tunnelled connections: the warehouse endpoint is resolved on
+    the bastion, not here, so a local lookup would fail closed on every legitimate
+    tunnel.
+    """
+    from ..network.validation import TCP_DB_TYPES, resolve_and_validate
+    from ..runtime.mode import is_cloud_mode
+
+    if not connection_string or db_type not in TCP_DB_TYPES or not is_cloud_mode():
+        return
+
+    host, port = _extract_host_port(connection_string, db_type)
+    resolve_and_validate(host, port, db_type)
+
+
 class PoolManager:
     """Manages a cache of connected connectors, keyed by (db_type, connection_string).
 
@@ -159,6 +316,7 @@ class PoolManager:
 
     def __init__(self, idle_timeout_sec: int = 300):
         self._pools: dict[str, tuple[BaseConnector, float]] = {}
+        self._identities: dict[str, str] = {}  # key -> credential identity the connector was built with
         self._tunnels: dict[str, SSHTunnel] = {}  # key -> active tunnel
         self._keepalive_intervals: dict[str, int] = {}  # key -> interval seconds
         self._last_keepalive: dict[str, float] = {}  # key -> last keepalive time
@@ -212,6 +370,7 @@ class PoolManager:
         connection_string: str,
         credential_extras: dict | None = None,
         max_retries: int = 3,
+        org_id: str | None = None,
     ) -> BaseConnector:
         """Get or create a connected connector for the given connection.
 
@@ -224,18 +383,26 @@ class PoolManager:
             credential_extras: Optional structured credential data (service account JSON,
                 SSH tunnel config, etc.) for connectors that need more than a connection string.
             max_retries: Maximum retry attempts for transient failures (default 3).
+            org_id: Owning organization. Defaults to the current governance context.
         """
-        key = f"{db_type}:{connection_string}"
+        credential_extras, credential_identity = _pop_credential_identity(credential_extras)
+        if org_id is None:
+            org_id = _current_org_id()
+        key = _make_pool_key(db_type, connection_string, org_id, credential_identity)
         async with self._lock:
             if key in self._pools:
                 connector, _ = self._pools[key]
                 self._pools[key] = (connector, time.monotonic())
-                # Verify it's still healthy (and tunnel is still active)
+                # A pooled connector is only reusable if it was built with the same
+                # credential identity: the reuse branch returns before
+                # set_credential_extras() runs, so serving a connector built from
+                # different extras would hand back another principal's session.
+                identity_ok = self._identities.get(key) == (credential_identity or "")
                 try:
                     tunnel_ok = True
                     if key in self._tunnels:
                         tunnel_ok = self._tunnels[key].check_tunnel()
-                    if tunnel_ok and await connector.health_check():
+                    if identity_ok and tunnel_ok and await connector.health_check():
                         return connector
                 except Exception:
                     pass
@@ -248,6 +415,7 @@ class PoolManager:
                     self._tunnels[key].stop()
                     del self._tunnels[key]
                 del self._pools[key]
+                self._identities.pop(key, None)
 
             # Cloud mode: reject all local database connections (file-based and in-memory)
             # Only MotherDuck (md:) DuckDB is allowed in cloud mode
@@ -273,6 +441,7 @@ class PoolManager:
             # the client with credentials, so we can skip connect()
             if db_type == "bigquery" and credential_extras and credential_extras.get("credentials_json"):
                 self._pools[key] = (connector, time.monotonic())
+                self._identities[key] = credential_identity or ""
                 return connector
 
             # SSH tunnel setup (for host:port-based databases)
@@ -298,6 +467,12 @@ class PoolManager:
                     local_host,
                     local_port,
                 )
+            else:
+                # Re-resolve and re-check the destination on every new outbound
+                # connection: the address validated when the connection was saved
+                # can be re-pointed at an internal address afterwards. Raises on a
+                # blocked or unresolvable target — there is no hostname fallback.
+                _validate_destination(db_type, connection_string)
 
             # Track keepalive interval if provided
             keepalive = credential_extras.get("keepalive_interval", 0) if credential_extras else 0
@@ -309,6 +484,7 @@ class PoolManager:
                     await connector.connect(actual_conn_str)
                     now = time.monotonic()
                     self._pools[key] = (connector, now)
+                    self._identities[key] = credential_identity or ""
                     if keepalive and keepalive > 0:
                         self._keepalive_intervals[key] = keepalive
                         self._last_keepalive[key] = now
@@ -390,9 +566,21 @@ class PoolManager:
                         logger.warning("Keepalive error for %s: %s", _safe_pool_key_for_log(key), e)
                         self._last_keepalive[key] = now  # Don't spam retries
 
-    async def release(self, db_type: str, connection_string: str) -> None:
-        """Mark a connector as available (updates last-used time)."""
-        key = f"{db_type}:{connection_string}"
+    async def release(
+        self,
+        db_type: str,
+        connection_string: str,
+        credential_extras: dict | None = None,
+        org_id: str | None = None,
+    ) -> None:
+        """Mark a connector as available (updates last-used time).
+
+        Pass the same credential_extras used to acquire so the pool key matches.
+        """
+        _, credential_identity = _pop_credential_identity(credential_extras)
+        if org_id is None:
+            org_id = _current_org_id()
+        key = _make_pool_key(db_type, connection_string, org_id, credential_identity)
         async with self._lock:
             if key in self._pools:
                 connector, _ = self._pools[key]
@@ -422,7 +610,7 @@ class PoolManager:
             yield connector
         finally:
             connector._audit_connection_name = None
-            await self.release(db_type, connection_string)
+            await self.release(db_type, connection_string, credential_extras=credential_extras)
 
     async def cleanup_idle(self) -> int:
         """Close connectors that have been idle longer than timeout. Returns count closed."""
@@ -441,6 +629,7 @@ class PoolManager:
                     self._tunnels[key].stop()
                     del self._tunnels[key]
                 # Clean up keepalive tracking
+                self._identities.pop(key, None)
                 self._keepalive_intervals.pop(key, None)
                 self._last_keepalive.pop(key, None)
                 closed += 1
@@ -458,6 +647,7 @@ class PoolManager:
                 except Exception:
                     pass
             self._pools.clear()
+            self._identities.clear()
             # Close all tunnels
             for tunnel in self._tunnels.values():
                 tunnel.stop()
@@ -465,16 +655,21 @@ class PoolManager:
             self._keepalive_intervals.clear()
             self._last_keepalive.clear()
 
-    async def close_pool(self, key_substring: str) -> int:
+    async def close_pool(self, key_substring: str, org_id: str | None = None) -> int:
         """Close pools whose key contains the given substring.
 
         Used when connection credentials change and existing pools are stale.
-        Pass the connection string or a unique identifier to match.
+        Pass the connection string or a unique identifier to match, plus the owning
+        org so a shared connection string does not evict another tenant's pool.
         Returns number of pools closed.
         """
         closed = 0
         async with self._lock:
-            stale_keys = [k for k in self._pools if key_substring in k]
+            stale_keys = [
+                k
+                for k in self._pools
+                if key_substring in _split_pool_key(k)[0] and (org_id is None or _pool_key_scope(k) == org_id)
+            ]
             for key in stale_keys:
                 connector, _ = self._pools.pop(key)
                 try:
@@ -484,6 +679,7 @@ class PoolManager:
                 if key in self._tunnels:
                     self._tunnels[key].stop()
                     del self._tunnels[key]
+                self._identities.pop(key, None)
                 self._keepalive_intervals.pop(key, None)
                 self._last_keepalive.pop(key, None)
                 closed += 1
@@ -506,7 +702,9 @@ class PoolManager:
             parts = key.split(":", 1)
             db_type = parts[0] if parts else "unknown"
             pool_info: dict[str, Any] = {
-                "key": key[:80],  # Truncate for security
+                # Redact, do not truncate — the password sits well inside the
+                # first 80 characters of a URL-style pool key.
+                "key": _safe_pool_key_for_log(key),
                 "db_type": db_type,
                 "idle_seconds": round(now - last_used, 1),
                 "connector_type": type(connector).__name__,
@@ -518,7 +716,7 @@ class PoolManager:
         for key, tunnel in self._tunnels.items():
             tunnels.append(
                 {
-                    "key": key[:80],
+                    "key": _safe_pool_key_for_log(key),
                     "active": tunnel.is_active if hasattr(tunnel, "is_active") else True,
                 }
             )

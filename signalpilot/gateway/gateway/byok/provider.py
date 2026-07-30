@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Protocol, runtime_checkable
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -37,6 +37,10 @@ logger = logging.getLogger(__name__)
 DEK_CACHE_DEFAULT_TTL_SECONDS = 300
 ENCRYPTION_MODE_MANAGED = "managed"
 ENCRYPTION_MODE_BYOK = "byok"
+
+# Segment separator for composite DEK cache keys. credential_id is always the
+# final segment so invalidate() can purge every scope of a credential.
+DEK_CACHE_KEY_SEP = "::"
 
 
 # ─── Exception ───────────────────────────────────────────────────────────────
@@ -78,6 +82,35 @@ class BYOKProvider(Protocol):
     async def health_check(self) -> bool:
         """Return True if the provider backend is reachable."""
         ...
+
+
+def provider_key_identifier(provider: BYOKProvider | None) -> str | None:
+    """Return the provider's backing key identifier (KMS ARN, key URI, …).
+
+    Duck-typed rather than part of the BYOKProvider protocol: BYOKProvider is
+    runtime_checkable, so adding a member would invalidate existing isinstance()
+    checks against providers that do not implement it.
+    """
+    if provider is None:
+        return None
+    getter = getattr(provider, "key_identifier", None)
+    if getter is None:
+        return None
+    try:
+        return getter()
+    except Exception:
+        return None
+
+
+def dek_cache_key(org_id: str, credential_id: str, provider: BYOKProvider | None = None) -> str:
+    """Build the composite DEK cache key.
+
+    Scoped by org and by the provider's backing key identifier so a DEK unwrapped
+    under one KEK is never served for another. credential_id stays last — see
+    DEK_CACHE_KEY_SEP.
+    """
+    provider_id = provider_key_identifier(provider) or "-"
+    return DEK_CACHE_KEY_SEP.join((org_id, provider_id, credential_id))
 
 
 # ─── LocalBYOKProvider ───────────────────────────────────────────────────────
@@ -164,6 +197,9 @@ class LocalBYOKProvider:
     async def health_check(self) -> bool:
         return True
 
+    def key_identifier(self) -> str:
+        return f"local:{self._key_dir}"
+
 
 # ─── DEKCache ─────────────────────────────────────────────────────────────────
 
@@ -207,9 +243,17 @@ class DEKCache:
             self._store[credential_id] = (dek, time.monotonic())
 
     def invalidate(self, credential_id: str) -> None:
-        """Remove a single entry."""
+        """Remove every cached DEK for a credential.
+
+        Entries are stored under composite keys (see dek_cache_key), so a bare
+        credential_id must also purge every org/provider scope that ends with it —
+        otherwise rotation leaves the pre-rotation DEK live until the TTL expires.
+        """
         with self._lock:
             self._store.pop(credential_id, None)
+            suffix = f"{DEK_CACHE_KEY_SEP}{credential_id}"
+            for key in [k for k in self._store if k.endswith(suffix)]:
+                del self._store[key]
 
     def clear(self) -> None:
         """Remove all entries. Call on application shutdown."""
@@ -268,8 +312,7 @@ async def decrypt_envelope(
     """
     dek: bytes | None = None
 
-    # Cache key includes org_id to prevent cross-org DEK access (defense-in-depth)
-    cache_key = f"{org_id}::{credential_id}" if credential_id else None
+    cache_key = dek_cache_key(org_id, credential_id, provider) if credential_id else None
 
     if cache is not None and cache_key is not None:
         dek = cache.get(cache_key)
@@ -385,6 +428,7 @@ async def rotate_byok_key(
     new_key_id: str,
     new_key_alias: str,
     cache: DEKCache | None = None,
+    old_provider: BYOKProvider | None = None,
 ) -> tuple[int, int, list[str]]:
     """Re-wrap all DEKs for credentials using old_key_id to new_key_id.
 
@@ -392,9 +436,13 @@ async def rotate_byok_key(
     then processes each individually. Per-credential atomicity: each row commits
     independently so partial rotation is safe to resume.
 
+    provider wraps under the new key; old_provider unwraps under the old one. They
+    differ whenever the two key rows point at different KMS keys.
+
     Returns:
         (rotated_count, failed_count, error_messages)
     """
+    unwrap_provider = old_provider or provider
     result = await session.execute(
         select(GatewayCredential, GatewayConnection)
         .join(
@@ -420,7 +468,7 @@ async def rotate_byok_key(
                 raise ValueError("Credential is BYOK mode but has no wrapped_dek")
 
             conn_string_plain = await decrypt_envelope(
-                provider=provider,
+                provider=unwrap_provider,
                 org_id=org_id,
                 key_alias=old_key_alias,
                 wrapped_dek=cred_row.wrapped_dek,
@@ -432,7 +480,7 @@ async def rotate_byok_key(
             extras_plain = "{}"
             if cred_row.extras_enc:
                 extras_plain = await decrypt_envelope(
-                    provider=provider,
+                    provider=unwrap_provider,
                     org_id=org_id,
                     key_alias=old_key_alias,
                     wrapped_dek=cred_row.wrapped_dek,
@@ -477,12 +525,16 @@ async def revert_to_managed(
     org_id: str,
     managed_encrypt: Callable[[str], bytes],
     cache: DEKCache | None = None,
+    resolve_provider: Callable[[GatewayCredential, GatewayConnection], Awaitable[BYOKProvider]] | None = None,
 ) -> tuple[int, int, list[str]]:
     """Re-encrypt all BYOK credentials for an org back to managed encryption.
 
     Loads all eligible credential rows in one query (join with connections),
     then processes each individually. Per-credential atomicity: each row commits
     independently so partial revert is safe.
+
+    resolve_provider, when supplied, returns the provider that wrapped a given
+    credential — an org can hold several keys backed by different KMS keys.
 
     Returns:
         (reverted_count, failed_count, error_messages)
@@ -514,8 +566,10 @@ async def revert_to_managed(
             if not key_alias:
                 raise ValueError("Connection is missing byok_key_alias for BYOK decryption")
 
+            row_provider = await resolve_provider(cred_row, conn_row) if resolve_provider else provider
+
             conn_string_plain = await decrypt_envelope(
-                provider=provider,
+                provider=row_provider,
                 org_id=org_id,
                 key_alias=key_alias,
                 wrapped_dek=cred_row.wrapped_dek,
@@ -527,7 +581,7 @@ async def revert_to_managed(
             extras_plain = "{}"
             if cred_row.extras_enc:
                 extras_plain = await decrypt_envelope(
-                    provider=provider,
+                    provider=row_provider,
                     org_id=org_id,
                     key_alias=key_alias,
                     wrapped_dek=cred_row.wrapped_dek,

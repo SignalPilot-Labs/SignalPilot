@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import random
+import socket
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -280,7 +281,7 @@ def _extract_host_port(connection_string: str, db_type: str) -> tuple[str, int]:
         return "localhost", default_port
 
 
-def _validate_destination(db_type: str, connection_string: str) -> None:
+def _validate_destination(db_type: str, connection_string: str) -> tuple[str, list[str]] | None:
     """Re-validate a TCP destination immediately before connecting.
 
     Gating mirrors network.validation.validate_connection_params: only TCP
@@ -289,9 +290,8 @@ def _validate_destination(db_type: str, connection_string: str) -> None:
     stop working. resolve_and_validate honours SP_ALLOW_PRIVATE_CONNECTIONS and
     raises ValueError on a blocked or unresolvable address.
 
-    The validated IPs are deliberately not substituted into the connection string:
-    connecting by IP breaks TLS hostname verification (sslmode=verify-full) and
-    SNI-based routing for several drivers.
+    Returns (host, validated_ips) so the caller can pin the resolver, or None when
+    validation does not apply.
 
     Not called for SSH-tunnelled connections: the warehouse endpoint is resolved on
     the bastion, not here, so a local lookup would fail closed on every legitimate
@@ -301,10 +301,73 @@ def _validate_destination(db_type: str, connection_string: str) -> None:
     from ..runtime.mode import is_cloud_mode
 
     if not connection_string or db_type not in TCP_DB_TYPES or not is_cloud_mode():
-        return
+        return None
 
     host, port = _extract_host_port(connection_string, db_type)
-    resolve_and_validate(host, port, db_type)
+    return host, resolve_and_validate(host, port, db_type)
+
+
+async def _connect_validated(
+    connector: BaseConnector,
+    db_type: str,
+    connection_string: str,
+    actual_conn_str: str,
+) -> None:
+    """Connect with the destination validated and the resolver pinned across it.
+
+    The validated IPs are deliberately not substituted into the connection string
+    — connecting by IP breaks TLS hostname verification (sslmode=verify-full) and
+    SNI-based routing. Pinning the resolver instead keeps the hostname in the DSN
+    while denying the driver's own lookup any address we did not just validate.
+    Drivers that resolve inside a C library (psycopg2/libpq, pymssql/FreeTDS) do
+    not consult the pin; for those the post-connect peer check below is the only
+    thing that narrows the window.
+    """
+    from ..network.validation import assert_address_allowed, pinned_resolution
+
+    validated = _validate_destination(db_type, connection_string)
+    if validated is None:
+        await connector.connect(actual_conn_str)
+        return
+
+    host, ips = validated
+    with pinned_resolution(host, ips):
+        await connector.connect(actual_conn_str)
+
+    peer = _connected_peer_ip(connector)
+    if peer is None:
+        return
+    try:
+        assert_address_allowed(peer)
+    except ValueError:
+        with contextlib.suppress(Exception):
+            await connector.close()
+        raise ValueError(f"Connection refused: {host} connected to a blocked internal address") from None
+
+
+def _connected_peer_ip(connector: BaseConnector) -> str | None:
+    """Best-effort: the address the driver's socket is actually connected to.
+
+    Only drivers that expose a socket file descriptor (psycopg2) can be checked;
+    everything else returns None. The fd is borrowed and detached again so the
+    wrapper object can never close the driver's socket.
+    """
+    raw = getattr(connector, "_conn", None)
+    fileno = getattr(raw, "fileno", None)
+    if fileno is None:
+        return None
+    try:
+        fd = fileno()
+        sock = socket.socket(fileno=fd)
+    except Exception:
+        return None
+    try:
+        peer = sock.getpeername()
+    except Exception:
+        return None
+    finally:
+        sock.detach()
+    return peer[0] if isinstance(peer, tuple) and peer else None
 
 
 class PoolManager:
@@ -446,12 +509,14 @@ class PoolManager:
 
             # SSH tunnel setup (for host:port-based databases)
             actual_conn_str = connection_string
+            tunnelled = False
             if (
                 credential_extras
                 and credential_extras.get("ssh_tunnel")
                 and credential_extras["ssh_tunnel"].get("enabled")
                 and db_type in _TUNNEL_CAPABLE_DB_TYPES
             ):
+                tunnelled = True
                 ssh_config = credential_extras["ssh_tunnel"]
                 remote_host, remote_port = _extract_host_port(connection_string, db_type)
 
@@ -467,12 +532,6 @@ class PoolManager:
                     local_host,
                     local_port,
                 )
-            else:
-                # Re-resolve and re-check the destination on every new outbound
-                # connection: the address validated when the connection was saved
-                # can be re-pointed at an internal address afterwards. Raises on a
-                # blocked or unresolvable target — there is no hostname fallback.
-                _validate_destination(db_type, connection_string)
 
             # Track keepalive interval if provided
             keepalive = credential_extras.get("keepalive_interval", 0) if credential_extras else 0
@@ -481,7 +540,16 @@ class PoolManager:
             last_error: Exception | None = None
             for attempt in range(max_retries + 1):
                 try:
-                    await connector.connect(actual_conn_str)
+                    if tunnelled:
+                        # The warehouse endpoint resolves on the bastion, not here;
+                        # the bastion itself is validated inside SSHTunnel.start().
+                        await connector.connect(actual_conn_str)
+                    else:
+                        # Re-resolve and re-check the destination on every attempt:
+                        # the address validated when the connection was saved can be
+                        # re-pointed at an internal address afterwards. Raises on a
+                        # blocked or unresolvable target — no hostname fallback.
+                        await _connect_validated(connector, db_type, connection_string, actual_conn_str)
                     now = time.monotonic()
                     self._pools[key] = (connector, now)
                     self._identities[key] = credential_identity or ""

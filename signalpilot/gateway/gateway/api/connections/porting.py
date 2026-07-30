@@ -11,7 +11,9 @@ from pydantic import BaseModel
 from gateway.api.connections._router import router
 from gateway.api.connections._validation import _validate_connection_params
 from gateway.api.deps import StoreD
+from gateway.auth import OrgAdmin
 from gateway.common.ip import request_meta
+from gateway.db.models import strip_ssl_secrets
 from gateway.models import AuditEntry, ConnectionCreate
 from gateway.security.scope_guard import RequireScope, require_scopes
 from gateway.store import CredentialEncryptionError
@@ -29,6 +31,7 @@ async def export_connections(
     body: ExportRequest,
     store: StoreD,
     request: Request,
+    _role: OrgAdmin,
 ):
     """Export all connections as a portable JSON manifest.
 
@@ -98,7 +101,9 @@ async def export_connections(
                     content={"error": "Failed to decrypt connection credentials."},
                 )
             if conn_dict.get("ssl_config"):
-                entry["ssl_config"] = conn_dict["ssl_config"]
+                # Certs/keys stay in the encrypted credential store — the manifest
+                # carries TLS mode only, so re-import needs them supplied again.
+                entry["ssl_config"] = strip_ssl_secrets(conn_dict["ssl_config"])
             if conn_dict.get("ssh_tunnel"):
                 entry["ssh_tunnel"] = conn_dict["ssh_tunnel"]
 
@@ -130,7 +135,7 @@ async def export_connections(
 
 
 @router.post("/connections/import", dependencies=[RequireScope("write")])
-async def import_connections(manifest: dict, store: StoreD, request: Request):
+async def import_connections(manifest: dict, store: StoreD, request: Request, _role: OrgAdmin):
     """Import connections from an exported JSON manifest."""
     connections = manifest.get("connections", [])
     if len(connections) > 500:

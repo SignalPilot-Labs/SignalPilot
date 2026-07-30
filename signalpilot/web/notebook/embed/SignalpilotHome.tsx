@@ -1,7 +1,11 @@
-import { SpApp } from "@/core/SpApp";
+import { lazy, Suspense } from "react";
 import { adaptMountConfig } from "./adaptMountConfig";
 import { SpEmbedProviders } from "./SpEmbedProviders";
 import type { SignalpilotHomeProps } from "./types";
+
+const LazySpApp = lazy(() =>
+  import("@/core/SpApp").then((module) => ({ default: module.SpApp })),
+);
 
 /**
  * Embeddable home-page component.
@@ -31,7 +35,9 @@ export function SignalpilotHome({
       className={`sp-root${className ? ` ${className}` : ""}`}
     >
       <SpEmbedProviders client={client} options={options}>
-        <SpApp />
+        <Suspense fallback={null}>
+          <LazySpApp />
+        </Suspense>
       </SpEmbedProviders>
     </div>
   );

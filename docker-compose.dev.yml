@@ -1,0 +1,114 @@
+# SignalPilot — Hot-reload development overlay
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build db gateway notebook sandbox
+#   cd signalpilot/web && pnpm exec next dev --port 3200 --hostname 0.0.0.0 --webpack
+#
+# Keep docker-compose.yml as the reproducible/prod-like stack. This overlay is
+# for day-to-day code edits: source is bind-mounted, dependency/build artifacts
+# stay inside Linux containers, and long-running services reload or restart.
+# The web app runs on the host by default for faster local iteration. Enable the
+# docker-web profile if you specifically need the containerized Next.js service.
+
+services:
+  gateway:
+    env_file:
+      - path: ./.slack.local.env
+        required: false
+      - path: ./.env
+        required: false
+    volumes:
+      - ./signalpilot/gateway/gateway:/app/gateway:cached
+      - ./scripts/dev-watch-notebook.py:/usr/local/bin/dev-watch-notebook.py:ro
+    command: >
+      sh -c "/app/.venv/bin/python -m gateway.dev_local_api_key /shared/local_api_key && exec /app/.venv/bin/python /usr/local/bin/dev-watch-notebook.py --watch /app/gateway --interval 1 -- /app/.venv/bin/uvicorn gateway.main:app --host 0.0.0.0 --port 3300"
+
+  notebook:
+    env_file:
+      - path: ./.slack.local.env
+        required: false
+      - path: ./.env
+        required: false
+    volumes:
+      - ./signalpilot/notebook-server/signalpilot:/opt/sp-notebook/signalpilot:cached
+      - ./scripts/dev-watch-notebook.py:/usr/local/bin/dev-watch-notebook.py:ro
+    entrypoint:
+      - sh
+      - -c
+      - |
+        export SP_API_KEY=$$(cat /shared/local_api_key 2>/dev/null || echo '')
+        exec /opt/sp-notebook/.venv/bin/python /usr/local/bin/dev-watch-notebook.py \
+          --watch /opt/sp-notebook/signalpilot \
+          --interval 1 \
+          -- /opt/sp-notebook/.venv/bin/python -m signalpilot --development-mode edit \
+            --host 0.0.0.0 --port 2718 --headless \
+            --no-token --no-skew-protection \
+            --allow-origins http://localhost:${SP_WEB_PORT:-3200},http://localhost:${SP_GATEWAY_PORT:-3300} \
+            /workspace
+
+  web:
+    profiles:
+      - docker-web
+    build:
+      target: dev
+    healthcheck:
+      disable: true
+    environment:
+      NODE_ENV: development
+      NEXT_TELEMETRY_DISABLED: "1"
+      NEXT_PUBLIC_DEPLOYMENT_MODE: local
+      NEXT_PUBLIC_GATEWAY_URL: http://localhost:${SP_GATEWAY_PORT:-3300}
+      SP_GATEWAY_INTERNAL_URL: http://gateway:3300
+      WATCHPACK_POLLING: "true"
+      CHOKIDAR_USEPOLLING: "true"
+    volumes:
+      - ./signalpilot/web:/app/signalpilot/web:cached
+      - type: volume
+        source: signalpilot-web-node-modules
+        target: /app/signalpilot/web/node_modules
+        volume:
+          nocopy: true
+      - signalpilot-web-next:/app/signalpilot/web/.next
+      - signalpilot-shared:/shared:ro
+    command: >
+      sh -c 'i=0;
+             while [ ! -f /shared/local_api_key ] && [ "$$i" -lt 30 ]; do
+               sleep 1;
+               i=$$((i+1));
+             done;
+             if [ -f /shared/local_api_key ]; then
+               export SP_LOCAL_API_KEY="$$(cat /shared/local_api_key)";
+             fi;
+             if [ ! -d node_modules/next ]; then
+               npm ci --legacy-peer-deps;
+             fi;
+             case "$$(uname -m)" in
+               aarch64)
+                 if [ ! -e node_modules/lightningcss-linux-arm64-gnu/lightningcss.linux-arm64-gnu.node ]; then
+                   npm install --legacy-peer-deps --no-save lightningcss-linux-arm64-gnu@1.32.0 @tailwindcss/oxide-linux-arm64-gnu@4.2.4;
+                 fi
+                 ;;
+               x86_64)
+                 if [ ! -e node_modules/lightningcss-linux-x64-gnu/lightningcss.linux-x64-gnu.node ]; then
+                   npm install --legacy-peer-deps --no-save lightningcss-linux-x64-gnu@1.32.0 @tailwindcss/oxide-linux-x64-gnu@4.2.4;
+                 fi
+                 ;;
+             esac;
+             bundler_flag="--webpack";
+             case "$${NEXT_DEV_BUNDLER:-webpack}" in
+               turbo|turbopack)
+                 bundler_flag="--turbopack";
+                 ;;
+               webpack|"")
+                 bundler_flag="--webpack";
+                 ;;
+               *)
+                 echo "Unknown NEXT_DEV_BUNDLER=$${NEXT_DEV_BUNDLER}; using webpack";
+                 ;;
+             esac;
+             rm -rf .next/dev;
+             exec npm run dev -- --hostname 0.0.0.0 "$$bundler_flag"'
+
+volumes:
+  signalpilot-web-node-modules:
+  signalpilot-web-next:

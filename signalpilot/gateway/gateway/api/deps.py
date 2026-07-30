@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import fnmatch
+import hashlib
+import os
 import re
 from typing import Annotated, Any
 
@@ -199,30 +201,76 @@ async def get_schema_filters(store: Store, name: str) -> tuple[list[str], list[s
 
 # ─── Sandbox client ───────────────────────────────────────────────────────────
 
-_sandbox_client: SandboxClient | None = None
+# Sandbox endpoint + credentials are org-scoped settings, so clients are cached
+# per org and per resolved config — never shared across orgs.
+_sandbox_clients: dict[str, tuple[str, SandboxClient]] = {}
+_platform_sandbox_client: SandboxClient | None = None
+
+_UNSCOPED_ORG_KEY = "\x00unscoped"
+
+
+def _sandbox_config_fingerprint(settings) -> str:
+    """Identity of the resolved sandbox config: endpoint + credential."""
+    key = settings.sandbox_api_key or ""
+    cred = hashlib.sha256(key.encode()).hexdigest() if key else "-"
+    return f"{settings.sandbox_manager_url}\x00{cred}"
+
+
+def _close_in_background(client: SandboxClient) -> None:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    asyncio.create_task(client.close())
 
 
 async def get_sandbox_client_with_store(store: Store) -> SandboxClient:
-    global _sandbox_client
-    if _sandbox_client is None:
-        settings = await store.load_settings()
-        _sandbox_client = SandboxClient(
-            base_url=settings.sandbox_manager_url,
-            api_key=settings.sandbox_api_key,
-        )
-    return _sandbox_client
+    settings = await store.load_settings()
+    org_key = store.org_id or _UNSCOPED_ORG_KEY
+    fingerprint = _sandbox_config_fingerprint(settings)
+
+    cached = _sandbox_clients.get(org_key)
+    if cached is not None:
+        if cached[0] == fingerprint:
+            return cached[1]
+        _close_in_background(cached[1])
+        del _sandbox_clients[org_key]
+
+    client = SandboxClient(
+        base_url=settings.sandbox_manager_url,
+        api_key=settings.sandbox_api_key,
+    )
+    _sandbox_clients[org_key] = (fingerprint, client)
+    return client
 
 
 def get_sandbox_client() -> SandboxClient:
-    """Legacy: get sandbox client without store (uses existing instance)."""
-    global _sandbox_client
-    if _sandbox_client is None:
-        raise HTTPException(status_code=503, detail="Sandbox client not initialized")
-    return _sandbox_client
+    """Legacy: sandbox client for callers with no org context.
+
+    Only ever the platform-operated sandbox — an org's BYOS endpoint must not be
+    reachable from a request whose org is unknown.
+    """
+    global _platform_sandbox_client
+    if _platform_sandbox_client is None:
+        url = os.environ.get("SP_SANDBOX_MANAGER_URL")
+        if not url:
+            raise HTTPException(status_code=503, detail="Sandbox client not initialized")
+        _platform_sandbox_client = SandboxClient(base_url=url, is_platform=True)
+    return _platform_sandbox_client
 
 
-def reset_sandbox_client():
-    global _sandbox_client
-    if _sandbox_client is not None:
-        asyncio.create_task(_sandbox_client.close())
-    _sandbox_client = None
+def reset_sandbox_client(org_id: str | None = None) -> None:
+    """Drop one org's cached client. Never touches another org's entry."""
+    entry = _sandbox_clients.pop(org_id or _UNSCOPED_ORG_KEY, None)
+    if entry is not None:
+        _close_in_background(entry[1])
+
+
+async def close_sandbox_clients() -> None:
+    global _platform_sandbox_client
+    for _, client in _sandbox_clients.values():
+        await client.close()
+    _sandbox_clients.clear()
+    if _platform_sandbox_client is not None:
+        await _platform_sandbox_client.close()
+        _platform_sandbox_client = None

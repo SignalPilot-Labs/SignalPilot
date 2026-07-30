@@ -78,6 +78,13 @@ def _log_notion_webhook_decision(
     )
 
 
+async def _rollback_session_best_effort(session: AsyncSession) -> None:
+    try:
+        await session.rollback()
+    except Exception:
+        logger.debug("Could not roll back Notion webhook session after processor error", exc_info=True)
+
+
 def _notion_oauth_client_id() -> str:
     value = os.getenv("NOTION_OAUTH_CLIENT_ID")
     if not value:
@@ -239,13 +246,14 @@ async def _process_notion_event_task(event_id: str, installation_id: str, payloa
             )
             return
         installation, config, token = record
+        installation_org_id = installation.org_id
         if config is None:
             _log_notion_webhook_decision(
                 "failed",
                 event_id=event_id,
                 payload=payload,
                 installation_id=installation_id,
-                org_id=installation.org_id,
+                org_id=installation_org_id,
                 reason="installation_not_provisioned",
                 level=logging.WARNING,
             )
@@ -254,7 +262,7 @@ async def _process_notion_event_task(event_id: str, installation_id: str, payloa
                 event_id,
                 status="failed",
                 installation_id=installation_id,
-                org_id=installation.org_id,
+                org_id=installation_org_id,
                 error="Notion installation is not provisioned",
                 processed=True,
             )
@@ -268,16 +276,17 @@ async def _process_notion_event_task(event_id: str, installation_id: str, payloa
                 "Notion webhook processing failed: event_id=%s installation_id=%s org_id=%s error=%s",
                 event_id,
                 installation_id,
-                installation.org_id,
+                installation_org_id,
                 error,
                 exc_info=True,
             )
+            await _rollback_session_best_effort(session)
             await notion_store.record_webhook_delivery(
                 session,
                 event_id,
                 status="failed",
                 installation_id=installation_id,
-                org_id=installation.org_id,
+                org_id=installation_org_id,
                 error=error[:1000],
                 processed=True,
             )
@@ -287,16 +296,17 @@ async def _process_notion_event_task(event_id: str, installation_id: str, payloa
                 "Notion webhook processing failed: event_id=%s installation_id=%s org_id=%s error=%s",
                 event_id,
                 installation_id,
-                installation.org_id,
+                installation_org_id,
                 str(exc)[:500],
                 exc_info=True,
             )
+            await _rollback_session_best_effort(session)
             await notion_store.record_webhook_delivery(
                 session,
                 event_id,
                 status="failed",
                 installation_id=installation_id,
-                org_id=installation.org_id,
+                org_id=installation_org_id,
                 error=str(exc)[:1000],
                 processed=True,
             )
@@ -307,7 +317,7 @@ async def _process_notion_event_task(event_id: str, installation_id: str, payloa
                 event_id=event_id,
                 payload=payload,
                 installation_id=installation_id,
-                org_id=installation.org_id,
+                org_id=installation_org_id,
                 reason=result.reason or "processor_ignored",
             )
             await notion_store.record_webhook_delivery(
@@ -315,7 +325,7 @@ async def _process_notion_event_task(event_id: str, installation_id: str, payloa
                 event_id,
                 status="ignored",
                 installation_id=installation_id,
-                org_id=installation.org_id,
+                org_id=installation_org_id,
                 error=result.reason,
                 processed=True,
             )
@@ -325,7 +335,7 @@ async def _process_notion_event_task(event_id: str, installation_id: str, payloa
             event_id=event_id,
             payload=payload,
             installation_id=installation_id,
-            org_id=installation.org_id,
+            org_id=installation_org_id,
             reason="processor_completed",
         )
         await notion_store.record_webhook_delivery(
@@ -333,7 +343,7 @@ async def _process_notion_event_task(event_id: str, installation_id: str, payloa
             event_id,
             status="processed",
             installation_id=installation_id,
-            org_id=installation.org_id,
+            org_id=installation_org_id,
             processed=True,
         )
 

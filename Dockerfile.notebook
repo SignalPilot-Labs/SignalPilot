@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 FROM python:3.13-slim
 
 RUN groupadd -g 10001 notebook && \
@@ -8,15 +9,20 @@ RUN groupadd -g 10001 notebook && \
 
 WORKDIR /opt/sp-notebook
 
+ENV UV_PYTHON_DOWNLOADS=never \
+    UV_PYTHON_PREFERENCE=only-system \
+    UV_PROJECT_ENVIRONMENT=/opt/sp-notebook/.venv \
+    UV_LINK_MODE=copy
+
 # Copy local notebook-server source
 COPY signalpilot/notebook-server/pyproject.toml signalpilot/notebook-server/uv.lock ./
 COPY signalpilot/notebook-server/MANIFEST.in signalpilot/notebook-server/.python-version ./
 COPY signalpilot/notebook-server/README.md signalpilot/notebook-server/LICENSE ./
-COPY signalpilot/notebook-server/signalpilot/ signalpilot/
 
 # Install via uv + additional production dependencies
-RUN uv sync --frozen --no-dev && \
-    uv pip install --no-cache \
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project && \
+    uv pip install --python /opt/sp-notebook/.venv/bin/python \
       requests httpx starlette uvicorn msgspec \
       pydantic pydantic-settings websockets sse-starlette pyjwt \
       dbt-core dbt-duckdb duckdb polars pandas pyarrow numpy \
@@ -24,14 +30,18 @@ RUN uv sync --frozen --no-dev && \
       seaborn scikit-learn scipy \
       anthropic openai tiktoken \
       dbt-postgres dbt-snowflake && \
-    # Bake in-tree .pyc for BOTH the app and the whole venv (12k+ dep files).
-    # The kernel runs on a read-only root (F-7) so it can never write .pyc at
-    # runtime — without this every interpreter start (entrypoint + sync_boot +
-    # `sp edit` + each kernel) recompiles every dependency from source. Compiling
-    # at build time means runtime imports read the cached .pyc with zero compile
-    # cost. -j 0 = all cores; ignore failures on optional/py2 files.
-    python -m compileall -q -j 0 /opt/sp-notebook/signalpilot /opt/sp-notebook/.venv/lib 2>/dev/null || true && \
-    chown -R notebook:notebook /opt/sp-notebook /workspace /home/notebook
+    # Bake dependency .pyc once. The runtime root is read-only, so imports should
+    # read precompiled bytecode instead of trying to write it at startup.
+    python -m compileall -q -j 0 /opt/sp-notebook/.venv/lib 2>/dev/null || true
+
+COPY --chown=notebook:notebook signalpilot/notebook-server/signalpilot/ signalpilot/
+
+# Install only the local package after copying source. Source edits should not
+# invalidate the heavyweight dependency layer above.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --python /opt/sp-notebook/.venv/bin/python --no-deps -e . && \
+    python -m compileall -q -j 0 /opt/sp-notebook/signalpilot 2>/dev/null || true && \
+    chown -R notebook:notebook /workspace /home/notebook
 
 ENV PATH="/opt/sp-notebook/.venv/bin:$PATH"
 
@@ -46,4 +56,9 @@ ENV SP_GATEWAY_URL=""
 ENV SP_API_KEY=""
 ENV SP_LOG_LEVEL="10"
 
-CMD ["python", "-m", "signalpilot._server.entrypoint", "--host", "0.0.0.0", "--port", "2718", "--headless", "--no-token", "--no-skew-protection", "/workspace"]
+# Fallback for a bare `docker run` of this image: auth is always on, with a
+# self-provisioned token file (see _server/local_token.py). In Kubernetes the pod
+# spec replaces command+args entirely and supplies a per-pod token instead.
+ENV SP_NOTEBOOK_TOKEN_FILE=/home/notebook/.sp/notebook_token
+
+CMD ["sh", "-c", "python -m signalpilot._server.local_token \"$SP_NOTEBOOK_TOKEN_FILE\" && exec python -m signalpilot._server.entrypoint --host 0.0.0.0 --port 2718 --headless --token-password-file \"$SP_NOTEBOOK_TOKEN_FILE\" --no-skew-protection /workspace"]

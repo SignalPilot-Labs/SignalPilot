@@ -86,6 +86,14 @@ async def run_notebook(
             )
             session_id = session_info.id
 
+            # create_session's FE-facing view hides access_token; the plaintext
+            # per-pod notebook token comes off the internal read path.
+            internal = await ns.get_session_internal(session, session_id=session_id, org_id=org_id)
+            notebook_token = internal.access_token if internal else None
+            if not notebook_token:
+                await ns.update_session_status(session, session_id=session_id, org_id=org_id, status="error")
+                return "Error starting notebook pod: no notebook auth token was minted"
+
             session_jwt = mint_session_jwt(
                 user_id=user_id, org_id=org_id, session_id=session_id,
                 project_id=None,
@@ -109,7 +117,7 @@ async def run_notebook(
                     gateway_url=k8s_settings.sp_public_gateway_url,
                     session_jwt_secret_name=f"sp-jwt-{pod_name}",
                     session_id=session_id,
-                    access_token=session_info.access_token,
+                    access_token=notebook_token,
                     extra_env={"SP_AGENT_MODE": "true"},
                 )
 
@@ -119,6 +127,7 @@ async def run_notebook(
                     namespace=ns_name,
                     pod_name=pod_name,
                     session_jwt=session_jwt,
+                    notebook_token=notebook_token,
                     create_pod_fn=_create_pod_fn,
                 )
             except Exception as exc:

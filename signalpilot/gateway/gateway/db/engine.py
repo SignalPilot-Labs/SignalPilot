@@ -246,6 +246,23 @@ async def _ensure_audit_ip_columns(engine) -> None:
     logger.info("Ensured client_ip and user_agent columns on gateway_audit_logs")
 
 
+async def _ensure_github_authorized_repos_column(engine) -> None:
+    """Add authorized_repository_ids to gateway_github_installations if absent.
+
+    SP-SEC-005: records the repository ids the authorizing user could reach, so
+    token refresh can stay scoped. NULL on rows created before the fix; the
+    refresh path falls back to linked repos for those.
+    """
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_github_installations "
+                "ADD COLUMN IF NOT EXISTS authorized_repository_ids JSON"
+            )
+        )
+    logger.info("Ensured authorized_repository_ids column on gateway_github_installations")
+
+
 async def _ensure_audit_parent_id_column(engine) -> None:
     """Add parent_id column to gateway_audit_logs for linking child SQL to parent tool calls."""
     async with engine.begin() as conn:
@@ -619,8 +636,7 @@ async def init_db() -> None:
     await _ensure_notebook_session_org_id(engine)
     await _ensure_notebook_session_pod_ip_internal(engine)
     await _ensure_drop_s3_prefix_column(engine)
-    # GitHub tables are created by metadata.create_all above; this is a placeholder
-    # for future column additions via ALTER TABLE IF NOT EXISTS.
+    await _ensure_github_authorized_repos_column(engine)
     logger.info("Gateway database tables initialized")
 
 

@@ -130,6 +130,7 @@ def _slack_link(url: str, label: str) -> str:
 
 
 def _to_slack_mrkdwn(text: str) -> str:
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", r"*\1*", text)
     text = re.sub(r"\*\*([^*\n]+?)\*\*", r"*\1*", text)
     text = re.sub(r"__([^_\n]+?)__", r"*\1*", text)
     return re.sub(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)", r"<\2|\1>", text)

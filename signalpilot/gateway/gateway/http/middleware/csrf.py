@@ -63,7 +63,13 @@ class CookieAuthCsrfMiddleware(BaseHTTPMiddleware):
     """
 
     SAFE_METHODS: frozenset[str] = frozenset({"GET", "HEAD", "OPTIONS"})
-    SAME_SITE_TOKENS: frozenset[str] = frozenset({"same-origin", "same-site", "none"})
+    # "same-site" is deliberately NOT accepted: a site ignores port and scheme, so
+    # it would admit every subdomain of the registrable domain, any port, and plain
+    # http — turning a subdomain takeover or a stray vhost into a full CSRF bypass.
+    # Legitimate cross-origin cookie callers must be named in the allow-list below.
+    # "none" is safe: browsers emit it only for user-initiated top-level navigation,
+    # which is always a safe method and already returns at step 1.
+    SAME_SITE_TOKENS: frozenset[str] = frozenset({"same-origin", "none"})
 
     def __init__(self, app: object, allowed_origins: list[str], enabled: bool) -> None:
         super().__init__(app)  # type: ignore[arg-type]

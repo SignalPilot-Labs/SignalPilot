@@ -111,8 +111,16 @@ signalpilot/notebook-server/signalpilot/_server/ai/.chat_sessions.json
 *.bak
 
 # Internal docs (not for public repo)
+# Internal roadmap, work-log, customer, vendor and operational material. Untracked
+# rather than deleted — the files stay on disk. Note this only stops FUTURE commits:
+# they remain in the existing history and need a separate history rewrite to remove.
 signalpilot/web/clerk-research.md
 signalpilot/web/enterprise-connections.md
+signalpilot/web/UX.md
+writeups/
+# Security audit reports: findings, credential names, deployment locations
+# and customer-identifying detail. Kept on disk, out of the repo.
+security/
 
 # Vendored GitHub Copilot LSP binaries (~81MB, disabled by default; install at build if needed)
 signalpilot/notebook-server/signalpilot/_lsp/copilot/
@@ -131,10 +139,16 @@ demo-9/
 benchmark-demo-1/
 demo-generator/
 dbt-playground/
-akasa_dbt.zip
-nala-demo.zip
+*.zip
 
 # Planning / research / customer docs (never commit)
+# Default-deny for root-level markdown: scratch planning notes land here and
+# their filenames alone can name customers or partners, so the allowlist below
+# is the public part rather than an inventory of internal work.
+/*.md
+!/README.md
+!/CONTRIBUTING.md
+!/SECURITY.md
 research-7-20/
 research-7-24/
 presentations/
@@ -143,13 +157,16 @@ cc.md
 dh.json
 eval-format.md
 eval-upload-spec.md
-five-customer-problems.md
 knowledge-base-redesign.md
-xata-partnership.md
 .codex/
 codex-signalpilot-plugin/
 redshift_export/
-redshift_nala_load.py
+redshift_*.py
 
 # Credentials — never commit
-.redshift-nala-creds.txt
+# Broad on purpose: a credentials filename can name the environment it
+# belongs to, and this list is public even when the files are not.
+/*creds*
+/*credentials*
+/.*creds*
+/.*credentials*

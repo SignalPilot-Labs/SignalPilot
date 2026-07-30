@@ -10,9 +10,11 @@ HTTP proxy support for corporate VPCs that block direct SSH (HEX pattern).
 
 from __future__ import annotations
 
+import contextlib
 import io
 import logging
 import re
+from collections.abc import Iterator
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -97,6 +99,29 @@ def _build_proxy_command(proxy_host: str, proxy_port: Any, ssh_host: str, ssh_po
     safe_ssh_host = _validate_socat_host("ssh_host", ssh_host)
     safe_ssh_port = _validate_socat_port("ssh_port", ssh_port)
     return f"socat - PROXY:{safe_proxy_host}:{safe_ssh_host}:{safe_ssh_port},proxyport={safe_proxy_port}"
+
+
+@contextlib.contextmanager
+def _validated_hop(host: str, port: int) -> Iterator[None]:
+    """Validate an SSH hop against the SSRF denylist and pin it while connecting.
+
+    Only the hop we dial from here can be checked. The warehouse endpoint behind
+    the tunnel is resolved by the bastion, in the bastion's DNS view, so it is not
+    observable locally and remains outside this control.
+
+    Gated on cloud mode to match network.validation.validate_connection_params —
+    local deployments legitimately tunnel through loopback/RFC1918 bastions.
+    """
+    from ..network.validation import pinned_resolution, resolve_and_validate
+    from ..runtime.mode import is_cloud_mode
+
+    if not is_cloud_mode():
+        yield
+        return
+
+    ips = resolve_and_validate(host, port, "ssh")
+    with pinned_resolution(host, ips):
+        yield
 
 
 class SSHTunnel:
@@ -185,8 +210,17 @@ class SSHTunnel:
                 raise ValueError("SSH tunnel with password auth requires a password")
             tunnel_kwargs["ssh_password"] = password
 
-        self._tunnel = SSHTunnelForwarder(**tunnel_kwargs)
-        self._tunnel.start()
+        # Validate the hop we actually dial. With an HTTP proxy that is the proxy
+        # (socat runs out-of-process, so it re-resolves and only the validation,
+        # not the pin, applies to it); otherwise it is the bastion itself.
+        if proxy_host:
+            hop_host, hop_port = proxy_host, proxy_port
+        else:
+            hop_host, hop_port = ssh_host, ssh_port
+
+        with _validated_hop(hop_host, hop_port):
+            self._tunnel = SSHTunnelForwarder(**tunnel_kwargs)
+            self._tunnel.start()
 
         local_host = self._tunnel.local_bind_host
         local_port = self._tunnel.local_bind_port

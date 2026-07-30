@@ -7,6 +7,7 @@ import os as _os
 from mcp.server.fastmcp import FastMCP
 
 from ..config import get_mcp_settings
+from ..config.k8s import get_k8s_settings
 from ..runtime.mode import is_cloud_mode
 
 # Allowed hosts for MCP streamable-http transport (DNS rebinding protection)
@@ -14,10 +15,13 @@ _allowed_hosts = ["localhost", "127.0.0.1", "host.docker.internal", "0.0.0.0"]
 _extra_hosts = get_mcp_settings().sp_mcp_allowed_hosts
 if _extra_hosts:
     _allowed_hosts.extend(h.strip() for h in _extra_hosts.split(",") if h.strip())
-# Include hosts with port numbers
+# Include hosts with port numbers. SP_PUBLIC_GATEWAY_PORT reflects the port
+# clients actually connect on (e.g. compose's SP_GATEWAY_PORT override), so
+# a remapped host port doesn't get rejected as an invalid Host header.
+_gateway_port = get_k8s_settings().sp_public_gateway_port
 _allowed_hosts_with_ports = list(_allowed_hosts)
 for h in _allowed_hosts:
-    _allowed_hosts_with_ports.append(f"{h}:3300")
+    _allowed_hosts_with_ports.append(f"{h}:{_gateway_port}")
 
 # In cloud mode behind a reverse proxy (Caddy/nginx), disable host validation entirely
 # since the proxy already handles DNS rebinding protection via its own config

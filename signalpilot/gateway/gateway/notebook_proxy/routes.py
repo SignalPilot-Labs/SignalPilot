@@ -33,9 +33,19 @@ from .proxy import NotebookProxy
 # CR (0x0D) and LF (0x0A) are explicitly excluded to prevent HTTP response splitting.
 _WS_QUERY_SAFE_PATTERN = re.compile(r"^[A-Za-z0-9\-._~%=&+]*$")
 
+# Same reasoning for the forwarded path segment, which is concatenated into the
+# upstream URL. Slashes are legal here; CR/LF and other control characters are not.
+_PATH_SAFE_PATTERN = re.compile(r"^[A-Za-z0-9\-._~%=&+/@:$,;!*'()]*$")
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _validate_upstream_path(path: str) -> None:
+    """Reject a forwarded path that could split the upstream request."""
+    if path and not _PATH_SAFE_PATTERN.match(path):
+        raise HTTPException(status_code=400, detail="Invalid notebook path")
 
 
 def _get_proxy_client(request: Request | WebSocket) -> httpx.AsyncClient:
@@ -61,8 +71,13 @@ async def proxy_http(
     Auth: resolve_proxy_session (Clerk/API-key/local + same-user ownership).
     No RequireScope — see module docstring.
     """
+    _validate_upstream_path(path)
     http_client = _get_proxy_client(request)
-    proxy = NotebookProxy(proxy_session.upstream_base, http_client=http_client)
+    proxy = NotebookProxy(
+        proxy_session.upstream_base,
+        http_client=http_client,
+        upstream_token=proxy_session.upstream_token,
+    )
     return await proxy.forward_http(request, path)
 
 
@@ -87,6 +102,11 @@ async def proxy_websocket(
 
     No RequireScope — see module docstring.
     """
+    if path and not _PATH_SAFE_PATTERN.match(path):
+        logger.warning("WS path contains unsafe characters — refusing before accept")
+        await ws.close(code=1008)
+        return
+
     raw_query = ws.url.query
 
     logger.info(
@@ -123,5 +143,6 @@ async def proxy_websocket(
     proxy = NotebookProxy(
         proxy_session.upstream_base,
         http_client=_get_proxy_client(ws),
+        upstream_token=proxy_session.upstream_token,
     )
     await proxy.forward_ws(ws, upstream_url, accept_subprotocol=accept_subprotocol)

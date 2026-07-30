@@ -11,6 +11,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     DateTime,
     Float,
@@ -30,6 +31,19 @@ TZDateTime = DateTime(timezone=True)
 
 class GatewayBase(DeclarativeBase):
     pass
+
+
+# TLS material lives only in the encrypted credential extras. These fields are
+# stripped before the ssl_config metadata column is written and redacted again on
+# read so rows written by earlier releases cannot leak through a response.
+SSL_SECRET_FIELDS = ("ca_cert", "client_cert", "client_key")
+
+
+def strip_ssl_secrets(ssl_config: dict | None) -> dict | None:
+    """Return ssl_config with certificate/key material removed."""
+    if not ssl_config:
+        return ssl_config
+    return {k: v for k, v in ssl_config.items() if k not in SSL_SECRET_FIELDS}
 
 
 class GatewayConnection(GatewayBase):
@@ -99,7 +113,7 @@ class GatewayConnection(GatewayBase):
             "database": self.database,
             "username": self.username,
             "ssl": self.ssl,
-            "ssl_config": self.ssl_config,
+            "ssl_config": strip_ssl_secrets(self.ssl_config),
             "ssh_tunnel": self.ssh_tunnel,
             "account": self.account,
             "warehouse": self.warehouse,
@@ -298,6 +312,36 @@ class GatewaySessionBudget(GatewayBase):
     __table_args__ = (
         UniqueConstraint("org_id", "session_id", name="uq_gw_budget_org_session"),
         Index("ix_gw_budget_org_id", "org_id"),
+    )
+
+
+class GatewayUploadSession(GatewayBase):
+    """Reserved slot for an in-flight eval multipart upload.
+
+    The bytes go straight to S3, so this row is the only server-side record of
+    what a principal was allowed to upload, and the per-principal open-upload
+    and concurrent-byte caps are counted from it. It is written before
+    CreateMultipartUpload is awaited (upload_id filled in afterwards) so racing
+    initiations in any worker or replica contend on one shared reservation.
+    """
+
+    __tablename__ = "gateway_upload_sessions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    key: Mapped[str] = mapped_column(String(500), nullable=False)
+    upload_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # 8 GB ceiling overflows INTEGER on Postgres.
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    part_lengths: Mapped[list | None] = mapped_column(JSON)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "key", name="uq_gw_upload_org_key"),
+        Index("ix_gw_upload_org_user", "org_id", "user_id"),
+        Index("ix_gw_upload_expires", "expires_at"),
     )
 
 
@@ -548,6 +592,37 @@ class SlackInstallationConfig(GatewayBase):
         server_default="per_request",
     )
     allowed_channel_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+
+
+class GatewaySlackThreadWatch(GatewayBase):
+    """Durable Slack thread invitation state.
+
+    A row means SignalPilot was explicitly mentioned in the Slack thread and may
+    route later plain replies through intake without another @mention.
+    """
+
+    __tablename__ = "gateway_slack_thread_watches"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    team_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    channel_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    thread_ts: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_thread_id: Mapped[str] = mapped_column(String(300), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active", server_default="active")
+    invited_by_user_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    latest_user_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    first_event_ts: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    latest_event_ts: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "team_id", "channel_id", "thread_ts", name="uq_slack_thread_watch_identity"),
+        Index("ix_slack_thread_watch_source_thread", "org_id", "source_thread_id"),
+        Index("ix_slack_thread_watch_active", "org_id", "team_id", "channel_id", "status"),
+    )
 
 
 class SlackOAuthState(GatewayBase):
@@ -1224,6 +1299,21 @@ class GatewayUserSecrets(GatewayBase):
     )
 
 
+class GatewayOrgSecrets(GatewayBase):
+    """Org-scoped secrets — encrypted at rest."""
+
+    __tablename__ = "gateway_org_secrets"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    anthropic_api_key_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        Index("ix_gw_orgsecrets_org_id", "org_id"),
+    )
+
+
 class GatewayGitHubInstallation(GatewayBase):
     """GitHub App installation linked to an org."""
 
@@ -1237,6 +1327,10 @@ class GatewayGitHubInstallation(GatewayBase):
     access_token_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
     token_expires_at: Mapped[float | None] = mapped_column(Float)
     permissions: Mapped[dict | None] = mapped_column(JSON)
+    # SP-SEC-005: repository ids the authorizing user could reach at install
+    # time. Installation tokens are minted restricted to this set, including on
+    # refresh. NULL means "legacy row, installed before repository scoping".
+    authorized_repository_ids: Mapped[list | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     created_by: Mapped[str | None] = mapped_column(String)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)

@@ -93,6 +93,17 @@ async def get_active_session(
     return _to_info(row) if row else None
 
 
+async def list_active_sessions_for_org(
+    session: AsyncSession, *, org_id: str
+) -> list[NotebookSessionInfo]:
+    q = select(GatewayNotebookSession).where(
+        GatewayNotebookSession.org_id == org_id,
+        GatewayNotebookSession.status.in_(["creating", "running"]),
+    )
+    rows = (await session.execute(q)).scalars().all()
+    return [_to_info(row) for row in rows]
+
+
 async def create_session(
     session: AsyncSession,
     *,
@@ -105,7 +116,9 @@ async def create_session(
     import secrets
 
     now = time.time()
-    token = secrets.token_urlsafe(24)
+    # This is the notebook server's own auth token for the pod this session owns:
+    # injected into the pod and presented upstream by the proxy. 32 bytes.
+    token = secrets.token_urlsafe(32)
     row = GatewayNotebookSession(
         id=str(uuid.uuid4()),
         org_id=org_id,

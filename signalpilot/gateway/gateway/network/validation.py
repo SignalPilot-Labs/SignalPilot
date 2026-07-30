@@ -10,13 +10,15 @@ DNS resolution failure is treated as rejection (fail closed).
 
 from __future__ import annotations
 
+import contextlib
 import ipaddress
 import logging
 import os
 import re
 import socket
 import threading
-from typing import cast
+from collections.abc import Iterator, Sequence
+from typing import Any, cast
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
@@ -163,6 +165,15 @@ def _check_ip_address(ip_str: str, allow_private: bool) -> None:
         raise ValueError(f"Connection refused: resolved address {ip_str!r} is a blocked internal/private address")
 
 
+def assert_address_allowed(ip: str) -> None:
+    """Raise ValueError if a literal IP address is on the SSRF denylist.
+
+    Used to re-check the address a driver actually connected to, which is the only
+    control available for drivers that resolve outside socket.getaddrinfo.
+    """
+    _check_ip_address(ip, _allow_private_connections())
+
+
 def validate_connection_host(host: str) -> None:
     """Validate that a hostname does not resolve to a blocked address.
 
@@ -253,6 +264,106 @@ def resolve_and_validate(host: str, port: int, db_type: str) -> list[str]:
         _check_ip_address(ip_str, allow_private)
 
     return ips
+
+
+# ---------------------------------------------------------------------------
+# Resolution pinning
+# ---------------------------------------------------------------------------
+# resolve_and_validate checks the addresses a hostname resolves to, but every
+# driver then performs its OWN lookup when it connects, so a rebinding record can
+# swap in an internal address in between. Substituting the validated IP into the
+# DSN would close that window but breaks TLS hostname verification
+# (sslmode=verify-full) and SNI-based routing, which managed Postgres/Snowflake
+# style endpoints depend on. Instead the resolver itself is pinned for the
+# duration of the connect: the driver still receives the hostname — so the
+# certificate check and the SNI extension are unchanged — but its lookup can only
+# return addresses that were already validated.
+#
+# Coverage is exactly "lookups that go through socket.getaddrinfo", which
+# includes asyncpg (via loop.getaddrinfo), pymysql, clickhouse-driver and the
+# requests/urllib3 stack behind trino. Drivers that resolve inside a C library
+# (psycopg2/libpq, pymssql/FreeTDS) never call it and are NOT pinned.
+
+# Captured at import so pinned entries are always resolved by the real stdlib
+# function — never by a wrapper or a patched-in replacement.
+_STDLIB_GETADDRINFO = socket.getaddrinfo
+
+_pin_lock = threading.RLock()
+# host (lowercased) -> (validated addresses, active pin count)
+_pinned_hosts: dict[str, tuple[tuple[str, ...], int]] = {}
+# The callable our hook displaced, restored when the last pin is released.
+_displaced_getaddrinfo: Any = None
+
+
+def _pinning_getaddrinfo(host: Any, port: Any, family: int = 0, type: int = 0, proto: int = 0, flags: int = 0) -> list:
+    """socket.getaddrinfo replacement that answers pinned hosts from cache."""
+    name = host
+    if isinstance(name, bytes):
+        name = name.decode("ascii", "ignore")
+
+    pinned: tuple[str, ...] | None = None
+    with _pin_lock:
+        passthrough = _displaced_getaddrinfo or _STDLIB_GETADDRINFO
+        if isinstance(name, str):
+            entry = _pinned_hosts.get(name.strip().lower())
+            if entry is not None:
+                pinned = entry[0]
+
+    if pinned is None:
+        return passthrough(host, port, family, type, proto, flags)
+
+    results: list = []
+    for ip in pinned:
+        try:
+            results.extend(_STDLIB_GETADDRINFO(ip, port, family, type, proto, flags | socket.AI_NUMERICHOST))
+        except socket.gaierror:
+            continue
+    if not results:
+        raise socket.gaierror(
+            socket.EAI_NONAME,
+            f"No validated address for {name!r} matches the requested address family",
+        )
+    return results
+
+
+@contextlib.contextmanager
+def pinned_resolution(host: str, ips: Sequence[str]) -> Iterator[None]:
+    """Pin ``host`` to ``ips`` for the duration of the block.
+
+    ``ips`` must already have passed the SSRF denylist. Nested and concurrent
+    pins of the same host are reference counted; the hook is uninstalled once the
+    last pin is released, so the stdlib resolver is untouched outside a connect.
+    """
+    key = (host or "").strip().lower()
+    if not key or not ips:
+        yield
+        return
+
+    global _displaced_getaddrinfo
+    addrs = tuple(ips)
+    with _pin_lock:
+        existing = _pinned_hosts.get(key)
+        # A concurrent pin for the same host already validated its own addresses;
+        # keep the first set rather than widening it.
+        _pinned_hosts[key] = (existing[0], existing[1] + 1) if existing else (addrs, 1)
+        if _displaced_getaddrinfo is None:
+            _displaced_getaddrinfo = socket.getaddrinfo
+            socket.getaddrinfo = _pinning_getaddrinfo  # type: ignore[assignment]
+    try:
+        yield
+    finally:
+        with _pin_lock:
+            current = _pinned_hosts.get(key)
+            if current is not None:
+                if current[1] <= 1:
+                    del _pinned_hosts[key]
+                else:
+                    _pinned_hosts[key] = (current[0], current[1] - 1)
+            if not _pinned_hosts and _displaced_getaddrinfo is not None:
+                # Only restore if nothing else replaced the hook underneath us.
+                if socket.getaddrinfo is _pinning_getaddrinfo:
+                    socket.getaddrinfo = _displaced_getaddrinfo  # type: ignore[assignment]
+                _displaced_getaddrinfo = None
 
 
 def validate_connection_params(

@@ -36,6 +36,58 @@ import type { DemoConnectorStatus, DemoWarehouse } from "~/lib/types";
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
 
+/**
+ * Showcase prompts per demo warehouse (keyed by catalog slug). Three workflows each:
+ * build on the private branch, investigate/verify a number, and the knowledge-base
+ * loop (the load prompt is the same one the benchmark harness uses to warm a
+ * workspace — see benchmark/runners/kb_generator.py).
+ */
+const DEMO_PROMPTS: Record<
+  string,
+  { title: string; hint: string; prompt: string }[]
+> = {
+  contoso: [
+    {
+      title: "build the warehouse on your branch",
+      hint: "governed credential handoff + 180-model build + post-build verification",
+      prompt:
+        "Use the SignalPilot get_dbt_profile tool to wire dbt to my contoso-demo connection, then run dbt build from the contoso-demo repo. When it finishes, tell me the total attributed revenue by client, in USD.",
+    },
+    {
+      title: "investigate a number before you report it",
+      hint: "grain checks + mart-vs-raw reconciliation across 4 wire dialects",
+      prompt:
+        "How many enrollments (subject-experiment assignments) does drift_labs have? Reconcile the built models against the raw blobs before you commit to a number.",
+    },
+    {
+      title: "load the knowledge base, then use it",
+      hint: "map the project into the KB; add an org policy in Knowledge, then ask a policy question",
+      prompt:
+        "Explore and map out this dbt project for my knowledge base. The project is contoso-demo. Research every model, source table, macro, and data pattern. Populate the knowledge base with everything a future agent would need to build models correctly in this project.",
+    },
+  ],
+  northwind: [
+    {
+      title: "build the revenue-cycle marts on your branch",
+      hint: "9 hospital clients, 4 encounter dialects, money-unit + denial-code landmines",
+      prompt:
+        "Use the SignalPilot get_dbt_profile tool to wire dbt to my northwind-demo connection and build the staging models from raw.client_blob. Then tell me total billed charges by client, in USD.",
+    },
+    {
+      title: "investigate a number before you report it",
+      hint: "claim-grain checks: service-line fan-outs and resubmission duplicates",
+      prompt:
+        "What's our org-wide claim denial rate by payer? Verify the claim grain and the denial encoding against the raw data before you commit to numbers.",
+    },
+    {
+      title: "load the knowledge base, then use it",
+      hint: "map the project into the KB; add reporting policies (fiscal year, KPI definitions), then ask",
+      prompt:
+        "Explore and map out this dbt project for my knowledge base. The project is northwind-demo. Research every model, source table, macro, and data pattern. Populate the knowledge base with everything a future agent would need to build models correctly in this project.",
+    },
+  ],
+};
+
 function StepCard({
   step,
   icon,
@@ -314,6 +366,47 @@ export default function AddDemoConnectorPage() {
               — it is yours to break.
             </p>
           </StepCard>
+
+          {/* Step 4 — try these workflows */}
+          {added.some((d) => DEMO_PROMPTS[d.slug]) && (
+            <StepCard
+              step={4}
+              icon={<Sparkles className="w-4 h-4" strokeWidth={1.5} />}
+              title="Try these workflows"
+            >
+              <p className="text-[12.5px] text-[var(--color-text-muted)] leading-relaxed mb-3">
+                three prompts per warehouse, in order: build it, interrogate it, then teach
+                it your business via the knowledge base. paste them into your connected agent.
+              </p>
+              {added
+                .filter((d) => DEMO_PROMPTS[d.slug])
+                .map((d) => (
+                  <div key={d.slug} className="mb-4 last:mb-0">
+                    <div className="text-[12px] font-medium text-[var(--color-text)] mb-1.5">
+                      {d.title}
+                    </div>
+                    {DEMO_PROMPTS[d.slug].map((p, i) => (
+                      <div key={i} className="mb-3">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[11px] text-[var(--color-text-dim)]">
+                            {i + 1}. {p.title} — {p.hint}
+                          </span>
+                          <CopyButton text={p.prompt} label="copy" />
+                        </div>
+                        <pre className="px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-[10px] text-[11px] text-[var(--color-text-muted)] font-mono overflow-x-auto whitespace-pre-wrap">
+{p.prompt}
+                        </pre>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              <p className="text-[11px] text-[var(--color-text-dim)]">
+                the knowledge-base prompt is the same one our benchmark harness uses to warm a
+                workspace. after it runs, add a reporting policy of your own under Knowledge and
+                ask a question that depends on it — that&apos;s the part no bare agent can do.
+              </p>
+            </StepCard>
+          )}
         </div>
       )}
 

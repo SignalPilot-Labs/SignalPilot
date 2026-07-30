@@ -491,14 +491,14 @@ export default function Sidebar() {
   const router = useRouter();
   const { isCloudMode, isAuthenticated } = useAppAuth();
   const [projectCount, setProjectCount] = useState(0);
-  // Evals nav item only shows when the eval runner is configured on this
-  // gateway (the config endpoint 404s otherwise).
+  // Evals nav item only shows for workspaces evals are enabled for. The
+  // availability probe is readable by everyone, so this is a 200 either way.
   const [evalsEnabled, setEvalsEnabled] = useState(false);
   useEffect(() => {
     if (!isAuthenticated) return;
     import("~/lib/api")
-      .then(({ getEvalConfig }) => getEvalConfig())
-      .then(() => setEvalsEnabled(true))
+      .then(({ getEvalAvailability }) => getEvalAvailability())
+      .then((a) => setEvalsEnabled(a.enabled))
       .catch(() => setEvalsEnabled(false));
   }, [isAuthenticated]);
 

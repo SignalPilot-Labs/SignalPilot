@@ -110,6 +110,15 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("STARTUP: Encryption health check passed.")
 
+    # Legacy plaintext TLS material blocks readiness in cloud mode rather than
+    # being migrated implicitly — /health reports 503 until an operator runs it.
+    if is_cloud_mode():
+        from .store.tls_migration import check_plaintext_tls_readiness
+
+        tls_blocked = await check_plaintext_tls_readiness(force=True)
+        if tls_blocked:
+            logger.error("STARTUP: %s", tls_blocked)
+
     # Verify OAuth state-signing key is resolvable (cloud mode raises if SP_ENCRYPTION_KEY absent)
     from .api._oauth_state import get_state_hmac_key
     get_state_hmac_key()  # raises RuntimeError in cloud mode when key missing — fail fast
@@ -439,10 +448,9 @@ async def lifespan(app: FastAPI):
         dek_cache.clear()
         await close_db()
         await proxy_client.aclose()
-        from .api.deps import _sandbox_client
+        from .api.deps import close_sandbox_clients
 
-        if _sandbox_client:
-            await _sandbox_client.close()
+        await close_sandbox_clients()
 
 
 # ─── App ──────────────────────────────────────────────────────────────────────

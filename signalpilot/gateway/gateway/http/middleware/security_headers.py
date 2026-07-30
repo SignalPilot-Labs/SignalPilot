@@ -2,8 +2,13 @@
 Security headers middleware.
 
 For /notebook/* proxy paths the following headers behave differently:
-- X-Frame-Options: SAMEORIGIN (not DENY) — the notebook runs in an iframe.
-- Content-Security-Policy: frame-ancestors 'self' only (not the default CSP).
+- X-Frame-Options: omitted entirely (not DENY, and deliberately not SAMEORIGIN).
+  Framing is governed solely by the CSP below, whose allowlist is cross-origin in
+  cloud (the web app is a different origin from the gateway). X-Frame-Options has
+  no multi-origin form, so SAMEORIGIN would contradict that allowlist instead of
+  reinforcing it.
+- Content-Security-Policy: frame-ancestors 'self' + SP_ALLOWED_ORIGINS only (not
+  the default CSP). This is the clickjacking control for proxy paths.
   The notebook server's own HTML/JS sets its own internal CSP. We do not layer one on top
   because doing so risks blocking its inline event handlers and wasm.
   `frame-ancestors 'self'` is the only CSP directive we keep on proxy responses,

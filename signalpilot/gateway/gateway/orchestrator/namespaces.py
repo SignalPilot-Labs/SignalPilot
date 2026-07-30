@@ -24,6 +24,22 @@ MANAGED_BY_LABEL = "signalpilot.ai/managed-by"
 ORG_LABEL = "signalpilot.ai/org"
 DEFAULT_NAMESPACE_PREFIX = "sp-nb"
 
+# SP-SEC-009: the gateway's notebook workload permissions live in a cluster-scoped
+# ClusterRole that is used ONLY as a permission template — it is never the target of
+# a ClusterRoleBinding. Each tenant namespace gets a RoleBinding to it, so the grant
+# is namespaced even though the rules are defined once.
+#
+# Both names are pinned:
+#   - RBAC: the gateway identity holds `bind` on clusterroles with
+#     resourceNames: [signalpilot-gateway-notebook-workload] only, so it cannot
+#     grant itself anything else (see deploy/k8s/gateway-runtime-rbac.yaml).
+#   - Admission: restrict-rbac-writes-* requires any RoleBinding to this ClusterRole
+#     to be named GATEWAY_ORG_BINDING_NAME and to live in a namespace labeled
+#     signalpilot.dev/tenant=user.
+# Changing either string requires updating both manifests.
+GATEWAY_WORKLOAD_CLUSTER_ROLE = "signalpilot-gateway-notebook-workload"
+GATEWAY_ORG_BINDING_NAME = "signalpilot-gateway-org-binding"
+
 DEFAULT_QUOTA: dict = {
     "pods": "20",
     "requests.cpu": "10",
@@ -131,18 +147,31 @@ async def ensure_org_namespace(
     gateway_port: int,
     egress_cidr: str | None,
     gateway_service_account: str,
+    gateway_runtime_groups: tuple[str, ...] = (),
     skip_network_policy: bool = False,
 ) -> None:
     """Idempotently bootstrap a per-org Kubernetes namespace and all required resources.
 
     Creates in order, swallowing only 409 AlreadyExists:
     1. Namespace
-    2. NetworkPolicy default-deny (skipped if skip_network_policy)
-    3. NetworkPolicy allow-gateway-ingress-and-egress (skipped if skip_network_policy)
-    4. ResourceQuota default-quota
-    5. LimitRange default-limits
-    6. Role signalpilot-gateway-org-role
-    7. RoleBinding signalpilot-gateway-org-binding
+    2. RoleBinding signalpilot-gateway-org-binding -> ClusterRole
+       signalpilot-gateway-notebook-workload
+    3. NetworkPolicy default-deny (skipped if skip_network_policy)
+    4. NetworkPolicy allow-gateway-ingress-and-egress (skipped if skip_network_policy)
+    5. ResourceQuota default-quota
+    6. LimitRange default-limits
+
+    SP-SEC-009: the RoleBinding is created SECOND, immediately after the Namespace.
+    The gateway identity holds no cluster-wide write power over NetworkPolicies,
+    ResourceQuotas, LimitRanges, Pods, or Secrets — every one of those verbs arrives
+    only through this RoleBinding. Creating the namespaced grant before the first
+    namespaced write is therefore mandatory, not cosmetic: with the old ordering
+    (netpol/quota/limits before RBAC) a least-privilege gateway 403s on step 3.
+
+    `gateway_runtime_groups` are extra Kubernetes Groups added as RoleBinding
+    subjects. Off-cluster deployments (gateway on EC2 authenticating through an EKS
+    access entry) have no ServiceAccount identity, so the group they map to must be
+    a subject or the gateway holds nothing in the namespace it just created.
 
     Uses a per-org asyncio.Lock to prevent intra-process bootstrap races.
     Cross-replica races are handled by swallowing 409 responses.
@@ -158,6 +187,20 @@ async def ensure_org_namespace(
         await _create_idempotent(
             lambda: core_api.create_namespace(body=_namespace_manifest(namespace, sha)),
             f"Namespace/{namespace}",
+        )
+        # SP-SEC-009: namespaced grant first — everything below it depends on this
+        # RoleBinding, because the gateway has no cluster-wide workload verbs.
+        await _create_idempotent(
+            lambda: rbac_api.create_namespaced_role_binding(
+                namespace=namespace,
+                body=_gateway_org_role_binding(
+                    namespace=namespace,
+                    gateway_namespace=gateway_namespace,
+                    gateway_service_account=gateway_service_account,
+                    runtime_groups=gateway_runtime_groups,
+                ),
+            ),
+            f"RoleBinding/{GATEWAY_ORG_BINDING_NAME} in {namespace}",
         )
         if skip_network_policy:
             # netpol OFF: apply ONLY the targeted IMDS-block. It allows all other
@@ -212,24 +255,6 @@ async def ensure_org_namespace(
                 body=_limit_range_manifest(namespace),
             ),
             f"LimitRange/default-limits in {namespace}",
-        )
-        await _create_idempotent(
-            lambda: rbac_api.create_namespaced_role(
-                namespace=namespace,
-                body=_gateway_org_role(namespace),
-            ),
-            f"Role/signalpilot-gateway-org-role in {namespace}",
-        )
-        await _create_idempotent(
-            lambda: rbac_api.create_namespaced_role_binding(
-                namespace=namespace,
-                body=_gateway_org_role_binding(
-                    namespace=namespace,
-                    gateway_namespace=gateway_namespace,
-                    gateway_service_account=gateway_service_account,
-                ),
-            ),
-            f"RoleBinding/signalpilot-gateway-org-binding in {namespace}",
         )
 
     logger.info(
@@ -482,79 +507,67 @@ def _limit_range_manifest(namespace: str) -> dict:
     }
 
 
-def _gateway_org_role(namespace: str) -> dict:
-    return {
-        "apiVersion": "rbac.authorization.k8s.io/v1",
-        "kind": "Role",
-        "metadata": {
-            "name": "signalpilot-gateway-org-role",
-            "namespace": namespace,
-        },
-        "rules": [
-            {
-                "apiGroups": [""],
-                "resources": ["pods", "resourcequotas", "limitranges"],
-                "verbs": ["create", "get", "list", "delete", "patch"],
-            },
-            {
-                "apiGroups": [""],
-                "resources": ["pods/log", "pods/status"],
-                "verbs": ["get", "list"],
-            },
-            # R4: pods/exec create — required for gateway-side workspace sync via tar.
-            # Mitigated by: pod_exec_io is the sole caller (C4 AST test), container
-            # hardcoded to "notebook", paths confined to /workspace/, argv is a list literal.
-            # R9 F-21: RBAC cannot prefix-match pod names, so the broad pods/exec grant is
-            # narrowed by Kyverno admission policy. Operator MUST also deploy
-            # deploy/k8s/admission/restrict-pod-exec-kyverno.yaml; it enforces pod-name shape
-            # (^nb-[0-9a-f]{12}$) and container=notebook as defense-in-depth.
-            {
-                "apiGroups": [""],
-                "resources": ["pods/exec"],
-                "verbs": ["create"],
-            },
-            # R4 F-6: gateway creates per-session Secrets (sp-jwt-<pod_name>) to stage
-            # the JWT into the pod via initContainer → emptyDir. Scoped to this namespace
-            # Role — NOT the cluster role.
-            # R7 F-13: "list" added for gc_orphan_jwt_secrets — no other code path
-            # lists Secrets in tenant namespaces; this verb is purely for the GC loop.
-            {
-                "apiGroups": [""],
-                "resources": ["secrets"],
-                "verbs": ["create", "get", "list", "patch", "delete"],
-            },
-            {
-                "apiGroups": ["networking.k8s.io"],
-                "resources": ["networkpolicies"],
-                "verbs": ["create", "get", "list", "delete", "patch"],
-            },
-        ],
-    }
-
-
 def _gateway_org_role_binding(
     *,
     namespace: str,
     gateway_namespace: str,
     gateway_service_account: str,
+    runtime_groups: tuple[str, ...] = (),
 ) -> dict:
+    """RoleBinding granting the gateway its notebook workload verbs in ONE namespace.
+
+    SP-SEC-009: roleRef is the cluster-scoped ClusterRole
+    ``signalpilot-gateway-notebook-workload`` (see deploy/k8s/gateway-runtime-rbac.yaml)
+    used purely as a permission template. A RoleBinding to a ClusterRole grants that
+    ClusterRole's rules **only inside this namespace**, so the pods, pods/exec, and
+    Secrets verbs never exist cluster-wide.
+
+    Why a ClusterRole and not a per-namespace Role: creating a Role requires the
+    creator to already hold every rule it grants, or to hold the `escalate` verb.
+    A least-privilege gateway holds neither, and `escalate` on roles ignores
+    resourceNames for CREATE (the object name is not in the request path), so it
+    cannot be pinned to one Role name. `bind` on clusterroles DOES honour
+    resourceNames (the name comes from roleRef), which is what makes the grant
+    pinnable to exactly one ClusterRole.
+
+    The rules themselves are the same set the old per-namespace Role carried:
+      - pods, resourcequotas, limitranges: create/get/list/delete/patch
+      - pods/log, pods/status: get/list
+      - pods/exec: create (R4 workspace sync; narrowed by restrict-pod-exec-* admission,
+        since RBAC cannot prefix-match the dynamic nb-<12hex> pod names)
+      - secrets: create/get/list/patch/delete (F-6 per-session sp-jwt-<pod> staging,
+        F-13 GC list) — namespaced ONLY, never cluster-wide
+      - networking.k8s.io/networkpolicies: create/get/list/delete/patch
+    """
+    subjects: list[dict] = [
+        {
+            "kind": "ServiceAccount",
+            "name": gateway_service_account,
+            "namespace": gateway_namespace,
+        }
+    ]
+    # Off-cluster (EC2/EKS access entry) identities authenticate as a Group, not as
+    # the ServiceAccount, so they must be named here explicitly. Empty by default —
+    # in-cluster deployments add nothing.
+    for group in runtime_groups:
+        subjects.append(
+            {
+                "kind": "Group",
+                "apiGroup": "rbac.authorization.k8s.io",
+                "name": group,
+            }
+        )
     return {
         "apiVersion": "rbac.authorization.k8s.io/v1",
         "kind": "RoleBinding",
         "metadata": {
-            "name": "signalpilot-gateway-org-binding",
+            "name": GATEWAY_ORG_BINDING_NAME,
             "namespace": namespace,
         },
         "roleRef": {
             "apiGroup": "rbac.authorization.k8s.io",
-            "kind": "Role",
-            "name": "signalpilot-gateway-org-role",
+            "kind": "ClusterRole",
+            "name": GATEWAY_WORKLOAD_CLUSTER_ROLE,
         },
-        "subjects": [
-            {
-                "kind": "ServiceAccount",
-                "name": gateway_service_account,
-                "namespace": gateway_namespace,
-            }
-        ],
+        "subjects": subjects,
     }

@@ -1,0 +1,13 @@
+.git
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.venv/
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+**/.next/
+**/.turbo/
+**/node_modules/
+**/dist/
+**/build/

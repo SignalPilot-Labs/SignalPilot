@@ -2,6 +2,10 @@
 
 import re
 
+from gateway.engine import inject_limit, sqlglot_dialect
+from gateway.engine import validate_sql as engine_validate_sql
+from gateway.engine._sqlglot import exp, sqlglot
+from gateway.engine.denylists import _check_dangerous_functions
 from gateway.errors.mcp import sanitize_mcp_error
 from gateway.mcp.audit import audited_tool
 from gateway.mcp.context import _store_session
@@ -13,6 +17,56 @@ from gateway.mcp.validation import _MODEL_NAME_RE, _quote_table, _validate_conne
 def _qid(name: str) -> str:
     """Quote a SQL identifier with double-quote doubling."""
     return '"' + name.replace('"', '""') + '"'
+
+
+# Strict grammar for one join key pair: qualified column = qualified column.
+# No functions, subqueries, comments, or operators other than a single '='.
+_JOIN_KEY_PAIR_RE = re.compile(
+    r"^([A-Za-z_][A-Za-z0-9_]{0,127})\.([A-Za-z_][A-Za-z0-9_]{0,127})"
+    r"\s*=\s*"
+    r"([A-Za-z_][A-Za-z0-9_]{0,127})\.([A-Za-z_][A-Za-z0-9_]{0,127})$"
+)
+
+
+def _parse_join_keys(join_keys: str) -> tuple[list[tuple[str, str]], str | None]:
+    """Parse comma-separated join key pairs into (left_col, right_col) tuples.
+
+    Returns (pairs, None) on success or ([], error_message) on rejection.
+    """
+    pairs: list[tuple[str, str]] = []
+    for raw in join_keys.split(","):
+        pair = raw.strip()
+        m = _JOIN_KEY_PAIR_RE.match(pair)
+        if not m:
+            return [], (
+                f"Invalid join key pair '{pair}'. "
+                'Each pair must be a qualified-column equality like "a.id = b.id" '
+                "(letters, numbers, underscores only)."
+            )
+        lq, lc, rq, rc = m.groups()
+        pairs.append((f"{lq}.{lc}", f"{rq}.{rc}"))
+    return pairs, None
+
+
+def _validate_where_predicate(where_clause: str, dialect: str) -> str | None:
+    """Validate where_clause as a single boolean predicate expression.
+
+    Rejects statements, stacked statements, subqueries, comments, and
+    dangerous functions. Returns an error message or None if valid.
+    """
+    if ";" in where_clause or "--" in where_clause or "/*" in where_clause:
+        return "where_clause must be a plain predicate — semicolons and comments are not allowed."
+    try:
+        predicate = sqlglot.parse_one(where_clause, dialect=dialect, into=exp.Condition)
+    except Exception as e:
+        return f"Could not parse where_clause as a boolean predicate: {str(e)[:100]}"
+    if predicate is None:
+        return "Could not parse where_clause as a boolean predicate."
+    if predicate.find(exp.Select, exp.Subquery, exp.Exists):
+        return "Subqueries are not allowed in where_clause."
+    if reason := _check_dangerous_functions(predicate, dialect):
+        return reason
+    return None
 
 
 @audited_tool(mcp)
@@ -614,9 +668,15 @@ async def compare_join_types(
         return 'Error: join_keys cannot be empty. Provide at least one join key pair, e.g. "a.id = b.id".'
     if err := _validate_sql(join_keys):
         return f"Error: {err}"
+    join_pairs, err = _parse_join_keys(join_keys)
+    if err:
+        return f"Error: {err}"
     if where_clause and where_clause.strip():
         if err := _validate_sql(where_clause):
             return f"Error: {err}"
+
+    from gateway.governance.annotations import load_annotations
+    from gateway.governance.context import require_org_id
 
     async with _store_session() as store:
         conn_info = await store.get_connection(connection_name)
@@ -630,16 +690,20 @@ async def compare_join_types(
 
         extras = await store.get_credential_extras(connection_name)
 
+        annotations = load_annotations(require_org_id(), connection_name)
+        blocked_tables = annotations.blocked_tables
+
     from gateway.connectors.pool_manager import pool_manager
 
-    # Extract left and right columns from the first join key for NULL detection.
-    # join_keys like "a.id = b.id" — extract "a.id" and "b.id"
-    first_key = join_keys.split(",")[0].strip()
-    parts = first_key.split("=")
-    if len(parts) != 2:
-        return "Error: join_keys must be in format 'a.col = b.col'. Could not parse left/right columns."
-    left_col = parts[0].strip()
-    right_col = parts[1].strip()
+    dialect = sqlglot_dialect(conn_info.db_type)
+
+    if where_clause and where_clause.strip():
+        if err := _validate_where_predicate(where_clause.strip(), dialect):
+            return f"Error: {err}"
+
+    # First join key's sides are used for NULL-based match detection.
+    left_col, right_col = join_pairs[0]
+    join_condition = " AND ".join(f"{lhs} = {rhs}" for lhs, rhs in join_pairs)
 
     where_part = f"WHERE {where_clause}" if where_clause and where_clause.strip() else ""
 
@@ -653,7 +717,7 @@ right_count AS (SELECT COUNT(*) AS cnt FROM {_qt_right}),
 inner_join AS (
     SELECT COUNT(*) AS cnt
     FROM {_qt_left} a
-    INNER JOIN {_qt_right} b ON {join_keys}
+    INNER JOIN {_qt_right} b ON {join_condition}
     {where_part}
 ),
 left_join AS (
@@ -661,7 +725,7 @@ left_join AS (
            COUNT({right_col}) AS matched,
            COUNT(*) - COUNT({right_col}) AS unmatched
     FROM {_qt_left} a
-    LEFT JOIN {_qt_right} b ON {join_keys}
+    LEFT JOIN {_qt_right} b ON {join_condition}
     {where_part}
 ),
 right_join AS (
@@ -669,13 +733,13 @@ right_join AS (
            COUNT({left_col}) AS matched,
            COUNT(*) - COUNT({left_col}) AS unmatched
     FROM {_qt_left} a
-    RIGHT JOIN {_qt_right} b ON {join_keys}
+    RIGHT JOIN {_qt_right} b ON {join_condition}
     {where_part}
 ),
 full_join AS (
     SELECT COUNT(*) AS cnt
     FROM {_qt_left} a
-    FULL OUTER JOIN {_qt_right} b ON {join_keys}
+    FULL OUTER JOIN {_qt_right} b ON {join_condition}
     {where_part}
 )
 SELECT
@@ -691,11 +755,20 @@ SELECT
     (SELECT cnt FROM full_join) AS full_join_rows
 """
 
+    validation = engine_validate_sql(sql, blocked_tables=blocked_tables or None, dialect=dialect)
+    if not validation.ok:
+        return f"Error: Query blocked: {validation.blocked_reason}"
+
+    try:
+        safe_sql = inject_limit(sql, 1000, dialect=dialect)
+    except ValueError as exc:
+        return f"Error: Query blocked: {exc}"
+
     try:
         async with pool_manager.connection(
             conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name
         ) as connector:
-            result = await connector.execute(sql)
+            result = await connector.execute(safe_sql)
     except Exception as e:
         return f"Error: {sanitize_mcp_error(str(e))}"
 
@@ -714,7 +787,7 @@ SELECT
 
     lines = [
         f"JOIN Impact Analysis: {left_table} × {right_table}",
-        f"  ON {join_keys}",
+        f"  ON {join_condition}",
         "",
         "Source Tables:",
         f"  {left_table}: {left_rows:,} rows",
@@ -956,7 +1029,7 @@ async def verify_model_values(connection_name: str, model_name: str) -> str:
                             if mv > 0 and cs > 0:
                                 ratio = cs / mv
                                 if 0.9 <= ratio <= 1.1:
-                                    lines.append(f"    → Model matches COUNT(*)")
+                                    lines.append("    → Model matches COUNT(*)")
                                 else:
                                     lines.append(f"    → MISMATCH vs COUNT(*) ({ratio:.1f}x)")
                         except (ValueError, ZeroDivisionError):

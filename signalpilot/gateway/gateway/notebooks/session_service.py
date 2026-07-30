@@ -18,12 +18,12 @@ from gateway.notebook_proxy.constants import POD_PORT
 from gateway.orchestrator import NotebookOrchestrator
 from gateway.orchestrator.jwt_secret_lifecycle import create_jwt_secret_with_owner_ref
 from gateway.store import notebook_sessions as ns
-from gateway.store import user_secrets as user_secrets_store
+from gateway.store import org_secrets as org_secrets_store
 
 logger = logging.getLogger(__name__)
 
 OrchestratorFactory = Callable[[], Awaitable[NotebookOrchestrator]]
-_AI_CREDENTIAL_ENV_NAMES = ("CLAUDE_CODE_OAUTH_TOKEN", "OAUTH_TOKEN", "ANTHROPIC_API_KEY")
+_AI_CREDENTIAL_ENV_NAMES = ("CLAUDE_CODE_OAUTH_TOKEN", "OAUTH_TOKEN")
 _NOTEBOOK_MODEL_ENV_NAMES = ("SIGNALPILOT_ANALYSIS_AGENT_MODEL", "SIGNALPILOT_WORKER_AGENT_MODEL")
 _DEFAULT_CLOUD_WEB_URL = "https://app.signalpilot.ai"
 
@@ -82,6 +82,24 @@ def _session_matches(session: NotebookSessionInfo, *, project_id: str | None, br
     return (session.project_id or None) == project_id and session.branch == branch
 
 
+async def _session_predates_org_secret_update(
+    session: AsyncSession,
+    session_info: NotebookSessionInfo,
+    *,
+    org_id: str,
+) -> bool:
+    try:
+        secret_updated_at = await org_secrets_store.get_anthropic_key_updated_at(session, org_id)
+    except Exception:
+        logger.warning(
+            "Could not check org Anthropic key freshness for notebook session %s",
+            session_info.id,
+            exc_info=True,
+        )
+        return False
+    return bool(secret_updated_at and session_info.created_at < secret_updated_at)
+
+
 def _pod_web_url() -> str | None:
     web_url = os.getenv("SP_WEB_URL") or os.getenv("SIGNALPILOT_WEB_URL")
     if web_url:
@@ -110,7 +128,6 @@ async def _pod_extra_env(
     session: AsyncSession,
     *,
     org_id: str,
-    user_id: str,
     extra_env: dict[str, str] | None,
 ) -> dict[str, str] | None:
     env: dict[str, str] = {
@@ -123,7 +140,7 @@ async def _pod_extra_env(
     if web_url:
         env["SP_WEB_URL"] = web_url
 
-    anthropic_key = await user_secrets_store.get_user_anthropic_key(session, org_id, user_id)
+    anthropic_key = await org_secrets_store.resolve_anthropic_key(session, org_id)
     if anthropic_key:
         env["ANTHROPIC_API_KEY"] = anthropic_key
 
@@ -234,6 +251,14 @@ async def ensure_notebook_session(
         await ns.mark_stopped(session, session_id=existing.id, org_id=existing.org_id)
         existing = None
 
+    if existing and await _session_predates_org_secret_update(session, existing, org_id=org_id):
+        logger.info(
+            "Recreating notebook session %s because org Anthropic key changed after it was created",
+            existing.id,
+        )
+        await ns.mark_stopped(session, session_id=existing.id, org_id=existing.org_id)
+        existing = None
+
     if existing and existing.status == "running" and existing.pod_name:
         if direct_url:
             if existing.pod_ip == _direct_host_port(direct_url):
@@ -289,6 +314,18 @@ async def ensure_notebook_session(
         pod_name=pod,
     )
 
+    # create_session only returns the FE-facing view (access_token=None by design);
+    # the plaintext per-pod notebook token has to come off the internal read path.
+    internal = await ns.get_session_internal(session, session_id=session_info.id, org_id=org_id)
+    notebook_token = internal.access_token if internal else None
+    if not notebook_token:
+        await _mark_session_status_best_effort(
+            session, session_id=session_info.id, org_id=org_id, status="error"
+        )
+        raise NotebookSessionError(
+            "Refusing to start a notebook pod without a notebook auth token"
+        )
+
     if project_id:
         try:
             from gateway.git.sync import sync_project_with_github
@@ -303,7 +340,6 @@ async def ensure_notebook_session(
     pod_extra_env = await _pod_extra_env(
         session,
         org_id=org_id,
-        user_id=credential_user_id or user_id,
         extra_env=extra_env,
     )
     session_jwt = mint_session_jwt(
@@ -337,7 +373,7 @@ async def ensure_notebook_session(
                 gateway_url=k8s_settings.sp_public_gateway_url,
                 session_jwt_secret_name=f"sp-jwt-{pod}",
                 session_id=session_info.id,
-                access_token=session_info.access_token,
+                access_token=notebook_token,
                 extra_env=pod_extra_env,
             )
 
@@ -346,6 +382,7 @@ async def ensure_notebook_session(
             namespace=namespace,
             pod_name=pod,
             session_jwt=session_jwt,
+            notebook_token=notebook_token,
             create_pod_fn=_create_pod_fn,
         )
         logger.info("Waiting for notebook pod %s to be running...", pod)
@@ -416,8 +453,10 @@ async def ensure_analysis_notebook_session(
     project_id: str,
     branch: str,
     credential_user_id: str | None = None,
+    runtime_session_id: str | None = None,
+    analysis_user_id: str | None = None,
 ) -> NotebookRuntime:
-    analysis_user_id = f"analysis:{source}:{request_id}"
+    analysis_user_id = analysis_user_id or f"analysis:{source}:{request_id}"
     session_info = await ensure_notebook_session(
         session,
         org_id=org_id,
@@ -430,6 +469,13 @@ async def ensure_analysis_notebook_session(
             "SP_ANALYSIS_REQUEST_ID": request_id,
         },
     )
+    if runtime_session_id and session_info.id != runtime_session_id:
+        logger.info(
+            "Replaced unavailable analysis runtime session request_id=%s previous=%s selected=%s",
+            request_id,
+            runtime_session_id,
+            session_info.id,
+        )
     return await runtime_for_session(session, session_info)
 
 

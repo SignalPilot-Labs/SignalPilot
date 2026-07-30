@@ -21,6 +21,7 @@ from ..byok import (
     decrypt_envelope,
     encrypt_envelope,
     migrate_to_byok,
+    provider_key_identifier,
     revert_to_managed,
     rotate_byok_key,
 )
@@ -39,6 +40,12 @@ from ..models import (
 )
 from ..security.scope_guard import RequireScope
 from ..store import _decrypt_with_migration, _encrypt
+from ..store.byok_state import (
+    BYOKProviderUnavailable,
+    invalidate_provider_cache,
+    provider_for_key,
+    resolve_decrypt_provider,
+)
 from .deps import StoreD
 
 logger = logging.getLogger(__name__)
@@ -209,6 +216,7 @@ async def update_byok_key(
 
     await db.commit()
     await db.refresh(key)
+    invalidate_provider_cache(key_id)
     return _key_to_response(key)
 
 
@@ -273,6 +281,7 @@ async def delete_byok_key(
 
     await db.delete(key)
     await db.commit()
+    invalidate_provider_cache(key_id)
     return Response(status_code=204)
 
 
@@ -345,36 +354,42 @@ async def validate_byok_key(
         raise HTTPException(status_code=404, detail="Key not found")
 
     result_status = "success"
+    reason = "success"
+    kms_key_id: str | None = None
     try:
+        # The row's own provider — validating the process-wide one would report a
+        # tenant key healthy while the operator's key is what actually wraps.
+        key_provider = provider_for_key(key)
+        kms_key_id = provider_key_identifier(key_provider)
         ciphertext, wrapped_dek = await encrypt_envelope(
-            provider, key.org_id, key.key_alias, BYOK_HEALTH_CHECK_PLAINTEXT
+            key_provider, key.org_id, key.key_alias, BYOK_HEALTH_CHECK_PLAINTEXT
         )
-        recovered = await decrypt_envelope(provider, key.org_id, key.key_alias, wrapped_dek, ciphertext)
+        recovered = await decrypt_envelope(key_provider, key.org_id, key.key_alias, wrapped_dek, ciphertext)
         if recovered != BYOK_HEALTH_CHECK_PLAINTEXT:
             result_status = "invalid"
+            reason = "validation_failed"
+    except BYOKProviderUnavailable as exc:
+        logger.warning("BYOK key validation could not build a provider for key_id=%s: %s", key_id, exc)
+        result_status = "invalid"
+        reason = "provider_not_found"
     except BYOKKeyError as exc:
         logger.warning("BYOK key validation failed for key_id=%s: %s", key_id, exc)
         result_status = "invalid"
+        reason = "validation_failed"
     except Exception:
         logger.exception("BYOK key validation failed for key_id=%s", key_id)
         result_status = "invalid"
+        reason = "validation_failed"
 
-    if result_status == "invalid":
-        audit_metadata = {
-            "key_id": key_id,
-            "key_alias": key.key_alias,
-            "provider_type": key.provider_type,
-            "result": "error",
-            "reason": "validation_failed",
-        }
-    else:
-        audit_metadata = {
-            "key_id": key_id,
-            "key_alias": key.key_alias,
-            "provider_type": key.provider_type,
-            "result": "success",
-            "reason": "success",
-        }
+    audit_metadata = {
+        "key_id": key_id,
+        "key_alias": key.key_alias,
+        "provider_type": key.provider_type,
+        "result": "error" if result_status == "invalid" else "success",
+        "reason": reason,
+    }
+    if kms_key_id:
+        audit_metadata["kms_key_id"] = kms_key_id
 
     # Audit-DB failure must not block the validation response; best-effort observability.
     try:
@@ -427,9 +442,14 @@ async def migrate_credentials_to_byok(
             detail="Active BYOK key not found",
         )
 
+    try:
+        key_provider = provider_for_key(key)
+    except BYOKProviderUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     migrated, failed, errors = await migrate_to_byok(
         session=store.session,
-        provider=provider,
+        provider=key_provider,
         org_id=org_id,
         key_id=body.key_id,
         key_alias=key.key_alias,
@@ -447,6 +467,7 @@ async def migrate_credentials_to_byok(
                 metadata={
                     "key_id": body.key_id,
                     "key_alias": key.key_alias,
+                    "kms_key_id": provider_key_identifier(key_provider),
                     "migrated": migrated,
                     "failed": failed,
                 },
@@ -481,12 +502,16 @@ async def revert_credentials_to_managed(
     if org_result.scalar_one_or_none() is None:
         raise HTTPException(status_code=404, detail="Organization not found")
 
+    async def _provider_for_row(cred_row, conn_row):
+        return await resolve_decrypt_provider(store.session, org_id, cred_row.byok_key_id, conn_row.byok_key_alias)
+
     migrated, failed, errors = await revert_to_managed(
         session=store.session,
         provider=provider,
         org_id=org_id,
         managed_encrypt=_encrypt,
         cache=cache,
+        resolve_provider=_provider_for_row,
     )
 
     client_ip, user_agent = request_meta(request)
@@ -550,24 +575,32 @@ async def rotate_byok_key_endpoint(
     if new_key is None or new_key.org_id != org_id or new_key.status != "active":
         raise HTTPException(status_code=404, detail="Target key not found")
 
+    try:
+        old_provider = provider_for_key(old_key)
+        new_provider = provider_for_key(new_key)
+    except BYOKProviderUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     old_key.status = "rotating"
     await store.session.commit()
 
     try:
         rotated, failed, errors = await rotate_byok_key(
             session=store.session,
-            provider=provider,
+            provider=new_provider,
             org_id=org_id,
             old_key_id=key_id,
             old_key_alias=old_key.key_alias,
             new_key_id=body.new_key_id,
             new_key_alias=new_key.key_alias,
             cache=cache,
+            old_provider=old_provider,
         )
 
         if failed == 0:
             old_key.status = "inactive"
             await store.session.commit()
+        invalidate_provider_cache(key_id)
     except Exception:
         old_key.status = "active"
         await store.session.commit()
@@ -586,6 +619,8 @@ async def rotate_byok_key_endpoint(
                     "old_key_alias": old_key.key_alias,
                     "new_key_id": body.new_key_id,
                     "new_key_alias": new_key.key_alias,
+                    "old_kms_key_id": provider_key_identifier(old_provider),
+                    "new_kms_key_id": provider_key_identifier(new_provider),
                     "rotated": rotated,
                     "failed": failed,
                 },

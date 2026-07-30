@@ -66,7 +66,7 @@ class TestCreatePodNamespaceBehavior:
             gateway_url="https://gateway.signalpilot.ai",
             session_jwt_secret_name="sp-jwt-nb-test",
             session_id="session-slack-1",
-            access_token=None,
+            access_token="pod-notebook-token",
         )
 
         labels = manifest["metadata"]["labels"]
@@ -128,7 +128,7 @@ class TestCreatePodNamespaceBehavior:
                 gateway_url="http://gateway:3300",
                 session_jwt_secret_name="sp-jwt-nb-test",
                 session_id="sess-1",
-                access_token=None,
+                access_token="pod-notebook-token",
             )
 
         assert call_order[0] == "ensure_org_namespace"
@@ -175,7 +175,7 @@ class TestCreatePodNamespaceBehavior:
                 gateway_url="http://gateway:3300",
                 session_jwt_secret_name="sp-jwt-nb-test",
                 session_id="sess-1",
-                access_token=None,
+                access_token="pod-notebook-token",
             )
 
         assert len(created_in_namespace) == 1
@@ -254,7 +254,7 @@ class TestCreatePodNamespaceBehavior:
                 gateway_url="http://gateway:3300",
                 session_jwt_secret_name="sp-jwt-nb-test",
                 session_id="sess-1",
-                access_token=None,
+                access_token="pod-notebook-token",
             )
 
         mock_core.create_namespaced_service.assert_not_called()
@@ -297,7 +297,7 @@ class TestCreatePodNamespaceBehavior:
                     gateway_url="http://gateway:3300",
                     session_jwt_secret_name="sp-jwt-nb-test",
                     session_id="sess-1",
-                    access_token=None,
+                    access_token="pod-notebook-token",
                 )
 
     @pytest.mark.asyncio
@@ -326,7 +326,7 @@ class TestCreatePodNamespaceBehavior:
                 gateway_url="http://gateway:3300",
                 session_jwt_secret_name="sp-jwt-nb-test",
                 session_id="sess-1",
-                access_token=None,
+                access_token="pod-notebook-token",
             )
 
 
@@ -374,7 +374,7 @@ class TestPodSpecHardening:
                 gateway_url="http://gateway:3300",
                 session_jwt_secret_name="sp-jwt-nb-test",
                 session_id="sess-1",
-                access_token=None,
+                access_token="pod-notebook-token",
             )
 
         assert len(captured_bodies) == 1

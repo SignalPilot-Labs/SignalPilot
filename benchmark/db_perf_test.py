@@ -16,7 +16,9 @@ KEY = os.environ["MCPKEY"]
 
 # (display label, real connection name)
 CONNS = [
-    ("Postgres (local)", "perf_nala_pg"),
+    # Gateway connection name to benchmark against. Overridable so the real
+    # connection name stays out of the repo: SP_PERF_PG_CONNECTION=<name>
+    ("Postgres (local)", os.environ.get("SP_PERF_PG_CONNECTION", "perf_pg")),
     ("Redshift Serverless", "perf_redshift"),
 ]
 TABLE = "raw_core_transfers.transfers"

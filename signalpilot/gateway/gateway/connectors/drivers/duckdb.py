@@ -41,11 +41,19 @@ class DuckDBConnector(BaseConnector):
 
         # connection_string is a file path, :memory:, or a MotherDuck URL (md:)
         self._db_path = connection_string
-        is_memory = connection_string == ":memory:" or connection_string.startswith("md:")
+        is_motherduck = connection_string.startswith("md:")
+        is_memory = connection_string == ":memory:" or is_motherduck
 
-        config = {}
-        if motherduck_token and connection_string.startswith("md:"):
+        config: dict[str, Any] = {}
+        if motherduck_token and is_motherduck:
             config["motherduck_token"] = motherduck_token
+        if not is_motherduck:
+            # Defence in depth beneath the SQL denylist: the engine itself refuses
+            # file/URL reads and extension downloads. Scoped to local and in-memory
+            # databases — MotherDuck is a network service and cannot connect with
+            # external access switched off.
+            config["enable_external_access"] = False
+            config["autoinstall_known_extensions"] = False
 
         try:
             self._is_memory = is_memory

@@ -15,8 +15,12 @@ from gateway.store._constants import (
     SALT_FILE_NAME,
 )
 from gateway.store.byok_state import (
+    BYOKProviderUnavailable,
     _resolve_byok_key,
     configure_byok,
+    invalidate_provider_cache,
+    provider_for_key,
+    resolve_decrypt_provider,
 )
 from gateway.store.connection_strings import (
     _build_connection_string,
@@ -57,6 +61,10 @@ __all__ = [
     # BYOK configuration entry point + read-only resolver
     "configure_byok",
     "_resolve_byok_key",
+    "BYOKProviderUnavailable",
+    "invalidate_provider_cache",
+    "provider_for_key",
+    "resolve_decrypt_provider",
     # Crypto primitives (read-only callables; module-level state stays in submodules)
     "_decrypt",
     "_decrypt_with_migration",

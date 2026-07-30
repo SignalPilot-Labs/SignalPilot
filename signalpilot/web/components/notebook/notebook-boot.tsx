@@ -3,8 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
-import { SignalpilotEditor, type SignalpilotClient } from "@/embed";
-import { spaNavigate } from "@/core/router/spa-navigate";
+import type { SignalpilotClient } from "@/embed/types";
 import { useNotebookConfig } from "./notebook-context";
 import {
   NotebookBootUserError,
@@ -22,7 +21,19 @@ const PHASE_LABELS: Record<string, string> = {
   syncing: "syncing project files...",
   sessions: "connecting kernel...",
   ready: "loading notebook...",
+  editor: "loading editor...",
 };
+
+type SignalpilotEditorComponent =
+  typeof import("@/embed/SignalpilotEditor").SignalpilotEditor;
+
+function spaNavigate(href: string): void {
+  if (!href) throw new Error("spaNavigate: empty href");
+  window.history.pushState({}, "", href);
+  window.dispatchEvent(
+    new CustomEvent("spa:navigate", { detail: { href } }),
+  );
+}
 
 function LoadingSpinner({ phase }: { phase: string }) {
   return (
@@ -51,6 +62,8 @@ export default function NotebookBoot({
   const staticDataRef = useRef<NotebookStaticData | null>(null);
   const [ready, setReady] = useState(false);
   const [phase, setPhase] = useState<string>("health");
+  const [EditorComponent, setEditorComponent] =
+    useState<SignalpilotEditorComponent | null>(null);
 
   const onReadyRef = useRef<(() => void) | undefined>(undefined);
   useEffect(() => {
@@ -92,6 +105,7 @@ export default function NotebookBoot({
         clientRef.current = result.client;
         staticDataRef.current = result.staticData ?? { filename: config.file };
         setReady(true);
+        handlePhase("editor");
         onReadyRef.current?.();
       })
       .catch((err) => {
@@ -116,6 +130,7 @@ export default function NotebookBoot({
       }
       staticDataRef.current = null;
       setReady(false);
+      setEditorComponent(null);
     };
   }, [
     config.sessionId,
@@ -130,6 +145,21 @@ export default function NotebookBoot({
     handlePhase,
   ]);
 
+  useEffect(() => {
+    if (!ready || EditorComponent) {
+      return;
+    }
+    let cancelled = false;
+    import("@/embed/SignalpilotEditor").then((module) => {
+      if (!cancelled) {
+        setEditorComponent(() => module.SignalpilotEditor);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [ready, EditorComponent]);
+
   if (error) {
     return (
       <div className="flex-1 flex items-center justify-center text-[var(--color-error)] text-xs">
@@ -138,7 +168,7 @@ export default function NotebookBoot({
     );
   }
 
-  if (!ready || !clientRef.current || !staticDataRef.current) {
+  if (!ready || !clientRef.current || !staticDataRef.current || !EditorComponent) {
     return <LoadingSpinner phase={phase} />;
   }
 
@@ -151,7 +181,7 @@ export default function NotebookBoot({
 
   return (
     <>
-      <SignalpilotEditor
+      <EditorComponent
         client={clientRef.current}
         config={{
           gatewayUrl: config.gatewayUrl,

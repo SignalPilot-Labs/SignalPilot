@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from gateway.db.models import GatewayBase
+from gateway.db.models import GatewayAnalysisTrail, GatewayBase
 from gateway.models.analysis_trails import AnalysisTrailUpdate, AnalysisTrailUpsert
-from gateway.store.analysis_trails import resolve_trail, update_trail, upsert_trail
+from gateway.store.analysis_trails import (
+    latest_trail_for_source_thread_prefix,
+    resolve_trail,
+    update_trail,
+    upsert_trail,
+)
 
 
 @pytest_asyncio.fixture
@@ -122,3 +128,97 @@ async def test_analysis_trail_resolve_uses_session_or_file_when_both_present(db_
     assert by_thread_even_with_stale_path.id == created.id
     assert by_path_even_with_stale_thread is not None
     assert by_path_even_with_stale_thread.id == created.id
+
+
+@pytest.mark.asyncio
+async def test_latest_trail_for_source_thread_prefix_returns_newest_matching_trail(db_session) -> None:
+    older = await upsert_trail(
+        db_session,
+        org_id="org-a",
+        trail=AnalysisTrailUpsert(
+            source="slack",
+            request_id="slack-older",
+            thread_id="session-slack-older",
+            runtime_session_id="runtime-older",
+            project_id="project-1",
+            branch="analysis/slack/older",
+            default_branch="main",
+            notebook_path="notebooks/slack/older.py",
+            source_thread_id="slack:T1:D1:dm-100.0",
+        ),
+    )
+    newer = await upsert_trail(
+        db_session,
+        org_id="org-a",
+        trail=AnalysisTrailUpsert(
+            source="slack",
+            request_id="slack-newer",
+            thread_id="session-slack-newer",
+            runtime_session_id="runtime-newer",
+            project_id="project-1",
+            branch="analysis/slack/newer",
+            default_branch="main",
+            notebook_path="notebooks/slack/newer.py",
+            source_thread_id="slack:T1:D1:dm-200.0",
+        ),
+    )
+    await upsert_trail(
+        db_session,
+        org_id="org-a",
+        trail=AnalysisTrailUpsert(
+            source="notion",
+            request_id="notion-newer",
+            thread_id="session-notion-newer",
+            runtime_session_id="runtime-notion-newer",
+            project_id="project-1",
+            branch="analysis/notion/newer",
+            default_branch="main",
+            notebook_path="notebooks/notion/newer.py",
+            source_thread_id="slack:T1:D1:dm-300.0",
+        ),
+    )
+    await upsert_trail(
+        db_session,
+        org_id="org-b",
+        trail=AnalysisTrailUpsert(
+            source="slack",
+            request_id="slack-other-org",
+            thread_id="session-slack-other-org",
+            runtime_session_id="runtime-other-org",
+            project_id="project-1",
+            branch="analysis/slack/other-org",
+            default_branch="main",
+            notebook_path="notebooks/slack/other-org.py",
+            source_thread_id="slack:T1:D1:dm-400.0",
+        ),
+    )
+
+    await db_session.execute(
+        update(GatewayAnalysisTrail)
+        .where(GatewayAnalysisTrail.request_id == "slack-older")
+        .values(created_at=100.0)
+    )
+    await db_session.execute(
+        update(GatewayAnalysisTrail)
+        .where(GatewayAnalysisTrail.request_id == "slack-newer")
+        .values(created_at=200.0)
+    )
+    await db_session.commit()
+
+    found = await latest_trail_for_source_thread_prefix(
+        db_session,
+        org_id="org-a",
+        source="slack",
+        prefix="slack:T1:D1:dm-",
+    )
+    missing = await latest_trail_for_source_thread_prefix(
+        db_session,
+        org_id="org-a",
+        source="slack",
+        prefix="slack:T2:D1:dm-",
+    )
+
+    assert found is not None
+    assert found.id == newer.id
+    assert found.id != older.id
+    assert missing is None

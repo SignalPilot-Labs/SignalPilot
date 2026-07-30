@@ -26,6 +26,35 @@ def redact_sql_literals(sql: str, dialect: str = "postgres") -> str:
         return sql[:50] + "... <REDACTED ON PARSE ERROR>" if len(sql) > 50 else sql
 
 
+def _resolve_limit_value(limit_node: exp.Expression) -> int | None:
+    """Return the row count of a LIMIT/FETCH/TOP node, or None when unbounded.
+
+    None means the node does not pin a concrete row count (LIMIT ALL, a
+    parameter or expression, or a PERCENT form) and must be overwritten.
+    """
+    if isinstance(limit_node, exp.Limit):
+        count_expr = limit_node.expression or limit_node.this
+    elif isinstance(limit_node, exp.Fetch):
+        count_expr = limit_node.args.get("count")
+        if count_expr is None:
+            # FETCH FIRST ROW ONLY — implicit count of 1
+            return 1
+    else:
+        return None
+
+    options = limit_node.args.get("limit_options")
+    if options is not None and options.args.get("percent"):
+        # TOP n PERCENT / FETCH ... PERCENT — not a row count
+        return None
+
+    if isinstance(count_expr, exp.Literal) and not count_expr.is_string:
+        try:
+            return int(count_expr.this)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def inject_limit(sql: str, max_rows: int = 10_000, dialect: str = "postgres") -> str:
     sql = sql.strip().rstrip(";")
 
@@ -45,19 +74,10 @@ def inject_limit(sql: str, max_rows: int = 10_000, dialect: str = "postgres") ->
         return sql
 
     existing_limit = parsed.args.get("limit")
-    if existing_limit:
-        try:
-            # sqlglot stores limit value as either .this.this or .expression.this
-            limit_expr = existing_limit.expression or existing_limit.this
-            current = int(limit_expr.this) if limit_expr else None
-            if current is not None and current > max_rows:
-                parsed.set(
-                    "limit",
-                    exp.Limit(expression=exp.Literal.number(max_rows)),
-                )
-        except Exception:
-            pass
-    else:
+    current = _resolve_limit_value(existing_limit) if existing_limit is not None else None
+    # Fail closed: any limit that is missing, unresolvable (LIMIT ALL, params,
+    # PERCENT forms), or above the cap is overwritten with min(current, max_rows).
+    if current is None or current > max_rows:
         parsed.set("limit", exp.Limit(expression=exp.Literal.number(max_rows)))
 
     return parsed.sql(dialect=dialect)

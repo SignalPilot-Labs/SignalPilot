@@ -17,7 +17,7 @@ from pathlib import Path
 
 LOG = Path(__file__).with_name("mock_xata_control.log")
 
-# Seeded parent branch — the "shared parallax demo db".
+# Seeded parent branch — the "shared contoso demo db".
 BRANCHES: dict[str, dict] = {
     "parent0main": {"id": "parent0main", "name": "main", "region": "us-east-1"},
 }

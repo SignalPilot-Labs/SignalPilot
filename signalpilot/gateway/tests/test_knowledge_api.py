@@ -34,7 +34,7 @@ def _make_doc(
     doc_id: str | None = None,
     scope: str = "org",
     scope_ref: str | None = None,
-    category: str = "conventions",
+    category: str = "rules",
     title: str = "test-doc",
     body: str | None = "Body content.",
     status: str = "active",
@@ -107,7 +107,7 @@ class TestKnowledgeListEndpoint:
 
         monkeypatch.setattr(Store, "list_knowledge_docs", AsyncMock(return_value=[doc]))
 
-        resp = auth_client.get("/api/knowledge?scope=org&category=conventions")
+        resp = auth_client.get("/api/knowledge?scope=org&category=rules")
         assert resp.status_code == 200
         data = resp.json()
         assert isinstance(data, list)
@@ -171,8 +171,8 @@ class TestKnowledgeCreateEndpoint:
             json={
                 "scope": "org",
                 "scope_ref": None,
-                "category": "conventions",
-                "title": "my-conventions",
+                "category": "rules",
+                "title": "my-rules",
                 "body": "Always do X.",
             },
         )
@@ -192,7 +192,7 @@ class TestKnowledgeCreateEndpoint:
             json={
                 "scope": "org",
                 "scope_ref": None,
-                "category": "conventions",
+                "category": "rules",
                 "title": "too-big",
                 "body": "x",
             },
@@ -213,7 +213,7 @@ class TestKnowledgeCreateEndpoint:
             json={
                 "scope": "org",
                 "scope_ref": None,
-                "category": "conventions",
+                "category": "rules",
                 "title": "dup-doc",
                 "body": "content",
             },
@@ -234,7 +234,7 @@ class TestKnowledgeCreateEndpoint:
             json={
                 "scope": "org",
                 "scope_ref": None,
-                "category": "conventions",
+                "category": "rules",
                 "title": "quota-bust",
                 "body": "x",
             },
@@ -365,7 +365,7 @@ class TestKnowledgeScopeRefValidation:
             json={
                 "scope": "project",
                 "scope_ref": "my\nproject",
-                "category": "conventions",
+                "category": "rules",
                 "title": "test-doc",
                 "body": "Some content.",
             },
@@ -387,7 +387,7 @@ class TestKnowledgeAdminScopeEnforcement:
             json={
                 "scope": "org",
                 "scope_ref": None,
-                "category": "conventions",
+                "category": "rules",
                 "title": "my-doc",
                 "body": "content",
             },

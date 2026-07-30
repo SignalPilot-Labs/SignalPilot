@@ -33,20 +33,41 @@ async def _resolve_user_id(request: Request) -> str:
     return await resolve_user_id(request)
 
 
+def _require_jwt_org_admin(request: Request) -> None:
+    """Enforce the org-admin role for a Clerk/JWT caller asking for "admin".
+
+    JWT callers carry no scopes — their capability ceiling is the organization
+    role in the verified token. Claims are already cached on request.state by
+    resolve_user_id, which RequireScope depends on, so this stays synchronous.
+    """
+    from ..auth.user import is_org_admin_role, org_role_from_claims
+    from ..runtime.mode import is_cloud_mode
+
+    # Local mode has no organizations — same bypass as Case 2.
+    if not is_cloud_mode():
+        return
+
+    claims = getattr(request.state, "_jwt_claims", None)
+    if not is_org_admin_role(org_role_from_claims(claims)):
+        raise HTTPException(status_code=403, detail="Organization admin role required")
+
+
 def require_scopes(request: Request, *required: str) -> None:
     """Check that the authenticated request has all required scopes.
 
     Four auth cases, checked in order:
-    1. No auth attribute (or auth is None) — JWT/Clerk user. Grant all scopes.
+    1. No auth attribute (or auth is None) — JWT/Clerk user. Scopes are an
+       API-key concept and do not apply, but "admin" is resolved against the
+       organization role in the token so it is a real gate, not a formality.
     2. auth_method == "local_key" / "local_nokey" — local dev key. Grant all scopes.
     3. auth_method == "api_key" — stored API key. Check scopes explicitly.
     4. auth_method == "notebook_session" — pod callback JWT. Enforce a fixed
        allowlist (read + write only). The token's own scopes claim is intersected
        with the allowlist so the token can never escalate above it.
 
-    WARNING: Case 1 grants all scopes when auth is None, which occurs for JWT
-    and cookie-authenticated requests before resolve_user_id runs. This means
-    every scope-protected endpoint MUST also include a `_: UserID` or
+    WARNING: Case 1 grants the non-admin scopes when auth is None, which occurs
+    for JWT and cookie-authenticated requests before resolve_user_id runs. This
+    means every scope-protected endpoint MUST also include a `_: UserID` or
     `store: StoreD` parameter dependency to ensure JWT verification actually
     runs in cloud mode. Endpoints without those dependencies will pass scope
     checks with an unverified (or fake) Bearer token.
@@ -58,6 +79,8 @@ def require_scopes(request: Request, *required: str) -> None:
 
     # Case 1: JWT/Clerk user — no auth dict set by middleware.
     if auth is None:
+        if "admin" in required:
+            _require_jwt_org_admin(request)
         return
 
     # Case 2: local mode — bypass all scope checks.

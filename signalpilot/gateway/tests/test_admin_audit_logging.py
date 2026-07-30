@@ -172,6 +172,8 @@ class TestBYOKAudit:
         key_mock = MagicMock()
         key_mock.org_id = "test-org"
         key_mock.key_alias = "my-key"
+        key_mock.provider_type = "local"
+        key_mock.provider_config = None
         key_id = str(uuid.uuid4())
 
         key_result = MagicMock()
@@ -255,11 +257,15 @@ class TestBYOKAudit:
         old_key.org_id = "test-org"
         old_key.status = "active"
         old_key.key_alias = "old-alias"
+        old_key.provider_type = "local"
+        old_key.provider_config = None
 
         new_key = MagicMock()
         new_key.org_id = "test-org"
         new_key.status = "active"
         new_key.key_alias = "new-alias"
+        new_key.provider_type = "local"
+        new_key.provider_config = None
 
         execute_results = [
             MagicMock(**{"scalar_one_or_none.return_value": old_key}),
@@ -352,6 +358,7 @@ class TestBYOKAudit:
         key_mock.org_id = "test-org"
         key_mock.key_alias = "my-key"
         key_mock.provider_type = "aws_kms"
+        key_mock.provider_config = {"kms_key_arn": "arn:aws:kms:us-east-1:123456789012:key/test"}
 
         db = AsyncMock()
         key_result = MagicMock()
@@ -406,6 +413,7 @@ class TestBYOKAudit:
         key_mock.org_id = "test-org"
         key_mock.key_alias = "my-key"
         key_mock.provider_type = "aws_kms"
+        key_mock.provider_config = {"kms_key_arn": "arn:aws:kms:us-east-1:123456789012:key/test"}
 
         db = AsyncMock()
         key_result = MagicMock()
@@ -541,6 +549,7 @@ class TestBYOKAudit:
         key_mock.org_id = "test-org"
         key_mock.key_alias = "my-key"
         key_mock.provider_type = "local"
+        key_mock.provider_config = None
 
         db = AsyncMock()
         key_result = MagicMock()
@@ -699,7 +708,7 @@ class TestConnectionPortingAudit:
         body = ExportRequest(include_credentials=False, confirm=True)
 
         with patch("gateway.api.connections.porting.require_scopes"):
-            await export_connections(body=body, store=store, request=request)
+            await export_connections(body=body, store=store, request=request, _role="admin")
 
         store.append_audit.assert_called_once()
         entry: AuditEntry = store.append_audit.call_args[0][0]
@@ -718,7 +727,7 @@ class TestConnectionPortingAudit:
         body = ExportRequest(include_credentials=False, confirm=False)
 
         with patch("gateway.api.connections.porting.require_scopes"):
-            await export_connections(body=body, store=store, request=request)
+            await export_connections(body=body, store=store, request=request, _role="admin")
 
         store.append_audit.assert_not_called()
 
@@ -740,7 +749,7 @@ class TestConnectionPortingAudit:
         with patch("gateway.api.connections.porting._validate_connection_params", return_value=[]):
             with patch("gateway.api.connections.porting.ConnectionCreate") as mock_cc:
                 mock_cc.return_value = MagicMock()
-                await import_connections(manifest=manifest, store=store, request=request)
+                await import_connections(manifest=manifest, store=store, request=request, _role="admin")
 
         store.append_audit.assert_called_once()
         entry: AuditEntry = store.append_audit.call_args[0][0]
@@ -762,7 +771,7 @@ class TestConnectionPortingAudit:
         body = ExportRequest(include_credentials=False, confirm=True)
 
         with patch("gateway.api.connections.porting.require_scopes"):
-            result = await export_connections(body=body, store=store, request=request)
+            result = await export_connections(body=body, store=store, request=request, _role="admin")
 
         assert result["connection_count"] == 0
 

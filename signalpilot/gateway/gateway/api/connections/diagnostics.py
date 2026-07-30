@@ -86,7 +86,7 @@ async def diagnose_connection(name: str, store: StoreD):
                     }
                 )
             finally:
-                await pool_manager.release(info.db_type, conn_str)
+                await pool_manager.release(info.db_type, conn_str, credential_extras=extras)
         except Exception as e:
             diagnostics.append(
                 {
@@ -238,7 +238,7 @@ async def diagnose_connection(name: str, store: StoreD):
                 }
             )
         finally:
-            await pool_manager.release(info.db_type, conn_str)
+            await pool_manager.release(info.db_type, conn_str, credential_extras=extras)
     except Exception as e:
         diagnostics.append(
             {

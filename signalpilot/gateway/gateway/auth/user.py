@@ -322,32 +322,48 @@ async def resolve_org_id(connection: HTTPConnection, _user_id: UserID) -> str:
     return org_id
 
 
-async def resolve_org_role(request: Request, _user_id: UserID) -> str:
-    """Extract org role from JWT claims. Returns 'admin' or 'basic_member'.
+def org_role_from_claims(claims: dict | None) -> str | None:
+    """Read the org role out of Clerk claims.
 
-    - MCP / API key auth: treat as admin (key holder has full access).
-    - Local mode: always admin.
-    - Cloud JWT: reads 'org_role' claim or Clerk prod short claim 'o.rol'.
+    Clerk dev emits "org_role" directly; Clerk prod emits the short claim "o"
+    with the role under "rol".
     """
-    claims = getattr(request.state, "_jwt_claims", {})
-
-    # Clerk dev uses "org_role" directly; Clerk prod uses short claim "o" with "rol"
+    if not claims:
+        return None
     role = claims.get("org_role")
     if not role:
         o_claim = claims.get("o")
         if isinstance(o_claim, dict):
             role = o_claim.get("rol")
+    return role
 
-    # MCP / API key auth — treat as admin (key holder has full access)
+
+def is_org_admin_role(role: str | None) -> bool:
+    """True for the role strings Clerk uses to denote an organization admin."""
+    return role in ("admin", "org:admin")
+
+
+async def resolve_org_role(request: Request, _user_id: UserID) -> str:
+    """Extract org role from JWT claims. Returns 'admin' or 'basic_member'.
+
+    - API key auth: admin only when the key itself carries the "admin" scope.
+      A key cannot outrank the scopes it was issued with.
+    - Local mode (including the local dev key): always admin.
+    - Cloud JWT: reads 'org_role' claim or Clerk prod short claim 'o.rol'.
+    """
     auth = getattr(request.state, "auth", None)
-    if auth and auth.get("auth_method") in ("api_key", "local_key", "local_nokey"):
+
+    if auth and auth.get("auth_method") == "api_key":
+        return "admin" if "admin" in (auth.get("scopes") or []) else "basic_member"
+
+    if auth and auth.get("auth_method") in ("local_key", "local_nokey"):
         return "admin"
 
     # Local mode — always admin
     if not is_cloud_mode():
         return "admin"
 
-    return role or "basic_member"
+    return org_role_from_claims(getattr(request.state, "_jwt_claims", {})) or "basic_member"
 
 
 OrgRole = Annotated[str, Depends(resolve_org_role)]
@@ -355,7 +371,7 @@ OrgRole = Annotated[str, Depends(resolve_org_role)]
 
 async def require_org_admin(role: OrgRole) -> str:
     """Require org:admin role. Raises 403 for non-admin members."""
-    if role not in ("admin", "org:admin"):
+    if not is_org_admin_role(role):
         raise HTTPException(status_code=403, detail="Organization admin role required")
     return role
 

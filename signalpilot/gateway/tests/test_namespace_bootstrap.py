@@ -104,8 +104,14 @@ class TestNamespaceForOrg:
 class TestEnsureNamespaceCreatesAllResourcesInOrder:
     @pytest.mark.asyncio
     async def test_ensure_namespace_creates_all_resources_in_order(self):
-        """All 7 resources created in the correct order: Namespace → deny NP → allow NP
-        → ResourceQuota → LimitRange → Role → RoleBinding."""
+        """All 6 resources created in the correct order: Namespace → RoleBinding →
+        deny NP → allow NP → ResourceQuota → LimitRange.
+
+        SP-SEC-009: the RoleBinding MUST come second. The gateway holds no cluster-wide
+        networkpolicy/resourcequota/limitrange verbs, so every write after the namespace
+        depends on the namespaced grant already existing. No per-namespace Role is
+        created any more — the binding targets the cluster-scoped workload template.
+        """
         core = _make_fake_core_api()
         networking = _make_fake_networking_api()
         rbac = _make_fake_rbac_api()
@@ -142,13 +148,16 @@ class TestEnsureNamespaceCreatesAllResourcesInOrder:
         )
 
         assert creation_order[0] == "Namespace"
-        assert creation_order[1] == "NetworkPolicy:default-deny"
-        assert creation_order[2] == "NetworkPolicy:allow-gateway-ingress-and-egress"
-        assert creation_order[3] == "ResourceQuota"
-        assert creation_order[4] == "LimitRange"
-        assert creation_order[5] == "Role"
-        assert creation_order[6] == "RoleBinding"
-        assert len(creation_order) == 7
+        assert creation_order[1] == "RoleBinding"
+        assert creation_order[2] == "NetworkPolicy:default-deny"
+        assert creation_order[3] == "NetworkPolicy:allow-gateway-ingress-and-egress"
+        assert creation_order[4] == "ResourceQuota"
+        assert creation_order[5] == "LimitRange"
+        assert len(creation_order) == 6
+        assert "Role" not in creation_order, (
+            "SP-SEC-009: no per-namespace Role — creating one requires `escalate`, "
+            "which cannot be pinned to a single Role name on CREATE"
+        )
 
 
 class TestEnsureNamespaceIdempotent:
@@ -363,70 +372,167 @@ class TestAllowGatewayPolicyShape:
                     )
 
 
-class TestRoleAndRoleBindingShape:
-    def _get_role(self) -> dict:
-        from gateway.orchestrator.namespaces import _gateway_org_role
+class TestRoleBindingShape:
+    """SP-SEC-009: the workload grant is a per-namespace RoleBinding to a cluster-scoped
+    ClusterRole template. The rules themselves now live in
+    deploy/k8s/gateway-rbac.yaml, so they are asserted against the manifest in
+    TestWorkloadClusterRoleManifest below."""
 
-        return _gateway_org_role("sp-nb-abc")
-
-    def _get_role_binding(self) -> dict:
+    def _get_role_binding(self, runtime_groups: tuple[str, ...] = ()) -> dict:
         from gateway.orchestrator.namespaces import _gateway_org_role_binding
 
         return _gateway_org_role_binding(
             namespace="sp-nb-abc",
             gateway_namespace="signalpilot",
             gateway_service_account="signalpilot-gateway",
+            runtime_groups=runtime_groups,
         )
 
-    def test_role_and_rolebinding_shape(self):
-        """Role has correct verbs on pods, services, networkpolicies, etc.
-        RoleBinding references gateway SA in gateway namespace and Role in org namespace.
+    def test_rolebinding_targets_namespaced_clusterrole_template(self):
+        """roleRef is the ClusterRole template, and the binding is namespaced.
+
+        A RoleBinding -> ClusterRole grants the ClusterRole's rules only inside the
+        binding's namespace, which is what keeps pods/exec and Secrets off cluster scope.
         """
-        role = self._get_role()
-        rules = role["rules"]
-
-        # Find rule for pods/services etc.
-        pod_rule = next(
-            (r for r in rules if "pods" in r.get("resources", [])), None
-        )
-        assert pod_rule is not None
-        assert set(pod_rule["verbs"]) >= {"create", "get", "list", "delete", "patch"}
-        assert "services" not in pod_rule["resources"]
-        assert "resourcequotas" in pod_rule["resources"]
-        assert "limitranges" in pod_rule["resources"]
-
-        # Find pods/log rule — no create verb.
-        log_rule = next(
-            (r for r in rules if "pods/log" in r.get("resources", [])), None
-        )
-        assert log_rule is not None
-        assert "get" in log_rule["verbs"]
-        assert "list" in log_rule["verbs"]
-        assert "create" not in log_rule["verbs"]
-        assert "pods/status" in log_rule["resources"]
-
-        # R4: Find pods/exec rule — create verb required for workspace sync.
-        exec_rule = next(
-            (r for r in rules if "pods/exec" in r.get("resources", [])), None
-        )
-        assert exec_rule is not None, "pods/exec rule must be in the per-namespace Role (R4)"
-        assert "create" in exec_rule["verbs"], "pods/exec must allow 'create' verb"
-        assert exec_rule["apiGroups"] == [""], "pods/exec rule must be in '' apiGroup"
-
-        # Find networkpolicies rule.
-        np_rule = next(
-            (r for r in rules if "networkpolicies" in r.get("resources", [])), None
-        )
-        assert np_rule is not None
-        assert set(np_rule["verbs"]) >= {"create", "get", "list", "delete", "patch"}
-        assert np_rule["apiGroups"] == ["networking.k8s.io"]
-
-        # RoleBinding shape.
         rb = self._get_role_binding()
-        assert rb["roleRef"]["name"] == "signalpilot-gateway-org-role"
-        assert rb["roleRef"]["kind"] == "Role"
+        assert rb["kind"] == "RoleBinding", "must be namespaced, never ClusterRoleBinding"
+        assert rb["metadata"]["namespace"] == "sp-nb-abc"
+        assert rb["metadata"]["name"] == "signalpilot-gateway-org-binding"
+        assert rb["roleRef"]["kind"] == "ClusterRole"
+        assert rb["roleRef"]["name"] == "signalpilot-gateway-notebook-workload"
+
+    def test_rolebinding_default_subject_is_gateway_sa_only(self):
+        rb = self._get_role_binding()
         subjects = rb["subjects"]
         assert len(subjects) == 1
         assert subjects[0]["kind"] == "ServiceAccount"
         assert subjects[0]["name"] == "signalpilot-gateway"
         assert subjects[0]["namespace"] == "signalpilot"
+
+    def test_rolebinding_includes_runtime_groups(self):
+        """Off-cluster (EC2/EKS access entry) identities authenticate as a Group.
+
+        Without the Group subject the least-privilege gateway holds nothing in the
+        namespace it just created and every pod/Secret write 403s.
+        """
+        rb = self._get_role_binding(runtime_groups=("signalpilot-gateway-ec2",))
+        subjects = rb["subjects"]
+        assert len(subjects) == 2
+        group = subjects[1]
+        assert group["kind"] == "Group"
+        assert group["name"] == "signalpilot-gateway-ec2"
+        assert group["apiGroup"] == "rbac.authorization.k8s.io"
+
+    def test_no_per_namespace_role_builder_remains(self):
+        """The per-namespace Role is gone — creating one needs the `escalate` verb."""
+        from gateway.orchestrator import namespaces
+
+        assert not hasattr(namespaces, "_gateway_org_role")
+
+
+class TestWorkloadClusterRoleManifest:
+    """SP-SEC-009 manifest invariants for deploy/k8s/*.yaml.
+
+    These are the checks that would have caught the original finding: a ClusterRole
+    carrying Secrets + pods/exec that was bound cluster-wide.
+    """
+
+    @staticmethod
+    def _load(rel: str) -> list[dict]:
+        import pathlib
+
+        import yaml
+
+        root = pathlib.Path(__file__).resolve().parents[3]
+        path = root / rel
+        assert path.exists(), f"missing manifest: {path}"
+        return [d for d in yaml.safe_load_all(path.read_text(encoding="utf-8")) if d]
+
+    def _all_docs(self) -> list[dict]:
+        return self._load("deploy/k8s/gateway-rbac.yaml") + self._load(
+            "deploy/k8s/gateway-runtime-rbac.yaml"
+        )
+
+    def test_workload_clusterrole_exists_and_matches_code(self):
+        from gateway.orchestrator.namespaces import GATEWAY_WORKLOAD_CLUSTER_ROLE
+
+        roles = [
+            d
+            for d in self._all_docs()
+            if d["kind"] == "ClusterRole"
+            and d["metadata"]["name"] == GATEWAY_WORKLOAD_CLUSTER_ROLE
+        ]
+        assert len(roles) == 1, "workload ClusterRole must be defined exactly once"
+        rules = roles[0]["rules"]
+
+        pod_rule = next(r for r in rules if "pods" in r["resources"])
+        assert set(pod_rule["verbs"]) >= {"create", "get", "list", "delete", "patch"}
+        assert "services" not in pod_rule["resources"]
+        assert "resourcequotas" in pod_rule["resources"]
+        assert "limitranges" in pod_rule["resources"]
+
+        exec_rule = next(r for r in rules if "pods/exec" in r["resources"])
+        assert "create" in exec_rule["verbs"]
+        assert exec_rule["apiGroups"] == [""]
+
+        secret_rule = next(r for r in rules if "secrets" in r["resources"])
+        assert set(secret_rule["verbs"]) >= {"create", "get", "list", "patch", "delete"}
+
+        np_rule = next(r for r in rules if "networkpolicies" in r["resources"])
+        assert np_rule["apiGroups"] == ["networking.k8s.io"]
+
+        for rule in rules:
+            assert "*" not in rule["resources"], "no wildcard resources"
+            assert "*" not in rule["verbs"], "no wildcard verbs"
+            assert "roles" not in rule["resources"]
+            assert "rolebindings" not in rule["resources"]
+
+    def test_workload_clusterrole_is_never_bound_clusterwide(self):
+        """The core SP-SEC-009 invariant."""
+        from gateway.orchestrator.namespaces import GATEWAY_WORKLOAD_CLUSTER_ROLE
+
+        offenders = [
+            d["metadata"]["name"]
+            for d in self._all_docs()
+            if d["kind"] == "ClusterRoleBinding"
+            and d["roleRef"]["name"] == GATEWAY_WORKLOAD_CLUSTER_ROLE
+        ]
+        assert offenders == [], (
+            f"ClusterRoleBinding(s) {offenders} bind the notebook workload ClusterRole "
+            "cluster-wide — that is SP-SEC-009 (cluster-wide Secret disclosure)"
+        )
+
+    def test_clusterwide_bound_roles_have_no_secrets_pods_or_exec(self):
+        """Whatever IS bound cluster-wide must not reach Secrets, pods, or exec."""
+        docs = self._all_docs()
+        bound = {
+            d["roleRef"]["name"] for d in docs if d["kind"] == "ClusterRoleBinding"
+        }
+        forbidden = {"secrets", "pods", "pods/exec", "pods/log", "pods/status", "roles"}
+        for doc in docs:
+            if doc["kind"] != "ClusterRole" or doc["metadata"]["name"] not in bound:
+                continue
+            for rule in doc["rules"]:
+                overlap = forbidden & set(rule["resources"])
+                assert not overlap, (
+                    f"cluster-wide ClusterRole {doc['metadata']['name']} grants "
+                    f"{sorted(overlap)} in every namespace"
+                )
+                assert "escalate" not in rule["verbs"], "no cluster-wide escalate"
+
+    def test_bind_verb_is_pinned_to_the_single_workload_role(self):
+        from gateway.orchestrator.namespaces import GATEWAY_WORKLOAD_CLUSTER_ROLE
+
+        bind_rules = [
+            rule
+            for doc in self._all_docs()
+            if doc["kind"] == "ClusterRole"
+            for rule in doc["rules"]
+            if "bind" in rule["verbs"]
+        ]
+        assert bind_rules, "the gateway needs `bind` to grant a dynamic namespace"
+        for rule in bind_rules:
+            assert rule.get("resourceNames") == [GATEWAY_WORKLOAD_CLUSTER_ROLE], (
+                "`bind` must be pinned by resourceNames — unpinned bind lets the "
+                "gateway grant itself any ClusterRole in the cluster"
+            )

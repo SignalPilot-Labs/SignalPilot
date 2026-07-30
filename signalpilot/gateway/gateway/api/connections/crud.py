@@ -185,7 +185,7 @@ async def edit_connection(name: str, update: ConnectionUpdate, store: StoreD, _r
 
     schema_cache.invalidate(name)
     if old_conn_str:
-        await pool_manager.close_pool(old_conn_str)
+        await pool_manager.close_pool(old_conn_str, org_id=store.org_id)
 
     client_ip, user_agent = request_meta(request)
     # Audit-DB failure must not block the completed update; best-effort observability.
@@ -207,7 +207,12 @@ async def edit_connection(name: str, update: ConnectionUpdate, store: StoreD, _r
 
 
 @router.post("/connections/{name}/clone", dependencies=[RequireScope("write")])
-async def clone_connection(name: str, store: StoreD, new_name: str = Query(..., min_length=1, max_length=64)):
+async def clone_connection(
+    store: StoreD,
+    _role: OrgAdmin,
+    name: str,
+    new_name: str = Query(..., min_length=1, max_length=64),
+):
     """Clone an existing connection with a new name."""
     existing = await store.get_connection(name)
     if not existing:

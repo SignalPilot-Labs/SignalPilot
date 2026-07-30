@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from gateway.notion import client as notion_client
@@ -15,6 +16,33 @@ def test_html_embed_block_uses_file_upload_shape() -> None:
             "file_upload": {"id": "upload-1"},
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_upload_file_retries_transient_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    async def upload_once(_token, *, filename, content_type, content):
+        calls.append(filename)
+        if len(calls) == 1:
+            raise httpx.ReadTimeout("timed out")
+        return {"id": "upload-1"}
+
+    async def sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(notion_client, "_upload_file_once", upload_once)
+    monkeypatch.setattr(notion_client.asyncio, "sleep", sleep)
+
+    result = await notion_client.upload_file(
+        "token",
+        filename="report.html",
+        content_type="text/html",
+        content=b"<html></html>",
+    )
+
+    assert result == {"id": "upload-1"}
+    assert calls == ["report.html", "report.html"]
 
 
 @pytest.mark.asyncio

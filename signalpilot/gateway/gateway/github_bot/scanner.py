@@ -78,6 +78,34 @@ def _qid(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+def _sql_str(value: str) -> str:
+    """Render a model/schema name as a SQL string literal, enforcing the
+    identifier invariant first: only strings matching the strict
+    ``_MODEL_RE`` regex (``[A-Za-z_][A-Za-z0-9_]*``) may reach SQL text.
+    Everything interpolated into the templates below goes through either
+    this validator or the ``_qid`` quote-escaping identifier quoter."""
+    if not _MODEL_RE.match(value):
+        raise ValueError(f"unsafe SQL identifier: {value!r}")
+    return "'" + value + "'"
+
+
+# SQL templates: static strings with placeholders. Every substituted value is
+# produced by _sql_str (regex-validated literal) or _qid/_qname (quote-escaped
+# identifier), so no untrusted text can alter the query structure.
+_COLUMNS_BY_SCHEMA_SQL = (
+    "SELECT column_name FROM information_schema.columns "
+    "WHERE table_schema = {schema} AND table_name = {table} "
+    "ORDER BY ordinal_position"
+)
+_COLUMNS_ANY_SCHEMA_SQL = (
+    "SELECT table_schema, column_name FROM information_schema.columns "
+    "WHERE table_name = {table} "
+    "AND table_schema NOT IN ('pg_catalog', 'information_schema') "
+    "ORDER BY table_schema, ordinal_position"
+)
+_AGGREGATE_PROBE_SQL = "SELECT {exprs} FROM {table}"
+
+
 async def _get_columns(connector, db_type: str, table_name: str) -> tuple[str | None, list[str]]:
     """Dialect-aware column introspection → (resolved qualified name, columns).
 
@@ -97,17 +125,12 @@ async def _get_columns(connector, db_type: str, table_name: str) -> tuple[str | 
     if len(parts) == 2:
         schema, tbl = parts
         rows = await connector.execute(
-            "SELECT column_name FROM information_schema.columns "
-            f"WHERE table_schema = '{schema}' AND table_name = '{tbl}' "
-            "ORDER BY ordinal_position"
+            _COLUMNS_BY_SCHEMA_SQL.format(schema=_sql_str(schema), table=_sql_str(tbl))
         )
         cols = [r.get("column_name", "") for r in rows if r.get("column_name")]
         return (table_name if cols else None), cols
     rows = await connector.execute(
-        "SELECT table_schema, column_name FROM information_schema.columns "
-        f"WHERE table_name = '{parts[0]}' "
-        "AND table_schema NOT IN ('pg_catalog', 'information_schema') "
-        "ORDER BY table_schema, ordinal_position"
+        _COLUMNS_ANY_SCHEMA_SQL.format(table=_sql_str(parts[0]))
     )
     by_schema: dict[str, list[str]] = {}
     for r in rows:
@@ -165,14 +188,13 @@ async def _check_model(connector, db_type: str, model: str) -> ModelCheck:
         f"SUM(CASE WHEN {_qid(c)} IS NULL THEN 1 ELSE 0 END) AS {_qid('null_' + str(i))}"
         for i, c in enumerate(probe_cols)
     ]
+    probe_sql = _AGGREGATE_PROBE_SQL.format(exprs=", ".join(exprs), table=_qname(resolved))
     try:
-        rows = await connector.execute(
-            f"SELECT {', '.join(exprs)} FROM {_qname(resolved)}", timeout=_QUERY_TIMEOUT_S
-        )
+        rows = await connector.execute(probe_sql, timeout=_QUERY_TIMEOUT_S)
     except TypeError:
         # Some connectors don't accept a timeout kwarg
         try:
-            rows = await connector.execute(f"SELECT {', '.join(exprs)} FROM {_qname(resolved)}")
+            rows = await connector.execute(probe_sql)
         except Exception as exc:
             check.verdict = "warn"
             check.notes.append(f"aggregate scan failed: {exc}")

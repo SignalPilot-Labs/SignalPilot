@@ -55,17 +55,118 @@ def _make_no_auth_request() -> MagicMock:
     return request
 
 
+def _make_jwt_request(claims: dict[str, Any]) -> MagicMock:
+    """Build a mock Clerk/JWT request carrying verified claims but no auth dict."""
+    request = MagicMock()
+    request.state = MagicMock(spec=["_jwt_claims"])
+    request.state._jwt_claims = claims
+    return request
+
+
 # ─── TestScopeGuardRequireScopes ─────────────────────────────────────────────
 
 
 class TestScopeGuardRequireScopes:
     """Unit tests for require_scopes() function."""
 
-    def test_no_auth_attribute_grants_all_scopes(self):
-        """JWT/Clerk users have no auth dict — all scopes granted."""
+    def test_no_auth_attribute_grants_non_admin_scopes(self):
+        """JWT/Clerk users have no auth dict — non-admin scopes granted."""
         request = _make_no_auth_request()
         # Should not raise
-        require_scopes(request, "admin", "write", "execute")
+        require_scopes(request, "write", "execute")
+
+    def test_jwt_basic_member_denied_admin_scope(self):
+        """In cloud mode an ordinary member must not satisfy the admin gate."""
+        from fastapi import HTTPException
+
+        request = _make_jwt_request(claims={"sub": "user_abc", "org_role": "basic_member"})
+        with patch("gateway.runtime.mode.is_cloud_mode", return_value=True):
+            with pytest.raises(HTTPException) as exc_info:
+                require_scopes(request, "admin")
+        assert exc_info.value.status_code == 403
+
+    def test_jwt_missing_role_claim_denied_admin_scope(self):
+        """A token with no role claim fails closed rather than passing the gate."""
+        from fastapi import HTTPException
+
+        request = _make_jwt_request(claims={"sub": "user_abc"})
+        with patch("gateway.runtime.mode.is_cloud_mode", return_value=True):
+            with pytest.raises(HTTPException):
+                require_scopes(request, "admin")
+
+    def test_jwt_org_admin_passes_admin_scope(self):
+        """An org admin still passes the admin gate."""
+        request = _make_jwt_request(claims={"sub": "user_abc", "org_role": "admin"})
+        with patch("gateway.runtime.mode.is_cloud_mode", return_value=True):
+            require_scopes(request, "admin")  # should not raise
+
+    def test_jwt_clerk_prod_short_claim_passes_admin_scope(self):
+        """Clerk prod nests the role under the short claim "o"."""
+        request = _make_jwt_request(claims={"sub": "user_abc", "o": {"rol": "admin"}})
+        with patch("gateway.runtime.mode.is_cloud_mode", return_value=True):
+            require_scopes(request, "admin")  # should not raise
+
+    def test_real_clerk_token_claim_shape_admin(self):
+        """The claim set a live Clerk token actually carries.
+
+        Captured from a real Clerk-minted session JWT: the role lives ONLY at
+        `o.rol` and its value is "admin" (the memberships API reports
+        "org:admin", the token does not). There is no `org_role` claim, so the
+        short-claim path is the production path, not an edge case.
+        """
+        claims = {
+            "sub": "user_abc",
+            "iss": "https://example.clerk.accounts.dev",
+            "exp": 9999999999,
+            "iat": 1000000000,
+            "nbf": 1000000000,
+            "jti": "abc123",
+            "sid": "sess_abc",
+            "org_id": "org_abc",
+            "o": {"id": "org_abc", "rol": "admin", "slg": "some-org"},
+            "v": 2,
+            "fva": [0, -1],
+            "pla": "u:free",
+            "sts": "active",
+        }
+        request = _make_jwt_request(claims=claims)
+        with patch("gateway.runtime.mode.is_cloud_mode", return_value=True):
+            require_scopes(request, "admin")  # should not raise
+
+    def test_real_clerk_token_claim_shape_non_admin_member(self):
+        """Same real claim shape, non-admin role — must be refused.
+
+        Verified against the live Clerk instance: the non-privileged membership
+        role is `org:member`, which the token abbreviates to `rol: "member"`.
+        """
+        from fastapi import HTTPException
+
+        claims = {
+            "sub": "user_abc",
+            "org_id": "org_abc",
+            "o": {"id": "org_abc", "rol": "member", "slg": "some-org"},
+            "v": 2,
+        }
+        request = _make_jwt_request(claims=claims)
+        with patch("gateway.runtime.mode.is_cloud_mode", return_value=True):
+            with pytest.raises(HTTPException) as exc_info:
+                require_scopes(request, "admin")
+        assert exc_info.value.status_code == 403
+
+    def test_org_scoped_token_without_org_context_denied_admin(self):
+        """A personal-account token (no org claims at all) is not an org admin."""
+        from fastapi import HTTPException
+
+        request = _make_jwt_request(claims={"sub": "user_abc", "sid": "sess_abc", "v": 2})
+        with patch("gateway.runtime.mode.is_cloud_mode", return_value=True):
+            with pytest.raises(HTTPException):
+                require_scopes(request, "admin")
+
+    def test_jwt_local_mode_bypasses_admin_gate(self):
+        """Local mode has no organizations — the admin gate does not apply."""
+        request = _make_jwt_request(claims={"sub": "local", "org_id": "local"})
+        with patch("gateway.runtime.mode.is_cloud_mode", return_value=False):
+            require_scopes(request, "admin")  # should not raise
 
     def test_local_key_bypasses_scope_check(self):
         """Local dev key bypasses all scope checks regardless of required scopes."""

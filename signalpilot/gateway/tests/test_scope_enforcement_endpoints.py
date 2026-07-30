@@ -667,15 +667,20 @@ class TestAuditAdminScope:
 
 
 class TestFilesBrowseReadScope:
-    """GET /api/files/browse requires 'read' scope."""
+    """GET /api/files/browse requires 'write' scope — it enumerates host paths."""
 
-    def test_browse_files_returns_403_without_read_scope(self, client):
+    def test_browse_files_returns_403_without_write_scope(self, client):
         _set_scopes([])
         response = client.get("/api/files/browse")
         assert response.status_code == 403
 
-    def test_browse_files_passes_with_read_scope(self, client):
+    def test_browse_files_returns_403_with_only_read_scope(self, client):
         _set_scopes(["read"])
+        response = client.get("/api/files/browse")
+        assert response.status_code == 403
+
+    def test_browse_files_passes_with_write_scope(self, client):
+        _set_scopes(["write"])
         response = client.get("/api/files/browse")
         assert response.status_code != 403
 

@@ -7,7 +7,8 @@
     "dev": "next dev --port 3200",
     "build": "next build",
     "start": "next start --port 3200",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:unit": "vitest run"
   },
   "dependencies": {
     "@anywidget/types": "^0.2.0",
@@ -81,7 +82,7 @@
     "date-fns": "^4.1.0",
     "dequal": "^2.0.3",
     "dnd-core": "^16.0.1",
-    "dompurify": "^3.4.11",
+    "dompurify": "^3.4.12",
     "htm": "^3.1.1",
     "html-react-parser": "^5.2.14",
     "html-to-image": "1.11.13",
@@ -160,9 +161,11 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
+    "jsdom": "^30.0.1",
     "raw-loader": "^4.0.2",
     "tailwindcss": "^4.0.0",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.10"
   },
   "optionalDependencies": {
     "lightningcss-darwin-arm64": "1.32.0",
@@ -192,9 +195,13 @@
   "overrides": {
     "@babel/core": "7.29.7",
     "brace-expansion": "5.0.8",
+    "form-data": "^4.0.4",
     "js-cookie": "$js-cookie",
+    "qs": "^6.15.3",
     "js-yaml": "4.3.0",
     "postcss": "8.5.18",
+    "request": "npm:@cypress/request@^4.0.1",
+    "sync-request": "^6.1.0",
     "sharp": "0.35.0",
     "svgo": "4.0.2",
     "yargs": "17.7.2",

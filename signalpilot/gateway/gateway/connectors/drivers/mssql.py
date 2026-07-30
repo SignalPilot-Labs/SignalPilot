@@ -23,10 +23,28 @@ except ImportError:
     HAS_PYMSSQL = False
 
 
+def _decode_extended_property(value: Any) -> str:
+    """Normalise a sys.extended_properties value into text.
+
+    The schema query casts these to NVARCHAR server-side, so pymssql hands back
+    a str. Bytes are still handled defensively — a plain str() on them would
+    yield the literal "b'...'" rather than the comment.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, bytes | bytearray):
+        return bytes(value).decode("utf-8", errors="replace").rstrip("\x00")
+    return str(value)
+
+
 class MSSQLConnector(BaseConnector):
     def __init__(self):
         super().__init__()
         self._conn: pymssql.Connection | None = None
+        # PoolManager hands the same connector to concurrent callers, but a
+        # pymssql connection cannot be multiplexed — interleaved cursors corrupt
+        # each other's state. Serialize every use of the underlying connection.
+        self._conn_lock = asyncio.Lock()
         self._connect_params: dict = {}
         self._login_timeout: int = 15
         # Azure AD / Entra ID auth via access token
@@ -237,7 +255,8 @@ class MSSQLConnector(BaseConnector):
             return list(rows) if rows else []
 
         try:
-            return await self._run_in_thread(_run, effective_timeout, label="SQL Server")
+            async with self._conn_lock:
+                return await self._run_in_thread(_run, effective_timeout, label="SQL Server")
         except pymssql.Error as e:
             raise RuntimeError(f"SQL Server query error: {e}") from e
 
@@ -263,8 +282,10 @@ class MSSQLConnector(BaseConnector):
                 c.is_identity,
                 OBJECT_DEFINITION(c.default_object_id) AS column_default,
                 CASE WHEN pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key,
-                ep.value AS column_comment,
-                ep_t.value AS table_comment
+                -- extended_properties.value is sql_variant; cast server-side so the
+                -- driver never has to guess the underlying varchar/nvarchar encoding
+                CAST(ep.value AS NVARCHAR(4000)) AS column_comment,
+                CAST(ep_t.value AS NVARCHAR(4000)) AS table_comment
             FROM sys.objects o
             JOIN sys.schemas s ON o.schema_id = s.schema_id
             JOIN sys.columns c ON o.object_id = c.object_id
@@ -378,13 +399,15 @@ class MSSQLConnector(BaseConnector):
             )
 
         # Run the synchronous queries in a thread to avoid blocking the event loop
+        async with self._conn_lock:
+            metadata = await asyncio.to_thread(_fetch_all_sequential)
         (
             (rows, _col_ms),
             (rowcount_rows, _rc_ms),
             (fk_rows, _fk_ms),
             (idx_rows, _idx_ms),
             (stat_rows, _stat_ms),
-        ) = await asyncio.to_thread(_fetch_all_sequential)
+        ) = metadata
         await self._audit_sql(col_sql.strip(), len(rows), _col_ms)
         await self._audit_sql(rowcount_sql.strip(), len(rowcount_rows), _rc_ms)
         await self._audit_sql(fk_sql.strip(), len(fk_rows), _fk_ms)
@@ -460,7 +483,7 @@ class MSSQLConnector(BaseConnector):
                     "indexes": indexes.get(key, []),
                     "row_count": row_counts.get(key, 0),
                     "size_mb": table_sizes.get(key, 0),
-                    "description": str(row.get("table_comment", "") or ""),
+                    "description": _decode_extended_property(row.get("table_comment")),
                 }
 
             # Build data type string with precision info
@@ -483,7 +506,7 @@ class MSSQLConnector(BaseConnector):
                 "nullable": bool(row["is_nullable"]),
                 "primary_key": bool(row["is_primary_key"]),
                 "default": row.get("column_default"),
-                "comment": str(row.get("column_comment", "") or ""),
+                "comment": _decode_extended_property(row.get("column_comment")),
             }
             if bool(row.get("is_identity")):
                 col_entry["identity"] = True
@@ -500,10 +523,14 @@ class MSSQLConnector(BaseConnector):
 
     async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
-        import time as _time
-
         if self._conn is None or not columns:
             return {}
+        async with self._conn_lock:
+            return await self._sample_values_locked(table, columns, limit)
+
+    async def _sample_values_locked(self, table: str, columns: list[str], limit: int) -> dict[str, list]:
+        import time as _time
+
         self._ensure_connected()
         safe_table = self._quote_table(table)
         try:

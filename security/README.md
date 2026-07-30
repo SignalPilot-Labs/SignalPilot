@@ -101,12 +101,22 @@ state is recorded as of this writing and several are not finished.
 | Dependency | Web lockfile criticals via `compassql` → `datalib` → `request` → `form-data`, plus a DOMPurify `CUSTOM_ELEMENT_HANDLING` advisory | **Fixed** |
 | Critical (new) | The app's DOMPurify `attributeNameCheck` regex admitted `on*` handlers on allowed custom elements, so `<sp-x onclick=...>` in notebook output survived sanitization — a live XSS in the notebook output path | **Fixed** (blocked). Contradicts the first-round "chart HTML is passed through DOMPurify" positive control |
 
-Also recorded, not a finding but a behaviour change operators must know about:
-cloud mode now **requires** `CLERK_JWT_AUDIENCE` or `SP_EXPECTED_AZP` so that
-tokens are bound to this application, with an explicit
-`SP_ALLOW_UNBOUND_JWT_AUDIENCE` escape hatch. This is fail-closed today: the
-Clerk instance currently has 0 JWT templates, and its default session token
-carries neither claim.
+### Accepted residual: Clerk JWTs are not bound to this application
+
+`CLERK_JWT_AUDIENCE` and `SP_EXPECTED_AZP` are both unset, so a token issued for
+any application on the same Clerk instance is accepted. A startup requirement for
+one of them was implemented and then **removed at the maintainers' direction**:
+both had been tried previously and did not work with this Clerk configuration.
+The instance has no JWT templates, and its default session token carries neither
+`aud` nor `azp`, so enforcing either would have refused every request.
+
+The verification code remains in place and activates automatically if either
+variable is ever set — no further change is needed to adopt binding once a
+working Clerk template exists.
+
+Residual risk is bounded by how many applications share the Clerk instance: with
+a single application it is negligible, and it grows with each additional one.
+Revisit if another application is added to the same instance.
 
 ## Deployment prerequisites
 
@@ -130,9 +140,8 @@ or during rollout, or the corresponding surface breaks rather than degrades.
   routing setting.
 - **`SP_GITHUB_WEBHOOK_SECRET`.** The GitHub bot webhook route is disabled in
   every mode unless a secret is configured.
-- **A Clerk JWT template emitting `aud`** (or a configured `SP_EXPECTED_AZP`).
-  The instance currently has no template, so cloud mode will refuse tokens until
-  one exists or `SP_ALLOW_UNBOUND_JWT_AUDIENCE` is set deliberately.
+- **No Clerk JWT template is required.** Application binding is an accepted
+  residual (see above); nothing about `aud`/`azp` blocks a deploy.
 - **TLS migration for legacy rows.** The dry-run-by-default helper must be run
   to move pre-existing plaintext TLS client keys into encrypted extras. Nothing
   runs it automatically.

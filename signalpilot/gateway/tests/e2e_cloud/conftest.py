@@ -236,12 +236,6 @@ def _child_env(workdir: Path, database_url: str, port: int, publishable_key: str
     }
     if expected_azp is not None:
         env["SP_EXPECTED_AZP"] = expected_azp
-    else:
-        # Real Clerk session tokens carry neither aud nor azp (0 JWT templates on
-        # the instance), so the real-Clerk gateway cannot satisfy the cloud-mode
-        # application-binding requirement. Opt out explicitly here rather than
-        # weakening the check itself.
-        env["SP_ALLOW_UNBOUND_JWT_AUDIENCE"] = "1"
     if ca_file is not None:
         # Makes PyJWKClient's urllib fetch trust the local JWKS server's self-signed
         # certificate: ssl.create_default_context() honours SSL_CERT_FILE.

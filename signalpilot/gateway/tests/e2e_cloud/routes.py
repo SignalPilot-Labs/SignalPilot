@@ -170,9 +170,6 @@ def discover() -> tuple[list[RouteSpec], list[RouteSpec]]:
         "SP_NOTEBOOK_IMAGE": "registry.invalid/notebook@sha256:0000000000000000000000000000000000000000000000000000000000000000",
         "SP_PUBLIC_GATEWAY_URL": "https://gateway.invalid",
         "SP_NOTEBOOK_RUNTIME_CLASS": "gvisor",
-        # Discovery only imports the app to read its dependency tree; it never
-        # verifies a token, so application binding is irrelevant here.
-        "SP_ALLOW_UNBOUND_JWT_AUDIENCE": "1",
         "CLERK_PUBLISHABLE_KEY": f"pk_test_{dummy_domain}",
         "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
         "PYTHONIOENCODING": "utf-8",

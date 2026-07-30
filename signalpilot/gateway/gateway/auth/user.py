@@ -83,39 +83,6 @@ if is_cloud_mode():
             f"Failed to initialize Clerk JWKS client at startup: {e}. Check CLERK_PUBLISHABLE_KEY format."
         ) from e
 
-    # Without one of these, any token the Clerk instance issues is accepted —
-    # including one minted for a different application on the same instance.
-    # Refusing to boot beats accepting cross-application tokens silently.
-    # Setting the variable alone is not enough: Clerk's DEFAULT session token
-    # carries neither claim, so the JWT template must be configured to emit it
-    # or every request will 401.
-    if not EXPECTED_AUDIENCE and not EXPECTED_AZP:
-        if os.environ.get("SP_ALLOW_UNBOUND_JWT_AUDIENCE", "").strip().lower() in (
-            "1",
-            "true",
-            "yes",
-        ):
-            logger.warning(
-                "SECURITY: Clerk JWTs are not bound to this application. "
-                "SP_ALLOW_UNBOUND_JWT_AUDIENCE is set, so a token issued for ANY "
-                "application on this Clerk instance is accepted. Configure a Clerk "
-                "JWT template emitting 'aud', set CLERK_JWT_AUDIENCE to match, and "
-                "remove this override."
-            )
-        else:
-            raise RuntimeError(
-                "Cloud mode requires application binding on Clerk JWTs, but neither "
-                "CLERK_JWT_AUDIENCE nor SP_EXPECTED_AZP is set, so a token issued for "
-                "any application on this Clerk instance would be accepted. Configure a "
-                "Clerk JWT template that emits an 'aud' claim and set CLERK_JWT_AUDIENCE "
-                "to the same value (or, if your tokens carry 'azp', set SP_EXPECTED_AZP "
-                "to the allowed authorized parties). Verify the claim is present in a "
-                "real token first — Clerk's DEFAULT session token carries neither, so "
-                "setting the variable without the template will 401 every request. "
-                "To deploy before that work lands, set SP_ALLOW_UNBOUND_JWT_AUDIENCE=1 "
-                "explicitly and remove it once binding is configured."
-            )
-
 
 def _extract_bearer_token(connection: HTTPConnection) -> str | None:
     """Extract the raw bearer token from Authorization header (no filtering)."""

@@ -54,10 +54,16 @@ async def _require_allowed_org(store: StoreD) -> None:
 RequireStaff = Depends(_require_platform_staff)
 RequireAllowedOrg = Depends(_require_allowed_org)
 
-# Every eval route carries all three. Adding a route means reusing this list —
+# Every eval route carries both. Adding a route means reusing this list —
 # tests/test_eval_org_allowlist.py enumerates router.routes, so one that is
 # gated some other way fails there rather than shipping ungated.
-EVAL_GUARDS = [RequireScope("admin"), RequireStaff, RequireAllowedOrg]
+#
+# The boundary is org membership: SP_EVAL_ALLOWED_ORGS names which workspaces
+# have the feature at all, and it fails closed when unset in cloud. Execution is
+# confined to a sandbox pod that cannot reach the Kubernetes API, so an org
+# member pointing a run at a hostile repo is contained by the sandbox rather
+# than by who they are.
+EVAL_GUARDS = [RequireScope("read"), RequireAllowedOrg]
 
 # In-process registry so a second trigger doesn't stack runs unboundedly.
 _active_tasks: dict[str, asyncio.Task] = {}

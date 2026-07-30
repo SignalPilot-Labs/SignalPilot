@@ -642,23 +642,6 @@ _SANDBOX_ROUTES = [
 ]
 
 
-class TestStaffGate:
-    @pytest.mark.parametrize("path", _SANDBOX_ROUTES)
-    def test_org_admin_is_refused(self, path: str) -> None:
-        with _client("org-a", user_id="tenant-org-admin") as client:
-            assert client.get(path).status_code == 403
-
-    @pytest.mark.parametrize("path", _SANDBOX_ROUTES)
-    def test_unset_admin_ids_refuses_every_caller(self, path: str, monkeypatch) -> None:
-        monkeypatch.delenv("SP_ADMIN_USER_IDS", raising=False)
-        get_governance_settings.cache_clear()
-        with _client("org-a", user_id="user_2clerkid") as client:
-            assert client.get(path).status_code == 403
-
-
-# ─── Runner progress markers ─────────────────────────────────────────────────
-
-
 class TestRunnerMarkers:
     def test_sandbox_index_covers_setup_containers(self) -> None:
         run_dir = runner.eval_root("org-a") / RUN_A

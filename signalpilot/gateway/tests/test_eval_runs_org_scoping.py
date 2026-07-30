@@ -157,33 +157,3 @@ _ROUTES = [
 ]
 
 
-class TestEvalStaffGate:
-    @pytest.mark.parametrize("method,path", _ROUTES)
-    def test_org_admin_is_refused(self, method: str, path: str) -> None:
-        with _client("org-a", user_id="tenant-org-admin") as client:
-            resp = getattr(client, method)(path)
-        assert resp.status_code == 403
-
-    def test_org_admin_cannot_write_config(self) -> None:
-        with _client("org-a", user_id="tenant-org-admin") as client:
-            resp = client.put("/api/evals/config", json={"repo_url": "https://evil.example/x.git"})
-        assert resp.status_code == 403
-        assert runner.load_eval_config("org-a") == {}
-
-    def test_org_admin_cannot_start_a_run(self) -> None:
-        with _client("org-a", user_id="tenant-org-admin") as client:
-            resp = client.post("/api/evals/runs", json={"doc_ids": ["doc-1"]})
-        assert resp.status_code == 403
-
-    def test_staff_is_allowed(self) -> None:
-        _seed_run("org-a", RUN_A, transcript="secret-a")
-        with _client("org-a", user_id=STAFF_USER) as client:
-            assert client.get("/api/evals/runs").status_code == 200
-            assert client.get(f"/api/evals/runs/{RUN_A}").status_code == 200
-
-    def test_unset_admin_ids_refuses_every_caller(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """SP_ADMIN_USER_IDS defaults to "local" — a cloud identity is refused."""
-        monkeypatch.delenv("SP_ADMIN_USER_IDS", raising=False)
-        get_governance_settings.cache_clear()
-        with _client("org-a", user_id="user_2clerkid") as client:
-            assert client.get("/api/evals/config").status_code == 403

@@ -126,12 +126,6 @@ class TestGateIsByOrgNotUser:
         with _client(OTHER_ORG, user_id=STAFF_USER) as client:
             assert client.get("/api/evals/runs").status_code == 403
 
-    def test_allowlisted_org_still_needs_staff(self) -> None:
-        with _client(ALLOWED_ORG, user_id="tenant-org-admin") as client:
-            resp = client.get("/api/evals/config")
-        assert resp.status_code == 403
-        assert resp.json()["detail"] == "Platform staff access required."
-
     def test_blank_org_id_is_refused(self) -> None:
         with _client("", user_id=STAFF_USER) as client:
             assert client.get("/api/evals/runs").status_code == 403
@@ -225,3 +219,28 @@ class TestAvailabilityEndpoint:
         calls = {d.dependency for d in route.dependencies}
         assert _require_allowed_org not in calls
         assert _require_platform_staff not in calls
+
+
+class TestOrgMembershipIsTheBoundary:
+    """Any member of an allowlisted org reaches evals; the staff gate is gone.
+
+    Execution is confined to a sandbox pod that cannot reach the Kubernetes API,
+    so a member pointing a run at a hostile repo is contained by the sandbox
+    rather than by who they are. The allowlist decides which workspaces have the
+    feature at all.
+    """
+
+    def test_plain_member_of_an_allowlisted_org_is_admitted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # No staff membership configured anywhere.
+        monkeypatch.delenv("SP_ADMIN_USER_IDS", raising=False)
+        get_governance_settings.cache_clear()
+        client = _client(ALLOWED_ORG, user_id="user_plain_member")
+        assert client.get("/api/evals/config").status_code != 403
+
+    def test_member_of_another_org_is_still_refused(self) -> None:
+        client = _client("org_someone_else", user_id="user_plain_member")
+        r = client.get("/api/evals/config")
+        assert r.status_code == 403
+        assert "not enabled for this workspace" in r.text

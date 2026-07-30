@@ -1,340 +1,331 @@
-# Backend Security Audit
+# Backend, MCP, and Infrastructure Security Audit
 
-Scope: `git diff main..HEAD` restricted to Python files and Docker/YAML on
-branch `autofyn/run-a-security-a-880618`. Credential-scanning is handled by a
-sibling reviewer and is excluded here.
+Audit date: 2026-07-29
 
-## Summary
+## SP-SEC-001 - Scope and organization-role enforcement are inconsistent
 
-| Severity | Count |
-|----------|-------|
-| CRITICAL | 0     |
-| HIGH     | 2     |
-| MEDIUM   | 4     |
-| LOW      | 3     |
-| INFO     | 5     |
+**Severity: Critical**
 
-Overall posture is defensible. The new attack surface is well-scoped:
-identifiers are validated before being interpolated into SQL, the /demo route
-never persists the shared org key, connection pinning stops it from being
-misused, and CSRF/CORS is on in cloud mode with an explicit allow-list. The
-findings below are concentrated around (a) admin-scope features that
-delegate execution to attacker-controlled inputs (eval runner + repo_url,
-setup manifest picking Docker image), (b) an unauthenticated notebook-server
-endpoint that mutates process-wide env and forwards a key to the gateway on
-behalf of the caller, and (c) local-mode fallbacks in webhook receivers that
-open a door if the gateway is ever exposed unprotected.
+`signalpilot/gateway/gateway/security/scope_guard.py:57-65` grants all scopes
+when `request.state.auth` is absent. That is the normal Clerk/JWT path because
+`signalpilot/gateway/gateway/http/middleware/auth.py:76-84` deliberately defers
+JWT authentication without populating `request.state.auth`. `RequireScope`
+verifies the JWT, but `require_scopes` still treats every verified JWT user as
+having `admin`.
 
----
+The inverse mismatch is at
+`signalpilot/gateway/gateway/auth/user.py:324-349`: every API key is treated as
+an organization admin without checking for an `admin` scope. A write-only API
+key can therefore pass routes that combine `RequireScope("write")` with
+`OrgAdmin`.
 
-## Findings
+**Remediation:** model organization role and API capability as separate
+attributes. Make `RequireScope("admin")` require an actual org-admin or staff
+role for JWT users. Derive API-key role from an explicit `admin` scope. Add a
+permission matrix test covering basic/admin JWTs and read/write/admin API keys
+against every protected route.
 
-### [HIGH] Notebook-server `/save-api-key` has no auth check and mutates process env
+## SP-SEC-002 - Basic cloud members can export decrypted connection credentials
 
-- File: `signalpilot/notebook-server/signalpilot/_server/api/endpoints/agent.py:115-160`
-- Category: authz / secrets
-- Description: `save_api_key` accepts an arbitrary `api_key` from the request
-  body, forwards it to the gateway `PUT /api/user/secrets` using the
-  server-side `gateway_headers()` (i.e. the notebook server's own gateway
-  credentials — not the caller's), and unconditionally sets
-  `os.environ["ANTHROPIC_API_KEY"] = api_key`. There is no session check on
-  this router, and the fallback path (line ~155) does the `os.environ` write
-  even when the gateway call fails. Setting `os.environ` mutates
-  process-global state that every kernel / subsequent request in the same
-  notebook-server process inherits.
-- Impact: A caller who can reach the notebook server (e.g. via the notebook
-  proxy path) can (1) overwrite the current user's gateway-stored Anthropic
-  key (or write one for a user who had none), and (2) poison the
-  notebook-server process's `ANTHROPIC_API_KEY` env for every subsequent
-  request routed to that pod — a form of stored key confusion across kernel
-  sessions in the same worker.
-- Recommendation: Require an authenticated notebook session on this route
-  (use the same session-cookie / SP session dep the other agent endpoints
-  rely on). Do not mutate `os.environ` at request time; store the key on the
-  session/kernel scope instead. Reject the request entirely if the gateway
-  call fails rather than silently "local_only".
-- Confidence: high
+**Severity: Critical**
 
-### [HIGH] Eval-set manifest chooses the Docker image executed on the gateway host
+`signalpilot/gateway/gateway/api/connections/porting.py:27-40` protects export
+with `write` and calls `require_scopes(request, "admin")` only when credentials
+are requested. Because SP-SEC-001 makes that admin check a no-op for JWT users,
+an ordinary organization member can request `include_credentials=true`.
+Lines 90 onward return decrypted connection strings and SSL configuration for
+every connection in the caller's organization.
 
-- File: `signalpilot/gateway/gateway/evals/runner.py:553` (`_run_setup_container`),
-  compose reference: `docker-compose.yml:105` (`/var/run/docker.sock:/var/run/docker.sock`)
-- Category: sandbox escape / RCE-via-config
-- Description: The gateway mounts the host Docker socket. The eval runner
-  invokes containers based on the eval-set manifest fetched by
-  `fetch_eval_repo(repo_url, …)`. Line 553:
-  `image = eval_set.setup.get("image") or settings.runner_image` — the
-  image name is taken straight from the manifest. `_run_setup_container`
-  also feeds `cmd` (from `runner_cmd`) into `sh -lc`, and honors
-  `eval_set.setup.get("mounts")` for bind mounts under
-  `SP_EVAL_SETUP_HOST_ROOT`. `repo_url` is set through the admin
-  `PUT /api/evals/config` endpoint, and once set, the manifest inside that
-  repo is fully attacker-controlled.
-- Impact: An admin (or anyone who reaches the admin scope, e.g. via a stolen
-  admin key) can point `repo_url` at a repo whose `manifest` names an
-  arbitrary image and arbitrary bind mounts under `SP_EVAL_SETUP_HOST_ROOT`.
-  Combined with the mounted docker socket, this is effectively RCE-as-root
-  on the gateway host (container escape via docker.sock is trivial: run a
-  container with `--privileged` / mount `/`).
-- Recommendation: Do not let the manifest choose the image — restrict to a
-  server-side allow-list (or force `settings.runner_image` / a small set of
-  known images). Reject bind-mount entries that resolve outside a fixed
-  read-only path even before the `..` check. Reconsider mounting
-  `/var/run/docker.sock` into the same container that runs application HTTP
-  logic; a dedicated docker-runner sidecar with a narrower socket proxy
-  (e.g. `docker-socket-proxy`) is the standard pattern.
-- Confidence: high
+**Remediation:** add an explicit `OrgAdmin` dependency, keep the admin API scope,
+and require a recent reauthentication or one-time export confirmation. Strip
+TLS private keys from the response unless a separate, audited credential-export
+policy explicitly permits them.
 
-### [MEDIUM] Eval-config `repo_url` cloned via `git clone` with attacker-controlled URL
+## SP-SEC-003 - `compare_join_types` bypasses governed SQL validation
 
-- File: `signalpilot/gateway/gateway/evals/runner.py:287-306` (`fetch_eval_repo`),
-  and repeated at line 560 inside the setup container script.
-- Category: injection (git remote / SSRF-adjacent)
-- Description: `fetch_eval_repo` does
-  `git clone --depth 1 <repo_url> <dest>` when the URL starts with
-  `http://`, `https://`, or `git@`. There's a leading-`-` argument-splitting
-  guard (via the prefix check), but the URL itself is otherwise unfiltered.
-  While CVE-2017-1000117-class `ssh://…-oProxyCommand=…` is largely mitigated
-  in modern git, this still lets an admin-scoped caller pull arbitrary code
-  onto the gateway host (and later the setup container script does
-  `git clone --depth 1 "$SP_EVAL_REPO_URL" /repo && … {runner_cmd}` where
-  `runner_cmd` is built from manifest-controlled `script_rel` and `state`
-  values interpolated into a double-quoted shell string — shell-quote
-  breakout is possible with a `"` in `script_rel`).
-- Impact: With admin scope: repo-driven code arriving on the gateway host,
-  and shell-quote breakout inside the setup container (further amplified by
-  the previous finding).
-- Recommendation: Validate `repo_url` against an allow-list of hosts (or
-  only accept https URLs to a known-good host set). Do not interpolate
-  `script_rel`/`state` into a shell command; instead pass them as
-  positional args (`sh /repo/script.sh state`) via `Cmd: ["sh", "/repo/…", state]`.
-  Reject any `script_rel` containing shell metacharacters or `..`.
-- Confidence: medium
+**Severity: Critical**
 
-### [MEDIUM] GitHub webhook accepts unsigned events in non-cloud mode
+`signalpilot/gateway/gateway/mcp/tools/model_verify.py:607-698` accepts free-text
+`join_keys` and `where_clause`, interpolates them into multiple query fragments,
+and sends the constructed statement directly to `connector.execute`. The imported
+`gateway.mcp.validation._validate_sql` checks only non-emptiness and a 100 KB
+length; it is not `gateway.engine.validate_sql` and applies no statement,
+dangerous-function, table, or limit policy.
 
-- File: `signalpilot/gateway/gateway/api/github_bot.py:44-48`
-- Category: auth (webhook trust)
-- Description: If `SP_GITHUB_WEBHOOK_SECRET` is unset and the process is
-  *not* in cloud mode, `github_webhook` accepts any body without an HMAC
-  signature check (only `is_cloud_mode()` triggers the 503). In cloud mode
-  the behavior is correct. If a self-hosted / on-prem gateway is ever
-  exposed to the internet without setting the secret, any caller can
-  trigger arbitrary PR scans against configured connections.
-- Impact: Data exfil / DoS potential: the scan runs warehouse queries
-  (`COUNT(*)`, `information_schema` reads, per-column null aggregates) and
-  the bot's GitHub token posts a comment + status. In cloud-mode
-  deployments this is fine; the risk lives at the "self-hoster exposes
-  local mode" boundary.
-- Recommendation: Require the webhook secret unconditionally (or only
-  accept the webhook from `127.0.0.1` / an internal network when the secret
-  is unset). Log a startup warning when the receiver is enabled without a
-  secret.
-- Confidence: medium
+An agent can be induced through prompt injection to place a dangerous function
+or subquery in a join or predicate. Database read-only settings reduce some
+write impact but do not block file reads, network-capable functions, expensive
+queries, or data exfiltration.
 
-### [MEDIUM] Legacy `/api/evals/upload` skips the multipart flow's size preflight
+**Remediation:** parse `join_keys` into a strict list of qualified-column equality
+pairs. Parse `where_clause` as an expression and reject statements, subqueries,
+comments, and dangerous functions. Route the final SQL through
+`gateway.engine.validate_sql` and `inject_limit` before execution. Add adversarial
+tests for stacked statements, file/network functions, subqueries, comments, and
+tautologies in both inputs.
 
-- File: `signalpilot/gateway/gateway/api/uploads.py:318-338`
-- Category: DoS / resource
-- Description: The legacy single-POST upload path (kept for small files /
-  older clients) writes the whole body to a spool before size is checked
-  (`file.file.seek(0, 2)`), then rejects at `cfg.max_bytes`. The body-size
-  middleware is configured for the `/api/evals/upload` prefix with
-  `_eval_uploads_settings().max_bytes + 1_048_576` — i.e. up to
-  ~500 MB (default max_mb=500 in compose) is buffered into the spool and
-  streamed onto disk before the endpoint gets to enforce the cap. This
-  applies to the multipart routes too, but they only carry small JSON.
-- Impact: A single POST can burn up to the large per-path limit worth of
-  disk/tmpfs even when the size will be rejected. With a naive attacker
-  script this is a cheap disk-exhaustion primitive.
-- Recommendation: Reject early in the endpoint using the `Content-Length`
-  header before letting FastAPI consume the body (or lower the legacy
-  endpoint's per-path body cap and route it through a small-file endpoint
-  distinct from the multipart prefix).
-- Confidence: medium
+## SP-SEC-004 - GitHub callback does not bind installation ID to the tenant
 
-### [MEDIUM] `/api/notion/webhooks/events` returns 200 to any body containing `verification_token`
+**Severity: Critical**
 
-- File: `signalpilot/gateway/gateway/api/notion.py:612-614`
-- Category: hardening / logging DoS
-- Description: The verification-token branch is checked *before* signature
-  verification, and returns 200 unconditionally with a WARNING log line. An
-  unauthenticated caller can send `{"verification_token": "..."}` to
-  generate warnings and 200 replies indefinitely.
-- Impact: Log flooding and observability noise. Not exploitable for data.
-- Recommendation: Once the integration has completed subscription
-  verification, ignore or 401 further verification-token payloads that
-  don't match a stored value; or rate-limit this path.
-- Confidence: high
+`signalpilot/gateway/gateway/api/github.py:72-130` validates signed state to
+choose the destination organization, but accepts `installation_id` independently.
+The server's GitHub App JWT then retrieves installation details and creates an
+installation token for that caller-supplied ID. No step proves that the
+installation was created by the current flow or belongs to the authenticated
+tenant. Installation IDs are not an authorization secret.
 
-### [LOW] `schema_watch` PR body includes truncated markdown built from server-fetched schemas
+An authenticated tenant able to obtain another installation ID for the same
+GitHub App can store a token for that installation under its own organization and
+obtain a credential-bearing clone URL at lines 287-311.
 
-- File: `signalpilot/gateway/gateway/schema_watch/runner.py:212-225`
-- Category: injection (into GitHub PR)
-- Description: The PR body embeds table/column names from the target
-  warehouse verbatim in markdown. If those names contain markdown/HTML
-  fragments, they end up in a GitHub PR body — cosmetic, but on issues
-  triggered by an org's own warehouse it can render as an image / link
-  chosen by the DB owner. Not exploitable across orgs; the watch is
-  org-scoped.
-- Recommendation: Escape backticks / pipes in table/column names when
-  rendering markdown (`f"`{name.replace('`','\'')}`"`).
-- Confidence: low
+**Remediation:** bind state to user, org, nonce, intended action, and expected
+installation. Complete GitHub's user authorization flow and verify that the
+installation appears in the authenticated user's accessible installations.
+Reject callbacks whose installation owner and repositories do not match the
+recorded flow. Store and consume state once.
 
-### [LOW] `github_repo` pattern permits `..` in either segment
+## SP-SEC-005 - Default compose exposes a fully privileged unauthenticated gateway
 
-- File: `signalpilot/gateway/gateway/api/github_bot.py:94` and
-  `signalpilot/gateway/gateway/api/schema_watches.py:24`
-- Category: input validation
-- Description: `pattern=r"^[\w.-]+/[\w.-]+$"` accepts values like
-  `foo/../bar` (the two segments are already split by `/`, so the
-  attacker can put `..` in either half). GitHub's API rejects those as
-  404, but the value is also interpolated into git branch names and file
-  paths in `schema_watch.runner.report_drift_pr`. `connection_name` in
-  those file paths is safe (constrained by the connection's own
-  `[a-zA-Z0-9_-]` pattern), but the repo half only affects the outgoing
-  GitHub URL. Practical exposure is low.
-- Recommendation: Tighten the pattern to disallow `..` per-segment and
-  `.` / `-` at segment boundaries.
-- Confidence: medium
+**Severity: Critical**
 
-### [LOW] MCP failed-auth rate limiter keys by rightmost `X-Forwarded-For`
+`docker-compose.yml:43-44` publishes gateway port 3300 on every host interface.
+`docker-compose.yml:54` selects local deployment mode. In that mode,
+`signalpilot/gateway/gateway/http/middleware/auth.py:86-92` accepts a request with
+no API key as `local_nokey`, and
+`signalpilot/gateway/gateway/security/scope_guard.py:63-65` grants every scope.
 
-- File: `signalpilot/gateway/gateway/auth/mcp_api_key.py:324-341, 268-269`
-- Category: rate limiting
-- Description: `_extract_client_ip` uses the rightmost XFF value, which is
-  the correct anti-spoof choice only when the request went through exactly
-  the trusted proxy set that appends. When the gateway is behind a single
-  trusted reverse proxy this is correct; behind multiple untrusted hops or
-  no proxy, the rightmost IP is the last hop and every failed attempt
-  shares a bucket. Notes call this out already.
-- Recommendation: Make the trust depth configurable
-  (`SP_TRUSTED_PROXY_DEPTH`) and skip that many rightmost hops when the
-  headers are trusted; otherwise fall back to `scope["client"][0]`.
-- Confidence: medium
+Any system that can reach the host port can use query, connection, knowledge,
+upload, administrative, MCP, and eval endpoints. A laptop firewall is not an
+application security boundary.
 
-### [INFO] Eval runner mints a `read,write`-scoped API key and passes it into an
-attacker-controlled container
+**Remediation:** publish `127.0.0.1:3300:3300` for local development. Generate
+and require a local API key when the listener is non-loopback. Remove the
+unconditional all-scopes path for `local_nokey`. Add a compose integration test
+that calls a privileged endpoint from a non-loopback client and expects 401.
 
-- File: `signalpilot/gateway/gateway/api/eval_runs.py:113-118`,
-  `signalpilot/gateway/gateway/evals/runner.py:724-729`
-- Category: least privilege
-- Description: The runner mints an API key with `["read", "write"]`
-  scopes and injects it into the eval container via `X-API-Key`. The
-  container executes `claude -p` with `--dangerously-skip-permissions` on
-  an admin-configured repo. Key is revoked after the run
-  (`_revoke_run_key`), which is the important control. Impact is bounded
-  by scope: no `admin`, so no ability to mint keys, edit connections,
-  etc. Still worth calling out because scope alone is what stops the
-  eval box from mutating knowledge docs and other write-scope surfaces.
-- Recommendation: Introduce a narrower scope (e.g. `read`-only, or
-  `eval_read`) for the eval-runner MCP token; write-scope surfaces used
-  by the eval flow can be re-checked or restricted to only knowledge
-  overlays via `X-SP-Eval-Docs`.
-- Confidence: medium
+## SP-SEC-006 - Eval routes expose cross-tenant infrastructure execution and data
 
-### [INFO] Gateway container mounts `/var/run/docker.sock`
+**Severity: Critical**
 
-- File: `docker-compose.yml:105`
-- Category: blast radius
-- Description: The gateway container has direct Docker daemon access. This
-  is required for the eval-runner + eval-setup flows but means any RCE
-  reaching the gateway process (see the HIGH finding above) is trivially
-  a host root escape.
-- Recommendation: Route Docker calls through
-  `tecnativa/docker-socket-proxy` (or similar) with only the container
-  endpoints the eval runner uses whitelisted (`GET /containers/json`,
-  `POST /containers/create` scoped to a fixed image allow-list,
-  `POST /containers/{id}/start|kill|logs`, `DELETE /containers/{id}`).
-- Confidence: high
+The eval endpoints at
+`signalpilot/gateway/gateway/api/eval_runs.py:42-119` rely on the ineffective
+JWT admin scope from SP-SEC-001. Configuration and file-based run state are
+global rather than organization-scoped. A basic member can replace `repo_url`,
+start a run, and read other tenants' run metadata and SQL transcripts.
 
-### [INFO] `_run_setup_container` `image` from manifest + `env_file` parsing
+`signalpilot/gateway/gateway/evals/runner.py:511-598` lets the selected repository
+manifest choose a container image, script, environment file, additional Docker
+network, and mounts below the configured setup root. The gateway talks to the
+host Docker socket mounted at `docker-compose.yml:120-127`.
 
-- File: `signalpilot/gateway/gateway/evals/runner.py:553, 580`
-- Category: least privilege
-- Description: `_parse_env_file(repo_dir, eval_set.setup.get("env_file", ""))`
-  reads an env file from the repo checkout — attacker-controlled contents
-  become container env vars, which is fine on its own but pairs with the
-  attacker-chosen `image` to allow arbitrary code selection.
-- Recommendation: See the HIGH finding — restricting the image is the
-  primary control here.
-- Confidence: medium
+The child is not explicitly privileged and does not directly receive the Docker
+socket, so unconditional host-root compromise was not demonstrated. It still
+provides arbitrary container code execution, access to configured host mounts,
+and attachment to Docker networks from a tenant-reachable application route.
 
-### [INFO] `github_bot.client.GitHubBotClient` accepts `token` verbatim
+**Remediation:** restrict the feature to a separate staff identity. Make config,
+run state, and transcripts organization-scoped. Move execution into a dedicated
+runner with a constrained job API. Allowlist immutable image digests, fixed
+networks, and fixed read-only mounts. Validate repository paths and invoke a fixed
+entry point without `sh -lc`.
 
-- File: `signalpilot/gateway/gateway/github_bot/client.py:35-46`
-- Category: hardening
-- Description: The token is placed in `Authorization: token <token>` on
-  every subsequent request. `resolve_bot_token` looks up an
-  installation-scoped token first, falling back to a PAT
-  (`SP_GITHUB_BOT_TOKEN`) if the DB lookup raises. That fallback is
-  logged as a warning — good — but it swaps identity silently. A
-  transient DB error during a `synchronize` event would make the shared
-  PAT scan a repo linked to a different customer.
-- Recommendation: Do not fall back to the PAT when the installation
-  lookup errors; fail the scan (webhook already returns 503 on lookup
-  failure, so keep that behavior consistent inside `run_pr_scan`).
-- Confidence: medium
+## SP-SEC-007 - S3 multipart quota is based on client-claimed size
 
-### [INFO] `notion.webhook_router` receiver processes any `comment.created` payload after signature check
+**Severity: High**
 
-- File: `signalpilot/gateway/gateway/api/notion.py:666+`
-- Category: informational
-- Description: The signature check is enforced; from there on the code
-  writes to `gateway_notion_webhook_deliveries`. Signature checking uses
-  the shared secret — the audit did not surface a bypass. This entry is
-  a "reviewed clean" marker.
-- Confidence: high
+`signalpilot/gateway/gateway/api/uploads.py:151-154` accepts a client-supplied
+size. The initiate path at lines 187-236 checks that claim and presigns one URL
+per part. The signing helper at lines 55-79 does not bind exact content length or
+a server-verified checksum to each `UploadPart` request. Lines 260-263 state that
+actual object size is checked only after completion.
 
----
+An authenticated `write` principal can claim a small object, upload much larger
+parts, and abandon the multipart upload until lifecycle cleanup. Completing an
+oversized object causes deletion only after storage and transfer have been used.
 
-## Areas reviewed clean
+**Remediation:** persist owner-bound upload sessions with expected length, part
+plan, checksums, and expiry. Enforce per-principal concurrent bytes and upload
+counts. Use short presign expiry, a one-day-or-shorter abort lifecycle, explicit
+authenticated abort, and the expensive-operation rate limiter.
 
-- **Semantic-layer providers** (`gateway/semantic_layer/providers.py`) —
-  all identifiers pass through `_check_ident` / `_check_qualified` before
-  being interpolated into SQL; string-literal interpolation (`WHERE
-  table_catalog = '{parts[0]}'`) is safe because the same regex validator
-  runs first (`_IDENT_RE = ^[A-Za-z_][A-Za-z0-9_$]*$`).
-- **PipelineProof scanner SQL construction**
-  (`gateway/github_bot/scanner.py`) — model names come from
-  `parse_changed_models` which filters via `_MODEL_RE`; schema/table
-  values used with f-string interpolation into `information_schema`
-  queries originate from that regex-validated split. `_qid` /
-  `_qname` quoting is applied to identifiers used in the final aggregate
-  query.
-- **Redshift `SET search_path`** — schema list comes from `pg_namespace`,
-  each name double-quote escaped before joining.
-- **Knowledge search** (`store/knowledge_search.py`) — all filters use
-  named binds (`:org_id`, `:q`, etc.) via `text()` + parameter dict.
-- **GitHub webhook HMAC verification** — SHA-256, `hmac.compare_digest`,
-  and prefix stripping.
-- **Xata credential indirection** (`connectors/xata_creds.py`) — the
-  demo flow correctly stores only `xata_credential_ref="demo"`, resolves
-  the org key from env at use time, and `enforce_xata_scope` pins
-  project + branch; the pinned-connection edit-guard in
-  `connections/crud.py` blocks moving these fields.
-- **Eval upload multipart flow** — S3 keys are server-generated, key
-  shape is re-validated on `complete` / `abort`, size is enforced twice
-  (initiate on declared size, complete on `head_object` after upload),
-  and the notification email is plain-text.
-- **CSRF middleware** — cookie-only mutation requests are gated on
-  `Sec-Fetch-Site` / `Origin` / `Referer` against an explicit allow-list;
-  webhook prefixes are exempted with a documented reason.
-- **CORS allow-list construction** — cloud mode filters non-HTTPS
-  origins out and falls back to hardcoded prod origins if
-  `SP_ALLOWED_ORIGINS` is empty.
-- **Body size middleware** — pure ASGI, early rejects on
-  `Content-Length`, wraps `receive` for chunked bodies, tracks
-  `response.start` to avoid ASGI protocol violations on late rejects.
-- **New DB models** (`db/models.py`) — `GatewayKnowledgeRetrieval` and
-  `GatewaySchemaWatch` both carry `org_id NOT NULL` and have indexes /
-  unique constraints scoped by `org_id`.
-- **Dbt error parsing** (`gateway/dbt/error_parse.py`) — pure regex, no
-  code execution paths.
-- **Slack OAuth redirect** (`api/slack.py`) — `_safe_redirect_url` +
-  `_is_safe_redirect_target` allow-list, so open-redirect is blocked.
-- **`schema_watch/runner.py` PR creation** — deterministic branch names,
-  base64-encoded file contents, `github_repo` and `connection_name`
-  patterns limit path traversal into the `PUT contents` API.
-- **Sandbox delete IDOR** (`api/sandboxes.py`) — `get_sandbox(id, org_id)`
-  scoping applied before delete/kill.
+## SP-SEC-008 - Stateful MCP transport uses a vulnerable SDK
+
+**Severity: High**
+
+The gateway locks `mcp==1.27.1` at
+`signalpilot/gateway/uv.lock:1328-1329`.
+`signalpilot/gateway/gateway/mcp/server.py` creates a default stateful FastMCP
+instance, and `signalpilot/gateway/gateway/main.py:574-581` mounts Streamable HTTP
+behind custom authentication. The middleware validates each request but does not
+bind the SDK session ID to the principal.
+
+PYSEC-2026-3482 is relevant: a learned or guessed MCP session ID can be replayed
+by a different authenticated principal in affected stateful transports.
+PYSEC-2026-3481 and PYSEC-2026-3483 also affect the locked version. Notebook MCP
+apps use `stateless_http=True`, so this session reachability does not apply there.
+
+**Remediation:** upgrade every MCP lock to at least `1.28.1`. Until then, use a
+stateless transport or bind session ownership before routing. Add a two-principal
+session replay test.
+
+## SP-SEC-009 - Kubernetes runtime group has cluster-wide secret and pod access
+
+**Severity: High**
+
+`deploy/k8s/gateway-runtime-rbac.yaml` creates a `ClusterRoleBinding` for the EC2
+runtime group. Its `ClusterRole` can create, read, list, patch, and delete pods and
+Secrets across the cluster, exec into pods in any namespace, and manage Roles and
+RoleBindings. The neighboring admission policy targets tenant notebook namespaces
+and does not constrain unrelated namespaces.
+
+**Remediation:** remove cluster-wide Secrets and `pods/exec`. Bind a namespaced
+Role only in tenant namespaces. For dynamic namespaces, use a small bootstrap
+controller whose admission policy permits bindings only in labeled notebook
+namespaces and only to a fixed Role.
+
+## SP-SEC-010 - SSRF checks fail open and are not repeated at connect time
+
+**Severity: High**
+
+`signalpilot/gateway/gateway/api/connections/testing.py:124-135` catches every
+`ValueError` from `resolve_and_validate`, including a blocked private or metadata
+address, then connects to the original host. This turns the validation rejection
+into an SSRF fallback. `signalpilot/gateway/gateway/connectors/pool_manager.py:209-318`
+later resolves and connects saved hostnames without re-validating the destination,
+leaving a DNS-rebinding window after creation-time checks.
+
+**Remediation:** fail closed on any validation error. Separate unsupported
+connection types from security rejection with distinct result types. Resolve and
+validate immediately before every new outbound connection, pin the validated
+address where the driver permits it, and recheck redirects and tunnel destinations.
+
+## SP-SEC-011 - SQL dangerous-operation checks fail open by dialect
+
+**Severity: High**
+
+`signalpilot/gateway/gateway/engine/denylists.py:32-157` defines dialect sets for
+only a subset of supported engines. Lines 197-203 treat an unknown set as empty.
+The `mssql` dialect maps to `tsql`, for example, but there is no `tsql` set.
+Local reproduction confirmed that a T-SQL `OPENROWSET` query passes
+`validate_sql`. Redshift, Databricks, and Trino likewise lack dialect-specific
+sets.
+
+DuckDB's function denylist does not catch path-as-table syntax. Local reproduction
+confirmed that `SELECT * FROM 'https://example.invalid/x.parquet'` passes. A
+read-only database connection does not disable file or network reads.
+
+**Remediation:** define policy for every supported dialect and fail closed when a
+dialect has no reviewed policy. Block T-SQL external rowset/data-source operations.
+Start DuckDB with `enable_external_access=false` and reject file/URL table forms.
+Add real-parser tests for each engine's file, network, linked-server, extension,
+and external-query syntax.
+
+## SP-SEC-012 - LIMIT enforcement retains unbounded forms
+
+**Severity: High**
+
+`signalpilot/gateway/gateway/engine/transforms.py:47-59` leaves an existing limit
+unchanged when it cannot convert the expression to an integer. Local reproduction
+confirmed that PostgreSQL `LIMIT ALL` and `FETCH FIRST 100 ROWS ONLY` remain
+unchanged when the configured maximum is 10. The gateway can then buffer results
+beyond the intended cap, causing bulk exfiltration or memory exhaustion.
+
+**Remediation:** replace the top-level limit unconditionally with
+`min(parsed_limit, max_rows)` and reject unsupported limit forms. Apply an
+independent streaming/post-execution hard row cap in every connector so parser or
+dialect mistakes cannot return an unbounded result.
+
+## SP-SEC-013 - Tenant BYOK records use one process-wide provider
+
+**Severity: High**
+
+`signalpilot/gateway/gateway/store/byok_state.py` holds one module-level provider.
+Store encryption and decryption at
+`signalpilot/gateway/gateway/store/store.py:232-264` and `:476-493` resolve a
+tenant key row but pass its alias to that single provider. The production factory
+can build a provider from each `GatewayBYOKKey`, but application paths do not call
+it. The validation endpoint at
+`signalpilot/gateway/gateway/api/byok.py:279-396` also tests the process-wide
+provider rather than the selected row's provider configuration.
+
+This can report a tenant key as valid while credentials are wrapped by the
+operator-configured KMS key, violating the advertised custody boundary.
+
+**Remediation:** instantiate or cache a provider keyed by immutable tenant key ID
+and provider configuration. Validate and encrypt with that exact provider. Include
+the KMS key identifier in authenticated encryption context and audit records. Add
+two-tenant tests using distinct KMS keys.
+
+## SP-SEC-014 - TLS client private keys are stored and returned as metadata
+
+**Severity: High**
+
+`signalpilot/gateway/gateway/store/store.py:169-182` strips SSH secrets before
+metadata persistence but stores the full SSL configuration. Update logic at lines
+328-330 does the same. `GatewayConnection.to_info_dict` returns `ssl_config`, and
+the read-scoped list/get routes expose it. If `client_key` is present, it resides
+in a plaintext JSON column and is returned to read principals.
+
+**Remediation:** move TLS certificates and private keys into encrypted credential
+extras. Persist only non-secret TLS mode metadata. Redact secret fields from every
+response and export unless a separately authorized credential-export operation is
+used. Migrate and purge existing plaintext rows.
+
+## SP-SEC-015 - Connection pools can reuse another tenant's credential extras
+
+**Severity: High**
+
+`signalpilot/gateway/gateway/connectors/pool_manager.py:228-275` keys the global
+pool only by database type and connection string. It excludes organization ID and
+credential extras. If two tenants use the same visible connection string with
+different service-account JSON, TLS key, SSH tunnel, or token extras, the second
+tenant can receive the connector initialized by the first tenant.
+
+**Remediation:** include a non-secret credential identity/version and org isolation
+key in the pool key, or maintain per-org pools. Never hash raw secret values into
+logs. Close affected pools on credential rotation and add a two-tenant collision
+test.
+
+## SP-SEC-016 - Notebook API-key mutation lacks an endpoint credential
+
+**Severity: Medium**
+
+`signalpilot/notebook-server/signalpilot_notebook_server/agent.py:115-155` accepts
+an API key, attempts to persist it through the gateway, and mutates process-global
+`os.environ` even when persistence fails. The external notebook proxy authenticates
+session ownership and local compose publishes the notebook only on loopback, so a
+broad cross-user claim is not supported. Internal pod/container callers can still
+reach a tokenless notebook directly.
+
+**Remediation:** require a notebook-scoped session credential, fail closed when
+persistence fails, and store per-user state outside process-global environment
+variables.
+
+## SP-SEC-017 - Unsigned local webhook and unresolved Bandit gate
+
+**Severity: Medium**
+
+`signalpilot/gateway/gateway/api/github_bot.py:39-49` accepts unsigned GitHub
+webhooks in local mode. Combined with SP-SEC-005, a network client can trigger
+repository scans and warehouse aggregate queries.
+
+The GitHub Bandit job also reports B608 at
+`signalpilot/gateway/gateway/github_bot/scanner.py:100`, `:107`, `:170`, and
+`:175`. Manual tracing found strict model-name validation and identifier quoting,
+so these appear to be false positives, but they still fail the required gate.
+
+**Remediation:** require a webhook secret whenever the feature is enabled and
+disable the route otherwise. Refactor scanner query construction so the quoting
+invariant is visible to static analysis, or use narrow documented suppressions
+with regression tests.
+
+## Lower-severity hardening
+
+- `signalpilot/gateway/gateway/api/notion.py:612-614` answers subscription
+  verification challenges before signature validation. Rate-limit and validate
+  the challenge shape.
+- Default compose includes a public development encryption key. Prevent it from
+  being accepted in shared or cloud deployments.
+- GitHub Actions use floating major-version action tags. Pin security-sensitive
+  actions to reviewed commit SHAs and update them through controlled automation.

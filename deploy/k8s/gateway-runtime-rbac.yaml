@@ -76,11 +76,24 @@
 #
 # Kept because tenant namespaces are created dynamically per org, so a purely static
 # namespaced Role cannot exist ahead of time:
-#   namespaces create/get/patch  orchestrator/namespaces.py ensure_org_namespace
-#                                (create_namespace)
+#   namespaces create            orchestrator/namespaces.py ensure_org_namespace
+#                                (create_namespace). Both labels are set in the CREATE
+#                                body — no follow-up patch is issued.
 #   namespaces list              orchestrator/jwt_secret_gc.py gc_orphan_jwt_secrets
 #                                (list_namespace, label-selected on
 #                                signalpilot.dev/tenant=user)
+#   namespaces get/patch         NO CALL SITE. Verified by grep over
+#                                signalpilot/gateway/gateway: create_namespace and
+#                                list_namespace are the only namespace-level calls.
+#                                `patch` is the SP-SEC-009 pivot lever — it is what
+#                                allowed labelling kube-system with
+#                                signalpilot.dev/tenant=user to satisfy the RoleBinding
+#                                rule's precondition. Admission rules 5-7 in
+#                                admission/restrict-rbac-writes-* block that now.
+#                                RECOMMENDED: reduce this verb list to
+#                                ["create", "list"] (here and in gateway-rbac.yaml).
+#                                Deferred: dropping a verb is a runtime behaviour change
+#                                and deserves its own deploy.
 #   rolebindings create/get      orchestrator/namespaces.py — the gateway binds
 #                                the workload ClusterRole into the namespace it just
 #                                created

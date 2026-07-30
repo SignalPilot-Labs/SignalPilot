@@ -155,6 +155,42 @@ For any RBAC object whose `roleRef` is `signalpilot-gateway-notebook-workload`:
    VAP form expresses both checks in a single CEL expression, where boolean nesting is
    fine.
 
+...and for any **core/v1 Namespace** CREATE or UPDATE (rules 5-7, see the pivot below):
+
+5. **restrict-tenant-label-to-tenant-namespaces** - the label `signalpilot.dev/tenant`
+   (any value) may only appear on a namespace whose name starts with `sp-nb-`, the
+   `DEFAULT_NAMESPACE_PREFIX` in `orchestrator/namespaces.py`.
+6. **deny-tenant-label-on-system-namespaces** - `kube-*`, `default`, `signalpilot` and
+   `kyverno` may never carry the label, whatever the prefix is set to.
+7. **deny-tenant-label-adoption-on-update** - the label may not be *added* to an existing
+   namespace unless that namespace also carries `signalpilot.ai/managed-by: gateway`.
+   `ensure_org_namespace` sets both labels in the single CREATE call, so a namespace
+   acquiring the tenant label later is being adopted, not bootstrapped.
+
+### The namespace-label pivot — why rules 5-7 exist
+
+Rule 2 confines the workload RoleBinding to namespaces labeled
+`signalpilot.dev/tenant=user`. Governing only `rbac.authorization.k8s.io` left that
+predicate **attacker-controlled**, because the gateway also holds
+`namespaces: [create, get, list, patch]` cluster-wide
+(`gateway-rbac.yaml`, `gateway-runtime-rbac.yaml`):
+
+```
+kubectl label ns kube-system signalpilot.dev/tenant=user     # step 1 — permitted by RBAC
+kubectl apply -f org-binding-in-kube-system.yaml             # step 2 — now rule-compliant
+# -> secrets/pods/pods-exec in kube-system == every ServiceAccount token on the cluster
+```
+
+Step 1 was allowed by the pre-fix policy: its `matchConstraints` covered only
+`rolebindings` and `clusterrolebindings`. `validate-admission-policies.sh` phase **B0**
+now asserts, as the gateway identity and before any policy is installed, that step 1
+*succeeds* — so the B2b denials cannot be mistaken for an RBAC 403 — and B2b then
+asserts the same write is rejected by name (`restrict-rbac-writes-signalpilot`).
+
+If you override `SP_NOTEBOOK_NAMESPACE_PREFIX`, you must change `tenantPrefix` in the VAP
+and the `sp-nb-*` value in the Kyverno rule to match. It fails **closed**: the gateway's
+own namespace CREATE is denied on the first session.
+
 **Scope:** unlike the two policies above, this one has **no `namespaceSelector`** - it
 matches every namespace on purpose, because the namespaces it must protect are the
 unrelated ones. It is also **caller-agnostic**: it constrains the object, not the
@@ -180,10 +216,16 @@ files literally named `kyverno-test.yaml`; against this repo's `<policy>.test.ya
 convention it prints `No test yamls available` and **exits 0**. Use the wrapper, or pass
 `--file-name <policy>.test.yaml` explicitly.
 
-`restrict-rbac-writes.test.yaml` covers rules 1, 3, 4a and 4b, plus the ALLOW path of
-rule 2. The DENY path of rule 2 resolves the target namespace's label with a context
-`apiCall` that the CLI cannot serve, so it is asserted against live Kyverno in the
-`--e2e --with-kyverno` run instead.
+`restrict-rbac-writes.test.yaml` covers rules 1, 3, 4a, 4b, 5 and 6, plus the ALLOW path
+of rule 2. Two DENY paths are not expressible offline and are asserted against a live
+cluster instead:
+
+- **rule 2 DENY** resolves the target namespace's label with a context `apiCall` that the
+  CLI cannot serve (and Value-file overrides are keyed by name only, while cases A/D/F
+  share a name).
+- **rule 7** matches `operations: [UPDATE]` and the CLI only ever simulates CREATE, so it
+  reports Skip/Excluded for every resource — the same limitation as
+  `restrict-pod-exec.test.yaml`. Covered by the `labelns` cases in B2b/B3.
 
 ---
 
@@ -232,6 +274,21 @@ because each one is invisible to a YAML-parse check and each failed **open**.
    failed to load: `json: unknown field "namespaces"`. Namespace labels belong in a Value
    file (`<policy>-values.yaml`), whose `ValuesSpec` is **inlined** — a `spec:` wrapper is
    ignored.
+
+7. **`restrict-rbac-writes` governed the RoleBinding but not its own precondition.**
+   `matchConstraints` (VAP) and the rule `match` blocks (Kyverno) covered only
+   `rolebindings`/`clusterrolebindings`, while the gateway holds `namespaces: patch`
+   cluster-wide. Rule 2's "namespace must be labeled `signalpilot.dev/tenant=user`" was
+   therefore a check the attacker could satisfy: label `kube-system`, then create a
+   fully-compliant binding there. Confirmed on a live cluster — as the gateway identity,
+   `kubectl label ns kube-system signalpilot.dev/tenant=user` was **ALLOWED** by the
+   pre-fix policy set (now asserted as the B0 negative control, so the fix cannot silently
+   regress into "denied by RBAC anyway"). Fixed by rules 5-7, which govern
+   `core/v1 namespaces` CREATE and UPDATE.
+
+   Generalisation worth carrying forward: **if a policy's predicate is a mutable field,
+   the write to that field is part of the policy's attack surface.** A label-based
+   allowlist is only as strong as the weakest identity that can set the label.
 
 ### Kyverno namespace exclusions — the fallback path does NOT protect kube-system by default
 

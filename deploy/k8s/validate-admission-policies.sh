@@ -22,6 +22,11 @@
 #                             legitimate write and denies each hostile one; the migration
 #                             script is idempotent; and `kubectl auth can-i` shows
 #                             SP-SEC-009 closed with the gateway still functional.
+#                             B2b covers the namespace-label pivot: the gateway holds
+#                             `namespaces: [create, patch]`, so it is asserted AS THE
+#                             GATEWAY that it cannot label kube-system (or any non
+#                             sp-nb-* namespace) with signalpilot.dev/tenant and then
+#                             bind the workload ClusterRole there.
 #
 # USAGE
 #   ./validate-admission-policies.sh                # Phase A only
@@ -158,6 +163,47 @@ kubectl create ns signalpilot >/dev/null 2>&1
 kubectl apply -f "$HERE/gateway-rbac.yaml" >/dev/null 2>&1
 kubectl apply -f "$HERE/gateway-runtime-rbac.yaml" >/dev/null 2>&1
 
+# --- helpers (defined before B0 so the pre-policy control can use them) --------------
+# admit <desc> <allow|deny> ; manifest on stdin
+admit() {
+  local desc="$1" want="$2" out got=allow
+  out="$(kubectl apply --dry-run=server -f - 2>&1)" || got=deny
+  if [ "$got" = "$want" ]; then ok "$(printf '%-50s expect=%-5s got=%s' "$desc" "$want" "$got")"
+  else bad "$(printf '%-50s expect=%-5s got=%s\n            %s' "$desc" "$want" "$got" "$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-150)")"; fi
+}
+rb() { # rb <name> <namespace> <roleRefName> <subjects-yaml>
+  printf 'apiVersion: rbac.authorization.k8s.io/v1\nkind: RoleBinding\nmetadata: {name: %s, namespace: %s}\nroleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: %s}\nsubjects: %s\n' "$1" "$2" "$3" "$4"
+}
+# ns <name> — a tenant Namespace exactly as orchestrator/namespaces.py::_namespace_manifest
+# builds it: BOTH labels set in the single CREATE call. Rules 5-7 require this; a bare
+# `kubectl create ns X` followed by `kubectl label ns X signalpilot.dev/tenant=user` is a
+# label ADOPTION on UPDATE and is denied on purpose (that is the kube-system pivot).
+ns() {
+  printf 'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: %s\n  labels:\n    signalpilot.dev/tenant: user\n    signalpilot.ai/managed-by: gateway\n    kubernetes.io/metadata.name: %s\n' "$1" "$1"
+}
+mkns() { ns "$1" | kubectl apply -f - >/dev/null 2>&1; }          # as cluster-admin
+mkns_gw() { ns "$1" | kubectl $GW apply -f - >/dev/null 2>&1; }   # as the gateway identity
+# labelns <want allow|deny> <desc> <namespace> — attempt to graft the tenant label onto an
+# EXISTING namespace, as the gateway. This is the SP-SEC-009 pivot in one command.
+# LAST_LABEL_ERR holds the server's reason, so a deny can be attributed to the admission
+# policy rather than to an RBAC 403 (see B0 and the attribution check in B2b).
+LAST_LABEL_ERR=""
+labelns() {
+  local want="$1" desc="$2" nsname="$3" got=allow out
+  out="$(kubectl $GW label ns "$nsname" signalpilot.dev/tenant=user --overwrite --dry-run=server 2>&1)" || got=deny
+  LAST_LABEL_ERR="$out"
+  if [ "$got" = "$want" ]; then ok "$(printf '%-50s expect=%-5s got=%s' "$desc" "$want" "$got")"
+  else bad "$(printf '%-50s expect=%-5s got=%s\n            %s' "$desc" "$want" "$got" "$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-150)")"; fi
+}
+
+# --- B0: NEGATIVE CONTROL — the escalation must be real with no policy installed ------
+# Without this, every deny in B2b could equally be an RBAC 403 and the policy would be
+# proving nothing. The gateway holds `namespaces: [create, get, list, patch]`
+# cluster-wide, so the API server MUST accept this label write until admission stops it.
+step "B0 — pre-policy control: is the pivot actually open?"
+labelns allow "NO POLICY: gateway CAN label kube-system"  kube-system
+labelns allow "NO POLICY: gateway CAN label plain ns"     default
+
 # --- B1: the VAP's CEL must compile in the API server -------------------------------
 step "B1 — ValidatingAdmissionPolicy CEL compilation"
 vap_out="$(kubectl apply -f "$ADMISSION/restrict-rbac-writes-validatingadmissionpolicy.yaml" 2>&1)"
@@ -172,23 +218,12 @@ sleep 2
 # --- B2: rule-by-rule ALLOW / DENY against a real API server ------------------------
 # Server-side dry-run runs the full admission chain without persisting anything.
 step "B2 — VAP rule matrix (server-side dry-run)"
-kubectl create ns sp-nb-tenant-a >/dev/null 2>&1
-kubectl label ns sp-nb-tenant-a signalpilot.dev/tenant=user --overwrite >/dev/null 2>&1
-kubectl create ns plain-ns >/dev/null 2>&1
-kubectl create sa signalpilot-gateway -n signalpilot >/dev/null 2>&1
-
-# admit <desc> <allow|deny> ; manifest on stdin
-admit() {
-  local desc="$1" want="$2" out got=allow
-  out="$(kubectl apply --dry-run=server -f - 2>&1)" || got=deny
-  if [ "$got" = "$want" ]; then ok "$(printf '%-50s expect=%-5s got=%s' "$desc" "$want" "$got")"
-  else bad "$(printf '%-50s expect=%-5s got=%s\n            %s' "$desc" "$want" "$got" "$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-150)")"; fi
-}
-rb() { # rb <name> <namespace> <roleRefName> <subjects-yaml>
-  printf 'apiVersion: rbac.authorization.k8s.io/v1\nkind: RoleBinding\nmetadata: {name: %s, namespace: %s}\nroleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: %s}\nsubjects: %s\n' "$1" "$2" "$3" "$4"
-}
 SA_SUBJ='[{kind: ServiceAccount, name: signalpilot-gateway, namespace: signalpilot}]'
 GOOD_SUBJ='[{kind: ServiceAccount, name: signalpilot-gateway, namespace: signalpilot}, {kind: Group, name: signalpilot-gateway-ec2, apiGroup: rbac.authorization.k8s.io}]'
+
+mkns sp-nb-tenant-a
+kubectl create ns plain-ns >/dev/null 2>&1
+kubectl create sa signalpilot-gateway -n signalpilot >/dev/null 2>&1
 
 admit "ALLOW legit org-binding in labeled tenant ns" allow < <(rb "$B" sp-nb-tenant-a "$W" "$GOOD_SUBJ")
 admit "R1 DENY ClusterRoleBinding of workload role" deny <<EOF
@@ -212,6 +247,50 @@ kind: ClusterRoleBinding
 metadata: {name: some-team-view-crb}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: view}
 subjects: [{kind: Group, name: platform-team, apiGroup: rbac.authorization.k8s.io}]
+EOF
+
+# --- B2b: THE NAMESPACE-LABEL PIVOT (rules 5-7) --------------------------------------
+# Rule 2 above denies the org-binding in kube-system *because kube-system lacks the
+# tenant label*. But the gateway holds `namespaces: [create, patch]` cluster-wide, so
+# until rules 5-7 existed it could simply create the precondition:
+#
+#   kubectl label ns kube-system signalpilot.dev/tenant=user   # step 1 — was ALLOWED
+#   kubectl apply -f org-binding-in-kube-system.yaml           # step 2 — now compliant
+#   -> Secrets/pods/pods/exec in kube-system == every SA token on the cluster
+#
+# Every assertion below runs AS THE GATEWAY IDENTITY ($GW), so it measures the real
+# escalation path and not what a cluster-admin can do.
+step "B2b — namespace-label pivot (kube-system escalation)"
+labelns deny  "PIVOT step 1: gateway labels kube-system"      kube-system
+# Attribution: B0 proved RBAC permits this write, so the deny must name the admission
+# policy. A "forbidden: User cannot patch" 403 here would mean the test is measuring
+# RBAC, not the policy under test.
+if printf '%s' "$LAST_LABEL_ERR" | grep -q 'restrict-rbac-writes-signalpilot'; then
+  ok "  deny is attributable to restrict-rbac-writes-signalpilot (not RBAC)"
+else
+  bad "  deny did NOT come from the policy: $(printf '%s' "$LAST_LABEL_ERR" | tr '\n' ' ' | cut -c1-160)"
+fi
+labelns deny  "PIVOT variant: gateway labels default"         default
+labelns deny  "PIVOT variant: gateway labels kube-public"     kube-public
+labelns deny  "PIVOT variant: gateway labels kube-node-lease" kube-node-lease
+labelns deny  "PIVOT variant: gateway labels signalpilot ns"  signalpilot
+labelns deny  "PIVOT variant: adopt pre-existing plain-ns"    plain-ns
+# Creating a fresh non-tenant namespace already carrying the label is the same pivot
+# without the patch verb — the name prefix is what stops it.
+admit "PIVOT DENY create labeled non-sp-nb namespace" deny <<'EOF'
+apiVersion: v1
+kind: Namespace
+metadata: {name: totally-legit-ns, labels: {signalpilot.dev/tenant: user, signalpilot.ai/managed-by: gateway}}
+EOF
+# PIVOT step 2 — even with step 1 blocked, the binding itself must still be refused.
+admit "PIVOT step 2: org-binding in kube-system"     deny  < <(rb "$B" kube-system "$W" "$SA_SUBJ")
+# ...and the legitimate flow must be untouched: the gateway creates its own tenant
+# namespace with both labels in ONE create, exactly as _namespace_manifest does.
+admit "PIVOT CONTROL sp-nb-* tenant ns create"       allow < <(ns sp-nb-abcdef0123456789)
+admit "PIVOT CONTROL unlabeled namespace, any name"     allow <<'EOF'
+apiVersion: v1
+kind: Namespace
+metadata: {name: some-unrelated-ns, labels: {team: platform}}
 EOF
 
 # --- B3: optional Kyverno fallback path on the same cluster --------------------------
@@ -252,6 +331,22 @@ if [ "$RUN_KYVERNO_E2E" -eq 1 ]; then
     admit "KYV R3 DENY unpinned binding name"        deny  < <(rb attacker-extra-binding sp-nb-tenant-a "$W" "$SA_SUBJ")
     admit "KYV R4 DENY User subject"                 deny  < <(rb "$B" sp-nb-tenant-a "$W" '[{kind: User, name: alice@example.com, apiGroup: rbac.authorization.k8s.io}]')
     admit "KYV R4 DENY system:* group"               deny  < <(rb "$B" sp-nb-tenant-a "$W" '[{kind: Group, name: system:authenticated, apiGroup: rbac.authorization.k8s.io}]')
+    # The pivot, on the fallback path. Both paths must be equivalent or an operator on
+    # k8s < 1.30 silently runs with the escalation still open.
+    labelns deny  "KYV PIVOT gateway labels kube-system"   kube-system
+    labelns deny  "KYV PIVOT gateway labels default"       default
+    labelns deny  "KYV PIVOT adopt pre-existing plain-ns"  plain-ns
+    admit "KYV PIVOT DENY create labeled non-sp-nb ns" deny <<'EOF'
+apiVersion: v1
+kind: Namespace
+metadata: {name: totally-legit-ns, labels: {signalpilot.dev/tenant: user, signalpilot.ai/managed-by: gateway}}
+EOF
+    admit "KYV PIVOT CONTROL sp-nb-* tenant ns create" allow < <(ns sp-nb-abcdef0123456789)
+    admit "KYV PIVOT CONTROL unlabeled ns, any name"   allow <<'EOF'
+apiVersion: v1
+kind: Namespace
+metadata: {name: some-unrelated-ns, labels: {team: platform}}
+EOF
     # Restore the default path for the migration phase.
     kubectl delete clusterpolicy restrict-rbac-writes-signalpilot >/dev/null 2>&1
     kubectl apply -f "$ADMISSION/restrict-rbac-writes-validatingadmissionpolicy.yaml" >/dev/null 2>&1
@@ -282,9 +377,10 @@ metadata: {name: signalpilot-gateway-runtime-binding}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: signalpilot-gateway-runtime}
 subjects: [{kind: Group, name: signalpilot-gateway-ec2, apiGroup: rbac.authorization.k8s.io}]
 EOF
-for ns in sp-nb-org-alpha sp-nb-org-beta; do
-  kubectl create ns "$ns" >/dev/null 2>&1
-  kubectl label ns "$ns" signalpilot.dev/tenant=user --overwrite >/dev/null 2>&1
+for tenant_ns in sp-nb-org-alpha sp-nb-org-beta; do
+  # Labels must be set in the CREATE (rule 7) — see mkns.
+  mkns "$tenant_ns"
+  ns="$tenant_ns"
   kubectl apply -n "$ns" -f - >/dev/null 2>&1 <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -331,8 +427,13 @@ else
   bad "migrated ns: gateway could NOT recreate $B (check the clusterroles/bind resourceNames pin)"
 fi
 # Brand-new namespace, in ensure_org_namespace order: Namespace -> RoleBinding -> netpol.
-kubectl $GW create ns sp-nb-org-gamma >/dev/null 2>&1
-kubectl $GW label ns sp-nb-org-gamma signalpilot.dev/tenant=user --overwrite >/dev/null 2>&1
+# The Namespace carries both labels in the single create, as _namespace_manifest does —
+# rules 5-7 require that, and this asserts the gateway can still do it under least privilege.
+if mkns_gw sp-nb-org-gamma; then
+  ok "new ns: gateway created a labeled sp-nb-* namespace"
+else
+  bad "new ns: gateway could NOT create its own tenant namespace (rules 5-7 too strict?)"
+fi
 if kubectl $GW apply -f - >/dev/null 2>&1 < <(rb "$B" sp-nb-org-gamma "$W" '[{kind: Group, name: signalpilot-gateway-ec2, apiGroup: rbac.authorization.k8s.io}]'); then
   ok "new ns: Namespace then RoleBinding succeeded"
 else
@@ -348,8 +449,7 @@ else
   bad "new ns: NetworkPolicy failed even after the RoleBinding"
 fi
 # And the ordering bug itself: netpol BEFORE the RoleBinding must 403.
-kubectl $GW create ns sp-nb-org-delta >/dev/null 2>&1
-kubectl $GW label ns sp-nb-org-delta signalpilot.dev/tenant=user --overwrite >/dev/null 2>&1
+mkns_gw sp-nb-org-delta
 np_delta="${np//sp-nb-org-gamma/sp-nb-org-delta}"
 if printf '%s\n' "$np_delta" | kubectl $GW apply -f - >/dev/null 2>&1; then
   bad "NetworkPolicy before RoleBinding SUCCEEDED — least privilege is not in effect"
@@ -394,8 +494,7 @@ if [ "$RUN_KYVERNO_E2E" -eq 1 ] && command -v helm >/dev/null 2>&1; then
     kubectl apply -f "$ADMISSION/restrict-pod-exec-kyverno.yaml" 2>&1 | grep -o 'path: spec\.rules.*' | head -2 | sed 's/^/          /'
   fi
   sleep 8
-  kubectl create ns sp-nb-exec >/dev/null 2>&1
-  kubectl label ns sp-nb-exec signalpilot.dev/tenant=user --overwrite >/dev/null 2>&1
+  mkns sp-nb-exec
   mkpod() {
     kubectl run "$1" -n sp-nb-exec --image=busybox --restart=Never \
       --overrides="{\"spec\":{\"containers\":[{\"name\":\"$2\",\"image\":\"busybox\",\"command\":[\"sleep\",\"3600\"]}]}}" \

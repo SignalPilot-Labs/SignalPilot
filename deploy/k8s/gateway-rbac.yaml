@@ -47,9 +47,25 @@ metadata:
 ---
 # ClusterRole: create/list/get/patch namespaces only (no delete, no update).
 # The gateway creates org namespaces lazily on first session.
-#   create/get/patch  orchestrator/namespaces.py::ensure_org_namespace
+#   create            orchestrator/namespaces.py::ensure_org_namespace (create_namespace) —
+#                     labels signalpilot.dev/tenant and signalpilot.ai/managed-by are set
+#                     in the CREATE body, not by a follow-up patch
 #   list              orchestrator/jwt_secret_gc.py::gc_orphan_jwt_secrets
 #                     (label-selected on signalpilot.dev/tenant=user)
+#
+# `get` and `patch` HAVE NO CALL SITE. Verified by grep over signalpilot/gateway/gateway:
+# the only namespace-scoped API calls are create_namespace and list_namespace; there is no
+# read_namespace and no patch_namespace anywhere. This header previously credited
+# ensure_org_namespace with using them, which is not true.
+#
+# `patch` in particular is the pivot lever for SP-SEC-009: it is what let a compromised
+# gateway add signalpilot.dev/tenant=user to kube-system and thereby satisfy the
+# precondition of the RoleBinding admission rule. Admission rules 5-7 in
+# admission/restrict-rbac-writes-* now block that, but the verb itself is still
+# unnecessary. RECOMMENDED: drop "get" and "patch" here and in
+# gateway-runtime-rbac.yaml, leaving ["create", "list"]. Not done in this change because
+# removing a verb is a runtime behaviour change and wants its own deploy; the admission
+# policy closes the escalation either way. Defence in depth, not defence instead.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:

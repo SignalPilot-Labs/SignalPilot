@@ -22,6 +22,23 @@
 # matches ALL namespaces — scoping it with a namespaceSelector would leave exactly
 # the unrelated namespaces this is meant to protect unconstrained.
 #
+# The namespace-label pivot (rules 5-7)
+#
+# Rule 2 pins the RoleBinding to namespaces labeled signalpilot.dev/tenant=user, but the
+# gateway ALSO holds `namespaces: [create, patch]` cluster-wide (gateway-rbac.yaml,
+# gateway-runtime-rbac.yaml). Governing only rbac.authorization.k8s.io therefore left a
+# one-hop escalation open:
+#
+#   1. PATCH namespace/kube-system, adding signalpilot.dev/tenant=user
+#   2. CREATE the (now perfectly compliant) signalpilot-gateway-org-binding in kube-system
+#   3. the workload ClusterRole's verbs — Secrets read, pods, pods/exec — now apply in
+#      kube-system, i.e. every service-account token on the cluster
+#
+# Rule 2's predicate was attacker-controlled. Rules 5-7 take that control away by
+# governing core/v1 namespaces as well: the label may only ever appear on a namespace
+# whose name carries the gateway's tenant prefix, never on a reserved/system namespace,
+# and never be grafted onto a namespace that the gateway did not itself create.
+#
 # Defense-in-depth layer over:
 #   - RBAC `bind` resourceNames pin (gateway-runtime-rbac.yaml)
 #   - Absence of any ClusterRoleBinding for the workload ClusterRole in this repo
@@ -48,6 +65,12 @@ spec:
         apiVersions: ["v1"]
         operations: ["CREATE", "UPDATE"]
         resources: ["rolebindings", "clusterrolebindings"]
+      # Namespaces are matched too: rule 2's tenant label is a security predicate, so
+      # who may set it has to be governed as tightly as the RoleBinding itself.
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["namespaces"]
   variables:
     # The one ClusterRole the gateway is allowed to bind, and the only name its
     # RoleBinding may carry. Keep in sync with namespaces.py.
@@ -55,14 +78,46 @@ spec:
       expression: "'signalpilot-gateway-notebook-workload'"
     - name: bindingName
       expression: "'signalpilot-gateway-org-binding'"
+    - name: isRbacWrite
+      expression: "request.resource.group == 'rbac.authorization.k8s.io'"
     # True only for writes that reference the workload ClusterRole; every other RBAC
-    # write in the cluster passes untouched.
+    # write in the cluster passes untouched. The isRbacWrite guard short-circuits the
+    # roleRef field access, which does not exist on a Namespace object.
     - name: bindsWorkloadRole
       expression: >-
+        variables.isRbacWrite &&
         object.roleRef.kind == 'ClusterRole' &&
         object.roleRef.name == variables.workloadRole
     - name: isNamespaced
       expression: "request.resource.resource == 'rolebindings'"
+
+    # ── namespace-label governance (rules 5-7) ────────────────────────────────────
+    - name: isNamespaceWrite
+      expression: "request.resource.group == '' && request.resource.resource == 'namespaces'"
+    - name: tenantLabelKey
+      expression: "'signalpilot.dev/tenant'"
+    # DEFAULT_NAMESPACE_PREFIX in namespaces.py, plus the separator. Namespace names are
+    # <prefix>-<sha256(org_id)[:16]>. Operators who override SP_NOTEBOOK_NAMESPACE_PREFIX
+    # MUST change this string too — otherwise the gateway's own namespace creation is
+    # denied (fails closed, loudly, on the first session).
+    - name: tenantPrefix
+      expression: "'sp-nb-'"
+    # Deliberately keyed on the PRESENCE of the label, not on the value 'user'. Rule 2
+    # only cares about =user, but leaving other values ungoverned would create a second
+    # surface the moment any policy starts keying on them.
+    - name: nsHasTenantLabel
+      expression: >-
+        variables.isNamespaceWrite && has(object.metadata.labels) &&
+        variables.tenantLabelKey in object.metadata.labels
+    - name: nsName
+      expression: "variables.isNamespaceWrite ? object.metadata.name : ''"
+    # Names that must never be able to hold the tenant label regardless of prefix, so a
+    # mistyped tenantPrefix can never open the pivot back up.
+    - name: nsReserved
+      expression: >-
+        variables.nsName.startsWith('kube-') ||
+        variables.nsName in ['default', 'signalpilot', 'kyverno', 'kube-system',
+                             'kube-public', 'kube-node-lease']
   validations:
     # Rule 1 — the workload ClusterRole must NEVER be granted cluster-wide. This is
     # the exact SP-SEC-009 regression: one ClusterRoleBinding here and pods, exec, and
@@ -104,6 +159,38 @@ spec:
       message: >-
         Subjects of signalpilot-gateway-org-binding must be namespaced
         ServiceAccounts or named Groups. User subjects and system:* groups are denied.
+    # Rule 5 — the tenant label may only live on a namespace named sp-nb-*. This is what
+    # makes rule 2's predicate non-forgeable: the gateway holds namespaces create+patch
+    # cluster-wide, so without this it could label ANY namespace (kube-system included)
+    # and then legitimately bind the workload role there.
+    - expression: >-
+        !variables.nsHasTenantLabel ||
+        variables.nsName.startsWith(variables.tenantPrefix)
+      message: >-
+        The label signalpilot.dev/tenant may only be set on tenant notebook namespaces
+        named sp-nb-* (SP-SEC-009). Labelling any other namespace would let the gateway
+        bind signalpilot-gateway-notebook-workload there.
+    # Rule 6 — belt and braces: system and platform namespaces can never carry the label
+    # even if tenantPrefix is ever misconfigured to something they'd match.
+    - expression: "!variables.nsHasTenantLabel || !variables.nsReserved"
+      message: >-
+        kube-system, kube-public, kube-node-lease, default, kube-* and the SignalPilot
+        control-plane namespace may never carry signalpilot.dev/tenant (SP-SEC-009).
+    # Rule 7 — the label may not be grafted onto a pre-existing namespace. ensure_org_namespace
+    # sets both labels in the CREATE call, so a namespace acquiring the tenant label on
+    # UPDATE without signalpilot.ai/managed-by=gateway was not created by the gateway and
+    # is being adopted — the exact move a compromised gateway makes on a namespace that
+    # already holds something worth stealing.
+    - expression: >-
+        !variables.nsHasTenantLabel || request.operation != 'UPDATE' ||
+        (has(oldObject.metadata.labels) &&
+         variables.tenantLabelKey in oldObject.metadata.labels) ||
+        ('signalpilot.ai/managed-by' in object.metadata.labels &&
+         object.metadata.labels['signalpilot.ai/managed-by'] == 'gateway')
+      message: >-
+        signalpilot.dev/tenant may not be added to a pre-existing namespace
+        (SP-SEC-009). Tenant namespaces are created with the label already set, and must
+        also carry signalpilot.ai/managed-by=gateway.
 
 ---
 

@@ -35,6 +35,18 @@
 #      validate-admission-policies.sh.
 #   G: subject kind is Group but the group is system:authenticated → deny
 #      (restrict-workload-binding-subject-groups)
+#   H: the gateway's own namespace CREATE (sp-nb-<16hex>, tenant + managed-by labels)
+#      → passes both namespace rules
+#   I: kube-system carrying signalpilot.dev/tenant=user — THE PIVOT → deny by both
+#      restrict-tenant-label-to-tenant-namespaces and deny-tenant-label-on-system-namespaces
+#   J: an ordinary non-system namespace carrying the label → deny by the sp-nb-* prefix
+#      rule only (proves rule 5 is not just a restatement of rule 6's deny-list)
+#   K: a namespace with no tenant label → neither namespace rule fires
+#
+# Rule deny-tenant-label-adoption-on-update matches operations [UPDATE] only and is NOT
+# assertable here: the CLI only ever simulates CREATE, so it reports Skip/Excluded for
+# every resource (same limitation as restrict-pod-exec.test.yaml). It is validated live
+# in kind by validate-admission-policies.sh (B2/B3 "label pre-existing ns" cases).
 
 apiVersion: cli.kyverno.io/v1alpha1
 kind: Test
@@ -135,3 +147,60 @@ results:
     result: pass
     resources:
       - sp-nb-system-group/signalpilot-gateway-org-binding
+
+  # Case H: the gateway's legitimate namespace CREATE must survive both rules.
+  - policy: restrict-rbac-writes-signalpilot
+    rule: restrict-tenant-label-to-tenant-namespaces
+    kind: Namespace
+    result: pass
+    resources:
+      - sp-nb-0123456789abcdef
+  - policy: restrict-rbac-writes-signalpilot
+    rule: deny-tenant-label-on-system-namespaces
+    kind: Namespace
+    result: pass
+    resources:
+      - sp-nb-0123456789abcdef
+
+  # Case I: THE PIVOT — kube-system labelled signalpilot.dev/tenant=user. Both namespace
+  # rules must deny it independently; either one alone closes the escalation.
+  - policy: restrict-rbac-writes-signalpilot
+    rule: restrict-tenant-label-to-tenant-namespaces
+    kind: Namespace
+    result: fail
+    resources:
+      - kube-system
+  - policy: restrict-rbac-writes-signalpilot
+    rule: deny-tenant-label-on-system-namespaces
+    kind: Namespace
+    result: fail
+    resources:
+      - kube-system
+
+  # Case J: non-system namespace with the label — only the prefix rule stops it.
+  - policy: restrict-rbac-writes-signalpilot
+    rule: restrict-tenant-label-to-tenant-namespaces
+    kind: Namespace
+    result: fail
+    resources:
+      - plain-ns
+  - policy: restrict-rbac-writes-signalpilot
+    rule: deny-tenant-label-on-system-namespaces
+    kind: Namespace
+    result: pass
+    resources:
+      - plain-ns
+
+  # Case K: control — unlabelled namespace, neither rule may fire.
+  - policy: restrict-rbac-writes-signalpilot
+    rule: restrict-tenant-label-to-tenant-namespaces
+    kind: Namespace
+    result: pass
+    resources:
+      - some-unrelated-ns
+  - policy: restrict-rbac-writes-signalpilot
+    rule: deny-tenant-label-on-system-namespaces
+    kind: Namespace
+    result: pass
+    resources:
+      - some-unrelated-ns

@@ -100,6 +100,54 @@ subjects:
     name: signalpilot-gateway
     namespace: signalpilot
 ---
+# ── Namespace objects for the label-pivot rules (5-7) ──────────────────────────────
+#
+# Rule 2 keys on signalpilot.dev/tenant=user, and the gateway holds namespaces
+# create+patch cluster-wide — so the label itself has to be governed or the gateway can
+# manufacture rule 2's precondition on any namespace it likes.
+
+# Case H: the legitimate gateway namespace CREATE, exactly as
+# namespaces.py::_namespace_manifest builds it. Must pass rules 5 and 6.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sp-nb-0123456789abcdef
+  labels:
+    signalpilot.dev/tenant: user
+    signalpilot.ai/managed-by: gateway
+    signalpilot.ai/org: 0123456789abcdef
+    kubernetes.io/metadata.name: sp-nb-0123456789abcdef
+---
+# Case I: THE PIVOT. kube-system carrying the tenant label — one PATCH away for a
+# gateway holding `namespaces: patch`, and it turns rule 2 into a no-op for the single
+# most valuable namespace on the cluster. Must be denied by BOTH rule 5 (wrong name) and
+# rule 6 (reserved name).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kube-system
+  labels:
+    signalpilot.dev/tenant: user
+---
+# Case J: an ordinary namespace given the tenant label. Not a system namespace, so only
+# the sp-nb-* prefix rule stops it — this is the case that proves rule 5 is not merely a
+# restatement of rule 6's deny-list.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: plain-ns
+  labels:
+    signalpilot.dev/tenant: user
+---
+# Case K: control — a namespace with no tenant label at all. Neither namespace rule may
+# fire; the policy must not interfere with ordinary namespace creation.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: some-unrelated-ns
+  labels:
+    team: platform
+---
 # Case E: an unrelated RoleBinding — the policy must not interfere with it.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

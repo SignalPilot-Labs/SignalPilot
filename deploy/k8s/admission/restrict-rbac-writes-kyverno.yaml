@@ -13,6 +13,18 @@
 # Policy is SA-agnostic and group-agnostic: it constrains the OBJECT, not the caller.
 # Unlike restrict-pod-exec-kyverno.yaml there is NO namespaceSelector — the point is to
 # cover the namespaces a compromised gateway would target (kube-system et al.).
+#
+# Rules 5-7 govern core/v1 Namespaces, not RBAC. Rule 2 keys on the label
+# signalpilot.dev/tenant=user, and the gateway also holds `namespaces: [create, patch]`
+# cluster-wide — so without rules 5-7 it could PATCH that label onto kube-system and then
+# create a fully rule-compliant RoleBinding there, obtaining Secrets/pods/exec in
+# kube-system. See the VAP file header for the full pivot.
+#
+# IMPORTANT for the Kyverno path: the Kyverno webhook must not exclude kube-system, and
+# for CLUSTER-SCOPED Namespace objects the chart's resourceFilters
+# ([*,kube-system,*] and friends) are matched against the namespace's own NAME. Install
+# with the settings validate-admission-policies.sh uses, and keep the
+# "Kyverno webhook covers kube-system" assertion in that script green.
 
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
@@ -176,3 +188,95 @@ spec:
                 operator: AnyIn
                 value:
                   - "system:*"
+
+    # ── Namespace-label governance — the pivot rules ─────────────────────────────────
+    #
+    # Rule 5 — the tenant label may only ever sit on a namespace named sp-nb-*.
+    # Keyed on the PRESENCE of signalpilot.dev/tenant (any value), not just "user", so no
+    # second surface opens if another policy ever keys on a different value.
+    # `sp-nb-*` must match namespaces.py DEFAULT_NAMESPACE_PREFIX /
+    # SP_NOTEBOOK_NAMESPACE_PREFIX. Wildcards are honoured in In/NotIn value lists.
+    - name: restrict-tenant-label-to-tenant-namespaces
+      match:
+        any:
+          - resources:
+              kinds:
+                - Namespace
+              operations:
+                - CREATE
+                - UPDATE
+      validate:
+        message: >-
+          The label signalpilot.dev/tenant may only be set on tenant notebook namespaces
+          named sp-nb-* (SP-SEC-009). Labelling any other namespace would let the gateway
+          bind signalpilot-gateway-notebook-workload there.
+        deny:
+          conditions:
+            all:
+              - key: "{{ request.object.metadata.labels.\"signalpilot.dev/tenant\" || 'absent' }}"
+                operator: NotEquals
+                value: "absent"
+              - key: "{{ request.object.metadata.name }}"
+                operator: NotIn
+                value:
+                  - "sp-nb-*"
+
+    # Rule 6 — belt and braces: system/platform namespaces can never carry the label,
+    # even if the sp-nb-* prefix above is ever misconfigured to something they match.
+    - name: deny-tenant-label-on-system-namespaces
+      match:
+        any:
+          - resources:
+              kinds:
+                - Namespace
+              operations:
+                - CREATE
+                - UPDATE
+      validate:
+        message: >-
+          kube-system, kube-public, kube-node-lease, default, kube-* and the SignalPilot
+          control-plane namespace may never carry signalpilot.dev/tenant (SP-SEC-009).
+        deny:
+          conditions:
+            all:
+              - key: "{{ request.object.metadata.labels.\"signalpilot.dev/tenant\" || 'absent' }}"
+                operator: NotEquals
+                value: "absent"
+              - key: "{{ request.object.metadata.name }}"
+                operator: In
+                value:
+                  - "kube-*"
+                  - "default"
+                  - "signalpilot"
+                  - "kyverno"
+
+    # Rule 7 — the label may not be grafted onto a pre-existing namespace.
+    # ensure_org_namespace sets signalpilot.dev/tenant AND signalpilot.ai/managed-by in the
+    # same CREATE call, so a namespace that gains the tenant label on UPDATE while lacking
+    # managed-by=gateway is being adopted, not bootstrapped. UPDATE only — request.oldObject
+    # is null on CREATE.
+    - name: deny-tenant-label-adoption-on-update
+      match:
+        any:
+          - resources:
+              kinds:
+                - Namespace
+              operations:
+                - UPDATE
+      validate:
+        message: >-
+          signalpilot.dev/tenant may not be added to a pre-existing namespace
+          (SP-SEC-009). Tenant namespaces are created with the label already set, and must
+          also carry signalpilot.ai/managed-by=gateway.
+        deny:
+          conditions:
+            all:
+              - key: "{{ request.object.metadata.labels.\"signalpilot.dev/tenant\" || 'absent' }}"
+                operator: NotEquals
+                value: "absent"
+              - key: "{{ request.oldObject.metadata.labels.\"signalpilot.dev/tenant\" || 'absent' }}"
+                operator: Equals
+                value: "absent"
+              - key: "{{ request.object.metadata.labels.\"signalpilot.ai/managed-by\" || 'absent' }}"
+                operator: NotEquals
+                value: "gateway"

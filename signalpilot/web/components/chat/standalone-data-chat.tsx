@@ -42,6 +42,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import ReactMarkdown from "react-markdown";
 import { VegaEmbed } from "react-vega";
@@ -717,7 +718,7 @@ function ConversationRail({
   const [menuId, setMenuId] = useState<string | null>(null);
   return (
     <aside className="flex w-72 flex-none flex-col border-r border-[var(--color-border)] bg-[var(--color-sidebar)]">
-      <div className="p-3">
+      <div className="p-3 pr-7">
         <button
           type="button"
           onClick={() => router.push("/chats")}
@@ -833,11 +834,25 @@ function ConversationRail({
   );
 }
 
-function Composer({ placeholder }: { placeholder: string }) {
+function Composer({
+  placeholder,
+  projectPicker,
+}: {
+  placeholder: string;
+  projectPicker?: ReactNode;
+}) {
   const canSend = useAuiState((state) => state.composer.canSend);
   return (
-    <div className="mx-auto w-full max-w-3xl px-6 pb-6 pt-3">
+    <div
+      data-testid="standalone-chat-composer"
+      className="mx-auto w-full max-w-3xl px-6 pb-6 pt-3"
+    >
       <ComposerPrimitive.Root className="relative overflow-hidden rounded-2xl border border-[var(--color-border-hover)] bg-[var(--color-bg-input)] shadow-2xl shadow-black/20 transition-colors focus-within:border-[var(--color-border-active)]">
+        {projectPicker && (
+          <div className="flex items-center border-b border-[var(--color-border)] px-4 py-2.5">
+            {projectPicker}
+          </div>
+        )}
         <ComposerPrimitive.Input
           data-chat-composer
           rows={1}
@@ -897,6 +912,7 @@ export function StandaloneDataChat({
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     null,
   );
+  const [isConversationRailOpen, setIsConversationRailOpen] = useState(true);
   const [events, setEvents] = useState<StandaloneChatEvent[]>([]);
   const selectedInitialized = useRef(false);
 
@@ -1379,97 +1395,50 @@ export function StandaloneDataChat({
     >
       <AssistantRuntimeProvider runtime={runtime}>
         <div className="h-screen min-w-[960px] overflow-hidden p-4">
-          <div className="flex h-full overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)] shadow-2xl shadow-black/20">
-            <ConversationRail
-              conversations={conversations}
-              activeId={conversationId}
-              onRename={(conversation) => void renameConversation(conversation)}
-              onArchive={(conversation) =>
-                void archiveConversation(conversation)
+          <div className="relative flex h-full overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)] shadow-2xl shadow-black/20">
+            <button
+              type="button"
+              aria-label={
+                isConversationRailOpen
+                  ? "Collapse chat history"
+                  : "Expand chat history"
               }
-              onShare={(conversation) => void shareConversation(conversation)}
-              onRevokeShare={(conversation) => void revokeShare(conversation)}
-            />
-            <ThreadPrimitive.Root className="flex min-w-0 flex-1 flex-col">
-              <header className="flex h-16 flex-none items-center justify-between border-b border-[var(--color-border)] px-6">
-                <div className="flex items-center gap-3">
-                  <PanelLeft className="h-4 w-4 text-[var(--color-text-dim)]" />
-                  <div>
-                    <div className="text-[10px] uppercase tracking-[0.15em] text-[var(--color-text-dim)]">
-                      Data chat
-                    </div>
-                    {conversationId && detail ? (
-                      <div className="max-w-xl truncate text-sm text-[var(--color-text)]">
-                        {detail.conversation.title}
-                      </div>
-                    ) : (
-                      <div className="text-sm text-[var(--color-text)]">
-                        New private conversation
-                      </div>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  {conversationId && detail && (
-                    <button
-                      type="button"
-                      title="Create a new authenticated team link and revoke any previous link"
-                      onClick={() => void shareConversation(detail.conversation)}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-1.5 text-xs text-[var(--color-text-muted)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)]"
-                    >
-                      <Share2 className="h-3.5 w-3.5" />
-                      Share
-                    </button>
-                  )}
-                  <span className="text-[10px] uppercase tracking-[0.12em] text-[var(--color-text-dim)]">
-                    Project
-                  </span>
-                  <select
-                    value={selectedProjectId ?? ""}
-                    onChange={(event) => {
-                      const projectId = event.target.value;
-                      if (conversationId) {
-                        router.push(
-                          `/chats?project=${encodeURIComponent(projectId)}`,
-                        );
-                      } else {
-                        setSelectedProjectId(projectId);
-                        void setDefaultStandaloneChatProject(projectId);
-                        router.replace(
-                          `/chats?project=${encodeURIComponent(projectId)}`,
-                        );
-                      }
-                    }}
-                    aria-label={
-                      conversationId
-                        ? "Start a new chat with another project"
-                        : "Select project"
-                    }
-                    className="rounded-full border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-1.5 text-xs text-[var(--color-text-muted)] focus:outline-none"
-                  >
-                    {bootstrap.projects.map((project) => (
-                      <option key={project.id} value={project.id}>
-                        {project.display_name}
-                        {project.ready
-                          ? ""
-                          : projectSetupSuffix(project.readiness_message)}
-                      </option>
-                    ))}
-                  </select>
-                  {conversationId && detail?.conversation.branch && (
-                    <span className="text-[10px] text-[var(--color-text-dim)]">
-                      {detail.conversation.branch}
-                    </span>
-                  )}
-                  {conversationId && currentRun?.status && (
-                    <span
-                      className={`rounded-full border border-[var(--color-border)] px-2.5 py-1 text-[10px] ${statusTone(currentRun.status)}`}
-                    >
-                      {statusLabel(currentRun.status)}
-                    </span>
-                  )}
-                </div>
-              </header>
+              aria-expanded={isConversationRailOpen}
+              onClick={() =>
+                setIsConversationRailOpen((isOpen) => !isOpen)
+              }
+              className={`absolute top-3 z-30 flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-dim)] shadow-lg shadow-black/20 transition-[left,color,background-color] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] ${
+                isConversationRailOpen ? "left-[17rem]" : "left-3"
+              }`}
+            >
+              <PanelLeft className="h-4 w-4" />
+            </button>
+            {isConversationRailOpen && (
+              <ConversationRail
+                conversations={conversations}
+                activeId={conversationId}
+                onRename={(conversation) =>
+                  void renameConversation(conversation)
+                }
+                onArchive={(conversation) =>
+                  void archiveConversation(conversation)
+                }
+                onShare={(conversation) => void shareConversation(conversation)}
+                onRevokeShare={(conversation) => void revokeShare(conversation)}
+              />
+            )}
+            <ThreadPrimitive.Root className="relative flex min-w-0 flex-1 flex-col">
+              {conversationId && detail && (
+                <button
+                  type="button"
+                  aria-label="Share conversation"
+                  title="Create a new authenticated team link and revoke any previous link"
+                  onClick={() => void shareConversation(detail.conversation)}
+                  className="absolute right-4 top-4 z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-muted)] shadow-lg shadow-black/20 hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+                >
+                  <Share2 className="h-4 w-4" />
+                </button>
+              )}
               {conversationId && unreadyMessage && (
                 <div className="flex-none px-6 pt-4">
                   <ReadinessNotice
@@ -1525,6 +1494,37 @@ export function StandaloneDataChat({
                       currentRun?.status === "waiting_for_user"
                         ? "Answer the clarification…"
                         : "Ask a question about this project…"
+                    }
+                    projectPicker={
+                      !conversationId ? (
+                        <label className="flex items-center gap-2 text-xs text-[var(--color-text-dim)]">
+                          <span>Project</span>
+                          <select
+                            value={selectedProjectId ?? ""}
+                            onChange={(event) => {
+                              const projectId = event.target.value;
+                              setSelectedProjectId(projectId);
+                              void setDefaultStandaloneChatProject(projectId);
+                              router.replace(
+                                `/chats?project=${encodeURIComponent(projectId)}`,
+                              );
+                            }}
+                            aria-label="Select project"
+                            className="rounded-full border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-1.5 text-xs text-[var(--color-text-muted)] focus:outline-none"
+                          >
+                            {bootstrap.projects.map((project) => (
+                              <option key={project.id} value={project.id}>
+                                {project.display_name}
+                                {project.ready
+                                  ? ""
+                                  : projectSetupSuffix(
+                                      project.readiness_message,
+                                    )}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      ) : undefined
                     }
                   />
                 </ThreadPrimitive.ViewportFooter>

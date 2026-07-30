@@ -383,6 +383,37 @@ test.describe("standalone data-chat chart screenshots", () => {
     await page.waitForFunction(() => document.fonts.status === "loaded");
   });
 
+  test("uses headerless contextual chat controls", async ({
+    page,
+  }) => {
+    await expect(
+      page.getByRole("button", { name: "Collapse chat history" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Share conversation" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("combobox", { name: "Select project" }),
+    ).toHaveCount(0);
+    await expect(page.getByTestId("standalone-chat-header")).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Collapse chat history" }).click();
+    await expect(page.getByText("Your chats", { exact: true })).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Expand chat history" }),
+    ).toBeVisible();
+
+    await page.goto("/chats", { waitUntil: "domcontentloaded" });
+
+    const composer = page.getByTestId("standalone-chat-composer");
+    await expect(
+      composer.getByRole("combobox", { name: "Select project" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Share conversation" }),
+    ).toHaveCount(0);
+  });
+
   for (const fixture of chartFixtures) {
     test(`${fixture.filename} stays readable`, async ({ page }) => {
       const chart = page.locator(

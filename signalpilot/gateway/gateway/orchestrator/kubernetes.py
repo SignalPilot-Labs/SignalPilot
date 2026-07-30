@@ -76,6 +76,29 @@ def _parse_single_kv(selector_str: str) -> dict[str, str]:
     return {k: v}
 
 
+def sandbox_scheduling() -> dict:
+    """runtimeClassName + node pinning for sandboxed workload pods.
+
+    Empty when SP_NOTEBOOK_RUNTIME_CLASS is unset so clusters without gVisor
+    (local/dev) still schedule. Shared by notebook and eval pods — both run
+    untrusted code and belong on the same tainted node group.
+    """
+    if not _NOTEBOOK_RUNTIME_CLASS:
+        return {}
+    return {
+        "runtimeClassName": _NOTEBOOK_RUNTIME_CLASS,
+        "nodeSelector": {_NOTEBOOK_NODE_LABEL_KEY: _NOTEBOOK_NODE_LABEL_VALUE},
+        "tolerations": [
+            {
+                "key": _NOTEBOOK_NODE_LABEL_KEY,
+                "operator": "Equal",
+                "value": _NOTEBOOK_NODE_LABEL_VALUE,
+                "effect": "NoSchedule",
+            }
+        ],
+    }
+
+
 def _pod_manifest(
     *,
     pod_name: str,
@@ -173,22 +196,7 @@ def _pod_manifest(
             # Run under the sandbox runtime (gVisor/runsc) and pin to the dedicated
             # notebook node group when configured. runtimeClassName is omitted when
             # SP_NOTEBOOK_RUNTIME_CLASS is empty (local/dev clusters without gVisor).
-            **({"runtimeClassName": _NOTEBOOK_RUNTIME_CLASS} if _NOTEBOOK_RUNTIME_CLASS else {}),
-            **(
-                {
-                    "nodeSelector": {_NOTEBOOK_NODE_LABEL_KEY: _NOTEBOOK_NODE_LABEL_VALUE},
-                    "tolerations": [
-                        {
-                            "key": _NOTEBOOK_NODE_LABEL_KEY,
-                            "operator": "Equal",
-                            "value": _NOTEBOOK_NODE_LABEL_VALUE,
-                            "effect": "NoSchedule",
-                        }
-                    ],
-                }
-                if _NOTEBOOK_RUNTIME_CLASS
-                else {}
-            ),
+            **sandbox_scheduling(),
             # Pods must not mount the SA token — no K8s API access from within notebook pods.
             "automountServiceAccountToken": False,
             # Suppress per-Service env var injection (SVC_SERVICE_HOST, SVC_PORT, etc.).

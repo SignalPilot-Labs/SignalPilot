@@ -26,9 +26,10 @@ router = APIRouter(prefix="/api")
 async def _require_platform_staff(store: StoreD) -> None:
     """Restrict eval runs to platform staff (SP_ADMIN_USER_IDS).
 
-    Eval runs create containers through the host Docker socket, so an org-admin
-    role — which a tenant can grant itself — is not a sufficient gate. In cloud
-    deployments SP_ADMIN_USER_IDS is unset by default, which refuses everyone.
+    Eval runs execute model-authored commands in a container (the host Docker
+    socket locally, a sandboxed pod in cloud), so an org-admin role — which a
+    tenant can grant itself — is not a sufficient gate. In cloud deployments
+    SP_ADMIN_USER_IDS is unset by default, which refuses everyone.
     """
     if not store.user_id or store.user_id not in get_governance_settings().admin_user_ids:
         raise HTTPException(status_code=403, detail="Platform staff access required.")

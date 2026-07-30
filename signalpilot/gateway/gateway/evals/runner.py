@@ -1,9 +1,10 @@
-"""Eval run execution: clone the eval repo, spawn one docker container per
-question (claude CLI wired to this gateway's MCP with the proposed knowledge
-docs overlaid), grade answers against ground truth.
+"""Eval run execution: clone the eval repo, spawn one container per question
+(claude CLI wired to this gateway's MCP with the proposed knowledge docs
+overlaid), grade answers against ground truth.
 
-Deliberately simple: sequential questions, file-based state, Docker Engine API
-over the unix socket via httpx (no docker CLI, no new dependencies).
+Deliberately simple: sequential questions, file-based state. Containers run
+through the execution backend seam (gateway/evals/backends.py) — the host Docker
+Engine API locally, short-lived sandboxed pods in cloud.
 
 Eval-set format (trap-arena compatible — see demo-generator/trap-arena):
     <repo>/traps.tsv           id \t kind \t state \t gt \t [mode] \t title \t why
@@ -24,9 +25,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-import httpx
-
 from ..config.evals import EvalRunSettings, get_eval_run_settings
+from .backends import ContainerRun, ExecutionBackend, get_execution_backend
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +35,6 @@ def get_data_dir() -> str:
     import os
 
     return os.getenv("SP_DATA_DIR", str(Path.home() / ".signalpilot"))
-
-# Unversioned path — the daemon serves its newest supported API version.
-_DOCKER_API = "http://docker"
 
 
 # ─── Paths & config ───────────────────────────────────────────────────────────
@@ -416,13 +413,7 @@ def grade_checks(checks: list[dict], answer: str) -> tuple[str, list[dict]]:
     return "OFF", results
 
 
-# ─── Docker Engine API (unix socket, no docker CLI) ──────────────────────────
-
-
-def _docker_client(settings: EvalRunSettings) -> httpx.AsyncClient:
-    transport = httpx.AsyncHTTPTransport(uds=settings.docker_socket)
-    return httpx.AsyncClient(transport=transport, timeout=httpx.Timeout(30.0))
-
+# ─── Question containers ─────────────────────────────────────────────────────
 
 # The container writes the MCP config from env (base64 — immune to any shell
 # quoting), pre-approves project MCP servers (claude 2.x gates them behind an
@@ -436,69 +427,35 @@ _RUNNER_SCRIPT = (
 )
 
 
-async def _run_container(
-    docker: httpx.AsyncClient,
+def _question_spec(
     settings: EvalRunSettings,
     *,
     prompt: str,
     model: str,
     mcp_json: str,
     labels: dict[str, str],
-) -> tuple[int, str]:
-    """Create/start/wait/log/remove one eval container. Returns (exit_code, logs)."""
+) -> ContainerRun:
+    """Describe one eval-question container."""
     import base64
 
-    env = [
-        f"SP_PROMPT={prompt}",
-        f"SP_MODEL={model}",
-        f"SP_MCP_JSON_B64={base64.b64encode(mcp_json.encode()).decode()}",
-    ]
+    # The MCP config carries the per-run API key header, so it is a credential
+    # and rides the secret channel alongside the Anthropic tokens.
+    secret_env = {"SP_MCP_JSON_B64": base64.b64encode(mcp_json.encode()).decode()}
     if settings.claude_token:
-        env.append(f"CLAUDE_CODE_OAUTH_TOKEN={settings.claude_token}")
+        secret_env["CLAUDE_CODE_OAUTH_TOKEN"] = settings.claude_token
     if settings.anthropic_key:
-        env.append(f"ANTHROPIC_API_KEY={settings.anthropic_key}")
+        secret_env["ANTHROPIC_API_KEY"] = settings.anthropic_key
 
-    create = await docker.post(
-        f"{_DOCKER_API}/containers/create",
-        json={
-            "Image": settings.runner_image,
-            "Cmd": ["sh", "-lc", _RUNNER_SCRIPT],
-            "Env": env,
-            "Tty": True,  # raw (non-multiplexed) log stream
-            "Labels": {"signalpilot.eval": "1", **labels},
-            "HostConfig": {
-                "NetworkMode": settings.docker_network,
-                "Memory": 2 * 1024 * 1024 * 1024,
-                "NanoCpus": 2_000_000_000,
-            },
-        },
+    return ContainerRun(
+        image=settings.runner_image,
+        command=["sh", "-lc", _RUNNER_SCRIPT],
+        env={"SP_PROMPT": prompt, "SP_MODEL": model},
+        secret_env=secret_env,
+        labels=labels,
+        memory_bytes=2 * 1024 * 1024 * 1024,
+        nano_cpus=2_000_000_000,
+        timeout_seconds=settings.timeout_seconds,
     )
-    if create.status_code != 201:
-        raise RuntimeError(f"container create failed ({create.status_code}): {create.text[:300]}")
-    cid = create.json()["Id"]
-
-    try:
-        start = await docker.post(f"{_DOCKER_API}/containers/{cid}/start")
-        if start.status_code not in (204, 304):
-            raise RuntimeError(f"container start failed ({start.status_code}): {start.text[:300]}")
-
-        try:
-            wait = await docker.post(
-                f"{_DOCKER_API}/containers/{cid}/wait",
-                timeout=httpx.Timeout(settings.timeout_seconds + 30, connect=30),
-            )
-            exit_code = int(wait.json().get("StatusCode", -1))
-        except httpx.TimeoutException:
-            await docker.post(f"{_DOCKER_API}/containers/{cid}/kill")
-            exit_code = -2  # timed out
-
-        logs = await docker.get(
-            f"{_DOCKER_API}/containers/{cid}/logs",
-            params={"stdout": "1", "stderr": "1"},
-        )
-        return exit_code, logs.content.decode("utf-8", errors="replace")
-    finally:
-        await docker.delete(f"{_DOCKER_API}/containers/{cid}", params={"force": "1"})
 
 
 def _extract_result_text(logs: str) -> str:
@@ -546,8 +503,7 @@ def _parse_env_file(repo_dir: Path, rel: str) -> list[str]:
     return out
 
 
-async def _run_setup_container(
-    docker: httpx.AsyncClient,
+def _setup_spec(
     settings: EvalRunSettings,
     *,
     eval_set: EvalSet,
@@ -556,13 +512,15 @@ async def _run_setup_container(
     script_rel: str,
     state: str,
     run_id: str,
-) -> tuple[int, str]:
-    """Run one state-setup script in its own container. Returns (exit, logs).
+) -> ContainerRun:
+    """Describe one state-setup container.
 
     The eval repo lands at /repo: bind-mounted read-only for local-path repos
     (host path via SP_EVAL_PROJECTS_HOST_DIR), cloned inside the container for
     git repos. Manifest setup.mounts bind extra host dirs (external dbt trees)
-    under /mnt/<name>, resolved against SP_EVAL_SETUP_HOST_ROOT.
+    under /mnt/<name>, resolved against SP_EVAL_SETUP_HOST_ROOT. Bind mounts are
+    a local-mode affordance — the Kubernetes backend refuses a spec that needs
+    them rather than running the setup script against the wrong tree.
     """
     image = eval_set.setup.get("image") or settings.runner_image
     runner_cmd = f'sh "/repo/{script_rel}" "{state}"'
@@ -591,55 +549,27 @@ async def _run_setup_container(
         mode = "rw" if entry.get("rw") else "ro"
         binds.append(f"{host_src}:/mnt/{Path(rel_path).name}:{mode}")
 
-    env = _parse_env_file(repo_dir, str(eval_set.setup.get("env_file", "")))
-    env += [f"SP_EVAL_STATE={state}", f"SP_EVAL_REPO_URL={repo_url}", "HOME=/tmp"]
-    timeout = int(eval_set.setup.get("timeout_seconds", settings.setup_timeout_seconds))
-
-    create = await docker.post(
-        f"{_DOCKER_API}/containers/create",
-        json={
-            "Image": image,
-            "Cmd": ["sh", "-lc", cmd],
-            "Env": env,
-            "Tty": True,
-            "Labels": {"signalpilot.eval": "1", "signalpilot.eval.setup": state, "signalpilot.eval.run": run_id},
-            "HostConfig": {
-                "NetworkMode": settings.docker_network,
-                "Binds": binds,
-                "Memory": 4 * 1024 * 1024 * 1024,
-                "NanoCpus": 4_000_000_000,
-            },
-        },
+    # env_file typically carries warehouse credentials, so it takes the secret
+    # channel; only the run's own coordinates are plain env.
+    secret_env = dict(
+        pair.split("=", 1)
+        for pair in _parse_env_file(repo_dir, str(eval_set.setup.get("env_file", "")))
     )
-    if create.status_code != 201:
-        raise RuntimeError(f"setup container create failed ({create.status_code}): {create.text[:300]}")
-    cid = create.json()["Id"]
-    try:
+
+    return ContainerRun(
+        image=image,
+        command=["sh", "-lc", cmd],
+        env={"SP_EVAL_STATE": state, "SP_EVAL_REPO_URL": repo_url, "HOME": "/tmp"},
+        secret_env=secret_env,
+        labels={"setup": state, "run": run_id},
+        memory_bytes=4 * 1024 * 1024 * 1024,
+        nano_cpus=4_000_000_000,
+        timeout_seconds=int(eval_set.setup.get("timeout_seconds", settings.setup_timeout_seconds)),
+        binds=binds,
         # Setup scripts talk to the warehouse directly (unlike question
         # containers, which go through gateway MCP) — join its network too.
-        extra_net = str(eval_set.setup.get("network", "")).strip()
-        if extra_net:
-            net_resp = await docker.post(f"{_DOCKER_API}/networks/{extra_net}/connect", json={"Container": cid})
-            if net_resp.status_code not in (200, 201):
-                raise RuntimeError(
-                    f"setup network '{extra_net}' attach failed ({net_resp.status_code}): {net_resp.text[:200]}"
-                )
-        start = await docker.post(f"{_DOCKER_API}/containers/{cid}/start")
-        if start.status_code not in (204, 304):
-            raise RuntimeError(f"setup container start failed ({start.status_code}): {start.text[:300]}")
-        try:
-            wait = await docker.post(
-                f"{_DOCKER_API}/containers/{cid}/wait",
-                timeout=httpx.Timeout(timeout + 30, connect=30),
-            )
-            exit_code = int(wait.json().get("StatusCode", -1))
-        except httpx.TimeoutException:
-            await docker.post(f"{_DOCKER_API}/containers/{cid}/kill")
-            exit_code = -2
-        logs = await docker.get(f"{_DOCKER_API}/containers/{cid}/logs", params={"stdout": "1", "stderr": "1"})
-        return exit_code, logs.content.decode("utf-8", errors="replace")
-    finally:
-        await docker.delete(f"{_DOCKER_API}/containers/{cid}", params={"force": "1"})
+        extra_network=str(eval_set.setup.get("network", "")).strip(),
+    )
 
 
 # ─── Run orchestration ───────────────────────────────────────────────────────
@@ -673,7 +603,7 @@ async def execute_run(
     api_key: str | None = None,
     api_key_id: str | None = None,
 ) -> None:
-    """Background task: fetch eval set, run each question in docker, grade."""
+    """Background task: fetch eval set, run each question, grade."""
     try:
         await _execute_run_inner(org_id, run_id, api_key)
     finally:
@@ -760,7 +690,8 @@ async def _execute_run_inner(org_id: str, run_id: str, api_key: str | None = Non
     run["setup"] = []
     _write_run(org_id, run)
 
-    async with _docker_client(settings) as docker:
+    backend: ExecutionBackend = get_execution_backend(settings, org_id=org_id)
+    try:
         current_state: str | None = None
         state_ok = True
         for i, q in enumerate(questions):
@@ -780,15 +711,16 @@ async def _execute_run_inner(org_id: str, run_id: str, api_key: str | None = Non
                     _write_run(org_id, run)
                     t0 = time.monotonic()
                     try:
-                        exit_code, slogs = await _run_setup_container(
-                            docker,
-                            settings,
-                            eval_set=eval_set,
-                            repo_dir=repo_dir,
-                            repo_url=cfg.get("repo_url", ""),
-                            script_rel=script,
-                            state=q.state,
-                            run_id=run_id,
+                        exit_code, slogs = await backend.run(
+                            _setup_spec(
+                                settings,
+                                eval_set=eval_set,
+                                repo_dir=repo_dir,
+                                repo_url=cfg.get("repo_url", ""),
+                                script_rel=script,
+                                state=q.state,
+                                run_id=run_id,
+                            )
                         )
                         (_run_dir(org_id, run_id) / f"setup-{_sanitize_state(q.state)}.log").write_text(
                             slogs, encoding="utf-8"
@@ -818,13 +750,14 @@ async def _execute_run_inner(org_id: str, run_id: str, api_key: str | None = Non
             started = time.monotonic()
             try:
                 prompt = f"{preamble}\n\n{q.prompt}" if preamble else q.prompt
-                exit_code, logs = await _run_container(
-                    docker,
-                    settings,
-                    prompt=prompt,
-                    model=run["model"],
-                    mcp_json=mcp_json,
-                    labels={"signalpilot.eval.run": run_id, "signalpilot.eval.question": q.id},
+                exit_code, logs = await backend.run(
+                    _question_spec(
+                        settings,
+                        prompt=prompt,
+                        model=run["model"],
+                        mcp_json=mcp_json,
+                        labels={"run": run_id, "question": q.id},
+                    )
                 )
                 answer = _extract_result_text(logs)
                 if exit_code != 0 and not answer.strip():
@@ -864,6 +797,8 @@ async def _execute_run_inner(org_id: str, run_id: str, api_key: str | None = Non
                 logger.exception("Eval run %s question %s errored", run_id, q.id)
                 entry.update(status="done", verdict="ERROR", answer=str(exc)[:500])
             _write_run(org_id, run)
+    finally:
+        await backend.aclose()
 
     verdicts = [e.get("verdict") for e in run["questions"]]
     run["summary"] = {

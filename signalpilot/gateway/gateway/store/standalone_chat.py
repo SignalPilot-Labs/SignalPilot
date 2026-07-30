@@ -1,8 +1,10 @@
-"""Persistence authority for author-private standalone data chat."""
+"""Persistence authority for standalone data chat and authenticated sharing."""
 
 from __future__ import annotations
 
 import base64
+import hashlib
+import secrets
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -18,12 +20,17 @@ from gateway.db.models import (
     GatewayChatMessage,
     GatewayChatRun,
     GatewayChatRunEvent,
+    GatewayChatShareGrant,
     GatewayWorkspaceProject,
 )
 from gateway.models.standalone_chat import (
     ChatArtifactInfo,
     ChatRunEventInfo,
     ChatRunInfo,
+    SharedChatArtifactInfo,
+    SharedConversationDetail,
+    SharedConversationInfo,
+    SharedMessageInfo,
     StandaloneConversationDetail,
     StandaloneConversationInfo,
     StandaloneMessageInfo,
@@ -37,6 +44,7 @@ from gateway.standalone_chat.artifacts import (
 )
 from gateway.standalone_chat.domain import (
     NONTERMINAL_RUN_STATUSES,
+    TERMINAL_RUN_STATUSES,
     RunStatus,
     assert_run_transition,
     fallback_conversation_title,
@@ -156,6 +164,28 @@ def _artifact_info(row: GatewayChatArtifact) -> ChatArtifactInfo:
         exclusions=[str(value) for value in row.exclusions or []],
         caveats=[str(value) for value in row.caveats or []],
         parent_artifact_id=row.parent_artifact_id,
+        created_at=row.created_at,
+        download_formats=formats,
+    )
+
+
+def _shared_artifact_info(row: GatewayChatArtifact) -> SharedChatArtifactInfo:
+    formats = {
+        "table": ["csv"],
+        "chart": ["png", "csv"],
+        "report": ["html"],
+    }[row.kind]
+    return SharedChatArtifactInfo(
+        id=row.id,
+        assistant_message_id=row.assistant_message_id,
+        kind=row.kind,
+        filename=row.filename,
+        mime_type=row.mime_type,
+        snapshot=row.snapshot_json,
+        freshness_at=row.freshness_at,
+        assumptions=[str(value) for value in row.assumptions or []],
+        exclusions=[str(value) for value in row.exclusions or []],
+        caveats=[str(value) for value in row.caveats or []],
         created_at=row.created_at,
         download_formats=formats,
     )
@@ -448,8 +478,354 @@ async def archive_conversation(
         conversation.status = "archived"
         conversation.archived_at = _now()
         conversation.updated_at = time.time()
-        await db.commit()
+    await db.execute(
+        update(GatewayChatShareGrant)
+        .where(
+            GatewayChatShareGrant.conversation_id == conversation_id,
+            GatewayChatShareGrant.org_id == org_id,
+            GatewayChatShareGrant.owner_user_id == user_id,
+            GatewayChatShareGrant.state == "active",
+        )
+        .values(state="revoked", revoked_at=_now())
+    )
+    await db.commit()
     return True
+
+
+def _share_token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+async def create_share_grant(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    conversation_id: str,
+) -> tuple[GatewayChatShareGrant, str] | None:
+    """Rotate the active grant and return the only copy of the raw token."""
+    conversation = await _owned_conversation_row(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        conversation_id=conversation_id,
+        lock=True,
+    )
+    if conversation is None:
+        return None
+    revoked_at = _now()
+    await db.execute(
+        update(GatewayChatShareGrant)
+        .where(
+            GatewayChatShareGrant.conversation_id == conversation_id,
+            GatewayChatShareGrant.org_id == org_id,
+            GatewayChatShareGrant.owner_user_id == user_id,
+            GatewayChatShareGrant.state == "active",
+        )
+        .values(state="revoked", revoked_at=revoked_at)
+    )
+    token = secrets.token_urlsafe(32)
+    grant = GatewayChatShareGrant(
+        id=str(uuid.uuid4()),
+        conversation_id=conversation_id,
+        org_id=org_id,
+        owner_user_id=user_id,
+        token_hash=_share_token_hash(token),
+        state="active",
+    )
+    db.add(grant)
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    await db.refresh(grant)
+    return grant, token
+
+
+async def revoke_share_grants(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    conversation_id: str,
+) -> bool:
+    conversation = await _owned_conversation_row(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        conversation_id=conversation_id,
+    )
+    if conversation is None:
+        return False
+    await db.execute(
+        update(GatewayChatShareGrant)
+        .where(
+            GatewayChatShareGrant.conversation_id == conversation_id,
+            GatewayChatShareGrant.org_id == org_id,
+            GatewayChatShareGrant.owner_user_id == user_id,
+            GatewayChatShareGrant.state == "active",
+        )
+        .values(state="revoked", revoked_at=_now())
+    )
+    await db.commit()
+    return True
+
+
+async def _shared_grant_row(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    token: str,
+    lock: bool = False,
+) -> tuple[GatewayChatShareGrant, GatewayChatConversation] | None:
+    if len(token) < 32 or len(token) > 128:
+        return None
+    query = (
+        select(GatewayChatShareGrant, GatewayChatConversation)
+        .join(
+            GatewayChatConversation,
+            GatewayChatConversation.id == GatewayChatShareGrant.conversation_id,
+        )
+        .where(
+            GatewayChatShareGrant.org_id == org_id,
+            GatewayChatShareGrant.token_hash == _share_token_hash(token),
+            GatewayChatShareGrant.state == "active",
+            GatewayChatConversation.org_id == org_id,
+            GatewayChatConversation.user_id == GatewayChatShareGrant.owner_user_id,
+            GatewayChatConversation.surface == "standalone",
+            GatewayChatConversation.status == "active",
+        )
+    )
+    if lock:
+        query = query.with_for_update()
+    return (await db.execute(query)).one_or_none()
+
+
+async def get_shared_conversation(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    token: str,
+) -> SharedConversationDetail | None:
+    shared = await _shared_grant_row(db, org_id=org_id, token=token)
+    if shared is None:
+        return None
+    grant, conversation = shared
+    project = (
+        await db.execute(
+            select(GatewayWorkspaceProject).where(
+                GatewayWorkspaceProject.id == conversation.project_id,
+                GatewayWorkspaceProject.org_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
+    messages = list(
+        (
+            await db.execute(
+                select(GatewayChatMessage)
+                .where(
+                    GatewayChatMessage.conversation_id == conversation.id,
+                    GatewayChatMessage.org_id == org_id,
+                    GatewayChatMessage.user_id == conversation.user_id,
+                    GatewayChatMessage.role.in_(("user", "assistant")),
+                )
+                .order_by(GatewayChatMessage.sequence)
+            )
+        ).scalars()
+    )
+    artifacts = list(
+        (
+            await db.execute(
+                select(GatewayChatArtifact)
+                .outerjoin(
+                    GatewayChatRun,
+                    GatewayChatRun.id == GatewayChatArtifact.run_id,
+                )
+                .where(
+                    GatewayChatArtifact.conversation_id == conversation.id,
+                    GatewayChatArtifact.org_id == org_id,
+                    GatewayChatArtifact.user_id == conversation.user_id,
+                    or_(
+                        GatewayChatRun.id.is_(None),
+                        GatewayChatRun.status.in_(TERMINAL_RUN_STATUSES),
+                    ),
+                )
+                .order_by(GatewayChatArtifact.created_at)
+            )
+        ).scalars()
+    )
+    return SharedConversationDetail(
+        conversation=SharedConversationInfo(
+            title=conversation.title or "New chat",
+            project_name=(project.display_name or project.name) if project else None,
+            created_at=conversation.created_at,
+            updated_at=conversation.updated_at,
+        ),
+        messages=[
+            SharedMessageInfo(
+                id=row.id,
+                role=row.role,
+                content=row.content,
+                sequence=row.sequence,
+                created_at=row.created_at,
+            )
+            for row in messages
+        ],
+        artifacts=[_shared_artifact_info(row) for row in artifacts],
+        shared_at=grant.created_at,
+    )
+
+
+async def get_shared_artifact(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    token: str,
+    artifact_id: str,
+) -> GatewayChatArtifact | None:
+    shared = await _shared_grant_row(db, org_id=org_id, token=token)
+    if shared is None:
+        return None
+    _, conversation = shared
+    return (
+        await db.execute(
+            select(GatewayChatArtifact)
+            .outerjoin(GatewayChatRun, GatewayChatRun.id == GatewayChatArtifact.run_id)
+            .where(
+                GatewayChatArtifact.id == artifact_id,
+                GatewayChatArtifact.conversation_id == conversation.id,
+                GatewayChatArtifact.org_id == org_id,
+                GatewayChatArtifact.user_id == conversation.user_id,
+                or_(
+                    GatewayChatRun.id.is_(None),
+                    GatewayChatRun.status.in_(TERMINAL_RUN_STATUSES),
+                ),
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def fork_shared_conversation(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    token: str,
+) -> GatewayChatConversation | None:
+    """Copy the share-safe snapshot into a new private conversation."""
+    shared = await _shared_grant_row(db, org_id=org_id, token=token, lock=True)
+    if shared is None:
+        return None
+    _, source = shared
+    active_run = (
+        await db.execute(
+            select(GatewayChatRun.id).where(
+                GatewayChatRun.conversation_id == source.id,
+                GatewayChatRun.status.in_(NONTERMINAL_RUN_STATUSES),
+            )
+        )
+    ).scalar_one_or_none()
+    if active_run is not None:
+        raise RuntimeError("Wait for the current answer to finish before forking this chat")
+
+    messages = list(
+        (
+            await db.execute(
+                select(GatewayChatMessage)
+                .where(
+                    GatewayChatMessage.conversation_id == source.id,
+                    GatewayChatMessage.org_id == org_id,
+                    GatewayChatMessage.user_id == source.user_id,
+                    GatewayChatMessage.role.in_(("user", "assistant")),
+                )
+                .order_by(GatewayChatMessage.sequence)
+            )
+        ).scalars()
+    )
+    artifacts = list(
+        (
+            await db.execute(
+                select(GatewayChatArtifact)
+                .where(
+                    GatewayChatArtifact.conversation_id == source.id,
+                    GatewayChatArtifact.org_id == org_id,
+                    GatewayChatArtifact.user_id == source.user_id,
+                )
+                .order_by(GatewayChatArtifact.created_at)
+            )
+        ).scalars()
+    )
+
+    now = time.time()
+    fork = GatewayChatConversation(
+        id=str(uuid.uuid4()),
+        org_id=org_id,
+        user_id=user_id,
+        project_id=source.project_id,
+        surface="standalone",
+        branch=source.branch,
+        status="active",
+        title=(source.title or "New chat")[:200],
+        internal_summary=None,
+        message_count=len(messages),
+        total_tokens=0,
+        total_cost_usd=0.0,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(fork)
+
+    message_ids = {row.id: str(uuid.uuid4()) for row in messages}
+    for sequence, row in enumerate(messages, start=1):
+        db.add(
+            GatewayChatMessage(
+                id=message_ids[row.id],
+                org_id=org_id,
+                user_id=user_id,
+                project_id=source.project_id,
+                conversation_id=fork.id,
+                role=row.role,
+                content=row.content,
+                metadata_json={"surface": "standalone", "forked": True},
+                sequence=sequence,
+                created_at=row.created_at,
+            )
+        )
+
+    artifact_ids = {row.id: str(uuid.uuid4()) for row in artifacts}
+    copied_run_ids: dict[str, str] = {}
+    for row in artifacts:
+        copied_run_id = copied_run_ids.setdefault(row.run_id, str(uuid.uuid4()))
+        db.add(
+            GatewayChatArtifact(
+                id=artifact_ids[row.id],
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=fork.id,
+                run_id=copied_run_id,
+                assistant_message_id=message_ids.get(row.assistant_message_id or ""),
+                kind=row.kind,
+                filename=row.filename,
+                mime_type=row.mime_type,
+                snapshot_json=row.snapshot_json,
+                binary_data=row.binary_data,
+                provenance_json=None,
+                freshness_at=row.freshness_at,
+                assumptions=list(row.assumptions or []),
+                exclusions=list(row.exclusions or []),
+                caveats=list(row.caveats or []),
+                parent_artifact_id=artifact_ids.get(row.parent_artifact_id or ""),
+                created_at=row.created_at,
+            )
+        )
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    await db.refresh(fork)
+    return fork
 
 
 async def create_run(

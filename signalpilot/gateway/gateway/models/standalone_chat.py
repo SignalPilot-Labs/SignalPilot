@@ -1,4 +1,4 @@
-"""Public API contracts for author-private standalone data chat."""
+"""Public API contracts for standalone data chat and authenticated sharing."""
 
 from __future__ import annotations
 
@@ -169,3 +169,49 @@ class StandaloneConversationDetail(BaseModel):
     artifacts: list[ChatArtifactInfo]
     current_run: ChatRunInfo | None = None
     run_events: list[ChatRunEventInfo] = Field(default_factory=list)
+
+
+class ChatShareGrantInfo(BaseModel):
+    token: str
+    created_at: datetime
+
+
+class SharedConversationInfo(BaseModel):
+    title: str
+    project_name: str | None = None
+    created_at: float
+    updated_at: float
+
+
+class SharedMessageInfo(BaseModel):
+    id: str
+    role: Literal["user", "assistant"]
+    content: str
+    sequence: int
+    created_at: float
+
+
+class SharedChatArtifactInfo(BaseModel):
+    id: str
+    assistant_message_id: str | None = None
+    kind: ArtifactKind
+    filename: str
+    mime_type: str
+    snapshot: dict[str, Any]
+    freshness_at: datetime | None = None
+    assumptions: list[str] = Field(default_factory=list)
+    exclusions: list[str] = Field(default_factory=list)
+    caveats: list[str] = Field(default_factory=list)
+    created_at: datetime
+    download_formats: list[str]
+
+
+class SharedConversationDetail(BaseModel):
+    conversation: SharedConversationInfo
+    messages: list[SharedMessageInfo]
+    artifacts: list[SharedChatArtifactInfo]
+    shared_at: datetime
+
+
+class ForkedConversationInfo(BaseModel):
+    id: str

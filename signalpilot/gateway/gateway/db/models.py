@@ -971,6 +971,46 @@ class GatewayChatArtifact(GatewayBase):
     )
 
 
+class GatewayChatShareGrant(GatewayBase):
+    """Revocable same-organization access grant for one standalone chat."""
+
+    __tablename__ = "gateway_chat_share_grants"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    conversation_id: Mapped[str] = mapped_column(String, nullable=False)
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    owner_user_id: Mapped[str] = mapped_column(String, nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    state: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="active", server_default="active"
+    )
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
+    revoked_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+
+    __table_args__ = (
+        Index(
+            "uq_gw_chat_share_active_conversation",
+            "conversation_id",
+            unique=True,
+            postgresql_where=text("state = 'active'"),
+            sqlite_where=text("state = 'active'"),
+        ),
+        Index(
+            "ix_gw_chat_share_lookup",
+            "org_id",
+            "token_hash",
+            "state",
+        ),
+        Index(
+            "ix_gw_chat_share_owner",
+            "org_id",
+            "owner_user_id",
+            "conversation_id",
+            "state",
+        ),
+    )
+
+
 class GatewayChatStarterCache(GatewayBase):
     """Four starter prompts cached by project metadata checksum."""
 

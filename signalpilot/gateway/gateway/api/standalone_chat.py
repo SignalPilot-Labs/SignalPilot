@@ -1,4 +1,4 @@
-"""Author-private standalone data-chat APIs and resumable event streaming."""
+"""Standalone data-chat APIs, authenticated sharing, and event streaming."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from sqlalchemy import select
 from gateway.auth import OrgRole
 from gateway.db.engine import get_session_factory
 from gateway.db.models import (
+    GatewayChatArtifact,
     GatewayChatConversation,
     GatewayChatRun,
     GatewayChatUserPreference,
@@ -22,6 +23,9 @@ from gateway.db.models import (
 from gateway.models.standalone_chat import (
     ChatBootstrapResponse,
     ChatRunInfo,
+    ChatShareGrantInfo,
+    ForkedConversationInfo,
+    SharedConversationDetail,
     StandaloneClarificationCreate,
     StandaloneConversationCreate,
     StandaloneConversationDetail,
@@ -348,6 +352,97 @@ async def archive_conversation(conversation_id: str, store: StoreD):
 
 
 @router.post(
+    "/conversations/{conversation_id}/share",
+    status_code=201,
+    response_model=ChatShareGrantInfo,
+    dependencies=[RequireScope("write")],
+)
+async def share_conversation(
+    conversation_id: str,
+    store: StoreD,
+    response: Response,
+):
+    _require_enabled()
+    result = await chat_store.create_share_grant(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=store.user_id or "local",
+        conversation_id=conversation_id,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    grant, token = result
+    response.headers["Cache-Control"] = "private, no-store"
+    return ChatShareGrantInfo(token=token, created_at=grant.created_at)
+
+
+@router.delete(
+    "/conversations/{conversation_id}/share",
+    status_code=204,
+    dependencies=[RequireScope("write")],
+)
+async def revoke_conversation_share(conversation_id: str, store: StoreD):
+    _require_enabled()
+    found = await chat_store.revoke_share_grants(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=store.user_id or "local",
+        conversation_id=conversation_id,
+    )
+    if not found:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return Response(status_code=204)
+
+
+@router.get(
+    "/shared/{token}",
+    response_model=SharedConversationDetail,
+    dependencies=[RequireScope("read")],
+)
+async def get_shared_conversation(
+    token: str,
+    store: StoreD,
+    response: Response,
+):
+    _require_enabled()
+    detail = await chat_store.get_shared_conversation(
+        store.session,
+        org_id=store._require_org_id(),
+        token=token,
+    )
+    if detail is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Shared conversation not found",
+            headers={"Cache-Control": "private, no-store"},
+        )
+    response.headers["Cache-Control"] = "private, no-store"
+    return detail
+
+
+@router.post(
+    "/shared/{token}/fork",
+    status_code=201,
+    response_model=ForkedConversationInfo,
+    dependencies=[RequireScope("write")],
+)
+async def fork_shared_conversation(token: str, store: StoreD):
+    _require_enabled()
+    try:
+        conversation = await chat_store.fork_shared_conversation(
+            store.session,
+            org_id=store._require_org_id(),
+            user_id=store.user_id or "local",
+            token=token,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Shared conversation not found")
+    return ForkedConversationInfo(id=conversation.id)
+
+
+@router.post(
     "/conversations/{conversation_id}/runs",
     status_code=201,
     response_model=ChatRunInfo,
@@ -579,7 +674,44 @@ async def download_artifact(
         artifact_id=artifact_id,
     )
     if artifact is None:
-        raise HTTPException(status_code=404, detail="Artifact not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Artifact not found",
+            headers={"Cache-Control": "private, no-store"},
+        )
+    return _artifact_download_response(artifact, format)
+
+
+@router.get(
+    "/shared/{token}/artifacts/{artifact_id}/download",
+    dependencies=[RequireScope("read")],
+)
+async def download_shared_artifact(
+    token: str,
+    artifact_id: str,
+    store: StoreD,
+    format: Annotated[str, Query(pattern=r"^(csv|png|html)$")],
+):
+    _require_enabled()
+    artifact = await chat_store.get_shared_artifact(
+        store.session,
+        org_id=store._require_org_id(),
+        token=token,
+        artifact_id=artifact_id,
+    )
+    if artifact is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Artifact not found",
+            headers={"Cache-Control": "private, no-store"},
+        )
+    return _artifact_download_response(artifact, format)
+
+
+def _artifact_download_response(
+    artifact: GatewayChatArtifact,
+    format: str,
+) -> Response:
     allowed = {
         "table": {"csv"},
         "chart": {"png", "csv"},

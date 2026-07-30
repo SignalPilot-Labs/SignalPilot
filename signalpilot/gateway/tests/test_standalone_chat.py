@@ -1,7 +1,8 @@
-"""Focused contracts for author-private durable standalone data chat."""
+"""Focused contracts for durable standalone data chat and team sharing."""
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -14,8 +15,10 @@ from gateway.auth.notebook_jwt import mint_session_jwt, verify_session_jwt
 from gateway.db.models import (
     GatewayBase,
     GatewayChatArtifact,
+    GatewayChatConversation,
     GatewayChatMessage,
     GatewayChatRun,
+    GatewayChatShareGrant,
     GatewayChatUserPreference,
     GatewayConnection,
     GatewayCredential,
@@ -110,6 +113,68 @@ async def _conversation_and_run(
         message="What changed in revenue?",
     )
     return conversation.id, run
+
+
+async def _completed_shared_conversation(
+    db: AsyncSession,
+) -> tuple[str, GatewayChatRun, str]:
+    conversation_id, run = await _conversation_and_run(db)
+    conversation = (
+        await db.execute(
+            select(GatewayChatConversation).where(
+                GatewayChatConversation.id == conversation_id
+            )
+        )
+    ).scalar_one()
+    assistant_message_id = "assistant-message-a"
+    db.add(
+        GatewayChatMessage(
+            id=assistant_message_id,
+            org_id="org-a",
+            user_id="user-a",
+            project_id="project-a",
+            conversation_id=conversation_id,
+            role="assistant",
+            content="Revenue increased by 12%.",
+            metadata_json={
+                "surface": "standalone",
+                "run_id": run.id,
+                "internal": {"sql": "select * from revenue"},
+            },
+            idempotency_key=f"chat-run:{run.id}:final",
+            sequence=2,
+            created_at=2.0,
+        )
+    )
+    db.add(
+        GatewayChatArtifact(
+            id="artifact-a",
+            org_id="org-a",
+            user_id="user-a",
+            conversation_id=conversation_id,
+            run_id=run.id,
+            assistant_message_id=assistant_message_id,
+            kind="table",
+            filename="revenue.csv",
+            mime_type="text/csv",
+            snapshot_json={
+                "columns": [{"name": "revenue"}],
+                "rows": [{"revenue": 112}],
+            },
+            provenance_json={"sql": "select revenue from private_schema.revenue"},
+            freshness_at=datetime(2026, 7, 30, tzinfo=UTC),
+            assumptions=["Booked revenue only"],
+            exclusions=["Refunds"],
+            caveats=["Partial current day"],
+        )
+    )
+    conversation.title = "Revenue trend"
+    conversation.internal_summary = "Hidden execution summary"
+    conversation.message_count = 2
+    run.status = "completed"
+    run.terminal_at = datetime.now(UTC)
+    await db.commit()
+    return conversation_id, run, assistant_message_id
 
 
 def test_state_machine_and_title_contracts():
@@ -337,6 +402,257 @@ async def test_same_org_peer_cannot_discover_private_conversation(db_session):
         )
         == []
     )
+
+
+@pytest.mark.asyncio
+async def test_share_grant_is_hashed_same_org_and_trace_free(db_session):
+    conversation_id, _, _ = await _completed_shared_conversation(db_session)
+    result = await chat_store.create_share_grant(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation_id,
+    )
+    assert result is not None
+    grant, token = result
+    assert grant.token_hash == hashlib.sha256(token.encode()).hexdigest()
+    assert token not in grant.token_hash
+
+    shared = await chat_store.get_shared_conversation(
+        db_session,
+        org_id="org-a",
+        token=token,
+    )
+    assert shared is not None
+    assert shared.conversation.title == "Revenue trend"
+    assert [message.role for message in shared.messages] == ["user", "assistant"]
+    assert not hasattr(shared.messages[1], "metadata")
+    assert len(shared.artifacts) == 1
+    assert shared.artifacts[0].assumptions == ["Booked revenue only"]
+    assert not hasattr(shared.artifacts[0], "provenance")
+    assert (
+        await chat_store.get_shared_conversation(
+            db_session,
+            org_id="org-b",
+            token=token,
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_rotating_revoking_and_archiving_share_returns_not_found(db_session):
+    conversation_id, _, _ = await _completed_shared_conversation(db_session)
+    first = await chat_store.create_share_grant(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation_id,
+    )
+    assert first is not None
+    _, first_token = first
+    second = await chat_store.create_share_grant(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation_id,
+    )
+    assert second is not None
+    _, second_token = second
+    assert (
+        await chat_store.get_shared_conversation(
+            db_session,
+            org_id="org-a",
+            token=first_token,
+        )
+        is None
+    )
+    assert await chat_store.get_shared_conversation(
+        db_session,
+        org_id="org-a",
+        token=second_token,
+    )
+
+    assert await chat_store.revoke_share_grants(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation_id,
+    )
+    assert (
+        await chat_store.get_shared_conversation(
+            db_session,
+            org_id="org-a",
+            token=second_token,
+        )
+        is None
+    )
+
+    third = await chat_store.create_share_grant(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation_id,
+    )
+    assert third is not None
+    third_grant, third_token = third
+    assert await chat_store.archive_conversation(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation_id,
+    )
+    await db_session.refresh(third_grant)
+    assert third_grant.state == "revoked"
+    assert third_grant.revoked_at is not None
+    assert (
+        await chat_store.get_shared_conversation(
+            db_session,
+            org_id="org-a",
+            token=third_token,
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_same_org_viewer_can_fork_share_safe_snapshot(db_session):
+    conversation_id, _, assistant_message_id = await _completed_shared_conversation(
+        db_session
+    )
+    shared = await chat_store.create_share_grant(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation_id,
+    )
+    assert shared is not None
+    _, token = shared
+
+    fork = await chat_store.fork_shared_conversation(
+        db_session,
+        org_id="org-a",
+        user_id="user-b",
+        token=token,
+    )
+    assert fork is not None
+    assert fork.id != conversation_id
+    assert fork.user_id == "user-b"
+    assert fork.internal_summary is None
+
+    detail = await chat_store.get_conversation_detail(
+        db_session,
+        org_id="org-a",
+        user_id="user-b",
+        conversation_id=fork.id,
+    )
+    assert detail is not None
+    assert [message.content for message in detail.messages] == [
+        "What changed in revenue?",
+        "Revenue increased by 12%.",
+    ]
+    assert detail.messages[1].id != assistant_message_id
+    assert detail.current_run is None
+    assert len(detail.artifacts) == 1
+    assert detail.artifacts[0].assistant_message_id == detail.messages[1].id
+
+    copied_artifact = (
+        await db_session.execute(
+            select(GatewayChatArtifact).where(
+                GatewayChatArtifact.id == detail.artifacts[0].id
+            )
+        )
+    ).scalar_one()
+    assert copied_artifact.provenance_json is None
+    assert copied_artifact.snapshot_json["rows"] == [{"revenue": 112}]
+
+    reshared = await chat_store.create_share_grant(
+        db_session,
+        org_id="org-a",
+        user_id="user-b",
+        conversation_id=fork.id,
+    )
+    assert reshared is not None
+    _, reshared_token = reshared
+    reshared_detail = await chat_store.get_shared_conversation(
+        db_session,
+        org_id="org-a",
+        token=reshared_token,
+    )
+    assert reshared_detail is not None
+    assert len(reshared_detail.artifacts) == 1
+
+
+@pytest.mark.asyncio
+async def test_share_fork_rejects_active_run_and_cross_org(db_session):
+    conversation_id, run = await _conversation_and_run(db_session)
+    db_session.add(
+        GatewayChatArtifact(
+            id="in-progress-artifact",
+            org_id="org-a",
+            user_id="user-a",
+            conversation_id=conversation_id,
+            run_id=run.id,
+            kind="table",
+            filename="in-progress.csv",
+            mime_type="text/csv",
+            snapshot_json={"columns": [], "rows": []},
+            assumptions=[],
+            exclusions=[],
+            caveats=[],
+        )
+    )
+    await db_session.commit()
+    shared = await chat_store.create_share_grant(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation_id,
+    )
+    assert shared is not None
+    _, token = shared
+    shared_detail = await chat_store.get_shared_conversation(
+        db_session,
+        org_id="org-a",
+        token=token,
+    )
+    assert shared_detail is not None
+    assert shared_detail.artifacts == []
+    assert (
+        await chat_store.get_shared_artifact(
+            db_session,
+            org_id="org-a",
+            token=token,
+            artifact_id="in-progress-artifact",
+        )
+        is None
+    )
+    with pytest.raises(RuntimeError, match="finish before forking"):
+        await chat_store.fork_shared_conversation(
+            db_session,
+            org_id="org-a",
+            user_id="user-b",
+            token=token,
+        )
+    assert (
+        await chat_store.fork_shared_conversation(
+            db_session,
+            org_id="org-b",
+            user_id="user-b",
+            token=token,
+        )
+        is None
+    )
+    grants = list(
+        (
+            await db_session.execute(
+                select(GatewayChatShareGrant).where(
+                    GatewayChatShareGrant.conversation_id == conversation_id
+                )
+            )
+        ).scalars()
+    )
+    assert len(grants) == 1
 
 
 @pytest.mark.asyncio

@@ -513,6 +513,23 @@ export type StandaloneConversationDetail = {
   run_events: StandaloneChatEvent[];
 };
 
+export type SharedChatArtifact = Omit<
+  StandaloneChatArtifact,
+  "run_id" | "provenance" | "parent_artifact_id"
+>;
+
+export type SharedConversationDetail = {
+  conversation: {
+    title: string;
+    project_name: string | null;
+    created_at: number;
+    updated_at: number;
+  };
+  messages: Array<Omit<StandaloneChatMessage, "metadata">>;
+  artifacts: SharedChatArtifact[];
+  shared_at: string;
+};
+
 export const getStandaloneChatBootstrap = () =>
   request<StandaloneChatBootstrap>("/api/chat/bootstrap");
 export const getStandaloneChatProjectReadiness = (projectId: string) =>
@@ -551,6 +568,25 @@ export const archiveStandaloneConversation = (conversationId: string) =>
   request<void>(`/api/chat/conversations/${encodeURIComponent(conversationId)}`, {
     method: "DELETE",
   });
+export const shareStandaloneConversation = (conversationId: string) =>
+  request<{ token: string; created_at: string }>(
+    `/api/chat/conversations/${encodeURIComponent(conversationId)}/share`,
+    { method: "POST" },
+  );
+export const revokeStandaloneConversationShare = (conversationId: string) =>
+  request<void>(
+    `/api/chat/conversations/${encodeURIComponent(conversationId)}/share`,
+    { method: "DELETE" },
+  );
+export const getSharedStandaloneConversation = (token: string) =>
+  request<SharedConversationDetail>(
+    `/api/chat/shared/${encodeURIComponent(token)}`,
+  );
+export const forkSharedStandaloneConversation = (token: string) =>
+  request<{ id: string }>(
+    `/api/chat/shared/${encodeURIComponent(token)}/fork`,
+    { method: "POST" },
+  );
 export const createStandaloneRun = (conversationId: string, message: string) =>
   request<StandaloneChatRun>(
     `/api/chat/conversations/${encodeURIComponent(conversationId)}/runs`,
@@ -611,11 +647,33 @@ export async function downloadStandaloneArtifact(
   format: string,
   filename: string,
 ): Promise<void> {
-  const headers = await getAuthHeaders();
-  const response = await fetch(
-    `${GATEWAY_URL}/api/chat/artifacts/${encodeURIComponent(artifactId)}/download?format=${encodeURIComponent(format)}`,
-    { headers },
+  return downloadChatArtifact(
+    `/api/chat/artifacts/${encodeURIComponent(artifactId)}/download?format=${encodeURIComponent(format)}`,
+    format,
+    filename,
   );
+}
+
+export async function downloadSharedStandaloneArtifact(
+  token: string,
+  artifactId: string,
+  format: string,
+  filename: string,
+): Promise<void> {
+  return downloadChatArtifact(
+    `/api/chat/shared/${encodeURIComponent(token)}/artifacts/${encodeURIComponent(artifactId)}/download?format=${encodeURIComponent(format)}`,
+    format,
+    filename,
+  );
+}
+
+async function downloadChatArtifact(
+  path: string,
+  format: string,
+  filename: string,
+): Promise<void> {
+  const headers = await getAuthHeaders();
+  const response = await fetch(`${GATEWAY_URL}${path}`, { headers });
   if (!response.ok) throw new Error(`Download failed (${response.status})`);
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);

@@ -27,6 +27,7 @@ import {
   PanelLeft,
   Play,
   Send,
+  Share2,
   Sparkles,
   Table2,
   Trash2,
@@ -60,7 +61,9 @@ import {
   listStandaloneConversations,
   renameStandaloneConversation,
   retryStandaloneRun,
+  revokeStandaloneConversationShare,
   setDefaultStandaloneChatProject,
+  shareStandaloneConversation,
   streamStandaloneRunEvents,
   type StandaloneChatArtifact,
   type StandaloneChatEvent,
@@ -245,7 +248,35 @@ function WorkTimeline({ runId }: { runId: string }) {
   );
 }
 
-function ArtifactDownloads({ artifact }: { artifact: StandaloneChatArtifact }) {
+export type ArtifactPreviewData = Pick<
+  StandaloneChatArtifact,
+  | "id"
+  | "assistant_message_id"
+  | "kind"
+  | "filename"
+  | "mime_type"
+  | "snapshot"
+  | "freshness_at"
+  | "assumptions"
+  | "exclusions"
+  | "caveats"
+  | "created_at"
+  | "download_formats"
+>;
+
+type ArtifactDownload = (
+  artifactId: string,
+  format: string,
+  filename: string,
+) => Promise<void>;
+
+function ArtifactDownloads({
+  artifact,
+  onDownload,
+}: {
+  artifact: ArtifactPreviewData;
+  onDownload: ArtifactDownload;
+}) {
   const { toast } = useToast();
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -254,7 +285,7 @@ function ArtifactDownloads({ artifact }: { artifact: StandaloneChatArtifact }) {
           key={format}
           type="button"
           onClick={() =>
-            downloadStandaloneArtifact(
+            onDownload(
               artifact.id,
               format,
               artifact.filename,
@@ -270,7 +301,7 @@ function ArtifactDownloads({ artifact }: { artifact: StandaloneChatArtifact }) {
   );
 }
 
-function ArtifactContext({ artifact }: { artifact: StandaloneChatArtifact }) {
+function ArtifactContext({ artifact }: { artifact: ArtifactPreviewData }) {
   const notes = [
     ...artifact.assumptions.map((value) => `Assumption: ${value}`),
     ...artifact.exclusions.map((value) => `Exclusion: ${value}`),
@@ -289,7 +320,13 @@ function ArtifactContext({ artifact }: { artifact: StandaloneChatArtifact }) {
   );
 }
 
-function ArtifactPreview({ artifact }: { artifact: StandaloneChatArtifact }) {
+export function ArtifactPreview({
+  artifact,
+  onDownload = downloadStandaloneArtifact,
+}: {
+  artifact: ArtifactPreviewData;
+  onDownload?: ArtifactDownload;
+}) {
   const [expanded, setExpanded] = useState(false);
   const snapshot = artifact.snapshot;
   if (artifact.kind === "table") {
@@ -329,7 +366,7 @@ function ArtifactPreview({ artifact }: { artifact: StandaloneChatArtifact }) {
                 {expanded ? "Collapse" : "Open"}
               </button>
             )}
-            <ArtifactDownloads artifact={artifact} />
+            <ArtifactDownloads artifact={artifact} onDownload={onDownload} />
           </div>
         </div>
         <div
@@ -415,7 +452,7 @@ function ArtifactPreview({ artifact }: { artifact: StandaloneChatArtifact }) {
               {artifact.filename}
             </span>
           </div>
-          <ArtifactDownloads artifact={artifact} />
+          <ArtifactDownloads artifact={artifact} onDownload={onDownload} />
         </div>
         <div className="min-h-64 overflow-x-auto p-4">
           <div className="mx-auto w-fit min-w-[640px]">
@@ -457,7 +494,7 @@ function ArtifactPreview({ artifact }: { artifact: StandaloneChatArtifact }) {
             {artifact.filename}
           </span>
         </div>
-        <ArtifactDownloads artifact={artifact} />
+        <ArtifactDownloads artifact={artifact} onDownload={onDownload} />
       </div>
       {hasRenderableReport ? (
         <iframe
@@ -666,11 +703,15 @@ function ConversationRail({
   activeId,
   onRename,
   onArchive,
+  onShare,
+  onRevokeShare,
 }: {
   conversations: StandaloneConversation[];
   activeId?: string;
   onRename: (conversation: StandaloneConversation) => void;
   onArchive: (conversation: StandaloneConversation) => void;
+  onShare: (conversation: StandaloneConversation) => void;
+  onRevokeShare: (conversation: StandaloneConversation) => void;
 }) {
   const router = useRouter();
   const [menuId, setMenuId] = useState<string | null>(null);
@@ -737,6 +778,27 @@ function ConversationRail({
               </button>
               {menuId === conversation.id && (
                 <div className="absolute right-2 top-9 z-20 w-44 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-1 shadow-2xl">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenuId(null);
+                      onShare(conversation);
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+                  >
+                    <Share2 className="h-3 w-3" />
+                    Share with team
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenuId(null);
+                      onRevokeShare(conversation);
+                    }}
+                    className="w-full rounded-lg px-3 py-2 text-left text-xs text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+                  >
+                    Revoke team link
+                  </button>
                   <button
                     type="button"
                     onClick={() => {
@@ -1230,6 +1292,35 @@ export function StandaloneDataChat({
       );
     }
   };
+  const shareConversation = async (conversation: StandaloneConversation) => {
+    try {
+      const grant = await shareStandaloneConversation(conversation.id);
+      const url = `${window.location.origin}/chats/shared/${grant.token}`;
+      try {
+        await navigator.clipboard.writeText(url);
+        toast("Team link copied", "success");
+      } catch {
+        window.prompt("Copy team link", url);
+      }
+    } catch (error) {
+      toast(
+        error instanceof Error ? error.message : "Could not share the chat",
+        "error",
+      );
+    }
+  };
+  const revokeShare = async (conversation: StandaloneConversation) => {
+    if (!window.confirm("Revoke all active team links for this chat?")) return;
+    try {
+      await revokeStandaloneConversationShare(conversation.id);
+      toast("Team link revoked", "success");
+    } catch (error) {
+      toast(
+        error instanceof Error ? error.message : "Could not revoke the link",
+        "error",
+      );
+    }
+  };
 
   if (bootstrapLoading) {
     return (
@@ -1296,6 +1387,8 @@ export function StandaloneDataChat({
               onArchive={(conversation) =>
                 void archiveConversation(conversation)
               }
+              onShare={(conversation) => void shareConversation(conversation)}
+              onRevokeShare={(conversation) => void revokeShare(conversation)}
             />
             <ThreadPrimitive.Root className="flex min-w-0 flex-1 flex-col">
               <header className="flex h-16 flex-none items-center justify-between border-b border-[var(--color-border)] px-6">
@@ -1317,6 +1410,17 @@ export function StandaloneDataChat({
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  {conversationId && detail && (
+                    <button
+                      type="button"
+                      title="Create a new authenticated team link and revoke any previous link"
+                      onClick={() => void shareConversation(detail.conversation)}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-1.5 text-xs text-[var(--color-text-muted)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)]"
+                    >
+                      <Share2 className="h-3.5 w-3.5" />
+                      Share
+                    </button>
+                  )}
                   <span className="text-[10px] uppercase tracking-[0.12em] text-[var(--color-text-dim)]">
                     Project
                   </span>

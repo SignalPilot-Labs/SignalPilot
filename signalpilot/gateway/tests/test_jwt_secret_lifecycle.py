@@ -63,6 +63,7 @@ class TestHappyPath:
             namespace="sp-nb-org1",
             pod_name="nb-abc",
             session_jwt="test.jwt.token",
+            notebook_token="pod-notebook-token",
             create_pod_fn=create_pod_fn,
         )
 
@@ -93,6 +94,7 @@ class TestHappyPath:
             namespace="sp-nb-org1",
             pod_name="nb-mytest",
             session_jwt="jwt-value",
+            notebook_token="pod-notebook-token",
             create_pod_fn=_make_pod_fn(),
         )
 
@@ -118,6 +120,7 @@ class TestPodCreateFailure:
                 namespace="sp-nb-org1",
                 pod_name="nb-abc",
                 session_jwt="jwt",
+                notebook_token="pod-notebook-token",
                 create_pod_fn=create_pod_fn,
             )
 
@@ -140,6 +143,7 @@ class TestPodCreateFailure:
                 namespace="sp-nb-org1",
                 pod_name="nb-abc",
                 session_jwt="jwt",
+                notebook_token="pod-notebook-token",
                 create_pod_fn=create_pod_fn,
             )
 
@@ -164,6 +168,7 @@ class TestOwnerRefPatchFailure:
                 namespace="sp-nb-org1",
                 pod_name="nb-abc",
                 session_jwt="jwt",
+                notebook_token="pod-notebook-token",
                 create_pod_fn=_make_pod_fn(),
             )
 
@@ -188,9 +193,57 @@ class TestSecretCreateFailure:
                 namespace="sp-nb-org1",
                 pod_name="nb-abc",
                 session_jwt="jwt",
+                notebook_token="pod-notebook-token",
                 create_pod_fn=create_pod_fn,
             )
 
         create_pod_fn.assert_not_called()
         core_v1.delete_namespaced_secret.assert_not_called()
         core_v1.delete_namespaced_pod.assert_not_called()
+
+
+class TestNotebookToken:
+    @pytest.mark.asyncio
+    async def test_secret_carries_the_notebook_token(self):
+        """Both credentials ride the one per-pod Secret, base64-encoded."""
+        import base64
+
+        from gateway.orchestrator.jwt_secret_lifecycle import create_jwt_secret_with_owner_ref
+        from gateway.orchestrator.kubernetes import SP_NOTEBOOK_TOKEN_SECRET_KEY
+
+        core_v1 = _make_core_v1()
+        await create_jwt_secret_with_owner_ref(
+            core_v1,
+            namespace="sp-nb-org1",
+            pod_name="nb-abc",
+            session_jwt="jwt",
+            notebook_token="pod-notebook-token",
+            create_pod_fn=_make_pod_fn(),
+        )
+
+        data = core_v1.create_namespaced_secret.call_args[1]["body"].data
+        assert set(data) == {"session_jwt", SP_NOTEBOOK_TOKEN_SECRET_KEY}
+        decoded = base64.b64decode(data[SP_NOTEBOOK_TOKEN_SECRET_KEY]).decode()
+        assert decoded == "pod-notebook-token"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("token", [None, ""])
+    async def test_missing_notebook_token_creates_nothing(self, token):
+        """Fail before the Secret exists rather than staging a tokenless pod."""
+        from gateway.orchestrator.jwt_secret_lifecycle import create_jwt_secret_with_owner_ref
+
+        core_v1 = _make_core_v1()
+        create_pod_fn = _make_pod_fn()
+
+        with pytest.raises(ValueError, match="without a notebook auth token"):
+            await create_jwt_secret_with_owner_ref(
+                core_v1,
+                namespace="sp-nb-org1",
+                pod_name="nb-abc",
+                session_jwt="jwt",
+                notebook_token=token,
+                create_pod_fn=create_pod_fn,
+            )
+
+        core_v1.create_namespaced_secret.assert_not_called()
+        create_pod_fn.assert_not_called()

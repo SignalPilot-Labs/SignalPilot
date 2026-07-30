@@ -41,7 +41,9 @@ services:
       context: ./signalpilot/gateway
       dockerfile: ../../Dockerfile.gateway
     ports:
-      - "3300:3300"
+      # Loopback only: SP_DEPLOYMENT_MODE=local accepts requests with no API key
+      # and grants them every scope, so this port must never face a network.
+      - "127.0.0.1:3300:3300"
     env_file:
       - path: ./.slack.local.env
         required: false
@@ -57,6 +59,9 @@ services:
       # Notebook: direct mode (no K8s)
       SP_NOTEBOOK_DIRECT_URL: http://notebook:2718
       SP_NOTEBOOK_UPSTREAM_MODE: direct
+      # The proxy presents this to the shared notebook container on every
+      # upstream request. Written by the notebook at boot.
+      SP_NOTEBOOK_TOKEN_FILE: /notebook-token/token
       SP_NOTEBOOK_IMAGE: signalpilot-notebook:latest
       SP_NOTEBOOK_NETWORK_POLICY: "false"
       SP_PUBLIC_GATEWAY_URL: http://localhost:3300
@@ -124,6 +129,7 @@ services:
       - signalpilot-shared:/shared
       - signalpilot-gateway-secrets:/gateway-secrets
       - signalpilot-repos:/repos
+      - signalpilot-notebook-token:/notebook-token:ro
       - /var/run/docker.sock:/var/run/docker.sock
       # Local eval sets (trap-arena format) usable as repo_url paths
       - ./demo-generator/trap-arena/projects:/eval-projects:ro
@@ -158,12 +164,16 @@ services:
       - -c
       - |
         export SP_API_KEY=$$(cat /shared/local_api_key 2>/dev/null || echo '')
+        python -m signalpilot._server.local_token /notebook-token/token
         exec python -m signalpilot edit \
           --host 0.0.0.0 --port 2718 --headless \
-          --no-token --no-skew-protection \
+          --token-password-file /notebook-token/token --no-skew-protection \
           --allow-origins http://localhost:3200,http://localhost:3300 \
           /workspace
     environment:
+      # Pin the notebook auth token here to a known value if you want to reach
+      # :2718 directly; leave unset and the container mints one on first boot.
+      SP_NOTEBOOK_TOKEN: ${SP_NOTEBOOK_TOKEN:-}
       SP_LOG_DIR: /tmp/sp-logs
       SP_LOG_LEVEL: "10"
       SP_GATEWAY_URL: http://gateway:3300
@@ -174,6 +184,10 @@ services:
     volumes:
       - signalpilot-workspace:/workspace
       - signalpilot-shared:/shared:ro
+      # Written here by the notebook, read-only in the gateway (same uid 10001).
+      # Kept off signalpilot-shared so the notebook never gets write access to
+      # the gateway's local_api_key.
+      - signalpilot-notebook-token:/notebook-token
       - ${CLAUDE_HOST_CONFIG_DIR:-${HOME:-~}/.config/signalpilot/claude-code-docker}:/home/notebook/.claude
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:2718/health"]
@@ -189,7 +203,7 @@ services:
       context: .
       dockerfile: Dockerfile.web
     ports:
-      - "3200:3200"
+      - "127.0.0.1:3200:3200"
     environment:
       SP_GATEWAY_INTERNAL_URL: http://gateway:3300
     volumes:
@@ -282,6 +296,7 @@ volumes:
   signalpilot-gateway-secrets:
   signalpilot-repos:
   signalpilot-workspace:
+  signalpilot-notebook-token:
   # Empty fallback for /host-data when SP_HOST_DATA_DIR is unset (host-file
   # DuckDB/SQLite access disabled).
   signalpilot-hostdata-empty:

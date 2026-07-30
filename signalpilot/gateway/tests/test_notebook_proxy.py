@@ -255,119 +255,123 @@ class TestNotebookSessionInternal:
 # ─── Orchestrator: pod CLI ────────────────────────────────────────────────────
 
 
+def _manifest(**overrides):
+    from gateway.orchestrator.kubernetes import _pod_manifest
+
+    kwargs = {
+        "pod_name": "nb-test",
+        "namespace": "default",
+        "image": "signalpilot-notebook:latest",
+        "user_id": "user-1",
+        "org_id": "org-1",
+        "project_id": "proj-1",
+        "branch": "main",
+        "gateway_url": "http://localhost:3300",
+        "session_jwt_secret_name": "sp-jwt-nb-test",
+        "session_id": "sess-abc",
+        "access_token": "pod-notebook-token",
+    }
+    kwargs.update(overrides)
+    return _pod_manifest(**kwargs)
+
+
 class TestPodCLI:
-    """kubernetes.py: pod manifest uses --no-token, no SP_ACCESS_TOKEN, --base-url."""
+    """kubernetes.py: pod boots with auth ON, token by file, no SP_ACCESS_TOKEN env."""
 
-    def test_pod_cli_always_uses_no_token(self):
-        from gateway.orchestrator.kubernetes import _pod_manifest
+    def test_pod_cli_never_disables_the_token(self):
+        args = _manifest()["spec"]["containers"][0]["args"]
+        assert "--no-token" not in args
 
-        manifest = _pod_manifest(
-            pod_name="nb-test",
-            namespace="default",
-            image="signalpilot-notebook:latest",
-            user_id="user-1",
-            org_id="org-1",
-            project_id="proj-1",
-            branch="main",
-            gateway_url="http://localhost:3300",
-            session_jwt="test.jwt",
-            session_id="sess-abc",
-            access_token="some-token",
+    def test_pod_cli_passes_token_by_file(self):
+        from gateway.orchestrator.kubernetes import SP_NOTEBOOK_TOKEN_MOUNT_FILE
+
+        args = _manifest()["spec"]["containers"][0]["args"]
+        assert "--token-password-file" in args
+        assert args[args.index("--token-password-file") + 1] == SP_NOTEBOOK_TOKEN_MOUNT_FILE
+        # The token itself must never appear in argv (/proc/*/cmdline is readable).
+        assert "pod-notebook-token" not in " ".join(args)
+
+    def test_pod_manifest_refuses_missing_token(self):
+        with pytest.raises(ValueError, match="without a notebook auth token"):
+            _manifest(access_token=None)
+
+    def test_pod_manifest_refuses_empty_token(self):
+        with pytest.raises(ValueError, match="without a notebook auth token"):
+            _manifest(access_token="")
+
+    def test_init_container_stages_the_token(self):
+        from gateway.orchestrator.kubernetes import (
+            SP_NOTEBOOK_TOKEN_MOUNT_FILE,
+            SP_NOTEBOOK_TOKEN_SECRET_KEY,
         )
-        # R4: command is now ["sh", "-c", "...sentinel shim..."]
-        command = manifest["spec"]["containers"][0]["command"]
-        assert command[0] == "sh"
-        assert command[1] == "-c"
-        cmd_str = command[2]
-        assert "--no-token" in cmd_str
-        assert "--token-password" not in cmd_str
 
-    def test_pod_cli_no_token_when_access_token_none(self):
-        from gateway.orchestrator.kubernetes import _pod_manifest
+        manifest = _manifest()
+        stager = manifest["spec"]["initContainers"][0]["command"][2]
+        assert SP_NOTEBOOK_TOKEN_MOUNT_FILE in stager
 
-        manifest = _pod_manifest(
-            pod_name="nb-test",
-            namespace="default",
-            image="signalpilot-notebook:latest",
-            user_id="user-1",
-            org_id="org-1",
-            project_id=None,
-            branch="main",
-            gateway_url="http://localhost:3300",
-            session_jwt="test.jwt",
-            session_id="sess-xyz",
-            access_token=None,
+        secret_volume = next(
+            v for v in manifest["spec"]["volumes"] if v["name"] == "session-jwt-src"
         )
-        # R4: command is now ["sh", "-c", "...sentinel shim..."]
-        command = manifest["spec"]["containers"][0]["command"]
-        assert command[0] == "sh"
-        assert command[1] == "-c"
-        cmd_str = command[2]
-        assert "--no-token" in cmd_str
-        assert "--token-password" not in cmd_str
+        keys = {item["key"] for item in secret_volume["secret"]["items"]}
+        assert keys == {"session_jwt", SP_NOTEBOOK_TOKEN_SECRET_KEY}
 
     def test_pod_cli_includes_base_url(self):
-        from gateway.orchestrator.kubernetes import _pod_manifest
-
-        manifest = _pod_manifest(
-            pod_name="nb-test",
-            namespace="default",
-            image="signalpilot-notebook:latest",
-            user_id="user-1",
-            org_id="org-1",
-            project_id="proj-1",
-            branch="main",
-            gateway_url="http://localhost:3300",
-            session_jwt="test.jwt",
-            session_id="sess-abc",
-            access_token=None,
-        )
-        # R4: command is ["sh", "-c", "...sentinel shim...exec sp edit ...--base-url /notebook/{sid}..."]
-        command = manifest["spec"]["containers"][0]["command"]
-        assert command[0] == "sh"
-        assert command[1] == "-c"
-        cmd_str = command[2]
-        assert "--base-url" in cmd_str
-        assert "/notebook/sess-abc" in cmd_str
+        args = _manifest()["spec"]["containers"][0]["args"]
+        assert "--base-url" in args
+        assert args[args.index("--base-url") + 1] == "/notebook/sess-abc"
 
     def test_pod_env_no_sp_access_token(self):
-        from gateway.orchestrator.kubernetes import _pod_manifest
-
-        manifest = _pod_manifest(
-            pod_name="nb-test",
-            namespace="default",
-            image="signalpilot-notebook:latest",
-            user_id="user-1",
-            org_id="org-1",
-            project_id="proj-1",
-            branch="main",
-            gateway_url="http://localhost:3300",
-            session_jwt="test.jwt",
-            session_id="sess-abc",
-            access_token="some-token",
-        )
+        manifest = _manifest()
         env_names = {e["name"] for e in manifest["spec"]["containers"][0]["env"]}
         assert "SP_ACCESS_TOKEN" not in env_names
-        assert "SP_SESSION_JWT" in env_names
+        # F-6: the JWT is delivered by file, never via pod env.
+        assert "SP_SESSION_JWT" not in env_names
 
-    def test_pod_env_no_sp_access_token_when_none(self):
-        from gateway.orchestrator.kubernetes import _pod_manifest
+    def test_token_is_not_in_pod_env(self):
+        manifest = _manifest()
+        env_values = {e.get("value") for e in manifest["spec"]["containers"][0]["env"]}
+        assert "pod-notebook-token" not in env_values
 
-        manifest = _pod_manifest(
-            pod_name="nb-test",
-            namespace="default",
-            image="signalpilot-notebook:latest",
-            user_id="user-1",
-            org_id="org-1",
-            project_id=None,
-            branch="main",
-            gateway_url="http://localhost:3300",
-            session_jwt="test.jwt",
-            session_id="sess-abc",
-            access_token=None,
-        )
-        env_names = {e["name"] for e in manifest["spec"]["containers"][0]["env"]}
-        assert "SP_ACCESS_TOKEN" not in env_names
+
+class TestNetworkPolicyUnchanged:
+    """The token is defense-in-depth; network isolation stays an independent gate."""
+
+    def test_pod_manifest_does_not_opt_out_of_network_policy(self):
+        manifest = _manifest()
+        assert manifest["spec"]["automountServiceAccountToken"] is False
+        assert manifest["spec"]["enableServiceLinks"] is False
+
+    @pytest.mark.asyncio
+    async def test_ensure_namespace_still_applies_network_policy(self, monkeypatch):
+        """ensure_org_namespace is still called with skip_network_policy=False."""
+        monkeypatch.setenv("SP_NOTEBOOK_UPSTREAM_MODE", "pod_ip")
+        monkeypatch.delenv("SP_NOTEBOOK_NETWORK_POLICY", raising=False)
+        import importlib
+        import sys
+
+        sys.modules.pop("gateway.orchestrator.kubernetes", None)
+        k8s_mod = importlib.import_module("gateway.orchestrator.kubernetes")
+
+        captured: dict = {}
+
+        async def _fake_ensure(*_args, **kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr(k8s_mod, "ensure_org_namespace", _fake_ensure)
+        orch = k8s_mod.KubernetesOrchestrator()
+        orch._client = object()
+        orch._core_api = MagicMock()
+        orch._networking_api = MagicMock()
+        orch._rbac_api = MagicMock()
+        orch._namespace_prefix = "sp"
+        orch._gateway_namespace = "signalpilot"
+        orch._gateway_pod_selector = {"app": "signalpilot-gateway"}
+        orch._gateway_port = 3300
+        orch._egress_cidr = "10.0.0.0/16"
+        orch._gateway_service_account = "sp-gateway"
+
+        await orch.ensure_namespace("org-1")
+        assert captured["skip_network_policy"] is False
 
 
 # ─── Invalid upstream mode ────────────────────────────────────────────────────
@@ -466,7 +470,7 @@ class TestNotebookProxyHTTP:
                 "x-custom": "kept",
             }
         )
-        outbound = _build_outbound_headers(request)
+        outbound = _build_outbound_headers(request, None)
         assert "cookie" not in outbound
         assert "authorization" not in outbound
         assert "x-custom" in outbound
@@ -520,10 +524,50 @@ class TestNotebookProxyHTTP:
                 "upgrade": "websocket",
             }
         )
-        result = _build_outbound_headers(request)
+        result = _build_outbound_headers(request, None)
         assert "connection" not in result
         assert "upgrade" not in result
         assert "x-custom" in result
+
+    def test_caller_authorization_is_replaced_by_the_pod_token(self):
+        """The pod token is applied AFTER the strip, so it survives it."""
+        from gateway.notebook_proxy.proxy import _build_outbound_headers
+
+        request = self._make_request(
+            headers={"authorization": "Bearer clerk-jwt-of-the-browser"}
+        )
+        result = _build_outbound_headers(request, "pod-notebook-token")
+        assert result["authorization"] == "Bearer pod-notebook-token"
+        assert "clerk-jwt" not in str(result)
+
+    def test_ws_handshake_carries_the_pod_token(self):
+        from gateway.notebook_proxy.proxy import _build_outbound_ws_headers
+
+        ws = MagicMock()
+        ws.headers = {
+            "authorization": "Bearer clerk-jwt-of-the-browser",
+            "sec-websocket-protocol": "signalpilot.auth, clerk-jwt-of-the-browser",
+            "x-custom": "kept",
+        }
+        result = dict(_build_outbound_ws_headers(ws, "pod-notebook-token"))
+        assert result["authorization"] == "Bearer pod-notebook-token"
+        assert "sec-websocket-protocol" not in result
+        assert result["x-custom"] == "kept"
+
+    def test_pod_token_is_never_returned_to_the_client(self):
+        """No response path can echo the credential back."""
+        import httpx
+
+        from gateway.notebook_proxy.proxy import _build_inbound_headers
+
+        upstream = httpx.Headers(
+            {
+                "content-type": "text/html",
+                "set-cookie": "session=pod-notebook-token; Path=/",
+            }
+        )
+        result = _build_inbound_headers(upstream)
+        assert "pod-notebook-token" not in str(result)
 
     @pytest.mark.asyncio
     async def test_proxy_502_on_connect_error(self):

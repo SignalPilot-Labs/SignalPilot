@@ -105,7 +105,9 @@ async def create_session(
     import secrets
 
     now = time.time()
-    token = secrets.token_urlsafe(24)
+    # This is the notebook server's own auth token for the pod this session owns:
+    # injected into the pod and presented upstream by the proxy. 32 bytes.
+    token = secrets.token_urlsafe(32)
     row = GatewayNotebookSession(
         id=str(uuid.uuid4()),
         org_id=org_id,

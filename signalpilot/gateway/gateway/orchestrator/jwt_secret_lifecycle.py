@@ -1,4 +1,4 @@
-"""Shared helper for the JWT Secret + Pod creation lifecycle.
+"""Shared helper for the per-pod credential Secret + Pod creation lifecycle.
 
 Both the HTTP path (gateway/api/notebook_sessions.py) and the MCP path
 (gateway/mcp/tools/notebook.py) must: create the Secret, create the Pod,
@@ -33,6 +33,7 @@ async def create_jwt_secret_with_owner_ref(
     namespace: str,
     pod_name: str,
     session_jwt: str,
+    notebook_token: str,
     create_pod_fn: Callable[[], Awaitable[Any]],
 ) -> Any:
     """Create the sp-jwt-<pod_name> Secret, call create_pod_fn, then patch ownerRef.
@@ -42,6 +43,8 @@ async def create_jwt_secret_with_owner_ref(
         namespace: Tenant namespace where both Secret and Pod live.
         pod_name: Name of the pod being created (also used to derive secret_name).
         session_jwt: Raw JWT string to store in the Secret (base64-encoded internally).
+        notebook_token: Per-pod notebook auth token. Required — an empty value would
+            produce a pod that serves anonymous callers, so it raises instead.
         create_pod_fn: Async callable that creates the Pod and returns the pod object.
             Called with no arguments; any required params must be captured in the closure.
 
@@ -49,11 +52,20 @@ async def create_jwt_secret_with_owner_ref(
         The pod object returned by create_pod_fn (a V1Pod or equivalent dict).
 
     Raises:
+        ValueError: notebook_token is empty.
         Any exception raised during secret create, pod create, pod read, or ownerRef patch.
         On pod-create or patch failure, delete_namespaced_secret is called before re-raising.
     """
     from kubernetes_asyncio import client as k8s_client
     from kubernetes_asyncio.client.exceptions import ApiException
+
+    from .kubernetes import SP_NOTEBOOK_TOKEN_SECRET_KEY
+
+    if not notebook_token:
+        raise ValueError(
+            f"Refusing to stage credentials for pod {pod_name!r} without a notebook "
+            "auth token: the pod would accept unauthenticated callers."
+        )
 
     secret_name = f"sp-jwt-{pod_name}"
 
@@ -76,6 +88,9 @@ async def create_jwt_secret_with_owner_ref(
             type="Opaque",
             data={
                 "session_jwt": base64.b64encode(session_jwt.encode()).decode(),
+                SP_NOTEBOOK_TOKEN_SECRET_KEY: base64.b64encode(
+                    notebook_token.encode()
+                ).decode(),
             },
         ),
     )

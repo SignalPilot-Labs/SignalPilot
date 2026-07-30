@@ -37,11 +37,11 @@ from dataclasses import dataclass
 from fastapi import HTTPException
 from starlette.requests import HTTPConnection
 
-from ..auth.user import resolve_org_id, resolve_user_id, verify_jwt_token  # noqa: F401  # re-exported
+from ..auth.user import resolve_org_id, resolve_user_id, verify_jwt_token  # re-exported
 from ..runtime.mode import is_cloud_mode
 from ..store import get_local_api_key
 from ..store import notebook_sessions as ns
-from .constants import POD_PORT, SESSION_ID_PATTERN_STR
+from .constants import LOCAL_NOTEBOOK_TOKEN_FILE, POD_PORT, SESSION_ID_PATTERN_STR
 
 SESSION_ID_PATTERN = re.compile(SESSION_ID_PATTERN_STR)
 
@@ -85,6 +85,26 @@ class ProxySession:
     user_id: str
     org_id: str
     upstream_base: str
+    # The notebook server's own auth token for this pod, presented upstream by the
+    # proxy. Never returned to the caller.
+    upstream_token: str
+
+
+def _local_notebook_token() -> str | None:
+    """Resolve the shared notebook token used by the compose/direct-URL path.
+
+    Read fresh rather than cached: the notebook container writes the file at boot, so
+    a gateway that started first would otherwise cache a miss forever.
+    """
+    env_token = os.getenv("SP_NOTEBOOK_TOKEN", "").strip()
+    if env_token:
+        return env_token
+    path = os.getenv("SP_NOTEBOOK_TOKEN_FILE", LOCAL_NOTEBOOK_TOKEN_FILE)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return handle.read().strip() or None
+    except OSError:
+        return None
 
 
 def _is_websocket(connection: HTTPConnection) -> bool:
@@ -173,17 +193,28 @@ async def resolve_proxy_session(
     # Step 4: readiness check + upstream URL resolution.
     direct_url = os.getenv("SP_NOTEBOOK_DIRECT_URL", "")
     if direct_url:
+        # One shared notebook container, not a per-session pod: its token comes from
+        # the container's own token file rather than the session row.
         upstream_base = direct_url.rstrip("/")
+        upstream_token = _local_notebook_token()
     elif session.status != "running" or not session.pod_ip_internal:
         _log.warning("REJECT: not ready status=%s pod_ip_internal=%s",
                       session.status, session.pod_ip_internal)
         raise HTTPException(status_code=409, detail="Session not ready")
     else:
         upstream_base = f"http://{session.pod_ip_internal}:{POD_PORT}/notebook/{session_id}"
+        upstream_token = session.access_token
+
+    if not upstream_token:
+        # Without it every proxied request would arrive at the notebook anonymously.
+        # Fail closed rather than forward an unauthenticated request.
+        _log.error("REJECT: no upstream notebook token available for session %s", session_id)
+        raise HTTPException(status_code=503, detail="Notebook credential unavailable")
 
     return ProxySession(
         session_id=session_id,
         user_id=session.user_id,
         org_id=session.org_id or "local",
         upstream_base=upstream_base,
+        upstream_token=upstream_token,
     )

@@ -122,7 +122,7 @@ function applySecurityHeaders(
       `frame-src ${frameSrc}`,
       "object-src 'none'",
       "frame-ancestors 'none'",
-      `base-uri 'self' ${gatewayUrl}`,
+      "base-uri 'self'",
       "form-action 'self'",
     ].join("; ")
   );

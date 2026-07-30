@@ -95,18 +95,80 @@ async def github_oauth_callback(
         else:
             org_id = "local"
 
+    from ..db.engine import get_session_factory
     from ..github_client import (
         create_installation_token,
+        create_unrestricted_installation_token,
+        exchange_code_for_token,
         generate_app_jwt,
         get_installation_details,
+        list_user_installation_repositories,
+        list_user_installations,
     )
-    from ..store.crypto import _encrypt
-    from ..db.engine import get_session_factory
     from ..store import github as gh_store
+    from ..store.crypto import _encrypt
+
+    # Repository ids the authorizing user can actually reach inside the
+    # installation. Populated in cloud mode only; stays None in local mode,
+    # where there is no user token to intersect against.
+    authorized_repository_ids: list[int] | None = None
+
+    # Installation IDs are guessable integers, not authorization proof. Complete
+    # the user-authorization leg and require the installation to be accessible
+    # to the user who authorized this flow before minting a token for it.
+    # Local mode skips this — there is no tenant boundary to cross.
+    if is_cloud_mode():
+        if not code:
+            return _github_settings_redirect(settings.sp_web_url, error="oauth_code_missing")
+        if not settings.sp_github_app_client_secret:
+            logger.error("SP_GITHUB_APP_CLIENT_SECRET not set — cannot verify installation ownership")
+            return _github_settings_redirect(settings.sp_web_url, error="github_app_not_configured")
+        try:
+            token_resp = await exchange_code_for_token(
+                settings.sp_github_app_client_id, settings.sp_github_app_client_secret, code
+            )
+            user_token = token_resp.get("access_token")
+            if not user_token:
+                raise ValueError(token_resp.get("error", "no access_token in response"))
+            user_installations = await list_user_installations(user_token)
+        except Exception as e:
+            logger.warning("GitHub user authorization failed for org=%s: %s", org_id, e)
+            return _github_settings_redirect(settings.sp_web_url, error="oauth_verification_failed")
+        if installation_id not in {inst.get("id") for inst in user_installations}:
+            logger.warning(
+                "GitHub installation_id=%s not accessible to authorizing user (org=%s)",
+                installation_id, org_id,
+            )
+            return _github_settings_redirect(settings.sp_web_url, error="installation_not_authorized")
+
+        # SP-SEC-005 (permission amplification): being able to SEE an
+        # installation does not mean being able to reach all of its repos. An
+        # unrestricted installation token would hand the org repositories this
+        # user cannot open themselves. Narrow the token to the user∩installation
+        # repository set, and refuse if that set is empty.
+        try:
+            user_repos = await list_user_installation_repositories(user_token, installation_id)
+        except Exception as e:
+            logger.warning("Could not enumerate user-accessible repos for org=%s: %s", org_id, e)
+            return _github_settings_redirect(settings.sp_web_url, error="oauth_verification_failed")
+        authorized_repository_ids = [r["id"] for r in user_repos if r.get("id") is not None]
+        if not authorized_repository_ids:
+            logger.warning(
+                "GitHub installation_id=%s has no user-accessible repositories (org=%s) — refusing to mint",
+                installation_id, org_id,
+            )
+            return _github_settings_redirect(settings.sp_web_url, error="no_accessible_repositories")
 
     app_jwt = generate_app_jwt(settings.sp_github_app_id, settings.sp_github_app_private_key)
     details = await get_installation_details(app_jwt, installation_id)
-    token_data = await create_installation_token(app_jwt, installation_id)
+    if authorized_repository_ids:
+        token_data = await create_installation_token(
+            app_jwt, installation_id, repository_ids=authorized_repository_ids
+        )
+    else:
+        # Local/single-tenant install: no user token exists to intersect
+        # against and there is no tenant boundary to cross.
+        token_data = await create_unrestricted_installation_token(app_jwt, installation_id)
 
     token = token_data["token"]
     from datetime import datetime
@@ -127,6 +189,7 @@ async def github_oauth_callback(
             access_token_enc=_encrypt(token),
             token_expires_at=expires_at,
             permissions=details.get("permissions"),
+            authorized_repository_ids=authorized_repository_ids,
         )
 
     logger.info("GitHub App installed: installation_id=%s org=%s", installation_id, org_id)
@@ -168,8 +231,8 @@ async def delete_installation(installation_id: str, store: StoreD):
     dependencies=[RequireScope("read")],
 )
 async def list_repos(installation_id: str, store: StoreD):
-    from ..store import github as gh_store
     from ..github_client import list_installation_repos
+    from ..store import github as gh_store
 
     row = await gh_store.get_installation(store.session, org_id=store.org_id or "local", installation_id=installation_id)
     if not row:
@@ -229,7 +292,7 @@ async def create_repo_link(body: GitHubRepoLinkCreate, store: StoreD):
     token = await gh_store.get_valid_token(store.session, installation)
     remote_url = f"https://x-access-token:{token}@github.com/{body.repo_full_name}.git"
 
-    from ..git.repos import clone_from_remote, materialize_local_branches, repo_exists
+    from ..git.repos import clone_from_remote, materialize_local_branches
     try:
         clone_from_remote(body.project_id, remote_url)
         # The bare repo is usually pre-created at project creation, so the line
@@ -246,7 +309,9 @@ async def create_repo_link(body: GitHubRepoLinkCreate, store: StoreD):
 
     # Update last_sync_at
     import time as _time
+
     from sqlalchemy import update as _update
+
     from ..db.models import GatewayGitHubRepoLink
     await store.session.execute(
         _update(GatewayGitHubRepoLink)

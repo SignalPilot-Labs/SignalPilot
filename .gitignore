@@ -110,8 +110,13 @@ signalpilot/notebook-server/signalpilot/_server/ai/.chat_sessions.json
 *.bak
 
 # Internal docs (not for public repo)
+# Internal roadmap, work-log, customer, vendor and operational material. Untracked
+# rather than deleted — the files stay on disk. Note this only stops FUTURE commits:
+# they remain in the existing history and need a separate history rewrite to remove.
 signalpilot/web/clerk-research.md
 signalpilot/web/enterprise-connections.md
+signalpilot/web/UX.md
+writeups/
 
 # Vendored GitHub Copilot LSP binaries (~81MB, disabled by default; install at build if needed)
 signalpilot/notebook-server/signalpilot/_lsp/copilot/

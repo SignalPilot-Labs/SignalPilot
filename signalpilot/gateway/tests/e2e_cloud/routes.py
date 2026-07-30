@@ -165,6 +165,11 @@ def discover() -> tuple[list[RouteSpec], list[RouteSpec]]:
     env = dict(os.environ)
     env |= {
         "SP_DEPLOYMENT_MODE": "cloud",
+        # Cloud K8s settings are validated when the module is imported, even
+        # though discovery never launches a pod. Digest-pinned by requirement.
+        "SP_NOTEBOOK_IMAGE": "registry.invalid/notebook@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "SP_PUBLIC_GATEWAY_URL": "https://gateway.invalid",
+        "SP_NOTEBOOK_RUNTIME_CLASS": "gvisor",
         # Discovery only imports the app to read its dependency tree; it never
         # verifies a token, so application binding is irrelevant here.
         "SP_ALLOW_UNBOUND_JWT_AUDIENCE": "1",

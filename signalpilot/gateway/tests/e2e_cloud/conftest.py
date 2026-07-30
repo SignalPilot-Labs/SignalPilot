@@ -207,6 +207,7 @@ def _child_env(workdir: Path, database_url: str, port: int, publishable_key: str
 
         # ── cloud hardening kill-switches (assert_cloud_hardening_intact) ─────
         "SP_NOTEBOOK_RUNTIME_CLASS": "gvisor",
+        "SP_NOTEBOOK_IMAGE": "registry.invalid/notebook@sha256:0000000000000000000000000000000000000000000000000000000000000000",
         "SP_NOTEBOOK_NETWORK_POLICY": "true",
         "SP_DISABLE_SANDBOX": "false",
         "SP_ALLOWED_ORIGINS": base_url,

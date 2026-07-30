@@ -2,8 +2,9 @@
 
 Thin routing layer — orchestration lives in gateway/github_bot/runner.py.
 The webhook path is auth-exempt (PUBLIC_PATHS) and protected by HMAC
-signature verification instead; scans run in the background so the webhook
-responds inside GitHub's 10s budget.
+signature verification instead, so it is disabled outright when no webhook
+secret is configured; scans run in the background so the webhook responds
+inside GitHub's 10s budget.
 """
 
 from __future__ import annotations
@@ -41,11 +42,12 @@ async def github_webhook(request: Request):
     """GitHub webhook receiver — pull_request events trigger a background scan."""
     body = await request.body()
     cfg = get_github_bot_settings()
-    if cfg.webhook_secret:
-        if not _verify_signature(cfg.webhook_secret, body, request.headers.get("x-hub-signature-256")):
-            raise HTTPException(status_code=401, detail="invalid webhook signature")
-    elif is_cloud_mode():
+    # No secret means no way to authenticate the sender, in any deployment mode —
+    # the route is closed rather than accepting unsigned deliveries.
+    if not cfg.webhook_secret:
         raise HTTPException(status_code=503, detail="webhook secret not configured")
+    if not _verify_signature(cfg.webhook_secret, body, request.headers.get("x-hub-signature-256")):
+        raise HTTPException(status_code=401, detail="invalid webhook signature")
 
     event = request.headers.get("x-github-event", "")
     if event == "ping":

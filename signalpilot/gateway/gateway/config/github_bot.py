@@ -5,8 +5,8 @@ Class A vars managed here:
                                 GitHub App installation covers the repo (local
                                 testing; production uses App installation tokens)
     SP_GITHUB_WEBHOOK_SECRET  — HMAC secret for /api/github/webhook signatures.
-                                Unset ⇒ webhook rejected in cloud mode, accepted
-                                unsigned in local mode (dev convenience).
+                                Unset ⇒ the webhook route is disabled (503) in
+                                every deployment mode.
     SP_GITHUB_BOT_CONNECTION  — default connection name the verification battery
                                 runs against when a scan doesn't specify one
 """

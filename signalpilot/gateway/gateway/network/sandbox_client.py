@@ -28,11 +28,19 @@ class SandboxClient:
         # Validate base_url to prevent SSRF via scheme injection
         from urllib.parse import urlparse
 
+        from ..runtime.mode import is_cloud_mode
+        from .validation import validate_connection_host
+
         parsed = urlparse(base_url)
         if parsed.scheme not in self.ALLOWED_SCHEMES:
             raise ValueError(f"Invalid sandbox manager URL scheme: {parsed.scheme!r}. Must be http or https.")
         if not parsed.hostname:
             raise ValueError("Invalid sandbox manager URL: missing hostname")
+        # BYOS makes this URL user-configurable, and every request carries the
+        # sandbox shared secret — the deny-list runs before any client exists.
+        # Cloud-mode only, matching validate_xata_control_url.
+        if is_cloud_mode():
+            validate_connection_host(parsed.hostname)
         self.base_url = base_url.rstrip("/")
         headers = {}
         if api_key:

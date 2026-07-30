@@ -20,9 +20,11 @@ Kubernetes pods and the Docker socket is never opened (gateway/evals/backends.py
 
 from __future__ import annotations
 
+import os
+import re
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from ._base import _GatewaySettingsBase
 
@@ -60,6 +62,32 @@ class EvalRunSettings(_GatewaySettingsBase):
     # named namespace is rejected at CREATE. Changing this requires widening
     # that policy's tenantPrefix in the same deploy.
     k8s_namespace_prefix: str = Field("sp-nb", alias="SP_EVAL_K8S_NAMESPACE_PREFIX")
+
+    # Cloud-mode image digest must be sha256 + exactly 64 lowercase hex chars,
+    # matching the guarantee SP_NOTEBOOK_IMAGE already carries.
+    _DIGEST_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
+
+    @field_validator("runner_image", mode="after")
+    @classmethod
+    def _require_digest_in_cloud_mode(cls, v: str) -> str:
+        """In cloud mode the eval runner image must be digest-pinned.
+
+        This image executes untrusted eval workloads, so a floating tag would let
+        what actually runs in the sandbox change without the config changing.
+        Empty is allowed: it is how the feature stays disabled.
+        """
+        if not v:
+            return v
+        is_cloud = os.environ.get("SP_DEPLOYMENT_MODE", "").lower() == "cloud"
+        if is_cloud and not re.search(r"@sha256:[0-9a-f]{64}$", v):
+            raise ValueError(
+                "SP_EVAL_RUNNER_IMAGE must reference a digest in cloud mode "
+                "(e.g. your-registry/eval-runner@sha256:<64-hex>). "
+                "Floating tags like ':latest' are not allowed. "
+                "Look up the digest with: crane digest <image> OR "
+                "docker buildx imagetools inspect <image>"
+            )
+        return v
 
     @property
     def enabled(self) -> bool:

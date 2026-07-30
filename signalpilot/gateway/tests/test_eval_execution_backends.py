@@ -23,9 +23,14 @@ from gateway.evals.backends import (
 )
 
 
+# Cloud mode requires the runner image to be digest-pinned, so the shared fixture
+# uses a digest; the local-mode cases override it with a floating tag.
+_DIGEST_IMAGE = "reg.example.com/eval-runner@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+
 def _settings(**overrides) -> EvalRunSettings:
     base = {
-        "SP_EVAL_RUNNER_IMAGE": "sp-eval-runner:latest",
+        "SP_EVAL_RUNNER_IMAGE": _DIGEST_IMAGE,
         "SP_EVAL_DOCKER_SOCKET": "/var/run/docker.sock",
         "SP_EVAL_MCP_URL": "http://gateway:3300/mcp",
         "SP_EVAL_TIMEOUT_SECONDS": "600",

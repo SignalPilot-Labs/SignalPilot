@@ -2,7 +2,8 @@
 binding, and per-principal quota.
 
 The gateway never sees the bytes, so everything here is about what the server
-commits to before handing out presigned URLs.
+commits to before handing out presigned URLs. Sessions live in the shared store,
+so these exercise the Store surface rather than a process dict.
 """
 
 from __future__ import annotations
@@ -10,19 +11,39 @@ from __future__ import annotations
 import time
 
 import pytest
+import pytest_asyncio
 from fastapi import HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from gateway.api import uploads
 from gateway.config.uploads import EvalUploadsSettings
+from gateway.db.models import GatewayBase, GatewayUploadSession
+from gateway.store import Store
 
 PART = uploads.PART_SIZE
 
+_ORG_ID = "test-org-uploads"
 
-@pytest.fixture(autouse=True)
-def _clean_sessions():
-    uploads._sessions.clear()
-    yield
-    uploads._sessions.clear()
+
+@pytest_asyncio.fixture
+async def session_factory():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(GatewayBase.metadata.create_all)
+    yield async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def db_session(session_factory) -> AsyncSession:
+    async with session_factory() as session:
+        yield session
+
+
+@pytest.fixture
+def store(db_session: AsyncSession) -> Store:
+    return Store(db_session, org_id=_ORG_ID, user_id="user-1")
 
 
 def _cfg(max_mb: int = 8192) -> EvalUploadsSettings:
@@ -43,8 +64,11 @@ class _FakeS3:
         self.deleted: list[str] = []
         self.head_size = 0
         self.aborted: list[str] = []
+        self.initiate_error: Exception | None = None
 
     def create_multipart_upload(self, **kwargs):
+        if self.initiate_error is not None:
+            raise self.initiate_error
         return {"UploadId": "upload-1"}
 
     def generate_presigned_url(self, op, Params, ExpiresIn):
@@ -73,6 +97,11 @@ def fake_s3(monkeypatch):
     return s3
 
 
+async def _rows(session: AsyncSession) -> list[GatewayUploadSession]:
+    result = await session.execute(select(GatewayUploadSession))
+    return list(result.scalars())
+
+
 # ─── Part-length binding ─────────────────────────────────────────────────────
 
 
@@ -84,17 +113,17 @@ class TestPartLengthBinding:
         assert sum(uploads._part_plan(3 * PART + 77)) == 3 * PART + 77
 
     @pytest.mark.asyncio
-    async def test_each_presigned_part_binds_its_content_length(self, fake_s3):
+    async def test_each_presigned_part_binds_its_content_length(self, fake_s3, store):
         req = uploads.InitiateRequest(filename="a.zip", size_bytes=PART + 500)
-        await uploads.initiate_eval_upload("user-1", req)
+        await uploads.initiate_eval_upload("user-1", store, req)
 
         lengths = [p["ContentLength"] for p in fake_s3.presign_params]
         assert lengths == [PART, 500]
 
     @pytest.mark.asyncio
-    async def test_presign_expiry_is_short(self, fake_s3):
+    async def test_presign_expiry_is_short(self, fake_s3, store):
         req = uploads.InitiateRequest(filename="a.zip", size_bytes=10)
-        await uploads.initiate_eval_upload("user-1", req)
+        await uploads.initiate_eval_upload("user-1", store, req)
         assert fake_s3.presign_params[0]["_expires_in"] <= 3600
 
     def test_boto3_signs_content_length_header(self):
@@ -122,22 +151,26 @@ class TestPartLengthBinding:
 
 class TestUploadSessionOwnership:
     @pytest.mark.asyncio
-    async def test_initiate_registers_owner_bound_session(self, fake_s3):
+    async def test_initiate_registers_owner_bound_session(self, fake_s3, store, db_session):
         req = uploads.InitiateRequest(filename="a.zip", size_bytes=PART + 1)
-        resp = await uploads.initiate_eval_upload("user-1", req)
-        session = uploads._sessions[resp.key]
-        assert session.user_id == "user-1"
-        assert session.size_bytes == PART + 1
-        assert session.expires_at > time.monotonic()
+        resp = await uploads.initiate_eval_upload("user-1", store, req)
+        row = (await _rows(db_session))[0]
+        assert row.key == resp.key
+        assert row.user_id == "user-1"
+        assert row.org_id == _ORG_ID
+        assert row.size_bytes == PART + 1
+        assert row.upload_id == resp.upload_id
+        assert row.expires_at > time.time()
 
     @pytest.mark.asyncio
-    async def test_complete_by_other_principal_rejected(self, fake_s3):
+    async def test_complete_by_other_principal_rejected(self, fake_s3, store):
         resp = await uploads.initiate_eval_upload(
-            "user-1", uploads.InitiateRequest(filename="a.zip", size_bytes=10)
+            "user-1", store, uploads.InitiateRequest(filename="a.zip", size_bytes=10)
         )
         with pytest.raises(HTTPException) as exc:
             await uploads.complete_eval_upload(
                 "user-2",
+                store,
                 uploads.CompleteRequest(
                     key=resp.key,
                     upload_id=resp.upload_id,
@@ -147,11 +180,12 @@ class TestUploadSessionOwnership:
         assert exc.value.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_complete_without_session_rejected(self, fake_s3):
+    async def test_complete_without_session_rejected(self, fake_s3, store):
         """A key/upload_id pair the gateway never issued cannot be completed."""
         with pytest.raises(HTTPException) as exc:
             await uploads.complete_eval_upload(
                 "user-1",
+                store,
                 uploads.CompleteRequest(
                     key="uploads/2026-01-01/aabbccdd/x.zip",
                     upload_id="forged",
@@ -161,13 +195,14 @@ class TestUploadSessionOwnership:
         assert exc.value.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_complete_rejects_parts_beyond_the_plan(self, fake_s3):
+    async def test_complete_rejects_parts_beyond_the_plan(self, fake_s3, store):
         resp = await uploads.initiate_eval_upload(
-            "user-1", uploads.InitiateRequest(filename="a.zip", size_bytes=10)
+            "user-1", store, uploads.InitiateRequest(filename="a.zip", size_bytes=10)
         )
         with pytest.raises(HTTPException) as exc:
             await uploads.complete_eval_upload(
                 "user-1",
+                store,
                 uploads.CompleteRequest(
                     key=resp.key,
                     upload_id=resp.upload_id,
@@ -180,14 +215,15 @@ class TestUploadSessionOwnership:
         assert exc.value.status_code == 400
 
     @pytest.mark.asyncio
-    async def test_oversized_object_deleted_against_declared_size(self, fake_s3):
+    async def test_oversized_object_deleted_against_declared_size(self, fake_s3, store):
         resp = await uploads.initiate_eval_upload(
-            "user-1", uploads.InitiateRequest(filename="a.zip", size_bytes=1024)
+            "user-1", store, uploads.InitiateRequest(filename="a.zip", size_bytes=1024)
         )
         fake_s3.head_size = 500 * 1024 * 1024  # far above the claim, under max_bytes
         with pytest.raises(HTTPException) as exc:
             await uploads.complete_eval_upload(
                 "user-1",
+                store,
                 uploads.CompleteRequest(
                     key=resp.key,
                     upload_id=resp.upload_id,
@@ -198,64 +234,99 @@ class TestUploadSessionOwnership:
         assert resp.key in fake_s3.deleted
 
     @pytest.mark.asyncio
-    async def test_abort_requires_the_owning_principal(self, fake_s3):
+    async def test_completion_frees_the_reservation(self, fake_s3, store, db_session):
         resp = await uploads.initiate_eval_upload(
-            "user-1", uploads.InitiateRequest(filename="a.zip", size_bytes=10)
+            "user-1", store, uploads.InitiateRequest(filename="a.zip", size_bytes=10)
+        )
+        fake_s3.head_size = 10
+        await uploads.complete_eval_upload(
+            "user-1",
+            store,
+            uploads.CompleteRequest(
+                key=resp.key,
+                upload_id=resp.upload_id,
+                parts=[uploads.CompletedPart(part_number=1, etag="e")],
+            ),
+        )
+        assert await _rows(db_session) == []
+
+    @pytest.mark.asyncio
+    async def test_abort_requires_the_owning_principal(self, fake_s3, store, db_session):
+        resp = await uploads.initiate_eval_upload(
+            "user-1", store, uploads.InitiateRequest(filename="a.zip", size_bytes=10)
         )
         with pytest.raises(HTTPException) as exc:
             await uploads.abort_eval_upload(
-                "user-2", uploads.AbortRequest(key=resp.key, upload_id=resp.upload_id)
+                "user-2", store, uploads.AbortRequest(key=resp.key, upload_id=resp.upload_id)
             )
         assert exc.value.status_code == 404
         assert fake_s3.aborted == []
 
         await uploads.abort_eval_upload(
-            "user-1", uploads.AbortRequest(key=resp.key, upload_id=resp.upload_id)
+            "user-1", store, uploads.AbortRequest(key=resp.key, upload_id=resp.upload_id)
         )
         assert fake_s3.aborted == [resp.key]
-        assert resp.key not in uploads._sessions
+        assert await _rows(db_session) == []
 
 
 class TestPerPrincipalQuota:
     @pytest.mark.asyncio
-    async def test_open_upload_count_capped(self, fake_s3):
+    async def test_open_upload_count_capped(self, fake_s3, store):
         for _ in range(uploads._MAX_OPEN_UPLOADS_PER_USER):
             await uploads.initiate_eval_upload(
-                "user-1", uploads.InitiateRequest(filename="a.zip", size_bytes=10)
+                "user-1", store, uploads.InitiateRequest(filename="a.zip", size_bytes=10)
             )
         with pytest.raises(HTTPException) as exc:
             await uploads.initiate_eval_upload(
-                "user-1", uploads.InitiateRequest(filename="a.zip", size_bytes=10)
+                "user-1", store, uploads.InitiateRequest(filename="a.zip", size_bytes=10)
             )
         assert exc.value.status_code == 429
 
     @pytest.mark.asyncio
-    async def test_concurrent_bytes_capped(self, monkeypatch, fake_s3):
+    async def test_concurrent_bytes_capped(self, monkeypatch, fake_s3, store):
         small = lambda: _cfg(max_mb=128)  # noqa: E731
         monkeypatch.setattr(uploads, "get_eval_uploads_settings", small)
         await uploads.initiate_eval_upload(
-            "user-1", uploads.InitiateRequest(filename="a.zip", size_bytes=100 * 1024 * 1024)
+            "user-1", store, uploads.InitiateRequest(filename="a.zip", size_bytes=100 * 1024 * 1024)
         )
         with pytest.raises(HTTPException) as exc:
             await uploads.initiate_eval_upload(
-                "user-1", uploads.InitiateRequest(filename="b.zip", size_bytes=100 * 1024 * 1024)
+                "user-1", store, uploads.InitiateRequest(filename="b.zip", size_bytes=100 * 1024 * 1024)
             )
         assert exc.value.status_code == 429
 
     @pytest.mark.asyncio
-    async def test_quota_is_per_principal(self, monkeypatch, fake_s3):
+    async def test_quota_is_per_principal(self, fake_s3, store, db_session):
         for _ in range(uploads._MAX_OPEN_UPLOADS_PER_USER):
             await uploads.initiate_eval_upload(
-                "user-1", uploads.InitiateRequest(filename="a.zip", size_bytes=10)
+                "user-1", store, uploads.InitiateRequest(filename="a.zip", size_bytes=10)
             )
         resp = await uploads.initiate_eval_upload(
-            "user-2", uploads.InitiateRequest(filename="a.zip", size_bytes=10)
+            "user-2", store, uploads.InitiateRequest(filename="a.zip", size_bytes=10)
         )
-        assert uploads._sessions[resp.key].user_id == "user-2"
+        rows = {r.key: r.user_id for r in await _rows(db_session)}
+        assert rows[resp.key] == "user-2"
 
-    def test_expired_sessions_stop_counting(self):
-        uploads._sessions["k"] = uploads._UploadSession(
-            key="k", upload_id="u", user_id="user-1", size_bytes=1, expires_at=time.monotonic() - 1
+    @pytest.mark.asyncio
+    async def test_failed_initiation_releases_the_reservation(self, fake_s3, store, db_session):
+        fake_s3.initiate_error = RuntimeError("S3 down")
+        with pytest.raises(RuntimeError):
+            await uploads.initiate_eval_upload(
+                "user-1", store, uploads.InitiateRequest(filename="a.zip", size_bytes=10)
+            )
+        assert await _rows(db_session) == []
+
+    @pytest.mark.asyncio
+    async def test_expired_sessions_stop_counting(self, fake_s3, store, db_session):
+        for _ in range(uploads._MAX_OPEN_UPLOADS_PER_USER):
+            await uploads.initiate_eval_upload(
+                "user-1", store, uploads.InitiateRequest(filename="a.zip", size_bytes=10)
+            )
+        for row in await _rows(db_session):
+            row.expires_at = time.time() - 1
+        await db_session.commit()
+
+        await uploads.initiate_eval_upload(
+            "user-1", store, uploads.InitiateRequest(filename="a.zip", size_bytes=10)
         )
-        uploads._check_quota("user-1", 1, 1024)
-        assert "k" not in uploads._sessions
+        assert len(await _rows(db_session)) == 1

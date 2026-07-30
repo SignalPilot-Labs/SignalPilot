@@ -1269,6 +1269,54 @@ class Store:
         oid = self._require_org_id()
         return await wp.delete_project(self.session, org_id=oid, project_id=project_id)
 
+    # ─── Upload Sessions ─────────────────────────────────────────────────────
+
+    async def reserve_upload_session(
+        self,
+        *,
+        user_id: str,
+        key: str,
+        size_bytes: int,
+        part_lengths: list[int],
+        max_open: int,
+        max_bytes: int,
+        ttl_s: float,
+    ) -> None:
+        from . import upload_sessions
+
+        oid = self._require_org_id()
+        await upload_sessions.reserve(
+            self.session,
+            org_id=oid,
+            user_id=user_id,
+            key=key,
+            size_bytes=size_bytes,
+            part_lengths=part_lengths,
+            max_open=max_open,
+            max_bytes=max_bytes,
+            ttl_s=ttl_s,
+        )
+
+    async def bind_upload_session(self, key: str, upload_id: str) -> None:
+        from . import upload_sessions
+
+        oid = self._require_org_id()
+        await upload_sessions.bind_upload_id(self.session, org_id=oid, key=key, upload_id=upload_id)
+
+    async def release_upload_session(self, key: str) -> None:
+        from . import upload_sessions
+
+        oid = self._require_org_id()
+        await upload_sessions.release(self.session, org_id=oid, key=key)
+
+    async def get_upload_session(self, *, user_id: str, key: str, upload_id: str):
+        from . import upload_sessions
+
+        oid = self._require_org_id()
+        return await upload_sessions.get_owned(
+            self.session, org_id=oid, user_id=user_id, key=key, upload_id=upload_id
+        )
+
     # ─── Chat ────────────────────────────────────────────────────────────────
 
     async def create_conversation(self, **kwargs):

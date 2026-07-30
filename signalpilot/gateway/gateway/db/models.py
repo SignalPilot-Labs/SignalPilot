@@ -11,6 +11,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     DateTime,
     Float,
@@ -310,6 +311,36 @@ class GatewaySessionBudget(GatewayBase):
     __table_args__ = (
         UniqueConstraint("org_id", "session_id", name="uq_gw_budget_org_session"),
         Index("ix_gw_budget_org_id", "org_id"),
+    )
+
+
+class GatewayUploadSession(GatewayBase):
+    """Reserved slot for an in-flight eval multipart upload.
+
+    The bytes go straight to S3, so this row is the only server-side record of
+    what a principal was allowed to upload, and the per-principal open-upload
+    and concurrent-byte caps are counted from it. It is written before
+    CreateMultipartUpload is awaited (upload_id filled in afterwards) so racing
+    initiations in any worker or replica contend on one shared reservation.
+    """
+
+    __tablename__ = "gateway_upload_sessions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    key: Mapped[str] = mapped_column(String(500), nullable=False)
+    upload_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # 8 GB ceiling overflows INTEGER on Postgres.
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    part_lengths: Mapped[list | None] = mapped_column(JSON)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "key", name="uq_gw_upload_org_key"),
+        Index("ix_gw_upload_org_user", "org_id", "user_id"),
+        Index("ix_gw_upload_expires", "expires_at"),
     )
 
 

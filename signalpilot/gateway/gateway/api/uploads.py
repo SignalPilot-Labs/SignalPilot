@@ -1,7 +1,8 @@
 """Eval upload endpoints — presigned S3 multipart upload, notify the team.
 
-Deliberately minimal (see eval-upload-spec.md at repo root): no database rows,
-no download path, no processing. S3 is the record; a bucket lifecycle rule
+Deliberately minimal (see eval-upload-spec.md at repo root): no download path,
+no processing, and the only database row is the short-lived quota reservation
+for an in-flight multipart upload. S3 is the record; a bucket lifecycle rule
 handles the 7-day deletion (and aborts stale multipart uploads); the
 notification is one email.
 
@@ -22,8 +23,6 @@ import logging
 import re
 import secrets
 import smtplib
-import time
-from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 
@@ -34,6 +33,8 @@ from starlette.concurrency import run_in_threadpool
 from ..auth import UserID
 from ..config.uploads import EvalUploadsSettings, get_eval_uploads_settings
 from ..security.scope_guard import RequireScope
+from ..store.upload_sessions import QuotaExceeded
+from .deps import StoreD
 
 logger = logging.getLogger(__name__)
 
@@ -58,32 +59,15 @@ def _sanitize_filename(name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# In-process upload sessions
+# Upload sessions
 # ---------------------------------------------------------------------------
 # The bytes never touch the gateway, so the only server-side record of what a
-# principal was allowed to upload is this registry. It binds owner, expected
-# total length and the per-part plan, and it is what the concurrent-bytes and
-# open-upload caps are counted from. A gateway restart drops open sessions —
-# clients must re-initiate; S3 lifecycle rules abort the orphaned uploads.
-
-
-@dataclass
-class _UploadSession:
-    key: str
-    upload_id: str
-    user_id: str
-    size_bytes: int
-    part_lengths: list[int] = field(default_factory=list)
-    expires_at: float = 0.0
-
-
-_sessions: dict[str, _UploadSession] = {}
-
-
-def _prune_sessions(now: float | None = None) -> None:
-    cutoff = now if now is not None else time.monotonic()
-    for key in [k for k, s in _sessions.items() if s.expires_at <= cutoff]:
-        del _sessions[key]
+# principal was allowed to upload is the gateway_upload_sessions table. It binds
+# owner, expected total length and the per-part plan, and it is what the
+# concurrent-bytes and open-upload caps are counted from. It lives in the shared
+# store, not in the process, so every worker and replica enforces one quota;
+# expired rows are pruned on the next reservation or lookup and the S3 lifecycle
+# rule aborts the orphaned multipart uploads.
 
 
 def _part_plan(size_bytes: int) -> list[int]:
@@ -94,27 +78,9 @@ def _part_plan(size_bytes: int) -> list[int]:
     return plan
 
 
-def _check_quota(user_id: str, size_bytes: int, max_bytes: int) -> None:
-    """Enforce per-principal open-upload and concurrent-byte ceilings."""
-    _prune_sessions()
-    open_sessions = [s for s in _sessions.values() if s.user_id == user_id]
-    if len(open_sessions) >= _MAX_OPEN_UPLOADS_PER_USER:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Too many uploads in progress (limit {_MAX_OPEN_UPLOADS_PER_USER}) — finish or abort one first",
-        )
-    outstanding = sum(s.size_bytes for s in open_sessions)
-    if outstanding + size_bytes > max_bytes:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Uploads in progress already reserve {outstanding // (1024 * 1024)} MB of the quota",
-        )
-
-
-def _owned_session(key: str, upload_id: str, user_id: str) -> _UploadSession:
-    _prune_sessions()
-    session = _sessions.get(key)
-    if session is None or session.upload_id != upload_id or session.user_id != user_id:
+async def _owned_session(store, key: str, upload_id: str, user_id: str):
+    session = await store.get_upload_session(user_id=user_id, key=key, upload_id=upload_id)
+    if session is None:
         raise HTTPException(status_code=404, detail="Unknown or expired upload session")
     return session
 
@@ -252,7 +218,7 @@ def _validate_key(key: str) -> None:
 
 
 @router.post("/evals/upload/initiate", dependencies=[RequireScope("write")])
-async def initiate_eval_upload(user_id: UserID, req: InitiateRequest) -> InitiateResponse:
+async def initiate_eval_upload(user_id: UserID, store: StoreD, req: InitiateRequest) -> InitiateResponse:
     """Start a multipart upload and presign one PUT URL per part."""
     cfg = _require_enabled()
 
@@ -265,10 +231,24 @@ async def initiate_eval_upload(user_id: UserID, req: InitiateRequest) -> Initiat
             detail=f"File is {req.size_bytes // (1024 * 1024)} MB — the limit is {cfg.max_mb} MB",
         )
 
-    _check_quota(user_id, req.size_bytes, cfg.max_bytes)
-
     key, reference_id, _ = _new_key(filename)
     part_lengths = _part_plan(req.size_bytes)
+
+    # The slot is claimed before the S3 round-trip is awaited: checking the
+    # quota and reserving against it must not be separated by an await, or
+    # concurrent initiations all pass the same check.
+    try:
+        await store.reserve_upload_session(
+            user_id=user_id,
+            key=key,
+            size_bytes=req.size_bytes,
+            part_lengths=part_lengths,
+            max_open=_MAX_OPEN_UPLOADS_PER_USER,
+            max_bytes=cfg.max_bytes,
+            ttl_s=_SESSION_TTL_S,
+        )
+    except QuotaExceeded as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
 
     def _initiate() -> InitiateResponse:
         client = _s3_client(cfg)
@@ -307,24 +287,21 @@ async def initiate_eval_upload(user_id: UserID, req: InitiateRequest) -> Initiat
             part_urls=part_urls,
         )
 
-    response = await run_in_threadpool(_initiate)
-    _sessions[key] = _UploadSession(
-        key=key,
-        upload_id=response.upload_id,
-        user_id=user_id,
-        size_bytes=req.size_bytes,
-        part_lengths=part_lengths,
-        expires_at=time.monotonic() + _SESSION_TTL_S,
-    )
+    try:
+        response = await run_in_threadpool(_initiate)
+    except Exception:
+        await store.release_upload_session(key)
+        raise
+    await store.bind_upload_session(key, response.upload_id)
     return response
 
 
 @router.post("/evals/upload/complete", dependencies=[RequireScope("write")])
-async def complete_eval_upload(user_id: UserID, req: CompleteRequest):
+async def complete_eval_upload(user_id: UserID, store: StoreD, req: CompleteRequest):
     """Finish the multipart upload, verify size, and email the team."""
     cfg = _require_enabled()
     _validate_key(req.key)
-    session = _owned_session(req.key, req.upload_id, user_id)
+    session = await _owned_session(store, req.key, req.upload_id, user_id)
 
     highest = max(p.part_number for p in req.parts)
     if highest > len(session.part_lengths) or len({p.part_number for p in req.parts}) != len(req.parts):
@@ -357,7 +334,7 @@ async def complete_eval_upload(user_id: UserID, req: CompleteRequest):
     try:
         size = await run_in_threadpool(_complete)
     finally:
-        _sessions.pop(req.key, None)
+        await store.release_upload_session(req.key)
 
     reference_id = _reference_from_key(req.key)
     expires = f"{datetime.now(UTC) + timedelta(days=7):%Y-%m-%d}"
@@ -383,12 +360,12 @@ async def complete_eval_upload(user_id: UserID, req: CompleteRequest):
 
 
 @router.post("/evals/upload/abort", status_code=204, response_model=None, dependencies=[RequireScope("write")])
-async def abort_eval_upload(user_id: UserID, req: AbortRequest) -> None:
+async def abort_eval_upload(user_id: UserID, store: StoreD, req: AbortRequest) -> None:
     """Best-effort cleanup when the client gives up; lifecycle rules are the backstop."""
     cfg = _require_enabled()
     _validate_key(req.key)
-    _owned_session(req.key, req.upload_id, user_id)
-    _sessions.pop(req.key, None)
+    await _owned_session(store, req.key, req.upload_id, user_id)
+    await store.release_upload_session(req.key)
 
     def _abort() -> None:
         client = _s3_client(cfg)

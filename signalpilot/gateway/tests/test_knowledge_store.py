@@ -44,7 +44,7 @@ def _make_doc_row(
     org_id: str = "test-org",
     scope: str = "org",
     scope_ref: str | None = None,
-    category: str = "conventions",
+    category: str = "rules",
     title: str = "test-doc",
     body: str = "hello world",
     status: str = "active",
@@ -275,15 +275,15 @@ class TestPlanLimitsTiersUpdated:
 
 
 class TestKnowledgeDocCreateValidation:
-    def test_valid_org_conventions(self):
+    def test_valid_org_rules(self):
         doc = KnowledgeDocCreate(
             scope=KnowledgeScope.org,
             scope_ref=None,
-            category=KnowledgeCategory.conventions,
-            title="my-conventions",
+            category=KnowledgeCategory.rules,
+            title="my-rules",
             body="content",
         )
-        assert doc.title == "my-conventions"
+        assert doc.title == "my-rules"
 
     def test_invalid_slug_title_rejected(self):
         import pydantic
@@ -292,7 +292,7 @@ class TestKnowledgeDocCreateValidation:
             KnowledgeDocCreate(
                 scope=KnowledgeScope.org,
                 scope_ref=None,
-                category=KnowledgeCategory.conventions,
+                category=KnowledgeCategory.rules,
                 title="Invalid Title!",
                 body="content",
             )
@@ -304,7 +304,7 @@ class TestKnowledgeDocCreateValidation:
             KnowledgeDocCreate(
                 scope=KnowledgeScope.org,
                 scope_ref=None,
-                category=KnowledgeCategory.quirks,  # quirks only for connection
+                category=KnowledgeCategory.troubleshooting,  # not permitted at org scope
                 title="wrong-cat",
                 body="content",
             )
@@ -316,7 +316,7 @@ class TestKnowledgeDocCreateValidation:
             KnowledgeDocCreate(
                 scope=KnowledgeScope.project,
                 scope_ref=None,
-                category=KnowledgeCategory.conventions,
+                category=KnowledgeCategory.rules,
                 title="my-doc",
                 body="content",
             )
@@ -328,7 +328,7 @@ class TestKnowledgeDocCreateValidation:
             KnowledgeDocCreate(
                 scope=KnowledgeScope.org,
                 scope_ref="some-ref",
-                category=KnowledgeCategory.conventions,
+                category=KnowledgeCategory.rules,
                 title="my-doc",
                 body="content",
             )
@@ -395,7 +395,7 @@ def _make_insert_session(existing_bytes: int = 0) -> AsyncMock:
     row.org_id = "test-org"
     row.scope = "org"
     row.scope_ref = None
-    row.category = "conventions"
+    row.category = "rules"
     row.title = "test-doc"
     row.body = "content"
     row.status = "active"
@@ -437,7 +437,7 @@ class TestAgentProposalCloudGating:
         payload = KnowledgeDocCreate(
             scope=KnowledgeScope.org,
             scope_ref=None,
-            category=KnowledgeCategory.conventions,
+            category=KnowledgeCategory.rules,
             title="test-doc",
             body="content",
         )
@@ -472,7 +472,7 @@ class TestAgentProposalCloudGating:
         payload = KnowledgeDocCreate(
             scope=KnowledgeScope.org,
             scope_ref=None,
-            category=KnowledgeCategory.conventions,
+            category=KnowledgeCategory.rules,
             title="test-doc",
             body="content",
         )
@@ -524,7 +524,7 @@ class TestAgentProposalCloudGating:
         payload = KnowledgeDocCreate(
             scope=KnowledgeScope.org,
             scope_ref=None,
-            category=KnowledgeCategory.conventions,
+            category=KnowledgeCategory.rules,
             title=existing.title,
             body="new content",
         )
@@ -573,7 +573,7 @@ class TestAgentProposalCloudGating:
         payload = KnowledgeDocCreate(
             scope=KnowledgeScope.org,
             scope_ref=None,
-            category=KnowledgeCategory.conventions,
+            category=KnowledgeCategory.rules,
             title=existing.title,
             body="new content",
         )
@@ -592,7 +592,13 @@ class TestAgentProposalCloudGating:
         assert existing.status == "active"
 
     @pytest.mark.asyncio
-    async def test_upsert_update_revives_archived_doc(self, monkeypatch):
+    async def test_upsert_update_leaves_archived_doc_archived(self, monkeypatch):
+        """An overwrite must not resurrect a tombstoned doc.
+
+        Archived is a tombstone: reviving it on upsert let a guessed
+        (scope, scope_ref, category, title) key silently bring back deleted
+        knowledge via overwrite=True. Unarchiving is now explicit only.
+        """
         """Editing an archived doc (local mode) revives it to active, not hidden."""
         monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
 
@@ -622,7 +628,7 @@ class TestAgentProposalCloudGating:
         payload = KnowledgeDocCreate(
             scope=KnowledgeScope.org,
             scope_ref=None,
-            category=KnowledgeCategory.conventions,
+            category=KnowledgeCategory.rules,
             title=existing.title,
             body="new content",
         )
@@ -638,5 +644,5 @@ class TestAgentProposalCloudGating:
             limits=limits,
             settings=settings,
         )
-        assert existing.status == "active"
+        assert existing.status == "archived"
         assert existing.body == "new content"

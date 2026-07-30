@@ -27,7 +27,7 @@ def _make_doc(
     doc_id: str | None = None,
     scope: str = "org",
     scope_ref: str | None = None,
-    category: str = "understanding",
+    category: str = "decisions",
     title: str = "test-doc",
     body: str = "Body content.",
     status: str = "active",
@@ -65,11 +65,31 @@ def mock_store():
     return store
 
 
+@pytest.fixture
+def mcp_ctx():
+    """Populate the MCP context vars the knowledge tools read.
+
+    Writes require admin scope since the MCP scope bypass was closed; reads need
+    an org id to resolve a store. Tokens are reset so one test cannot leak scope
+    into the next.
+    """
+    from gateway.mcp.context import mcp_org_id_var, mcp_scopes_var
+
+    org_token = mcp_org_id_var.set("test-org")
+    scope_token = mcp_scopes_var.set(["read", "write", "admin"])
+    try:
+        yield
+    finally:
+        mcp_scopes_var.reset(scope_token)
+        mcp_org_id_var.reset(org_token)
+
+
+@pytest.mark.usefixtures("mcp_ctx")
 class TestGetKnowledgeTool:
     @pytest.mark.asyncio
     async def test_get_knowledge_returns_org_and_project_baseline(self, mock_store):
-        org_doc = _make_doc(scope="org", category="understanding", title="org-understanding")
-        proj_doc = _make_doc(scope="project", scope_ref="my-proj", category="understanding", title="proj-understanding")
+        org_doc = _make_doc(scope="org", category="context", title="org-baseline")
+        proj_doc = _make_doc(scope="project", scope_ref="my-proj", category="context", title="proj-baseline")
         mock_store.list_knowledge_docs = AsyncMock(side_effect=[
             [org_doc],   # First call: org-scope docs
             [proj_doc],  # Second call: project-scope docs
@@ -82,8 +102,8 @@ class TestGetKnowledgeTool:
             mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
             result = await get_knowledge.__wrapped__(task_description=None)
 
-        assert "org-understanding" in result
-        assert "proj-understanding" in result
+        assert "org-baseline" in result
+        assert "proj-baseline" in result
 
     @pytest.mark.asyncio
     async def test_get_knowledge_empty_returns_no_content_message(self, mock_store):
@@ -105,7 +125,7 @@ class TestGetKnowledgeTool:
             _make_doc(
                 scope="project",
                 scope_ref=f"proj-{i:03d}",
-                category="understanding",
+                category="decisions",
                 title=f"proj-doc-{i:03d}",
             )
             for i in range(60)
@@ -152,11 +172,14 @@ class TestGetKnowledgeTool:
         assert len(keyword_calls) <= 12
 
 
+@pytest.mark.usefixtures("mcp_ctx")
 class TestSearchKnowledgeTool:
     @pytest.mark.asyncio
-    async def test_search_knowledge_pure_read_allows_understanding(self, mock_store):
-        understanding_doc = _make_doc(category="understanding", title="org-understanding")
-        mock_store.search_knowledge = AsyncMock(return_value=[understanding_doc])
+    async def test_search_knowledge_pure_read_allows_baseline_docs(self, mock_store):
+        baseline_doc = _make_doc(category="context", title="org-baseline")
+        mock_store.search_knowledge_hybrid = AsyncMock(
+            return_value=[MagicMock(doc=baseline_doc)]
+        )
 
         from gateway.mcp.tools.knowledge import search_knowledge
 
@@ -165,7 +188,7 @@ class TestSearchKnowledgeTool:
             mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
             result = await search_knowledge.__wrapped__(query="something")
 
-        assert "org-understanding" in result
+        assert "org-baseline" in result
         assert "Error" not in result
 
     @pytest.mark.asyncio
@@ -193,9 +216,10 @@ class TestSearchKnowledgeTool:
         assert "No knowledge docs found" in result
 
 
+@pytest.mark.usefixtures("mcp_ctx")
 class TestProposeKnowledgeTool:
     @pytest.mark.asyncio
-    async def test_propose_knowledge_rejects_understanding(self, mock_store):
+    async def test_propose_knowledge_rejects_category_invalid_for_scope(self, mock_store):
         from gateway.mcp.tools.knowledge import propose_knowledge
 
         with patch("gateway.mcp.tools.knowledge._store_session") as mock_ctx:
@@ -204,13 +228,14 @@ class TestProposeKnowledgeTool:
             result = await propose_knowledge.__wrapped__(
                 scope="org",
                 scope_ref=None,
-                category="understanding",
+                category="troubleshooting",
                 title="my-doc",
                 body="content",
             )
 
-        assert "Refused" in result
-        assert "human-authored" in result
+        assert "not allowed for scope" in result
+        mock_store.insert_knowledge_doc.assert_not_called()
+        mock_store.upsert_knowledge_doc.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_propose_knowledge_auto_accepts_decisions(self, mock_store):
@@ -236,7 +261,7 @@ class TestProposeKnowledgeTool:
 
     @pytest.mark.asyncio
     async def test_propose_knowledge_pending_for_conventions(self, mock_store):
-        doc = _make_doc(scope="org", category="conventions", status="pending")
+        doc = _make_doc(scope="org", category="rules", status="pending")
         mock_store.insert_knowledge_doc = AsyncMock(return_value=doc)
 
         from gateway.mcp.tools.knowledge import propose_knowledge
@@ -247,7 +272,7 @@ class TestProposeKnowledgeTool:
             result = await propose_knowledge.__wrapped__(
                 scope="org",
                 scope_ref=None,
-                category="conventions",
+                category="rules",
                 title="my-convention",
                 body="Always use snake_case.",
             )
@@ -271,7 +296,7 @@ class TestProposeKnowledgeTool:
             result = await propose_knowledge.__wrapped__(
                 scope="org",
                 scope_ref=None,
-                category="conventions",
+                category="rules",
                 title="my-convention",
                 body="Already exists.",
             )
@@ -401,6 +426,7 @@ class TestProposeKnowledgeTool:
         assert "Error" in result
 
 
+@pytest.mark.usefixtures("mcp_ctx")
 class TestArchiveKnowledgeTool:
     @pytest.mark.asyncio
     async def test_archive_knowledge_archives_active_doc(self, mock_store):

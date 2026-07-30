@@ -18,13 +18,49 @@ from ..models import ExecuteResult, SandboxInfo
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_SANDBOX_MANAGER_URL = "http://localhost:8180"
+
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def platform_sandbox_url() -> str:
+    """The sandbox manager operated by the platform, from deployment env."""
+    return os.environ.get("SP_SANDBOX_MANAGER_URL") or DEFAULT_SANDBOX_MANAGER_URL
+
+
+def _normalize_endpoint(url: str) -> tuple[str, str, int, str] | None:
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    if not parsed.hostname:
+        return None
+    scheme = parsed.scheme.lower()
+    port = parsed.port or _DEFAULT_PORTS.get(scheme, 0)
+    return (scheme, parsed.hostname.lower(), port, parsed.path.rstrip("/"))
+
+
+def is_platform_sandbox_url(base_url: str) -> bool:
+    """True only for the platform-operated endpoint.
+
+    Anything else is tenant-configured (BYOS) and must never see the
+    platform-wide shared secret.
+    """
+    target = _normalize_endpoint(base_url)
+    return target is not None and target == _normalize_endpoint(platform_sandbox_url())
+
 
 class SandboxClient:
     """HTTP client for the gVisor sandbox manager."""
 
     ALLOWED_SCHEMES = {"http", "https"}
 
-    def __init__(self, base_url: str, api_key: str | None = None, timeout: int = 60):
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str | None = None,
+        timeout: int = 60,
+        is_platform: bool | None = None,
+    ):
         # Validate base_url to prevent SSRF via scheme injection
         from urllib.parse import urlparse
 
@@ -42,11 +78,15 @@ class SandboxClient:
         if is_cloud_mode():
             validate_connection_host(parsed.hostname)
         self.base_url = base_url.rstrip("/")
+        self.is_platform = is_platform_sandbox_url(base_url) if is_platform is None else is_platform
         headers = {}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
+        # SP_SANDBOX_TOKEN is a platform-wide secret shared with the sandbox we
+        # operate. A BYOS endpoint is tenant-controlled, so it authenticates with
+        # the tenant's own key only.
         sandbox_token = os.environ.get("SP_SANDBOX_TOKEN", "")
-        if sandbox_token:
+        if sandbox_token and self.is_platform:
             headers["X-Sandbox-Auth"] = sandbox_token
         self._client = httpx.AsyncClient(
             base_url=self.base_url,

@@ -13,6 +13,7 @@ Eval-set format (trap-arena compatible — see demo-generator/trap-arena):
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -42,51 +43,64 @@ _DOCKER_API = "http://docker"
 # ─── Paths & config ───────────────────────────────────────────────────────────
 
 
-def eval_root() -> Path:
-    root = Path(get_data_dir()) / "eval-runs"
+def _org_slug(org_id: str) -> str:
+    """Directory name for an org's eval state.
+
+    The hash suffix keeps two org ids that sanitize to the same characters from
+    ever sharing a directory.
+    """
+    if not org_id or not str(org_id).strip():
+        raise ValueError("org_id is required for eval state")
+    org_id = str(org_id)
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "-", org_id)[:48]
+    return f"{safe}-{hashlib.sha256(org_id.encode()).hexdigest()[:8]}"
+
+
+def eval_root(org_id: str) -> Path:
+    root = Path(get_data_dir()) / "eval-runs" / _org_slug(org_id)
     root.mkdir(parents=True, exist_ok=True)
     return root
 
 
-def config_path() -> Path:
-    return Path(get_data_dir()) / "eval-config.json"
+def config_path(org_id: str) -> Path:
+    return eval_root(org_id) / "eval-config.json"
 
 
-def load_eval_config() -> dict:
+def load_eval_config(org_id: str) -> dict:
     try:
-        return json.loads(config_path().read_text(encoding="utf-8"))
+        return json.loads(config_path(org_id).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
 
 
-def save_eval_config(cfg: dict) -> dict:
-    config_path().write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+def save_eval_config(org_id: str, cfg: dict) -> dict:
+    config_path(org_id).write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     return cfg
 
 
 # ─── Run state (file-based) ──────────────────────────────────────────────────
 
 
-def _run_dir(run_id: str) -> Path:
-    return eval_root() / run_id
+def _run_dir(org_id: str, run_id: str) -> Path:
+    return eval_root(org_id) / run_id
 
 
-def _write_run(run: dict) -> None:
-    (_run_dir(run["id"]) / "run.json").write_text(json.dumps(run, indent=2), encoding="utf-8")
+def _write_run(org_id: str, run: dict) -> None:
+    (_run_dir(org_id, run["id"]) / "run.json").write_text(json.dumps(run, indent=2), encoding="utf-8")
 
 
-def read_run(run_id: str) -> dict | None:
+def read_run(org_id: str, run_id: str) -> dict | None:
     try:
-        return json.loads((_run_dir(run_id) / "run.json").read_text(encoding="utf-8"))
+        return json.loads((_run_dir(org_id, run_id) / "run.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
 
 
-def list_runs(limit: int = 50) -> list[dict]:
+def list_runs(org_id: str, limit: int = 50) -> list[dict]:
     runs = []
-    for p in eval_root().iterdir():
+    for p in eval_root(org_id).iterdir():
         if (p / "run.json").exists():
-            run = read_run(p.name)
+            run = read_run(org_id, p.name)
             if run:
                 run.pop("questions_detail", None)
                 runs.append(run)
@@ -94,17 +108,17 @@ def list_runs(limit: int = 50) -> list[dict]:
     return runs[:limit]
 
 
-def read_setup_log(run_id: str, state: str) -> str | None:
-    path = _run_dir(run_id) / f"setup-{_sanitize_state(state)}.log"
+def read_setup_log(org_id: str, run_id: str, state: str) -> str | None:
+    path = _run_dir(org_id, run_id) / f"setup-{_sanitize_state(state)}.log"
     try:
         return path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
 
 
-def read_transcript(run_id: str, question_id: str) -> str | None:
+def read_transcript(org_id: str, run_id: str, question_id: str) -> str | None:
     safe_q = re.sub(r"[^a-zA-Z0-9_-]", "_", question_id)
-    path = _run_dir(run_id) / "questions" / f"{safe_q}.log"
+    path = _run_dir(org_id, run_id) / "questions" / f"{safe_q}.log"
     try:
         return path.read_text(encoding="utf-8", errors="replace")
     except OSError:
@@ -306,19 +320,19 @@ async def fetch_eval_repo(repo_url: str, dest: Path, settings: EvalRunSettings) 
     return local
 
 
-async def get_eval_set() -> EvalSet:
+async def get_eval_set(org_id: str) -> EvalSet:
     """Load the configured eval set for browsing (UI question breakdown).
 
     Git repos are shallow-cloned into a cache refreshed at most every 5 minutes;
     local paths are read directly.
     """
-    cfg = load_eval_config()
+    cfg = load_eval_config(org_id)
     repo_url = cfg.get("repo_url", "")
     if not repo_url:
         raise ValueError("No eval repo configured")
     settings = get_eval_run_settings()
     if repo_url.startswith(("http://", "https://", "git@")):
-        cache = eval_root() / ".repo-cache"
+        cache = eval_root(org_id) / ".repo-cache"
         marker = cache / ".sp-cache-meta"
         stale = True
         try:
@@ -331,7 +345,7 @@ async def get_eval_set() -> EvalSet:
             await fetch_eval_repo(repo_url, cache, settings)
             marker.write_text(json.dumps({"url": repo_url, "at": time.time()}), encoding="utf-8")
         return load_eval_set(cache)
-    repo_dir = await fetch_eval_repo(repo_url, eval_root() / ".unused", settings)
+    repo_dir = await fetch_eval_repo(repo_url, eval_root(org_id) / ".unused", settings)
     return load_eval_set(repo_dir)
 
 
@@ -631,9 +645,9 @@ async def _run_setup_container(
 # ─── Run orchestration ───────────────────────────────────────────────────────
 
 
-def create_run(*, doc_ids: list[str], doc_titles: list[str], question_ids: list[str] | None) -> dict:
+def create_run(org_id: str, *, doc_ids: list[str], doc_titles: list[str], question_ids: list[str] | None) -> dict:
     run_id = f"run-{datetime.now(UTC):%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}"
-    cfg = load_eval_config()
+    cfg = load_eval_config(org_id)
     run = {
         "id": run_id,
         "status": "preparing",
@@ -647,23 +661,23 @@ def create_run(*, doc_ids: list[str], doc_titles: list[str], question_ids: list[
         "questions": [],
         "error": None,
     }
-    _run_dir(run_id).mkdir(parents=True, exist_ok=True)
-    (_run_dir(run_id) / "questions").mkdir(exist_ok=True)
-    _write_run(run)
+    _run_dir(org_id, run_id).mkdir(parents=True, exist_ok=True)
+    (_run_dir(org_id, run_id) / "questions").mkdir(exist_ok=True)
+    _write_run(org_id, run)
     return run
 
 
 async def execute_run(
+    org_id: str,
     run_id: str,
     api_key: str | None = None,
     api_key_id: str | None = None,
-    org_id: str | None = None,
 ) -> None:
     """Background task: fetch eval set, run each question in docker, grade."""
     try:
-        await _execute_run_inner(run_id, api_key)
+        await _execute_run_inner(org_id, run_id, api_key)
     finally:
-        if api_key_id and org_id:
+        if api_key_id:
             await _revoke_run_key(api_key_id, org_id)
 
 
@@ -682,21 +696,21 @@ async def _revoke_run_key(key_id: str, org_id: str) -> None:
         logger.exception("Failed to revoke eval run API key %s", key_id)
 
 
-async def _execute_run_inner(run_id: str, api_key: str | None = None) -> None:
+async def _execute_run_inner(org_id: str, run_id: str, api_key: str | None = None) -> None:
     settings = get_eval_run_settings()
-    run = read_run(run_id)
+    run = read_run(org_id, run_id)
     if run is None:
         return
-    cfg = load_eval_config()
+    cfg = load_eval_config(org_id)
 
     def fail(msg: str) -> None:
         run["status"] = "failed"
         run["error"] = msg
-        _write_run(run)
+        _write_run(org_id, run)
         logger.error("Eval run %s failed: %s", run_id, msg)
 
     try:
-        repo_dir = await fetch_eval_repo(cfg.get("repo_url", ""), _run_dir(run_id) / "repo", settings)
+        repo_dir = await fetch_eval_repo(cfg.get("repo_url", ""), _run_dir(org_id, run_id) / "repo", settings)
         eval_set = load_eval_set(repo_dir)
         questions = eval_set.questions
     except Exception as exc:
@@ -744,7 +758,7 @@ async def _execute_run_inner(run_id: str, api_key: str | None = None) -> None:
         for q in questions
     ]
     run["setup"] = []
-    _write_run(run)
+    _write_run(org_id, run)
 
     async with _docker_client(settings) as docker:
         current_state: str | None = None
@@ -763,7 +777,7 @@ async def _execute_run_inner(run_id: str, api_key: str | None = None) -> None:
                         "duration_s": None,
                     }
                     run["setup"].append(setup_entry)
-                    _write_run(run)
+                    _write_run(org_id, run)
                     t0 = time.monotonic()
                     try:
                         exit_code, slogs = await _run_setup_container(
@@ -776,7 +790,7 @@ async def _execute_run_inner(run_id: str, api_key: str | None = None) -> None:
                             state=q.state,
                             run_id=run_id,
                         )
-                        (_run_dir(run_id) / f"setup-{_sanitize_state(q.state)}.log").write_text(
+                        (_run_dir(org_id, run_id) / f"setup-{_sanitize_state(q.state)}.log").write_text(
                             slogs, encoding="utf-8"
                         )
                         setup_entry.update(
@@ -788,7 +802,7 @@ async def _execute_run_inner(run_id: str, api_key: str | None = None) -> None:
                         logger.exception("Eval run %s setup for state %s errored", run_id, q.state)
                         setup_entry.update(status="failed", error=str(exc)[:300], duration_s=round(time.monotonic() - t0, 1))
                     state_ok = setup_entry["status"] == "ok"
-                    _write_run(run)
+                    _write_run(org_id, run)
 
             entry = run["questions"][i]
             if not state_ok:
@@ -797,10 +811,10 @@ async def _execute_run_inner(run_id: str, api_key: str | None = None) -> None:
                     verdict="SETUP_FAILED",
                     answer=f"State setup for '{q.state}' failed — see the setup log.",
                 )
-                _write_run(run)
+                _write_run(org_id, run)
                 continue
             entry["status"] = "running"
-            _write_run(run)
+            _write_run(org_id, run)
             started = time.monotonic()
             try:
                 prompt = f"{preamble}\n\n{q.prompt}" if preamble else q.prompt
@@ -818,10 +832,10 @@ async def _execute_run_inner(run_id: str, api_key: str | None = None) -> None:
                 else:
                     verdict, check_results = grade_checks(q.checks, answer)
                 safe_q = re.sub(r"[^a-zA-Z0-9_-]", "_", q.id)
-                (_run_dir(run_id) / "questions" / f"{safe_q}.log").write_text(
+                (_run_dir(org_id, run_id) / "questions" / f"{safe_q}.log").write_text(
                     logs, encoding="utf-8"
                 )
-                (_run_dir(run_id) / "questions" / f"{safe_q}.json").write_text(
+                (_run_dir(org_id, run_id) / "questions" / f"{safe_q}.json").write_text(
                     json.dumps(
                         {
                             "id": q.id,
@@ -849,7 +863,7 @@ async def _execute_run_inner(run_id: str, api_key: str | None = None) -> None:
             except Exception as exc:
                 logger.exception("Eval run %s question %s errored", run_id, q.id)
                 entry.update(status="done", verdict="ERROR", answer=str(exc)[:500])
-            _write_run(run)
+            _write_run(org_id, run)
 
     verdicts = [e.get("verdict") for e in run["questions"]]
     run["summary"] = {
@@ -863,6 +877,6 @@ async def _execute_run_inner(run_id: str, api_key: str | None = None) -> None:
         "setup_failed": verdicts.count("SETUP_FAILED"),
     }
     run["status"] = "completed"
-    _write_run(run)
+    _write_run(org_id, run)
     # Cloned repos can be big — clean up.
-    shutil.rmtree(_run_dir(run_id) / "repo", ignore_errors=True)
+    shutil.rmtree(_run_dir(org_id, run_id) / "repo", ignore_errors=True)

@@ -613,9 +613,18 @@ class TestSecurityHeadersOnProxyPaths:
         with TestClient(inner_app, raise_server_exceptions=False) as client:
             return client.get(path)
 
-    def test_proxy_path_sameorigin_xframe(self):
+    def test_proxy_path_omits_xframe_options(self):
+        """Proxy paths deliberately carry NO X-Frame-Options.
+
+        Framing on /notebook/* is governed solely by the CSP written by
+        _build_proxy_csp: `frame-ancestors 'self' <SP_ALLOWED_ORIGINS…>`. In
+        cloud the embedding web app is a DIFFERENT origin from the gateway, and
+        X-Frame-Options has no multi-origin form — SAMEORIGIN would contradict
+        the allowlist rather than reinforce it, so it is omitted, not forgotten.
+        The frame-ancestors assertions below are the clickjacking control.
+        """
         resp = self._build_middleware_response("/notebook/abc/index.html")
-        assert resp.headers.get("x-frame-options") == "SAMEORIGIN"
+        assert resp.headers.get("x-frame-options") is None
 
     def test_non_proxy_path_deny_xframe(self):
         resp = self._build_middleware_response("/api/something")
@@ -627,6 +636,12 @@ class TestSecurityHeadersOnProxyPaths:
         assert "frame-ancestors 'self'" in csp
         # Must NOT contain the full default-src policy
         assert "default-src" not in csp
+
+    def test_proxy_csp_allows_configured_cross_origin_embedder(self, monkeypatch):
+        """Why X-Frame-Options is omitted: the allowlist is cross-origin."""
+        monkeypatch.setenv("SP_ALLOWED_ORIGINS", "https://app.signalpilot.ai")
+        resp = self._build_middleware_response("/notebook/abc/index.html")
+        assert "https://app.signalpilot.ai" in resp.headers.get("content-security-policy", "")
 
     def test_proxy_path_no_cache_control_forced(self):
         """Upstream Cache-Control passes through; no-store not forced."""
@@ -643,49 +658,180 @@ class TestSecurityHeadersOnProxyPaths:
 # ─── Notebook URL shape ────────────────────────────────────────────────────────
 
 
+def _arrange_proxy_session(
+    monkeypatch,
+    *,
+    session_org_id: str | None = "org-1",
+    session_user_id: str = "user-1",
+    caller_user_id: str = "user-1",
+    caller_org_id: str = "org-1",
+    access_token: str = "tok",
+):
+    """Wire resolve_proxy_session's three collaborators and return the connection.
+
+    Stubs the caller identity (resolve_user_id/resolve_org_id), the DB session
+    factory, and the session row, so the test only varies who is calling and
+    which org owns the session.
+    """
+    import contextlib
+
+    import gateway.db.engine as engine_mod
+    import gateway.notebook_proxy.auth as auth_mod
+    import gateway.store.notebook_sessions as ns_mod
+    from gateway.store.notebook_sessions import NotebookSessionInternal
+
+    monkeypatch.delenv("SP_NOTEBOOK_DIRECT_URL", raising=False)
+
+    internal = NotebookSessionInternal(
+        session_id="sess-123",
+        org_id=session_org_id,
+        user_id=session_user_id,
+        status="running",
+        pod_ip_internal="10.42.0.5",
+        access_token=access_token,
+    )
+    monkeypatch.setattr(ns_mod, "get_session_internal", AsyncMock(return_value=internal))
+
+    @contextlib.asynccontextmanager
+    async def _factory():
+        yield AsyncMock()
+
+    monkeypatch.setattr(engine_mod, "get_session_factory", lambda: _factory)
+
+    async def _fake_user(conn):
+        return caller_user_id
+
+    async def _fake_org(conn, uid):
+        return caller_org_id
+
+    monkeypatch.setattr(auth_mod, "resolve_user_id", _fake_user)
+    monkeypatch.setattr(auth_mod, "resolve_org_id", _fake_org)
+
+    connection = MagicMock()
+    connection.scope = {"type": "http"}
+    connection.headers = {}
+    connection.cookies = {}
+    connection.state = MagicMock()
+    connection.state.auth = None
+    return connection
+
+
 class TestProxyUsesInternalIp:
     """test_proxy_route_uses_internal_ip_not_nodeport."""
 
     @pytest.mark.asyncio
     async def test_upstream_base_uses_pod_ip_internal(self, monkeypatch):
-        import gateway.notebook_proxy.auth as auth_mod
-        import gateway.store.notebook_sessions as ns_mod
-        from gateway.store.notebook_sessions import NotebookSessionInternal
-
-        token = "tok"
-        internal = NotebookSessionInternal(
-            session_id="sess-123",
-            org_id="org-1",
-            user_id="user-1",
-            status="running",
-            pod_ip_internal="10.42.0.5",  # Internal pod IP
-            access_token=token,
-        )
-        monkeypatch.setattr(ns_mod, "get_session_internal", AsyncMock(return_value=internal))
-
-        async def _fake_user(req):
-            return "user-1"
-
-        async def _fake_org(req, uid):
-            return "org-1"
-
-        monkeypatch.setattr(auth_mod, "resolve_user_id", _fake_user)
-        monkeypatch.setattr(auth_mod, "resolve_org_id", _fake_org)
-
-        store = MagicMock()
-        store.session = AsyncMock()
-        request = MagicMock()
-        request.cookies = {"sp_nb_sess-123": token}
-        request.headers = {}
-        request.state = MagicMock()
-        request.state.auth = None
-
         from gateway.notebook_proxy.auth import resolve_proxy_session
 
-        result = await resolve_proxy_session("sess-123", request, store)
+        connection = _arrange_proxy_session(monkeypatch)
+        result = await resolve_proxy_session(connection, "sess-123")
         # Must use internal IP, not any nodeport address
         assert "10.42.0.5" in result.upstream_base
         assert "30" not in result.upstream_base  # NodePort ports are 30000+
+
+
+# ─── Active-org authorization on the proxy ────────────────────────────────────
+
+
+class TestProxyActiveOrgAuthorization:
+    """auth.py: the caller's ACTIVE org must own the session, not just the user.
+
+    resolve_proxy_session is the sanctioned RequireScope bypass, so it has to do
+    the whole authorization itself. user_id alone survives an org switch and
+    survives losing membership of the owning org.
+    """
+
+    @pytest.mark.asyncio
+    async def test_same_user_active_in_other_org_is_refused(self, monkeypatch):
+        """Session created in org A; the same user, now active in org B, is out."""
+        from fastapi import HTTPException
+
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+
+        connection = _arrange_proxy_session(
+            monkeypatch, session_org_id="org-a", caller_org_id="org-b"
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await resolve_proxy_session(connection, "sess-123")
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_same_user_active_in_owning_org_is_allowed(self, monkeypatch):
+        """Control for the test above: back in org A the same session resolves."""
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+
+        connection = _arrange_proxy_session(
+            monkeypatch, session_org_id="org-a", caller_org_id="org-a"
+        )
+        result = await resolve_proxy_session(connection, "sess-123")
+        assert result.org_id == "org-a"
+
+    @pytest.mark.asyncio
+    async def test_user_removed_from_owning_org_is_refused(self, monkeypatch):
+        """Membership revoked: the JWT no longer names org A as the active org."""
+        from fastapi import HTTPException
+
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+
+        connection = _arrange_proxy_session(
+            monkeypatch,
+            session_org_id="org-a",
+            caller_org_id="org-personal",
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await resolve_proxy_session(connection, "sess-123")
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_cross_user_same_org_still_refused(self, monkeypatch):
+        """The org check does not weaken the ownership check."""
+        from fastapi import HTTPException
+
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+
+        connection = _arrange_proxy_session(
+            monkeypatch, session_user_id="user-1", caller_user_id="user-2"
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await resolve_proxy_session(connection, "sess-123")
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_session_without_org_is_refused_in_a_real_org(self, monkeypatch):
+        """A legacy org-less row must not be reachable from a cloud org."""
+        from fastapi import HTTPException
+
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+
+        connection = _arrange_proxy_session(
+            monkeypatch, session_org_id=None, caller_org_id="org-a"
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await resolve_proxy_session(connection, "sess-123")
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_local_mode_org_still_resolves(self, monkeypatch):
+        """Local mode: both sides are "local", so the check is a no-op there."""
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+
+        connection = _arrange_proxy_session(
+            monkeypatch, session_org_id="local", caller_org_id="local"
+        )
+        result = await resolve_proxy_session(connection, "sess-123")
+        assert result.org_id == "local"
+
+    @pytest.mark.asyncio
+    async def test_missing_upstream_token_is_503(self, monkeypatch):
+        """Pod-token behaviour is preserved: no credential → fail closed, not open."""
+        from fastapi import HTTPException
+
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+
+        connection = _arrange_proxy_session(monkeypatch, access_token=None)
+        with pytest.raises(HTTPException) as exc_info:
+            await resolve_proxy_session(connection, "sess-123")
+        assert exc_info.value.status_code == 503
 
 
 # ─── H-1/R3: NodePort fully retired — KubernetesOrchestrator only accepts pod_ip ─
@@ -856,7 +1002,7 @@ class TestSessionOwnershipCheck:
         response = Response()
 
         with pytest.raises(HTTPException) as exc_info:
-            await ns_api_mod.delete_session_by_id("sess-owned", store, response)
+            await ns_api_mod.delete_session_by_id("sess-owned", store)
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio

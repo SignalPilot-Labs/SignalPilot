@@ -25,14 +25,27 @@ ADMIN_PROBE_SKIP: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/api/demo/connector"),  # provisions a real Xata branch
         ("POST", "/api/github/bot/scan"),  # calls the GitHub API
         ("POST", "/api/evals/runs"),  # can launch an eval runner
-        # Deliberately stricter than OrgAdmin: security.py::_require_admin additionally
-        # requires the caller's user_id to be listed in SP_ADMIN_USER_IDS (a
-        # deployment-operator allowlist, default {"local"}). An org admin who is not a
-        # platform operator is *correctly* 403 here, so the "admin is not locked out"
-        # probe does not apply. The basic_member 403 case is still asserted.
-        ("GET", "/api/security/status"),
     }
 )
+
+# Routes that require a PLATFORM-STAFF identity (user_id in SP_ADMIN_USER_IDS, a
+# deployment-operator allowlist defaulting to {"local"}) on top of the org-admin
+# role. A tenant org admin is *correctly* refused on these, so the matrix asserts
+# the refusal rather than the "admin is not locked out" probe, and asserts a staff
+# identity gets through.
+STAFF_ONLY_PATH_PREFIXES: tuple[str, ...] = (
+    "/api/evals/config",
+    "/api/evals/questions",
+    "/api/evals/runs",
+)
+STAFF_ONLY_ROUTES: frozenset[tuple[str, str]] = frozenset({("GET", "/api/security/status")})
+
+# Sub claim of the staff token; matches SP_ADMIN_USER_IDS on the booted gateway.
+STAFF_USER_ID = "user_staff"
+
+
+def is_staff_only(method: str, path: str) -> bool:
+    return (method, path) in STAFF_ONLY_ROUTES or path.startswith(STAFF_ONLY_PATH_PREFIXES)
 
 # Non-authorization reasons a route may legitimately answer 403. Used to distinguish
 # a real authorization denial from an unrelated policy denial.
@@ -49,6 +62,7 @@ AUTHZ_DENIAL_DETAILS: tuple[str, ...] = (
     "Insufficient scope",
     "Unknown authentication method",
     "Admin access required",
+    "Platform staff access required",
 )
 
 
@@ -151,6 +165,9 @@ def discover() -> tuple[list[RouteSpec], list[RouteSpec]]:
     env = dict(os.environ)
     env |= {
         "SP_DEPLOYMENT_MODE": "cloud",
+        # Discovery only imports the app to read its dependency tree; it never
+        # verifies a token, so application binding is irrelevant here.
+        "SP_ALLOW_UNBOUND_JWT_AUDIENCE": "1",
         "CLERK_PUBLISHABLE_KEY": f"pk_test_{dummy_domain}",
         "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
         "PYTHONIOENCODING": "utf-8",

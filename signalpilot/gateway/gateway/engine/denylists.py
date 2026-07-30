@@ -256,6 +256,19 @@ _SPARK_PATH_READERS: frozenset[str] = frozenset(
 )
 
 
+def _is_four_part_table_name(table: exp.Table) -> bool:
+    """True if a table reference carries a fourth part (server.db.schema.object).
+
+    sqlglot models at most three parts as catalog/db/name; a fourth part
+    overflows into a Dot chain under ``this``.  T-SQL also permits omitted
+    middle parts (``srv...tbl``), which drop out of ``Table.parts`` entirely but
+    still leave the Dot chain behind, so both signals are checked.
+    """
+    if isinstance(table.args.get("this"), exp.Dot):
+        return True
+    return len(table.parts) >= 4
+
+
 def _is_pathlike_table_name(name: str) -> bool:
     """True if a table identifier looks like a file path or URL."""
     normalized = name.strip().lower()
@@ -351,6 +364,14 @@ def _check_dangerous_functions(parsed: exp.Expression, dialect: str) -> str | No
                         f"Blocked: file table reference via '{node.db}' "
                         "is not permitted in governed read-only mode"
                     )
+            # Four-part T-SQL name reaches a linked server without OPENQUERY and
+            # so cannot be caught by the function denylist. Three-part names
+            # (database.schema.object) are ordinary and must still pass.
+            if dialect_key == "tsql" and _is_four_part_table_name(node):
+                return (
+                    f"Blocked: four-part table reference '{node.sql(dialect='tsql')}' "
+                    "targets a linked server and is not permitted in governed read-only mode"
+                )
 
     return None
 
@@ -368,5 +389,6 @@ __all__ = [
     "_DANGEROUS_FUNCTIONS",
     "_UNIVERSAL_BLOCKED_FUNCTIONS",
     "_check_dangerous_functions",
+    "_is_four_part_table_name",
     "_check_into_clause",
 ]

@@ -9,6 +9,9 @@ cannot drift out of sync with the code. For each route:
   no token                               -> 401
   admin JWT (dev claim form)             -> NOT 401/403
   admin JWT (Clerk prod o.rol="admin")   -> NOT 401/403
+
+Staff-only routes (see routes.is_staff_only) invert the last two: an org admin is a
+tenant identity and must be REFUSED there; only a platform-staff identity gets in.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ from .routes import (
     MEMBER_ROUTES,
     NON_AUTHZ_403_MARKERS,
     discover,
+    is_staff_only,
 )
 
 pytestmark = pytest.mark.e2e_cloud
@@ -40,6 +44,9 @@ def test_discovery_found_the_expected_surface():
                      "/api/evals/config", "/api/settings", "/api/keys",
                      "/api/byok/keys"):
         assert expected in paths, f"{expected} missing from discovered admin routes"
+    # The staff classification must not go vacuous — that would silently drop the
+    # tenant-escalation assertions below.
+    assert len(STAFF_ROUTES) >= 7, f"only {len(STAFF_ROUTES)} staff-only routes discovered"
 
 
 @pytest.mark.parametrize("route", ADMIN_ROUTES, ids=IDS)
@@ -79,7 +86,13 @@ def test_unauthenticated_is_401(client, route):
     )
 
 
-_PROBEABLE = [r for r in ADMIN_ROUTES if (r.method, r.path) not in ADMIN_PROBE_SKIP]
+STAFF_ROUTES = [r for r in ADMIN_ROUTES if is_staff_only(r.method, r.path)]
+_STAFF_IDS = [r.id for r in STAFF_ROUTES]
+
+_PROBEABLE = [
+    r for r in ADMIN_ROUTES
+    if (r.method, r.path) not in ADMIN_PROBE_SKIP and not is_staff_only(r.method, r.path)
+]
 _PROBE_IDS = [r.id for r in _PROBEABLE]
 
 
@@ -100,6 +113,41 @@ def test_admin_short_claim_is_not_locked_out(client, clerk_shaped_admin_token, r
     r = call(client, route.method, route.url, clerk_shaped_admin_token, default_body(route.method))
     assert r.status_code not in (401, 403), (
         f"ADMIN LOCKED OUT (prod claim form o.rol): {route.id} returned {r.status_code}. "
+        f"Body: {r.text[:400]}"
+    )
+
+
+# ── staff-only routes: the org-admin role is deliberately not enough ─────────
+
+_STAFF_PROBEABLE = [r for r in STAFF_ROUTES if (r.method, r.path) not in ADMIN_PROBE_SKIP]
+_STAFF_PROBE_IDS = [r.id for r in _STAFF_PROBEABLE]
+
+
+@pytest.mark.parametrize("route", STAFF_ROUTES, ids=_STAFF_IDS)
+def test_org_admin_is_forbidden_on_staff_routes(client, admin_token, route):
+    """An org admin is a tenant identity — it must not reach platform-staff routes."""
+    r = call(client, route.method, route.url, admin_token, default_body(route.method))
+    assert r.status_code == 403, (
+        f"TENANT ESCALATION: {route.id} returned {r.status_code} for an org-admin JWT; "
+        f"expected 403 (staff-only route). Body: {r.text[:400]}"
+    )
+
+
+@pytest.mark.parametrize("route", STAFF_ROUTES, ids=_STAFF_IDS)
+def test_org_admin_short_claim_is_forbidden_on_staff_routes(client, clerk_shaped_admin_token, route):
+    r = call(client, route.method, route.url, clerk_shaped_admin_token, default_body(route.method))
+    assert r.status_code == 403, (
+        f"TENANT ESCALATION (prod claim form): {route.id} returned {r.status_code} for an "
+        f"org-admin JWT; expected 403 (staff-only route). Body: {r.text[:400]}"
+    )
+
+
+@pytest.mark.parametrize("route", _STAFF_PROBEABLE, ids=_STAFF_PROBE_IDS)
+def test_staff_identity_is_not_locked_out(client, staff_token, route):
+    """The positive half: a user listed in SP_ADMIN_USER_IDS does get through."""
+    r = call(client, route.method, route.url, staff_token, default_body(route.method))
+    assert r.status_code not in (401, 403), (
+        f"STAFF LOCKED OUT: {route.id} returned {r.status_code} for a platform-staff JWT. "
         f"Body: {r.text[:400]}"
     )
 

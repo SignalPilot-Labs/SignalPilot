@@ -18,7 +18,7 @@ import pytest
 
 from .clerk_backend import decode_claims
 from .conftest import call, default_body
-from .routes import ADMIN_PROBE_SKIP, discover
+from .routes import ADMIN_PROBE_SKIP, discover, is_staff_only
 
 pytestmark = pytest.mark.e2e_cloud
 
@@ -98,7 +98,11 @@ def test_real_member_is_forbidden_on_every_admin_route(real_client, real_clerk, 
     )
 
 
-_PROBEABLE = [r for r in ADMIN_ROUTES if (r.method, r.path) not in ADMIN_PROBE_SKIP]
+_PROBEABLE = [
+    r for r in ADMIN_ROUTES
+    if (r.method, r.path) not in ADMIN_PROBE_SKIP and not is_staff_only(r.method, r.path)
+]
+_STAFF_ROUTES = [r for r in ADMIN_ROUTES if is_staff_only(r.method, r.path)]
 
 
 @pytest.mark.parametrize("route", _PROBEABLE, ids=[r.id for r in _PROBEABLE])
@@ -108,6 +112,17 @@ def test_real_admin_is_not_locked_out(real_client, real_clerk, route):
     assert r.status_code not in (401, 403), (
         f"ADMIN LOCKED OUT WITH A REAL CLERK TOKEN: {route.id} returned {r.status_code}. "
         f"Body: {r.text[:400]}"
+    )
+
+
+@pytest.mark.parametrize("route", _STAFF_ROUTES, ids=[r.id for r in _STAFF_ROUTES])
+def test_real_admin_is_forbidden_on_staff_routes(real_client, real_clerk, route):
+    """A genuine Clerk org admin is still only a tenant identity."""
+    r = call(real_client, route.method, route.url, real_clerk.admin_token,
+             default_body(route.method))
+    assert r.status_code == 403, (
+        f"TENANT ESCALATION WITH A REAL CLERK TOKEN: {route.id} returned {r.status_code}; "
+        f"expected 403 (staff-only route). Body: {r.text[:400]}"
     )
 
 

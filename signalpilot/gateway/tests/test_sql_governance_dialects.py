@@ -522,13 +522,54 @@ class TestFileAndRemoteAccessPrimitives:
     def test_postgres_residual_primitives_should_be_blocked(self, sql: str) -> None:
         assert validate_sql(sql, dialect="postgres").ok is False
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "OPEN BYPASS: a four-part T-SQL name reaches a linked server without "
-            "OPENQUERY/OPENROWSET. Blocking needs a table-shape rule, not a function "
-            "denylist entry."
-        ),
-    )
     def test_tsql_four_part_linked_server_name_should_be_blocked(self) -> None:
         assert validate_sql("SELECT * FROM evil_srv.db.dbo.tbl", dialect="tsql").ok is False
+
+    TSQL_FOUR_PART_NAMES = [
+        "SELECT * FROM evil_srv.db.dbo.tbl",
+        "SELECT * FROM [evil srv].[db].[dbo].[tbl]",
+        # T-SQL permits omitted middle parts; the leading name is still a server.
+        "SELECT * FROM evil_srv...tbl",
+        "SELECT * FROM evil_srv.db..tbl",
+        # Not just the first table in the statement.
+        "SELECT * FROM db.dbo.tbl JOIN evil_srv.db.dbo.other ON 1 = 1",
+        "SELECT * FROM (SELECT id FROM evil_srv.db.dbo.tbl) s",
+        "WITH x AS (SELECT * FROM evil_srv.db.dbo.tbl) SELECT * FROM x",
+        "SELECT * FROM db.dbo.tbl WHERE id IN (SELECT id FROM evil_srv.db.dbo.tbl)",
+    ]
+
+    @pytest.mark.parametrize("sql", TSQL_FOUR_PART_NAMES, ids=[s[:44] for s in TSQL_FOUR_PART_NAMES])
+    def test_tsql_four_part_names_are_blocked(self, sql: str) -> None:
+        result = validate_sql(sql, dialect="tsql")
+        assert result.ok is False
+        assert "four-part" in (result.blocked_reason or "").lower()
+
+    def test_mssql_dialect_alias_blocks_four_part_names(self) -> None:
+        assert validate_sql("SELECT * FROM evil_srv.db.dbo.tbl", dialect="mssql").ok is False
+
+    TSQL_LEGITIMATE_NAMES = [
+        "SELECT * FROM tbl",
+        "SELECT * FROM dbo.tbl",
+        "SELECT * FROM db.dbo.tbl",
+        "SELECT * FROM [db].[dbo].[tbl]",
+        "SELECT * FROM db..tbl",
+        "SELECT a.id FROM db.dbo.tbl AS a JOIN dbo.other AS b ON b.id = a.id",
+        "WITH x AS (SELECT id FROM db.dbo.tbl) SELECT * FROM x",
+        # A four-part *column* reference (alias.db.schema.col style) is not a
+        # table reference and must not be caught by the table-shape rule.
+        "SELECT t.id FROM db.dbo.tbl AS t WHERE t.id > 0",
+        # Qualified table-valued functions parse as a Table wrapping a Func.
+        "SELECT * FROM dbo.fn_split(1)",
+        "SELECT * FROM db.dbo.fn_split(1)",
+        "SELECT * FROM master.sys.tables",
+        "SELECT * FROM #temp",
+    ]
+
+    @pytest.mark.parametrize("sql", TSQL_LEGITIMATE_NAMES, ids=[s[:44] for s in TSQL_LEGITIMATE_NAMES])
+    def test_tsql_two_and_three_part_names_still_pass(self, sql: str) -> None:
+        result = validate_sql(sql, dialect="tsql")
+        assert result.ok is True, result.blocked_reason
+
+    @pytest.mark.parametrize("dialect", ["postgres", "duckdb", "snowflake", "bigquery"])
+    def test_three_part_names_unaffected_in_other_dialects(self, dialect: str) -> None:
+        assert validate_sql("SELECT * FROM db.schema_a.tbl", dialect=dialect).ok is True

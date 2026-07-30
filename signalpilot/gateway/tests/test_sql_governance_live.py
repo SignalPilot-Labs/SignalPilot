@@ -108,6 +108,9 @@ TSQL_PAYLOADS = [
     "SELECT xp_cmdshell('whoami')",
     "SELECT xp_dirtree('C:/')",
     "SELECT sp_executesql('SELECT 1')",
+    # Four-part name — reaches a linked server with no OPEN* function involved.
+    "SELECT * FROM evil_srv.sp_test.analytics.customers",
+    "SELECT * FROM evil_srv...customers",
 ]
 
 
@@ -148,6 +151,16 @@ class TestMSSQLLiveGovernance:
             dialect=self.DIALECT,
         )
         assert len(rows) >= 1
+
+    @pytest.mark.parametrize(
+        "table",
+        ["analytics.customers", "sp_test.analytics.customers", "[sp_test].[analytics].[customers]"],
+        ids=["two-part", "three-part", "three-part-bracketed"],
+    )
+    async def test_two_and_three_part_names_still_reach_the_server(self, connector, table: str) -> None:
+        """The four-part rule must not cost us ordinary qualified names."""
+        rows = await governed_execute(connector, f"SELECT customer_id FROM {table}", dialect=self.DIALECT)
+        assert len(rows) == 5
 
     async def test_limit_cap_enforced_end_to_end_via_top(self, connector) -> None:
         governed = inject_limit(f"SELECT * FROM {MSSQL_CUSTOMERS}", max_rows=2, dialect=self.DIALECT)
@@ -453,38 +466,69 @@ class TestDuckDBLiveGovernance:
 
     # ── Defense in depth: DuckDB-level external access ──────────────────────
 
-    async def test_raw_engine_still_reads_files_governance_is_the_only_barrier(self, connector) -> None:
-        """Documents the CURRENT defense-in-depth posture, honestly.
-
-        The DuckDB connector does not set ``enable_external_access=false``, so if
-        governance were bypassed the engine itself would happily read a local
-        file. This test asserts the state of the world so the gap is visible in
-        the suite rather than implied away. It is paired with
-        ``test_external_access_should_be_disabled_at_the_engine`` below.
-        """
+    async def test_a_default_duckdb_connection_would_read_files(self) -> None:
+        """Baseline: external access is on by default, so the hardening is load-bearing."""
         import duckdb
 
         raw = duckdb.connect(":memory:")
-        settings = {
-            r[0]: r[1]
-            for r in raw.execute(
-                "SELECT name, value FROM duckdb_settings() WHERE name = 'enable_external_access'"
-            ).fetchall()
-        }
+        value = raw.execute(
+            "SELECT value FROM duckdb_settings() WHERE name = 'enable_external_access'"
+        ).fetchone()
         raw.close()
-        assert settings.get("enable_external_access") == "true"
-
-    @pytest.mark.xfail(
-        reason=(
-            "NOT IMPLEMENTED: the DuckDB connector does not pass "
-            "enable_external_access=false. Governance (validate_sql) is currently "
-            "the only barrier against file/URL reads. Remove this xfail when the "
-            "connector hardens the engine config."
-        ),
-        strict=False,
-    )
-    async def test_external_access_should_be_disabled_at_the_engine(self, connector) -> None:
-        conn = connector._conn or connector._open_transient()
-        value = conn.execute("SELECT value FROM duckdb_settings() WHERE name = 'enable_external_access'").fetchone()
         assert value is not None
-        assert value[0] == "false"
+        assert value[0] == "true"
+
+    async def test_external_access_is_disabled_at_the_engine(self, connector) -> None:
+        conn = connector._conn or connector._open_transient()
+        try:
+            value = conn.execute(
+                "SELECT value FROM duckdb_settings() WHERE name = 'enable_external_access'"
+            ).fetchone()
+            assert value is not None
+            assert value[0] == "false"
+        finally:
+            if connector._conn is None:
+                conn.close()
+
+    ENGINE_LEVEL_PAYLOADS = [
+        "SELECT * FROM 'https://example.com/x.parquet'",
+        "SELECT * FROM '/etc/passwd'",
+        "SELECT * FROM read_csv_auto('/etc/passwd')",
+        "SELECT * FROM read_parquet('https://example.com/x.parquet')",
+        "SELECT * FROM read_text('/etc/passwd')",
+        "SELECT * FROM read_json_auto('https://example.com/x.json')",
+    ]
+
+    @pytest.mark.parametrize("sql", ENGINE_LEVEL_PAYLOADS, ids=[s[:44] for s in ENGINE_LEVEL_PAYLOADS])
+    async def test_engine_refuses_external_reads_with_governance_bypassed(self, connector, sql: str) -> None:
+        """Defence in depth: bypass validate_sql entirely and hit the engine raw."""
+        conn = connector._conn or connector._open_transient()
+        try:
+            with pytest.raises(Exception) as excinfo:
+                conn.execute(sql).fetchall()
+            assert "does not exist" in str(excinfo.value) or "disabled" in str(excinfo.value).lower()
+        finally:
+            if connector._conn is None:
+                conn.close()
+
+    async def test_ordinary_table_reads_survive_the_hardening(self, connector) -> None:
+        conn = connector._conn or connector._open_transient()
+        try:
+            assert conn.execute("SELECT COUNT(*) FROM main_orders").fetchone()[0] == 50
+            assert conn.execute("SELECT COUNT(*) FROM analytics.orders").fetchone()[0] == 50
+        finally:
+            if connector._conn is None:
+                conn.close()
+
+    async def test_motherduck_keeps_external_access(self) -> None:
+        """MotherDuck is a network service — the hardening must not be applied to it."""
+        from gateway.connectors.drivers.duckdb import DuckDBConnector
+
+        c = DuckDBConnector()
+        c.set_credential_extras({"motherduck_token": "not-a-real-token"})
+        try:
+            await c.connect("md:somedb")
+        except RuntimeError:
+            pass  # no network / bad token in CI — the config decision is what matters
+        assert "enable_external_access" not in c._config
+        assert c._config.get("motherduck_token") == "not-a-real-token"

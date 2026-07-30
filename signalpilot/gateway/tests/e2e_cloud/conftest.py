@@ -24,6 +24,7 @@ import httpx
 import pytest
 
 from .jwks import FakeClerk, start_fake_clerk
+from .routes import STAFF_USER_ID
 
 GATEWAY_DIR = Path(__file__).resolve().parents[2]
 
@@ -220,6 +221,11 @@ def _child_env(workdir: Path, database_url: str, port: int, publishable_key: str
         "SP_GIT_REPOS_DIR": str(workdir / "repos"),
         "SP_DATA_DIR": str(workdir / "data"),
 
+        # Platform-staff allowlist. Without it the default is {"local"} and no
+        # cloud identity can reach the staff-only routes, which would make the
+        # positive half of the staff matrix unassertable.
+        "SP_ADMIN_USER_IDS": STAFF_USER_ID,
+
         # Narrow, deliberate deviation from cloud defaults: lets the credential
         # exfiltration suite seed a connection with a real password without sending
         # packets to a public IP. It relaxes only the SSRF host allowlist in
@@ -229,6 +235,12 @@ def _child_env(workdir: Path, database_url: str, port: int, publishable_key: str
     }
     if expected_azp is not None:
         env["SP_EXPECTED_AZP"] = expected_azp
+    else:
+        # Real Clerk session tokens carry neither aud nor azp (0 JWT templates on
+        # the instance), so the real-Clerk gateway cannot satisfy the cloud-mode
+        # application-binding requirement. Opt out explicitly here rather than
+        # weakening the check itself.
+        env["SP_ALLOW_UNBOUND_JWT_AUDIENCE"] = "1"
     if ca_file is not None:
         # Makes PyJWKClient's urllib fetch trust the local JWKS server's self-signed
         # certificate: ssl.create_default_context() honours SSL_CERT_FILE.
@@ -415,6 +427,12 @@ def member_token(gateway: Gateway, azp: str) -> str:
 def admin_token(gateway: Gateway, azp: str) -> str:
     """Clerk dev-form JWT, org_role=admin."""
     return gateway.clerk.mint(sub="user_admin", org_id=ORG_ID, org_role="admin", azp=azp)
+
+
+@pytest.fixture(scope="session")
+def staff_token(gateway: Gateway, azp: str) -> str:
+    """Org admin whose sub is also in the gateway's SP_ADMIN_USER_IDS allowlist."""
+    return gateway.clerk.mint(sub=STAFF_USER_ID, org_id=ORG_ID, org_role="admin", azp=azp)
 
 
 @pytest.fixture(scope="session")

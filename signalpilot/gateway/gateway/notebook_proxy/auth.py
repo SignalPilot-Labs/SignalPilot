@@ -18,10 +18,14 @@ Auth chain (runs on every HTTP and WS request, before ws.accept()):
    - WS: browsers cannot set Authorization on a WebSocket, so the token rides
      the Sec-WebSocket-Protocol two-token form ["signalpilot.auth", "<jwt>"];
      we verify it via auth/user.verify_jwt_token.
-3. Load the session (no org filter — ownership is the gate).
+3. Load the session (no org filter — the checks below are the gate).
 4. Ownership: session.user_id == caller user_id (same-user only). 404 otherwise
    (404 not 403 so we don't reveal that a session id exists for another user).
-5. session.status == "running" and pod_ip_internal set — 409 otherwise.
+5. Active org: session.org_id == the caller's currently-active org. 404 otherwise.
+   User identity alone is not enough — a user in two orgs keeps their user_id
+   across an org switch, and losing membership of the owning org does not change
+   it either.
+6. session.status == "running" and pod_ip_internal set — 409 otherwise.
 
 resolve_user_id / resolve_org_id are re-exported for tests/back-compat.
 """
@@ -37,7 +41,7 @@ from dataclasses import dataclass
 from fastapi import HTTPException
 from starlette.requests import HTTPConnection
 
-from ..auth.user import resolve_org_id, resolve_user_id, verify_jwt_token  # re-exported
+from ..auth.user import LOCAL_ORG_ID, resolve_org_id, resolve_user_id, verify_jwt_token  # re-exported
 from ..runtime.mode import is_cloud_mode
 from ..store import get_local_api_key
 from ..store import notebook_sessions as ns
@@ -171,7 +175,7 @@ async def resolve_proxy_session(
         user_id = await resolve_user_id(connection)
     org_id = await resolve_org_id(connection, user_id)
 
-    # Step 2: load session (no org filter — ownership check below is the gate).
+    # Step 2: load session (no org filter — the checks below are the gate).
     from ..db.engine import get_session_factory
     factory = get_session_factory()
     async with factory() as db_session:
@@ -187,10 +191,20 @@ async def resolve_proxy_session(
         _log.warning("REJECT: session %s owned by %s, caller %s", session_id, session.user_id, user_id)
         raise HTTPException(status_code=404, detail="Session not found")
 
+    # Step 4: active org — the caller must be acting in the org that owns the
+    # session right now, not merely be its creator. Same 404 as above.
+    # A row written before org_id was populated reads as LOCAL_ORG_ID, which only
+    # ever matches local mode; in cloud it fails closed.
+    session_org_id = session.org_id or LOCAL_ORG_ID
+    if session_org_id != org_id:
+        _log.warning("REJECT: session %s belongs to org %s, caller active org %s",
+                     session_id, session_org_id, org_id)
+        raise HTTPException(status_code=404, detail="Session not found")
+
     _log.info("  session authenticated: user=%s org=%s status=%s",
               session.user_id, session.org_id, session.status)
 
-    # Step 4: readiness check + upstream URL resolution.
+    # Step 5: readiness check + upstream URL resolution.
     direct_url = os.getenv("SP_NOTEBOOK_DIRECT_URL", "")
     if direct_url:
         # One shared notebook container, not a per-session pod: its token comes from

@@ -25,12 +25,14 @@ import {
   XCircle,
 } from "lucide-react";
 import {
+  getEvalAvailability,
   getEvalConfig,
   getEvalRun,
   getEvalRunProgress,
   listEvalQuestions,
   listEvalRuns,
   putEvalConfig,
+  type EvalAvailability,
   type EvalCheckResult,
   type EvalQuestion,
   type EvalRun,
@@ -477,6 +479,62 @@ function RunDetail({ runId }: { runId: string }) {
   );
 }
 
+/* ─── setup state (evals not enabled for this workspace) ────────────────── */
+
+function SetupState({ reason }: { reason: EvalAvailability["reason"] }) {
+  const staffOnly = reason === "not_staff";
+  return (
+    <div className="ev-card p-8">
+      <div className="flex items-center gap-3">
+        <FlaskConical className="w-5 h-5 text-[var(--color-text-dim)]" strokeWidth={1.25} />
+        <h2 className="text-2xl font-semibold tracking-[-0.01em] text-[var(--color-text)]">
+          Evals aren’t set up for this workspace
+        </h2>
+      </div>
+      <p className="mt-3 text-sm text-[var(--color-text-muted)] max-w-2xl leading-relaxed">
+        {staffOnly
+          ? "Eval runs execute agent-authored commands inside a sandbox, so they’re operated by the SignalPilot team rather than enabled per user. Ask your SignalPilot contact to run an eval on your behalf."
+          : "Evals run your proposed knowledge entries against a graded question set, so you can see whether an entry actually changes an agent’s answers before you approve it. It’s enabled per workspace during onboarding."}
+      </p>
+
+      <div className="mt-6 pt-5 border-t border-[var(--color-border)]">
+        <h3 className="text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-dim)] mb-3">
+          How to get access
+        </h3>
+        <ol className="space-y-2.5 text-sm text-[var(--color-text-muted)] max-w-2xl">
+          <li className="flex gap-3">
+            <span className="ev-badge flex-shrink-0">1</span>
+            <span>
+              Email{" "}
+              <a
+                href="mailto:support@signalpilot.dev?subject=Enable%20evals%20for%20my%20workspace"
+                className="text-[var(--color-text)] underline underline-offset-2"
+              >
+                support@signalpilot.dev
+              </a>{" "}
+              from the workspace you want enabled.
+            </span>
+          </li>
+          <li className="flex gap-3">
+            <span className="ev-badge flex-shrink-0">2</span>
+            <span>We turn evals on for that workspace and connect your eval set.</span>
+          </li>
+          <li className="flex gap-3">
+            <span className="ev-badge flex-shrink-0">3</span>
+            <span>
+              “Evaluate Change” then appears on pending knowledge entries, and runs show up here.
+            </span>
+          </li>
+        </ol>
+        <p className="mt-5 text-xs text-[var(--color-text-dim)]">
+          Already enabled elsewhere? Evals follow the active organization — switch to it from the
+          workspace switcher.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 /* ─── page ──────────────────────────────────────────────────────────────── */
 
 function EvalsPageInner() {
@@ -484,25 +542,51 @@ function EvalsPageInner() {
   const [selectedRun, setSelectedRun] = useState<string | null>(() => searchParams.get("run"));
   const [detailQ, setDetailQ] = useState<EvalQuestion | null>(null);
 
-  const { data: cfg } = useSWR("eval-config", getEvalConfig);
+  // Availability is the only eval route an unentitled workspace may call; every
+  // fetch below stays unkeyed until it says yes, so a refused org never fires one.
+  const { data: availability, isLoading: availLoading } = useSWR("eval-availability", getEvalAvailability);
+  const enabled = availability?.enabled === true;
+
+  const { data: cfg } = useSWR(enabled ? "eval-config" : null, getEvalConfig);
   const { data: evalSet, error: qError } = useSWR(
-    cfg?.repo_url ? `eval-questions-${cfg.repo_url}` : null,
+    enabled && cfg?.repo_url ? `eval-questions-${cfg.repo_url}` : null,
     () => listEvalQuestions(),
   );
   const questions = evalSet?.questions;
-  const { data: runsData } = useSWR("eval-runs", listEvalRuns, {
+  const { data: runsData } = useSWR(enabled ? "eval-runs" : null, listEvalRuns, {
     refreshInterval: (latest) =>
       latest?.runs?.some((r: EvalRun) => r.status === "running" || r.status === "preparing") ? 4000 : 15000,
   });
   const runs = runsData?.runs ?? [];
 
+  const header = (
+    <PageHeader
+      title="evals"
+      subtitle="knowledge"
+      description="test proposed knowledge entries against your eval suite before approving"
+    />
+  );
+
+  if (!enabled) {
+    return (
+      <div className="min-h-screen p-8 animate-fade-in">
+        {header}
+        <div className="max-w-5xl">
+          {availLoading || !availability ? (
+            <div className="ev-card p-8 text-sm text-[var(--color-text-dim)] flex items-center gap-2">
+              <Loader2 className="w-4 h-4 animate-spin" /> loading…
+            </div>
+          ) : (
+            <SetupState reason={availability.reason} />
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen p-8 animate-fade-in">
-      <PageHeader
-        title="evals"
-        subtitle="knowledge"
-        description="test proposed knowledge entries against your eval suite before approving"
-      />
+      {header}
 
       <div className="max-w-5xl space-y-6">
         <Hero questions={questions} setName_={evalSet?.name} description={evalSet?.description} repoUrl={cfg?.repo_url ?? ""} model={cfg?.model ?? "sonnet"} runnerEnabled={cfg?.enabled ?? true} cfgLoaded={!!cfg} />

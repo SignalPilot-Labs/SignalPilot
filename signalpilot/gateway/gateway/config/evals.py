@@ -4,6 +4,7 @@ Cached because no test monkeypatches these vars after import (new vars,
 verified by grep at introduction — audit tests/ before adding more).
 
 Class A vars managed here:
+    SP_EVAL_ALLOWED_ORGS       — orgs allowed to use the eval feature at all
     SP_EVAL_RUNNER_IMAGE       — docker image with the claude CLI; feature disabled when unset
     SP_EVAL_DOCKER_SOCKET      — Docker Engine socket path mounted into the gateway
     SP_EVAL_DOCKER_NETWORK     — network eval containers join (must reach the gateway)
@@ -34,6 +35,16 @@ from ._base import _GatewaySettingsBase
 
 class EvalRunSettings(_GatewaySettingsBase):
     """Typed eval-run configuration read from process environment at instantiation."""
+
+    # Comma-separated Clerk org ids allowed to reach the eval feature.
+    #
+    # Empty means DENY ALL in cloud mode: an unset allowlist is the state a fresh
+    # deployment is in, and there is no org id it could safely stand for. Empty in
+    # local mode allows the caller, because a local deployment is single-tenant
+    # with a synthetic org id ("local") that nobody would think to enumerate here
+    # — requiring it would break development for no tenancy gained. Deployment
+    # mode is read at call time so the allowlist follows the mode, not import order.
+    allowed_orgs_raw: str = Field("", alias="SP_EVAL_ALLOWED_ORGS")
 
     runner_image: str = Field("", alias="SP_EVAL_RUNNER_IMAGE")
     docker_socket: str = Field("/var/run/docker.sock", alias="SP_EVAL_DOCKER_SOCKET")
@@ -118,6 +129,18 @@ class EvalRunSettings(_GatewaySettingsBase):
                 "docker buildx imagetools inspect <image>"
             )
         return v
+
+    @property
+    def allowed_orgs(self) -> frozenset[str]:
+        """Parse SP_EVAL_ALLOWED_ORGS CSV into a frozenset of stripped, non-empty ids."""
+        return frozenset(o.strip() for o in self.allowed_orgs_raw.split(",") if o.strip())
+
+    def org_allowed(self, org_id: str | None) -> bool:
+        """Whether `org_id` may use evals at all. See allowed_orgs_raw for empty-list semantics."""
+        allowed = self.allowed_orgs
+        if not allowed:
+            return os.environ.get("SP_DEPLOYMENT_MODE", "").lower() != "cloud"
+        return bool(org_id) and org_id in allowed
 
     @property
     def enabled(self) -> bool:

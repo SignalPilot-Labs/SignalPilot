@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
 
+def _is_platform_staff(store: StoreD) -> bool:
+    return bool(store.user_id) and store.user_id in get_governance_settings().admin_user_ids
+
+
 async def _require_platform_staff(store: StoreD) -> None:
     """Restrict eval runs to platform staff (SP_ADMIN_USER_IDS).
 
@@ -33,11 +37,27 @@ async def _require_platform_staff(store: StoreD) -> None:
     tenant can grant itself — is not a sufficient gate. In cloud deployments
     SP_ADMIN_USER_IDS is unset by default, which refuses everyone.
     """
-    if not store.user_id or store.user_id not in get_governance_settings().admin_user_ids:
+    if not _is_platform_staff(store):
         raise HTTPException(status_code=403, detail="Platform staff access required.")
 
 
+async def _require_allowed_org(store: StoreD) -> None:
+    """Restrict evals to the orgs named in SP_EVAL_ALLOWED_ORGS.
+
+    Independent of the staff gate above: staff switching into a non-allowlisted
+    org loses access, because the active org is what carries the eval state.
+    """
+    if not get_eval_run_settings().org_allowed(store.org_id):
+        raise HTTPException(status_code=403, detail="Evals are not enabled for this workspace.")
+
+
 RequireStaff = Depends(_require_platform_staff)
+RequireAllowedOrg = Depends(_require_allowed_org)
+
+# Every eval route carries all three. Adding a route means reusing this list —
+# tests/test_eval_org_allowlist.py enumerates router.routes, so one that is
+# gated some other way fails there rather than shipping ungated.
+EVAL_GUARDS = [RequireScope("admin"), RequireStaff, RequireAllowedOrg]
 
 # In-process registry so a second trigger doesn't stack runs unboundedly.
 _active_tasks: dict[str, asyncio.Task] = {}
@@ -56,7 +76,22 @@ class EvalRunRequest(BaseModel):
     question_ids: list[str] | None = Field(None, max_length=100)
 
 
-@router.get("/evals/config", dependencies=[RequireScope("admin"), RequireStaff])
+@router.get("/evals/availability", dependencies=[RequireScope("read")])
+async def get_eval_availability(store: StoreD):
+    """Whether the caller may use evals — the only eval route the gates let through.
+
+    Deliberately says nothing about who else is allowed: no org id (not even the
+    caller's), no allowlist size, no runner config. The reason is what the page
+    needs to pick a setup state, and nothing more.
+    """
+    if not get_eval_run_settings().org_allowed(store.org_id):
+        return {"enabled": False, "reason": "not_enabled_for_org"}
+    if not _is_platform_staff(store):
+        return {"enabled": False, "reason": "not_staff"}
+    return {"enabled": True, "reason": "ok"}
+
+
+@router.get("/evals/config", dependencies=EVAL_GUARDS)
 async def get_eval_config(store: StoreD):
     settings = get_eval_run_settings()
     return {
@@ -66,12 +101,12 @@ async def get_eval_config(store: StoreD):
     }
 
 
-@router.put("/evals/config", dependencies=[RequireScope("admin"), RequireStaff])
+@router.put("/evals/config", dependencies=EVAL_GUARDS)
 async def put_eval_config(store: StoreD, cfg: EvalConfig):
     return runner.save_eval_config(store.org_id, cfg.model_dump())
 
 
-@router.get("/evals/questions", dependencies=[RequireScope("admin"), RequireStaff])
+@router.get("/evals/questions", dependencies=EVAL_GUARDS)
 async def list_eval_questions(store: StoreD):
     """The configured eval set (metadata + questions), for the /evals page."""
     try:
@@ -102,7 +137,7 @@ async def list_eval_questions(store: StoreD):
     }
 
 
-@router.post("/evals/runs", status_code=201, dependencies=[RequireScope("admin"), RequireStaff])
+@router.post("/evals/runs", status_code=201, dependencies=EVAL_GUARDS)
 async def start_eval_run(store: StoreD, req: EvalRunRequest):
     settings = get_eval_run_settings()
     if not settings.enabled:
@@ -146,12 +181,12 @@ def _active_tasks_prune() -> None:
         _active_tasks.pop(run_id, None)
 
 
-@router.get("/evals/runs", dependencies=[RequireScope("admin"), RequireStaff])
+@router.get("/evals/runs", dependencies=EVAL_GUARDS)
 async def list_eval_runs(store: StoreD):
     return {"runs": runner.list_runs(store.org_id)}
 
 
-@router.get("/evals/runs/{run_id}", dependencies=[RequireScope("admin"), RequireStaff])
+@router.get("/evals/runs/{run_id}", dependencies=EVAL_GUARDS)
 async def get_eval_run(store: StoreD, run_id: str):
     run = runner.read_run(store.org_id, _safe_id(run_id))
     if run is None:
@@ -162,7 +197,7 @@ async def get_eval_run(store: StoreD, run_id: str):
 @router.get(
     "/evals/runs/{run_id}/setup/{state}/log",
     response_class=PlainTextResponse,
-    dependencies=[RequireScope("admin"), RequireStaff],
+    dependencies=EVAL_GUARDS,
 )
 async def get_eval_setup_log(store: StoreD, run_id: str, state: str):
     text = runner.read_setup_log(store.org_id, _safe_id(run_id), state)
@@ -174,7 +209,7 @@ async def get_eval_setup_log(store: StoreD, run_id: str, state: str):
 @router.get(
     "/evals/runs/{run_id}/questions/{question_id}/transcript",
     response_class=PlainTextResponse,
-    dependencies=[RequireScope("admin"), RequireStaff],
+    dependencies=EVAL_GUARDS,
 )
 async def get_eval_transcript(store: StoreD, run_id: str, question_id: str):
     text = runner.read_transcript(store.org_id, _safe_id(run_id), question_id)
@@ -211,7 +246,7 @@ def _safe_sandbox_name(name: str) -> str:
     return name
 
 
-@router.get("/evals/sandboxes", dependencies=[RequireScope("admin"), RequireStaff])
+@router.get("/evals/sandboxes", dependencies=EVAL_GUARDS)
 async def list_eval_sandboxes(store: StoreD):
     """Eval containers alive right now for the caller's org."""
     view = sandboxes.get_sandbox_view(store.org_id)
@@ -221,7 +256,7 @@ async def list_eval_sandboxes(store: StoreD):
         await view.aclose()
 
 
-@router.get("/evals/sandboxes/{name}/events", dependencies=[RequireScope("admin"), RequireStaff])
+@router.get("/evals/sandboxes/{name}/events", dependencies=EVAL_GUARDS)
 async def get_eval_sandbox_events(store: StoreD, name: str):
     """Recent Kubernetes events for a sandbox pod — what makes a stuck pod
     diagnosable (unschedulable, image pull failure, sandbox runtime error)."""
@@ -232,7 +267,7 @@ async def get_eval_sandbox_events(store: StoreD, name: str):
         await view.aclose()
 
 
-@router.get("/evals/sandboxes/{name}/logs/stream", dependencies=[RequireScope("admin"), RequireStaff])
+@router.get("/evals/sandboxes/{name}/logs/stream", dependencies=EVAL_GUARDS)
 async def stream_eval_sandbox_logs(
     store: StoreD, name: str, tail: int = Query(200, ge=1, le=2000)
 ) -> StreamingResponse:
@@ -307,7 +342,7 @@ def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
-@router.get("/evals/runs/{run_id}/progress", dependencies=[RequireScope("admin"), RequireStaff])
+@router.get("/evals/runs/{run_id}/progress", dependencies=EVAL_GUARDS)
 async def get_eval_run_progress(store: StoreD, run_id: str):
     """Where a run is right now: phase, question index, elapsed, live sandbox."""
     run = runner.read_run(store.org_id, _safe_id(run_id))

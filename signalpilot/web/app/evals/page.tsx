@@ -27,6 +27,7 @@ import {
 import {
   getEvalConfig,
   getEvalRun,
+  getEvalRunProgress,
   listEvalQuestions,
   listEvalRuns,
   putEvalConfig,
@@ -38,6 +39,7 @@ import {
 import { PageHeader } from "~/components/ui/page-header";
 import { useToast } from "~/components/ui/toast";
 import { Md, fmtNum } from "./_components/Markdown";
+import { RunProgressBar, SandboxPanel } from "./_components/SandboxPanel";
 import { TranscriptSlideOver } from "./_components/TranscriptView";
 import "./evals.css";
 
@@ -406,6 +408,12 @@ function RunDetail({ runId }: { runId: string }) {
   const { data: run } = useSWR(`eval-run-${runId}`, () => getEvalRun(runId), {
     refreshInterval: (latest) => (latest && (latest.status === "running" || latest.status === "preparing") ? 3000 : 0),
   });
+  const live = run?.status === "running" || run?.status === "preparing";
+  const { data: progress } = useSWR(
+    live ? `eval-run-progress-${runId}` : null,
+    () => getEvalRunProgress(runId),
+    { refreshInterval: 2000 },
+  );
   if (!run) return <div className="ev-card p-5 text-sm text-[var(--color-text-dim)]">loading run…</div>;
 
   const s = run.summary ?? {};
@@ -435,6 +443,8 @@ function RunDetail({ runId }: { runId: string }) {
       </div>
 
       {run.error && <p className="mt-3 text-sm text-[#e5484d]">{run.error}</p>}
+
+      {progress && <RunProgressBar progress={progress} />}
 
       {(run.setup?.length ?? 0) > 0 && (
         <div className="mt-4 space-y-1">
@@ -512,6 +522,8 @@ function EvalsPageInner() {
         )}
 
         {selectedRun && <RunDetail runId={selectedRun} />}
+
+        <SandboxPanel />
 
         <div className="ev-card p-5">
           <h2 className="text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-muted)] mb-3">Runs</h2>

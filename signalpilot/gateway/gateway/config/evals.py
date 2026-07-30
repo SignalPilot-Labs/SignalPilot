@@ -13,6 +13,9 @@ Class A vars managed here:
     SP_EVAL_TIMEOUT_SECONDS    — per-question container timeout
     SP_EVAL_PROJECTS_DIR       — root allowed for local-path eval sets (mounted ro)
     SP_EVAL_K8S_NAMESPACE_PREFIX — namespace prefix for eval pods in cloud mode
+    SP_EVAL_CPU_REQUEST / SP_EVAL_CPU_LIMIT             — eval pod cpu sizing
+    SP_EVAL_MEMORY_REQUEST / SP_EVAL_MEMORY_LIMIT       — eval pod memory sizing
+    SP_EVAL_EPHEMERAL_REQUEST / SP_EVAL_EPHEMERAL_LIMIT — eval pod scratch sizing
 
 SP_EVAL_DOCKER_* apply to local mode only. In cloud mode eval workloads run as
 Kubernetes pods and the Docker socket is never opened (gateway/evals/backends.py).
@@ -62,6 +65,33 @@ class EvalRunSettings(_GatewaySettingsBase):
     # named namespace is rejected at CREATE. Changing this requires widening
     # that policy's tenantPrefix in the same deploy.
     k8s_namespace_prefix: str = Field("sp-nb", alias="SP_EVAL_K8S_NAMESPACE_PREFIX")
+
+    # Eval pods are sized exactly like notebook pods: they share the sandbox node
+    # group, so a limit larger than that node's allocatable CPU could never be
+    # honoured. Both limit:request ratios are 4, which is the namespace
+    # LimitRange maxLimitRequestRatio — raising a limit without raising its
+    # request in step gets the pod rejected at CREATE.
+    cpu_request: str = Field("250m", alias="SP_EVAL_CPU_REQUEST")
+    cpu_limit: str = Field("1", alias="SP_EVAL_CPU_LIMIT")
+    memory_request: str = Field("128Mi", alias="SP_EVAL_MEMORY_REQUEST")
+    memory_limit: str = Field("512Mi", alias="SP_EVAL_MEMORY_LIMIT")
+    ephemeral_request: str = Field("256Mi", alias="SP_EVAL_EPHEMERAL_REQUEST")
+    ephemeral_limit: str = Field("4Gi", alias="SP_EVAL_EPHEMERAL_LIMIT")
+
+    @property
+    def pod_resources(self) -> dict[str, dict[str, str]]:
+        return {
+            "requests": {
+                "cpu": self.cpu_request,
+                "memory": self.memory_request,
+                "ephemeral-storage": self.ephemeral_request,
+            },
+            "limits": {
+                "cpu": self.cpu_limit,
+                "memory": self.memory_limit,
+                "ephemeral-storage": self.ephemeral_limit,
+            },
+        }
 
     # Cloud-mode image digest must be sha256 + exactly 64 lowercase hex chars,
     # matching the guarantee SP_NOTEBOOK_IMAGE already carries.

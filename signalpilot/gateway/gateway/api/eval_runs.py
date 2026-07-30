@@ -6,15 +6,17 @@ File-based state (SP_DATA_DIR/eval-runs/<org>) — see gateway/evals/runner.py.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import time
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..config import get_governance_settings
 from ..config.evals import get_eval_run_settings
-from ..evals import runner
+from ..evals import runner, sandboxes
 from ..security.scope_guard import RequireScope
 from .deps import StoreD
 
@@ -187,3 +189,128 @@ def _safe_id(run_id: str) -> str:
     if not re.fullmatch(r"run-[0-9]{8}-[0-9]{6}-[a-f0-9]{6}", run_id):
         raise HTTPException(status_code=400, detail="Invalid run id")
     return run_id
+
+
+# ─── Sandbox panel (live view of the containers a run is executing in) ───────
+#
+# Read-only, staff-gated and org-scoped like every route above. The view layer
+# (gateway/evals/sandboxes.py) never returns a pod or container spec, so the
+# credentials those carry cannot reach a response; the free text that a cluster
+# can put in front of us is redacted there.
+
+# One log stream holds an open connection to the cluster for as long as the
+# sandbox lives, so viewers are capped globally rather than per user.
+MAX_LOG_STREAMS: int = 8
+_LOG_HEARTBEAT_SECONDS: float = 10.0
+_log_stream_semaphore = asyncio.Semaphore(MAX_LOG_STREAMS)
+
+
+def _safe_sandbox_name(name: str) -> str:
+    if not sandboxes.is_valid_sandbox_name(name):
+        raise HTTPException(status_code=400, detail="Invalid sandbox name")
+    return name
+
+
+@router.get("/evals/sandboxes", dependencies=[RequireScope("admin"), RequireStaff])
+async def list_eval_sandboxes(store: StoreD):
+    """Eval containers alive right now for the caller's org."""
+    view = sandboxes.get_sandbox_view(store.org_id)
+    try:
+        return await view.inventory()
+    finally:
+        await view.aclose()
+
+
+@router.get("/evals/sandboxes/{name}/events", dependencies=[RequireScope("admin"), RequireStaff])
+async def get_eval_sandbox_events(store: StoreD, name: str):
+    """Recent Kubernetes events for a sandbox pod — what makes a stuck pod
+    diagnosable (unschedulable, image pull failure, sandbox runtime error)."""
+    view = sandboxes.get_sandbox_view(store.org_id)
+    try:
+        return await view.events(_safe_sandbox_name(name))
+    finally:
+        await view.aclose()
+
+
+@router.get("/evals/sandboxes/{name}/logs/stream", dependencies=[RequireScope("admin"), RequireStaff])
+async def stream_eval_sandbox_logs(
+    store: StoreD, name: str, tail: int = Query(200, ge=1, le=2000)
+) -> StreamingResponse:
+    """SSE tail of a live sandbox.
+
+    Terminates on its own when the sandbox exits (the follow stream closes),
+    when the byte cap or the wall-clock deadline is hit, or when the viewer
+    disconnects — the pump task is cancelled in `finally` either way, so a
+    closed tab never leaves a task or an open cluster connection behind.
+    """
+    safe_name = _safe_sandbox_name(name)
+    if _log_stream_semaphore.locked():
+        raise HTTPException(
+            status_code=429,
+            detail="Too many sandbox log streams open. Close one and retry.",
+            headers={"Retry-After": "15"},
+        )
+    view = sandboxes.get_sandbox_view(store.org_id)
+
+    async def generate():
+        await _log_stream_semaphore.acquire()
+        queue: asyncio.Queue = asyncio.Queue(maxsize=256)
+
+        async def pump() -> None:
+            try:
+                async for kind, payload in view.stream_logs(safe_name, tail_lines=tail):
+                    await queue.put((kind, payload))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("Eval sandbox log stream for %s failed: %s", safe_name, exc)
+                await queue.put(("error", f"log stream failed: {type(exc).__name__}"))
+                await queue.put(("end", "stream-error"))
+            finally:
+                await queue.put(None)
+
+        task = asyncio.create_task(pump())
+        try:
+            yield _sse({"type": "open", "sandbox": safe_name, "at": time.time()})
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=_LOG_HEARTBEAT_SECONDS)
+                except TimeoutError:
+                    # Signs of life for the connection itself, so the panel can
+                    # tell "the agent is quiet" from "the stream is dead".
+                    yield _sse({"type": "heartbeat", "at": time.time()})
+                    continue
+                if item is None:
+                    return
+                kind, payload = item
+                if kind == "end":
+                    yield _sse({"type": "end", "reason": payload, "at": time.time()})
+                    return
+                yield _sse({"type": kind, "text": sandboxes.redact(payload), "at": time.time()})
+        finally:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+            await view.aclose()
+            _log_stream_semaphore.release()
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+def _sse(payload: dict) -> str:
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+@router.get("/evals/runs/{run_id}/progress", dependencies=[RequireScope("admin"), RequireStaff])
+async def get_eval_run_progress(store: StoreD, run_id: str):
+    """Where a run is right now: phase, question index, elapsed, live sandbox."""
+    run = runner.read_run(store.org_id, _safe_id(run_id))
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return runner.run_progress(run)

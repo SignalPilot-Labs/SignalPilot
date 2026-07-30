@@ -122,6 +122,105 @@ def read_transcript(org_id: str, run_id: str, question_id: str) -> str | None:
         return None
 
 
+# ─── In-flight progress ──────────────────────────────────────────────────────
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _mark_progress(org_id: str, run: dict, **fields) -> None:
+    """Record what the run is doing *now*, before the work happens.
+
+    Everything else in run.json is written after the fact, which is why a live
+    view could previously only show completed questions. These markers are the
+    in-flight half: one small dict, rewritten with the run file that was already
+    being rewritten at each transition, so no extra write pattern is introduced.
+    """
+    progress = run.setdefault("progress", {})
+    progress.update(fields)
+    progress["updated_at"] = _now()
+    _write_run(org_id, run)
+
+
+def run_progress(run: dict) -> dict:
+    """Derived, UI-ready view of where a run is."""
+    questions = run.get("questions") or []
+    progress = dict(run.get("progress") or {})
+    done = sum(1 for q in questions if q.get("status") == "done")
+    started_at = progress.get("started_at") or ""
+    elapsed = None
+    if started_at:
+        try:
+            started = datetime.fromisoformat(started_at)
+            elapsed = max(0, int((datetime.now(UTC) - started).total_seconds()))
+        except ValueError:
+            elapsed = None
+    phase = progress.get("phase") or ("finished" if run.get("status") in ("completed", "failed") else "preparing")
+    return {
+        "run_id": run.get("id", ""),
+        "status": run.get("status", ""),
+        "phase": phase,
+        "state": progress.get("state", ""),
+        "index": progress.get("index"),
+        "total": progress.get("total", len(questions)),
+        "done": done,
+        "question_id": progress.get("question_id", ""),
+        "question_title": progress.get("question_title", ""),
+        "started_at": started_at,
+        "elapsed_s": elapsed,
+        "updated_at": progress.get("updated_at", ""),
+        "sandbox": progress.get("sandbox"),
+        "error": run.get("error"),
+    }
+
+
+def sandbox_index(org_id: str, limit: int = 25) -> dict[str, dict]:
+    """Map sandbox name -> what it is running, from this org's recent run state.
+
+    The sandbox panel needs exact question ids and titles, which pod labels
+    cannot carry (they are sanitized to the Kubernetes label grammar). It is
+    also the ownership proof in local mode, where Docker has no namespaces.
+    """
+    index: dict[str, dict] = {}
+    try:
+        dirs = sorted(
+            (p for p in eval_root(org_id).iterdir() if (p / "run.json").exists()),
+            key=lambda p: p.name,
+            reverse=True,
+        )[:limit]
+    except OSError:
+        return index
+    for run_dir in dirs:
+        run = read_run(org_id, run_dir.name)
+        if not run:
+            continue
+        run_id = run.get("id", run_dir.name)
+        for entry in run.get("questions") or []:
+            sandbox = entry.get("sandbox") or {}
+            name = str(sandbox.get("name") or "")
+            if name:
+                index[name] = {
+                    "run_id": run_id,
+                    "question_id": entry.get("id", ""),
+                    "question_title": entry.get("title", ""),
+                    "setup_state": "",
+                    "kind": "question",
+                }
+        for entry in run.get("setup") or []:
+            sandbox = entry.get("sandbox") or {}
+            name = str(sandbox.get("name") or "")
+            if name:
+                index[name] = {
+                    "run_id": run_id,
+                    "question_id": "",
+                    "question_title": f"state setup · {entry.get('state', '')}",
+                    "setup_state": entry.get("state", ""),
+                    "kind": "setup",
+                }
+    return index
+
+
 # ─── Eval set parsing ────────────────────────────────────────────────────────
 
 
@@ -636,7 +735,7 @@ async def _execute_run_inner(org_id: str, run_id: str, api_key: str | None = Non
     def fail(msg: str) -> None:
         run["status"] = "failed"
         run["error"] = msg
-        _write_run(org_id, run)
+        _mark_progress(org_id, run, phase="finished", sandbox=None, started_at="")
         logger.error("Eval run %s failed: %s", run_id, msg)
 
     try:
@@ -690,6 +789,16 @@ async def _execute_run_inner(org_id: str, run_id: str, api_key: str | None = Non
     run["setup"] = []
     _write_run(org_id, run)
 
+    def sandbox_recorder(entry: dict):
+        """Attach the live sandbox's identity to both the entry and the run's
+        current-position marker as soon as the backend creates it."""
+
+        def record(info: dict) -> None:
+            entry["sandbox"] = info
+            _mark_progress(org_id, run, sandbox=info)
+
+        return record
+
     backend: ExecutionBackend = get_execution_backend(settings, org_id=org_id)
     try:
         current_state: str | None = None
@@ -708,20 +817,31 @@ async def _execute_run_inner(org_id: str, run_id: str, api_key: str | None = Non
                         "duration_s": None,
                     }
                     run["setup"].append(setup_entry)
-                    _write_run(org_id, run)
+                    _mark_progress(
+                        org_id,
+                        run,
+                        phase="setup",
+                        state=q.state,
+                        index=i,
+                        total=len(questions),
+                        question_id="",
+                        question_title=f"state setup · {q.state}",
+                        started_at=_now(),
+                        sandbox=None,
+                    )
                     t0 = time.monotonic()
                     try:
-                        exit_code, slogs = await backend.run(
-                            _setup_spec(
-                                settings,
-                                eval_set=eval_set,
-                                repo_dir=repo_dir,
-                                repo_url=cfg.get("repo_url", ""),
-                                script_rel=script,
-                                state=q.state,
-                                run_id=run_id,
-                            )
+                        spec = _setup_spec(
+                            settings,
+                            eval_set=eval_set,
+                            repo_dir=repo_dir,
+                            repo_url=cfg.get("repo_url", ""),
+                            script_rel=script,
+                            state=q.state,
+                            run_id=run_id,
                         )
+                        spec.on_start = sandbox_recorder(setup_entry)
+                        exit_code, slogs = await backend.run(spec)
                         (_run_dir(org_id, run_id) / f"setup-{_sanitize_state(q.state)}.log").write_text(
                             slogs, encoding="utf-8"
                         )
@@ -746,19 +866,32 @@ async def _execute_run_inner(org_id: str, run_id: str, api_key: str | None = Non
                 _write_run(org_id, run)
                 continue
             entry["status"] = "running"
-            _write_run(org_id, run)
+            entry["started_at"] = _now()
+            entry["sandbox"] = None
+            _mark_progress(
+                org_id,
+                run,
+                phase="question",
+                state=q.state,
+                index=i,
+                total=len(questions),
+                question_id=q.id,
+                question_title=q.title,
+                started_at=entry["started_at"],
+                sandbox=None,
+            )
             started = time.monotonic()
             try:
                 prompt = f"{preamble}\n\n{q.prompt}" if preamble else q.prompt
-                exit_code, logs = await backend.run(
-                    _question_spec(
-                        settings,
-                        prompt=prompt,
-                        model=run["model"],
-                        mcp_json=mcp_json,
-                        labels={"run": run_id, "question": q.id},
-                    )
+                spec = _question_spec(
+                    settings,
+                    prompt=prompt,
+                    model=run["model"],
+                    mcp_json=mcp_json,
+                    labels={"run": run_id, "question": q.id},
                 )
+                spec.on_start = sandbox_recorder(entry)
+                exit_code, logs = await backend.run(spec)
                 answer = _extract_result_text(logs)
                 if exit_code != 0 and not answer.strip():
                     verdict, check_results = "ERROR", []
@@ -812,6 +945,8 @@ async def _execute_run_inner(org_id: str, run_id: str, api_key: str | None = Non
         "setup_failed": verdicts.count("SETUP_FAILED"),
     }
     run["status"] = "completed"
-    _write_run(org_id, run)
+    _mark_progress(
+        org_id, run, phase="finished", question_id="", question_title="", sandbox=None, started_at=""
+    )
     # Cloned repos can be big — clean up.
     shutil.rmtree(_run_dir(org_id, run_id) / "repo", ignore_errors=True)

@@ -179,10 +179,44 @@ class TestPodHardening:
         assert manifest["spec"]["containers"][0]["workingDir"] == "/work"
 
     def test_explicit_cpu_and_memory_requests_and_limits(self, manifest):
+        """Sized exactly like a notebook pod — same sandbox node group, and a
+        limit above that node's allocatable CPU could never be honoured."""
         res = manifest["spec"]["containers"][0]["resources"]
-        assert res["limits"] == {"cpu": "2000m", "memory": "2048Mi"}
+        assert res["limits"] == {"cpu": "1", "memory": "512Mi", "ephemeral-storage": "4Gi"}
         # LimitRange maxLimitRequestRatio is 4 for both cpu and memory.
-        assert res["requests"] == {"cpu": "500m", "memory": "512Mi"}
+        assert res["requests"] == {"cpu": "250m", "memory": "128Mi", "ephemeral-storage": "256Mi"}
+
+    def test_resource_sizing_is_configurable(self):
+        m = eval_pod_manifest(
+            pod_name="p",
+            namespace="ns",
+            spec=_spec(),
+            secret_name="s",
+            resources=_settings(
+                SP_EVAL_CPU_REQUEST="500m",
+                SP_EVAL_CPU_LIMIT="2",
+                SP_EVAL_MEMORY_REQUEST="512Mi",
+                SP_EVAL_MEMORY_LIMIT="2Gi",
+                SP_EVAL_EPHEMERAL_REQUEST="1Gi",
+                SP_EVAL_EPHEMERAL_LIMIT="8Gi",
+            ).pod_resources,
+        )
+        res = m["spec"]["containers"][0]["resources"]
+        assert res["requests"] == {"cpu": "500m", "memory": "512Mi", "ephemeral-storage": "1Gi"}
+        assert res["limits"] == {"cpu": "2", "memory": "2Gi", "ephemeral-storage": "8Gi"}
+
+    def test_settings_defaults_match_the_notebook_pod(self):
+        assert _settings().pod_resources == {
+            "requests": {"cpu": "250m", "memory": "128Mi", "ephemeral-storage": "256Mi"},
+            "limits": {"cpu": "1", "memory": "512Mi", "ephemeral-storage": "4Gi"},
+        }
+
+    def test_docker_only_spec_fields_no_longer_size_the_pod(self, manifest):
+        """memory_bytes/nano_cpus describe the Docker path; a 2Gi/2-CPU spec must
+        not translate into a pod the sandbox node cannot schedule."""
+        res = manifest["spec"]["containers"][0]["resources"]
+        assert res["limits"]["cpu"] != "2000m"
+        assert res["limits"]["memory"] != "2048Mi"
 
     def test_active_deadline_matches_the_timeout(self, manifest):
         assert manifest["spec"]["activeDeadlineSeconds"] == 600
@@ -492,3 +526,27 @@ class TestRunnerSpecs:
             "HOME": "/tmp",
         }
         assert spec.timeout_seconds == 900
+
+
+class TestKubernetesResourceSizing:
+    @pytest.mark.asyncio
+    async def test_pod_is_sized_from_the_backends_own_settings(self):
+        """Sizing comes from the settings the backend was constructed with, not
+        the process-wide cache another caller may have warmed."""
+        core = _make_core([_pod_status("Succeeded", 0)])
+        backend = KubernetesBackend(
+            _settings(SP_EVAL_MEMORY_LIMIT="1Gi", SP_EVAL_MEMORY_REQUEST="256Mi"), org_id="org-1"
+        )
+        orch = MagicMock()
+        orch._core_api = core
+        orch.ensure_namespace = AsyncMock(return_value="sp-eval-0011223344556677")
+        orch.close = AsyncMock()
+        backend._orchestrator = orch
+
+        await backend.run(_spec(timeout_seconds=1))
+
+        body = core.create_namespaced_pod.call_args[1]["body"]
+        res = body["spec"]["containers"][0]["resources"]
+        assert res["limits"]["memory"] == "1Gi"
+        assert res["requests"]["memory"] == "256Mi"
+        assert res["limits"]["cpu"] == "1"

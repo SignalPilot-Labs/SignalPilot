@@ -118,6 +118,13 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log", "pods/status"]
     verbs: ["get", "list"]
+  # Read-only, tenant-namespace only. The sandbox dashboard surfaces these to
+  # distinguish a pod that is slow (pulling, scheduling) from one that is broken
+  # (ImagePullBackOff, OOMKilled, gVisor refusal). Verified absent on the live
+  # cluster, where the events panel would otherwise silently degrade.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create", "get"]

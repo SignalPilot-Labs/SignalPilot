@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -47,6 +48,11 @@ class ContainerRun:
     `binds` and `extra_network` are Docker-only host affordances used by the
     state-setup path; KubernetesBackend refuses them rather than silently
     dropping the mount a setup script depends on.
+
+    `on_start` fires once the workload exists and carries its identity
+    ({backend, name, namespace, started_at}). The runner records it so the
+    sandbox panel can attribute a live pod to the question it is answering
+    without waiting for `run` to return.
     """
 
     image: str
@@ -59,6 +65,24 @@ class ContainerRun:
     timeout_seconds: int
     binds: list[str] = field(default_factory=list)
     extra_network: str = ""
+    on_start: Callable[[dict], None] | None = None
+
+
+def _notify_start(spec: ContainerRun, info: dict) -> None:
+    """Hand the workload's identity to the runner. Never fatal: a bookkeeping
+    failure must not take down the eval it is describing."""
+    if spec.on_start is None:
+        return
+    try:
+        spec.on_start({**info, "started_at": _utcnow()})
+    except Exception:
+        logger.warning("Eval sandbox start callback failed for %s", info.get("name"), exc_info=True)
+
+
+def _utcnow() -> str:
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC).isoformat()
 
 
 class ExecutionBackend(Protocol):
@@ -122,6 +146,7 @@ class DockerBackend:
             start = await docker.post(f"{_DOCKER_API}/containers/{cid}/start")
             if start.status_code not in (204, 304):
                 raise RuntimeError(f"container start failed ({start.status_code}): {start.text[:300]}")
+            _notify_start(spec, {"backend": "docker", "name": cid[:12], "id": cid, "namespace": ""})
 
             try:
                 wait = await docker.post(
@@ -160,6 +185,7 @@ def eval_pod_manifest(
     namespace: str,
     spec: ContainerRun,
     secret_name: str,
+    resources: dict | None = None,
 ) -> dict:
     """Pod spec for one eval workload.
 
@@ -171,8 +197,18 @@ def eval_pod_manifest(
 
     Credentials are never in this spec — they arrive via envFrom on the
     ownerRef'd Secret, so `kubectl describe pod` and pod events show nothing.
+
+    `spec.memory_bytes`/`nano_cpus` size the Docker path only. Pod sizing comes
+    from settings (SP_EVAL_CPU_*/MEMORY_*/EPHEMERAL_*) and matches the notebook
+    pod: eval pods land on the same sandbox node group, so a limit above that
+    node's allocatable capacity is unschedulable rather than generous.
     """
     from ..orchestrator.kubernetes import _k8s_label_value, sandbox_scheduling
+
+    if resources is None:
+        from ..config.evals import get_eval_run_settings
+
+        resources = get_eval_run_settings().pod_resources
 
     return {
         "apiVersion": "v1",
@@ -220,18 +256,7 @@ def eval_pod_manifest(
                     ],
                     "envFrom": [{"secretRef": {"name": secret_name}}],
                     "workingDir": _WORK_DIR,
-                    "resources": {
-                        # Limit:request ratio must stay <= 4 (namespace LimitRange
-                        # maxLimitRequestRatio for cpu/memory).
-                        "requests": {
-                            "cpu": _milli_cpu(spec.nano_cpus // 4),
-                            "memory": _bytes_quantity(spec.memory_bytes // 4),
-                        },
-                        "limits": {
-                            "cpu": _milli_cpu(spec.nano_cpus),
-                            "memory": _bytes_quantity(spec.memory_bytes),
-                        },
-                    },
+                    "resources": resources,
                     "securityContext": {
                         "runAsNonRoot": True,
                         "allowPrivilegeEscalation": False,
@@ -253,14 +278,6 @@ def eval_pod_manifest(
             ],
         },
     }
-
-
-def _milli_cpu(nano_cpus: int) -> str:
-    return f"{max(1, nano_cpus // 1_000_000)}m"
-
-
-def _bytes_quantity(num_bytes: int) -> str:
-    return f"{max(1, num_bytes // (1024 * 1024))}Mi"
 
 
 class KubernetesBackend:
@@ -314,7 +331,11 @@ class KubernetesBackend:
         pod_name = f"sp-eval-{uuid.uuid4().hex[:12]}"
         secret_name = f"sp-eval-env-{pod_name}"
         manifest = eval_pod_manifest(
-            pod_name=pod_name, namespace=ns, spec=spec, secret_name=secret_name
+            pod_name=pod_name,
+            namespace=ns,
+            spec=spec,
+            secret_name=secret_name,
+            resources=self._settings.pod_resources,
         )
 
         from ..orchestrator.jwt_secret_lifecycle import create_secret_with_owner_ref
@@ -327,6 +348,7 @@ class KubernetesBackend:
             pod_name=pod_name,
             create_pod_fn=lambda: core.create_namespaced_pod(namespace=ns, body=manifest),
         )
+        _notify_start(spec, {"backend": "kubernetes", "name": pod_name, "namespace": ns})
         try:
             exit_code = await self._wait_terminal(core, pod_name, ns, spec.timeout_seconds)
             logs = await self._read_logs(core, pod_name, ns)

@@ -73,8 +73,11 @@ def _find_marker_matches(content: str) -> list[_MarkerMatch]:
     decoder = json.JSONDecoder()
     matches: list[_MarkerMatch] = []
     marker_pattern = "|".join(re.escape(marker) for marker in TRACE_CONTROL_MARKERS)
-    for match in re.finditer(rf"(?m)^[ \t]*({marker_pattern})[ \t]*:[ \t]*", content):
-        marker = _normalize_marker(match.group(1))
+    for match in re.finditer(
+        rf"(?m)^[ \t]*(?P<wrapper>\*\*)?(?P<marker>{marker_pattern})[ \t]*:[ \t]*",
+        content,
+    ):
+        marker = _normalize_marker(match.group("marker"))
         if marker is None:
             continue
         remainder = content[match.end() :]
@@ -86,7 +89,11 @@ def _find_marker_matches(content: str) -> list[_MarkerMatch]:
             continue
         if not isinstance(parsed, dict):
             continue
-        end = _extend_to_marker_line_end(content, match.end() + offset + json_end)
+        end = _extend_to_marker_line_end(
+            content,
+            match.end() + offset + json_end,
+            closing_wrapper=match.group("wrapper"),
+        )
         matches.append(_MarkerMatch(marker=marker, payload=parsed, start=match.start(), end=end))
     matches.sort(key=lambda item: item.start)
     return _drop_overlapping(matches)
@@ -102,10 +109,19 @@ def _redact_matches(content: str, matches: list[_MarkerMatch]) -> str:
     return re.sub(r"\n{3,}", "\n\n", "".join(pieces)).strip()
 
 
-def _extend_to_marker_line_end(content: str, end: int) -> int:
+def _extend_to_marker_line_end(
+    content: str,
+    end: int,
+    *,
+    closing_wrapper: str | None = None,
+) -> int:
     cursor = end
     while cursor < len(content) and content[cursor] in " \t":
         cursor += 1
+    if closing_wrapper and content.startswith(closing_wrapper, cursor):
+        cursor += len(closing_wrapper)
+        while cursor < len(content) and content[cursor] in " \t":
+            cursor += 1
     if cursor < len(content) and content[cursor] == "\r":
         cursor += 1
         if cursor < len(content) and content[cursor] == "\n":

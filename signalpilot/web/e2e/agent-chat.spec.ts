@@ -104,11 +104,10 @@ test("SignalPilot Agent — send message and receive response", async ({
   const hasInput = await chatInput.isVisible({ timeout: 10_000 }).catch(() => false);
 
   if (!hasInput) {
-    ts("Chat textarea not found — checking for API key input...");
-    // The agent panel might show an API key input first
-    const apiKeyInput = spRoot.locator('input[placeholder*="sk-ant"]');
-    if (await apiKeyInput.isVisible({ timeout: 3000 }).catch(() => false)) {
-      ts("API key input found — agent requires API key configuration");
+    ts("Chat textarea not found — checking for org API key setup prompt...");
+    const integrationsLink = spRoot.locator('a[href="/integrations"]');
+    if (await integrationsLink.isVisible({ timeout: 3000 }).catch(() => false)) {
+      ts("Org API key setup prompt found — agent requires admin configuration");
       await page.screenshot({ path: "e2e-agent-apikey.png" });
     } else {
       await page.screenshot({ path: "e2e-agent-noinput.png" });

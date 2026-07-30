@@ -137,11 +137,22 @@ GATEWAY_DEPLOY_FILE="$(basename "$GATEWAY_DEPLOY_SCRIPT")"
 )
 
 if [[ "${SKIP_GATEWAY_ROLLOUT_WAIT:-0}" != "1" ]]; then
-  log "Waiting for gateway rollout: ${GATEWAY_NAMESPACE}/${GATEWAY_DEPLOYMENT}"
-  run kubectl rollout status \
-    -n "$GATEWAY_NAMESPACE" \
-    "deployment/${GATEWAY_DEPLOYMENT}" \
-    --timeout="${GATEWAY_ROLLOUT_TIMEOUT:-300s}"
+  if [[ "${DRY_RUN:-0}" == "1" ]]; then
+    log "DRY_RUN=1: would wait for gateway rollout: ${GATEWAY_NAMESPACE}/${GATEWAY_DEPLOYMENT}"
+    run kubectl rollout status \
+      -n "$GATEWAY_NAMESPACE" \
+      "deployment/${GATEWAY_DEPLOYMENT}" \
+      --timeout="${GATEWAY_ROLLOUT_TIMEOUT:-300s}"
+  elif kubectl auth can-i get deployments.apps -n "$GATEWAY_NAMESPACE" >/dev/null 2>&1 \
+    && kubectl get deployment -n "$GATEWAY_NAMESPACE" "$GATEWAY_DEPLOYMENT" >/dev/null 2>&1; then
+    log "Waiting for gateway rollout: ${GATEWAY_NAMESPACE}/${GATEWAY_DEPLOYMENT}"
+    run kubectl rollout status \
+      -n "$GATEWAY_NAMESPACE" \
+      "deployment/${GATEWAY_DEPLOYMENT}" \
+      --timeout="${GATEWAY_ROLLOUT_TIMEOUT:-300s}"
+  else
+    log "Skipping gateway rollout wait; current kube identity cannot read ${GATEWAY_NAMESPACE}/${GATEWAY_DEPLOYMENT} or it does not exist"
+  fi
 fi
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
@@ -171,7 +182,13 @@ if [[ "${DELETE_SP_NB_NAMESPACES:-0}" == "1" ]]; then
 else
   log "Deleting notebook pods in namespaces: ${NOTEBOOK_NAMESPACES[*]}"
   for namespace in "${NOTEBOOK_NAMESPACES[@]}"; do
-    run kubectl delete pods -n "$namespace" --all --wait=false --ignore-not-found
+    mapfile -t NOTEBOOK_PODS < <(kubectl get pods -n "$namespace" -o name)
+    if [[ "${#NOTEBOOK_PODS[@]}" -eq 0 ]]; then
+      log "No notebook pods found in namespace: ${namespace}"
+      continue
+    fi
+    log "Deleting notebook pods in ${namespace}: ${NOTEBOOK_PODS[*]}"
+    run kubectl delete -n "$namespace" --wait=false --ignore-not-found "${NOTEBOOK_PODS[@]}"
   done
 fi
 

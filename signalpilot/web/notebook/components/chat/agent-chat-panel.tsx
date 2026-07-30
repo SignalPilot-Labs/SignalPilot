@@ -47,76 +47,27 @@ import {
 
 
 /* ── API Key Setup ── */
-const ApiKeySetup: React.FC<{ onConfigured: () => void }> = ({ onConfigured }) => {
-  const [apiKey, setApiKey] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const runtimeManager = useRuntimeManager();
-
-  const handleSave = async () => {
-    if (!apiKey.trim()) {return;}
-    setSaving(true);
-    setError("");
-    try {
-      const resp = await fetch(
-        runtimeManager.getAgentURL("save-api-key").toString(),
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...(await runtimeManager.headers()) },
-          body: JSON.stringify({ api_key: apiKey.trim() }),
-        },
-      );
-      const data = await resp.json() as { success?: boolean; error?: string };
-      if (data.success) {
-        onConfigured();
-      } else {
-        setError(data.error || "Failed to save");
-      }
-    } catch (e) {
-      setError(String(e));
-    }
-    setSaving(false);
-  };
-
+const ApiKeySetup: React.FC = () => {
   return (
-    <div className="flex flex-col items-center justify-center h-full p-6 text-center gap-4">
+    <div className="flex flex-col items-center justify-center h-full bg-background p-6 text-center gap-4">
       <KeyRoundIcon className="h-10 w-10 text-muted-foreground opacity-30" />
       <div>
         <h3 className="text-sm font-semibold text-foreground mb-1">Set up AI Agent</h3>
         <p className="text-xs text-muted-foreground">
-          Enter your Anthropic API key to enable the AI agent.
+          Ask an admin to add the org Anthropic API key on the integrations page.
         </p>
       </div>
-      <div className="w-full max-w-xs space-y-2">
-        <input
-          type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") {handleSave();} }}
-          placeholder="sk-ant-..."
-          className={cn(
-            "w-full rounded-md border border-border bg-background px-3 py-2 text-xs font-mono",
-            "placeholder:text-muted-foreground/50",
-            "focus:outline-none focus:ring-1 focus:ring-primary/40",
-          )}
-        />
-        {error && <p className="text-[11px] text-red-500">{error}</p>}
-        <Button
-          variant="default"
-          size="sm"
-          className="w-full"
-          onClick={handleSave}
-          disabled={!apiKey.trim() || saving}
-        >
-          {saving ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
-          Save API Key
-        </Button>
-      </div>
-      <p className="text-[10px] text-muted-foreground max-w-xs">
-        Your key is stored securely on the server. Get one at{" "}
-        <a href="https://console.anthropic.com" target="_blank" rel="noopener noreferrer"
-          className="text-primary hover:underline">console.anthropic.com</a>
-      </p>
+      <a
+        href="/integrations"
+        target="_blank"
+        rel="noopener noreferrer"
+        className={cn(
+          "inline-flex h-8 items-center rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground",
+          "hover:bg-primary/90",
+        )}
+      >
+        Open integrations
+      </a>
     </div>
   );
 };
@@ -185,7 +136,7 @@ const AgentChatPanel: React.FC = () => {
 
   if (aiConfigured === null) {
     return (
-      <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+      <div className="flex items-center justify-center h-full bg-background text-muted-foreground text-sm">
         <Loader2 className="h-4 w-4 animate-spin mr-2" />
         Checking AI configuration...
       </div>
@@ -193,7 +144,7 @@ const AgentChatPanel: React.FC = () => {
   }
 
   if (!aiConfigured) {
-    return <ApiKeySetup onConfigured={() => setAiConfigured(true)} />;
+    return <ApiKeySetup />;
   }
 
   return <AgentChatPanelInner />;
@@ -390,7 +341,7 @@ const AgentChatPanelInner: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100%-53px)]">
+    <div className="flex flex-col h-[calc(100%-53px)] bg-background text-foreground">
       {/* Header */}
       <div className="flex border-b px-3 py-2 justify-between shrink-0 items-center">
         <div className="flex items-center gap-2">

@@ -7,36 +7,20 @@ from unittest.mock import AsyncMock
 import pytest
 
 from gateway.analysis_delivery import (
-    AnalysisPreflightKind,
     DeliveryRenderer,
-    classify_analysis_request,
-    delivery_api_key_for_user,
+    DeliveryResult,
+    delivery_api_key_for_org,
     delivery_result_to_status,
     load_delivery_packet,
     load_delivery_packet_from_events,
     render_slack_final_message,
     render_slack_progress_message,
-    wants_html_deliverable,
 )
 from gateway.analysis_delivery import credentials as credentials_module
 from gateway.analysis_delivery import trace_loader as trace_loader_module
 from gateway.analysis_delivery.html_orchestrator import _html_model_payload
 from gateway.analysis_delivery.renderer import fallback_delivery
 from gateway.trace_markers import redact_trace_control_markers
-
-
-def test_preflight_gates_greetings_and_ambiguous_data_prompts() -> None:
-    assert classify_analysis_request("hi").kind == AnalysisPreflightKind.DIRECT
-    assert classify_analysis_request("hello").kind == AnalysisPreflightKind.DIRECT
-    assert classify_analysis_request("thanks").kind == AnalysisPreflightKind.DIRECT
-
-    ambiguous = classify_analysis_request("revenue")
-
-    assert ambiguous.kind == AnalysisPreflightKind.AMBIGUOUS
-    assert "fresh, specific analysis request" in (ambiguous.response or "")
-    assert classify_analysis_request("Analyze revenue by product for Q2").kind == AnalysisPreflightKind.ANALYZE
-    assert classify_analysis_request("Build a dashboard for revenue by product").kind == AnalysisPreflightKind.ANALYZE
-    assert wants_html_deliverable("Create a scorecard for Q2 pipeline")
 
 
 def test_trace_loader_extracts_latest_worker_plan_progress_and_final_statement() -> None:
@@ -261,6 +245,96 @@ def test_trace_control_markers_are_redacted_into_metadata_for_delivery() -> None
     assert packet.final_statement.handoff_notes == ["Used notebook SDK."]
 
 
+def test_trace_loader_uses_final_statement_metadata_with_empty_content() -> None:
+    packet = load_delivery_packet_from_events(
+        [
+            {
+                "idx": 1,
+                "type": "done",
+                "content": "",
+                "metadata": {
+                    "control_markers": [
+                        {
+                            "marker": "FINAL_STATEMENT",
+                            "payload": {
+                                "statement": "Revenue increased.",
+                                "confidenceScore": "high",
+                                "caveats": ["Excludes refunds"],
+                                "handoffNotes": ["Used notebook SDK."],
+                            },
+                        }
+                    ],
+                    "result": {"summary": "Revenue increased."},
+                },
+            }
+        ],
+        status_payload={"status": "Done"},
+        thread_status="done",
+    )
+
+    assert packet.final_statement is not None
+    assert packet.final_statement.statement == "Revenue increased."
+    assert packet.final_statement.confidence_score == "high"
+    assert packet.final_statement.caveats == ["Excludes refunds"]
+    assert packet.final_statement.handoff_notes == ["Used notebook SDK."]
+
+
+def test_trace_loader_falls_back_to_done_result_final_statement() -> None:
+    packet = load_delivery_packet_from_events(
+        [
+            {
+                "idx": 1,
+                "type": "done",
+                "content": "",
+                "metadata": {
+                    "result": {
+                        "final_answer": "Legacy result completed.",
+                        "confidence_score": "medium",
+                        "gotchas": ["Limited rows"],
+                        "analysis_method": "Used notebook SDK.",
+                    }
+                },
+            }
+        ],
+        status_payload={"status": "Done"},
+        thread_status="done",
+    )
+
+    assert packet.final_statement is not None
+    assert packet.final_statement.statement == "Legacy result completed."
+    assert packet.final_statement.confidence_score == "medium"
+    assert packet.final_statement.caveats == ["Limited rows"]
+    assert packet.final_statement.handoff_notes == ["Used notebook SDK."]
+
+
+def test_markdown_wrapped_trace_marker_is_compatibility_parsed() -> None:
+    content, metadata = redact_trace_control_markers(
+        '**FINAL_STATEMENT: {"statement":"Revenue increased.",'
+        '"confidenceScore":"high","caveats":[],"handoffNotes":[]}**'
+    )
+
+    assert content == ""
+    assert metadata is not None
+    assert metadata["control_markers"][0]["payload"]["statement"] == "Revenue increased."
+
+    packet = load_delivery_packet_from_events(
+        [
+            {
+                "idx": 1,
+                "type": "text",
+                "content": (
+                    '**FINAL_STATEMENT: {"statement":"Revenue increased.",'
+                    '"confidenceScore":"high","caveats":[],"handoffNotes":[]}**'
+                ),
+            }
+        ],
+        status_payload={"status": "Done"},
+    )
+
+    assert packet.final_statement is not None
+    assert packet.final_statement.statement == "Revenue increased."
+
+
 def test_slack_progress_waits_for_worker_plan_then_uses_exact_steps() -> None:
     no_plan = load_delivery_packet_from_events([], user_request="Analyze revenue")
 
@@ -287,26 +361,43 @@ def test_slack_progress_waits_for_worker_plan_then_uses_exact_steps() -> None:
     assert "querying fin-db" in rendered
 
 
+def test_slack_final_message_converts_standard_markdown_to_mrkdwn() -> None:
+    packet = load_delivery_packet_from_events([], status_payload={"status": "Done"})
+    delivery = DeliveryResult(
+        summary="Revenue increased.",
+        slack_message="# Summary\n- **Revenue** increased. See [report](https://app.test/report).",
+        notion_comment="",
+        final_answer="",
+    )
+
+    rendered = render_slack_final_message(packet, delivery)
+
+    assert "*Summary*" in rendered
+    assert "*Revenue*" in rendered
+    assert "<https://app.test/report|report>" in rendered
+    assert "**Revenue**" not in rendered
+
+
 @pytest.mark.asyncio
-async def test_delivery_api_key_for_user_reads_stored_account_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    get_user_anthropic_key = AsyncMock(return_value="sk-ant-user")
-    monkeypatch.setattr(credentials_module.user_secrets_store, "get_user_anthropic_key", get_user_anthropic_key)
+async def test_delivery_api_key_for_org_reads_stored_org_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    resolve_anthropic_key = AsyncMock(return_value="sk-ant-org")
+    monkeypatch.setattr(credentials_module.org_secrets_store, "resolve_anthropic_key", resolve_anthropic_key)
 
-    api_key = await delivery_api_key_for_user(AsyncMock(), org_id="org-1", user_id="user-1")
+    api_key = await delivery_api_key_for_org(AsyncMock(), org_id="org-1")
 
-    assert api_key == "sk-ant-user"
-    get_user_anthropic_key.assert_awaited_once()
-    assert get_user_anthropic_key.await_args.args[1:] == ("org-1", "user-1")
+    assert api_key == "sk-ant-org"
+    resolve_anthropic_key.assert_awaited_once()
+    assert resolve_anthropic_key.await_args.args[1:] == ("org-1",)
 
 
 @pytest.mark.asyncio
-async def test_delivery_api_key_for_user_disables_model_delivery_without_account_key(
+async def test_delivery_api_key_for_org_disables_model_delivery_without_org_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    get_user_anthropic_key = AsyncMock(return_value=None)
-    monkeypatch.setattr(credentials_module.user_secrets_store, "get_user_anthropic_key", get_user_anthropic_key)
+    resolve_anthropic_key = AsyncMock(return_value=None)
+    monkeypatch.setattr(credentials_module.org_secrets_store, "resolve_anthropic_key", resolve_anthropic_key)
 
-    api_key = await delivery_api_key_for_user(AsyncMock(), org_id="org-1", user_id="user-1")
+    api_key = await delivery_api_key_for_org(AsyncMock(), org_id="org-1")
 
     assert api_key == ""
 

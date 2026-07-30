@@ -207,27 +207,33 @@ def _get_auth_config() -> dict[str, str]:
     if credentials_path.is_file() and credentials_path.stat().st_size > 0:
         return {"type": "config_dir", "token": ""}
 
-    # Try fetching from gateway user secrets
+    # Check gateway org secrets. In cloud pods this should already be injected
+    # into ANTHROPIC_API_KEY at pod creation; local direct-mode notebooks fetch
+    # it over the runtime-authenticated gateway channel instead.
     try:
-        from signalpilot._server.gateway_client import gateway_headers, gateway_url
         import httpx
+
+        from signalpilot._server.gateway_client import (
+            gateway_headers,
+            gateway_url,
+        )
         resp = httpx.get(
-            f"{gateway_url()}/api/user/secrets",
+            f"{gateway_url()}/api/org/secrets/anthropic-key",
             headers=gateway_headers(),
             timeout=5.0,
         )
         if resp.status_code == 200:
             data = resp.json()
-            if data.get("has_anthropic_key"):
-                # The full key isn't returned via GET for security.
-                # It should be injected as env var by the gateway.
-                pass
+            key = data.get("anthropic_api_key", "")
+            if isinstance(key, str) and key:
+                return {"type": "api_key", "token": key}
     except Exception:
         pass
 
     raise ValueError(
         "No AI credentials configured. Set CLAUDE_CODE_OAUTH_TOKEN or "
-        "ANTHROPIC_API_KEY, or add your Anthropic API key in Settings."
+        "ANTHROPIC_API_KEY, or ask your admin to add the Anthropic API key "
+        "on the integrations page."
     )
 
 

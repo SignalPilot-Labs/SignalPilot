@@ -593,6 +593,37 @@ class SlackInstallationConfig(GatewayBase):
     allowed_channel_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
 
 
+class GatewaySlackThreadWatch(GatewayBase):
+    """Durable Slack thread invitation state.
+
+    A row means SignalPilot was explicitly mentioned in the Slack thread and may
+    route later plain replies through intake without another @mention.
+    """
+
+    __tablename__ = "gateway_slack_thread_watches"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    team_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    channel_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    thread_ts: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_thread_id: Mapped[str] = mapped_column(String(300), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active", server_default="active")
+    invited_by_user_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    latest_user_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    first_event_ts: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    latest_event_ts: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "team_id", "channel_id", "thread_ts", name="uq_slack_thread_watch_identity"),
+        Index("ix_slack_thread_watch_source_thread", "org_id", "source_thread_id"),
+        Index("ix_slack_thread_watch_active", "org_id", "team_id", "channel_id", "status"),
+    )
+
+
 class SlackOAuthState(GatewayBase):
     """Short-lived Slack OAuth state for CSRF protection and post-install redirect."""
 
@@ -1057,6 +1088,21 @@ class GatewayUserSecrets(GatewayBase):
     __table_args__ = (
         UniqueConstraint("org_id", "user_id", name="uq_gw_usersecrets_org_user"),
         Index("ix_gw_usersecrets_org_id", "org_id"),
+    )
+
+
+class GatewayOrgSecrets(GatewayBase):
+    """Org-scoped secrets — encrypted at rest."""
+
+    __tablename__ = "gateway_org_secrets"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    anthropic_api_key_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        Index("ix_gw_orgsecrets_org_id", "org_id"),
     )
 
 

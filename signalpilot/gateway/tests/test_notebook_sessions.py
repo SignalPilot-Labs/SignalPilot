@@ -15,15 +15,16 @@ from __future__ import annotations
 
 import time
 import uuid
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import jwt
 import pytest
 import pytest_asyncio
+from cryptography.fernet import Fernet
 from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
-from cryptography.fernet import Fernet
 
 from gateway.auth.notebook_jwt import (
     NOTEBOOK_SESSION_AUD,
@@ -49,6 +50,18 @@ def _patch_encryption_key(monkeypatch):
     monkeypatch.setenv("SP_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.delenv("SP_ENCRYPTION_KEY_OLD", raising=False)
     monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _default_org_secret_freshness(monkeypatch):
+    monkeypatch.setattr(
+        "gateway.notebooks.session_service.org_secrets_store.get_anthropic_key_updated_at",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "gateway.notebooks.session_service.org_secrets_store.resolve_anthropic_key",
+        AsyncMock(return_value=None),
+    )
 
 
 def _make_nb_jwt(user_id: str, org_id: str, session_id: str, ttl: int = 3600, scopes: list | None = None) -> str:
@@ -556,6 +569,11 @@ class TestSessionReuse:
         mock_orch.is_pod_alive.return_value = True
 
         monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=existing_session))
+        monkeypatch.setattr(
+            ns_store,
+            "get_session_internal",
+            AsyncMock(return_value=SimpleNamespace(pod_ip_internal="10.0.0.1")),
+        )
         monkeypatch.setattr(ns_api, "_get_orchestrator", AsyncMock(return_value=mock_orch))
 
         store = _make_mock_store()
@@ -624,10 +642,15 @@ class TestSessionReuse:
         async def _mock_delete_stopped(session, *, org_id, user_id):
             pass
 
-        async def _mock_update_status(session, *, session_id, status, pod_ip=None, pod_ip_internal=None):
+        async def _mock_update_status(session, *, session_id, org_id, status, pod_ip=None, pod_ip_internal=None):
             pass
 
         monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=existing_session))
+        monkeypatch.setattr(
+            ns_store,
+            "get_session_internal",
+            AsyncMock(return_value=SimpleNamespace(pod_ip_internal="10.0.0.2")),
+        )
         monkeypatch.setattr(ns_store, "create_session", AsyncMock(return_value=new_session))
         monkeypatch.setattr(ns_store, "mark_stopped", _mock_mark_stopped)
         monkeypatch.setattr(ns_store, "delete_stopped", _mock_delete_stopped)

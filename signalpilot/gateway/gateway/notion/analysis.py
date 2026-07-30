@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import logging
 import os
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -18,20 +20,18 @@ import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.analysis_delivery import (
-    AnalysisPreflightKind,
     DeliveryPacket,
-    classify_analysis_request,
-    delivery_api_key_for_user,
+    delivery_api_key_for_org,
     delivery_result_to_status,
     load_delivery_packet,
     load_delivery_packet_from_events,
-    plan_deliverable_followup,
     render_delivery,
     render_followup,
     render_html_deliverable,
-    wants_html_deliverable,
 )
 from gateway.analysis_delivery.design_system import DEFAULT_THEME, theme_token_map
+from gateway.analysis_delivery.intake_actions import analysis_status_for_source_thread
+from gateway.analysis_delivery.intake_agent import IntakeSession, run_intake_agent
 from gateway.auth.jwt_secret import load_session_jwt_secret
 from gateway.db.models import NotionInstallationConfig
 from gateway.git.repos import ensure_branch_from
@@ -57,6 +57,15 @@ logger = logging.getLogger(__name__)
 _HTML_DELIVERABLE_SUCCESS_NOTE = "- HTML block inserted on this Notion page."
 _HTML_DELIVERABLE_FAILURE_NOTE = (
     "- I could not insert the HTML block in Notion, so I delivered the analysis text here instead."
+)
+NOTION_ACTIVE_TRAIL_STALE_SECONDS = 30 * 60
+NOTION_INTAKE_OPERATIONAL_FAILURE_TEXT = "I could not safely decide how to handle that. Try again in a moment."
+NOTION_BUSY_TEXT = (
+    "Still working on the earlier question in this thread. "
+    "Resend this after I post the result and I'll build on it."
+)
+NOTION_MISSING_ANTHROPIC_KEY_TEXT = (
+    "SignalPilot needs an Anthropic API key. Ask your admin to add it on the integrations page."
 )
 
 
@@ -84,10 +93,75 @@ class AnalysisSetupRequiredError(RuntimeError):
     """Raised when an external analysis source has no configured default project."""
 
 
+class NotionIntakeConfigurationError(RuntimeError):
+    """Raised when Notion intake cannot run because org credentials are missing."""
+
+
 def _ignored(reason: str, **context: Any) -> NotionCommentProcessResult:
     details = " ".join(f"{key}={value}" for key, value in context.items() if value is not None)
     logger.info("Ignoring Notion comment event: %s%s", reason, f" ({details})" if details else "")
     return NotionCommentProcessResult(status="ignored", reason=reason)
+
+
+async def _run_notion_intake(
+    *,
+    db: AsyncSession,
+    routed: RoutedNotionInstallation,
+    surface: str,
+    prompt: str,
+    source_thread_id: str,
+    source_url: str,
+    previous_messages: list[str],
+    available_terminal_actions: tuple[str, ...],
+    deliverable_context: dict[str, Any] | None = None,
+):
+    api_key = await delivery_api_key_for_org(db, org_id=routed.installation.org_id)
+    if not api_key:
+        raise NotionIntakeConfigurationError("missing org Anthropic key for Notion intake")
+    session = IntakeSession(
+        source="notion",
+        surface=surface,
+        org_id=routed.installation.org_id,
+        user_id=routed.installation.user_id,
+        prompt=prompt,
+        source_thread_id=source_thread_id,
+        source_url=source_url,
+        previous_messages=previous_messages,
+        continuation_state={
+            "workspaceId": routed.installation.workspace_id,
+            "installationId": routed.installation.id,
+        },
+        deliverable_context=deliverable_context or {},
+        available_terminal_actions=available_terminal_actions,
+        active_stale_seconds=NOTION_ACTIVE_TRAIL_STALE_SECONDS,
+    )
+    return await run_intake_agent(session, db=db, api_key=api_key)
+
+
+async def _notion_notebook_update_status(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    discussion_id: str,
+) -> str:
+    status = await analysis_status_for_source_thread(
+        db,
+        org_id=org_id,
+        source="notion",
+        source_thread_id=discussion_id,
+        active_stale_seconds=NOTION_ACTIVE_TRAIL_STALE_SECONDS,
+    )
+    return status.status
+
+
+def _deliverable_intake_context(deliverable: Any) -> dict[str, Any]:
+    return {
+        "deliverableId": _text(getattr(deliverable, "id", "")),
+        "reportId": _text(getattr(deliverable, "report_id", "")),
+        "embedBlockAvailable": bool(getattr(deliverable, "embed_block_id", None)),
+        "fileUploadAvailable": bool(getattr(deliverable, "file_upload_id", None)),
+        "embedBlockId": _text(getattr(deliverable, "embed_block_id", "")),
+    }
 
 
 async def _org_deliverable_theme(db: AsyncSession, org_id: str) -> DeliverableTheme:
@@ -237,25 +311,60 @@ def _analysis_detail_blocks(status: dict[str, Any]) -> list[dict[str, Any]]:
     return blocks[: notion_formatting.NOTION_BLOCK_CHILD_LIMIT]
 
 
+_INCOMPLETE_ANALYSIS_FALLBACK_FIELDS = (
+    "summary",
+    "finalAnswer",
+    "notionComment",
+    "analysisMethod",
+)
+_INCOMPLETE_ANALYSIS_FALLBACK_MARKERS = (
+    "analysis could not be completed",
+    "did not emit the required final_statement marker",
+    "api error: overloaded",
+    "transient overload response",
+)
+
+
+def _incomplete_analysis_fallback_match(
+    status: dict[str, Any]
+) -> dict[str, str] | None:
+    for field in _INCOMPLETE_ANALYSIS_FALLBACK_FIELDS:
+        raw = str(status.get(field) or "")
+        text = raw.lower()
+        for marker in _INCOMPLETE_ANALYSIS_FALLBACK_MARKERS:
+            index = text.find(marker)
+            if index == -1:
+                continue
+            return {
+                "field": field,
+                "marker": marker,
+                "snippet": _matched_status_snippet(raw, index),
+            }
+    return None
+
+
 def _is_incomplete_analysis_fallback(status: dict[str, Any]) -> bool:
-    text = "\n".join(
-        str(status.get(key) or "")
-        for key in (
-            "summary",
-            "finalAnswer",
-            "notionComment",
-            "analysisMethod",
-        )
-    ).lower()
-    return any(
-        marker in text
-        for marker in (
-            "analysis could not be completed",
-            "did not emit the required final_statement marker",
-            "api error: overloaded",
-            "transient overload response",
-        )
+    return _incomplete_analysis_fallback_match(status) is not None
+
+
+def _log_incomplete_analysis_fallback_skip(
+    request_id: str,
+    match: dict[str, str],
+) -> None:
+    logger.info(
+        "Skipping Notion HTML deliverable for incomplete analysis fallback: "
+        "request_id=%s field=%s marker=%s snippet=%s",
+        request_id,
+        match["field"],
+        match["marker"],
+        match["snippet"],
     )
+
+
+def _matched_status_snippet(value: str, index: int, limit: int = 180) -> str:
+    start = max(index - 40, 0)
+    end = min(index + limit, len(value))
+    return re.sub(r"\s+", " ", value[start:end]).strip()
 
 
 def _analysis_request_id(source: str, discussion_id: str) -> str:
@@ -909,6 +1018,17 @@ def _existing_report_payload(report: Any) -> dict[str, Any]:
     }
 
 
+def _freeze_deliverable_context(context: Any) -> Any:
+    return SimpleNamespace(
+        project_id=getattr(context, "project_id", None),
+        branch=getattr(context, "branch", None),
+        base_notebook_code=getattr(context, "base_notebook_code", None),
+        base_chat_events=getattr(context, "base_chat_events", None),
+        base_final_packet=getattr(context, "base_final_packet", None),
+        base_notebook_path=getattr(context, "base_notebook_path", None),
+    )
+
+
 def _packet_from_status(prompt: str, status: dict[str, Any], trail_url: str = "") -> DeliveryPacket:
     return load_delivery_packet_from_events(
         [],
@@ -1343,6 +1463,38 @@ async def _comment_deliverable_followup(
     )
 
 
+async def _release_db_session(db: AsyncSession) -> None:
+    """End an idle transaction before long external work can outlive its DB connection."""
+    rollback = getattr(db, "rollback", None)
+    if rollback is None:
+        return
+    try:
+        result = rollback()
+        if inspect.isawaitable(result):
+            await result
+    except Exception:
+        logger.debug("Could not release DB session before external Notion deliverable work", exc_info=True)
+
+
+async def _mark_deliverable_update_failed_best_effort(
+    db: AsyncSession,
+    *,
+    update_id: str | None,
+    deliverable_id: str,
+    error: str,
+) -> None:
+    try:
+        await notion_store.mark_deliverable_update_failed(
+            db,
+            update_id=update_id,
+            deliverable_id=deliverable_id,
+            error=error,
+        )
+    except Exception:
+        logger.warning("Could not mark Notion deliverable update failed", exc_info=True)
+        await _release_db_session(db)
+
+
 def _followup_refresh_route(context: Any, ephemeral_run_id: str) -> AnalysisRoute:
     project_id = _text(getattr(context, "project_id", None))
     branch = _text(getattr(context, "branch", None)) or "main"
@@ -1384,7 +1536,8 @@ async def _load_refresh_delivery_packet(
 async def _run_ephemeral_deliverable_refresh(
     *,
     db: AsyncSession,
-    routed: RoutedNotionInstallation,
+    org_id: str,
+    user_id: str | None,
     context: Any,
     deliverable_id: str,
     ephemeral_run_id: str,
@@ -1396,18 +1549,19 @@ async def _run_ephemeral_deliverable_refresh(
         raise RuntimeError("Refresh context is missing project_id; rebuild the deliverable once before refreshing.")
     runtime = await ensure_analysis_notebook_session(
         db,
-        org_id=routed.installation.org_id,
+        org_id=org_id,
         source=route.source,
         request_id=route.request_id,
         project_id=route.project_id,
         branch=route.branch,
-        credential_user_id=routed.installation.user_id,
+        credential_user_id=user_id,
     )
+    await _release_db_session(db)
     start = await _call_notebook(
         runtime,
         "/api/notion-analysis/refresh",
-        routed.installation.org_id,
-        routed.installation.user_id,
+        org_id,
+        user_id,
         {
             "method": "POST",
             "json": {
@@ -1430,8 +1584,8 @@ async def _run_ephemeral_deliverable_refresh(
     status = await _poll_analysis(
         str(start.get("requestId") or ephemeral_run_id),
         runtime,
-        routed.installation.org_id,
-        routed.installation.user_id,
+        org_id,
+        user_id,
         route,
     )
     if status.get("status") != "Done" or status.get("error"):
@@ -1440,13 +1594,14 @@ async def _run_ephemeral_deliverable_refresh(
     trail_url = _public_signalpilot_url(public_status.get("trailUrl") or "", runtime)
     packet = await _load_refresh_delivery_packet(
         db,
-        org_id=routed.installation.org_id,
-        user_id=routed.installation.user_id or route.analysis_user_id,
+        org_id=org_id,
+        user_id=user_id or route.analysis_user_id,
         thread_id=f"session-{ephemeral_run_id}",
         prompt=data_instruction,
         status=public_status,
         trail_url=trail_url,
     )
+    await _release_db_session(db)
     return packet, runtime
 
 
@@ -1459,19 +1614,61 @@ async def _process_deliverable_followup(
     discussion_id: str,
     prompt: str,
 ) -> NotionCommentProcessResult:
-    plan = plan_deliverable_followup(prompt)
-    if plan.mode == "clarify":
+    org_id = routed.installation.org_id
+    user_id = routed.installation.user_id
+    deliverable_id = deliverable.id
+    report_id = deliverable.report_id
+    embed_block_id = deliverable.embed_block_id
+    file_upload_id = getattr(deliverable, "file_upload_id", None)
+
+    try:
+        action = (
+            await _run_notion_intake(
+                db=db,
+                routed=routed,
+                surface="notion_deliverable_followup",
+                prompt=prompt,
+                source_thread_id=discussion_id,
+                source_url="",
+                previous_messages=[],
+                available_terminal_actions=(
+                    "respond_to_user",
+                    "react_or_ignore",
+                    "update_notion_deliverable",
+                ),
+                deliverable_context=_deliverable_intake_context(deliverable),
+            )
+        ).action
+    except NotionIntakeConfigurationError:
         await _comment_deliverable_followup(
             token,
             discussion_id,
-            plan.response or "Tell me how to update this dashboard/report.",
+            NOTION_MISSING_ANTHROPIC_KEY_TEXT,
         )
         return NotionCommentProcessResult(status="processed")
+    except Exception:
+        logger.info("Notion deliverable intake failed", exc_info=True)
+        await _comment_deliverable_followup(token, discussion_id, NOTION_INTAKE_OPERATIONAL_FAILURE_TEXT)
+        return NotionCommentProcessResult(status="processed")
+
+    if action.name == "respond_to_user":
+        await _comment_deliverable_followup(token, discussion_id, action.text)
+        return NotionCommentProcessResult(status="processed")
+    if action.name == "react_or_ignore":
+        return NotionCommentProcessResult(status="processed")
+    if action.name != "update_notion_deliverable":
+        await _comment_deliverable_followup(token, discussion_id, NOTION_INTAKE_OPERATIONAL_FAILURE_TEXT)
+        return NotionCommentProcessResult(status="processed")
+
+    mode = action.deliverable_mode
+    requires_ephemeral_run = mode == "refresh_data"
+    render_instruction = action.render_instruction
+    data_instruction = action.data_instruction
 
     report = await reports_store.get_report(
         db,
-        org_id=routed.installation.org_id,
-        report_id=deliverable.report_id,
+        org_id=org_id,
+        report_id=report_id,
     )
     if report is None:
         await _comment_deliverable_followup(
@@ -1480,14 +1677,14 @@ async def _process_deliverable_followup(
             "I found this dashboard/report block, but its saved SignalPilot report is missing.",
         )
         return NotionCommentProcessResult(status="processed")
-    if not deliverable.embed_block_id:
+    if not embed_block_id:
         await _comment_deliverable_followup(
             token,
             discussion_id,
             "I can edit saved reports, but this older deliverable does not have a replaceable Notion embed block.",
         )
         return NotionCommentProcessResult(status="processed")
-    if not getattr(deliverable, "file_upload_id", None):
+    if not file_upload_id:
         await _comment_deliverable_followup(
             token,
             discussion_id,
@@ -1499,45 +1696,51 @@ async def _process_deliverable_followup(
         )
         return NotionCommentProcessResult(status="processed")
 
-    theme = await _org_deliverable_theme(db, routed.installation.org_id)
-    ephemeral_run_id = f"notion-refresh-{uuid4().hex[:16]}" if plan.requires_ephemeral_run else None
+    existing_report = _existing_report_payload(report)
+    report_data_json = report.data_json
+    theme = await _org_deliverable_theme(db, org_id)
+    ephemeral_run_id = f"notion-refresh-{uuid4().hex[:16]}" if requires_ephemeral_run else None
     update = await notion_store.create_deliverable_update(
         db,
-        deliverable_id=deliverable.id,
-        org_id=routed.installation.org_id,
-        mode=plan.mode,
+        deliverable_id=deliverable_id,
+        org_id=org_id,
+        mode=mode,
         prompt=prompt,
-        data_instruction=plan.data_instruction,
-        render_instruction=plan.render_instruction,
-        old_file_upload_id=deliverable.file_upload_id,
+        data_instruction=data_instruction,
+        render_instruction=render_instruction,
+        old_file_upload_id=file_upload_id,
         ephemeral_run_id=ephemeral_run_id,
     )
+    update_id = update.id
 
     try:
         runtime: NotebookRuntime | None = None
         packet: DeliveryPacket | None = None
-        if plan.requires_ephemeral_run:
-            context = await notion_store.latest_deliverable_context_snapshot(db, deliverable_id=deliverable.id)
+        if requires_ephemeral_run:
+            context = await notion_store.latest_deliverable_context_snapshot(db, deliverable_id=deliverable_id)
             if context is None or not context.base_notebook_code:
                 message = (
                     "I can edit this dashboard/report, but refresh requires a rebuild once with "
                     "captured SignalPilot context. Rebuild it once, then refresh will be available."
                 )
-                await notion_store.mark_deliverable_update_failed(
+                await _mark_deliverable_update_failed_best_effort(
                     db,
-                    update_id=update.id,
-                    deliverable_id=deliverable.id,
+                    update_id=update_id,
+                    deliverable_id=deliverable_id,
                     error=message,
                 )
                 await _comment_deliverable_followup(token, discussion_id, message)
                 return NotionCommentProcessResult(status="processed")
+            context = _freeze_deliverable_context(context)
+            await _release_db_session(db)
             packet, runtime = await _run_ephemeral_deliverable_refresh(
                 db=db,
-                routed=routed,
+                org_id=org_id,
+                user_id=user_id,
                 context=context,
-                deliverable_id=deliverable.id,
+                deliverable_id=deliverable_id,
                 ephemeral_run_id=ephemeral_run_id or f"notion-refresh-{uuid4().hex[:16]}",
-                data_instruction=plan.data_instruction,
+                data_instruction=data_instruction or prompt,
                 theme=theme,
             )
 
@@ -1545,44 +1748,44 @@ async def _process_deliverable_followup(
             token,
             discussion_id,
             "Refreshing and updating this dashboard/report."
-            if plan.requires_ephemeral_run
+            if requires_ephemeral_run
             else "Updating this dashboard/report.",
         )
-        delivery_api_key = await delivery_api_key_for_user(
+        delivery_api_key = await delivery_api_key_for_org(
             db,
-            org_id=routed.installation.org_id,
-            user_id=routed.installation.user_id,
+            org_id=org_id,
         )
+        await _release_db_session(db)
         html_result = await render_followup(
-            plan.render_instruction,
-            _existing_report_payload(report),
+            render_instruction,
+            existing_report,
             packet,
-            "refresh_data" if plan.requires_ephemeral_run else "edit_existing",
+            "refresh_data" if requires_ephemeral_run else "edit_existing",
             api_key=delivery_api_key or None,
             fetch_snapshot=_snapshot_fetcher(runtime),
             theme=theme,
         )
         replaced = await notion_dashboards.replace_html_deliverable(
             token,
-            embed_block_id=deliverable.embed_block_id,
+            embed_block_id=embed_block_id,
             title=html_result.title,
             html=html_result.html,
-            report_id=deliverable.report_id,
+            report_id=report_id,
         )
         await reports_store.update_report_html(
             db,
-            org_id=routed.installation.org_id,
-            report_id=deliverable.report_id,
+            org_id=org_id,
+            report_id=report_id,
             payload=ReportUpdate(
                 title=html_result.title,
                 html=html_result.html,
-                data_json=html_result.data_json if html_result.data_json is not None else report.data_json,
+                data_json=html_result.data_json if html_result.data_json is not None else report_data_json,
             ),
         )
         await notion_store.mark_deliverable_update_succeeded(
             db,
-            update_id=update.id,
-            deliverable_id=deliverable.id,
+            update_id=update_id,
+            deliverable_id=deliverable_id,
             new_file_upload_id=replaced.file_upload_id,
             html_bytes=len(html_result.html.encode("utf-8")),
         )
@@ -1590,17 +1793,18 @@ async def _process_deliverable_followup(
             token,
             discussion_id,
             "Updated this dashboard/report with fresh data."
-            if plan.requires_ephemeral_run
+            if requires_ephemeral_run
             else "Updated this dashboard/report.",
         )
         return NotionCommentProcessResult(status="processed")
     except Exception as exc:
         logger.info("Could not update Notion HTML deliverable follow-up", exc_info=True)
         message = str(exc) or exc.__class__.__name__
-        await notion_store.mark_deliverable_update_failed(
+        await _release_db_session(db)
+        await _mark_deliverable_update_failed_best_effort(
             db,
-            update_id=update.id,
-            deliverable_id=deliverable.id,
+            update_id=update_id,
+            deliverable_id=deliverable_id,
             error=message,
         )
         await _comment_deliverable_followup(
@@ -1676,16 +1880,6 @@ async def process_routed_comment_event(
             prompt=prompt,
         )
 
-    preflight = classify_analysis_request(prompt)
-    if preflight.kind != AnalysisPreflightKind.ANALYZE:
-        await notion_client.create_comment(
-            token,
-            discussion_id=discussion_id,
-            rich_text=_rich_text(preflight.response or "Send a fresh, specific analysis request to start SignalPilot."),
-        )
-        return NotionCommentProcessResult(status="processed")
-    html_deliverable = wants_html_deliverable(prompt)
-
     previous_messages = [
         notion_client.extract_comment_text(comment)
         for comment in comments
@@ -1696,7 +1890,76 @@ async def process_routed_comment_event(
     previous_messages = [message for message in previous_messages if message]
 
     source_url = _notion_page_url(page_id, discussion_id)
-    headline = _headline_from_prompt(prompt)
+    try:
+        action = (
+            await _run_notion_intake(
+                db=db,
+                routed=routed,
+                surface="notion_comment",
+                prompt=prompt,
+                source_thread_id=discussion_id,
+                source_url=source_url,
+                previous_messages=previous_messages,
+                available_terminal_actions=(
+                    "respond_to_user",
+                    "react_or_ignore",
+                    "start_notebook_analysis",
+                    "update_notebook_analysis",
+                ),
+            )
+        ).action
+    except NotionIntakeConfigurationError:
+        await notion_client.create_comment(
+            token,
+            discussion_id=discussion_id,
+            rich_text=_rich_text(NOTION_MISSING_ANTHROPIC_KEY_TEXT),
+        )
+        return NotionCommentProcessResult(status="processed")
+    except Exception:
+        logger.info("Notion intake failed", exc_info=True)
+        await notion_client.create_comment(
+            token,
+            discussion_id=discussion_id,
+            rich_text=_rich_text(NOTION_INTAKE_OPERATIONAL_FAILURE_TEXT),
+        )
+        return NotionCommentProcessResult(status="processed")
+
+    if action.name == "respond_to_user":
+        await notion_client.create_comment(
+            token,
+            discussion_id=discussion_id,
+            rich_text=_rich_text(action.text),
+        )
+        return NotionCommentProcessResult(status="processed")
+    if action.name == "react_or_ignore":
+        return NotionCommentProcessResult(status="processed")
+    if action.name not in {"start_notebook_analysis", "update_notebook_analysis"}:
+        await notion_client.create_comment(
+            token,
+            discussion_id=discussion_id,
+            rich_text=_rich_text(NOTION_INTAKE_OPERATIONAL_FAILURE_TEXT),
+        )
+        return NotionCommentProcessResult(status="processed")
+    if action.name == "update_notebook_analysis":
+        update_status = await _notion_notebook_update_status(
+            db,
+            org_id=routed.installation.org_id,
+            discussion_id=discussion_id,
+        )
+        if update_status == "busy":
+            await notion_client.create_comment(token, discussion_id=discussion_id, rich_text=_rich_text(NOTION_BUSY_TEXT))
+            return NotionCommentProcessResult(status="processed")
+        if update_status == "not_found":
+            await notion_client.create_comment(
+                token,
+                discussion_id=discussion_id,
+                rich_text=_rich_text("I could not find an earlier SignalPilot analysis in this thread to update."),
+            )
+            return NotionCommentProcessResult(status="processed")
+
+    analysis_prompt = action.prompt
+    output_mode = action.output_mode
+    headline = _headline_from_prompt(analysis_prompt)
     requester_ids = [
         str(author.get("id"))
         for author in payload.get("authors") or []
@@ -1790,8 +2053,8 @@ async def process_routed_comment_event(
                     "sourceUrl": source_url,
                     "requester": requester_ids,
                     "headline": headline,
-                    "prompt": prompt,
-                    "outputMode": "deliverable" if html_deliverable else "answer",
+                    "prompt": analysis_prompt,
+                    "outputMode": output_mode,
                     "previousMessages": previous_messages,
                     "createdAt": created_at,
                     "theme": theme_token_map(theme),
@@ -1849,7 +2112,7 @@ async def process_routed_comment_event(
                 org_id=routed.installation.org_id,
                 user_id=routed.installation.user_id or route.analysis_user_id,
                 thread_id=trace_thread_id,
-                user_request=prompt,
+                user_request=analysis_prompt,
             ).tick,
         )
         await update_analysis_trail_from_status(
@@ -1886,10 +2149,9 @@ async def process_routed_comment_event(
         public_status = _with_public_snapshot_urls(_with_public_chart_urls(final_status, runtime), runtime)
         public_trail_url = _public_signalpilot_url(public_status.get("trailUrl") or start_trail_url, runtime)
         delivery_user_id = routed.installation.user_id or route.analysis_user_id
-        delivery_api_key = await delivery_api_key_for_user(
+        delivery_api_key = await delivery_api_key_for_org(
             db,
             org_id=routed.installation.org_id,
-            user_id=delivery_user_id,
         )
         try:
             packet = await load_delivery_packet(
@@ -1897,7 +2159,7 @@ async def process_routed_comment_event(
                 org_id=routed.installation.org_id,
                 user_id=delivery_user_id,
                 thread_id=f"session-{route.request_id}",
-                user_request=prompt,
+                user_request=analysis_prompt,
                 status_payload=public_status,
                 trail_url=public_trail_url,
             )
@@ -1905,7 +2167,7 @@ async def process_routed_comment_event(
             logger.info("Could not load Notion delivery trace; using status fallback: %s", exc, exc_info=True)
             packet = load_delivery_packet_from_events(
                 [],
-                user_request=prompt,
+                user_request=analysis_prompt,
                 status_payload=public_status,
                 trail_url=public_trail_url,
                 thread_status="done",
@@ -1913,13 +2175,14 @@ async def process_routed_comment_event(
         delivery = await render_delivery(packet, api_key=delivery_api_key)
         rendered_status = delivery_result_to_status(delivery, packet, base_status=public_status)
         html_delivery_error: str | None = None
-        if html_deliverable and _is_incomplete_analysis_fallback(final_status):
-            logger.info(
-                "Skipping Notion HTML deliverable for incomplete analysis fallback: request_id=%s",
-                route.request_id,
+        incomplete_fallback_match = _incomplete_analysis_fallback_match(final_status)
+        deliver_html = output_mode == "deliverable"
+        if deliver_html and incomplete_fallback_match:
+            _log_incomplete_analysis_fallback_skip(
+                route.request_id, incomplete_fallback_match
             )
-            html_deliverable = False
-        if html_deliverable:
+            deliver_html = False
+        if deliver_html:
             try:
                 delivered = await _insert_html_deliverable(
                     db=db,

@@ -362,6 +362,8 @@ def test_analysis_agent_parses_streamed_final_statement(
     from signalpilot._server.ai import chat_store, claude_agent
     from signalpilot._server.ai.claude_agent import AgentEvent
 
+    appended_events: list[dict] = []
+
     class FakeStore:
         async def upsert_thread(self, thread) -> None:
             del thread
@@ -370,7 +372,8 @@ def test_analysis_agent_parses_streamed_final_statement(
             del thread_id
 
         async def append_event(self, thread_id: str, event_data: dict) -> int:
-            del thread_id, event_data
+            del thread_id
+            appended_events.append(event_data)
             return 0
 
     project_root = tmp_path / "projects" / "project-1"
@@ -431,6 +434,106 @@ def test_analysis_agent_parses_streamed_final_statement(
     assert record.status == "Done"
     assert record.result is not None
     assert record.result.final_answer == "Streamed done"
+    done_event = [event for event in appended_events if event["type"] == "done"][-1]
+    marker = done_event["metadata"]["control_markers"][0]
+    assert marker == {
+        "marker": "FINAL_STATEMENT",
+        "payload": {
+            "statement": "Streamed done",
+            "confidenceScore": "high",
+            "caveats": [],
+            "handoffNotes": [],
+        },
+    }
+
+
+def test_analysis_agent_parses_markdown_wrapped_final_statement(
+    tmp_path, monkeypatch
+) -> None:
+    from signalpilot._server.ai import chat_store, claude_agent
+    from signalpilot._server.ai.claude_agent import AgentEvent
+
+    appended_events: list[dict] = []
+
+    class FakeStore:
+        async def upsert_thread(self, thread) -> None:
+            del thread
+
+        async def clear_events(self, thread_id: str) -> None:
+            del thread_id
+
+        async def append_event(self, thread_id: str, event_data: dict) -> int:
+            del thread_id
+            appended_events.append(event_data)
+            return 0
+
+    project_root = tmp_path / "projects" / "project-1"
+    project_root.mkdir(parents=True)
+    app_state = SimpleNamespace(
+        request=SimpleNamespace(app=object(), headers={}),
+        session_manager=SimpleNamespace(
+            workspace=SimpleNamespace(directory=str(tmp_path / "workspace"))
+        ),
+    )
+    record = _record()
+
+    async def fake_run_notebook_agent(**kwargs: object):
+        del kwargs
+        yield AgentEvent(
+            type="text",
+            content=(
+                '**FINAL_STATEMENT: {"statement":"Bold wrapped done",'
+                '"confidenceScore":"medium","caveats":["Limited rows"],'
+                '"handoffNotes":["Used notebook SDK."]}**'
+            ),
+        )
+
+    monkeypatch.setattr(
+        notion_analysis, "_project_root", lambda _app_state: project_root
+    )
+    monkeypatch.setattr(
+        notion_analysis,
+        "_build_analysis_warm_context",
+        lambda *_args, **_kwargs: "",
+    )
+    monkeypatch.setattr(
+        notion_analysis, "_ensure_session", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        notion_analysis, "_save_registry", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        notion_analysis,
+        "_persist_record_completion_artifacts",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        chat_store, "get_gateway_chat_trace_store", lambda: FakeStore()
+    )
+    monkeypatch.setattr(
+        claude_agent, "run_notebook_agent", fake_run_notebook_agent
+    )
+
+    asyncio.run(
+        notion_analysis._run_analysis(
+            app_state,
+            record,
+            _body(),
+            new_chat=True,
+        )
+    )
+
+    assert record.status == "Done"
+    assert record.result is not None
+    assert record.result.final_answer == "Bold wrapped done"
+    assert "Analysis could not be completed" not in record.result.final_answer
+    done_event = [event for event in appended_events if event["type"] == "done"][-1]
+    assert done_event["metadata"]["control_markers"][0]["payload"] == {
+        "statement": "Bold wrapped done",
+        "confidenceScore": "medium",
+        "caveats": ["Limited rows"],
+        "handoffNotes": ["Used notebook SDK."],
+    }
 
 
 def test_analysis_agent_retries_once_after_transient_overload(
@@ -640,6 +743,173 @@ def test_refresh_session_creation_does_not_call_maybe_resume_session(tmp_path) -
     assert calls == ["create:notebooks/notion-refresh/refresh.py"]
 
 
+def test_missing_existing_notebook_is_restored_from_completion_artifacts(
+    tmp_path, monkeypatch
+) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    app_state = SimpleNamespace(
+        request=SimpleNamespace(headers={}),
+        session_manager=SimpleNamespace(
+            workspace=SimpleNamespace(directory=str(project_root))
+        ),
+    )
+    body = notion_analysis.StartNotionAnalysisRequest(
+        discussion_id="slack:T:C:123",
+        source_url="https://slack.test/archives/C/p124",
+        headline="Update dev DB",
+        prompt="what changed?",
+        created_at="2026-07-21T00:00:00Z",
+        source="slack",
+        previous_messages=["Analyze dev DB", "Prior trace summary: revenue increased."],
+        existing_notebook_path="notebooks/slack/original.py",
+    )
+    record = _record()
+    record.request_id = notion_analysis._request_id(body.discussion_id, "slack")
+    record.notebook_path = "notebooks/slack/original.py"
+    record.status = "Done"
+    record.result = notion_analysis.AnalysisResult(
+        summary="Revenue increased.",
+        final_answer="Revenue increased by 12%.",
+        confidence_score="high",
+    )
+    monkeypatch.setattr(notion_analysis, "_project_root", lambda _app_state: project_root)
+    monkeypatch.setattr(notion_analysis, "_load_registry", lambda _app_state: None)
+    monkeypatch.setattr(notion_analysis, "_save_registry", lambda _app_state: None)
+    monkeypatch.setattr(notion_analysis, "_checkpoint_analysis_files", lambda *_args, **_kwargs: None)
+
+    old_records = dict(notion_analysis._records_by_request_id)
+    old_discussions = dict(notion_analysis._records_by_discussion_id)
+    try:
+        notion_analysis._records_by_request_id.clear()
+        notion_analysis._records_by_discussion_id.clear()
+        notion_analysis._records_by_request_id[record.request_id] = record
+        notion_analysis._records_by_discussion_id[record.discussion_id] = record.request_id
+
+        recovered = notion_analysis._ensure_record(app_state, body, "https://notebook.test/")
+
+        notebook = project_root / record.notebook_path
+        assert notebook.exists()
+        assert "Revenue increased by 12%." in notebook.read_text(encoding="utf-8")
+        assert recovered.recovery_mode == "restored"
+        assert "restored" in (recovered.recovery_notice or "").lower()
+    finally:
+        notion_analysis._records_by_request_id.clear()
+        notion_analysis._records_by_request_id.update(old_records)
+        notion_analysis._records_by_discussion_id.clear()
+        notion_analysis._records_by_discussion_id.update(old_discussions)
+
+
+def test_missing_existing_notebook_without_artifacts_becomes_explicit_rerun(
+    tmp_path, monkeypatch
+) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    app_state = SimpleNamespace(request=SimpleNamespace(headers={}))
+    body = notion_analysis.StartNotionAnalysisRequest(
+        discussion_id="slack:T:C:123",
+        source_url="https://slack.test/archives/C/p124",
+        headline="Update dev DB",
+        prompt="rerun with latest data",
+        created_at="2026-07-21T00:00:00Z",
+        source="slack",
+        previous_messages=["Analyze dev DB", "Prior analysis trace summary: revenue increased."],
+        existing_notebook_path="notebooks/slack/original.py",
+    )
+    monkeypatch.setattr(notion_analysis, "_project_root", lambda _app_state: project_root)
+    monkeypatch.setattr(notion_analysis, "_load_registry", lambda _app_state: None)
+    monkeypatch.setattr(notion_analysis, "_save_registry", lambda _app_state: None)
+    monkeypatch.setattr(notion_analysis, "_checkpoint_analysis_files", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        notion_analysis,
+        "_record_trail_url",
+        lambda *_args, **_kwargs: "https://notebook.test/trail",
+    )
+
+    old_records = dict(notion_analysis._records_by_request_id)
+    old_discussions = dict(notion_analysis._records_by_discussion_id)
+    try:
+        notion_analysis._records_by_request_id.clear()
+        notion_analysis._records_by_discussion_id.clear()
+
+        recovered = notion_analysis._ensure_record(app_state, body, "https://notebook.test/")
+
+        assert recovered.notebook_path == body.existing_notebook_path
+        assert recovered.recovery_mode == "rerun"
+        assert "rerunning" in (recovered.recovery_notice or "").lower()
+        assert (project_root / body.existing_notebook_path).exists()
+    finally:
+        notion_analysis._records_by_request_id.clear()
+        notion_analysis._records_by_request_id.update(old_records)
+        notion_analysis._records_by_discussion_id.clear()
+        notion_analysis._records_by_discussion_id.update(old_discussions)
+
+
+@pytest.mark.asyncio
+async def test_session_startup_failure_is_durable_and_pollable(monkeypatch) -> None:
+    from signalpilot._server.ai import chat_store, claude_agent
+
+    appended_events: list[dict] = []
+
+    class FakeStore:
+        async def upsert_thread(self, thread) -> None:
+            del thread
+
+        async def append_event(self, thread_id: str, event_data: dict) -> int:
+            del thread_id
+            appended_events.append(event_data)
+            return 0
+
+    app_state = SimpleNamespace(request=SimpleNamespace(app=object(), headers={}))
+    record = _record()
+    monkeypatch.setattr(
+        notion_analysis,
+        "_ensure_session",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError("missing.py")),
+    )
+    monkeypatch.setattr(notion_analysis, "_save_registry", lambda _app_state: None)
+    monkeypatch.setattr(chat_store, "get_gateway_chat_trace_store", lambda: FakeStore())
+    monkeypatch.setattr(claude_agent, "buffer_event", lambda *_args, **_kwargs: None)
+
+    old_records = dict(notion_analysis._records_by_request_id)
+    old_running = dict(notion_analysis._running_tasks)
+    try:
+        notion_analysis._records_by_request_id.clear()
+        notion_analysis._running_tasks.clear()
+        notion_analysis._records_by_request_id[record.request_id] = record
+        notion_analysis._running_tasks[record.request_id] = SimpleNamespace()
+
+        await notion_analysis._run_analysis(app_state, record, _body(), new_chat=False)
+
+        assert record.status == "Failed"
+        assert record.error == (
+            "The analysis notebook could not be reopened. "
+            "Start a fresh analysis from the thread context."
+        )
+        assert record.request_id not in notion_analysis._running_tasks
+        assert appended_events[-1]["type"] == "error"
+        assert appended_events[-1]["content"] == record.error
+
+        monkeypatch.setattr(notion_analysis, "AppState", lambda _request: app_state)
+        monkeypatch.setattr(notion_analysis, "_load_registry", lambda _app_state: None)
+        monkeypatch.setattr(notion_analysis, "_refresh_trail_url", lambda *_args, **_kwargs: None)
+        response = await notion_analysis.notion_analysis_status(
+            request=SimpleNamespace(
+                path_params={"request_id": record.request_id},
+                base_url="https://notebook.test/",
+            )
+        )
+        payload = json.loads(response.body)
+        assert response.status_code == 200
+        assert payload["status"] == "Failed"
+        assert payload["error"] == record.error
+    finally:
+        notion_analysis._records_by_request_id.clear()
+        notion_analysis._records_by_request_id.update(old_records)
+        notion_analysis._running_tasks.clear()
+        notion_analysis._running_tasks.update(old_running)
+
+
 def test_refresh_completion_can_skip_branch_checkpoint(monkeypatch) -> None:
     calls: list[str] = []
 
@@ -717,6 +987,72 @@ def test_status_recover_completed_refresh_from_trace(monkeypatch) -> None:
     assert record.error is None
     assert record.result is not None
     assert record.result.final_answer == "Recovered"
+    assert calls == ["save_registry"]
+
+
+def test_status_recover_completed_refresh_from_structured_trace_metadata(
+    monkeypatch,
+) -> None:
+    record = _record()
+    record.status = "Analyzing"
+
+    class FakeTraceStore:
+        async def get_thread(self, thread_id: str):
+            assert thread_id == record.session_id
+            return {"status": "done"}
+
+        async def get_events(self, thread_id: str):
+            assert thread_id == record.session_id
+            return [
+                {
+                    "type": "done",
+                    "content": "",
+                    "metadata": {
+                        "control_markers": [
+                            {
+                                "marker": "FINAL_STATEMENT",
+                                "payload": {
+                                    "statement": "Recovered from metadata",
+                                    "confidenceScore": "medium",
+                                    "caveats": ["Limited rows"],
+                                    "handoffNotes": ["Used notebook SDK."],
+                                },
+                            }
+                        ],
+                        "result": {
+                            "final_answer": "Should not win over marker metadata"
+                        },
+                    },
+                }
+            ]
+
+    from signalpilot._server.ai import chat_store
+
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        chat_store, "get_gateway_chat_trace_store", lambda: FakeTraceStore()
+    )
+    monkeypatch.setattr(
+        notion_analysis,
+        "_save_registry",
+        lambda *_args, **_kwargs: calls.append("save_registry"),
+    )
+
+    recovered = asyncio.run(
+        notion_analysis._recover_completed_record_from_trace(
+            SimpleNamespace(), record
+        )
+    )
+
+    assert recovered is True
+    assert record.status == "Done"
+    assert record.error is None
+    assert record.result is not None
+    assert record.result.final_answer == "Recovered from metadata"
+    assert record.result.confidence_score == "medium"
+    assert record.result.gotchas == ["Limited rows"]
+    assert record.result.analysis_method == "Used notebook SDK."
     assert calls == ["save_registry"]
 
 

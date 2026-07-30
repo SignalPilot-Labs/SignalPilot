@@ -1,7 +1,22 @@
-// Full-page notebook IDE. Same component as /projects, but the layout hides the
-// left navbar and goes full-width for "/notebook" (see sidebar.tsx
-// HIDDEN_SIDEBAR_PREFIXES and main-content.tsx FULL_WIDTH_PREFIXES). Used by the
-// IDE header's "External" / pop-out link so it stays inside the authenticated
-// app instead of hitting the gateway notebook URL directly (which lacks the
-// proxy session cookie).
-export { default } from "../projects/page";
+"use client";
+
+import dynamic from "next/dynamic";
+import { Loader2 } from "lucide-react";
+
+const NotebooksPage = dynamic(
+  () => import("~/components/notebook/notebooks-page"),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex min-h-screen items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-[var(--color-text-dim)]" />
+      </div>
+    ),
+  },
+);
+
+// Full-page notebook IDE. Keep this route as a tiny shell so the initial
+// /notebook request does not compile the notebook runtime graph in Docker.
+export default function NotebookPage() {
+  return <NotebooksPage />;
+}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 from collections.abc import Awaitable, Callable
@@ -24,8 +25,25 @@ LOGGER = logging.getLogger(__name__)
 _ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 _ANTHROPIC_VERSION = "2023-06-01"
 _DEFAULT_TIMEOUT_SECONDS = 240.0
-_DEFAULT_MAX_TOKENS = 20_000
+_HTML_ORCHESTRATOR_OUTPUT_TOKENS = 30_000
+_DEFAULT_MAX_TOKENS = _HTML_ORCHESTRATOR_OUTPUT_TOKENS
+_MAX_TOKENS_RETRY_FLOOR = _HTML_ORCHESTRATOR_OUTPUT_TOKENS
+_DEFAULT_TOOL_LOOP_LIMIT = 8
+_ANTHROPIC_ERROR_BODY_MAX_CHARS = 2_000
 _DELIVERABLE_TOOL_NAMES = {"create_dashboard", "create_report", "edit_dashboard", "edit_report"}
+_DIV_TAG_RE = re.compile(r"</?div\b[^>]*>", flags=re.IGNORECASE)
+_CLASS_ATTR_RE = re.compile(r"\bclass=[\"']([^\"']*)[\"']", flags=re.IGNORECASE)
+_SVG_RE = re.compile(r"<svg\b(?P<attrs>[^>]*)>(?P<body>.*?)</svg>", flags=re.IGNORECASE | re.DOTALL)
+_VIEWBOX_RE = re.compile(
+    r"\bviewBox=[\"']\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s*[\"']",
+    flags=re.IGNORECASE,
+)
+_PATH_TAG_RE = re.compile(r"<path\b(?P<attrs>[^>]*)>(?P<body>\s*</path>)?", flags=re.IGNORECASE)
+_PATH_D_ATTR_RE = re.compile(r"\s+d=([\"']).*?\1", flags=re.IGNORECASE | re.DOTALL)
+_LEGEND_PERCENT_RE = re.compile(
+    r"\b(?:legend-value|sp-pie-legend-value|sp-donut-legend-value)\b[^>]*>\s*([+-]?\d+(?:\.\d+)?)\s*%",
+    flags=re.IGNORECASE,
+)
 _COMPONENT_LAYOUT_GUARD_ID = "sp-component-layout-guard"
 _COMPONENT_LAYOUT_GUARD = f"""<style id="{_COMPONENT_LAYOUT_GUARD_ID}">
 .sp-dashboard,
@@ -882,9 +900,15 @@ class HtmlOrchestrator:
         fetch_snapshot: SnapshotFetcher | None = None,
     ) -> None:
         self.provider = (provider or "anthropic").strip().lower()
-        self.model = (model or os.getenv("SIGNALPILOT_ORCHESTRATOR_MODEL") or DEFAULT_DELIVERY_MODEL).strip()
+        self.model = (
+            model
+            or os.getenv("SIGNALPILOT_ORCHESTRATOR_MODEL")
+            or os.getenv("SIGNALPILOT_DELIVERY_MODEL")
+            or DEFAULT_DELIVERY_MODEL
+        ).strip()
         self.timeout_seconds = _timeout_seconds(timeout_seconds)
         self.max_tokens = _max_tokens()
+        self.tool_loop_limit = _tool_loop_limit()
         self.api_key = api_key if api_key is not None else os.getenv("ANTHROPIC_API_KEY")
         self._http_client = http_client
         self._fetch_snapshot = fetch_snapshot
@@ -929,27 +953,80 @@ class HtmlOrchestrator:
         ]
         fetched_snapshots: dict[str, Any] = {}
         tool_choice = _tool_choice_for_payload(payload)
-        for _ in range(4):
+        last_iteration_summary: dict[str, Any] = {}
+        for iteration in range(1, self.tool_loop_limit + 1):
             response = await self._anthropic_request(
                 messages,
                 allow_fetch_snapshot=packet is not None,
                 tool_choice=tool_choice,
             )
             content = response.get("content") or []
+            last_iteration_summary = _anthropic_iteration_summary(content, response)
             result = await self._result_from_content(packet, content, fetched_snapshots, theme)
             if result is not None:
                 return result
             tool_results = await self._tool_results(packet, content, fetched_snapshots)
             if not tool_results:
                 text = _anthropic_text(response)
+                LOGGER.error(
+                    "HTML orchestrator iteration did not produce deliverable and has no tool feedback path "
+                    "iteration=%s/%s model=%s max_tokens=%s tool_choice=%s allow_fetch_snapshot=%s messages=%s "
+                    "content_types=%s tool_uses=%s text_chars=%s stop_reason=%s fetched_snapshots=%s",
+                    iteration,
+                    self.tool_loop_limit,
+                    self.model,
+                    self.max_tokens,
+                    tool_choice or "",
+                    packet is not None,
+                    len(messages),
+                    last_iteration_summary["content_types"],
+                    last_iteration_summary["tool_uses"],
+                    last_iteration_summary["text_chars"],
+                    last_iteration_summary["stop_reason"],
+                    len(fetched_snapshots),
+                )
                 parsed = _parse_json_object(text)
                 result = _html_result_from_payload(parsed)
                 if result is not None:
                     return _normalize_html_result(result, fetched_snapshots, theme=theme)
                 raise ValueError("HTML orchestrator did not return a deliverable")
+            LOGGER.info(
+                "HTML orchestrator iteration did not produce deliverable; sending tool feedback "
+                "iteration=%s/%s model=%s max_tokens=%s tool_choice=%s allow_fetch_snapshot=%s messages=%s "
+                "content_types=%s tool_uses=%s tool_results=%s text_chars=%s stop_reason=%s fetched_snapshots=%s",
+                iteration,
+                self.tool_loop_limit,
+                self.model,
+                self.max_tokens,
+                tool_choice or "",
+                packet is not None,
+                len(messages),
+                last_iteration_summary["content_types"],
+                last_iteration_summary["tool_uses"],
+                _tool_result_summary(tool_results),
+                last_iteration_summary["text_chars"],
+                last_iteration_summary["stop_reason"],
+                len(fetched_snapshots),
+            )
             messages.append({"role": "assistant", "content": content})
             messages.append({"role": "user", "content": tool_results})
-        raise TimeoutError("HTML orchestrator exceeded tool loop limit")
+        LOGGER.error(
+            "HTML orchestrator exceeded tool loop limit loop_limit=%s model=%s max_tokens=%s tool_choice=%s "
+            "allow_fetch_snapshot=%s messages=%s fetched_snapshots=%s last_content_types=%s last_tool_uses=%s "
+            "last_text_chars=%s last_stop_reason=%s",
+            self.tool_loop_limit,
+            self.model,
+            self.max_tokens,
+            tool_choice or "",
+            packet is not None,
+            len(messages),
+            len(fetched_snapshots),
+            last_iteration_summary.get("content_types", ""),
+            last_iteration_summary.get("tool_uses", ""),
+            last_iteration_summary.get("text_chars", 0),
+            last_iteration_summary.get("stop_reason", ""),
+        )
+        raise TimeoutError(f"HTML orchestrator exceeded tool loop limit ({self.tool_loop_limit})")
 
     async def _anthropic_request(
         self,
@@ -975,11 +1052,15 @@ class HtmlOrchestrator:
         }
         if self._http_client is not None:
             response = await self._http_client.post(_ANTHROPIC_MESSAGES_URL, headers=headers, json=request_body)
-            response.raise_for_status()
+            if await _should_retry_anthropic_request_with_lower_max_tokens(response, request_body):
+                response = await self._http_client.post(_ANTHROPIC_MESSAGES_URL, headers=headers, json=request_body)
+            _raise_anthropic_for_status(response, request_body)
             return response.json()
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             response = await client.post(_ANTHROPIC_MESSAGES_URL, headers=headers, json=request_body)
-            response.raise_for_status()
+            if await _should_retry_anthropic_request_with_lower_max_tokens(response, request_body):
+                response = await client.post(_ANTHROPIC_MESSAGES_URL, headers=headers, json=request_body)
+            _raise_anthropic_for_status(response, request_body)
             return response.json()
 
     async def _result_from_content(
@@ -1161,13 +1242,189 @@ def _timeout_seconds(value: float | None) -> float:
 
 
 def _max_tokens() -> int:
-    raw = os.getenv("SIGNALPILOT_ORCHESTRATOR_MAX_TOKENS", "").strip()
+    return _DEFAULT_MAX_TOKENS
+
+
+async def _should_retry_anthropic_request_with_lower_max_tokens(response: Any, request_body: dict[str, Any]) -> bool:
+    status_code = int(getattr(response, "status_code", 0) or 0)
+    max_tokens = request_body.get("max_tokens")
+    if status_code != 400 or not isinstance(max_tokens, int) or max_tokens <= _MAX_TOKENS_RETRY_FLOOR:
+        return False
+    body = _anthropic_error_body(response).lower()
+    if "max_tokens" not in body:
+        return False
+    request_body["max_tokens"] = _MAX_TOKENS_RETRY_FLOOR
+    LOGGER.warning(
+        "Anthropic HTML orchestrator rejected max_tokens=%s; retrying with max_tokens=%s "
+        "(status=%s, model=%s, payload_chars=%s, messages=%s, tool_choice=%s, error=%s)",
+        max_tokens,
+        _MAX_TOKENS_RETRY_FLOOR,
+        status_code,
+        request_body.get("model"),
+        _request_body_chars(request_body),
+        _message_count(request_body),
+        _tool_choice_name(request_body),
+        _anthropic_error_body(response),
+    )
+    return True
+
+
+def _raise_anthropic_for_status(response: Any, request_body: dict[str, Any]) -> None:
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        body = _anthropic_error_body(response)
+        payload_chars = _request_body_chars(request_body)
+        status_code = getattr(response, "status_code", None)
+        LOGGER.error(
+            "Anthropic HTML orchestrator request failed "
+            "status=%s model=%s max_tokens=%s payload_chars=%s messages=%s tools=%s tool_choice=%s error=%s",
+            status_code,
+            request_body.get("model"),
+            request_body.get("max_tokens"),
+            payload_chars,
+            _message_count(request_body),
+            _tool_names(request_body),
+            _tool_choice_name(request_body),
+            body,
+        )
+        raise RuntimeError(
+            "Anthropic HTML orchestrator request failed "
+            f"(status={status_code}, model={request_body.get('model')}, "
+            f"max_tokens={request_body.get('max_tokens')}, payload_chars={payload_chars}): {body}"
+        ) from exc
+
+
+def _message_count(request_body: dict[str, Any]) -> int:
+    messages = request_body.get("messages")
+    return len(messages) if isinstance(messages, list) else 0
+
+
+def _tool_names(request_body: dict[str, Any]) -> str:
+    tools = request_body.get("tools")
+    if not isinstance(tools, list):
+        return ""
+    names = [_string(tool.get("name")) for tool in tools if isinstance(tool, dict) and tool.get("name")]
+    return ",".join(names)
+
+
+def _tool_choice_name(request_body: dict[str, Any]) -> str:
+    tool_choice = request_body.get("tool_choice")
+    if not isinstance(tool_choice, dict):
+        return ""
+    return _string(tool_choice.get("name"))
+
+
+def _anthropic_error_body(response: Any) -> str:
+    text = ""
+    try:
+        payload = response.json()
+    except Exception:
+        payload = None
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            message = _string(error.get("message"))
+            error_type = _string(error.get("type"))
+            text = f"{error_type}: {message}" if error_type else message
+        else:
+            text = _string(payload)
+    if not text:
+        text = _string(getattr(response, "text", ""))
+    text = text.strip() or "<empty response body>"
+    if len(text) > _ANTHROPIC_ERROR_BODY_MAX_CHARS:
+        text = f"{text[:_ANTHROPIC_ERROR_BODY_MAX_CHARS]}..."
+    return text
+
+
+def _request_body_chars(request_body: dict[str, Any]) -> int:
+    try:
+        return len(json.dumps(request_body, ensure_ascii=True, separators=(",", ":")))
+    except Exception:
+        return -1
+
+
+def _anthropic_iteration_summary(content: list[Any], response: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "content_types": _anthropic_content_types(content),
+        "tool_uses": _anthropic_tool_use_summary(content),
+        "text_chars": _anthropic_content_text_chars(content),
+        "stop_reason": _string(response.get("stop_reason")),
+    }
+
+
+def _anthropic_content_types(content: list[Any]) -> str:
+    counts: dict[str, int] = {}
+    for item in content:
+        content_type = _string(item.get("type")) if isinstance(item, dict) else type(item).__name__
+        content_type = content_type or "<empty>"
+        counts[content_type] = counts.get(content_type, 0) + 1
+    return ",".join(f"{key}:{value}" for key, value in counts.items())
+
+
+def _anthropic_content_text_chars(content: list[Any]) -> int:
+    return sum(
+        len(item.get("text"))
+        for item in content
+        if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str)
+    )
+
+
+def _anthropic_tool_use_summary(content: list[Any]) -> str:
+    tool_uses: list[str] = []
+    for item in content:
+        if not isinstance(item, dict) or item.get("type") != "tool_use":
+            continue
+        name = _string(item.get("name")) or "<unnamed>"
+        args = _tool_args_dict(item)
+        if args is None:
+            tool_uses.append(f"{name}(input=invalid)")
+            continue
+        if name in _DELIVERABLE_TOOL_NAMES:
+            html = _string(args.get("html")).strip()
+            title = _string(args.get("title")).strip()
+            report_id = _string(args.get("report_id") or args.get("reportId")).strip()
+            data_json = args.get("data_json", args.get("dataJson"))
+            tool_uses.append(
+                f"{name}(title={bool(title)},html_chars={len(html)},"
+                f"data_json={data_json is not None},report_id={bool(report_id)})"
+            )
+            continue
+        if name == "fetch_snapshot":
+            snapshot_name = _string(args.get("name")).strip()
+            url = _string(args.get("url")).strip()
+            tool_uses.append(f"{name}(name={bool(snapshot_name)},url={bool(url)})")
+            continue
+        tool_uses.append(f"{name}(args={len(args)})")
+    return ",".join(tool_uses)
+
+
+def _tool_result_summary(tool_results: list[dict[str, Any]]) -> str:
+    summaries: list[str] = []
+    for index, item in enumerate(tool_results):
+        tool_use_id = _string(item.get("tool_use_id")) or str(index)
+        status = "payload"
+        try:
+            payload = json.loads(_string(item.get("content")))
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            if payload.get("error"):
+                status = "error"
+            elif payload.get("ok") is True:
+                status = "ok"
+        summaries.append(f"{tool_use_id}:{status}")
+    return ",".join(summaries)
+
+
+def _tool_loop_limit() -> int:
+    raw = os.getenv("SIGNALPILOT_ORCHESTRATOR_TOOL_LOOP_LIMIT", "").strip()
     if raw:
         try:
-            return max(int(raw), 1024)
+            return max(int(raw), 2)
         except ValueError:
-            LOGGER.warning("Invalid SIGNALPILOT_ORCHESTRATOR_MAX_TOKENS=%r; using default", raw)
-    return _DEFAULT_MAX_TOKENS
+            LOGGER.warning("Invalid SIGNALPILOT_ORCHESTRATOR_TOOL_LOOP_LIMIT=%r; using default", raw)
+    return _DEFAULT_TOOL_LOOP_LIMIT
 
 
 def _tool_choice_for_payload(payload: dict[str, Any]) -> str | None:
@@ -1313,6 +1570,7 @@ def _normalize_html_result(
 ) -> HtmlDeliverableResult:
     data_json = _merged_data_json(result.data_json, fetched_snapshots)
     html = _inject_data_island(result.html, data_json)
+    html = _normalize_pie_slice_geometry(html)
     html = _stabilize_common_chart_layouts(html, theme=theme)
     if html == result.html and data_json is result.data_json:
         return result
@@ -1402,6 +1660,133 @@ def _uses_chart_or_table_components(html: str) -> bool:
             flags=re.IGNORECASE,
         )
     )
+
+
+def _normalize_pie_slice_geometry(html: str) -> str:
+    replacements: list[tuple[int, int, str]] = []
+    for start, end in _div_blocks_with_class(html, "sp-pie-chart"):
+        block = html[start:end]
+        normalized = _normalize_pie_block(block)
+        if normalized != block:
+            replacements.append((start, end, normalized))
+    if not replacements:
+        return html
+    updated = html
+    for start, end, replacement in reversed(replacements):
+        updated = updated[:start] + replacement + updated[end:]
+    return updated
+
+
+def _div_blocks_with_class(html: str, class_name: str) -> list[tuple[int, int]]:
+    blocks: list[tuple[int, int]] = []
+    tags = list(_DIV_TAG_RE.finditer(html))
+    index = 0
+    while index < len(tags):
+        tag = tags[index]
+        text = tag.group(0)
+        if text.startswith("</") or not _tag_has_class(text, class_name):
+            index += 1
+            continue
+        depth = 1
+        cursor = index + 1
+        while cursor < len(tags):
+            next_tag = tags[cursor].group(0)
+            depth += -1 if next_tag.startswith("</") else 1
+            if depth == 0:
+                blocks.append((tag.start(), tags[cursor].end()))
+                index = cursor
+                break
+            cursor += 1
+        index += 1
+    return blocks
+
+
+def _tag_has_class(tag: str, class_name: str) -> bool:
+    match = _CLASS_ATTR_RE.search(tag)
+    if match is None:
+        return False
+    return class_name in match.group(1).split()
+
+
+def _normalize_pie_block(block: str) -> str:
+    svg_match = _SVG_RE.search(block)
+    if svg_match is None:
+        return block
+    percentages = [float(match.group(1)) for match in _LEGEND_PERCENT_RE.finditer(block)]
+    if len(percentages) < 2 or sum(value for value in percentages if value > 0) <= 0:
+        return block
+    svg = svg_match.group(0)
+    path_matches = list(_PATH_TAG_RE.finditer(svg))
+    if len(path_matches) != len(percentages):
+        return block
+    viewbox = _svg_viewbox(svg_match.group("attrs"))
+    if viewbox is None:
+        return block
+    x, y, width, height = viewbox
+    cx = x + width / 2
+    cy = y + height / 2
+    radius = min(width, height) * 0.45
+    paths = _pie_paths_from_values(percentages, cx=cx, cy=cy, radius=radius)
+    rewritten_svg = svg
+    for path_match, path in reversed(list(zip(path_matches, paths, strict=True))):
+        rewritten = _replace_path_d(path_match.group(0), path)
+        rewritten_svg = rewritten_svg[: path_match.start()] + rewritten + rewritten_svg[path_match.end() :]
+    return block[: svg_match.start()] + rewritten_svg + block[svg_match.end() :]
+
+
+def _svg_viewbox(attrs: str) -> tuple[float, float, float, float] | None:
+    match = _VIEWBOX_RE.search(attrs)
+    if match is None:
+        return None
+    x, y, width, height = match.groups()
+    return float(x), float(y), float(width), float(height)
+
+
+def _pie_paths_from_values(values: list[float], *, cx: float, cy: float, radius: float) -> list[str]:
+    positive_values = [max(value, 0.0) for value in values]
+    total = sum(positive_values)
+    if total <= 0:
+        return []
+    paths: list[str] = []
+    angle = -math.pi / 2
+    for value in positive_values:
+        share = value / total
+        next_angle = angle + (share * math.tau)
+        start_x = cx + radius * math.cos(angle)
+        start_y = cy + radius * math.sin(angle)
+        end_x = cx + radius * math.cos(next_angle)
+        end_y = cy + radius * math.sin(next_angle)
+        large_arc = 1 if share > 0.5 else 0
+        paths.append(
+            "M "
+            f"{_fmt_svg_number(cx)} {_fmt_svg_number(cy)} "
+            "L "
+            f"{_fmt_svg_number(start_x)} {_fmt_svg_number(start_y)} "
+            "A "
+            f"{_fmt_svg_number(radius)} {_fmt_svg_number(radius)} 0 {large_arc} 1 "
+            f"{_fmt_svg_number(end_x)} {_fmt_svg_number(end_y)} Z"
+        )
+        angle = next_angle
+    return paths
+
+
+def _replace_path_d(path_tag: str, d: str) -> str:
+    attrs_match = _PATH_TAG_RE.fullmatch(path_tag)
+    if attrs_match is None:
+        return path_tag
+    attrs = attrs_match.group("attrs")
+    body = attrs_match.group("body") or "</path>"
+    if attrs.rstrip().endswith("/"):
+        attrs = attrs.rstrip()[:-1]
+    attrs = _PATH_D_ATTR_RE.sub("", attrs, count=1)
+    return f'<path d="{d}"{attrs}>{body.lstrip()}'
+
+
+def _fmt_svg_number(value: float) -> str:
+    if abs(value) < 0.000001:
+        value = 0.0
+    formatted = f"{value:.2f}".rstrip("0").rstrip(".")
+    return formatted or "0"
 
 
 def _inject_head_style(html: str, *, style_id: str, style: str) -> str:

@@ -121,14 +121,14 @@ export function ThemeEditor() {
     <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-5">
         <div>
-          <p className="text-[13px] text-[var(--color-text)]">HTML deliverable theme</p>
-          {adminLocked && <p className="mt-1 text-[11px] text-[var(--color-error)]">org admin required</p>}
+          <p className="text-[13px] text-[var(--color-text)] tracking-wider">AI generations theme</p>
+          {adminLocked && <p className="mt-1 text-[11px] text-[var(--color-error)] tracking-wider">org admin required</p>}
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={handleReset}
             disabled={disabled}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-colors duration-150 uppercase disabled:opacity-30"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-all tracking-wider uppercase disabled:opacity-30"
           >
             <RotateCcw className="w-3 h-3" />
             reset
@@ -136,7 +136,7 @@ export function ThemeEditor() {
           <button
             onClick={handleSave}
             disabled={disabled || !dirty || hasErrors}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-bg)] bg-[var(--color-text)] hover:opacity-90 transition-colors duration-150 uppercase disabled:opacity-30"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-bg)] bg-[var(--color-text)] hover:opacity-90 transition-all tracking-wider uppercase disabled:opacity-30"
           >
             {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
             save
@@ -144,10 +144,10 @@ export function ThemeEditor() {
         </div>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_460px]">
+      <div className="flex flex-col gap-5">
         <div className="space-y-5">
           <label className="block max-w-md">
-            <span className="block text-[11px] text-[var(--color-text-dim)] uppercase mb-1.5">main color</span>
+            <span className="block text-[11px] text-[var(--color-text-dim)] tracking-wider uppercase mb-1.5">main color</span>
             <div className="flex items-center border border-[var(--color-border)] bg-[var(--color-bg-input)]">
               <input
                 type="color"
@@ -197,7 +197,7 @@ function NumberField({
 }) {
   return (
     <label className="block">
-      <span className="block text-[11px] text-[var(--color-text-dim)] uppercase mb-1.5">{label}</span>
+      <span className="block text-[11px] text-[var(--color-text-dim)] tracking-wider uppercase mb-1.5">{label}</span>
       <input
         type="number"
         min={min}
@@ -226,12 +226,12 @@ function Preview({ theme }: { theme: DeliverableTheme }) {
       <div className="sp-dashboard">
         <div className="sp-kpi-grid grid grid-cols-2 gap-[var(--sp-space-2)] mb-[var(--sp-space-2)]">
           <div className="sp-kpi-card bg-[var(--sp-surface)] border border-[var(--sp-border)] p-[var(--sp-space-2)]" style={{ borderRadius: "var(--sp-radius)" }}>
-            <div className="sp-kpi-label text-[var(--sp-muted)] text-[11px] uppercase">revenue</div>
+            <div className="sp-kpi-label text-[var(--sp-muted)] text-[11px] uppercase tracking-wider">revenue</div>
             <div className="sp-kpi-value">$2.4m</div>
             <div className="sp-delta-up text-[12px] text-[var(--sp-positive)]">+18.2%</div>
           </div>
           <div className="sp-kpi-card bg-[var(--sp-surface)] border border-[var(--sp-border)] p-[var(--sp-space-2)]" style={{ borderRadius: "var(--sp-radius)" }}>
-            <div className="sp-kpi-label text-[var(--sp-muted)] text-[11px] uppercase">risk</div>
+            <div className="sp-kpi-label text-[var(--sp-muted)] text-[11px] uppercase tracking-wider">risk</div>
             <div className="sp-kpi-value">low</div>
             <div className="sp-delta-down text-[12px] text-[var(--sp-negative)]">-3 pts</div>
           </div>

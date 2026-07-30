@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from gateway.analysis_delivery.model_client import AnthropicMessagesClient
 from gateway.store import chat_traces
 from gateway.string_utils import string_value as _string
 
@@ -23,8 +24,6 @@ INITIAL_PROGRESS_TEXT = "Analyzing your request..."
 COMPLETING_PROGRESS_TEXT = "Generating the final answer..."
 FALLBACK_PROGRESS_TEXT = "Working through the analysis..."
 
-_ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
-_ANTHROPIC_VERSION = "2023-06-01"
 _MAX_RECENT_EVENTS = 12
 _SAFE_TEXT_LIMIT = 180
 
@@ -66,7 +65,11 @@ class SlackProgressSummarizer:
         self.model = (model or "").strip()
         self.timeout_seconds = max(float(timeout_seconds or 8.0), 0.1)
         self.api_key = api_key if api_key is not None else os.getenv("ANTHROPIC_API_KEY")
-        self._http_client = http_client
+        self._model_client = AnthropicMessagesClient(
+            api_key=self.api_key or "",
+            timeout_seconds=self.timeout_seconds,
+            http_client=http_client,
+        )
 
     async def summarize(self, payload: dict[str, Any]) -> ProgressSummary:
         if self.provider != "anthropic" or not self.model or not self.api_key:
@@ -112,20 +115,7 @@ class SlackProgressSummarizer:
                 }
             ],
         }
-        headers = {
-            "x-api-key": self.api_key or "",
-            "anthropic-version": _ANTHROPIC_VERSION,
-            "content-type": "application/json",
-        }
-        if self._http_client is not None:
-            response = await self._http_client.post(_ANTHROPIC_MESSAGES_URL, headers=headers, json=request_body)
-            response.raise_for_status()
-            data = response.json()
-        else:
-            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-                response = await client.post(_ANTHROPIC_MESSAGES_URL, headers=headers, json=request_body)
-                response.raise_for_status()
-                data = response.json()
+        data = await self._model_client.create_message(request_body)
 
         raw_text = _anthropic_text(data)
         if not raw_text:

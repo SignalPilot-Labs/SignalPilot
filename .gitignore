@@ -117,6 +117,9 @@ signalpilot/web/clerk-research.md
 signalpilot/web/enterprise-connections.md
 signalpilot/web/UX.md
 writeups/
+# Security audit reports: findings, credential names, deployment locations
+# and customer-identifying detail. Kept on disk, out of the repo.
+security/
 
 # Vendored GitHub Copilot LSP binaries (~81MB, disabled by default; install at build if needed)
 signalpilot/notebook-server/signalpilot/_lsp/copilot/

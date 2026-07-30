@@ -30,6 +30,7 @@ async def create_conversation(
         org_id=org_id,
         user_id=user_id,
         project_id=project_id,
+        surface="notebook",
         title=title,
         agent_session_id=chat_session_id,
         model=model,
@@ -56,6 +57,7 @@ async def list_conversations(
     base = select(GatewayChatConversation).where(
         GatewayChatConversation.org_id == org_id,
         GatewayChatConversation.user_id == user_id,
+        GatewayChatConversation.surface == "notebook",
     )
     if project_id:
         base = base.where(GatewayChatConversation.project_id == project_id)
@@ -73,6 +75,7 @@ async def get_conversation(
         GatewayChatConversation.org_id == org_id,
         GatewayChatConversation.user_id == user_id,
         GatewayChatConversation.id == conversation_id,
+        GatewayChatConversation.surface == "notebook",
     )
     row = (await session.execute(q)).scalar_one_or_none()
     return _conv_info(row) if row else None
@@ -85,6 +88,7 @@ async def delete_conversation(
         GatewayChatConversation.org_id == org_id,
         GatewayChatConversation.user_id == user_id,
         GatewayChatConversation.id == conversation_id,
+        GatewayChatConversation.surface == "notebook",
     )
     row = (await session.execute(q)).scalar_one_or_none()
     if not row:
@@ -113,6 +117,7 @@ async def append_message(
         GatewayChatConversation.org_id == org_id,
         GatewayChatConversation.user_id == user_id,
         GatewayChatConversation.id == conversation_id,
+        GatewayChatConversation.surface == "notebook",
     )
     conv = (await session.execute(conv_q)).scalar_one_or_none()
     if not conv:
@@ -156,6 +161,7 @@ async def list_messages(
                 GatewayChatConversation.id == conversation_id,
                 GatewayChatConversation.org_id == org_id,
                 GatewayChatConversation.user_id == user_id,
+                GatewayChatConversation.surface == "notebook",
             )
         )
     ).scalar_one_or_none()

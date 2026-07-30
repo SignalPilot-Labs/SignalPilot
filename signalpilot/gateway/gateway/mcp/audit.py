@@ -9,14 +9,56 @@ import uuid
 
 from gateway.mcp.context import (
     _store_session,
+    mcp_allowed_connection_var,
     mcp_audit_id_var,
     mcp_client_ip_var,
+    mcp_execution_identity_var,
     mcp_org_id_var,
     mcp_user_agent_var,
 )
 from gateway.models import AuditEntry
 
 _mcp_logger = _logging.getLogger("gateway.mcp_audit")
+
+STANDALONE_CHAT_TOOL_ALLOWLIST = frozenset(
+    {
+        "check_budget",
+        "connector_capabilities",
+        "debug_cte_query",
+        "describe_table",
+        "estimate_query_cost",
+        "explain_query",
+        "explore_column",
+        "explore_columns",
+        "explore_table",
+        "find_join_path",
+        "get_date_boundaries",
+        "get_relationships",
+        "list_database_connections",
+        "list_semantic_metrics",
+        "list_tables",
+        "query_database",
+        "schema_ddl",
+        "schema_link",
+        "schema_overview",
+        "schema_statistics",
+        "validate_sql",
+        "verify_metric_conformance",
+    }
+)
+
+
+def standalone_chat_tool_denial(tool_name: str, connection_name: str | None) -> str | None:
+    """Return a public denial for capabilities unavailable to standalone chat."""
+    execution_identity = mcp_execution_identity_var.get(None)
+    if not execution_identity or not execution_identity.startswith("chat:"):
+        return None
+    if tool_name not in STANDALONE_CHAT_TOOL_ALLOWLIST:
+        return "Error: this tool is unavailable in standalone data chat"
+    allowed_connection = mcp_allowed_connection_var.get(None)
+    if connection_name and allowed_connection and connection_name != allowed_connection:
+        return "Error: connection is outside this chat's allowed scope"
+    return None
 
 
 async def _audit_tool_call(
@@ -79,6 +121,20 @@ def _audited_tool(fn):
         conn = kwargs.get("connection_name") or (args[0] if args and isinstance(args[0], str) else None)
         sql_arg = kwargs.get("sql")
         try:
+            denial = standalone_chat_tool_denial(tool_name, conn)
+            if denial:
+                duration_ms = (time.time() - t0) * 1000
+                await _audit_tool_call(
+                    tool_name=tool_name,
+                    args=kwargs,
+                    result=denial,
+                    duration_ms=duration_ms,
+                    connection_name=conn,
+                    sql=sql_arg,
+                    audit_id=audit_id,
+                    error=denial,
+                )
+                return denial
             result = await fn(*args, **kwargs)
             duration_ms = (time.time() - t0) * 1000
             # Detect blocked queries from return value

@@ -16,7 +16,7 @@ import fnmatch
 import re
 from typing import Annotated, Any
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 
 from ..auth import DBSession, OrgID, UserID
 from ..connectors.pool_manager import pool_manager
@@ -31,9 +31,22 @@ async def get_store(
     org_id: OrgID,
     user_id: UserID,
     db: DBSession,
+    request: Request,
 ) -> Store:
     """FastAPI dependency: yields a Store scoped to the current org."""
-    return Store(db, org_id=org_id, user_id=user_id)
+    claims = getattr(request.state, "_jwt_claims", {}) or {}
+    execution_identity = claims.get("execution_identity")
+    allowed_connection_name = (
+        claims.get("connection_name")
+        if isinstance(execution_identity, str) and execution_identity.startswith("chat:")
+        else None
+    )
+    return Store(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        allowed_connection_name=allowed_connection_name,
+    )
 
 
 StoreD = Annotated[Store, Depends(get_store)]

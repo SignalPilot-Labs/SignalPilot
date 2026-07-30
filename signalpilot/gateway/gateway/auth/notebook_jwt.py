@@ -41,6 +41,10 @@ def mint_session_jwt(
     branch: str,
     ttl: int,
     project_id: str | None = None,
+    connection_name: str | None = None,
+    capabilities: list[str] | None = None,
+    execution_identity: str | None = None,
+    scopes: list[str] | None = None,
 ) -> str:
     """Mint a signed HS256 JWT for a notebook session.
 
@@ -65,10 +69,16 @@ def mint_session_jwt(
         "session_id": session_id,
         "project_id": project_id or "",
         "branch": branch,
-        "scopes": NOTEBOOK_SESSION_SCOPES,
+        "scopes": scopes or NOTEBOOK_SESSION_SCOPES,
         "iat": now,
         "exp": now + ttl,
     }
+    if connection_name:
+        payload["connection_name"] = connection_name
+    if capabilities is not None:
+        payload["capabilities"] = capabilities
+    if execution_identity:
+        payload["execution_identity"] = execution_identity
     return jwt.encode(payload, secret, algorithm="HS256")
 
 
@@ -113,5 +123,15 @@ def verify_session_jwt(token: str) -> dict:
     scopes = claims.get("scopes")
     if not isinstance(scopes, list) or not scopes:
         raise NotebookSessionJWTError("Required claim 'scopes' is missing or not a list")
+
+    execution_identity = claims.get("execution_identity")
+    if isinstance(execution_identity, str) and execution_identity.startswith("chat:"):
+        if not claims.get("project_id"):
+            raise NotebookSessionJWTError("Standalone chat token missing project_id")
+        if not claims.get("connection_name"):
+            raise NotebookSessionJWTError("Standalone chat token missing connection_name")
+        capabilities = claims.get("capabilities")
+        if not isinstance(capabilities, list) or not capabilities:
+            raise NotebookSessionJWTError("Standalone chat token missing capabilities")
 
     return claims

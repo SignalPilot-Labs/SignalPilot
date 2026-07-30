@@ -900,7 +900,7 @@ def _respond(result: Any) -> JSONResponse:
 @router.post("/conversations")
 async def create_conversation(request: Request) -> JSONResponse:
     body = await request.json()
-    result = await _gw("POST", "/api/chat/conversations", body)
+    result = await _gw("POST", "/api/notebook-chat/conversations", body)
     if isinstance(result, dict) and result.get("_error"):
         return JSONResponse(_local_create_conversation(request, body))
     return _respond(result)
@@ -922,7 +922,7 @@ async def list_conversations(request: Request) -> JSONResponse:
         from urllib.parse import urlencode
 
         qs = "?" + urlencode(params)
-    result = await _gw("GET", f"/api/chat/conversations{qs}")
+    result = await _gw("GET", f"/api/notebook-chat/conversations{qs}")
     if isinstance(result, dict) and result.get("_error"):
         local = _local_list_conversations(request)
         if local.get("conversations"):
@@ -946,7 +946,7 @@ async def get_conversation(request: Request) -> JSONResponse:
     if traced is not None:
         return JSONResponse(traced)
 
-    result = await _gw("GET", f"/api/chat/conversations/{cid}")
+    result = await _gw("GET", f"/api/notebook-chat/conversations/{cid}")
     if isinstance(result, dict) and result.get("_error"):
         return JSONResponse(_local_get_conversation(request, cid))
     return _respond(result)
@@ -955,7 +955,7 @@ async def get_conversation(request: Request) -> JSONResponse:
 @router.delete("/conversations/{conversation_id}")
 async def delete_conversation(request: Request) -> JSONResponse:
     cid = request.path_params["conversation_id"]
-    result = await _gw("DELETE", f"/api/chat/conversations/{cid}")
+    result = await _gw("DELETE", f"/api/notebook-chat/conversations/{cid}")
     if isinstance(result, dict) and result.get("_error"):
         return JSONResponse(_local_delete_conversation(request, cid))
     return _respond(result)
@@ -968,7 +968,7 @@ async def delete_conversation(request: Request) -> JSONResponse:
 async def append_message(request: Request) -> JSONResponse:
     cid = request.path_params["conversation_id"]
     body = await request.json()
-    result = await _gw("POST", f"/api/chat/conversations/{cid}/messages", body)
+    result = await _gw("POST", f"/api/notebook-chat/conversations/{cid}/messages", body)
     if isinstance(result, dict) and result.get("_error"):
         return JSONResponse(_local_append_message(request, cid, body))
     return _respond(result)
@@ -983,7 +983,7 @@ async def list_messages(request: Request) -> JSONResponse:
         from urllib.parse import urlencode
 
         qs = "?" + urlencode(params)
-    result = await _gw("GET", f"/api/chat/conversations/{cid}/messages{qs}")
+    result = await _gw("GET", f"/api/notebook-chat/conversations/{cid}/messages{qs}")
     if isinstance(result, dict) and result.get("_error"):
         return JSONResponse(_local_list_messages(request, cid))
     return _respond(result)

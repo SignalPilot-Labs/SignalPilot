@@ -81,8 +81,10 @@ async def test_gateway_trace_client_uses_expected_endpoints_and_bearer_auth(
     assert idx == 2
     assert events == [{"idx": 2, "type": "text"}]
     assert [call["method"] for call in calls] == ["POST", "POST", "GET", "GET"]
-    assert calls[0]["url"] == "http://gateway:3300/api/chat/traces/threads"
-    assert calls[1]["url"] == "http://gateway:3300/api/chat/traces/threads/thread-1/events"
+    assert calls[0]["url"] == "http://gateway:3300/api/notebook-chat/traces/threads"
+    assert calls[1]["url"] == (
+        "http://gateway:3300/api/notebook-chat/traces/threads/thread-1/events"
+    )
     assert calls[1]["json"]["tool_name"] == ""
     assert calls[1]["json"]["tool_call_id"] == ""
     assert calls[1]["json"]["is_error"] is False

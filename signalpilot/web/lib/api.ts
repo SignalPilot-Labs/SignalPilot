@@ -399,10 +399,234 @@ export type ChatTraceEvent = {
 };
 export const listChatThreads = (source?: string) =>
   request<{ threads: ChatTraceThread[] }>(
-    `/api/chat/traces/threads?limit=200${source ? `&source=${encodeURIComponent(source)}` : ""}`,
+    `/api/notebook-chat/traces/threads?limit=200${source ? `&source=${encodeURIComponent(source)}` : ""}`,
   );
 export const getChatThreadEvents = (threadId: string) =>
-  request<{ events: ChatTraceEvent[] }>(`/api/chat/traces/threads/${encodeURIComponent(threadId)}/events`);
+  request<{ events: ChatTraceEvent[] }>(
+    `/api/notebook-chat/traces/threads/${encodeURIComponent(threadId)}/events`,
+  );
+
+// Standalone, author-private data chat
+export type StandaloneChatRunStatus =
+  | "queued"
+  | "running"
+  | "waiting_for_user"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type StandaloneChatProject = {
+  id: string;
+  name: string;
+  display_name: string;
+  connection_name: string | null;
+  default_branch: string;
+  ready: boolean;
+  readiness_message: string;
+};
+
+export type StandaloneChatBootstrap = {
+  enabled: boolean;
+  projects: StandaloneChatProject[];
+  selected_project_id: string | null;
+  is_admin: boolean;
+  starter_questions: string[];
+};
+
+export type StandaloneChatRun = {
+  id: string;
+  conversation_id: string;
+  status: StandaloneChatRunStatus;
+  retry_of_run_id: string | null;
+  public_error_code: string | null;
+  public_error_message: string | null;
+  cancellation_requested_at: string | null;
+  created_at: string;
+  started_at: string | null;
+  terminal_at: string | null;
+  last_event_sequence: number;
+};
+
+export type StandaloneChatEvent = {
+  run_id: string;
+  sequence: number;
+  type:
+    | "status"
+    | "progress"
+    | "text_delta"
+    | "tool_started"
+    | "tool_completed"
+    | "sql"
+    | "source"
+    | "intermediate_result"
+    | "clarification_requested"
+    | "artifact_created"
+    | "error";
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
+export type StandaloneChatArtifact = {
+  id: string;
+  run_id: string;
+  assistant_message_id: string | null;
+  kind: "table" | "chart" | "report";
+  filename: string;
+  mime_type: string;
+  snapshot: Record<string, unknown>;
+  provenance: Record<string, unknown> | null;
+  freshness_at: string | null;
+  assumptions: string[];
+  exclusions: string[];
+  caveats: string[];
+  parent_artifact_id: string | null;
+  created_at: string;
+  download_formats: string[];
+};
+
+export type StandaloneChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  sequence: number;
+  created_at: number;
+  metadata: Record<string, unknown>;
+};
+
+export type StandaloneConversation = {
+  id: string;
+  project_id: string;
+  project_name: string | null;
+  branch: string;
+  title: string;
+  status: "active" | "archived";
+  created_at: number;
+  updated_at: number;
+  run_status: StandaloneChatRunStatus | null;
+};
+
+export type StandaloneConversationDetail = {
+  conversation: StandaloneConversation;
+  messages: StandaloneChatMessage[];
+  artifacts: StandaloneChatArtifact[];
+  current_run: StandaloneChatRun | null;
+  run_events: StandaloneChatEvent[];
+};
+
+export const getStandaloneChatBootstrap = () =>
+  request<StandaloneChatBootstrap>("/api/chat/bootstrap");
+export const getStandaloneChatProjectReadiness = (projectId: string) =>
+  request<{
+    project_id: string;
+    ready: boolean;
+    code: string;
+    message: string;
+    setup_cta: boolean;
+    branch: string | null;
+    connection_name: string | null;
+    starter_questions: string[];
+  }>(`/api/chat/projects/${encodeURIComponent(projectId)}/readiness`);
+export const setDefaultStandaloneChatProject = (projectId: string) =>
+  request<void>("/api/chat/default-project", {
+    method: "PUT",
+    body: JSON.stringify({ project_id: projectId }),
+  });
+export const listStandaloneConversations = () =>
+  request<{ conversations: StandaloneConversation[] }>("/api/chat/conversations");
+export const createStandaloneConversation = (projectId: string, message: string) =>
+  request<StandaloneConversationDetail>("/api/chat/conversations", {
+    method: "POST",
+    body: JSON.stringify({ project_id: projectId, message }),
+  });
+export const getStandaloneConversation = (conversationId: string) =>
+  request<StandaloneConversationDetail>(
+    `/api/chat/conversations/${encodeURIComponent(conversationId)}`,
+  );
+export const renameStandaloneConversation = (conversationId: string, title: string) =>
+  request<{ id: string; title: string }>(
+    `/api/chat/conversations/${encodeURIComponent(conversationId)}`,
+    { method: "PATCH", body: JSON.stringify({ title }) },
+  );
+export const archiveStandaloneConversation = (conversationId: string) =>
+  request<void>(`/api/chat/conversations/${encodeURIComponent(conversationId)}`, {
+    method: "DELETE",
+  });
+export const createStandaloneRun = (conversationId: string, message: string) =>
+  request<StandaloneChatRun>(
+    `/api/chat/conversations/${encodeURIComponent(conversationId)}/runs`,
+    { method: "POST", body: JSON.stringify({ message }) },
+  );
+export const cancelStandaloneRun = (runId: string) =>
+  request<StandaloneChatRun>(`/api/chat/runs/${encodeURIComponent(runId)}/cancel`, {
+    method: "POST",
+  });
+export const clarifyStandaloneRun = (runId: string, message: string) =>
+  request<StandaloneChatRun>(
+    `/api/chat/runs/${encodeURIComponent(runId)}/clarification`,
+    { method: "POST", body: JSON.stringify({ message }) },
+  );
+export const retryStandaloneRun = (runId: string) =>
+  request<StandaloneChatRun>(`/api/chat/runs/${encodeURIComponent(runId)}/retry`, {
+    method: "POST",
+  });
+
+export async function streamStandaloneRunEvents(
+  runId: string,
+  after: number,
+  signal: AbortSignal,
+  onEvent: (event: StandaloneChatEvent) => void,
+): Promise<void> {
+  const headers = await getAuthHeaders();
+  const response = await fetch(
+    `${GATEWAY_URL}/api/chat/runs/${encodeURIComponent(runId)}/events?after=${after}`,
+    {
+      headers: { ...headers, Accept: "text/event-stream" },
+      signal,
+    },
+  );
+  if (!response.ok || !response.body) {
+    throw new Error(`Could not connect to the run (${response.status})`);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const blocks = buffer.split("\n\n");
+    buffer = blocks.pop() ?? "";
+    for (const block of blocks) {
+      const dataLine = block
+        .split("\n")
+        .find((line) => line.startsWith("data: "));
+      if (!dataLine) continue;
+      onEvent(JSON.parse(dataLine.slice(6)) as StandaloneChatEvent);
+    }
+    if (done) break;
+  }
+}
+
+export async function downloadStandaloneArtifact(
+  artifactId: string,
+  format: string,
+  filename: string,
+): Promise<void> {
+  const headers = await getAuthHeaders();
+  const response = await fetch(
+    `${GATEWAY_URL}/api/chat/artifacts/${encodeURIComponent(artifactId)}/download?format=${encodeURIComponent(format)}`,
+    { headers },
+  );
+  if (!response.ok) throw new Error(`Download failed (${response.status})`);
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${filename.replace(/\.[^.]+$/, "")}.${format}`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
 
 // Settings
 export const getSettings = () => request<import("./types").GatewaySettings>("/api/settings");

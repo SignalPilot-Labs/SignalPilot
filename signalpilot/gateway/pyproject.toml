@@ -60,6 +60,7 @@ all-connectors = [
 sp = "gateway.cli:app"
 signalpilot-mcp = "gateway.mcp:main"
 signalpilot-slack-poc = "gateway.slack_poc.worker:main"
+signalpilot-chat-worker = "gateway.standalone_chat.worker:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["gateway"]

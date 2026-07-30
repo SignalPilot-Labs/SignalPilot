@@ -201,8 +201,66 @@ class MCPAuthMiddleware:
         # (API keys are now org-scoped and managed by the gateway, not the backend)
         from sqlalchemy.exc import SQLAlchemyError
 
+        raw_bearer = _extract_bearer_key(scope)
+        if raw_bearer and not raw_bearer.startswith("sp_"):
+            from ..auth.notebook_jwt import NotebookSessionJWTError, verify_session_jwt
+            from ..mcp.context import (
+                mcp_allowed_connection_var,
+                mcp_capabilities_var,
+                mcp_client_ip_var,
+                mcp_eval_doc_ids_var,
+                mcp_execution_identity_var,
+                mcp_org_id_var,
+                mcp_raw_key_var,
+                mcp_scopes_var,
+                mcp_user_agent_var,
+                mcp_user_id_var,
+            )
+
+            try:
+                claims = verify_session_jwt(raw_bearer)
+            except NotebookSessionJWTError:
+                await _send_401(send, "Invalid notebook session token.")
+                return
+
+            token_user_id = claims["sub"]
+            token_org_id = claims["org_id"]
+            token_scopes = list(claims.get("scopes") or [])
+            if "state" not in scope:
+                scope["state"] = {}
+            scope["state"]["auth"] = {
+                "auth_method": "notebook_session",
+                "user_id": token_user_id,
+                "org_id": token_org_id,
+                "session_id": claims["session_id"],
+                "project_id": claims.get("project_id"),
+                "branch": claims.get("branch"),
+                "connection_name": claims.get("connection_name"),
+                "capabilities": list(claims.get("capabilities") or []),
+                "execution_identity": claims.get("execution_identity"),
+                "scopes": token_scopes,
+            }
+            mcp_user_id_var.set(token_user_id)
+            mcp_org_id_var.set(token_org_id)
+            mcp_raw_key_var.set(raw_bearer)
+            mcp_scopes_var.set(token_scopes)
+            mcp_allowed_connection_var.set(claims.get("connection_name"))
+            mcp_capabilities_var.set(list(claims.get("capabilities") or []))
+            mcp_execution_identity_var.set(claims.get("execution_identity"))
+            mcp_client_ip_var.set(_extract_client_ip(scope))
+            mcp_user_agent_var.set(_extract_user_agent(scope))
+            mcp_eval_doc_ids_var.set(None)
+            await self._app(scope, receive, send)
+            return
+
         from ..db.engine import get_session_factory
-        from ..mcp import mcp_org_id_var, mcp_user_id_var
+        from ..mcp import (
+            mcp_allowed_connection_var,
+            mcp_capabilities_var,
+            mcp_execution_identity_var,
+            mcp_org_id_var,
+            mcp_user_id_var,
+        )
         from ..store import Store
 
         try:
@@ -232,6 +290,9 @@ class MCPAuthMiddleware:
                     # Set user_id and org_id to "local" so MCP tools can access the store
                     mcp_user_id_var.set("local")
                     mcp_org_id_var.set("local")
+                    mcp_allowed_connection_var.set(None)
+                    mcp_capabilities_var.set(None)
+                    mcp_execution_identity_var.set(None)
                     from ..mcp import mcp_client_ip_var, mcp_raw_key_var, mcp_user_agent_var
 
                     mcp_raw_key_var.set(None)
@@ -296,6 +357,9 @@ class MCPAuthMiddleware:
                 # Set user_id and org_id context vars for MCP store access
                 mcp_user_id_var.set(key_user_id)
                 mcp_org_id_var.set(key_org_id)
+                mcp_allowed_connection_var.set(None)
+                mcp_capabilities_var.set(None)
+                mcp_execution_identity_var.set(None)
                 from ..mcp import mcp_client_ip_var, mcp_raw_key_var, mcp_scopes_var, mcp_user_agent_var
 
                 mcp_scopes_var.set(list(matched.scopes or []))

@@ -476,7 +476,7 @@ export default function NotebooksPage() {
     const headers: Record<string, string> = {};
     if (token) headers.Authorization = `Bearer ${token}`;
 
-    return fetch(`${GATEWAY_URL}/api/chat/traces/threads`, {
+    return fetch(`${GATEWAY_URL}/api/notebook-chat/traces/threads`, {
       headers,
     });
   }

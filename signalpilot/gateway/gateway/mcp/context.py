@@ -19,6 +19,15 @@ mcp_audit_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("m
 mcp_client_ip_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_client_ip", default=None)
 mcp_user_agent_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_user_agent", default=None)
 mcp_scopes_var: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar("mcp_scopes", default=None)
+mcp_allowed_connection_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "mcp_allowed_connection", default=None
+)
+mcp_capabilities_var: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
+    "mcp_capabilities", default=None
+)
+mcp_execution_identity_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "mcp_execution_identity", default=None
+)
 # Eval mode: doc IDs from the X-SP-Eval-Docs header. When set, knowledge tools
 # serve these proposed (pending) docs alongside active ones so an eval run can
 # test the system with a knowledge change before it is approved.
@@ -54,7 +63,12 @@ async def _store_session(user_id: str | None = None, org_id: str | None = None):
     try:
         factory = get_session_factory()
         async with factory() as session:
-            yield Store(session, org_id=org_id, user_id=user_id)
+            yield Store(
+                session,
+                org_id=org_id,
+                user_id=user_id,
+                allowed_connection_name=mcp_allowed_connection_var.get(None),
+            )
     finally:
         current_org_id_var.reset(token)
 
@@ -84,5 +98,7 @@ def _gw_headers() -> dict[str, str]:
     """Build auth headers for internal MCP->gateway HTTP calls."""
     key = mcp_raw_key_var.get(None)
     if key:
-        return {"X-API-Key": key}
+        if key.startswith("sp_"):
+            return {"X-API-Key": key}
+        return {"Authorization": f"Bearer {key}"}
     return {}

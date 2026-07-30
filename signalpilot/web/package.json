@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@anywidget/types": "^0.2.0",
+    "@assistant-ui/react": "0.15.1",
     "@clerk/nextjs": "^6.39.3",
     "@codemirror/autocomplete": "^6.20.1",
     "@codemirror/commands": "^6.10.2",

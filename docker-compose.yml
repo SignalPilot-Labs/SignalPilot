@@ -41,7 +41,7 @@ services:
       context: ./signalpilot/gateway
       dockerfile: ../../Dockerfile.gateway
     ports:
-      - "3300:3300"
+      - "${SP_GATEWAY_PORT:-3300}:3300"
     env_file:
       - path: ./.slack.local.env
         required: false
@@ -63,6 +63,7 @@ services:
       SP_PUBLIC_GATEWAY_PORT: "3300"
       SP_REPOS_DIR: /repos
       SP_WEB_URL: http://localhost:3200
+      SP_FEATURE_STANDALONE_CHAT: "true"
       SIGNALPILOT_NOTEBOOK_INTERNAL_URL: http://notebook:2718
       SIGNALPILOT_NOTEBOOK_PUBLIC_URL: http://localhost:3200/notebook
       SIGNALPILOT_DELIVERY_MODEL: ${SIGNALPILOT_DELIVERY_MODEL:-claude-sonnet-4-5-20250929}
@@ -141,6 +142,48 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ─── Durable standalone-chat worker ───────────────────────────
+  gateway-chat-worker:
+    build:
+      context: ./signalpilot/gateway
+      dockerfile: ../../Dockerfile.gateway
+    env_file:
+      - path: ./.slack.local.env
+        required: false
+      - path: ./benchmark/.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://signalpilot:changeme_dev_only@db:5432/signalpilot
+      SP_DATA_DIR: /data
+      SP_DEPLOYMENT_MODE: local
+      SP_ENCRYPTION_KEY: 5d1aa5ETRcln8vkPWrzDkdfSEuqAua5xcZCWMLMDXmc=
+      SP_FEATURE_STANDALONE_CHAT: "true"
+      CHAT_WORKER_CONCURRENCY: "4"
+      SP_NOTEBOOK_DIRECT_URL: http://notebook:2718
+      SP_NOTEBOOK_UPSTREAM_MODE: direct
+      SP_NOTEBOOK_IMAGE: signalpilot-notebook:latest
+      SP_NOTEBOOK_NETWORK_POLICY: "false"
+      SP_PUBLIC_GATEWAY_URL: http://gateway:3300
+      SP_PUBLIC_GATEWAY_PORT: "3300"
+      SP_REPOS_DIR: /repos
+      SP_WEB_URL: http://localhost:3200
+      SP_K8S_HOST: ""
+      KUBECONFIG: ""
+      SP_K8S_NAMESPACE: default
+      SP_GATEWAY_NAMESPACE: signalpilot
+      SP_GATEWAY_POD_SELECTOR: "app=signalpilot-gateway"
+    volumes:
+      - signalpilot-data:/data
+      - signalpilot-gateway-secrets:/gateway-secrets
+      - signalpilot-repos:/repos:ro
+    command: signalpilot-chat-worker
+    depends_on:
+      db:
+        condition: service_healthy
+      gateway:
+        condition: service_started
     restart: unless-stopped
 
   # ─── Notebook Server ──────────────────────────────────────────

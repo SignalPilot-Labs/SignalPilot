@@ -127,12 +127,13 @@ async def _resolve_via_notebook_jwt(connection: HTTPConnection, token: str) -> s
         "org_id": org_id,
         "session_id": session_id,
         "scopes": token_scopes,
+        "project_id": claims.get("project_id"),
+        "branch": claims.get("branch"),
+        "connection_name": claims.get("connection_name"),
+        "capabilities": claims.get("capabilities") or [],
+        "execution_identity": claims.get("execution_identity"),
     }
-    connection.state._jwt_claims = {
-        "sub": user_id,
-        "org_id": org_id,
-        "session_id": session_id,
-    }
+    connection.state._jwt_claims = claims
     return user_id
 
 

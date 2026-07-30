@@ -35,7 +35,7 @@ Sidebar regrouped from one flat list into four labeled groups:
 | Group | Items | Notes |
 |---|---|---|
 | *(brand)* | Dashboard | trust summary |
-| **Activity** | Chats, Reports, Audit | what agents did |
+| **Activity** | Chats, Reports, Audit | private data questions, generated reports, and governed activity |
 | **Data** | Connections *(absorbs Health)*, Schema, Query, Notebooks, Sandboxes | exploring + wiring the data plane |
 | **Workspace** | Projects, Knowledge Base, Evals*, Integrations | building + curating; evals hidden unless enabled |
 | **Settings** | Settings (keys, MCP, GitHub under it as today) | footer area |
@@ -103,7 +103,32 @@ mint glow in page headers.
    `page-header` component, keep mono on data.
 6. **Verification screenshots** of every page; fix regressions.
 
-## 5. Non-goals (this pass)
+## 5. Standalone data chat
+
+`/chats` is a desktop-first, private data-question surface for non-technical users.
+It is intentionally separate from notebook chat and from Slack or Notion execution
+traces.
+
+- `/chats` is always a fresh, unsaved draft. The first submission atomically creates
+  the conversation, first user message, and durable run.
+- `/chats/[conversationId]` restores an author-private conversation, its current run,
+  public work events, and immutable artifact snapshots.
+- The selected project is visible and editable before the first prompt, then frozen
+  with the production/default branch. Changing projects from an existing chat opens
+  a new draft.
+- The left rail contains New chat, active history, passive run status, rename, and
+  Remove from history. There is no search, archive screen, sharing, or mobile drawer.
+- Each assistant response exposes Copy and View work. Running work exposes Stop;
+  failed work exposes Retry. Table, chart, and report artifacts add their supported
+  downloads.
+- View work is collapsed by default and contains only redacted public progress,
+  invoked tools, governed SQL, sources, and concise result summaries. Private model
+  reasoning is never persisted or rendered.
+- Reports render as scriptless, sandboxed HTML. Charts use normalized Vega-Lite
+  snapshots; tables and chart sources download as formula-safe CSV.
+
+## 6. Non-goals (this pass)
+
 - No route renames beyond /health redirect; no feature changes; no light mode.
 - Knowledge page keeps its own scoped design layer (already redesigned, already close
   to the target aesthetic) — only token alignment.

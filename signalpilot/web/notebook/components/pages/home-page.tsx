@@ -236,7 +236,7 @@ const HomePage: React.FC = () => {
 
       try {
         const gatewayUrl = notebookConfig.gatewayUrl.replace(/\/$/, "");
-        const resp = await fetch(`${gatewayUrl}/api/chat/traces/threads`, {
+        const resp = await fetch(`${gatewayUrl}/api/notebook-chat/traces/threads`, {
           headers,
         });
         if (!resp.ok) {

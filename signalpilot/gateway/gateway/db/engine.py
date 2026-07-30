@@ -360,6 +360,66 @@ async def _ensure_chat_columns(engine) -> None:
     logger.info("Ensured chat conversation columns")
 
 
+async def _ensure_standalone_chat_schema(engine) -> None:
+    """Add standalone-chat columns and privacy/queue indexes idempotently."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_chat_conversations "
+                "ADD COLUMN IF NOT EXISTS surface VARCHAR(20) NOT NULL DEFAULT 'notebook'"
+            )
+        )
+        await conn.execute(
+            text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS branch VARCHAR(100)")
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_chat_conversations "
+                "ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active'"
+            )
+        )
+        await conn.execute(
+            text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ")
+        )
+        await conn.execute(
+            text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS internal_summary TEXT")
+        )
+        await conn.execute(
+            text("UPDATE gateway_chat_conversations SET surface = 'notebook' WHERE surface IS NULL")
+        )
+        await conn.execute(
+            text("ALTER TABLE gateway_chat_messages ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(200)")
+        )
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_gw_conv_standalone_history "
+                "ON gateway_chat_conversations "
+                "(org_id, user_id, surface, status, updated_at)"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_gw_chat_message_idempotency "
+                "ON gateway_chat_messages (idempotency_key) "
+                "WHERE idempotency_key IS NOT NULL"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_gw_chat_run_nonterminal_conversation "
+                "ON gateway_chat_runs (conversation_id) "
+                "WHERE status IN ('queued','running','waiting_for_user')"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_gw_chat_artifact_publication "
+                "ON gateway_chat_artifacts (run_id, kind, filename)"
+            )
+        )
+    logger.info("Ensured standalone chat columns and indexes")
+
+
 async def _ensure_chat_trace_indexes(engine) -> None:
     """Create durable trace lookup indexes idempotently."""
     async with engine.begin() as conn:
@@ -549,6 +609,7 @@ async def init_db() -> None:
     await _ensure_audit_indexes(engine)
     await _ensure_knowledge_columns(engine)
     await _ensure_chat_columns(engine)
+    await _ensure_standalone_chat_schema(engine)
     await _ensure_chat_trace_indexes(engine)
     await _ensure_notion_installation_config_analysis_columns(engine)
     await _ensure_report_deliverable_columns(engine)

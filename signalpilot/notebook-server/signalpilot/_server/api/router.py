@@ -58,6 +58,9 @@ from signalpilot._server.api.endpoints.project_sync import (
 )
 from signalpilot._server.api.endpoints.secrets import router as secrets_router
 from signalpilot._server.api.endpoints.sql import router as sql_router
+from signalpilot._server.api.endpoints.standalone_chat import (
+    router as standalone_chat_router,
+)
 from signalpilot._server.api.endpoints.terminal import (
     router as terminal_router,
 )
@@ -116,6 +119,11 @@ def build_routes(base_url: str = "") -> list[BaseRoute]:
         notion_analysis_router,
         prefix="/api/notion-analysis",
         name="notion_analysis",
+    )
+    app_router.include_router(
+        standalone_chat_router,
+        prefix="/api/standalone-chat",
+        name="standalone_chat",
     )
     app_router.include_router(home_router, prefix="/api/home", name="home")
     app_router.include_router(login_router, prefix="/auth", name="auth")

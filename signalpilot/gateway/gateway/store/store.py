@@ -7,7 +7,7 @@ import logging
 import time
 import uuid
 
-from sqlalchemy import delete, literal, select
+from sqlalchemy import and_, delete, literal, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -71,11 +71,13 @@ class Store:
         org_id: str | None = None,
         user_id: str | None = None,
         allow_unscoped: bool = False,
+        allowed_connection_name: str | None = None,
     ):
         self.session = session
         self.org_id = org_id
         self.user_id = user_id
         self._allow_unscoped = allow_unscoped
+        self.allowed_connection_name = allowed_connection_name
         # Intentional: we do not store the token for reset. FastAPI runs each request in a
         # dedicated asyncio task whose contextvars copy is isolated; the var dies with the task.
         # Background task usage must set the var explicitly and reset (see main.py schema refresh loop).
@@ -106,7 +108,13 @@ class Store:
 
     def _conn_filter(self):
         if self.org_id is not None:
-            return GatewayConnection.org_id == self.org_id
+            predicate = GatewayConnection.org_id == self.org_id
+            if self.allowed_connection_name:
+                predicate = and_(
+                    predicate,
+                    GatewayConnection.name == self.allowed_connection_name,
+                )
+            return predicate
         if self._allow_unscoped:
             return literal(True)
         raise ValueError(
@@ -114,11 +122,16 @@ class Store:
             "Use allow_unscoped=True for background tasks that need cross-org access."
         )
 
+    def _require_allowed_connection(self, name: str) -> None:
+        if self.allowed_connection_name and name != self.allowed_connection_name:
+            raise ValueError("Connection is outside this execution's allowed scope")
+
     async def list_connections(self) -> list[ConnectionInfo]:
         result = await self.session.execute(select(GatewayConnection).where(self._conn_filter()))
         return [ConnectionInfo(**row.to_info_dict()) for row in result.scalars()]
 
     async def get_connection(self, name: str) -> ConnectionInfo | None:
+        self._require_allowed_connection(name)
         result = await self.session.execute(
             select(GatewayConnection).where(self._conn_filter(), GatewayConnection.name == name)
         )
@@ -275,6 +288,7 @@ class Store:
         return ConnectionInfo(**db_conn.to_info_dict())
 
     async def delete_connection(self, name: str) -> bool:
+        self._require_allowed_connection(name)
         oid = self._require_org_id()
         result = await self.session.execute(
             select(GatewayConnection).where(GatewayConnection.org_id == oid, GatewayConnection.name == name)
@@ -293,6 +307,7 @@ class Store:
         return True
 
     async def update_connection(self, name: str, update_data: ConnectionUpdate) -> ConnectionInfo | None:
+        self._require_allowed_connection(name)
         oid = self._require_org_id()
         result = await self.session.execute(
             select(GatewayConnection).where(GatewayConnection.org_id == oid, GatewayConnection.name == name)
@@ -454,6 +469,7 @@ class Store:
         return ConnectionInfo(**row.to_info_dict())
 
     async def get_connection_string(self, name: str) -> str | None:
+        self._require_allowed_connection(name)
         oid = self._require_org_id()
         result = await self.session.execute(
             select(GatewayCredential, GatewayConnection)
@@ -509,6 +525,7 @@ class Store:
         return plaintext
 
     async def get_credential_extras(self, name: str) -> dict:
+        self._require_allowed_connection(name)
         oid = self._require_org_id()
         result = await self.session.execute(
             select(GatewayCredential, GatewayConnection)

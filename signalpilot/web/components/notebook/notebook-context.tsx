@@ -22,7 +22,7 @@ export interface NotebookConfig {
   project?: string;
   /** Branch from URL */
   branch?: string;
-  /** File path from URL */
+  /** File path used to initialize the mounted runtime; later files are SPA state. */
   file?: string;
   /** Whether this org has a non-disconnected Notion OAuth installation. */
   notionConnected?: boolean;

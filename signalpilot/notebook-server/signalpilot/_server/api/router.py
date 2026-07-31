@@ -137,13 +137,13 @@ def build_routes(base_url: str = "") -> list[BaseRoute]:
         packages_router, prefix="/api/packages", name="packages"
     )
     app_router.include_router(lsp_router, prefix="/api/lsp", name="lsp")
-    app_router.include_router(health_router, prefix="/api", name="health")
-    app_router.include_router(root_health_router, name="root_health")
     app_router.include_router(
         notebook_static_router,
         prefix="/api/notebook",
         name="notebook_static",
     )
+    app_router.include_router(health_router, prefix="/api", name="health")
+    app_router.include_router(root_health_router, name="root_health")
     # mount_config_router MUST be last — its /api prefix would shadow
     # more-specific /api/* mounts if placed earlier
     app_router.include_router(

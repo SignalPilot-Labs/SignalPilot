@@ -163,8 +163,31 @@ function isNotebookPath(pathname: string): boolean {
   return pathname.startsWith("/notebook/");
 }
 
+function isMisroutedProjectEditorDocument(req: NextRequest): boolean {
+  const pathSegments = req.nextUrl.pathname.split("/").filter(Boolean);
+  if (
+    pathSegments.length !== 2 ||
+    pathSegments[0] !== "notebook" ||
+    !req.nextUrl.searchParams.has("project") ||
+    !req.nextUrl.searchParams.has("file")
+  ) {
+    return false;
+  }
+
+  return (
+    req.headers.get("sec-fetch-dest") === "document" ||
+    req.headers.get("accept")?.includes("text/html") === true
+  );
+}
+
 function isLegacyNotebooksPath(pathname: string): boolean {
   return pathname === "/notebooks" || pathname.startsWith("/notebooks/");
+}
+
+function redirectMisroutedProjectEditor(req: NextRequest): NextResponse {
+  const target = req.nextUrl.clone();
+  target.pathname = "/projects";
+  return NextResponse.redirect(target, 307);
 }
 
 function redirectLegacyNotebooks(req: NextRequest): NextResponse {
@@ -199,10 +222,13 @@ if (clerkEnabled) {
     "/sign-up(.*)",
     "/onboarding(.*)",
     "/",
-    "/notebook(.*)",
   ]);
 
   middlewareExport = clerkMiddleware(async (auth, req) => {
+    if (isMisroutedProjectEditorDocument(req)) {
+      return redirectMisroutedProjectEditor(req);
+    }
+
     if (isLegacyNotebooksPath(req.nextUrl.pathname)) {
       return redirectLegacyNotebooks(req);
     }
@@ -224,6 +250,10 @@ if (clerkEnabled) {
   });
 } else {
   middlewareExport = (req: NextRequest) => {
+    if (isMisroutedProjectEditorDocument(req)) {
+      return redirectMisroutedProjectEditor(req);
+    }
+
     if (isLegacyNotebooksPath(req.nextUrl.pathname)) {
       return redirectLegacyNotebooks(req);
     }

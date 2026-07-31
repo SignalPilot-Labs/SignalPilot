@@ -26,6 +26,7 @@ export function adaptMountConfig(source: {
     code: config.initialCode,
     session: config.session,
     notebook: config.notebook,
+    rawFallback: config.rawFallback,
     version: config.version,
     config: config.userConfig,
     appConfig: config.appConfig,

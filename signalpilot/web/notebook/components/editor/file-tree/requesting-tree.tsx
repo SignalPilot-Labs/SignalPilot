@@ -5,6 +5,7 @@ import type {
   FileInfo,
   FileUpdateResponse,
 } from "@/core/network/types";
+import { invalidateFileKind } from "@/core/active-file";
 import { prettyError } from "@/utils/errors";
 import { Functions } from "@/utils/functions";
 import { type FilePath, PathBuilder } from "@/utils/paths";
@@ -155,6 +156,8 @@ export class RequestingTree {
       return;
     }
 
+    invalidateFileKind(path);
+    invalidateFileKind(newPath);
     this.delegate.update({ id, changes: { name, path: newPath } });
     this.onChange(this.delegate.data);
     // Rename all of its children
@@ -183,6 +186,8 @@ export class RequestingTree {
         return;
       }
 
+      invalidateFileKind(originalPath);
+      invalidateFileKind(newPath);
       this.delegate.move({ id, parentId, index: 0 });
       this.delegate.update({ id, changes: { path: newPath } });
     });

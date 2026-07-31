@@ -29,6 +29,11 @@ services:
         required: false
       - path: ./.env
         required: false
+    environment:
+      # Local direct mode funnels every browser/account through one notebook
+      # server. Let distinct kernel session IDs coexist so shareability can be
+      # tested without one tab taking over another.
+      SP_ALLOW_CONCURRENT_EDIT_SESSIONS: "true"
     volumes:
       - ./signalpilot/notebook-server/signalpilot:/opt/sp-notebook/signalpilot:cached
       - ./scripts/dev-watch-notebook.py:/usr/local/bin/dev-watch-notebook.py:ro
@@ -37,12 +42,13 @@ services:
       - -c
       - |
         export SP_API_KEY=$$(cat /shared/local_api_key 2>/dev/null || echo '')
+        /opt/sp-notebook/.venv/bin/python -m signalpilot._server.local_token /notebook-token/token
         exec /opt/sp-notebook/.venv/bin/python /usr/local/bin/dev-watch-notebook.py \
           --watch /opt/sp-notebook/signalpilot \
           --interval 1 \
           -- /opt/sp-notebook/.venv/bin/python -m signalpilot --development-mode edit \
             --host 0.0.0.0 --port 2718 --headless \
-            --no-token --no-skew-protection \
+            --token-password-file /notebook-token/token --no-skew-protection \
             --allow-origins http://localhost:${SP_WEB_PORT:-3200},http://localhost:${SP_GATEWAY_PORT:-3300} \
             /workspace
 

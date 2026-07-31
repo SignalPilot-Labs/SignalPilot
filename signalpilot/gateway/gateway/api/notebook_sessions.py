@@ -8,8 +8,8 @@ import re
 from fastapi import APIRouter, HTTPException, Response
 
 from ..models.notebook_sessions import NotebookSessionCreate, NotebookSessionInfo
-from ..notebooks import session_service
 from ..notebook_proxy.constants import SESSION_ID_PATTERN_STR
+from ..notebooks import session_service
 from ..runtime.mode import is_cloud_mode
 from ..security.scope_guard import RequireScope
 from .deps import ProjectsGate, StoreD
@@ -45,6 +45,8 @@ async def create_session(body: NotebookSessionCreate, store: StoreD, _response: 
         raise HTTPException(status_code=401, detail="User identity required")
     user_id = store.user_id or "local"
     project_id = body.project_id or None
+    if project_id and await store.get_workspace_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
     try:
         return await session_service.ensure_notebook_session(
             store.session,

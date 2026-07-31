@@ -10,6 +10,9 @@ from starlette.responses import JSONResponse
 from signalpilot import _loggers
 from signalpilot._cli.sandbox import SandboxMode
 from signalpilot._server.api.deps import AppState
+from signalpilot._server.api.endpoints.notebook_file import (
+    resolve_notebook_file,
+)
 from signalpilot._server.files.lsp_workspace import (
     LspWorkspace,
     resolve_lsp_workspace,
@@ -129,11 +132,18 @@ async def _build_notebook_config(
     file_key: str,
     cloud_local_dir: Path | None,
 ) -> MountConfigResponse:
-    notebook_extensions = {".py", ".md", ".qmd"}
-    file_ext = Path(file_key).suffix.lower() if file_key else ""
-    is_raw_file = file_ext not in notebook_extensions
-
-    resolved_file_key = _resolve_cloud_file_key(file_key, cloud_local_dir)
+    directory = (
+        str(cloud_local_dir)
+        if cloud_local_dir is not None
+        else app_state.session_manager.workspace.directory
+    )
+    if file_key.startswith(NEW_FILE):
+        resolved_file_key = file_key
+        is_raw_file = file_key == NEW_FILE + "raw"
+    else:
+        resolved_file = resolve_notebook_file(file_key, directory)
+        resolved_file_key = str(resolved_file.path)
+        is_raw_file = resolved_file.raw_fallback
     config_manager = app_state.config_manager_at_file(resolved_file_key)
 
     if is_raw_file:
@@ -197,23 +207,6 @@ async def _build_notebook_config(
             raw_fallback=is_raw_file,
         ),
     )
-
-
-def _resolve_cloud_file_key(
-    file_key: str, cloud_local_dir: Path | None
-) -> str:
-    if not cloud_local_dir or Path(file_key).is_absolute():
-        return file_key
-
-    candidate = cloud_local_dir / file_key
-    if candidate.exists():
-        return str(candidate)
-
-    fname = Path(file_key).name
-    for match in cloud_local_dir.rglob(fname):
-        return str(match)
-
-    return file_key
 
 
 async def _precompute_notebook_snapshot(

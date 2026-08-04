@@ -49,6 +49,29 @@ logger = logging.getLogger(__name__)
 _CONTAINER_HOME = "/tmp"  # nosec B108 - This path is a mounted container directory.
 
 
+# Prepended to every WRITE task's prompt. The governed MCP path deliberately
+# refuses DDL/DML, so an agent asked to rebuild a mart will read the model,
+# try to build it, and stop at "I hit a wall" — which is what happened the
+# first time this ran for real. The disposable branch is the thing that makes
+# writing safe, so the agent has to be told the branch exists and how to
+# reach it; otherwise "agent-writable branch" is only true on paper.
+WRITE_ACCESS_NOTE = """\
+[WRITE TASK — you have a private, disposable copy of the warehouse]
+
+This task runs against your own throwaway branch. Nothing you do here can
+touch the shared warehouse, and the branch is destroyed when the task ends.
+
+The governed MCP tools stay read-only, so use them to INSPECT. To WRITE
+(CREATE/DROP/INSERT), use the branch credential in the environment variable
+SP_WAREHOUSE_DSN with psql, which is installed:
+
+    psql "$SP_WAREHOUSE_DSN" -v ON_ERROR_STOP=1 -c "CREATE TABLE ... AS SELECT ..."
+
+Verify your work the same way. If a tool tells you writes are blocked, that
+is the read-only MCP path — switch to psql with $SP_WAREHOUSE_DSN rather
+than concluding the task is impossible."""
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -952,6 +975,8 @@ async def _run_agent(ctx: TaskContext, task: EvalTask, connection: str, warehous
     key_id, raw_key = await _task_credential(ctx, task, connection)
     try:
         prompt = f"{ctx.preamble}\n\n{task.prompt}" if ctx.preamble else task.prompt
+        if warehouse_dsn:
+            prompt = f"{WRITE_ACCESS_NOTE}\n\n{prompt}"
         spec = _task_spec(
             ctx.settings,
             prompt=prompt,

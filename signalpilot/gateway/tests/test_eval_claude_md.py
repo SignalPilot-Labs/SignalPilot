@@ -119,3 +119,40 @@ class TestTheRunnerScript:
         assert _RUNNER_SCRIPT.index("SP_PROJECT_TARBALL_URL") < _RUNNER_SCRIPT.index(
             "SP_CLAUDE_MD_B64"
         )
+
+
+class TestWriteTasksAreToldHowToWrite:
+    """A write task gets a disposable branch and a DSN, but the governed MCP
+    path refuses DDL. Without an explicit note the agent reads the model,
+    tries to build it, and stops — observed on the first real run. The note
+    is the harness's job: every write task needs it, not just the ones whose
+    author remembered.
+    """
+
+    def test_note_names_the_env_var_and_the_tool(self) -> None:
+        from gateway.evals.runner import WRITE_ACCESS_NOTE
+
+        assert "SP_WAREHOUSE_DSN" in WRITE_ACCESS_NOTE
+        assert "psql" in WRITE_ACCESS_NOTE
+        assert "read-only" in WRITE_ACCESS_NOTE.lower()
+
+    def test_note_is_prepended_only_when_a_dsn_is_present(self) -> None:
+        import inspect
+
+        from gateway.evals import runner
+
+        src = inspect.getsource(runner._run_agent)
+        assert "if warehouse_dsn:" in src
+        assert "WRITE_ACCESS_NOTE" in src
+
+    def test_read_tasks_get_no_write_note(self) -> None:
+        """A read task shares the build branch — telling it about a write
+        path would be both wrong and an invitation to mutate shared state."""
+        import inspect
+
+        from gateway.evals import runner
+
+        src = inspect.getsource(runner._run_agent)
+        note_line = next(ln for ln in src.splitlines() if "WRITE_ACCESS_NOTE" in ln)
+        guard = next(ln for ln in src.splitlines() if "if warehouse_dsn:" in ln)
+        assert src.index(guard) < src.index(note_line)

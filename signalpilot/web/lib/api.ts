@@ -278,6 +278,8 @@ export type EvalConfig = {
   enabled?: boolean;
   runner_image?: string;
   repo_url: string;
+  repo_installation_id?: string | null;
+  repo_id?: number | null;
   model: string;
   max_tasks: number;
   prompt_preamble: string;
@@ -309,6 +311,13 @@ export type EvalCaptureResult = {
   stored?: string[];
 } & Record<string, unknown>;
 export type EvalCoverageLayer = { total?: number; covered?: number; pct?: number | null };
+export type EvalCoverageModel = {
+  name: string;
+  layer: string;
+  covered: boolean;
+  declared_by: string[];
+  observed_by: string[];
+};
 export type EvalCoverage = {
   declared: string[];
   observed: string[];
@@ -319,6 +328,7 @@ export type EvalCoverage = {
   pct: number | null;
   by_layer?: Record<string, EvalCoverageLayer>;
   marts_pct?: number | null;
+  models?: EvalCoverageModel[];
 };
 /** The server reports a sandbox as a name or an object. */
 export type EvalSandboxRef =
@@ -340,7 +350,7 @@ export type EvalRunTask = {
   covers: string[];
   builds: string[];
   capture_spec: EvalCaptureSpec | null;
-  status: "pending" | "running" | "done";
+  status: "pending" | "running" | "done" | "cancelled";
   verdict: string | null;
   check_results?: EvalCheckResult[];
   answer?: string;
@@ -363,10 +373,11 @@ export type EvalRunSummary = {
   ungraded?: number;
   error?: number;
   setup_failed?: number;
+  cancelled?: number;
 };
 export type EvalRun = {
   id: string;
-  status: "preparing" | "running" | "completed" | "failed";
+  status: "preparing" | "running" | "cancelling" | "cancelled" | "completed" | "failed";
   trigger: string;
   created_at: string;
   finished_at: string | null;
@@ -408,6 +419,8 @@ export const startEvalRun = (docIds: string[], taskIds?: string[]) =>
   });
 /** Grade the complete set against the stored knowledge base without document overlays. */
 export const startBaselineEvalRun = () => startEvalRun([]);
+export const cancelEvalRun = (runId: string) =>
+  request<EvalRunDetail>(`/api/evals/runs/${runId}/cancel`, { method: "POST" });
 export const listEvalRuns = () => request<{ runs: EvalRun[] }>("/api/evals/runs");
 export const getEvalRun = (runId: string) => request<EvalRunDetail>(`/api/evals/runs/${runId}`);
 
@@ -622,8 +635,28 @@ export type EvalRegression = {
   notified_at: string | null;
   recipients: string[];
 };
+export type EvalTaskPerformance = {
+  task_id: string;
+  title: string;
+  kind: string;
+  class: "read" | "write";
+  covers: string[];
+  attempts: number;
+  correct: number;
+  partial: number;
+  off: number;
+  errors: number;
+  pass_rate_pct: number;
+  avg_duration_s: number | null;
+  last_verdict: string;
+  last_run_id: string;
+};
 export const getEvalAccuracy = () =>
-  request<{ history: EvalAccuracyPoint[]; regressions: EvalRegression[] }>("/api/evals/accuracy");
+  request<{
+    history: EvalAccuracyPoint[];
+    regressions: EvalRegression[];
+    task_performance: EvalTaskPerformance[];
+  }>("/api/evals/accuracy");
 
 // The following types and functions support run artifacts and exports.
 export type EvalArtifact = { path: string; bytes: number };

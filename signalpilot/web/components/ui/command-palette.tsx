@@ -71,12 +71,12 @@ export function CommandPalette() {
   const commands: CommandItem[] = useMemo(() => [
     // Navigation
     { id: "nav-dashboard", label: "dashboard", description: "overview and metrics", shortcut: "^1", action: () => router.push("/dashboard"), icon: <IconNav />, category: "navigate" },
-    { id: "nav-query", label: "query explorer", description: "governed sql queries", shortcut: "^2", action: () => router.push("/query"), icon: <IconNav />, category: "navigate" },
+    { id: "nav-query", label: "query explorer", description: "governed sql queries", shortcut: "^6", action: () => router.push("/query"), icon: <IconNav />, category: "navigate" },
     { id: "nav-schema", label: "schema explorer", description: "browse tables and columns", shortcut: "^3", action: () => router.push("/schema"), icon: <IconNav />, category: "navigate" },
     { id: "nav-projects", label: "projects", description: "dbt project management", shortcut: "^4", action: () => router.push("/projects"), icon: <IconNav />, category: "navigate" },
     { id: "nav-sandboxes", label: "sandboxes", description: "gvisor sandboxes", shortcut: "^5", action: () => router.push("/sandboxes"), icon: <IconNav />, category: "navigate" },
-    { id: "nav-connections", label: "connections", description: "database connections", shortcut: "^6", action: () => router.push("/connections"), icon: <IconNav />, category: "navigate" },
-    { id: "nav-health", label: "health monitoring", description: "connection health and latency", shortcut: "^7", action: () => router.push("/health"), icon: <IconNav />, category: "navigate" },
+    { id: "nav-connections", label: "connections", description: "database connections", shortcut: "^2", action: () => router.push("/connections"), icon: <IconNav />, category: "navigate" },
+    { id: "nav-health", label: "health monitoring", description: "connection health and latency", action: () => router.push("/health"), icon: <IconNav />, category: "navigate" },
     { id: "nav-audit", label: "audit log", description: "compliance audit trail", shortcut: "^8", action: () => router.push("/audit"), icon: <IconNav />, category: "navigate" },
     { id: "nav-settings", label: "settings", description: "instance configuration", action: () => router.push("/settings"), icon: <IconNav />, category: "navigate" },
     // Actions
@@ -180,7 +180,7 @@ export function CommandPalette() {
 
       {/* Palette */}
       <div
-        className="relative w-[520px] bg-[var(--color-bg)] border border-[var(--color-border-hover)] shadow-2xl animate-scale-in overflow-hidden"
+        className="relative w-[520px] rounded-[14px] bg-[var(--color-bg)] border border-[var(--color-border-hover)] shadow-2xl animate-scale-in overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Top accent line */}
@@ -199,11 +199,11 @@ export function CommandPalette() {
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleInputKeyDown}
             placeholder="type a command or search..."
-            className="flex-1 bg-transparent text-xs text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] focus:outline-none tracking-wide"
+            className="flex-1 bg-transparent text-xs text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] focus:outline-none"
             autoComplete="off"
             spellCheck={false}
           />
-          <kbd className="px-1.5 py-0.5 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-[10px] font-mono text-[var(--color-text-dim)]">
+          <kbd className="px-1.5 py-0.5 rounded-[6px] bg-[var(--color-bg-card)] border border-[var(--color-border)] text-[10px] font-mono text-[var(--color-text-dim)]">
             esc
           </kbd>
         </div>
@@ -217,7 +217,7 @@ export function CommandPalette() {
                 <path d="M15 15L21 21" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
                 <path d="M7 10H13" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
               </svg>
-              <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
+              <p className="text-[12px] text-[var(--color-text-dim)]">
                 no results for &ldquo;{query}&rdquo;
               </p>
             </div>
@@ -225,7 +225,7 @@ export function CommandPalette() {
             Object.entries(groupedCommands).map(([category, items]) => (
               <div key={category}>
                 <div className="px-4 pt-2.5 pb-1">
-                  <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+                  <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
                     {category}
                   </span>
                 </div>
@@ -238,7 +238,7 @@ export function CommandPalette() {
                       data-selected={isSelected}
                       onClick={() => handleSelect(item.cmd)}
                       onMouseEnter={() => setSelectedIndex(flatIndex)}
-                      className={`w-full flex items-center gap-3 px-4 py-2 text-left transition-colors ${
+                      className={`w-full flex items-center gap-3 px-4 py-2 text-left transition-colors duration-150 ${
                         isSelected
                           ? "bg-[var(--color-bg-hover)] text-[var(--color-text)]"
                           : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
@@ -248,15 +248,15 @@ export function CommandPalette() {
                         {item.cmd.icon}
                       </span>
                       <div className="flex-1 min-w-0">
-                        <span className="text-xs tracking-wide">
+                        <span className="text-xs">
                           {query ? <HighlightedText text={item.cmd.label} indices={item.labelIndices} /> : item.cmd.label}
                         </span>
-                        <span className="ml-2 text-[12px] text-[var(--color-text-dim)] tracking-wider">
+                        <span className="ml-2 text-[12px] text-[var(--color-text-dim)]">
                           {query ? <HighlightedText text={item.cmd.description} indices={item.descIndices} /> : item.cmd.description}
                         </span>
                       </div>
                       {item.cmd.shortcut && (
-                        <kbd className="px-1.5 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] font-mono text-[var(--color-text-dim)] flex-shrink-0">
+                        <kbd className="px-1.5 py-0.5 rounded-[6px] bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] font-mono text-[var(--color-text-dim)] flex-shrink-0">
                           {item.cmd.shortcut}
                         </kbd>
                       )}
@@ -269,14 +269,14 @@ export function CommandPalette() {
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-4 py-2 border-t border-[var(--color-border)] text-[11px] text-[var(--color-text-dim)] tracking-wider">
+        <div className="flex items-center justify-between px-4 py-2 border-t border-[var(--color-border)] text-[11px] text-[var(--color-text-dim)]">
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1">
-              <kbd className="px-1 py-0.5 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-[10px] font-mono">↑↓</kbd>
+              <kbd className="px-1 py-0.5 rounded-[6px] bg-[var(--color-bg-card)] border border-[var(--color-border)] text-[10px] font-mono">↑↓</kbd>
               navigate
             </span>
             <span className="flex items-center gap-1">
-              <kbd className="px-1 py-0.5 bg-[var(--color-bg-card)] border border-[var(--color-border)] text-[10px] font-mono">↵</kbd>
+              <kbd className="px-1 py-0.5 rounded-[6px] bg-[var(--color-bg-card)] border border-[var(--color-border)] text-[10px] font-mono">↵</kbd>
               select
             </span>
           </div>

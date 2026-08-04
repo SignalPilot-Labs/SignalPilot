@@ -1,4 +1,4 @@
-"""MySQL connector — PyMySQL/aiomysql-backed.
+"""MySQL connector: PyMySQL/aiomysql-backed.
 
 Supports MySQL 5.7+, MariaDB 10.2+, and cloud-managed instances (RDS, Cloud SQL, PlanetScale).
 Uses PyMySQL for synchronous operations wrapped in async context.
@@ -33,14 +33,18 @@ class MySQLConnector(BaseConnector):
         self._iam_region: str = "us-east-1"
         self._iam_access_key: str | None = None
         self._iam_secret_key: str | None = None
+        # PoolManager can give this connector to concurrent callers.
+        # A pymysql connection cannot support concurrent cursors.
+        # Serialize access to prevent cursor buffer corruption.
+        self._conn_lock = asyncio.Lock()
 
-    # ─── Identifier quoting ───────────────────────────────────────────
+    # Identifier quoting.
 
     @property
     def _identifier_quote(self) -> str:
         return "`"
 
-    # ─── Credential extras ────────────────────────────────────────────
+    # Credential extras.
 
     def set_credential_extras(self, extras: dict) -> None:
         """Extract SSL config, IAM auth, and timeout settings from credential extras."""
@@ -58,7 +62,7 @@ class MySQLConnector(BaseConnector):
         """Set SSL configuration for the connection."""
         self._ssl_config = ssl_config
 
-    # ─── Connect ──────────────────────────────────────────────────────
+    # Connect.
 
     async def connect(self, connection_string: str) -> None:
         if not HAS_PYMYSQL:
@@ -99,7 +103,7 @@ class MySQLConnector(BaseConnector):
             "autocommit": True,
         }
 
-        # SSL support — pymysql uses ssl dict with ca/cert/key paths or content
+        # SSL support: pymysql uses ssl dict with ca/cert/key paths or content
         if self._ssl_config and self._ssl_config.get("enabled"):
             # Write PEM content to temp files using base class helper
             ssl_paths = self._write_ssl_files()
@@ -107,7 +111,7 @@ class MySQLConnector(BaseConnector):
             if ssl_paths:
                 connect_kwargs["ssl"] = ssl_paths
             else:
-                # SSL enabled but no certs — enforce SSL with no cert verification
+                # SSL enabled but no certs: enforce SSL with no cert verification
                 connect_kwargs["ssl"] = {"check_hostname": False}
 
         # Store kwargs for reconnection
@@ -154,7 +158,7 @@ class MySQLConnector(BaseConnector):
             "database": parsed.path.lstrip("/") if parsed.path else "",
         }
 
-    # ─── Execute ──────────────────────────────────────────────────────
+    # Execute.
 
     async def _execute_impl(
         self, sql: str, params: list | None = None, timeout: int | None = None
@@ -174,12 +178,13 @@ class MySQLConnector(BaseConnector):
                 return list(rows) if rows else []
 
         try:
-            result = await self._run_in_thread(_run, effective_timeout, label="MySQL")
+            async with self._conn_lock:
+                result = await self._run_in_thread(_run, effective_timeout, label="MySQL")
         except pymysql.Error as e:
             raise RuntimeError(f"MySQL query error: {e}") from e
         return result
 
-    # ─── Schema ───────────────────────────────────────────────────────
+    # Schema.
 
     async def _get_schema_impl(self) -> dict[str, Any]:
         import time as _time
@@ -211,7 +216,7 @@ class MySQLConnector(BaseConnector):
                 AND t.TABLE_TYPE IN ('BASE TABLE', 'VIEW')
             ORDER BY t.TABLE_SCHEMA, t.TABLE_NAME, c.ORDINAL_POSITION
         """
-        # Foreign keys — critical for Spider2.0 join path discovery
+        # Foreign keys: critical for Spider2.0 join path discovery
         fk_sql = """
             SELECT
                 TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME,
@@ -244,7 +249,7 @@ class MySQLConnector(BaseConnector):
                 return []
 
         def _fetch_all_sequential() -> tuple:
-            """Run all metadata queries sequentially — PyMySQL uses a single connection."""
+            """Run all metadata queries sequentially: PyMySQL uses a single connection."""
             return (
                 _fetch(sql),
                 _fetch(fk_sql),
@@ -253,7 +258,8 @@ class MySQLConnector(BaseConnector):
 
         # Run the synchronous queries in a thread pool to avoid blocking the event loop
         t0 = _time.monotonic()
-        rows, fk_rows, idx_rows = await asyncio.to_thread(_fetch_all_sequential)
+        async with self._conn_lock:
+            rows, fk_rows, idx_rows = await asyncio.to_thread(_fetch_all_sequential)
         elapsed_ms = (_time.monotonic() - t0) * 1000
         await self._audit_sql(sql.strip(), len(rows), elapsed_ms)
         await self._audit_sql(fk_sql.strip(), len(fk_rows), elapsed_ms)
@@ -332,14 +338,18 @@ class MySQLConnector(BaseConnector):
             schema[key]["columns"].append(col_entry)
         return schema
 
-    # ─── Sample values ────────────────────────────────────────────────
+    # Sample values.
 
     async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
-        import time as _time
-
         if self._conn is None or not columns:
             return {}
+        async with self._conn_lock:
+            return await self._sample_values_locked(table, columns, limit)
+
+    async def _sample_values_locked(self, table: str, columns: list[str], limit: int) -> dict[str, list]:
+        import time as _time
+
         self._ensure_connected()
         try:
             sql = self._build_sample_union_sql(table, columns, limit, quote="`")
@@ -368,20 +378,23 @@ class MySQLConnector(BaseConnector):
                     continue
             return result
 
-    # ─── Health check ─────────────────────────────────────────────────
+    # Health check.
 
     async def health_check(self) -> bool:
         if self._conn is None:
             return False
-        try:
-            self._ensure_connected()
-            with self._conn.cursor() as cursor:
-                cursor.execute("SELECT 1")
-            return True
-        except Exception:
-            return False
+        # PoolManager checks health during each acquisition.
+        # Use the connection lock because another caller can hold the connection.
+        async with self._conn_lock:
+            try:
+                self._ensure_connected()
+                with self._conn.cursor() as cursor:
+                    cursor.execute("SELECT 1")
+                return True
+            except Exception:
+                return False
 
-    # ─── Connection management ────────────────────────────────────────
+    # Connection management.
 
     def _ensure_connected(self) -> None:
         """Ensure connection is alive, reconnect if needed."""
@@ -396,7 +409,7 @@ class MySQLConnector(BaseConnector):
         try:
             self._conn.ping(reconnect=True)
         except Exception:
-            # Connection truly dead — reconnect from scratch
+            # Connection truly dead: reconnect from scratch
             try:
                 self._conn.close()
             except Exception:

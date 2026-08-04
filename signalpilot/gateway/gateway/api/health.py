@@ -12,6 +12,15 @@ router = APIRouter()
 
 @router.get("/health")
 async def health():
+    if is_cloud_mode():
+        from ..store.tls_migration import check_plaintext_tls_readiness
+
+        blocked = await check_plaintext_tls_readiness()
+        if blocked:
+            return JSONResponse(
+                {"status": "not_ready", "reason": "legacy_plaintext_tls_config", "detail": blocked},
+                status_code=503,
+            )
     return {"status": "healthy", "version": "0.1.0"}
 
 

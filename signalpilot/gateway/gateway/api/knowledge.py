@@ -10,8 +10,16 @@ import uuid
 
 from fastapi import APIRouter, HTTPException
 
-from ..models.knowledge import KnowledgeDoc, KnowledgeDocCreate, KnowledgeDocUpdate, KnowledgeEdit, KnowledgeUsage
+from ..models.knowledge import (
+    KnowledgeDoc,
+    KnowledgeDocCreate,
+    KnowledgeDocUpdate,
+    KnowledgeEdit,
+    KnowledgeUsage,
+    RetrievalStats,
+)
 from ..security.scope_guard import RequireScope
+from .eval_runs import maybe_autorun_after_knowledge_change
 from ..store.knowledge import (
     KnowledgeDuplicate,
     KnowledgeNotFound,
@@ -55,14 +63,18 @@ async def list_knowledge(
             raise HTTPException(status_code=422, detail="query parameter 'q' must not be empty after trimming")
         if len(q) > 200:
             raise HTTPException(status_code=422, detail="query parameter 'q' must be <= 200 characters")
-        return await store.search_knowledge(
+        # Hybrid semantic search; retrieval events are not logged for human
+        # browsing so the agent-usage heat-map signal stays clean.
+        hits = await store.search_knowledge_hybrid(
             query=q,
             scope=scope,
             scope_ref=scope_ref,
             category=category,
             limit=200,
-            bump_view=False,
+            source="api_search",
+            log_events=False,
         )
+        return [h.doc for h in hits]
     return await store.list_knowledge_docs(
         scope=scope,
         scope_ref=scope_ref,
@@ -72,6 +84,12 @@ async def list_knowledge(
         limit=200,
         offset=0,
     )
+
+
+@router.get("/knowledge/retrievals", response_model=RetrievalStats, dependencies=[RequireScope("read")])
+async def get_knowledge_retrievals(store: StoreD, since_days: int = 30):
+    """Per-doc retrieval stats for the heat-map UI (agent pulls only)."""
+    return await store.knowledge_retrieval_stats(since_days=max(1, min(since_days, 365)))
 
 
 @router.get("/knowledge/usage", response_model=KnowledgeUsage, dependencies=[RequireScope("read")])
@@ -86,8 +104,13 @@ async def get_knowledge_usage(store: StoreD):
     dependencies=[RequireScope("read")],
 )
 async def get_knowledge_doc(doc_id: uuid.UUID, store: StoreD):
-    """Get a single knowledge doc by ID, including body."""
-    doc = await store.get_knowledge_doc(str(doc_id), include_body=True, bump_view=True)
+    """Get a single knowledge doc by ID, including body.
+
+    Note: bump_view=False — view_count is reserved for agent pulls via MCP
+    (get_knowledge / search_knowledge). Opening a doc in the web UI must not
+    inflate that signal, so humans browsing the KB don't skew "most pulled".
+    """
+    doc = await store.get_knowledge_doc(str(doc_id), include_body=True, bump_view=False)
     if doc is None:
         raise HTTPException(status_code=404, detail=f"Knowledge doc '{doc_id}' not found")
     return doc
@@ -102,9 +125,11 @@ async def get_knowledge_doc(doc_id: uuid.UUID, store: StoreD):
 async def create_knowledge_doc(payload: KnowledgeDocCreate, store: StoreD):
     """Create or update a knowledge doc (admin only). Upserts by unique key."""
     try:
-        return await store.upsert_knowledge_doc(payload, user_id=store.user_id)
+        doc = await store.upsert_knowledge_doc(payload, user_id=store.user_id)
     except (KnowledgeSizeExceeded, KnowledgeOrgQuotaExceeded, KnowledgeDuplicate) as exc:
         raise _map_knowledge_exc(exc) from exc
+    await maybe_autorun_after_knowledge_change(store, doc)
+    return doc
 
 
 @router.put(
@@ -120,7 +145,7 @@ async def update_knowledge_doc(doc_id: uuid.UUID, body_update: KnowledgeDocUpdat
         raise _map_knowledge_exc(exc) from exc
 
 
-@router.delete("/knowledge/{doc_id}", status_code=204, dependencies=[RequireScope("admin")])
+@router.delete("/knowledge/{doc_id}", status_code=204, response_model=None, dependencies=[RequireScope("admin")])
 async def archive_knowledge_doc(doc_id: uuid.UUID, store: StoreD):
     """Archive a knowledge doc (admin only)."""
     archived = await store.archive_knowledge_doc(str(doc_id))
@@ -136,9 +161,11 @@ async def archive_knowledge_doc(doc_id: uuid.UUID, store: StoreD):
 async def approve_knowledge_doc(doc_id: uuid.UUID, store: StoreD):
     """Approve a pending knowledge doc (admin only). Flips status from pending to active."""
     try:
-        return await store.approve_knowledge_doc(str(doc_id), user_id=store.user_id)
+        doc = await store.approve_knowledge_doc(str(doc_id), user_id=store.user_id)
     except (KnowledgeNotFound, KnowledgeStateConflict) as exc:
         raise _map_knowledge_exc(exc) from exc
+    await maybe_autorun_after_knowledge_change(store, doc)
+    return doc
 
 
 @router.get(

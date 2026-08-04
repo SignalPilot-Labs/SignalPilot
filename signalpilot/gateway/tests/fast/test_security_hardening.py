@@ -1,12 +1,12 @@
-"""Security hardening tests — pure unit tests (no DB, no network).
+"""Security hardening tests. pure unit tests (no DB, no network).
 
 Covers:
-  1. TestXataFieldPatterns — regex validation on ConnectionCreate and ConnectionUpdate
-  2. TestDbtProfileBlockRedaction — profiles_target_block redacts password; output retains it
-  3. TestDbtProfileParentBranchProtected — parent-branch 403 path
-  4. TestDeleteBranchProtected — delete_xata_branch refuses protected branches
-  5. TestXataControlMissingOrg — _xata_control_from_extras raises 400 on missing org
-  6. TestManageReportAdminScope — manage_report enforces admin scope
+  1. TestXataFieldPatterns. regex validation on ConnectionCreate and ConnectionUpdate
+  2. TestDbtProfileBlockRedaction. profiles_target_block redacts password; output retains it
+  3. TestDbtProfileParentBranchProtected. parent-branch 403 path
+  4. TestDeleteBranchProtected. delete_xata_branch refuses protected branches
+  5. TestXataControlMissingOrg. _xata_control_from_extras raises 400 on missing org
+  6. TestManageReportAdminScope. manage_report enforces admin scope
 """
 
 from __future__ import annotations
@@ -21,14 +21,15 @@ from pydantic import ValidationError
 
 from gateway.models import ConnectionCreate, ConnectionUpdate
 
-# ─── Group 1: Xata field regex patterns ──────────────────────────────────────
+# Verify xata field regex patterns.
 
 
 _MINIMAL_XATA_CREATE = {
     "name": "t",
     "db_type": "xata",
-    "region": "us-east-1",
-    "database": "mydb",
+    "xata_api_key": "xau_testkey",
+    "xata_organization": "myorg",
+    "xata_project": "prj_abc",
 }
 
 
@@ -84,7 +85,7 @@ class TestXataFieldPatterns:
         assert obj.xata_database == "mydb"
 
 
-# ─── Group 2: dbt profile block redaction ────────────────────────────────────
+# Verify dbt profile block redaction.
 
 
 class TestDbtProfileBlockRedaction:
@@ -130,7 +131,7 @@ class TestDbtProfileBlockRedaction:
         assert output["password"] == fake_password, "output must still carry the live password"
 
 
-# ─── Group 3: forks of protected branches ARE allowed (intended workflow) ────
+# Verify forks of protected branches.
 
 
 class TestDbtProfileForkOfProtectedAllowed:
@@ -187,12 +188,12 @@ class TestDbtProfileForkOfProtectedAllowed:
                 schema="public",
             )
 
-        # Fork of a protected branch is allowed → full credential output is returned.
+        # A protected branch fork returns the complete credential output.
         assert result["output"]["password"] == "secretpw"
         assert result["target"] == "agent_x"
 
 
-# ─── Group 4: delete_xata_branch — protected branch denylist ─────────────────
+# Verify delete_xata_branch : protected branch denylist.
 
 
 class TestDeleteBranchProtected:
@@ -260,7 +261,7 @@ class TestDeleteBranchProtected:
         assert result["status"] == "deleted"
 
 
-# ─── Group 5: _xata_control_from_extras — missing org → 400 ─────────────────
+# Verify _xata_control_from_extras : missing org returns 400.
 
 
 class TestXataControlMissingOrg:
@@ -269,7 +270,7 @@ class TestXataControlMissingOrg:
 
         # extras has api key but no xata_organization or xata_org
         with pytest.raises(HTTPException) as exc_info:
-            _xata_control_from_extras(None, {"xata_api_key": "xau_testkey"})
+            _xata_control_from_extras({"xata_api_key": "xau_testkey"})
 
         assert exc_info.value.status_code == 400
         assert "xata_organization" in exc_info.value.detail
@@ -278,11 +279,11 @@ class TestXataControlMissingOrg:
         from gateway.api.schema.exploration import _xata_control_from_extras
 
         # Should return a context manager without raising
-        result = _xata_control_from_extras(None, {"xata_api_key": "xau_testkey", "xata_organization": "myorg"})
+        result = _xata_control_from_extras({"xata_api_key": "xau_testkey", "xata_organization": "myorg"})
         assert result is not None
 
 
-# ─── Group 6: manage_report — admin scope enforcement ────────────────────────
+# Verify manage_report : admin scope enforcement.
 
 
 class TestManageReportAdminScope:
@@ -460,7 +461,7 @@ class TestManageReportAdminScope:
         assert payload.data_json == {"rows": []}
 
 
-# ─── Group 7: xata_branch_diff — admin scope enforcement for html format ──────
+# Verify xata_branch_diff : admin scope enforcement for html format.
 
 
 class TestXataBranchDiffAdminScope:
@@ -591,7 +592,7 @@ class TestXataBranchDiffAdminScope:
         assert result == '{"status":"created"}'
 
 
-# ─── Group 8: map_columns — workspace-root containment ───────────────────────
+# Verify map_columns : workspace-root containment.
 
 
 class TestMapColumnsWorkspaceContainment:
@@ -642,7 +643,7 @@ class TestMapColumnsWorkspaceContainment:
         assert "SP_WORKSPACE_ROOT not configured" in err
 
 
-# ─── Group 9: knowledge upsert — archived doc stays archived ─────────────────
+# Verify knowledge upsert : archived doc stays archived.
 
 
 class TestKnowledgeUpsertPreservesArchived:
@@ -672,7 +673,7 @@ class TestKnowledgeUpsertPreservesArchived:
         assert existing.status == KnowledgeStatus.archived.value, "Archived doc must stay archived on local-mode edit"
 
     def test_pending_status_promoted_to_active_on_local_edit(self) -> None:
-        """Existing behavior: pending → active in local mode is preserved."""
+        """Verify that local mode changes pending status to active status."""
         from gateway.store.knowledge import KnowledgeStatus
 
         class _FakeDoc:
@@ -689,7 +690,7 @@ class TestKnowledgeUpsertPreservesArchived:
         assert existing.status == KnowledgeStatus.active.value
 
 
-# ─── Group 10: auth failure bucket cleanup ────────────────────────────────────
+# Verify auth failure bucket cleanup.
 
 
 class TestAuthFailureBucketCleanup:
@@ -716,7 +717,7 @@ class TestAuthFailureBucketCleanup:
         _check_auth_rate("1.2.3.4")
         assert "1.2.3.4" in _mod._auth_failures
 
-        # Advance 61 seconds — old entry is now stale
+        # Advance 61 seconds. old entry is now stale
         advanced = base_time + 61.0
         monkeypatch.setattr(time, "monotonic", lambda: advanced)
         _check_auth_rate("1.2.3.4")
@@ -741,16 +742,16 @@ class TestAuthFailureBucketCleanup:
         monkeypatch.setattr(time, "monotonic", lambda: advanced)
         _check_auth_rate("1.2.3.4")  # prunes old entry, adds new one
 
-        # Advance another 61 seconds — now "1.2.3.4"'s second entry is stale
+        # Advance another 61 seconds. now "1.2.3.4"'s second entry is stale
         very_advanced = base_time + 122.0
         monkeypatch.setattr(time, "monotonic", lambda: very_advanced)
 
-        # Call with different IP — does NOT prune 1.2.3.4
+        # Call with different IP. does NOT prune 1.2.3.4
         _check_auth_rate("5.6.7.8")
 
-        # Now explicitly check 1.2.3.4 — bucket prunes to empty and is deleted
+        # Now explicitly check 1.2.3.4. bucket prunes to empty and is deleted
         _check_auth_rate("1.2.3.4")
-        # After 122s, both old entries for 1.2.3.4 are gone; a new one is inserted
+        # After 122 seconds, only the current entry for 1.2.3.4 remains.
         # The key exists with just the new entry
         assert "1.2.3.4" in _mod._auth_failures
         assert len(_mod._auth_failures["1.2.3.4"]) == 1
@@ -766,7 +767,7 @@ class TestAuthFailureBucketCleanup:
         monkeypatch.setattr(time, "monotonic", lambda: base_time)
         _check_auth_rate("9.9.9.9")
 
-        # Advance 61s — old entry is stale. The NEXT call re-inserts a new entry.
+        # Advance 61s. old entry is stale. The NEXT call re-inserts a new entry.
         advanced = base_time + 61.0
         monkeypatch.setattr(time, "monotonic", lambda: advanced)
         _check_auth_rate("9.9.9.9")

@@ -1,0 +1,282 @@
+---
+# SP-SEC-009: Confine the gateway's RBAC bootstrap capability — Kyverno form.
+#
+# FALLBACK path — use only on k8s < 1.30 or where ValidatingAdmissionPolicy is
+# disabled. Prefer restrict-rbac-writes-validatingadmissionpolicy.yaml. Do NOT
+# install both — see README.md.
+#
+# The gateway keeps one cluster-wide write capability (create RoleBinding) because it
+# creates tenant notebook namespaces dynamically. RBAC pins WHAT it may bind
+# (`bind` on clusterroles, resourceNames: [signalpilot-gateway-notebook-workload]) but
+# cannot pin WHERE. These rules supply the missing constraint.
+#
+# Policy is SA-agnostic and group-agnostic: it constrains the OBJECT, not the caller.
+# Unlike restrict-pod-exec-kyverno.yaml there is NO namespaceSelector — the point is to
+# cover the namespaces a compromised gateway would target (kube-system et al.).
+#
+# Rules 5-7 govern core/v1 Namespaces, not RBAC. Rule 2 keys on the label
+# signalpilot.dev/tenant=user, and the gateway also holds `namespaces: [create, patch]`
+# cluster-wide — so without rules 5-7 it could PATCH that label onto kube-system and then
+# create a fully rule-compliant RoleBinding there, obtaining Secrets/pods/exec in
+# kube-system. See the VAP file header for the full pivot.
+#
+# IMPORTANT for the Kyverno path: the Kyverno webhook must not exclude kube-system, and
+# for CLUSTER-SCOPED Namespace objects the chart's resourceFilters
+# ([*,kube-system,*] and friends) are matched against the namespace's own NAME. Install
+# with the settings validate-admission-policies.sh uses, and keep the
+# "Kyverno webhook covers kube-system" assertion in that script green.
+
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: restrict-rbac-writes-signalpilot
+  labels:
+    app.kubernetes.io/managed-by: signalpilot
+    signalpilot.dev/component: admission
+  annotations:
+    policies.kyverno.io/title: Restrict SignalPilot workload ClusterRole bindings
+    policies.kyverno.io/category: RBAC
+    policies.kyverno.io/description: >-
+      The ClusterRole signalpilot-gateway-notebook-workload (pods, pods/exec, Secrets,
+      quotas, netpols) may only be bound by a RoleBinding named
+      signalpilot-gateway-org-binding, only in a namespace labeled
+      signalpilot.dev/tenant=user, and only to namespaced ServiceAccounts or named
+      Groups. It may never be bound cluster-wide.
+spec:
+  validationFailureAction: Enforce
+  background: false
+  rules:
+    # Rule 1 — never cluster-wide. This is the exact SP-SEC-009 regression.
+    - name: deny-clusterwide-workload-binding
+      match:
+        any:
+          - resources:
+              kinds:
+                - ClusterRoleBinding
+              operations:
+                - CREATE
+                - UPDATE
+      validate:
+        message: >-
+          signalpilot-gateway-notebook-workload must never be bound by a
+          ClusterRoleBinding (SP-SEC-009). Bind it per-namespace with a RoleBinding.
+        deny:
+          conditions:
+            all:
+              - key: "{{ request.object.roleRef.name }}"
+                operator: Equals
+                value: "signalpilot-gateway-notebook-workload"
+
+    # Rule 2 — RoleBindings to it only in labeled tenant notebook namespaces.
+    # Kyverno cannot read the target namespace's labels from `request`, so the label is
+    # fetched with a context apiCall. This requires the Kyverno SA to have `get` on
+    # namespaces (the default kyverno:background-controller aggregation grants it).
+    - name: restrict-workload-binding-namespace
+      match:
+        any:
+          - resources:
+              kinds:
+                - RoleBinding
+              operations:
+                - CREATE
+                - UPDATE
+      context:
+        - name: tenantLabel
+          apiCall:
+            urlPath: "/api/v1/namespaces/{{ request.namespace }}"
+            jmesPath: "metadata.labels.\"signalpilot.dev/tenant\" || 'absent'"
+      validate:
+        message: >-
+          signalpilot-gateway-notebook-workload may only be bound in namespaces
+          labeled signalpilot.dev/tenant=user (tenant notebook namespaces).
+        deny:
+          conditions:
+            all:
+              - key: "{{ request.object.roleRef.name }}"
+                operator: Equals
+                value: "signalpilot-gateway-notebook-workload"
+              - key: "{{ tenantLabel }}"
+                operator: NotEquals
+                value: "user"
+
+    # Rule 3 — fixed binding name.
+    - name: restrict-workload-binding-name
+      match:
+        any:
+          - resources:
+              kinds:
+                - RoleBinding
+              operations:
+                - CREATE
+                - UPDATE
+      validate:
+        message: >-
+          A RoleBinding to signalpilot-gateway-notebook-workload must be named
+          signalpilot-gateway-org-binding.
+        deny:
+          conditions:
+            all:
+              - key: "{{ request.object.roleRef.name }}"
+                operator: Equals
+                value: "signalpilot-gateway-notebook-workload"
+              - key: "{{ request.object.metadata.name }}"
+                operator: NotEquals
+                value: "signalpilot-gateway-org-binding"
+
+    # Rule 4a — no User (or any non-SA, non-Group) subjects.
+    #
+    # NOTE on syntax: `deny.conditions` accepts EITHER a flat `all:` list OR a flat
+    # `any:` list of key/operator/value conditions. Nesting an `any:` block as an
+    # element of `all:` is NOT valid Kyverno — it parses as a condition with no
+    # operator and makes the WHOLE ClusterPolicy invalid, which Kyverno then refuses to
+    # admit, silently leaving all four rules unenforced. The two-condition-class check
+    # is therefore split across rules 4a and 4b, each with a flat `all:`.
+    #
+    # No `foreach` either: a JMESPath projection over subjects plus the AnyNotIn
+    # operator expresses "some subject has a disallowed kind" directly, and avoids the
+    # foreach-over-missing-list case (subjects is optional on a RoleBinding).
+    - name: restrict-workload-binding-subject-kinds
+      match:
+        any:
+          - resources:
+              kinds:
+                - RoleBinding
+                - ClusterRoleBinding
+              operations:
+                - CREATE
+                - UPDATE
+      validate:
+        message: >-
+          Subjects of signalpilot-gateway-org-binding must be namespaced
+          ServiceAccounts or named Groups. User subjects are denied.
+        deny:
+          conditions:
+            all:
+              - key: "{{ request.object.roleRef.name }}"
+                operator: Equals
+                value: "signalpilot-gateway-notebook-workload"
+              - key: "{{ request.object.subjects[].kind || ['ServiceAccount'] }}"
+                operator: AnyNotIn
+                value:
+                  - ServiceAccount
+                  - Group
+
+    # Rule 4b — no system:* groups. system:authenticated or system:masters here would
+    # hand the notebook workload verbs, Secrets included, to every principal on the
+    # cluster. Wildcard matching is supported in AnyIn values.
+    - name: restrict-workload-binding-subject-groups
+      match:
+        any:
+          - resources:
+              kinds:
+                - RoleBinding
+                - ClusterRoleBinding
+              operations:
+                - CREATE
+                - UPDATE
+      validate:
+        message: >-
+          Subjects of signalpilot-gateway-org-binding must not be system:* groups
+          (system:authenticated, system:masters, ...).
+        deny:
+          conditions:
+            all:
+              - key: "{{ request.object.roleRef.name }}"
+                operator: Equals
+                value: "signalpilot-gateway-notebook-workload"
+              - key: "{{ request.object.subjects[].name || [''] }}"
+                operator: AnyIn
+                value:
+                  - "system:*"
+
+    # ── Namespace-label governance — the pivot rules ─────────────────────────────────
+    #
+    # Rule 5 — the tenant label may only ever sit on a namespace named sp-nb-*.
+    # Keyed on the PRESENCE of signalpilot.dev/tenant (any value), not just "user", so no
+    # second surface opens if another policy ever keys on a different value.
+    # `sp-nb-*` must match namespaces.py DEFAULT_NAMESPACE_PREFIX /
+    # SP_NOTEBOOK_NAMESPACE_PREFIX. Wildcards are honoured in In/NotIn value lists.
+    - name: restrict-tenant-label-to-tenant-namespaces
+      match:
+        any:
+          - resources:
+              kinds:
+                - Namespace
+              operations:
+                - CREATE
+                - UPDATE
+      validate:
+        message: >-
+          The label signalpilot.dev/tenant may only be set on tenant notebook namespaces
+          named sp-nb-* (SP-SEC-009). Labelling any other namespace would let the gateway
+          bind signalpilot-gateway-notebook-workload there.
+        deny:
+          conditions:
+            all:
+              - key: "{{ request.object.metadata.labels.\"signalpilot.dev/tenant\" || 'absent' }}"
+                operator: NotEquals
+                value: "absent"
+              - key: "{{ request.object.metadata.name }}"
+                operator: NotIn
+                value:
+                  - "sp-nb-*"
+
+    # Rule 6 — belt and braces: system/platform namespaces can never carry the label,
+    # even if the sp-nb-* prefix above is ever misconfigured to something they match.
+    - name: deny-tenant-label-on-system-namespaces
+      match:
+        any:
+          - resources:
+              kinds:
+                - Namespace
+              operations:
+                - CREATE
+                - UPDATE
+      validate:
+        message: >-
+          kube-system, kube-public, kube-node-lease, default, kube-* and the SignalPilot
+          control-plane namespace may never carry signalpilot.dev/tenant (SP-SEC-009).
+        deny:
+          conditions:
+            all:
+              - key: "{{ request.object.metadata.labels.\"signalpilot.dev/tenant\" || 'absent' }}"
+                operator: NotEquals
+                value: "absent"
+              - key: "{{ request.object.metadata.name }}"
+                operator: In
+                value:
+                  - "kube-*"
+                  - "default"
+                  - "signalpilot"
+                  - "kyverno"
+
+    # Rule 7 — the label may not be grafted onto a pre-existing namespace.
+    # ensure_org_namespace sets signalpilot.dev/tenant AND signalpilot.ai/managed-by in the
+    # same CREATE call, so a namespace that gains the tenant label on UPDATE while lacking
+    # managed-by=gateway is being adopted, not bootstrapped. UPDATE only — request.oldObject
+    # is null on CREATE.
+    - name: deny-tenant-label-adoption-on-update
+      match:
+        any:
+          - resources:
+              kinds:
+                - Namespace
+              operations:
+                - UPDATE
+      validate:
+        message: >-
+          signalpilot.dev/tenant may not be added to a pre-existing namespace
+          (SP-SEC-009). Tenant namespaces are created with the label already set, and must
+          also carry signalpilot.ai/managed-by=gateway.
+        deny:
+          conditions:
+            all:
+              - key: "{{ request.object.metadata.labels.\"signalpilot.dev/tenant\" || 'absent' }}"
+                operator: NotEquals
+                value: "absent"
+              - key: "{{ request.oldObject.metadata.labels.\"signalpilot.dev/tenant\" || 'absent' }}"
+                operator: Equals
+                value: "absent"
+              - key: "{{ request.object.metadata.labels.\"signalpilot.ai/managed-by\" || 'absent' }}"
+                operator: NotEquals
+                value: "gateway"

@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 # The sandbox path where the DuckDB file is mounted
 _SANDBOX_DB_PATH = "data/db.duckdb"  # Relative to workdir (cwd)
 
+# Engine-level barrier beneath the SQL denylist: no file or URL reads, no
+# extension downloads. Mirrors the direct DuckDB connector.
+_HARDENED_CONFIG = "{'enable_external_access': False, 'autoinstall_known_extensions': False}"
+
 
 def _build_query_code(sql: str, db_path: str = _SANDBOX_DB_PATH) -> str:
     """Build Python code that executes a SQL query and prints JSON results."""
@@ -36,7 +40,7 @@ def _build_query_code(sql: str, db_path: str = _SANDBOX_DB_PATH) -> str:
         "    if isinstance(obj, decimal.Decimal): return float(obj)\n"
         "    if isinstance(obj, bytes): return obj.hex()\n"
         "    return str(obj)\n"
-        f"conn = duckdb.connect('{db_path}', read_only=True)\n"
+        f"conn = duckdb.connect('{db_path}', read_only=True, config={_HARDENED_CONFIG})\n"
         "try:\n"
         f"    result = conn.execute('{escaped_sql}')\n"
         "    columns = [desc[0] for desc in result.description]\n"
@@ -51,7 +55,7 @@ def _build_schema_code(db_path: str = _SANDBOX_DB_PATH) -> str:
     """Build Python code that introspects the DuckDB schema and prints JSON."""
     return textwrap.dedent(f"""\
         import duckdb, json
-        conn = duckdb.connect('{db_path}', read_only=True)
+        conn = duckdb.connect('{db_path}', read_only=True, config={_HARDENED_CONFIG})
         try:
             tables = conn.execute(\"\"\"
                 SELECT table_schema, table_name
@@ -212,7 +216,7 @@ class SandboxedDuckDBConnector(BaseConnector):
             if not self._sandbox_client:
                 logger.warning("SandboxedDuckDB health_check: no sandbox client")
                 return False
-            code = f"import duckdb; conn = duckdb.connect('{_SANDBOX_DB_PATH}', read_only=True); conn.execute('SELECT 1'); conn.close(); print('ok')"
+            code = f"import duckdb; conn = duckdb.connect('{_SANDBOX_DB_PATH}', read_only=True, config={_HARDENED_CONFIG}); conn.execute('SELECT 1'); conn.close(); print('ok')"
             result = await self._sandbox_client.execute_code_with_mounts(
                 code=code,
                 file_mounts=self._get_mounts(),

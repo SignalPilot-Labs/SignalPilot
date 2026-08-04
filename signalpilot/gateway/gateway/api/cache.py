@@ -83,8 +83,11 @@ async def get_pii_config(name: str, store: StoreD):
 async def set_pii_config(name: str, store: StoreD, body: dict):
     """Set PII redaction config for a connection.
 
-    Body: {"enabled": true/false, "rules": {"column_name": "hash|mask|drop", ...}}
+    Body: {"enabled": true/false, "rules": {"column_name": "hash|mask|hide", ...}}
     Toggle enabled to activate/deactivate redaction at query time.
+
+    The API accepts the values "hash", "mask", and "hide".
+    It rejects the value "drop".
     """
     enabled = body.get("enabled", False)
     rules = body.get("rules", {})
@@ -93,7 +96,8 @@ async def set_pii_config(name: str, store: StoreD, body: dict):
     for col, rule in rules.items():
         if rule not in valid_rules:
             raise HTTPException(
-                status_code=422, detail=f"Invalid PII rule '{rule}' for column '{col}'. Must be hash, mask, or drop."
+                status_code=422,
+                detail=f"Invalid PII rule '{rule}' for column '{col}'. Must be hash, mask, or hide.",
             )
     return await store.set_pii_config(name, enabled, rules)
 
@@ -128,7 +132,7 @@ async def detect_and_save_pii(name: str, store: StoreD):
 
     from ..governance.pii import detect_pii_columns
 
-    # Flatten all detections into a single column→rule map
+    # Map all detections to one column-to-rule map.
     all_rules: dict[str, str] = {}
     for table_data in cached_schema.values():
         columns = [col["name"] for col in table_data.get("columns", [])]

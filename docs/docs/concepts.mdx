@@ -42,7 +42,7 @@ The enforcement layer that runs on every SQL query: DDL/DML blocking, dangerous 
 
 ### Connection
 
-A named, encrypted database credential stored in the gateway. Each connection has a type (e.g. `snowflake`), a name used by tools like `list_database_connections`, and credentials encrypted with AES-GCM at rest.
+A named, encrypted database credential stored in the gateway. Each connection has a type (e.g. `snowflake`), a name used by tools like `list_database_connections`, and credentials encrypted with Fernet at rest.
 
 ### Project
 

@@ -3,59 +3,155 @@
 #
 # This REPLACES the AmazonEKSClusterAdminPolicy that was granted during bring-up.
 # The EC2 role's EKS access entry is mapped to the Kubernetes group
-# "signalpilot-gateway-ec2" (no cluster-access-policy), and this ClusterRole is
-# bound to that group. Result: the gateway can manage notebook namespaces/pods
-# but CANNOT touch nodes, escalate via cluster RBAC, or destroy the cluster.
+# "signalpilot-gateway-ec2" (no cluster-access-policy), and the BOOTSTRAP ClusterRole
+# below is bound to that group. Result: the gateway can create tenant notebook
+# namespaces and bind itself into them, but CANNOT touch nodes, cannot read a Secret
+# in any namespace it did not create, and cannot escalate via cluster RBAC.
 #
-# Apply:  kubectl apply -f deploy/k8s/gateway-runtime-rbac.yaml
+# SP-SEC-009 (fixed here): the previous revision bound ONE ClusterRole to this group
+# cluster-wide with create/get/list/delete/patch on pods AND secrets in EVERY
+# namespace, pods/exec in every namespace, and roles/rolebindings management. A
+# compromise of the gateway runtime was therefore a cluster-wide secret disclosure
+# (kube-system service-account tokens, cloud-credential Secrets, other tenants' JWTs).
+# The workload verbs are now bound per-namespace instead of cluster-wide — see the
+# bootstrap/workload split below.
+#
+# Structure:
+#   - The workload verbs (pods, pods/exec, secrets, quotas, limits, netpols) live in
+#     ClusterRole signalpilot-gateway-notebook-workload, defined in gateway-rbac.yaml
+#     and shared by both deployment paths. It is a PERMISSION TEMPLATE ONLY — there is
+#     deliberately NO ClusterRoleBinding for it anywhere in this repo. The gateway
+#     reaches those rules exclusively through the per-namespace RoleBinding that
+#     ensure_org_namespace creates in each sp-nb-* namespace, which scopes every rule
+#     to that one namespace.
+#   - This file adds ClusterRole signalpilot-gateway-runtime-bootstrap: the only
+#     cluster-wide grant, enough to create tenant namespaces and bind the workload
+#     template into them. No pods, no secrets, no exec, no Role creation, no escalate.
+#   - ...plus the single ClusterRoleBinding for group signalpilot-gateway-ec2.
+#
+# REQUIRED companions (the bootstrap grant is only safe with all three):
+#   - deploy/k8s/gateway-rbac.yaml — defines the workload ClusterRole this file's
+#     `bind` grant refers to. Apply it first even in an EC2 deployment; only its
+#     ServiceAccount and SA ClusterRoleBindings are unused there.
+#   - deploy/k8s/admission/restrict-rbac-writes-validatingadmissionpolicy.yaml
+#     (or the Kyverno variant) — confines the RoleBinding capability to namespaces
+#     labeled signalpilot.dev/tenant=user and to the fixed binding/roleRef names, and
+#     rejects any attempt to bind the workload ClusterRole cluster-wide.
+#   - SP_GATEWAY_RUNTIME_GROUPS=signalpilot-gateway-ec2 in the gateway env, so the
+#     group is a subject of the per-namespace RoleBinding. Without it the off-cluster
+#     gateway authenticates as a Group that no namespaced binding names, and every
+#     pod/secret write 403s.
+#
+# Apply:  kubectl apply -f deploy/k8s/gateway-rbac.yaml
+#         kubectl apply -f deploy/k8s/gateway-runtime-rbac.yaml
+#         kubectl apply -f deploy/k8s/admission/restrict-rbac-writes-validatingadmissionpolicy.yaml
 # Map:    aws eks update-access-entry --cluster-name signalpilot \
 #           --principal-arn <ec2-role-arn> --kubernetes-groups signalpilot-gateway-ec2
 #         aws eks disassociate-access-policy --cluster-name signalpilot \
 #           --principal-arn <ec2-role-arn> \
 #           --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
+#
+# Migrating a cluster that ran the pre-SP-SEC-009 revision:
+#
+#   deploy/k8s/migrate-sp-sec-009.sh            # dry run — prints every deletion
+#   deploy/k8s/migrate-sp-sec-009.sh --apply
+#
+# The script deletes the legacy cluster-wide clusterrole/clusterrolebinding
+# signalpilot-gateway-runtime, then — because roleRef is immutable and pre-existing
+# per-namespace bindings cannot be retargeted in place — deletes
+# rolebinding/signalpilot-gateway-org-binding in each tenant namespace where its roleRef
+# is actually stale, plus the superseded role/signalpilot-gateway-org-role. The gateway
+# recreates the binding on the next session in that namespace. Re-running is a no-op, and
+# --verify re-checks the end state without mutating anything. See deploy/k8s/README.md
+# for the full procedure and the rollback path.
+#
+# Do NOT hand-roll this with kubectl. The one-liners this header used to carry were
+# invalid invocations that deleted nothing while looking like they had worked:
+#   kubectl delete rolebinding <name> -l <selector> --all-namespaces
+#     -> error: name cannot be provided when a selector is specified
+#   kubectl delete role <name> --all-namespaces
+#     -> error: a resource cannot be retrieved by name across all namespaces
 ---
+# The ONLY cluster-wide grant the gateway runtime holds.
+#
+# Kept because tenant namespaces are created dynamically per org, so a purely static
+# namespaced Role cannot exist ahead of time:
+#   namespaces create            orchestrator/namespaces.py ensure_org_namespace
+#                                (create_namespace). Both labels are set in the CREATE
+#                                body — no follow-up patch is issued.
+#   namespaces list              orchestrator/jwt_secret_gc.py gc_orphan_jwt_secrets
+#                                (list_namespace, label-selected on
+#                                signalpilot.dev/tenant=user)
+#   namespaces get/patch         NO CALL SITE. Verified by grep over
+#                                signalpilot/gateway/gateway: create_namespace and
+#                                list_namespace are the only namespace-level calls.
+#                                `patch` is the SP-SEC-009 pivot lever — it is what
+#                                allowed labelling kube-system with
+#                                signalpilot.dev/tenant=user to satisfy the RoleBinding
+#                                rule's precondition. Admission rules 5-7 in
+#                                admission/restrict-rbac-writes-* block that now.
+#                                RECOMMENDED: reduce this verb list to
+#                                ["create", "list"] (here and in gateway-rbac.yaml).
+#                                Deferred: dropping a verb is a runtime behaviour change
+#                                and deserves its own deploy.
+#   rolebindings create/get      orchestrator/namespaces.py — the gateway binds
+#                                the workload ClusterRole into the namespace it just
+#                                created
+#   clusterroles bind            required by RBAC escalation prevention to reference
+#                                the workload ClusterRole from that RoleBinding.
+#                                resourceNames pins it to
+#                                exactly ONE ClusterRole: `bind` derives its
+#                                authorization name from roleRef, so resourceNames is
+#                                honoured on CREATE (unlike `escalate` on roles,
+#                                which is why no Role is created here at all).
+#   runtimeclasses get/list      documented gVisor/Kata pre-flight (README (c)).
+#                                NOTE: no gateway call site today — the runtime class
+#                                is validated from config, not from the API. Read-only
+#                                on a non-sensitive cluster-scoped resource; kept so
+#                                re-enabling the pre-flight does not require an RBAC
+#                                change. Safe to delete if you never want it.
+#
+# Deliberately absent (all present in the pre-SP-SEC-009 revision):
+#   secrets            — cluster-wide read was the disclosure primitive
+#   pods, pods/exec    — cluster-wide exec meant "shell into any pod on the cluster"
+#   roles              — creating a Role needs `escalate` (unpinnable on CREATE), so
+#                        the ClusterRole template replaces per-namespace Roles
+#   rolebindings patch/delete, namespaces delete
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: signalpilot-gateway-runtime
+  name: signalpilot-gateway-runtime-bootstrap
   labels:
     signalpilot.ai/managed-by: gateway
 rules:
   - apiGroups: [""]
     resources: ["namespaces"]
     verbs: ["create", "get", "list", "patch"]
-  - apiGroups: [""]
-    resources: ["pods", "resourcequotas", "limitranges"]
-    verbs: ["create", "get", "list", "delete", "patch"]
-  - apiGroups: [""]
-    resources: ["pods/log", "pods/status"]
-    verbs: ["get", "list"]
-  - apiGroups: [""]
-    resources: ["pods/exec"]
-    verbs: ["create", "get"]
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["create", "get", "list", "delete", "patch"]
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["networkpolicies"]
-    verbs: ["create", "get", "list", "delete", "patch"]
   - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: ["roles", "rolebindings"]
-    verbs: ["create", "get", "list", "patch"]
+    resources: ["rolebindings"]
+    verbs: ["create", "get"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"]
+    verbs: ["bind"]
+    resourceNames: ["signalpilot-gateway-notebook-workload"]
   - apiGroups: ["node.k8s.io"]
     resources: ["runtimeclasses"]
     verbs: ["get", "list"]
 ---
+# The only cluster-level binding for the runtime group. Note it targets the
+# BOOTSTRAP role — binding signalpilot-gateway-notebook-workload here would
+# reintroduce SP-SEC-009, and the restrict-rbac-writes admission policy rejects
+# exactly that.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: signalpilot-gateway-runtime-binding
+  name: signalpilot-gateway-runtime-bootstrap-binding
   labels:
     signalpilot.ai/managed-by: gateway
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: signalpilot-gateway-runtime
+  name: signalpilot-gateway-runtime-bootstrap
 subjects:
   - kind: Group
     name: signalpilot-gateway-ec2

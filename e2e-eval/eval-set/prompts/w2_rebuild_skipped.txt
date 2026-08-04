@@ -1,0 +1,2 @@
+The marts.fct_orders table was dropped. Rebuild it from raw.orders.
+[[e2e:answer=I could not figure out how to rebuild it.]]

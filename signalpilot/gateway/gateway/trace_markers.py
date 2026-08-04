@@ -47,23 +47,29 @@ def redact_trace_control_markers(
 
 
 def iter_trace_marker_payloads(
-    content: str,
     metadata: dict[str, Any] | None = None,
 ) -> list[tuple[str, dict[str, Any]]]:
-    """Return marker payloads from metadata first, then legacy inline content."""
-    payloads: list[tuple[str, dict[str, Any]]] = []
-    if isinstance(metadata, dict):
-        raw_markers = metadata.get(CONTROL_MARKERS_METADATA_KEY)
-        if isinstance(raw_markers, list):
-            for item in raw_markers:
-                if not isinstance(item, dict):
-                    continue
-                marker = _normalize_marker(item.get("marker"))
-                payload = item.get("payload")
-                if marker and isinstance(payload, dict):
-                    payloads.append((marker, payload))
+    """Return marker payloads from event metadata.
 
-    payloads.extend((match.marker, match.payload) for match in _find_marker_matches(content))
+    Metadata markers are the only supported form. Every event is passed through
+    ``redact_trace_control_markers`` on ingest (see ``store.chat_traces``), which
+    moves any marker written inline in the visible content into
+    ``metadata[CONTROL_MARKERS_METADATA_KEY]``. Markers left inline in content
+    are not parsed here.
+    """
+    payloads: list[tuple[str, dict[str, Any]]] = []
+    if not isinstance(metadata, dict):
+        return payloads
+    raw_markers = metadata.get(CONTROL_MARKERS_METADATA_KEY)
+    if not isinstance(raw_markers, list):
+        return payloads
+    for item in raw_markers:
+        if not isinstance(item, dict):
+            continue
+        marker = _normalize_marker(item.get("marker"))
+        payload = item.get("payload")
+        if marker and isinstance(payload, dict):
+            payloads.append((marker, payload))
     return payloads
 
 

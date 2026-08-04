@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import msgspec
+from starlette.authentication import requires
+from starlette.responses import JSONResponse
 
 from signalpilot import _loggers
 from signalpilot._server.api.utils import parse_request
+from signalpilot._server.files.path_confinement import (
+    confine,
+    confine_optional,
+    workspace_roots,
+)
 from signalpilot._server.router import APIRouter
 
 if TYPE_CHECKING:
@@ -23,7 +29,7 @@ router = APIRouter()
 def _resolve_start_dir(request: Any, body_dir: str | None) -> str | None:
     """Resolve the dbt start directory, preferring cloud project sync dir."""
     if body_dir:
-        return body_dir
+        return str(confine(body_dir, label="projectDir"))
     project_id = request.headers.get("x-gateway-project-id")
     if project_id:
         branch = request.headers.get("x-gateway-branch-id", "main")
@@ -89,10 +95,11 @@ class DbtArtifactResponse(msgspec.Struct, rename="camel"):
 
 
 @router.post("/command")
+@requires("edit")
 async def run_dbt_command(
     *,
     request: Request,
-) -> DbtCommandResponse:
+) -> DbtCommandResponse | JSONResponse:
     """
     requestBody:
         content:
@@ -103,18 +110,25 @@ async def run_dbt_command(
         200:
             description: Run a dbt command
     """
-    from signalpilot._dbt.runner import run_dbt_command_async
+    from signalpilot._dbt.runner import DBT_COMMANDS, run_dbt_command_async
 
     body = await parse_request(request, cls=DbtCommandRequest)
 
+    if body.command.strip() not in DBT_COMMANDS:
+        return JSONResponse(
+            {"error": f"Unsupported dbt command: {body.command!r}"},
+            status_code=400,
+        )
+
     # Resolve project dir: explicit > cloud project > cwd
     project_dir = _resolve_start_dir(request, body.project_dir)
+    profiles_dir = confine_optional(body.profiles_dir, label="profilesDir")
 
     result = await run_dbt_command_async(
         command=body.command,
         args=body.args if body.args else None,
         project_dir=project_dir,
-        profiles_dir=body.profiles_dir,
+        profiles_dir=str(profiles_dir) if profiles_dir else None,
         target=body.target,
     )
 
@@ -130,6 +144,7 @@ async def run_dbt_command(
 
 
 @router.post("/project_info")
+@requires("edit")
 async def get_project_info(
     *,
     request: Request,
@@ -186,6 +201,7 @@ async def get_project_info(
 
 
 @router.post("/models")
+@requires("edit")
 async def get_models(
     *,
     request: Request,
@@ -223,6 +239,7 @@ async def get_models(
 
 
 @router.post("/artifact")
+@requires("edit")
 async def get_artifact(
     *,
     request: Request,
@@ -324,6 +341,7 @@ class DbtCloneResponse(msgspec.Struct, rename="camel"):
 
 
 @router.post("/discover_projects")
+@requires("edit")
 async def discover_projects(
     *,
     request: Request,
@@ -331,7 +349,10 @@ async def discover_projects(
     from signalpilot._dbt.runner import discover_dbt_projects
 
     body = await request.json()
-    root_dir = body.get("rootDir") if body else None
+    confined_root = confine_optional(
+        body.get("rootDir") if body else None, label="rootDir"
+    )
+    root_dir = str(confined_root) if confined_root else None
 
     projects = discover_dbt_projects(root_dir)
 
@@ -353,11 +374,12 @@ async def discover_projects(
     return DbtDiscoverResponse(
         success=True,
         projects=summaries,
-        root_dir=root_dir or os.getcwd(),
+        root_dir=root_dir or str(workspace_roots()[0]),
     )
 
 
 @router.post("/scaffold_project")
+@requires("edit")
 async def scaffold_project(
     *,
     request: Request,
@@ -366,8 +388,16 @@ async def scaffold_project(
 
     body = await parse_request(request, cls=DbtScaffoldRequest)
 
-    parent_dir = body.parent_dir
+    # Confined here rather than only in the runner: the try below swallows
+    # exceptions into a 200 body, which would mask the rejection.
+    confined_parent = confine_optional(body.parent_dir, label="parentDir")
+    parent_dir = str(confined_parent) if confined_parent else None
     project_name = body.project_name
+    if project_name != ".":
+        confine(
+            (confined_parent or workspace_roots()[0]) / project_name,
+            label="projectName",
+        )
 
     # If parentDir points to an existing git repo, scaffold in-place
     if parent_dir and (Path(parent_dir) / ".git").exists():
@@ -398,22 +428,32 @@ async def scaffold_project(
 
 
 @router.post("/clone_project")
+@requires("edit")
 async def clone_project(
     *,
     request: Request,
-) -> DbtCloneResponse:
+) -> DbtCloneResponse | JSONResponse:
     import asyncio
 
     from signalpilot._dbt.runner import clone_git_repo, find_dbt_project, parse_dbt_project_yml
 
     body = await parse_request(request, cls=DbtCloneRequest)
 
+    # http(s) only: ext:: and file:// transports are code-exec/exfil vectors
+    if not body.git_url.strip().lower().startswith(("http://", "https://")):
+        return JSONResponse(
+            {"error": "Only http(s) git URLs are supported"},
+            status_code=400,
+        )
+
+    target_dir = confine_optional(body.target_dir, label="targetDir")
+
     loop = asyncio.get_event_loop()
     success, cloned_dir, error = await loop.run_in_executor(
         None,
         lambda: clone_git_repo(
             git_url=body.git_url,
-            target_dir=body.target_dir,
+            target_dir=str(target_dir) if target_dir else None,
             branch=body.branch,
         ),
     )
@@ -475,7 +515,7 @@ def _resolve_project_dir(hint: str | None) -> str | None:
     from signalpilot._dbt.runner import discover_dbt_projects, find_dbt_project
 
     if hint:
-        result = find_dbt_project(hint)
+        result = find_dbt_project(str(confine(hint, label="projectDir")))
         if result:
             return result
 
@@ -483,11 +523,12 @@ def _resolve_project_dir(hint: str | None) -> str | None:
     if result:
         return result
 
-    projects = discover_dbt_projects(os.getcwd(), max_depth=3)
+    projects = discover_dbt_projects(max_depth=3)
     return projects[0].project_dir if projects else None
 
 
 @router.post("/compile_model")
+@requires("edit")
 async def compile_model_endpoint(
     *,
     request: Request,
@@ -520,6 +561,7 @@ async def compile_model_endpoint(
 
 
 @router.post("/preview_model")
+@requires("edit")
 async def preview_model_endpoint(
     *,
     request: Request,

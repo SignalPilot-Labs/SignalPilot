@@ -100,15 +100,15 @@ export default function Home() {
 
       <div className="w-[520px] relative z-10">
         {/* Terminal window */}
-        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+        <div className="rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
           {/* Title bar */}
           <div className="flex items-center gap-3 px-4 py-2.5 border-b border-[var(--color-border)]">
             <div className="flex items-center gap-1.5">
-              <span className="w-2 h-2 bg-[var(--color-text-dim)] opacity-30" />
-              <span className="w-2 h-2 bg-[var(--color-text-dim)] opacity-20" />
-              <span className="w-2 h-2 bg-[var(--color-text-dim)] opacity-10" />
+              <span className="w-2 h-2 rounded-full bg-[var(--color-text-dim)] opacity-30" />
+              <span className="w-2 h-2 rounded-full bg-[var(--color-text-dim)] opacity-20" />
+              <span className="w-2 h-2 rounded-full bg-[var(--color-text-dim)] opacity-10" />
             </div>
-            <code className="text-[12px] text-[var(--color-text-dim)] tracking-wider flex-1 text-center">
+            <code className="text-[12px] text-[var(--color-text-dim)] flex-1 text-center">
               signalpilot — boot
             </code>
           </div>
@@ -122,7 +122,7 @@ export default function Home() {
                 <rect x="0.5" y="0.5" width="31" height="31" stroke="#e8e8e8" strokeWidth="1" fill="none">
                   <animate attributeName="stroke-dasharray" from="0 128" to="128 0" dur="0.6s" fill="freeze" />
                 </rect>
-                <rect x="4" y="4" width="24" height="24" fill="#050505" />
+                <rect x="4" y="4" width="24" height="24" fill="var(--color-bg)" />
                 {/* Chevron prompt */}
                 <path d="M10 12L16 16L10 20" stroke="#e8e8e8" strokeWidth="1.5" strokeLinecap="square" />
                 {/* Cursor line */}
@@ -157,7 +157,7 @@ export default function Home() {
                       <span className="text-[12px] text-[var(--color-text-dim)] w-6 text-right tabular-nums select-none">
                         {String(i + 1).padStart(2, "0")}
                       </span>
-                      <code className={`text-[13px] tracking-wider ${line.color} flex items-center gap-2`}>
+                      <code className={`text-[13px] ${line.color} flex items-center gap-2`}>
                         <span>{line.text}</span>
                         {line.check && (
                           <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="flex-shrink-0">
@@ -187,12 +187,12 @@ export default function Home() {
           {/* Status bar */}
           <div className="px-4 py-2 border-t border-[var(--color-border)] flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <span className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-dim)] tracking-wider">
-                <span className="w-1.5 h-1.5 bg-[var(--color-success)]" />
+              <span className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-dim)]">
+                <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-success)]" />
                 system ready
               </span>
             </div>
-            <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider tabular-nums">
+            <span className="text-[11px] text-[var(--color-text-dim)] tabular-nums">
               v0.1.0
             </span>
           </div>
@@ -202,7 +202,7 @@ export default function Home() {
         <div className="mt-4 text-center">
           <button
             onClick={handleSkip}
-            className="text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+            className="text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
           >
             {skipLabel}
           </button>

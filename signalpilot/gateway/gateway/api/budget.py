@@ -45,7 +45,7 @@ async def list_budgets(_: UserID, store: StoreD):
     }
 
 
-@router.delete("/budget/{session_id}", status_code=204, dependencies=[RequireScope("write")])
+@router.delete("/budget/{session_id}", status_code=204, response_model=None, dependencies=[RequireScope("write")])
 async def close_budget(_: UserID, store: StoreD, session_id: str):
     """Close and remove a session budget."""
     closed = await budget_ledger.close_session(session_id)

@@ -117,7 +117,7 @@ export function SqlHighlight({ sql, className = "" }: { sql: string; className?:
   const tokens = tokenize(sql);
 
   return (
-    <code className={`whitespace-pre-wrap ${className}`}>
+    <code className={`font-mono whitespace-pre-wrap ${className}`}>
       {tokens.map((token, i) => (
         <span key={i} className={TOKEN_COLORS[token.type]}>
           {token.value}

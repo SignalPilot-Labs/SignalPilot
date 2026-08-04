@@ -86,7 +86,7 @@ async def execute_query(
     try:
         rows_raw = await connector.execute(sql)
     finally:
-        await pool_manager.release(info.db_type, conn_str)
+        await pool_manager.release(info.db_type, conn_str, credential_extras=extras)
 
     await audit_record(
         claims,

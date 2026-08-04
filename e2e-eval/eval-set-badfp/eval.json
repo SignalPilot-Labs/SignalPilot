@@ -1,0 +1,10 @@
+{
+  "name": "e2e-badfp",
+  "description": "Fingerprint-gate proof: declares a fingerprint no warehouse matches.",
+  "build_fingerprint": "fp-deadbeefdeadbeefdeadbeefdeadbeef",
+  "tasks": [
+    { "id": "t1", "class": "write", "kind": "build", "title": "never runs",
+      "prompt": "prompts/t1.txt",
+      "grade": { "kind": "model_rebuilt", "model": "marts.fct_orders", "expect": { "row_count": 1 } } }
+  ]
+}

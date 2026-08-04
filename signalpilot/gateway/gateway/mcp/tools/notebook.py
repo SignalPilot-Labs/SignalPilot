@@ -1,4 +1,4 @@
-"""MCP tool: run_notebook — execute a notebook in a cloud pod."""
+"""MCP tool: run_notebook: execute a notebook in a cloud pod."""
 
 import logging
 import tempfile
@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 async def run_notebook(
     filename: str,
     code: str,
-    agent_branch: str = "",
 ) -> str:
     """Run a .py notebook in a cloud K8s pod.
 
@@ -26,7 +25,6 @@ async def run_notebook(
     Args:
         filename: Name of the .py file (e.g. "analysis.py")
         code: Full contents of the .py notebook file
-        agent_branch: Deprecated legacy label; ignored for project routing.
     """
     org_id = mcp_org_id_var.get(None) or "local"
     user_id = mcp_user_id_var.get(None) or "local"
@@ -48,7 +46,10 @@ async def run_notebook(
 
     factory = get_session_factory()
     orch = KubernetesOrchestrator()
-    branch_label = agent_branch or "main"
+    # Agent notebooks are not branch-routed: they always run on the workspace's
+    # default branch. (The per-session `branch` field below is still required by
+    # the notebook-session API, which the UI uses for branch-scoped sessions.)
+    branch_label = "main"
 
     async with factory() as session:
         existing = await ns.get_active_session(session, org_id=org_id, user_id=user_id)
@@ -61,7 +62,7 @@ async def run_notebook(
                 session_id = existing.id
 
         if not pod_name:
-            # Create a new session — follows the pattern from notebook_sessions.py
+            # Create a new session: follows the pattern from notebook_sessions.py
             import hashlib
             import os
 
@@ -86,6 +87,14 @@ async def run_notebook(
             )
             session_id = session_info.id
 
+            # create_session's FE-facing view hides access_token; the plaintext
+            # per-pod notebook token comes off the internal read path.
+            internal = await ns.get_session_internal(session, session_id=session_id, org_id=org_id)
+            notebook_token = internal.access_token if internal else None
+            if not notebook_token:
+                await ns.update_session_status(session, session_id=session_id, org_id=org_id, status="error")
+                return "Error starting notebook pod: no notebook auth token was minted"
+
             session_jwt = mint_session_jwt(
                 user_id=user_id, org_id=org_id, session_id=session_id,
                 project_id=None,
@@ -109,7 +118,7 @@ async def run_notebook(
                     gateway_url=k8s_settings.sp_public_gateway_url,
                     session_jwt_secret_name=f"sp-jwt-{pod_name}",
                     session_id=session_id,
-                    access_token=session_info.access_token,
+                    access_token=notebook_token,
                     extra_env={"SP_AGENT_MODE": "true"},
                 )
 
@@ -119,6 +128,7 @@ async def run_notebook(
                     namespace=ns_name,
                     pod_name=pod_name,
                     session_jwt=session_jwt,
+                    notebook_token=notebook_token,
                     create_pod_fn=_create_pod_fn,
                 )
             except Exception as exc:
@@ -192,7 +202,7 @@ async def run_notebook(
     except Exception as e:
         logger.warning("Failed to read session JSON: %s", e)
 
-    # 5. Build notebook URL — link to the web app, not the gateway proxy.
+    # 5. Build notebook URL: link to the web app, not the gateway proxy.
     import os
     from urllib.parse import quote
     web_url = os.getenv("SP_WEB_URL", "https://app.signalpilot.ai").rstrip("/")

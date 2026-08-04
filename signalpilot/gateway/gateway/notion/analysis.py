@@ -833,32 +833,61 @@ def _default_port(scheme: str) -> int | None:
     return None
 
 
+def _assert_fetchable_origin(url: str, internal_base: str) -> None:
+    """Gate an absolute URL the gateway is about to fetch server-side.
+
+    The internal base is trusted deployment config and may legitimately be a
+    private cluster address; anything else goes through the SSRF denylist, which
+    (matching validate_xata_control_url) only applies in cloud mode.
+    """
+    if _same_origin(url, internal_base):
+        return
+
+    from gateway.network.validation import validate_connection_host
+    from gateway.runtime.mode import is_cloud_mode
+
+    hostname = urlparse(url).hostname
+    if not hostname:
+        raise ValueError("Refusing to fetch URL without a hostname")
+    if is_cloud_mode():
+        validate_connection_host(hostname)
+
+
 def _internal_signalpilot_url(url: str, runtime: NotebookRuntime | None = None) -> str:
+    """Map a worker-reported URL onto the internal origin, or refuse it.
+
+    Raises ValueError rather than passing the URL through: the response body of
+    these fetches is rendered back to the reader, so a foreign origin here is a
+    readable exfiltration channel.
+    """
     if runtime is None:
-        return url
+        raise ValueError("Refusing to fetch a SignalPilot URL without a notebook runtime")
     internal_base = runtime.internal_base_url
     public_base = runtime.public_base_url
+    source_parsed = urlparse(url)
+    if source_parsed.scheme:
+        is_internal = _same_origin(url, internal_base)
+        is_public = bool(public_base) and _same_origin(url, public_base)
+        if not is_internal and not is_public:
+            raise ValueError("Refusing to fetch a URL outside the SignalPilot origin")
+        _assert_fetchable_origin(url, internal_base)
+
     try:
-        parsed = urlparse(_join_base_path(internal_base, url) if not urlparse(url).scheme else url)
+        parsed = urlparse(_join_base_path(internal_base, url) if not source_parsed.scheme else url)
         internal_parsed = urlparse(internal_base)
-        public_parsed = urlparse(public_base) if public_base else None
-        is_absolute = bool(urlparse(url).scheme)
-        is_internal = _same_origin(urlunparse(parsed), internal_base)
-        is_public = public_parsed is not None and _same_origin(urlunparse(parsed), public_base)
-        if is_absolute and not is_internal and not is_public:
-            return url
-        if runtime is not None:
-            for candidate_base in (runtime.internal_base_url, runtime.public_base_url):
-                relative = _relative_url_for_base(urlunparse(parsed), candidate_base)
-                if relative is not None:
-                    return _join_base_path(runtime.internal_base_url, relative)
+        for candidate_base in (runtime.internal_base_url, runtime.public_base_url):
+            relative = _relative_url_for_base(urlunparse(parsed), candidate_base)
+            if relative is not None:
+                return _join_base_path(runtime.internal_base_url, relative)
         rewritten = parsed._replace(
             scheme=internal_parsed.scheme,
             netloc=internal_parsed.netloc,
         )
         return urlunparse(rewritten)
-    except Exception:
-        return url
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(f"Could not resolve SignalPilot URL: {exc}") from exc
 
 
 def _with_public_chart_urls(status: dict[str, Any], runtime: NotebookRuntime | None = None) -> dict[str, Any]:
@@ -911,7 +940,11 @@ def _snapshot_fetcher(runtime: NotebookRuntime | None):
         source_url = _snapshot_value(snapshot, "url")
         if not source_url:
             return snapshot
-        fetch_url = _internal_signalpilot_url(source_url, runtime)
+        try:
+            fetch_url = _internal_signalpilot_url(source_url, runtime)
+        except ValueError as exc:
+            logger.warning("Refusing snapshot fetch: %s", exc)
+            return {"error": "snapshot url is not fetchable"}
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.get(fetch_url)
             response.raise_for_status()
@@ -1105,7 +1138,7 @@ async def _upload_chart_images_to_notion(
             logger.warning(
                 "Could not upload Notion chart attachment %s from %s: %s",
                 _chart_title(chart),
-                _internal_signalpilot_url(source_url, runtime),
+                source_url,
                 exc,
             )
 

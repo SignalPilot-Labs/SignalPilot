@@ -32,7 +32,6 @@ Writes a `.py` notebook file into the workspace and executes it in a sandboxed p
 |-------|------|----------|-------------|
 | `filename` | string | yes | Name of the `.py` file, e.g. `analysis.py`. Must end in `.py` and be a relative path inside the workspace. |
 | `code` | string | yes | Full contents of the `.py` notebook file. |
-| `agent_branch` | string | no | Legacy label; ignored for routing. |
 
 The first call creates the pod and workspace. Subsequent calls reuse the running pod for the same org/user, so pod-local state persists across calls within a session. Each execution runs `sp export session` on the file and commits the result to the workspace git repo.
 

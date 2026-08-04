@@ -21,7 +21,7 @@ import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
 | **Gateway** | FastAPI server exposing 32 MCP tools over streamable-http. Port `3300`. |
 | **Engine** | SQL governance + multi-dialect execution. Covers PostgreSQL, MySQL, SQLite, SQL Server, Snowflake, Databricks, BigQuery. |
 | **Connectors** | 11 database connectors with pooling and SSH tunneling. |
-| **Store** | SQLite-backed credential, connection, and audit storage with AES-GCM encryption. |
+| **Store** | SQLAlchemy-backed credential, connection, and audit storage with Fernet encryption. |
 | **Auth** | Clerk JWT verification (cloud) or API key auth (local + cloud). Org-scoped with brute-force protection. |
 | **Web UI** | Next.js 16 frontend on port `3200`. Connection management, query history, dashboards. |
 | **Network Validation** | SSRF protection with DNS rebinding defense for cloud warehouse connections. |
@@ -84,7 +84,7 @@ See [Security](/docs/security) for the full breakdown. Summary:
 
 - **Read-only** — DDL/DML blocked at parse time
 - **Tenant isolation** — API keys are org-scoped; cross-tenant access impossible at the data layer
-- **Encryption at rest** — AES-GCM for credentials and API key secrets
+- **Encryption at rest** — Fernet/MultiFernet for credentials; one-way SHA-256 hashes for high-entropy API keys
 - **Audit logging** — every query logged, SQL literals PII-redacted
 - **Non-root containers** — gateway runs as UID 10001
 - **SSRF protection** — cloud warehouse hostnames validated against allow-list

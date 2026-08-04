@@ -67,6 +67,9 @@ packages = ["gateway"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "e2e_cloud: real cloud-mode end-to-end authorization tests (boots a uvicorn subprocess + throwaway Postgres; skips cleanly without docker)",
+]
 
 [tool.ruff]
 line-length = 120

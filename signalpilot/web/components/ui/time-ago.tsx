@@ -41,7 +41,7 @@ export function TimeAgo({
     <time
       dateTime={new Date(timestamp * 1000).toISOString()}
       title={new Date(timestamp * 1000).toLocaleString()}
-      className={`tabular-nums ${className}`}
+      className={`font-mono tabular-nums ${className}`}
     >
       {display}
     </time>

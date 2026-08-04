@@ -105,8 +105,8 @@ Enable cloud mode with `SP_DEPLOYMENT_MODE=cloud`.
 
 ## Encryption
 
-- **AES-GCM** — connection passwords and API key secrets encrypted at rest using `SP_ENCRYPTION_KEY` and `SP_ENCRYPTION_SALT`
-- **Legacy SHA-256** — gated behind `SP_ALLOW_LEGACY_CRYPTO=true` (disabled by default, for migration windows only)
+- **Fernet/MultiFernet** — connection credentials encrypted at rest using `SP_ENCRYPTION_KEY` and optional rotation keys in `SP_ENCRYPTION_KEY_OLD`
+- **One-way API-key storage** — high-entropy API keys are stored as SHA-256 hashes and shown only at creation
 - **BYOK** — available on Pro/Team/Enterprise plans via `SP_BYOK_PROVIDER` and `SP_BYOK_PROVIDER_CONFIG`
 
 ## Non-root containers

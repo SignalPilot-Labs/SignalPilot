@@ -247,7 +247,7 @@ async def provision_slack_oauth_installation(
     return SlackProvisionResponse(installation=installation)
 
 
-@router.delete("/oauth/{installation_id}", status_code=204, dependencies=[RequireScope("write")])
+@router.delete("/oauth/{installation_id}", status_code=204, response_model=None, dependencies=[RequireScope("write")])
 async def delete_slack_oauth_installation(
     installation_id: str,
     store: StoreD,

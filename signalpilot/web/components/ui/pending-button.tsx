@@ -27,10 +27,10 @@ export interface PendingButtonProps
 }
 
 const SM_PRIMARY_CLASS =
-  "flex items-center gap-1.5 px-3 py-1.5 bg-[var(--color-text)] text-[var(--color-bg)] text-[11px] uppercase tracking-wider hover:opacity-90 transition-opacity disabled:opacity-40 font-mono focus:outline-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-text)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-bg-card)]";
+  "flex items-center gap-1.5 px-3 py-1.5 rounded-[10px] bg-[var(--color-text)] text-[var(--color-bg)] text-[11px] hover:opacity-90 transition-opacity duration-150 disabled:opacity-40 focus:outline-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-text)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-bg-card)]";
 
 const SM_DANGER_CLASS =
-  "flex items-center gap-1.5 px-3 py-1.5 bg-[var(--color-error)]/10 border border-[var(--color-error)]/40 text-[var(--color-error)] text-[11px] uppercase tracking-wider hover:bg-[var(--color-error)]/20 transition-colors disabled:opacity-40 font-mono focus:outline-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-text)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-bg-card)]";
+  "flex items-center gap-1.5 px-3 py-1.5 rounded-[10px] bg-[var(--color-error)]/10 border border-[var(--color-error)]/40 text-[var(--color-error)] text-[11px] hover:bg-[var(--color-error)]/20 transition-colors duration-150 disabled:opacity-40 focus:outline-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-text)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-bg-card)]";
 
 function resolveClass(variant: PendingButtonVariant, size: PendingButtonSize): string {
   if (size === "sm") {

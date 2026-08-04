@@ -22,9 +22,9 @@ logger = logging.getLogger(__name__)
 class NotebookSessionInternal:
     """Internal-only session view that includes the real access_token.
 
-    NEVER serialize this to JSON or include in any API response.
-    Used only by the gateway proxy for upstream routing and legacy token access.
-    Two distinct read paths off the same DB row:
+    Do not serialize this object to JSON or include it in an API response.
+    Only the gateway proxy uses this object for upstream routing and token access.
+    The database row has two read paths:
     - _to_info() -> NotebookSessionInfo  (FE-facing, access_token=None)
     - get_session_internal() -> NotebookSessionInternal  (proxy-only, real token)
     """
@@ -116,7 +116,9 @@ async def create_session(
     import secrets
 
     now = time.time()
-    token = secrets.token_urlsafe(24)
+    # This is the notebook server's own auth token for the pod this session owns:
+    # injected into the pod and presented upstream by the proxy. 32 bytes.
+    token = secrets.token_urlsafe(32)
     row = GatewayNotebookSession(
         id=str(uuid.uuid4()),
         org_id=org_id,
@@ -126,7 +128,6 @@ async def create_session(
         pod_name=pod_name,
         pod_ip=None,
         pod_ip_internal=None,
-        access_token=None,
         access_token_enc=_encrypt(token),
         status="creating",
         last_ping=now,
@@ -268,30 +269,25 @@ async def _get_internal_access_token(
     session: AsyncSession,
     row: GatewayNotebookSession,
 ) -> str | None:
-    """Return the plaintext token, migrating legacy/plaintext storage in place."""
+    """Return the plaintext token from encrypted storage.
+
+    Store tokens only in encrypted form.
+    Rewrite ciphertext with the primary key when decryption uses the secondary rotation key.
+    """
     encrypted = getattr(row, "access_token_enc", None)
-    if encrypted:
-        token, needs_migration = _decrypt_with_migration(encrypted)
-        if needs_migration or row.access_token:
-            row.access_token_enc = _encrypt(token)
-            row.access_token = None
-            await session.commit()
-        return token
-
-    if not row.access_token:
+    if not encrypted:
         return None
-
-    token = row.access_token
-    row.access_token_enc = _encrypt(token)
-    row.access_token = None
-    await session.commit()
+    token, needs_migration = _decrypt_with_migration(encrypted)
+    if needs_migration:
+        row.access_token_enc = _encrypt(token)
+        await session.commit()
     return token
 
 
 def _to_info(row: GatewayNotebookSession) -> NotebookSessionInfo:
     """FE-facing view of a session row.
 
-    access_token is always None here — the secret never leaves the server.
+    access_token is always None here: the secret never leaves the server.
     notebook_url is the path-only proxy URL (no token, no host, no port); the
     browser authenticates to the proxy with its Clerk JWT directly.
     """

@@ -56,11 +56,86 @@ kubectl apply -f deploy/k8s/gateway-rbac.yaml
 This provisions:
 - `ServiceAccount signalpilot-gateway` in the `signalpilot` namespace.
 - `ClusterRole signalpilot-gateway-namespaces` — namespace create/get/list/patch.
-- `ClusterRole signalpilot-gateway-rbac-provisioner` — roles/rolebindings create/get/patch.
-- Two `ClusterRoleBinding` resources binding the SA to these ClusterRoles.
+- `ClusterRole signalpilot-gateway-notebook-workload` — the notebook workload verbs
+  (pods, pods/exec, Secrets, quotas, limits, netpols). **Permission template only** —
+  it is never the target of a `ClusterRoleBinding`; the gateway binds it into each
+  tenant namespace with a `RoleBinding`, which scopes every verb to that namespace.
+- `ClusterRole signalpilot-gateway-rbac-provisioner` — rolebindings create/get, plus
+  `bind` pinned by `resourceNames` to the one workload ClusterRole above.
+- Two `ClusterRoleBinding` resources binding the SA to the namespaces and provisioner
+  ClusterRoles (never to the workload ClusterRole).
 
-The gateway pod must run as this ServiceAccount. Per-namespace Roles and
-RoleBindings are created lazily by the gateway on first session per org.
+The gateway pod must run as this ServiceAccount. The per-namespace RoleBinding is
+created lazily by the gateway on first session per org, immediately after the
+namespace and **before** any NetworkPolicy/quota/pod/Secret write — everything after
+the namespace depends on the permissions that binding grants.
+
+**SP-SEC-009:** the gateway holds no cluster-wide Secrets, pods, or `pods/exec` verbs,
+and no `roles` create or `escalate`. Apply
+`admission/restrict-rbac-writes-validatingadmissionpolicy.yaml` alongside this file:
+RBAC pins *what* the gateway may bind, that policy pins *where* (namespaces labeled
+`signalpilot.dev/tenant=user` only).
+
+#### Migrating a cluster that ran the pre-SP-SEC-009 RBAC
+
+`roleRef` is immutable, so the existing `rolebinding/signalpilot-gateway-org-binding` in
+every tenant namespace cannot be retargeted from the old per-namespace Role to the
+workload ClusterRole — each one must be deleted and recreated. Use the script; it is
+idempotent, dry-run by default, and verifies the end state:
+
+```bash
+# 1. the new RBAC and the admission policy must be in place FIRST
+kubectl apply -f deploy/k8s/gateway-rbac.yaml
+kubectl apply -f deploy/k8s/gateway-runtime-rbac.yaml           # EC2/off-cluster only
+kubectl apply -f deploy/k8s/admission/restrict-rbac-writes-validatingadmissionpolicy.yaml
+
+# 2. review the plan, then run it
+deploy/k8s/migrate-sp-sec-009.sh                # dry run — prints every deletion
+deploy/k8s/migrate-sp-sec-009.sh --apply
+
+# 3. re-verify at any time (read-only)
+deploy/k8s/migrate-sp-sec-009.sh --verify
+```
+
+The script deletes the legacy `clusterrole`/`clusterrolebinding
+signalpilot-gateway-runtime`, then per tenant namespace deletes
+`signalpilot-gateway-org-binding` **only if its `roleRef` is actually stale** plus the
+superseded `role/signalpilot-gateway-org-role`. The gateway recreates the binding on the
+next session in that namespace (`ensure_org_namespace`); running notebook pods are
+unaffected, but new pod/Secret writes in a namespace 403 until it is recreated. Roll a
+maintenance window if that matters.
+
+> The migration commands previously carried in the `gateway-runtime-rbac.yaml` header were
+> invalid kubectl invocations (`name cannot be provided when a selector is specified`;
+> `a resource cannot be retrieved by name across all namespaces`) and deleted nothing
+> while appearing to succeed. Use the script, not those one-liners.
+
+**Rollback** is documented in the script header and available as
+`migrate-sp-sec-009.sh --rollback`. The forward path is self-healing (the gateway
+recreates what was deleted), so rollback is only needed to restore the *old cluster-wide
+grant*, which re-opens SP-SEC-009 — treat it as break-glass.
+
+#### Validating the SP-SEC-009 rollout
+
+```bash
+deploy/k8s/validate-admission-policies.sh                      # policy unit tests, no cluster
+deploy/k8s/validate-admission-policies.sh --e2e                # + throwaway kind cluster
+deploy/k8s/validate-admission-policies.sh --e2e --with-kyverno # + the Kyverno fallback path
+```
+
+`--e2e` creates its own kind cluster on an isolated kubeconfig and refuses to run unless
+the active context is that cluster, so it cannot touch a real cluster. It asserts that the
+ValidatingAdmissionPolicy's CEL compiles in a real API server, that each rule allows the
+legitimate write and denies each hostile one, that `migrate-sp-sec-009.sh` is idempotent,
+that the gateway can recreate the binding with only its bootstrap grant, and that
+`kubectl auth can-i` shows SP-SEC-009 closed while the gateway still works. Requires
+Docker, `kind`, `kubectl`, the `kyverno` CLI, and `helm` for `--with-kyverno`; set
+`KYVERNO=` / `KIND=` to point at binaries that are not on `PATH`.
+
+Several defects that a YAML-parse check cannot see were found this way, including two
+Kyverno policies that were structurally invalid and therefore silently unenforced. See
+`admission/README.md` → "Validation findings", and note in particular that a default
+Kyverno install **does not protect `kube-system`**.
 
 ### (c) Runtime sandbox (gVisor / Kata)
 
@@ -137,10 +212,11 @@ Set `SP_NOTEBOOK_RUNTIME_CLASS=kata` and install kata-runtime on each node per t
 
 #### RBAC
 
-The gateway needs `get` on `node.k8s.io/runtimeclasses` for the pre-flight check. This is included in `gateway-rbac.yaml` (`ClusterRole signalpilot-gateway-runtimeclass-reader`). Re-apply after upgrading:
+`get`/`list` on `node.k8s.io/runtimeclasses` is granted by `ClusterRole signalpilot-gateway-runtime-bootstrap` in `gateway-runtime-rbac.yaml`. (There is no `signalpilot-gateway-runtimeclass-reader` ClusterRole — that name in earlier revisions of this document was never created. The runtime class is currently validated from `SP_NOTEBOOK_RUNTIME_CLASS` config, not from the API; the grant is kept read-only so re-enabling an API pre-flight needs no RBAC change.) Re-apply after upgrading:
 
 ```bash
 kubectl apply -f deploy/k8s/gateway-rbac.yaml
+kubectl apply -f deploy/k8s/gateway-runtime-rbac.yaml
 ```
 
 ---
@@ -157,6 +233,7 @@ kubectl apply -f deploy/k8s/gateway-rbac.yaml
 | `SP_GATEWAY_NAMESPACE` | `signalpilot` | Namespace where the gateway pod runs. |
 | `SP_GATEWAY_POD_SELECTOR` | `app=signalpilot-gateway` | Single k=v label selector for gateway pods. Used in NetworkPolicy ingress. |
 | `SP_GATEWAY_SERVICE_ACCOUNT` | `signalpilot-gateway` | SA name for per-namespace RoleBinding subjects. |
+| `SP_GATEWAY_RUNTIME_GROUPS` | `signalpilot-gateway-ec2` | **Required when the gateway runs off-cluster** (EC2 authenticating through an EKS access entry). Comma-separated Kubernetes Groups added as subjects of the per-namespace RoleBinding. That identity is a Group, not the ServiceAccount, so without this every pod/Secret write 403s. Leave empty for in-cluster deployments. `system:*` groups are rejected at startup. |
 | `SP_NOTEBOOK_NAMESPACE_PREFIX` | `sp-nb` | Prefix for org namespaces. **Set at bootstrap, never change** (see warning below). |
 | `SP_NOTEBOOK_EGRESS_CIDR` | `52.0.0.0/8` | (Optional) Allow notebook pods to reach this CIDR on port 443 (e.g. S3). **Validator hard-fails on startup if this CIDR contains AWS IMDS (`169.254.169.254` or `fd00:ec2::/32`). `0.0.0.0/0` and `169.254.0.0/16` are rejected.** |
 | `SP_NOTEBOOK_IMAGE` | `your-registry/notebook@sha256:<64-hex>` | Container image for notebook pods. **In cloud mode, must be a digest reference** (`@sha256:<64-hex>`). Floating tags like `:latest` are rejected at startup. Look up the digest with `crane digest <image>` or `docker buildx imagetools inspect <image>`. |
@@ -292,8 +369,18 @@ and runtime controls. Apply them on any multi-tenant cluster:
   even if the gateway is misconfigured.
 - **`restrict-pod-exec-*`** — narrow the gateway's `pods/exec` grant in a way RBAC
   cannot express: only `container=notebook` on pods named `^nb-[0-9a-f]{12}$`. The
-  gateway's `pods/exec` Role is broad by necessity (RBAC can't prefix-match pod
+  gateway's `pods/exec` grant is broad by necessity (RBAC can't prefix-match pod
   names); this policy enforces the pod-name shape and container at admission time.
+- **`restrict-rbac-writes-*`** (SP-SEC-009) — confine the gateway's one retained
+  cluster-wide write capability. Tenant namespaces are created dynamically, so the
+  gateway must be able to create the RoleBinding that grants it workload verbs in the
+  namespace it just made. RBAC pins *what* it may bind (`bind` on clusterroles with
+  `resourceNames`), but cannot pin *where*; this policy requires that binding to sit in
+  a namespace labeled `signalpilot.dev/tenant=user`, carry the fixed name
+  `signalpilot-gateway-org-binding`, name only ServiceAccount/Group subjects, and never
+  appear as a `ClusterRoleBinding`. **Unlike the other two policies it deliberately has
+  no `namespaceSelector`** — scoping it to tenant namespaces would leave exactly the
+  unrelated namespaces (kube-system et al.) it exists to protect unconstrained.
 
 Each control ships as both a `ValidatingAdmissionPolicy` (vanilla k8s 1.30+) and a
 Kyverno variant — apply whichever your cluster supports:
@@ -301,6 +388,7 @@ Kyverno variant — apply whichever your cluster supports:
 ```bash
 kubectl apply -f deploy/k8s/admission/require-gvisor-validatingadmissionpolicy.yaml
 kubectl apply -f deploy/k8s/admission/restrict-pod-exec-validatingadmissionpolicy.yaml
+kubectl apply -f deploy/k8s/admission/restrict-rbac-writes-validatingadmissionpolicy.yaml
 # (or the *-kyverno.yaml variants if you run Kyverno)
 ```
 

@@ -1,4 +1,4 @@
-"""Tests for the notebook reverse proxy — §3.14 of the R2 spec.
+"""Verify the notebook reverse proxy contract.
 
 Covers:
 - Proxy HTTP/WS: header stripping (cookie/authorization/set-cookie/hop-by-hop)
@@ -8,8 +8,8 @@ Covers:
 - Orchestrator: pod CLI --no-token, no SP_ACCESS_TOKEN, fail-fast upstream mode
 - Upstream mode: pod_ip_internal used (not NodePort)
 
-Proxy auth itself (Clerk JWT / local) is covered end-to-end by the live
-run_notebook test; the removed unit cases tested the retired cookie/_init model.
+The live run_notebook test verifies proxy authentication with Clerk JWT and
+local credentials.
 """
 
 from __future__ import annotations
@@ -25,8 +25,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from cryptography.fernet import Fernet
 
-
-# ─── Helpers ─────────────────────────────────────────────────────────────────
+# Helper functions.
 
 
 def _patch_encryption_key(monkeypatch):
@@ -44,12 +43,15 @@ def _make_session_row(
     user_id: str = "user-1",
     status: str = "running",
     pod_ip_internal: str = "10.42.0.5",
-    access_token: str = "secret-token-abc",
+    access_token_enc: bytes | None = None,
 ):
-    """Build a fake GatewayNotebookSession-like object."""
+    """Build a GatewayNotebookSession test double.
+
+    ``access_token_enc`` stores the encrypted access token.
+    """
     from gateway.db.models import GatewayNotebookSession
 
-    row = GatewayNotebookSession(
+    return GatewayNotebookSession(
         id=session_id,
         org_id=org_id,
         user_id=user_id,
@@ -58,15 +60,14 @@ def _make_session_row(
         pod_name="nb-test",
         pod_ip="k3s:30042",
         pod_ip_internal=pod_ip_internal,
-        access_token=access_token,
+        access_token_enc=access_token_enc,
         status=status,
         last_ping=time.time(),
         created_at=time.time(),
     )
-    return row
 
 
-# ─── Cookie helpers ───────────────────────────────────────────────────────────
+# Cookie helper functions.
 
 
 class TestSessionIdPattern:
@@ -110,7 +111,7 @@ class TestSessionIdPattern:
         assert SESSION_ID_PATTERN.match("") is None
 
 
-# ─── HTTP header stripping ────────────────────────────────────────────────────
+# Verify HTTP header filtering.
 
 
 class TestHeaderStripping:
@@ -147,7 +148,7 @@ class TestHeaderStripping:
         assert HOP_BY_HOP_HEADERS.issubset(INBOUND_STRIP_HEADERS)
 
 
-# ─── Store: NotebookSessionInternal ──────────────────────────────────────────
+# Verify NotebookSessionInternal storage.
 
 
 class TestNotebookSessionInternal:
@@ -160,8 +161,7 @@ class TestNotebookSessionInternal:
         from gateway.store.crypto import _encrypt
         from gateway.store.notebook_sessions import get_session_internal
 
-        row = _make_session_row(access_token=None)
-        row.access_token_enc = _encrypt("secret-token-abc")
+        row = _make_session_row(access_token_enc=_encrypt("secret-token-abc"))
         mock_session = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = row
@@ -176,14 +176,21 @@ class TestNotebookSessionInternal:
         mock_session.commit.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_get_session_internal_migrates_legacy_plaintext_token(self, monkeypatch):
+    async def test_get_session_internal_without_ciphertext_returns_no_token(self, monkeypatch):
+        """Verify that missing ciphertext produces no access token.
+
+        A null ``access_token_enc`` value produces ``access_token=None`` and no
+        database write.
+        """
         _patch_encryption_key(monkeypatch)
 
-        from gateway.store.crypto import _decrypt_with_migration
+        from gateway.db.models import GatewayNotebookSession
         from gateway.store.notebook_sessions import get_session_internal
 
-        row = _make_session_row(access_token="legacy-token")
-        assert row.access_token_enc is None
+        # The model does not contain a plaintext access token column.
+        assert not hasattr(GatewayNotebookSession, "access_token")
+
+        row = _make_session_row(access_token_enc=None)
         mock_session = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = row
@@ -194,21 +201,19 @@ class TestNotebookSessionInternal:
         )
 
         assert result is not None
-        assert result.access_token == "legacy-token"
-        assert row.access_token is None
-        assert row.access_token_enc is not None
-        assert b"legacy-token" not in row.access_token_enc
-        token, needs_migration = _decrypt_with_migration(row.access_token_enc)
-        assert token == "legacy-token"
-        assert needs_migration is False
-        mock_session.commit.assert_awaited_once()
+        assert result.access_token is None
+        assert row.access_token_enc is None
+        mock_session.commit.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_to_info_hides_access_token(self):
-        from gateway.db.models import GatewayNotebookSession
+    async def test_to_info_hides_access_token(self, monkeypatch):
+        """The FE-facing view exposes no token even when the row holds one."""
+        _patch_encryption_key(monkeypatch)
+
+        from gateway.store.crypto import _encrypt
         from gateway.store.notebook_sessions import get_session_by_id
 
-        row = _make_session_row()
+        row = _make_session_row(access_token_enc=_encrypt("secret-token-abc"))
         mock_session = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = row
@@ -234,7 +239,7 @@ class TestNotebookSessionInternal:
             mock_session, session_id="test-sess-123", org_id="org-1"
         )
         assert result is not None
-        # Tokenless proxy path — the browser authenticates with its Clerk JWT.
+# The browser uses its Clerk JWT to authenticate the tokenless proxy path.
         assert result.notebook_url == "/notebook/test-sess-123/"
 
     @pytest.mark.asyncio
@@ -252,125 +257,129 @@ class TestNotebookSessionInternal:
         assert result is None
 
 
-# ─── Orchestrator: pod CLI ────────────────────────────────────────────────────
+# Verify the orchestrator pod command.
+
+
+def _manifest(**overrides):
+    from gateway.orchestrator.kubernetes import _pod_manifest
+
+    kwargs = {
+        "pod_name": "nb-test",
+        "namespace": "default",
+        "image": "signalpilot-notebook:latest",
+        "user_id": "user-1",
+        "org_id": "org-1",
+        "project_id": "proj-1",
+        "branch": "main",
+        "gateway_url": "http://localhost:3300",
+        "session_jwt_secret_name": "sp-jwt-nb-test",
+        "session_id": "sess-abc",
+        "access_token": "pod-notebook-token",
+    }
+    kwargs.update(overrides)
+    return _pod_manifest(**kwargs)
 
 
 class TestPodCLI:
-    """kubernetes.py: pod manifest uses --no-token, no SP_ACCESS_TOKEN, --base-url."""
+    """kubernetes.py: pod boots with auth ON, token by file, no SP_ACCESS_TOKEN env."""
 
-    def test_pod_cli_always_uses_no_token(self):
-        from gateway.orchestrator.kubernetes import _pod_manifest
+    def test_pod_cli_never_disables_the_token(self):
+        args = _manifest()["spec"]["containers"][0]["args"]
+        assert "--no-token" not in args
 
-        manifest = _pod_manifest(
-            pod_name="nb-test",
-            namespace="default",
-            image="signalpilot-notebook:latest",
-            user_id="user-1",
-            org_id="org-1",
-            project_id="proj-1",
-            branch="main",
-            gateway_url="http://localhost:3300",
-            session_jwt="test.jwt",
-            session_id="sess-abc",
-            access_token="some-token",
+    def test_pod_cli_passes_token_by_file(self):
+        from gateway.orchestrator.kubernetes import SP_NOTEBOOK_TOKEN_MOUNT_FILE
+
+        args = _manifest()["spec"]["containers"][0]["args"]
+        assert "--token-password-file" in args
+        assert args[args.index("--token-password-file") + 1] == SP_NOTEBOOK_TOKEN_MOUNT_FILE
+        # The token itself must never appear in argv (/proc/*/cmdline is readable).
+        assert "pod-notebook-token" not in " ".join(args)
+
+    def test_pod_manifest_refuses_missing_token(self):
+        with pytest.raises(ValueError, match="without a notebook auth token"):
+            _manifest(access_token=None)
+
+    def test_pod_manifest_refuses_empty_token(self):
+        with pytest.raises(ValueError, match="without a notebook auth token"):
+            _manifest(access_token="")
+
+    def test_init_container_stages_the_token(self):
+        from gateway.orchestrator.kubernetes import (
+            SP_NOTEBOOK_TOKEN_MOUNT_FILE,
+            SP_NOTEBOOK_TOKEN_SECRET_KEY,
         )
-        # R4: command is now ["sh", "-c", "...sentinel shim..."]
-        command = manifest["spec"]["containers"][0]["command"]
-        assert command[0] == "sh"
-        assert command[1] == "-c"
-        cmd_str = command[2]
-        assert "--no-token" in cmd_str
-        assert "--token-password" not in cmd_str
 
-    def test_pod_cli_no_token_when_access_token_none(self):
-        from gateway.orchestrator.kubernetes import _pod_manifest
+        manifest = _manifest()
+        stager = manifest["spec"]["initContainers"][0]["command"][2]
+        assert SP_NOTEBOOK_TOKEN_MOUNT_FILE in stager
 
-        manifest = _pod_manifest(
-            pod_name="nb-test",
-            namespace="default",
-            image="signalpilot-notebook:latest",
-            user_id="user-1",
-            org_id="org-1",
-            project_id=None,
-            branch="main",
-            gateway_url="http://localhost:3300",
-            session_jwt="test.jwt",
-            session_id="sess-xyz",
-            access_token=None,
+        secret_volume = next(
+            v for v in manifest["spec"]["volumes"] if v["name"] == "session-jwt-src"
         )
-        # R4: command is now ["sh", "-c", "...sentinel shim..."]
-        command = manifest["spec"]["containers"][0]["command"]
-        assert command[0] == "sh"
-        assert command[1] == "-c"
-        cmd_str = command[2]
-        assert "--no-token" in cmd_str
-        assert "--token-password" not in cmd_str
+        keys = {item["key"] for item in secret_volume["secret"]["items"]}
+        assert keys == {"session_jwt", SP_NOTEBOOK_TOKEN_SECRET_KEY}
 
     def test_pod_cli_includes_base_url(self):
-        from gateway.orchestrator.kubernetes import _pod_manifest
-
-        manifest = _pod_manifest(
-            pod_name="nb-test",
-            namespace="default",
-            image="signalpilot-notebook:latest",
-            user_id="user-1",
-            org_id="org-1",
-            project_id="proj-1",
-            branch="main",
-            gateway_url="http://localhost:3300",
-            session_jwt="test.jwt",
-            session_id="sess-abc",
-            access_token=None,
-        )
-        # R4: command is ["sh", "-c", "...sentinel shim...exec sp edit ...--base-url /notebook/{sid}..."]
-        command = manifest["spec"]["containers"][0]["command"]
-        assert command[0] == "sh"
-        assert command[1] == "-c"
-        cmd_str = command[2]
-        assert "--base-url" in cmd_str
-        assert "/notebook/sess-abc" in cmd_str
+        args = _manifest()["spec"]["containers"][0]["args"]
+        assert "--base-url" in args
+        assert args[args.index("--base-url") + 1] == "/notebook/sess-abc"
 
     def test_pod_env_no_sp_access_token(self):
-        from gateway.orchestrator.kubernetes import _pod_manifest
-
-        manifest = _pod_manifest(
-            pod_name="nb-test",
-            namespace="default",
-            image="signalpilot-notebook:latest",
-            user_id="user-1",
-            org_id="org-1",
-            project_id="proj-1",
-            branch="main",
-            gateway_url="http://localhost:3300",
-            session_jwt="test.jwt",
-            session_id="sess-abc",
-            access_token="some-token",
-        )
+        manifest = _manifest()
         env_names = {e["name"] for e in manifest["spec"]["containers"][0]["env"]}
         assert "SP_ACCESS_TOKEN" not in env_names
-        assert "SP_SESSION_JWT" in env_names
+        # F-6: the JWT is delivered by file, never via pod env.
+        assert "SP_SESSION_JWT" not in env_names
 
-    def test_pod_env_no_sp_access_token_when_none(self):
-        from gateway.orchestrator.kubernetes import _pod_manifest
-
-        manifest = _pod_manifest(
-            pod_name="nb-test",
-            namespace="default",
-            image="signalpilot-notebook:latest",
-            user_id="user-1",
-            org_id="org-1",
-            project_id=None,
-            branch="main",
-            gateway_url="http://localhost:3300",
-            session_jwt="test.jwt",
-            session_id="sess-abc",
-            access_token=None,
-        )
-        env_names = {e["name"] for e in manifest["spec"]["containers"][0]["env"]}
-        assert "SP_ACCESS_TOKEN" not in env_names
+    def test_token_is_not_in_pod_env(self):
+        manifest = _manifest()
+        env_values = {e.get("value") for e in manifest["spec"]["containers"][0]["env"]}
+        assert "pod-notebook-token" not in env_values
 
 
-# ─── Invalid upstream mode ────────────────────────────────────────────────────
+class TestNetworkPolicyUnchanged:
+    """The token is defense-in-depth; network isolation stays an independent gate."""
+
+    def test_pod_manifest_does_not_opt_out_of_network_policy(self):
+        manifest = _manifest()
+        assert manifest["spec"]["automountServiceAccountToken"] is False
+        assert manifest["spec"]["enableServiceLinks"] is False
+
+    @pytest.mark.asyncio
+    async def test_ensure_namespace_still_applies_network_policy(self, monkeypatch):
+        """ensure_org_namespace is still called with skip_network_policy=False."""
+        monkeypatch.setenv("SP_NOTEBOOK_UPSTREAM_MODE", "pod_ip")
+        monkeypatch.delenv("SP_NOTEBOOK_NETWORK_POLICY", raising=False)
+        import importlib
+        import sys
+
+        sys.modules.pop("gateway.orchestrator.kubernetes", None)
+        k8s_mod = importlib.import_module("gateway.orchestrator.kubernetes")
+
+        captured: dict = {}
+
+        async def _fake_ensure(*_args, **kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr(k8s_mod, "ensure_org_namespace", _fake_ensure)
+        orch = k8s_mod.KubernetesOrchestrator()
+        orch._client = object()
+        orch._core_api = MagicMock()
+        orch._networking_api = MagicMock()
+        orch._rbac_api = MagicMock()
+        orch._namespace_prefix = "sp"
+        orch._gateway_namespace = "signalpilot"
+        orch._gateway_pod_selector = {"app": "signalpilot-gateway"}
+        orch._gateway_port = 3300
+        orch._egress_cidr = "10.0.0.0/16"
+        orch._gateway_service_account = "sp-gateway"
+
+        await orch.ensure_namespace("org-1")
+        assert captured["skip_network_policy"] is False
+
+
+# Verify invalid upstream modes.
 
 
 class TestInvalidUpstreamMode:
@@ -407,7 +416,7 @@ class TestInvalidUpstreamMode:
         assert mod._UPSTREAM_MODE == "nodeport"
 
 
-# ─── NotebookProxy HTTP ───────────────────────────────────────────────────────
+# Verify NotebookProxy HTTP behavior.
 
 
 class TestNotebookProxyHTTP:
@@ -466,7 +475,7 @@ class TestNotebookProxyHTTP:
                 "x-custom": "kept",
             }
         )
-        outbound = _build_outbound_headers(request)
+        outbound = _build_outbound_headers(request, None)
         assert "cookie" not in outbound
         assert "authorization" not in outbound
         assert "x-custom" in outbound
@@ -520,10 +529,50 @@ class TestNotebookProxyHTTP:
                 "upgrade": "websocket",
             }
         )
-        result = _build_outbound_headers(request)
+        result = _build_outbound_headers(request, None)
         assert "connection" not in result
         assert "upgrade" not in result
         assert "x-custom" in result
+
+    def test_caller_authorization_is_replaced_by_the_pod_token(self):
+        """The pod token is applied AFTER the strip, so it survives it."""
+        from gateway.notebook_proxy.proxy import _build_outbound_headers
+
+        request = self._make_request(
+            headers={"authorization": "Bearer clerk-jwt-of-the-browser"}
+        )
+        result = _build_outbound_headers(request, "pod-notebook-token")
+        assert result["authorization"] == "Bearer pod-notebook-token"
+        assert "clerk-jwt" not in str(result)
+
+    def test_ws_handshake_carries_the_pod_token(self):
+        from gateway.notebook_proxy.proxy import _build_outbound_ws_headers
+
+        ws = MagicMock()
+        ws.headers = {
+            "authorization": "Bearer clerk-jwt-of-the-browser",
+            "sec-websocket-protocol": "signalpilot.auth, clerk-jwt-of-the-browser",
+            "x-custom": "kept",
+        }
+        result = dict(_build_outbound_ws_headers(ws, "pod-notebook-token"))
+        assert result["authorization"] == "Bearer pod-notebook-token"
+        assert "sec-websocket-protocol" not in result
+        assert result["x-custom"] == "kept"
+
+    def test_pod_token_is_never_returned_to_the_client(self):
+        """No response path can echo the credential back."""
+        import httpx
+
+        from gateway.notebook_proxy.proxy import _build_inbound_headers
+
+        upstream = httpx.Headers(
+            {
+                "content-type": "text/html",
+                "set-cookie": "session=pod-notebook-token; Path=/",
+            }
+        )
+        result = _build_inbound_headers(upstream)
+        assert "pod-notebook-token" not in str(result)
 
     @pytest.mark.asyncio
     async def test_proxy_502_on_connect_error(self):
@@ -544,7 +593,7 @@ class TestNotebookProxyHTTP:
         assert exc_info.value.status_code == 502
 
 
-# ─── Security headers middleware ──────────────────────────────────────────────
+# Verify security header middleware.
 
 
 class TestSecurityHeadersOnProxyPaths:
@@ -569,9 +618,14 @@ class TestSecurityHeadersOnProxyPaths:
         with TestClient(inner_app, raise_server_exceptions=False) as client:
             return client.get(path)
 
-    def test_proxy_path_sameorigin_xframe(self):
+    def test_proxy_path_omits_xframe_options(self):
+        """Verify that proxy paths contain no X-Frame-Options header.
+
+        The CSP frame-ancestors directive controls framing for notebook paths.
+        X-Frame-Options cannot express the configured cross-origin allowlist.
+        """
         resp = self._build_middleware_response("/notebook/abc/index.html")
-        assert resp.headers.get("x-frame-options") == "SAMEORIGIN"
+        assert resp.headers.get("x-frame-options") is None
 
     def test_non_proxy_path_deny_xframe(self):
         resp = self._build_middleware_response("/api/something")
@@ -583,6 +637,12 @@ class TestSecurityHeadersOnProxyPaths:
         assert "frame-ancestors 'self'" in csp
         # Must NOT contain the full default-src policy
         assert "default-src" not in csp
+
+    def test_proxy_csp_allows_configured_cross_origin_embedder(self, monkeypatch):
+        """Why X-Frame-Options is omitted: the allowlist is cross-origin."""
+        monkeypatch.setenv("SP_ALLOWED_ORIGINS", "https://app.signalpilot.ai")
+        resp = self._build_middleware_response("/notebook/abc/index.html")
+        assert "https://app.signalpilot.ai" in resp.headers.get("content-security-policy", "")
 
     def test_proxy_path_no_cache_control_forced(self):
         """Upstream Cache-Control passes through; no-store not forced."""
@@ -596,7 +656,65 @@ class TestSecurityHeadersOnProxyPaths:
         assert resp.headers.get("cache-control") == "no-store"
 
 
-# ─── Notebook URL shape ────────────────────────────────────────────────────────
+# Verify the notebook URL structure.
+
+
+def _arrange_proxy_session(
+    monkeypatch,
+    *,
+    session_org_id: str | None = "org-1",
+    session_user_id: str = "user-1",
+    caller_user_id: str = "user-1",
+    caller_org_id: str = "org-1",
+    access_token: str = "tok",
+):
+    """Wire resolve_proxy_session's three collaborators and return the connection.
+
+    Stubs the caller identity (resolve_user_id/resolve_org_id), the DB session
+    factory, and the session row, so the test only varies who is calling and
+    which org owns the session.
+    """
+    import contextlib
+
+    import gateway.db.engine as engine_mod
+    import gateway.notebook_proxy.auth as auth_mod
+    import gateway.store.notebook_sessions as ns_mod
+    from gateway.store.notebook_sessions import NotebookSessionInternal
+
+    monkeypatch.delenv("SP_NOTEBOOK_DIRECT_URL", raising=False)
+
+    internal = NotebookSessionInternal(
+        session_id="sess-123",
+        org_id=session_org_id,
+        user_id=session_user_id,
+        status="running",
+        pod_ip_internal="10.42.0.5",
+        access_token=access_token,
+    )
+    monkeypatch.setattr(ns_mod, "get_session_internal", AsyncMock(return_value=internal))
+
+    @contextlib.asynccontextmanager
+    async def _factory():
+        yield AsyncMock()
+
+    monkeypatch.setattr(engine_mod, "get_session_factory", lambda: _factory)
+
+    async def _fake_user(conn):
+        return caller_user_id
+
+    async def _fake_org(conn, uid):
+        return caller_org_id
+
+    monkeypatch.setattr(auth_mod, "resolve_user_id", _fake_user)
+    monkeypatch.setattr(auth_mod, "resolve_org_id", _fake_org)
+
+    connection = MagicMock()
+    connection.scope = {"type": "http"}
+    connection.headers = {}
+    connection.cookies = {}
+    connection.state = MagicMock()
+    connection.state.auth = None
+    return connection
 
 
 class TestProxyUsesInternalIp:
@@ -604,55 +722,126 @@ class TestProxyUsesInternalIp:
 
     @pytest.mark.asyncio
     async def test_upstream_base_uses_pod_ip_internal(self, monkeypatch):
-        import gateway.notebook_proxy.auth as auth_mod
-        import gateway.store.notebook_sessions as ns_mod
-        from gateway.store.notebook_sessions import NotebookSessionInternal
-
-        token = "tok"
-        internal = NotebookSessionInternal(
-            session_id="sess-123",
-            org_id="org-1",
-            user_id="user-1",
-            status="running",
-            pod_ip_internal="10.42.0.5",  # Internal pod IP
-            access_token=token,
-        )
-        monkeypatch.setattr(ns_mod, "get_session_internal", AsyncMock(return_value=internal))
-
-        async def _fake_user(req):
-            return "user-1"
-
-        async def _fake_org(req, uid):
-            return "org-1"
-
-        monkeypatch.setattr(auth_mod, "resolve_user_id", _fake_user)
-        monkeypatch.setattr(auth_mod, "resolve_org_id", _fake_org)
-
-        store = MagicMock()
-        store.session = AsyncMock()
-        request = MagicMock()
-        request.cookies = {"sp_nb_sess-123": token}
-        request.headers = {}
-        request.state = MagicMock()
-        request.state.auth = None
-
         from gateway.notebook_proxy.auth import resolve_proxy_session
 
-        result = await resolve_proxy_session("sess-123", request, store)
+        connection = _arrange_proxy_session(monkeypatch)
+        result = await resolve_proxy_session(connection, "sess-123")
         # Must use internal IP, not any nodeport address
         assert "10.42.0.5" in result.upstream_base
         assert "30" not in result.upstream_base  # NodePort ports are 30000+
 
 
-# ─── H-1/R3: NodePort fully retired — KubernetesOrchestrator only accepts pod_ip ─
+# Verify active organization authorization.
+
+
+class TestProxyActiveOrgAuthorization:
+    """auth.py: the caller's ACTIVE org must own the session, not just the user.
+
+    resolve_proxy_session is the sanctioned RequireScope bypass, so it has to do
+    the whole authorization itself. user_id alone survives an org switch and
+    survives losing membership of the owning org.
+    """
+
+    @pytest.mark.asyncio
+    async def test_same_user_active_in_other_org_is_refused(self, monkeypatch):
+        """Session created in org A; the same user, now active in org B, is out."""
+        from fastapi import HTTPException
+
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+
+        connection = _arrange_proxy_session(
+            monkeypatch, session_org_id="org-a", caller_org_id="org-b"
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await resolve_proxy_session(connection, "sess-123")
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_same_user_active_in_owning_org_is_allowed(self, monkeypatch):
+        """Control for the test above: back in org A the same session resolves."""
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+
+        connection = _arrange_proxy_session(
+            monkeypatch, session_org_id="org-a", caller_org_id="org-a"
+        )
+        result = await resolve_proxy_session(connection, "sess-123")
+        assert result.org_id == "org-a"
+
+    @pytest.mark.asyncio
+    async def test_user_removed_from_owning_org_is_refused(self, monkeypatch):
+        """Verify denial when the JWT does not name organization A as active."""
+        from fastapi import HTTPException
+
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+
+        connection = _arrange_proxy_session(
+            monkeypatch,
+            session_org_id="org-a",
+            caller_org_id="org-personal",
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await resolve_proxy_session(connection, "sess-123")
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_cross_user_same_org_still_refused(self, monkeypatch):
+        """The org check does not weaken the ownership check."""
+        from fastapi import HTTPException
+
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+
+        connection = _arrange_proxy_session(
+            monkeypatch, session_user_id="user-1", caller_user_id="user-2"
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await resolve_proxy_session(connection, "sess-123")
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_session_without_org_is_refused_in_a_real_org(self, monkeypatch):
+        """Verify that a cloud organization cannot access an unscoped session."""
+        from fastapi import HTTPException
+
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+
+        connection = _arrange_proxy_session(
+            monkeypatch, session_org_id=None, caller_org_id="org-a"
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await resolve_proxy_session(connection, "sess-123")
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_local_mode_org_still_resolves(self, monkeypatch):
+        """Local mode: both sides are "local", so the check is a no-op there."""
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+
+        connection = _arrange_proxy_session(
+            monkeypatch, session_org_id="local", caller_org_id="local"
+        )
+        result = await resolve_proxy_session(connection, "sess-123")
+        assert result.org_id == "local"
+
+    @pytest.mark.asyncio
+    async def test_missing_upstream_token_is_503(self, monkeypatch):
+        """Verify that a missing pod credential denies access."""
+        from fastapi import HTTPException
+
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+
+        connection = _arrange_proxy_session(monkeypatch, access_token=None)
+        with pytest.raises(HTTPException) as exc_info:
+            await resolve_proxy_session(connection, "sess-123")
+        assert exc_info.value.status_code == 503
+
+
+# Verify the pod_ip upstream mode.
 
 
 class TestNodePortServiceGating:
-    """R3: NodePort is fully retired from KubernetesOrchestrator.
+    """Verify that KubernetesOrchestrator accepts only pod_ip mode.
 
-    The constructor now refuses any SP_NOTEBOOK_UPSTREAM_MODE other than pod_ip.
-    Services are never created. ResourceQuota services=0 enforces this at the
-    K8s API layer too.
+    The orchestrator does not create services. ResourceQuota sets services to zero.
     """
 
     @pytest.mark.asyncio
@@ -665,7 +854,6 @@ class TestNodePortServiceGating:
         sys.modules.pop("gateway.orchestrator.kubernetes", None)
 
         import importlib
-
         from unittest.mock import patch
 
         mod = importlib.import_module("gateway.orchestrator.kubernetes")
@@ -702,11 +890,7 @@ class TestNodePortServiceGating:
         core_api.create_namespaced_service.assert_not_called()
 
     def test_nodeport_mode_constructor_raises_runtime_error(self, monkeypatch):
-        """R3: KubernetesOrchestrator constructor raises if SP_NOTEBOOK_UPSTREAM_MODE=nodeport.
-
-        NodePort was retired in R3. The constructor now refuses it immediately
-        rather than failing at create_pod — no dead branches remain in the class.
-        """
+        """Verify that the constructor rejects the nodeport upstream mode."""
         import sys
 
         monkeypatch.setenv("SP_NOTEBOOK_UPSTREAM_MODE", "nodeport")
@@ -720,7 +904,7 @@ class TestNodePortServiceGating:
             mod.KubernetesOrchestrator()
 
     def test_nodeport_mode_in_cloud_constructor_raises(self, monkeypatch):
-        """R3: nodeport mode is rejected at constructor time, regardless of deployment mode."""
+        """Verify constructor rejection of nodeport mode in each deployment mode."""
         import sys
 
         monkeypatch.setenv("SP_NOTEBOOK_UPSTREAM_MODE", "nodeport")
@@ -735,11 +919,11 @@ class TestNodePortServiceGating:
             mod.KubernetesOrchestrator()
 
 
-# ─── M-1: User ownership check on session API endpoints ───────────────────────
+# Verify session ownership in API endpoints.
 
 
 class TestSessionOwnershipCheck:
-    """M-1: Same-org peers cannot access each other's sessions."""
+    """Verify that organization peers cannot access another user's session."""
 
     @pytest.mark.asyncio
     async def test_get_session_by_id_cross_user_raises_404(self, monkeypatch):
@@ -809,10 +993,10 @@ class TestSessionOwnershipCheck:
         store.session = AsyncMock()
         store.org_id = "org-1"
         store.user_id = "user-attacker"
-        response = Response()
+        Response()
 
         with pytest.raises(HTTPException) as exc_info:
-            await ns_api_mod.delete_session_by_id("sess-owned", store, response)
+            await ns_api_mod.delete_session_by_id("sess-owned", store)
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
@@ -885,11 +1069,11 @@ class TestSessionOwnershipCheck:
         assert result.id == "sess-mine"
 
 
-# ─── M-2: resolve_proxy_session accepts HTTPConnection (WS-compatible) ─────────
+# Verify HTTPConnection support in resolve_proxy_session.
 
 
 class TestWsQueryValidation:
-    """M-3: WS query string is validated before forwarding."""
+    """Verify WebSocket query validation before forwarding."""
 
     def test_safe_query_accepted(self):
         """A normal query string passes validation."""
@@ -917,7 +1101,7 @@ class TestWsQueryValidation:
 
 
 class TestCspPathGateExact:
-    """M-5: Security headers only apply relaxed CSP to exact /notebook/{seg}/... shape."""
+    """Verify relaxed CSP only for the exact notebook path structure."""
 
     def test_notebook_other_prefix_not_exempt(self):
         """A path like /notebook-other/... must NOT get the relaxed proxy CSP."""
@@ -961,11 +1145,11 @@ class TestCspPathGateExact:
         assert resp.headers.get("x-frame-options") == "DENY"
 
 
-# ─── M-6: Error logs do not leak pod IP ───────────────────────────────────────
+# Verify that error logs exclude pod IP addresses.
 
 
 class TestProxyErrorLogScrubbing:
-    """M-6: Upstream connect errors must not emit warning-level logs with pod IP."""
+    """Verify that upstream connection warnings exclude pod IP addresses."""
 
     @pytest.mark.asyncio
     async def test_connect_error_logged_at_debug_not_warning(self, monkeypatch, caplog):
@@ -1008,11 +1192,11 @@ class TestProxyErrorLogScrubbing:
             assert "10.42.0.5" not in msg, f"Pod IP leaked in warning log: {msg}"
 
 
-# ─── Session ID validation on API endpoints ────────────────────────────────────
+# Verify session identifier validation in API endpoints.
 
 
 class TestSessionIdValidationOnApiEndpoints:
-    """M-4: Session ID charset validation on get/delete/ping endpoints."""
+    """Verify session identifiers on get, delete, and ping endpoints."""
 
     @pytest.mark.asyncio
     async def test_get_session_by_id_invalid_charset_raises_404(self, monkeypatch):
@@ -1063,3 +1247,48 @@ class TestSessionIdValidationOnApiEndpoints:
 
 
 
+
+
+class TestLegacyCollectionPingRemoved:
+    """Verify that the collection ping route rejects POST requests.
+
+    The per-session route requires a session identifier and returns status 404
+    when the caller does not own the session.
+    """
+
+    def _routes(self) -> set[tuple[str, frozenset]]:
+        from gateway.api import notebook_sessions as ns_api_mod
+
+        return {
+            (route.path, frozenset(route.methods))
+            for route in ns_api_mod.router.routes
+        }
+
+    def test_per_session_ping_is_registered(self) -> None:
+        assert (
+            "/api/notebook-sessions/{session_id}/ping",
+            frozenset({"POST"}),
+        ) in self._routes()
+
+    def test_legacy_collection_ping_is_not_registered(self) -> None:
+        paths = {path for path, _ in self._routes()}
+        assert "/api/notebook-sessions/ping" not in paths
+
+    def test_legacy_collection_ping_is_rejected(self) -> None:
+        """Verify that POST to the collection path returns status 405.
+
+        The request does not extend a session lifetime.
+        """
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from gateway.api import notebook_sessions as ns_api_mod
+
+        app = FastAPI()
+        app.include_router(ns_api_mod.router)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        resp = client.post("/api/notebook-sessions/ping")
+
+        assert resp.status_code == 405
+        assert not resp.is_success

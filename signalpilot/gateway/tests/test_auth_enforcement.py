@@ -304,10 +304,25 @@ class TestCredentialExportScopeEscalation:
         )
         assert response.status_code == 403
 
-    def test_export_without_credentials_succeeds_with_write_scope(self, client):
-        """Exporting without credentials is fine at write scope."""
+    def test_export_without_credentials_refused_with_write_scope(self, client):
+        """Export requires an org-admin role even without credentials.
+
+        The manifest still enumerates every connection in the organization, so
+        the route carries OrgAdmin. For an API key that role comes from an
+        explicit "admin" scope, which a write-only key does not have.
+        """
         _set_mode("api_key")
         _set_scopes(["write"])
+        response = client.post(
+            "/api/connections/export",
+            json={"include_credentials": False, "confirm": True},
+        )
+        assert response.status_code == 403
+
+    def test_export_without_credentials_succeeds_with_admin_scope(self, client):
+        """The same call is allowed once the key carries admin scope."""
+        _set_mode("api_key")
+        _set_scopes(["admin", "write"])
         response = client.post(
             "/api/connections/export",
             json={"include_credentials": False, "confirm": True},

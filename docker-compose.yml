@@ -1,23 +1,22 @@
-# SignalPilot — Local Development Stack
+# SignalPilot local development stack.
 #
-# Usage: docker compose up --build
+# Run the following command to start the stack: docker compose up --build
 #
-# Starts: Postgres + Gateway + Notebook + Web + Sandbox
-# No K8s, no .env file, no external dependencies. Works on any OS.
+# The stack starts PostgreSQL, Gateway, Notebook, Web, and Sandbox services.
+# The stack does not require Kubernetes, an .env file, or external services.
 #
-# Services:
-#   - db        (Postgres 17)          localhost:5601
-#   - gateway   (FastAPI backend)      localhost:3300
-#   - notebook  (Notebook kernel)      localhost:2718
-#   - web       (Next.js frontend)     localhost:3200
-#   - sandbox   (gVisor code exec)     internal only
+# The PostgreSQL 17 database uses localhost port 5601.
+# The FastAPI gateway uses localhost port 3300.
+# The notebook kernel uses localhost port 2718.
+# The Next.js frontend uses localhost port 3200.
+# The gVisor sandbox is an internal service.
 #
 # Open http://localhost:3200 to start.
 
 name: signalpilot
 
 services:
-  # ─── Database ──────────────────────────────────────────────────
+  # Database service.
   db:
     image: postgres:17
     environment:
@@ -35,17 +34,23 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # ─── Gateway (API + proxy) ────────────────────────────────────
+  # Gateway API and proxy.
   gateway:
     build:
       context: ./signalpilot/gateway
       dockerfile: ../../Dockerfile.gateway
     ports:
-      - "${SP_GATEWAY_HOST:-0.0.0.0}:${SP_GATEWAY_PORT:-3300}:3300"
+      # The gateway listens on loopback unless SP_GATEWAY_HOST specifies another host.
+      # Local mode grants all scopes to requests without an API key.
+      # Do not expose local mode to a network.
+      - "${SP_GATEWAY_HOST:-127.0.0.1}:${SP_GATEWAY_PORT:-3300}:3300"
     env_file:
       - path: ./.slack.local.env
         required: false
       - path: ./.env
+        required: false
+      # CLAUDE_KEY_1 authenticates evaluation run containers.
+      - path: ./benchmark/.env
         required: false
     environment:
       DATABASE_URL: postgresql+asyncpg://signalpilot:changeme_dev_only@db:5432/signalpilot
@@ -53,9 +58,12 @@ services:
       SP_DEPLOYMENT_MODE: local
       SP_ENCRYPTION_KEY: 5d1aa5ETRcln8vkPWrzDkdfSEuqAua5xcZCWMLMDXmc=
       SP_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:${SP_WEB_PORT:-3200},http://localhost:${SP_GATEWAY_PORT:-3300},http://localhost:${SP_NOTEBOOK_PORT:-2718}
-      # Notebook: direct mode (no K8s)
+      # The notebook uses direct mode without Kubernetes.
       SP_NOTEBOOK_DIRECT_URL: http://notebook:2718
       SP_NOTEBOOK_UPSTREAM_MODE: direct
+      # The proxy sends this value to the shared notebook container with each request.
+      # The notebook writes the value during startup.
+      SP_NOTEBOOK_TOKEN_FILE: /notebook-token/token
       SP_NOTEBOOK_IMAGE: signalpilot-notebook:latest
       SP_NOTEBOOK_NETWORK_POLICY: "false"
       SP_PUBLIC_GATEWAY_URL: http://localhost:${SP_GATEWAY_PORT:-3300}
@@ -65,20 +73,81 @@ services:
       SIGNALPILOT_NOTEBOOK_INTERNAL_URL: http://notebook:2718
       SIGNALPILOT_NOTEBOOK_PUBLIC_URL: http://localhost:${SP_WEB_PORT:-3200}/notebook
       SIGNALPILOT_DELIVERY_MODEL: ${SIGNALPILOT_DELIVERY_MODEL:-claude-sonnet-4-5-20250929}
-      # Sandbox
+      # The following settings configure the sandbox.
       SP_SANDBOX_MANAGER_URL: http://sandbox:8080
       SP_SANDBOX_ENABLED: "true"
-      # Unused in local mode but required by gateway startup
+      # Gateway startup requires this value. Local mode does not use it.
       SP_K8S_HOST: ""
       KUBECONFIG: ""
       SP_K8S_NAMESPACE: default
       SP_GATEWAY_NAMESPACE: signalpilot
       SP_GATEWAY_POD_SELECTOR: "app=signalpilot-gateway"
+      # MinIO simulates S3 for local evaluation uploads.
+      # Mailpit simulates local email delivery.
+      SP_EVAL_UPLOADS_BUCKET: sp-eval-uploads
+      SP_EVAL_UPLOADS_S3_ENDPOINT: http://minio:9000
+      # The browser must reach presigned part URLs without Docker Compose DNS.
+      SP_EVAL_UPLOADS_S3_PUBLIC_ENDPOINT: http://localhost:9000
+      SP_EVAL_UPLOADS_S3_ACCESS_KEY: minioadmin
+      SP_EVAL_UPLOADS_S3_SECRET_KEY: minioadmin
+      SP_EVAL_UPLOADS_NOTIFY_EMAIL: evals@signalpilot.dev
+      SP_EVAL_UPLOADS_SMTP_HOST: mailpit
+      SP_EVAL_UPLOADS_SMTP_PORT: "1025"
+      SP_EVAL_UPLOADS_MAX_MB: "500"
+      # The gateway starts Claude CLI containers for evaluation runs.
+      # The gateway uses the Docker socket to start the containers.
+      # Each container connects to this gateway through MCP.
+      SP_EVAL_RUNNER_IMAGE: sp-eval-runner:latest
+      SP_EVAL_SETUP_IMAGE: sp-eval-setup:latest
+      SP_EVAL_DOCKER_NETWORK: signalpilot_eval_runtime
+      SP_EVAL_MCP_URL: http://gateway:3300/mcp
+      # MinIO stores evaluation transcripts, setup logs, captures, and exports.
+      SP_EVAL_S3_BUCKET: sp-eval-runs
+      SP_EVAL_S3_ENDPOINT: http://minio:9000
+      SP_EVAL_S3_RUNNER_ENDPOINT: http://eval-object-proxy:9000
+      SP_EVAL_S3_ACCESS_KEY: minioadmin
+      SP_EVAL_S3_SECRET_KEY: minioadmin
+      # Mailpit receives local regression notifications. SES receives cloud notifications.
+      SP_EVAL_SMTP_HOST: mailpit
+      SP_EVAL_SMTP_PORT: "1025"
+      # The local branch provider copies the parent PostgreSQL database for each write task.
+      # Create the clean parent database before a write task starts.
+      SP_EVAL_PG_ADMIN_DSN: ${SP_EVAL_PG_ADMIN_DSN:-}
+      SP_EVAL_PG_PARENT_DB: ${SP_EVAL_PG_PARENT_DB:-}
+      # This allowlist prevents MCP DNS rebinding.
+      # Evaluation containers use the gateway network alias.
+      SP_MCP_ALLOWED_HOSTS: gateway
+      SP_EVAL_CLAUDE_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # PipelineProof uses a PAT and a default connection for local verification.
+      # Cloud deployments use GitHub App installation tokens.
+      SP_GITHUB_BOT_TOKEN: ${SP_GITHUB_BOT_TOKEN:-}
+      SP_GITHUB_BOT_CONNECTION: ${SP_GITHUB_BOT_CONNECTION:-}
+      SP_GITHUB_WEBHOOK_SECRET: ${SP_GITHUB_WEBHOOK_SECRET:-}
+      # Setup containers use host paths for bind mounts.
+      # Docker resolves these paths on the host.
+      # SP_EVAL_HOST_ROOT comes from .env.
+      SP_EVAL_PROJECTS_HOST_DIR: ${SP_EVAL_HOST_ROOT:-}/demo-generator/trap-arena/projects
+      SP_EVAL_SETUP_HOST_ROOT: ${SP_EVAL_HOST_ROOT:-}
+      # The /demo-db page creates one Xata branch per workspace.
+      # Each branch uses the shared demonstration warehouse.
+      # The root .env file supplies these values.
+      # The gateway stores the organization XATA_KEY and resolves it for each request.
+      # Workspace connection records do not contain XATA_KEY.
+      XATA_KEY: ${XATA_KEY:-}
+      SP_DEMO_XATA_ORG: ${SP_DEMO_XATA_ORG:-}
+      SP_DEMO_CATALOG: ${SP_DEMO_CATALOG:-}
+      SP_DEMO_XATA_API_URL: ${SP_DEMO_XATA_API_URL:-https://api.xata.tech}
+    group_add:
+      - "0"  # docker socket access (root group inside Docker Desktop VM)
     volumes:
       - signalpilot-data:/data
       - signalpilot-shared:/shared
       - signalpilot-gateway-secrets:/gateway-secrets
       - signalpilot-repos:/repos
+      - signalpilot-notebook-token:/notebook-token:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Local evaluation sets use the trap-arena format and repo_url paths.
+      - ./demo-generator/trap-arena/projects:/eval-projects:ro
     command: >
       sh -c "python3 -m gateway.dev_local_api_key /shared/local_api_key &&
              uvicorn gateway.main:app --host 0.0.0.0 --port 3300"
@@ -89,6 +158,10 @@ services:
         condition: service_healthy
       sandbox:
         condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3300/health', timeout=2).read()"]
       interval: 5s
@@ -96,8 +169,25 @@ services:
       retries: 20
       start_period: 10s
     restart: unless-stopped
+    networks:
+      - default
+      - eval-runtime
 
-  # ─── Notebook Server ──────────────────────────────────────────
+  # Evaluation containers receive presigned project URLs through this read-only proxy.
+  # The eval-runtime network cannot access MinIO.
+  eval-object-proxy:
+    image: nginx:1.27-alpine
+    depends_on:
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./deploy/eval-object-proxy.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - default
+      - eval-runtime
+    restart: unless-stopped
+
+  # Notebook server.
   notebook:
     build:
       context: ./signalpilot/notebook-server
@@ -114,12 +204,16 @@ services:
       - -c
       - |
         export SP_API_KEY=$$(cat /shared/local_api_key 2>/dev/null || echo '')
+        python -m signalpilot._server.local_token /notebook-token/token
         exec python -m signalpilot edit \
           --host 0.0.0.0 --port 2718 --headless \
-          --no-token --no-skew-protection \
+          --token-password-file /notebook-token/token --no-skew-protection \
           --allow-origins http://localhost:${SP_WEB_PORT:-3200},http://localhost:${SP_GATEWAY_PORT:-3300} \
           /workspace
     environment:
+      # Set a notebook authentication token to access port 2718 directly.
+      # The container generates a token during startup when this value is absent.
+      SP_NOTEBOOK_TOKEN: ${SP_NOTEBOOK_TOKEN:-}
       SP_LOG_DIR: /tmp/sp-logs
       SP_LOG_LEVEL: "10"
       SP_GATEWAY_URL: http://gateway:3300
@@ -130,6 +224,10 @@ services:
     volumes:
       - signalpilot-workspace:/workspace
       - signalpilot-shared:/shared:ro
+      # The notebook writes this volume. The gateway mounts it as read-only.
+      # Both containers use user identifier 10001.
+      # This separate volume prevents notebook write access to the gateway local_api_key.
+      - signalpilot-notebook-token:/notebook-token
       - ${CLAUDE_HOST_CONFIG_DIR:-${HOME:-~}/.config/signalpilot/claude-code-docker}:/home/notebook/.claude
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:2718/health"]
@@ -139,13 +237,16 @@ services:
       start_period: 15s
     restart: unless-stopped
 
-  # ─── Web Frontend ─────────────────────────────────────────────
+  # Web frontend.
   web:
     build:
       context: .
       dockerfile: Dockerfile.web
     ports:
-      - "${SP_WEB_HOST:-0.0.0.0}:${SP_WEB_PORT:-3200}:3200"
+      # The web service listens on loopback unless SP_WEB_HOST specifies another host.
+      # Local mode grants all scopes to requests without an API key.
+      # Do not expose local mode to a network.
+      - "${SP_WEB_HOST:-127.0.0.1}:${SP_WEB_PORT:-3200}:3200"
     environment:
       SP_GATEWAY_INTERNAL_URL: http://gateway:3300
     volumes:
@@ -161,7 +262,48 @@ services:
       start_period: 30s
     restart: unless-stopped
 
-  # ─── Sandbox (gVisor code execution) ──────────────────────────
+  # Local evaluation upload services.
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "127.0.0.1:9000:9000"   # S3 API
+      - "127.0.0.1:9001:9001"   # console (minioadmin/minioadmin)
+    volumes:
+      - signalpilot-minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # This service creates the eval-uploads bucket and its seven-day lifecycle rule.
+  # The service exits after it creates the resources.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc mb --ignore-existing local/sp-eval-uploads &&
+        mc mb --ignore-existing local/sp-eval-runs &&
+        mc ilm rule add local/sp-eval-uploads --prefix "uploads/" --expire-days 7 || true
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "127.0.0.1:8025:8025"   # inbox UI
+    restart: unless-stopped
+
+  # gVisor sandbox service.
   sandbox:
     build:
       context: ./sp-sandbox
@@ -182,12 +324,10 @@ services:
       SP_GATEWAY_URL: http://gateway:3300
       SP_MAX_VMS: "10"
     volumes:
-      # Users root (C:\Users, /home, /Users) — sandboxed DuckDB/SQLite translate
-      # host file paths to /host-data/<user>/... (see sandboxed_duckdb.py).
-      # Set SP_HOST_DATA_DIR to your OS users-root to enable querying host
-      # DuckDB/SQLite files (Windows C:/Users, macOS /Users, Linux /home).
-      # When unset it falls back to an empty named volume, so the stack builds
-      # and runs with zero config — host-file access is simply disabled.
+      # Sandboxed DuckDB and SQLite map host file paths to /host-data/<user>.
+      # Supported host roots are C:/Users, /Users, and /home.
+      # Set SP_HOST_DATA_DIR to the host root to enable host file queries.
+      # An empty named volume disables host file access when the variable is absent.
       - ${SP_HOST_DATA_DIR:-signalpilot-hostdata-empty}:/host-data:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
@@ -199,11 +339,16 @@ services:
 
 volumes:
   signalpilot-pg-data:
+  signalpilot-minio-data:
   signalpilot-data:
   signalpilot-shared:
   signalpilot-gateway-secrets:
   signalpilot-repos:
   signalpilot-workspace:
-  # Empty fallback for /host-data when SP_HOST_DATA_DIR is unset (host-file
-  # DuckDB/SQLite access disabled).
+  signalpilot-notebook-token:
+  # This empty volume disables host file access when SP_HOST_DATA_DIR is absent.
   signalpilot-hostdata-empty:
+
+networks:
+  eval-runtime:
+    name: signalpilot_eval_runtime

@@ -1,4 +1,4 @@
-"""Microsoft SQL Server connector — pymssql backed.
+"""Microsoft SQL Server connector: pymssql backed.
 
 Supports SQL Server 2016+, Azure SQL Database, Azure SQL Managed Instance.
 Uses pymssql for synchronous operations wrapped in async context.
@@ -23,10 +23,28 @@ except ImportError:
     HAS_PYMSSQL = False
 
 
+def _decode_extended_property(value: Any) -> str:
+    """Normalise a sys.extended_properties value into text.
+
+    The schema query casts these to NVARCHAR server-side, so pymssql hands back
+    a str. Bytes are still handled defensively: a plain str() on them would
+    yield the literal "b'...'" rather than the comment.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, bytes | bytearray):
+        return bytes(value).decode("utf-8", errors="replace").rstrip("\x00")
+    return str(value)
+
+
 class MSSQLConnector(BaseConnector):
     def __init__(self):
         super().__init__()
         self._conn: pymssql.Connection | None = None
+        # PoolManager hands the same connector to concurrent callers, but a
+        # pymssql connection cannot be multiplexed: interleaved cursors corrupt
+        # each other's state. Serialize every use of the underlying connection.
+        self._conn_lock = asyncio.Lock()
         self._connect_params: dict = {}
         self._login_timeout: int = 15
         # Azure AD / Entra ID auth via access token
@@ -99,7 +117,7 @@ class MSSQLConnector(BaseConnector):
             "charset": "UTF-8",
         }
 
-        # Azure AD auth — acquire token and use as password
+        # Azure AD auth: acquire token and use as password
         if self._azure_ad_auth:
             token = self._acquire_azure_ad_token()
             connect_kwargs["password"] = token
@@ -109,7 +127,7 @@ class MSSQLConnector(BaseConnector):
         # Default to TDS 7.4 (SQL Server 2019+ / Azure SQL)
         connect_kwargs["tds_version"] = "7.4"
 
-        # TLS encryption — from SSL config or URL encrypt=true
+        # TLS encryption: from SSL config or URL encrypt=true
         enable_tls = params.get("encrypt", False)
         if not self._azure_ad_auth:  # Azure AD already sets encryption above
             if self._ssl_config and self._ssl_config.get("enabled"):
@@ -237,7 +255,8 @@ class MSSQLConnector(BaseConnector):
             return list(rows) if rows else []
 
         try:
-            return await self._run_in_thread(_run, effective_timeout, label="SQL Server")
+            async with self._conn_lock:
+                return await self._run_in_thread(_run, effective_timeout, label="SQL Server")
         except pymssql.Error as e:
             raise RuntimeError(f"SQL Server query error: {e}") from e
 
@@ -246,7 +265,6 @@ class MSSQLConnector(BaseConnector):
 
         if self._conn is None:
             raise RuntimeError("Not connected")
-        self._ensure_connected()
 
         # Columns + primary keys from tables AND views
         col_sql = """
@@ -263,8 +281,10 @@ class MSSQLConnector(BaseConnector):
                 c.is_identity,
                 OBJECT_DEFINITION(c.default_object_id) AS column_default,
                 CASE WHEN pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key,
-                ep.value AS column_comment,
-                ep_t.value AS table_comment
+                -- extended_properties.value is sql_variant; cast server-side so the
+                -- driver never has to guess the underlying varchar/nvarchar encoding
+                CAST(ep.value AS NVARCHAR(4000)) AS column_comment,
+                CAST(ep_t.value AS NVARCHAR(4000)) AS table_comment
             FROM sys.objects o
             JOIN sys.schemas s ON o.schema_id = s.schema_id
             JOIN sys.columns c ON o.object_id = c.object_id
@@ -334,7 +354,7 @@ class MSSQLConnector(BaseConnector):
             GROUP BY i.object_id, i.name, i.is_unique, i.type_desc
         """
 
-        # Column statistics — helps Spider2.0 understand selectivity
+        # Column statistics: helps Spider2.0 understand selectivity
         # Uses dm_db_stats_properties for actual distinct counts from auto-stats
         # OUTER APPLY is required because dm_db_stats_properties is a TVF
         stats_sql = """
@@ -367,8 +387,14 @@ class MSSQLConnector(BaseConnector):
                 return [], 0.0
 
         def _fetch_all_sequential() -> tuple:
-            """Run all metadata queries sequentially — pymssql uses a single connection.
-            5 queries (down from 6): cardinality merged into idx_sql via lead_column."""
+            """Run all metadata queries sequentially on the single pymssql connection.
+
+            Run five queries. The index query obtains cardinality through lead_column.
+
+            Run the liveness check in this thread while _conn_lock is held.
+            A check from the caller can conflict with a concurrent query.
+            """
+            self._ensure_connected()
             return (
                 _fetch(col_sql),
                 _fetch(rowcount_sql),
@@ -378,13 +404,15 @@ class MSSQLConnector(BaseConnector):
             )
 
         # Run the synchronous queries in a thread to avoid blocking the event loop
+        async with self._conn_lock:
+            metadata = await asyncio.to_thread(_fetch_all_sequential)
         (
             (rows, _col_ms),
             (rowcount_rows, _rc_ms),
             (fk_rows, _fk_ms),
             (idx_rows, _idx_ms),
             (stat_rows, _stat_ms),
-        ) = await asyncio.to_thread(_fetch_all_sequential)
+        ) = metadata
         await self._audit_sql(col_sql.strip(), len(rows), _col_ms)
         await self._audit_sql(rowcount_sql.strip(), len(rowcount_rows), _rc_ms)
         await self._audit_sql(fk_sql.strip(), len(fk_rows), _fk_ms)
@@ -429,7 +457,7 @@ class MSSQLConnector(BaseConnector):
                 }
             )
 
-        # Build stats map (column → statistics info)
+        # Map each column to its statistics information.
         col_has_stats: set[str] = set()
         col_stat_info: dict[str, dict] = {}
         for r in stat_rows:
@@ -460,7 +488,7 @@ class MSSQLConnector(BaseConnector):
                     "indexes": indexes.get(key, []),
                     "row_count": row_counts.get(key, 0),
                     "size_mb": table_sizes.get(key, 0),
-                    "description": str(row.get("table_comment", "") or ""),
+                    "description": _decode_extended_property(row.get("table_comment")),
                 }
 
             # Build data type string with precision info
@@ -483,7 +511,7 @@ class MSSQLConnector(BaseConnector):
                 "nullable": bool(row["is_nullable"]),
                 "primary_key": bool(row["is_primary_key"]),
                 "default": row.get("column_default"),
-                "comment": str(row.get("column_comment", "") or ""),
+                "comment": _decode_extended_property(row.get("column_comment")),
             }
             if bool(row.get("is_identity")):
                 col_entry["identity"] = True
@@ -500,10 +528,14 @@ class MSSQLConnector(BaseConnector):
 
     async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
-        import time as _time
-
         if self._conn is None or not columns:
             return {}
+        async with self._conn_lock:
+            return await self._sample_values_locked(table, columns, limit)
+
+    async def _sample_values_locked(self, table: str, columns: list[str], limit: int) -> dict[str, list]:
+        import time as _time
+
         self._ensure_connected()
         safe_table = self._quote_table(table)
         try:
@@ -547,12 +579,15 @@ class MSSQLConnector(BaseConnector):
     async def health_check(self) -> bool:
         if self._conn is None:
             return False
-        try:
-            self._ensure_connected()
-            cursor = self._conn.cursor(as_dict=True)
-            cursor.execute("SELECT 1 AS ok")
-            cursor.fetchall()
-            cursor.close()
-            return True
-        except Exception:
-            return False
+        # PoolManager checks health during each acquisition.
+        # Use the connection lock because another caller can hold the connection.
+        async with self._conn_lock:
+            try:
+                self._ensure_connected()
+                cursor = self._conn.cursor(as_dict=True)
+                cursor.execute("SELECT 1 AS ok")
+                cursor.fetchall()
+                cursor.close()
+                return True
+            except Exception:
+                return False

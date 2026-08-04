@@ -1,14 +1,12 @@
-"""
-Schema annotations — Feature #16 from the feature table.
+"""Load schema annotations from YAML sidecar files.
 
-Loads YAML sidecar files with:
 - Table descriptions, owners, sensitivity levels
 - Column descriptions, business definitions
-- PII flags with redaction rules (hash, mask, drop)
+- PII flags with redaction rules (hash, mask, hide)
 - Blocked tables that agents should never query
 
-Annotations are stored alongside dbt models or in SP_DATA_DIR.
-Cache is keyed by (org_id, connection_name) to isolate orgs.
+Store annotations with dbt models or in SP_DATA_DIR.
+Use the organization identifier and connection name as the cache key.
 """
 
 from __future__ import annotations
@@ -36,7 +34,7 @@ class ColumnAnnotation:
     description: str = ""
     business_name: str = ""
     unit: str = ""
-    pii: str | None = None  # hash, mask, drop
+    pii: str | None = None  # hash, mask, hide
     sensitivity: str = "public"  # public, internal, confidential, restricted
     tags: list[str] = field(default_factory=list)
 
@@ -166,7 +164,7 @@ def load_annotations(
             ]
         )
     else:
-        # Cloud mode: per-org path only — flat fallback disabled (fail closed)
+        # Cloud mode: per-org path only: flat fallback disabled (fail closed)
         paths_to_try.extend(
             [
                 data_dir / "annotations" / org_id / f"{connection_name}.yml",
@@ -209,7 +207,7 @@ def invalidate_annotations_cache(
         for k in keys_to_remove:
             del _annotations_cache[k]
     else:
-        # connection_name only — clear all entries with that connection across orgs
+        # connection_name only: clear all entries with that connection across orgs
         keys_to_remove = [k for k in _annotations_cache if k[1] == connection_name]
         for k in keys_to_remove:
             del _annotations_cache[k]
@@ -306,9 +304,9 @@ def _suggest_pii_rule(column_name: str) -> str | None:
     if any(term in name for term in ("address", "street", "zip_code", "postal")):
         return "mask"
     if any(term in name for term in ("password", "passwd", "secret", "token")):
-        return "drop"
+        return "hide"
     if any(term in name for term in ("credit_card", "card_number", "cvv")):
-        return "drop"
+        return "hide"
     if any(term in name for term in ("first_name", "last_name", "full_name", "surname")):
         return "mask"
     if any(term in name for term in ("date_of_birth", "dob", "birth_date")):

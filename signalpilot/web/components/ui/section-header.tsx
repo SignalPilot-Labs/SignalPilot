@@ -16,7 +16,7 @@ export function SectionHeader({
           className={`w-3.5 h-3.5 ${iconColor || "text-[var(--color-text-dim)]"}`}
           strokeWidth={1.5}
         />
-        <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+        <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
           {title}
         </span>
       </div>

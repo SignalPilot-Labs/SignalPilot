@@ -1,4 +1,4 @@
-"""Spider2-DBT benchmark runner — runs directly without Docker.
+"""Run the Spider2-DBT benchmark without Docker.
 
 Uses the Claude Agent SDK with MCP config for SignalPilot integration.
 Intended for use inside a container or machine that already has all deps
@@ -37,7 +37,6 @@ from ..dbt_tools.scanner import (
     check_package_availability,
     classify_sql_models,
     extract_model_columns,
-    scan_yml_models,
 )
 from ..dbt_tools.templates import create_ephemeral_stubs, create_sql_templates
 from ..evaluation.comparator import evaluate
@@ -50,7 +49,7 @@ DBT_BIN = shutil.which("dbt") or "/home/agentuser/.local/bin/dbt"
 _DBT_SYSTEM_PROMPT_TEMPLATE: str = (PROMPTS_DIR / "dbt_local_system.md").read_text()
 
 # Skills are provided by the signalpilot-plugin (installed at user scope).
-# No skill_names needed — the agent discovers them via the plugin.
+# The agent discovers skill names through the plugin.
 
 
 def _snapshot_reference_tables(work_dir: Path, db_path: Path | None) -> None:
@@ -183,27 +182,6 @@ async def run_agent(
     return result["success"]
 
 
-def _auto_scale_max_turns(work_dir: Path, eval_critical_models: set[str], default_turns: int) -> int:
-    """Deprecated: we no longer scale turns by project complexity.
-
-    Turn caps are now a uniform safety ceiling (200) regardless of task size.
-    Validation loops are legitimate work and there is no budget cap either.
-    This function is kept only so that existing callers don't break — it logs
-    the project shape for debugging and returns the caller's default.
-    """
-    yml_models = scan_yml_models(work_dir)
-    complete_sql_models, stub_sql_models = classify_sql_models(work_dir)
-    missing_models_set = yml_models - (complete_sql_models | stub_sql_models)
-    work_count = len(missing_models_set) + len(stub_sql_models)
-    total_sql = len(list(work_dir.rglob("*.sql")))
-    log(
-        f"Project shape: {work_count} model(s) needing work "
-        f"({len(missing_models_set)} missing, {len(stub_sql_models)} stubs, "
-        f"{total_sql} total SQL files) — max_turns={default_turns}"
-    )
-    return default_turns
-
-
 def _run_dbt_selective(work_dir: Path, eval_critical_models: set[str], timeout: int = 120) -> subprocess.CompletedProcess:
     """Run `dbt run --select <model>...` for eval-critical models (no upstream deps)."""
     select_args = (
@@ -325,11 +303,14 @@ def _post_agent_dbt_run(
     eval_critical_models: set[str],
     model: str,
 ) -> None:
-    """Post-agent safety net: run dbt deps + dbt run, dispatch quick-fix agent on failure."""
+    """Run dbt dependencies and models after the agent finishes.
+
+    Dispatch a correction agent when the dbt run fails.
+    """
     t0 = time.monotonic()
     log_separator("Step 4b: Final dbt deps + dbt run (post-agent safety net)")
 
-    # Only run dbt deps if packages.yml exists — otherwise it wipes pre-installed packages!
+    # Run dbt deps only when packages.yml exists.
     if (work_dir / "packages.yml").exists():
         subprocess.run(
             [DBT_BIN, "deps"],
@@ -369,8 +350,8 @@ def _post_agent_dbt_run(
         except Exception as e:
             log(f"Quick-fix agent failed: {e}", "WARN")
 
-    # Best-effort selective run (eval-critical only — do NOT run a full rebuild
-    # as it overwrites pre-existing dimension tables with non-deterministic ordering)
+    # Run only evaluation-critical models.
+    # A complete rebuild can overwrite reference dimension tables.
     if eval_critical_models:
         subprocess.run(
             [DBT_BIN, "run", "--select"] + list(sorted(eval_critical_models)),
@@ -386,7 +367,7 @@ def _run_name_fix_stage(
     eval_critical_models: set[str],
     model: str,
 ) -> None:
-    """If eval-critical tables are missing by name, dispatch a name-fix agent."""
+    """Dispatch a correction agent when evaluation-critical tables are missing."""
     if not eval_critical_models:
         return
 
@@ -441,9 +422,8 @@ def _flush_and_release(work_dir: Path, instance_id: str) -> None:
     time.sleep(2)
 
 
-# ── Async helpers for parallel mode ──────────────────────────────────────────
-# These wrap blocking subprocess calls so they don't stall the event loop when
-# multiple tasks run concurrently under asyncio.gather.
+# Define asynchronous helpers for parallel mode.
+# These helpers prevent blocking subprocess calls from stalling the event loop.
 
 async def _async_subprocess_run(
     args: list[str],
@@ -535,8 +515,8 @@ async def _post_agent_dbt_run_async(
         except Exception as e:
             log(f"Quick-fix agent failed: {e}", "WARN")
 
-    # Best-effort selective run (eval-critical only — do NOT run a full rebuild
-    # as it overwrites pre-existing dimension tables with non-deterministic ordering)
+    # Run only evaluation-critical models.
+    # A complete rebuild can overwrite reference dimension tables.
     if eval_critical_models:
         await _async_subprocess_run(
             [DBT_BIN, "run", "--select"] + list(sorted(eval_critical_models)),
@@ -671,8 +651,6 @@ async def execute_dbt_task(
             register_local_connection(connection_name, str(_db))
         else:
             log(f"No .duckdb files in {work_dir}", "WARN")
-
-        _auto_scale_max_turns(work_dir, eval_critical_models, max_turns)
 
         for w in check_package_availability(work_dir):
             log(w, "WARN")
@@ -809,10 +787,10 @@ def main() -> None:
     log(f"MCP config: {MCP_CONFIG}")
     log(f"Work dir:  {WORK_DIR / instance_id}")
 
-    # ── MCP sanity check ──────────────────────────────────────────────────────
+    # Check MCP availability.
     _mcp_sanity_check()
 
-    # ── Load task ──────────────────────────────────────────────────────────────
+    # Load the task.
     t0 = time.monotonic()
     task = load_task(instance_id)
     instruction: str = task["instruction"]
@@ -821,7 +799,7 @@ def main() -> None:
 
     work_dir = WORK_DIR / instance_id
 
-    # ── Load eval config to identify critical models ───────────────────────────
+    # Load the evaluation configuration and identify critical models.
     eval_config = load_eval_config(instance_id)
     eval_critical_models: set[str] = set()
     if eval_config is not None:
@@ -838,7 +816,7 @@ def main() -> None:
         log(f"No eval config found for '{instance_id}' — treating all models as equal", "WARN")
 
     if not args.skip_agent:
-        # ── Prepare workdir ────────────────────────────────────────────────────
+        # Prepare the working directory.
         t0 = time.monotonic()
         log_separator("Step 1: Prepare workdir")
         if args.no_reset and work_dir.exists():
@@ -847,13 +825,13 @@ def main() -> None:
             work_dir = prepare_workdir(instance_id)
         log(f"Workdir ready in {time.monotonic()-t0:.2f}s")
 
-        # ── Write CLAUDE.md ────────────────────────────────────────────────────
+        # Write CLAUDE.md.
         t0 = time.monotonic()
         log_separator("Step 2: Write CLAUDE.md")
         write_claude_md(work_dir, instance_id, instruction)
         log(f"CLAUDE.md written in {time.monotonic()-t0:.2f}s")
 
-        # ── Register connection ────────────────────────────────────────────────
+        # Register the connection.
         t0 = time.monotonic()
         log_separator("Step 3: Register DuckDB connection")
         _db = find_result_db(work_dir)
@@ -862,10 +840,6 @@ def main() -> None:
         else:
             log(f"No .duckdb files in {work_dir}", "WARN")
         log(f"Connection registered in {time.monotonic()-t0:.2f}s")
-
-        # Still call the helper for its project-shape logging, but it no
-        # longer rewrites max_turns.
-        _auto_scale_max_turns(work_dir, eval_critical_models, max_turns)
 
         for w in check_package_availability(work_dir):
             log(w, "WARN")
@@ -880,7 +854,7 @@ def main() -> None:
 
         _snapshot_reference_tables(work_dir, _db)
 
-        # ── Run agent ──────────────────────────────────────────────────────────
+        # Run the agent.
         t0 = time.monotonic()
         log_separator("Step 4: Run Claude agent")
         try:
@@ -900,7 +874,7 @@ def main() -> None:
 
     _flush_and_release(work_dir, instance_id)
 
-    # ── Evaluate ───────────────────────────────────────────────────────────────
+    # Evaluate the result.
     t0 = time.monotonic()
     log_separator("Step 5: Evaluate against gold standard")
 

@@ -1,10 +1,9 @@
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
 const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 
-// ─── Cloud mode: Clerk token getter ─────────────────────────────────────────
-// Set by auth-context when Clerk is loaded so gateway requests use JWT auth.
-// _clerkReadyPromise lets early requests wait for Clerk to initialize instead
-// of firing without auth and failing with 401.
+// The following code gets Clerk tokens in cloud mode.
+// auth-context sets the token getter after Clerk loads.
+// Early requests wait for Clerk initialization before they use JWT authentication.
 let _clerkGetToken: (() => Promise<string | null>) | null = null;
 let _resolveClerkReady: (() => void) | null = null;
 const _clerkReadyPromise: Promise<void> | null = IS_CLOUD_MODE
@@ -19,18 +18,11 @@ export function setClerkTokenGetter(getter: () => Promise<string | null>) {
   }
 }
 
-// ─── Local mode: auto-fetch local API key ───────────────────────────────────
-// Migration: move from localStorage to sessionStorage (reduces XSS exposure)
-if (typeof window !== "undefined" && !IS_CLOUD_MODE) {
-  const oldKey = localStorage.getItem("sp_api_key");
-  if (oldKey) {
-    sessionStorage.setItem("sp_api_key", oldKey);
-    localStorage.removeItem("sp_api_key");
-  }
-}
-// Cloud mode cleanup: remove any stale localStorage key
+// The following code gets the local API key automatically.
+// sessionStorage contains the key.
+// This storage location reduces exposure to persistent XSS.
+// The browser removes the key when the tab closes.
 if (typeof window !== "undefined" && IS_CLOUD_MODE) {
-  localStorage.removeItem("sp_api_key");
   sessionStorage.removeItem("sp_api_key");
 }
 
@@ -53,8 +45,7 @@ function _fetchLocalKey(): Promise<string | null> {
 function getApiKey(): string | null {
   if (typeof window === "undefined") return null;
   if (IS_CLOUD_MODE) {
-    // Cloud mode uses Clerk JWT, not localStorage keys
-    localStorage.removeItem("sp_api_key");
+    // Cloud mode uses the Clerk JWT, never a stored sp_ key.
     return null;
   }
   const stored = sessionStorage.getItem("sp_api_key");
@@ -71,17 +62,15 @@ export function setApiKey(key: string | null) {
   } else {
     sessionStorage.removeItem("sp_api_key");
   }
-  // Always clean up localStorage regardless
-  localStorage.removeItem("sp_api_key");
 }
 
-// ─── Unified request function ───────────────────────────────────────────────
+// The following function sends API requests.
 
 async function _getAuthHeader(): Promise<string | null> {
-  // Cloud mode: wait for Clerk to initialize, then use JWT
+    // In cloud mode, wait for Clerk initialization and then use the JWT.
   if (IS_CLOUD_MODE) {
     if (_clerkReadyPromise && !_clerkGetToken) {
-      // Wait up to 10s for Clerk to load — avoids firing unauthenticated requests
+      // Wait up to 10 seconds for Clerk to prevent unauthenticated requests.
       await Promise.race([_clerkReadyPromise, new Promise((r) => setTimeout(r, 10_000))]);
     }
     if (_clerkGetToken) {
@@ -90,7 +79,7 @@ async function _getAuthHeader(): Promise<string | null> {
     }
     return null;
   }
-  // Local mode: use sp_ API key
+  // In local mode, use the sp_ API key.
   let apiKey = getApiKey();
   if (!apiKey && _localKeyPromise) {
     apiKey = await _localKeyPromise;
@@ -107,11 +96,12 @@ export async function getAuthHeaders(): Promise<Record<string, string>> {
 }
 
 /**
- * Resolve the raw gateway auth token (no "Bearer " prefix): the Clerk JWT in
- * cloud mode, the sp_ API key in local mode, or null when local-noauth. The
- * notebook proxy authenticates with this exact token — over the Authorization
- * header for HTTP and the Sec-WebSocket-Protocol two-token form for WS — so the
- * embed client is given this as its authToken thunk.
+ * Return the raw gateway authentication token without the Bearer prefix.
+ * Cloud mode returns the Clerk JWT.
+ * Local mode returns the sp_ API key or null when authentication is disabled.
+ * The notebook proxy sends this token in the HTTP Authorization header.
+ * WebSocket requests use the Sec-WebSocket-Protocol two-token format.
+ * The embedded client receives the token through its authToken callback.
  */
 export async function getGatewayAuthToken(): Promise<string | null> {
   const header = await _getAuthHeader();
@@ -132,13 +122,12 @@ export async function request<T>(path: string, options?: RequestInit, _retried =
     ...options,
     headers,
   });
-  // On 401/403, clear stale credentials and retry once
+  // Clear stale credentials after a 401 or 403 response and retry once.
   if ((res.status === 401 || res.status === 403) && !_retried) {
     sessionStorage.removeItem("sp_api_key");
-    localStorage.removeItem("sp_api_key");
     _localKeyPromise = null;
-    // In cloud mode, the Clerk token getter will provide a fresh token on retry
-    // In local mode, re-fetch the local key
+    // In cloud mode, the Clerk token getter provides a fresh token.
+    // In local mode, fetch the local key again.
     if (!IS_CLOUD_MODE) {
       _localKeyPromise = _fetchLocalKey();
       await _localKeyPromise;
@@ -153,12 +142,554 @@ export async function request<T>(path: string, options?: RequestInit, _retried =
   return res.json();
 }
 
-// Settings
+// The following functions support uploads from the /evals/upload page.
+// The gateway creates presigned PUT URLs for each S3 part.
+// The browser uploads parts directly to S3 in parallel.
+// The browser retries each part and then requests upload completion.
+// File data does not pass through the gateway.
+// The part uploads use XHR because fetch does not report upload progress.
+export type EvalUploadResult = { reference_id: string; expires_at: string };
+
+type EvalUploadInitiate = {
+  key: string;
+  upload_id: string;
+  reference_id: string;
+  part_size: number;
+  part_urls: string[];
+};
+
+const PART_CONCURRENCY = 4;
+const PART_RETRIES = 3;
+
+function putPart(
+  url: string,
+  blob: Blob,
+  onBytes: (loaded: number) => void,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", url);
+    xhr.upload.onprogress = (e) => onBytes(e.loaded);
+    xhr.onload = () => {
+      const etag = xhr.getResponseHeader("ETag");
+      if (xhr.status >= 200 && xhr.status < 300 && etag) {
+        onBytes(blob.size);
+        resolve(etag);
+      } else {
+        reject(new Error(`Part upload failed (${xhr.status}${etag ? "" : ", no ETag"})`));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Network error during part upload"));
+    xhr.send(blob);
+  });
+}
+
+async function putPartWithRetry(
+  url: string,
+  blob: Blob,
+  onBytes: (loaded: number) => void,
+): Promise<string> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < PART_RETRIES; attempt++) {
+    try {
+      return await putPart(url, blob, onBytes);
+    } catch (err) {
+      lastErr = err;
+      onBytes(0);
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+    }
+  }
+  throw lastErr;
+}
+
+export async function uploadEval(
+  file: File,
+  notes: string,
+  onProgress?: (pct: number) => void,
+): Promise<EvalUploadResult> {
+  let init: EvalUploadInitiate;
+  try {
+    init = await request<EvalUploadInitiate>("/api/evals/upload/initiate", {
+      method: "POST",
+      body: JSON.stringify({ filename: file.name, size_bytes: file.size, notes }),
+    });
+  } catch (err) {
+    // request() includes the status and body in the error.
+    // Return the status and detail for the page error message.
+    const m = /^(\d{3}): (.*)$/s.exec((err as Error).message ?? "");
+    if (m) {
+      let detail = "";
+      try { detail = (JSON.parse(m[2]) as { detail?: string })?.detail ?? ""; } catch {}
+      throw Object.assign(new Error(detail || m[2]), { status: Number(m[1]) });
+    }
+    throw err;
+  }
+
+  const partCount = init.part_urls.length;
+  const loaded = new Array<number>(partCount).fill(0);
+  const report = () => {
+    if (onProgress) {
+      const total = loaded.reduce((a, b) => a + b, 0);
+      onProgress(Math.min(99, Math.round((total / file.size) * 100)));
+    }
+  };
+
+  const etags = new Array<string>(partCount);
+  let next = 0;
+  try {
+    const worker = async () => {
+      while (next < partCount) {
+        const i = next++;
+        const blob = file.slice(i * init.part_size, Math.min((i + 1) * init.part_size, file.size));
+        etags[i] = await putPartWithRetry(init.part_urls[i], blob, (n) => {
+          loaded[i] = n;
+          report();
+        });
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(PART_CONCURRENCY, partCount) }, worker),
+    );
+  } catch (err) {
+    // Abort the upload when possible.
+    // The bucket lifecycle rule removes incomplete upload data.
+    request("/api/evals/upload/abort", {
+      method: "POST",
+      body: JSON.stringify({ key: init.key, upload_id: init.upload_id }),
+    }).catch(() => {});
+    throw err;
+  }
+
+  const result = await request<EvalUploadResult>("/api/evals/upload/complete", {
+    method: "POST",
+    body: JSON.stringify({
+      key: init.key,
+      upload_id: init.upload_id,
+      parts: etags.map((etag, i) => ({ part_number: i + 1, etag })),
+      notes,
+    }),
+  });
+  if (onProgress) onProgress(100);
+  return result;
+}
+
+// The following types and functions support evaluation runs on the /evals page.
+export type EvalConfig = {
+  enabled?: boolean;
+  runner_image?: string;
+  repo_url: string;
+  model: string;
+  max_tasks: number;
+  prompt_preamble: string;
+  connection: string;
+  autorun_on_knowledge_add: boolean;
+  notify_emails: string[];
+};
+export type EvalGoldCheck = { name: string; value: number; tolerance: number };
+/**
+ * A checks result contains a value and a tolerance.
+ * A model_rebuilt result contains a text description.
+ */
+export type EvalCheckResult = {
+  name: string;
+  passed: boolean;
+  value?: number;
+  tolerance?: number;
+  detail?: string;
+};
+export type EvalGradeExpectation = { name: string; value?: number; tolerance?: number };
+export type EvalGrade = {
+  kind: "checks" | "model_rebuilt";
+  expectations?: EvalGradeExpectation[];
+} & Record<string, unknown>;
+export type EvalCaptureSpec = { tables: string[]; mode: string; sample_rows: number };
+export type EvalCaptureResult = {
+  row_count?: number;
+  grain_unique?: boolean;
+  stored?: string[];
+} & Record<string, unknown>;
+export type EvalCoverageLayer = { total?: number; covered?: number; pct?: number | null };
+export type EvalCoverage = {
+  declared: string[];
+  observed: string[];
+  observed_not_declared: string[];
+  per_task_observed: Record<string, string[]>;
+  models_total: number | null;
+  models_covered?: number;
+  pct: number | null;
+  by_layer?: Record<string, EvalCoverageLayer>;
+  marts_pct?: number | null;
+};
+/** The server reports a sandbox as a name or an object. */
+export type EvalSandboxRef =
+  | string
+  | { name?: string; backend?: string; namespace?: string; started_at?: string }
+  | null;
+export function evalSandboxName(ref: EvalSandboxRef | undefined): string | null {
+  if (!ref) return null;
+  return typeof ref === "string" ? ref : ref.name ?? null;
+}
+export type EvalRunTask = {
+  id: string;
+  title: string;
+  kind: string;
+  task_class: "read" | "write";
+  gt: string;
+  checks: EvalGoldCheck[];
+  grade: EvalGrade | null;
+  covers: string[];
+  builds: string[];
+  capture_spec: EvalCaptureSpec | null;
+  status: "pending" | "running" | "done";
+  verdict: string | null;
+  check_results?: EvalCheckResult[];
+  answer?: string;
+  duration_s?: number;
+  started_at?: string | null;
+  finished_at?: string | null;
+  sandbox?: EvalSandboxRef;
+  branch_name?: string | null;
+  capture_result?: EvalCaptureResult | null;
+  observed_tables?: string[];
+  error?: string | null;
+  position: number;
+};
+export type EvalRunSummary = {
+  total?: number;
+  correct?: number;
+  partial?: number;
+  off?: number;
+  unknown?: number;
+  ungraded?: number;
+  error?: number;
+  setup_failed?: number;
+};
+export type EvalRun = {
+  id: string;
+  status: "preparing" | "running" | "completed" | "failed";
+  trigger: string;
+  created_at: string;
+  finished_at: string | null;
+  doc_ids: string[];
+  doc_titles: string[];
+  repo_url: string;
+  model: string;
+  eval_set_name: string;
+  eval_set_ref: string;
+  project_repo: string;
+  project_ref: string;
+  build_fingerprint: string;
+  kb_doc_ids: string[];
+  summary: EvalRunSummary;
+  progress?: unknown;
+  coverage: EvalCoverage | null;
+  error: string | null;
+  artifact_bytes: number;
+  artifacts_pruned: boolean;
+  traces_pruned: boolean;
+};
+/** The detail route returns tasks. The list route omits tasks. */
+export type EvalRunDetail = EvalRun & { tasks: EvalRunTask[] };
+
+/** Any authenticated user can read availability. Entitlement controls all other evaluation routes. */
+export type EvalAvailability = {
+  enabled: boolean;
+  reason: "ok" | "not_enabled_for_org";
+};
+export const getEvalAvailability = () => request<EvalAvailability>("/api/evals/availability");
+
+export const getEvalConfig = () => request<EvalConfig>("/api/evals/config");
+export const putEvalConfig = (cfg: Omit<EvalConfig, "enabled" | "runner_image">) =>
+  request<EvalConfig>("/api/evals/config", { method: "PUT", body: JSON.stringify(cfg) });
+export const startEvalRun = (docIds: string[], taskIds?: string[]) =>
+  request<EvalRun>("/api/evals/runs", {
+    method: "POST",
+    body: JSON.stringify({ doc_ids: docIds, task_ids: taskIds ?? null }),
+  });
+/** Grade the complete set against the stored knowledge base without document overlays. */
+export const startBaselineEvalRun = () => startEvalRun([]);
+export const listEvalRuns = () => request<{ runs: EvalRun[] }>("/api/evals/runs");
+export const getEvalRun = (runId: string) => request<EvalRunDetail>(`/api/evals/runs/${runId}`);
+
+export type EvalTask = {
+  id: string;
+  class: "read" | "write";
+  kind: string;
+  gt: string;
+  title: string;
+  why: string;
+  prompt: string;
+  doc: string;
+  checks: EvalGoldCheck[];
+  grade: EvalGrade | null;
+  covers: string[];
+  builds: string[];
+  capture: EvalCaptureSpec | null;
+  setup: string;
+  teardown: string;
+};
+export type EvalSetInfo = {
+  name: string;
+  description: string;
+  ref: string;
+  project_repo: string;
+  build_fingerprint: string;
+  setup: Record<string, unknown>;
+  tasks: EvalTask[];
+};
+export const listEvalTasks = () => request<EvalSetInfo>("/api/evals/tasks");
+
+/** Return the setup or teardown log for a write task. */
+export async function getEvalSetupLog(
+  runId: string,
+  taskId: string,
+  phase: "setup" | "teardown",
+): Promise<string> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(
+    `${GATEWAY_URL}/api/evals/runs/${runId}/tasks/${encodeURIComponent(taskId)}/setup/${phase}/log`,
+    { headers },
+  );
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.text();
+}
+
+// The following types and functions support live evaluation sandboxes.
+export type EvalSandbox = {
+  name: string;
+  backend: "kubernetes" | "docker";
+  phase: "pending" | "running" | "succeeded" | "failed" | "unknown";
+  reason: string;
+  message: string;
+  ready: boolean;
+  oom_killed: boolean;
+  restart_count: number;
+  node: string;
+  created_at: string;
+  started_at: string;
+  age_seconds: number | null;
+  run_id: string;
+  task_id: string;
+  task_title: string;
+  task_phase: string;
+};
+export type EvalSandboxInventory = {
+  backend: "kubernetes" | "docker";
+  live: boolean;
+  supports_live_logs: boolean;
+  namespace: string;
+  message: string;
+  sandboxes: EvalSandbox[];
+};
+export type EvalSandboxEvent = {
+  type: string;
+  reason: string;
+  message: string;
+  count: number;
+  first_seen: string;
+  last_seen: string;
+  age_seconds: number | null;
+  source: string;
+};
+export type EvalActiveTask = {
+  task_id: string;
+  title: string;
+  phase: string;
+  started_at: string;
+  sandbox?: EvalSandboxRef;
+};
+export type EvalRunProgress = {
+  run_id: string;
+  status: string;
+  phase: string;
+  done: number;
+  total: number;
+  /** Tasks execute concurrently. Each active entry describes one task. */
+  active: EvalActiveTask[];
+  started_at: string;
+  elapsed_s: number | null;
+  updated_at: string;
+  error: string | null;
+};
+
+export const listEvalSandboxes = () => request<EvalSandboxInventory>("/api/evals/sandboxes");
+export const getEvalSandboxEvents = (name: string) =>
+  request<{ backend: string; supported: boolean; message: string; events: EvalSandboxEvent[] }>(
+    `/api/evals/sandboxes/${encodeURIComponent(name)}/events`,
+  );
+export const getEvalRunProgress = (runId: string) =>
+  request<EvalRunProgress>(`/api/evals/runs/${runId}/progress`);
+
+export type EvalLogEvent =
+  | { type: "open"; sandbox: string; at: number }
+  | { type: "log"; text: string; at: number }
+  | { type: "error"; text: string; at: number }
+  | { type: "heartbeat"; at: number }
+  | { type: "end"; reason: string; at: number };
+
+/**
+ * Stream live output from one evaluation sandbox through SSE over fetch.
+ * Fetch permits authentication headers on the request.
+ * The server ends the stream when the sandbox exits.
+ * The caller decides whether to create another subscription.
+ */
+export function subscribeEvalSandboxLogs(
+  name: string,
+  tail: number,
+  cb: (event: EvalLogEvent) => void,
+): () => void {
+  let aborted = false;
+  const controller = new AbortController();
+
+  (async () => {
+    const authHeader = await _getAuthHeader();
+    if (aborted) return;
+    try {
+      const res = await fetch(
+        `${GATEWAY_URL}/api/evals/sandboxes/${encodeURIComponent(name)}/logs/stream?tail=${tail}`,
+        {
+          headers: {
+            Accept: "text/event-stream",
+            ...(authHeader ? { Authorization: authHeader } : {}),
+          },
+          signal: controller.signal,
+        },
+      );
+      if (!res.ok || !res.body) {
+        cb({ type: "end", reason: `http-${res.status}`, at: Date.now() / 1000 });
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (!aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try { cb(JSON.parse(line.slice(6)) as EvalLogEvent); } catch {}
+        }
+      }
+    } catch {
+      if (!aborted) cb({ type: "end", reason: "disconnected", at: Date.now() / 1000 });
+    }
+  })();
+
+  return () => {
+    aborted = true;
+    controller.abort();
+  };
+}
+
+export async function getEvalTranscript(runId: string, taskId: string): Promise<string> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(
+    `${GATEWAY_URL}/api/evals/runs/${runId}/tasks/${encodeURIComponent(taskId)}/transcript`,
+    { headers },
+  );
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.text();
+}
+
+// The following types and functions support accuracy history and regressions.
+export type EvalAccuracyPoint = {
+  run_id: string;
+  created_at: string;
+  trigger: string;
+  eval_set_name: string;
+  eval_set_ref: string;
+  build_fingerprint: string;
+  tasks_total: number;
+  tasks_passed: number;
+  accuracy_pct: number;
+  coverage_pct: number | null;
+  kb_doc_ids: string[];
+};
+export type EvalRegression = {
+  id: string;
+  run_id: string;
+  created_at: string;
+  baseline_run_ids: string[];
+  baseline_accuracy_pct: number;
+  run_accuracy_pct: number;
+  drop_pct: number;
+  suspected_doc_ids: string[];
+  sole_change: boolean;
+  flipped_tasks: { task_id: string; title: string; verdict: string }[];
+  notified_at: string | null;
+  recipients: string[];
+};
+export const getEvalAccuracy = () =>
+  request<{ history: EvalAccuracyPoint[]; regressions: EvalRegression[] }>("/api/evals/accuracy");
+
+// The following types and functions support run artifacts and exports.
+export type EvalArtifact = { path: string; bytes: number };
+export const listEvalArtifacts = (runId: string) =>
+  request<{ artifacts: EvalArtifact[] }>(`/api/evals/runs/${runId}/artifacts`);
+export const evalArtifactUrl = (runId: string, taskId: string, filename: string) =>
+  `${GATEWAY_URL}/api/evals/runs/${runId}/artifacts/${encodeURIComponent(taskId)}/${encodeURIComponent(filename)}`;
+export const evalExportUrl = (runId: string) => `${GATEWAY_URL}/api/evals/runs/${runId}/export`;
+
+/** Fetch the file with authentication and start a browser download. */
+async function downloadAuthed(url: string, filename: string): Promise<void> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(url, { headers });
+  if (!res.ok) throw new Error(`${res.status}`);
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objectUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(objectUrl);
+}
+export const downloadEvalArtifact = (runId: string, taskId: string, filename: string) =>
+  downloadAuthed(evalArtifactUrl(runId, taskId, filename), filename);
+export const downloadEvalRunExport = (runId: string) =>
+  downloadAuthed(evalExportUrl(runId), `eval-${runId}.zip`);
+
+// The following functions support chat traces on the /chats page.
+export type ChatTraceThread = {
+  thread_id: string;
+  session_id: string;
+  source: string;
+  title: string;
+  status: string;
+  notebook_path: string;
+  created_at: number;
+  updated_at: number;
+  metadata: Record<string, unknown>;
+};
+export type ChatTraceEvent = {
+  idx: number;
+  type: string;
+  role: string | null;
+  content: string;
+  tool_name: string;
+  tool_input: unknown;
+  is_error: boolean;
+  cost_usd: number | null;
+  turn: number;
+  created_at: number;
+};
+export const listChatThreads = (source?: string) =>
+  request<{ threads: ChatTraceThread[] }>(
+    `/api/chat/traces/threads?limit=200${source ? `&source=${encodeURIComponent(source)}` : ""}`,
+  );
+export const getChatThreadEvents = (threadId: string) =>
+  request<{ events: ChatTraceEvent[] }>(`/api/chat/traces/threads/${encodeURIComponent(threadId)}/events`);
+
+// The following functions support settings.
 export const getSettings = () => request<import("./types").GatewaySettings>("/api/settings");
 export const updateSettings = (s: import("./types").GatewaySettings) =>
   request<import("./types").GatewaySettings>("/api/settings", { method: "PUT", body: JSON.stringify(s) });
 
-// Connections
+// The following functions support connections.
 export const getConnections = () => request<import("./types").ConnectionInfo[]>("/api/connections");
 export const createConnection = (c: Record<string, unknown>) =>
   request<import("./types").ConnectionInfo>("/api/connections", { method: "POST", body: JSON.stringify(c) });
@@ -166,6 +697,15 @@ export const updateConnection = (name: string, updates: Record<string, unknown>)
   request<import("./types").ConnectionInfo>(`/api/connections/${name}`, { method: "PUT", body: JSON.stringify(updates) });
 export const deleteConnection = (name: string) =>
   request<void>(`/api/connections/${name}`, { method: "DELETE" });
+
+// The following functions support the /demo-db page.
+export const getDemoConnector = () =>
+  request<import("./types").DemoConnectorStatus>("/api/demo/connector");
+export const createDemoConnector = (demo: string) =>
+  request<import("./types").DemoConnectorCreated>("/api/demo/connector", {
+    method: "POST",
+    body: JSON.stringify({ demo }),
+  });
 export const refreshConnectionSchema = (name: string) =>
   request<{ connection_name: string; table_count: number; message: string; refreshed_at?: number; next_refresh_in?: number | null }>(
     `/api/connections/${name}/schema/refresh`, { method: "POST" }
@@ -237,7 +777,7 @@ export const searchConnectionSchema = (name: string, query: string) =>
     }>;
   }>(`/api/connections/${name}/schema/search?q=${encodeURIComponent(query)}`);
 
-// Column Exploration (ReFoRCE Spider2.0 pattern)
+// The following functions support column exploration.
 export const exploreColumns = (name: string, table: string, columns?: string[], options?: { include_stats?: boolean; include_values?: boolean; value_limit?: number }) =>
   request<{
     table: string;
@@ -265,7 +805,7 @@ export const exploreColumns = (name: string, table: string, columns?: string[], 
     }),
   });
 
-// Column Name Correction
+// The following functions support column name correction.
 export const correctColumns = (name: string, table: string, columns: string[], threshold = 0.5) =>
   request<{
     table: string;
@@ -276,7 +816,7 @@ export const correctColumns = (name: string, table: string, columns: string[], t
     body: JSON.stringify({ table, columns, threshold }),
   });
 
-// Schema Endorsements
+// The following functions support schema endorsements.
 export const getSchemaEndorsements = (name: string) =>
   request<{ endorsed: string[]; hidden: string[]; mode: "all" | "endorsed_only" }>(
     `/api/connections/${name}/schema/endorsements`
@@ -287,7 +827,7 @@ export const setSchemaEndorsements = (name: string, endorsements: { endorsed: st
     { method: "PUT", body: JSON.stringify(endorsements) }
   );
 
-// Connection Export/Import
+// The following functions support connection export and import.
 export const exportConnections = (includeCredentials = false) =>
   request<{
     version: string;
@@ -304,7 +844,7 @@ export const importConnections = (manifest: Record<string, unknown>) =>
     errors: { name: string; error: string }[];
   }>("/api/connections/import", { method: "POST", body: JSON.stringify(manifest) });
 
-// Projects (legacy dbt projects)
+// The following functions support dbt projects.
 export const getProjects = () => request<import("./types").ProjectInfo[]>("/api/projects");
 export const getProject = (name: string) => request<import("./types").ProjectInfo>(`/api/projects/${name}`);
 export const createProject = (p: Record<string, unknown>) =>
@@ -319,7 +859,7 @@ export const discoverDbtCloudProjects = (token: string, account_id: string, host
     body: JSON.stringify({ token, account_id, host }),
   });
 
-// Workspace Projects (S3-backed)
+// The following functions support workspace projects in S3.
 export const getWorkspaceProjects = (status?: string) =>
   request<{ projects: import("./types").WorkspaceProjectInfo[]; total: number }>(
     `/api/workspace-projects${status ? `?status=${status}` : ""}`
@@ -341,7 +881,7 @@ export const updateWorkspaceProject = (id: string, p: Record<string, unknown>) =
 export const deleteWorkspaceProject = (id: string) =>
   request<void>(`/api/workspace-projects/${id}`, { method: "DELETE" });
 
-// Workspace Project Branches
+// The following functions support workspace project branches.
 export const getWorkspaceBranches = (projectId: string) =>
   request<{ branches: import("./types").WorkspaceBranchInfo[] }>(`/api/workspace-projects/${projectId}/branches`);
 export const createWorkspaceBranch = (projectId: string, name: string, fromBranch = "main") =>
@@ -352,7 +892,7 @@ export const createWorkspaceBranch = (projectId: string, name: string, fromBranc
 export const deleteWorkspaceBranch = (projectId: string, branch: string) =>
   request<void>(`/api/workspace-projects/${projectId}/branches/${branch}`, { method: "DELETE" });
 
-// Workspace Project Files (branch-scoped)
+// The following functions support files in a workspace project branch.
 export const getWorkspaceFiles = (projectId: string, branch = "main", prefix?: string) =>
   request<{ project_id: string; branch: string; prefix: string; files: import("./types").WorkspaceFileInfo[] }>(
     `/api/workspace-projects/${projectId}/branches/${branch}/files${prefix ? `?prefix=${prefix}` : ""}`
@@ -368,7 +908,7 @@ export const uploadWorkspaceFile = (projectId: string, branch: string, path: str
 export const deleteWorkspaceFile = (projectId: string, branch: string, path: string) =>
   request<void>(`/api/workspace-projects/${projectId}/branches/${branch}/files/${path}`, { method: "DELETE" });
 
-// User Session
+// The following functions support the user session.
 export const getUserSession = (projectId: string) =>
   request<{ user_id: string; project_id: string; active_branch: string; updated_at: number }>(
     `/api/workspace-projects/${projectId}/user-session`
@@ -378,7 +918,7 @@ export const switchBranch = (projectId: string, branch: string) =>
     `/api/workspace-projects/${projectId}/user-session`, { method: "PUT", body: JSON.stringify({ branch }) }
   );
 
-// API Keys (org-scoped)
+// The following functions support organization API keys.
 export const getApiKeys = () =>
   request<{ id: string; name: string; prefix: string; scopes: string[]; created_at: string; last_used_at: string | null }[]>("/api/keys");
 export const createApiKey = (name: string, scopes: string[]) =>
@@ -389,7 +929,7 @@ export const createApiKey = (name: string, scopes: string[]) =>
 export const deleteApiKey = (keyId: string) =>
   request<void>(`/api/keys/${keyId}`, { method: "DELETE" });
 
-// Sandboxes
+// The following functions support sandboxes.
 export const getSandboxes = () => request<import("./types").SandboxInfo[]>("/api/sandboxes");
 export const createSandbox = (s: Record<string, unknown>) =>
   request<import("./types").SandboxInfo>("/api/sandboxes", { method: "POST", body: JSON.stringify(s) });
@@ -402,13 +942,13 @@ export const executeSandbox = (id: string, code: string, timeout = 30) =>
     body: JSON.stringify({ code, timeout }),
   });
 
-// Audit
+// The following functions support audit records.
 export const getAudit = (params?: Record<string, string | number>) => {
   const qs = params ? "?" + new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)])).toString() : "";
   return request<{ entries: import("./types").AuditEntry[]; total: number }>(`/api/audit${qs}`);
 };
 
-// Audit export
+// The following functions support audit record exports.
 export function getAuditExportUrl(format: "json" | "csv" = "json", eventType?: string, connectionName?: string): string {
   const params = new URLSearchParams({ format });
   if (eventType) params.set("event_type", eventType);
@@ -416,7 +956,7 @@ export function getAuditExportUrl(format: "json" | "csv" = "json", eventType?: s
   return `${GATEWAY_URL}/api/audit/export?${params}`;
 }
 
-// Query
+// The following functions support queries.
 export const executeQuery = (connection_name: string, sql: string, row_limit = 1000) =>
   request<{
     rows: Record<string, unknown>[];
@@ -429,7 +969,7 @@ export const executeQuery = (connection_name: string, sql: string, row_limit = 1
     body: JSON.stringify({ connection_name, sql, row_limit }),
   });
 
-// Budget
+// The following functions support budgets.
 export const getBudgets = () =>
   request<{ sessions: Record<string, unknown>[]; total_spent_usd: number }>("/api/budget");
 export const createBudget = (session_id: string, budget_usd: number) =>
@@ -440,9 +980,9 @@ export const createBudget = (session_id: string, budget_usd: number) =>
 export const getBudget = (session_id: string) =>
   request<Record<string, unknown>>(`/api/budget/${session_id}`);
 
-// Notebook Sessions
-// access_token is intentionally absent: the gateway issues an HttpOnly cookie
-// at /_init and never surfaces the token to frontend JavaScript.
+// The following functions support notebook sessions.
+// The gateway issues an HttpOnly cookie at /_init.
+// The access_token field is absent from frontend JavaScript.
 export type NotebookSession = {
   id: string;
   status: string;
@@ -466,8 +1006,10 @@ export const getNotebookSession = () =>
 export const deleteNotebookSession = () =>
   request<void>("/api/notebook-sessions", { method: "DELETE" });
 
-export const pingNotebookSession = () =>
-  request<void>("/api/notebook-sessions/ping", { method: "POST" });
+export const pingNotebookSession = (sessionId: string) =>
+  request<void>(`/api/notebook-sessions/${encodeURIComponent(sessionId)}/ping`, {
+    method: "POST",
+  });
 
 export type AnalysisTrail = {
   id: string;
@@ -498,7 +1040,7 @@ export const resolveAnalysisTrail = (params: { session_id?: string; file?: strin
   return request<AnalysisTrail>(`/api/analysis-trails/resolve?${qs.toString()}`);
 };
 
-// GitHub App
+// The following functions support the GitHub App.
 export const getGitHubInstallUrl = () =>
   request<{ install_url: string }>("/api/github/install-url");
 
@@ -534,10 +1076,10 @@ export const getGitHubRepoLinks = (projectId?: string) =>
 export const getGitCredentials = (projectId: string) =>
   request<GitCredentials>(`/api/github/credentials/${projectId}`);
 
-// Health
+// The following function returns gateway health.
 export const getHealth = () => request<Record<string, unknown>>("/health");
 
-// Plan & Usage
+// The following functions support plan limits and usage.
 export interface PlanUsage {
   tier: string;
   limits: {
@@ -562,7 +1104,7 @@ export interface PlanUsage {
 }
 export const getPlan = () => request<PlanUsage>("/api/plan");
 
-// Connection Health
+// The following functions support connection health.
 export const getConnectionsHealth = () =>
   request<{ connections: import("./types").ConnectionHealthStats[] }>("/api/connections/health");
 export const getConnectionHealth = (name: string) =>
@@ -570,7 +1112,7 @@ export const getConnectionHealth = (name: string) =>
 export const getConnectionHealthHistory = (name: string, window: number = 3600, bucket: number = 60) =>
   request<{ connection_name: string; window_seconds: number; bucket_seconds: number; buckets: { timestamp: number; avg_latency_ms: number | null; max_latency_ms: number | null; successes: number; failures: number; total: number }[] }>(`/api/connections/${name}/health/history?window=${window}&bucket=${bucket}`);
 
-// Cache
+// The following functions support the query and schema caches.
 export const getCacheStats = () =>
   request<{ entries: number; max_entries: number; ttl_seconds: number; hits: number; misses: number; hit_rate: number }>("/api/cache/stats");
 export const invalidateCache = (connection_name?: string) =>
@@ -579,7 +1121,7 @@ export const invalidateCache = (connection_name?: string) =>
     { method: "POST" },
   );
 
-// PII Detection
+// The following function detects PII.
 export const detectPII = (name: string) =>
   request<{
     connection_name: string;
@@ -588,7 +1130,7 @@ export const detectPII = (name: string) =>
     detections: Record<string, Record<string, string>>;
   }>(`/api/connections/${name}/detect-pii`, { method: "POST" });
 
-// PII Redaction Config
+// The following functions configure PII redaction.
 export const getPIIConfig = (name: string) =>
   request<{ enabled: boolean; rules: Record<string, string> }>(`/api/connections/${name}/pii`);
 export const setPIIConfig = (name: string, config: { enabled: boolean; rules: Record<string, string> }) =>
@@ -596,7 +1138,7 @@ export const setPIIConfig = (name: string, config: { enabled: boolean; rules: Re
 export const detectAndSavePII = (name: string) =>
   request<{ connection_name: string; columns_flagged: number; rules: Record<string, string>; enabled: boolean }>(`/api/connections/${name}/detect-and-save-pii`, { method: "POST" });
 
-// BYOK Key Management
+// The following functions manage BYOK keys.
 export type BYOKKey = { id: string; org_id: string; key_alias: string; provider_type: string; provider_config: Record<string, unknown> | null; status: string; created_at: number; revoked_at: number | null };
 export type BYOKStatus = { total: number; byok: number; managed: number; status: "none" | "partial" | "complete" };
 export const listBYOKKeys = () => request<BYOKKey[]>("/api/byok/keys");
@@ -608,13 +1150,13 @@ export const getBYOKStatus = () => request<BYOKStatus>("/api/byok/status");
 export const migrateToBYOK = (keyId: string) => request<{ migrated: number; failed: number; errors: string[] }>("/api/byok/migrate", { method: "POST", body: JSON.stringify({ key_id: keyId }) });
 export const revertToManaged = () => request<{ migrated: number; failed: number; errors: string[] }>("/api/byok/revert", { method: "POST" });
 
-// Schema Cache
+// The following function clears the schema cache.
 export const getSchemaCache = () =>
   request<{ cached_connections: number; total_entries: number; ttl_seconds: number }>("/api/schema-cache/stats");
 export const invalidateSchemaCache = (name?: string) =>
   request<{ invalidated: number }>(`/api/schema-cache/invalidate${name ? `?connection_name=${encodeURIComponent(name)}` : ""}`, { method: "POST" });
 
-// Schema Warmup (parallel across all connections)
+// The following function warms schemas for all connections in parallel.
 export const warmupSchemas = () =>
   request<{
     warmed: number;
@@ -624,13 +1166,13 @@ export const warmupSchemas = () =>
     duration_ms: number;
   }>("/api/connections/schema/warmup", { method: "POST" });
 
-// Connection URL Validation
+// The following function validates a connection URL.
 export const validateConnectionUrl = (connection_string: string, db_type: string) =>
   request<{ valid: boolean; parsed?: Record<string, unknown>; warnings?: string[]; error?: string }>(
     "/api/connections/validate-url", { method: "POST", body: JSON.stringify({ connection_string, db_type }) }
   );
 
-// Pre-save Connection Test (HEX pattern: test before saving)
+// The following function tests a connection before save.
 export const testCredentials = (payload: Record<string, unknown>) =>
   request<{
     status: string;
@@ -639,14 +1181,14 @@ export const testCredentials = (payload: Record<string, unknown>) =>
     total_duration_ms?: number;
   }>("/api/connections/test-credentials", { method: "POST", body: JSON.stringify(payload) });
 
-// Parse Connection URL into credential fields (HEX paste-and-parse pattern)
+// The following function parses a connection URL into credential fields.
 export const parseConnectionUrl = (url: string, db_type?: string) =>
   request<Record<string, string | number | boolean>>(
     "/api/connections/parse-url",
     { method: "POST", body: JSON.stringify({ url, db_type }) },
   );
 
-// Connector Capabilities
+// The following function returns connector capabilities.
 export const getConnectorCapabilities = (dbType?: string) =>
   request<{
     tier_1?: { db_type: string; tier: number; label: string; feature_score: number }[];
@@ -664,21 +1206,21 @@ export const getConnectionCapabilities = (name: string) =>
     configured: Record<string, boolean>;
   }>(`/api/connections/${name}/capabilities`);
 
-// Network info (IP whitelist helper)
+// The following function returns network information for IP allowlists.
 export const getNetworkInfo = () =>
   request<{
     hostname: string; local_ips: string[]; public_ip: string | null;
     whitelist_instructions: Record<string, string>;
   }>("/api/network/info");
 
-// Connection diagnostics (DNS, TCP, TLS, auth)
+// The following function returns DNS, TCP, TLS, and authentication diagnostics.
 export const diagnoseConnection = (name: string) =>
   request<{
     host: string; port: number;
     diagnostics: { check: string; status: string; message: string; hint?: string; duration_ms: number }[];
   }>(`/api/connections/${name}/diagnose`, { method: "POST" });
 
-// Semantic Model (HEX-style inline schema editing)
+// The following functions support semantic model editing.
 export const getSemanticModel = (name: string) =>
   request<{
     tables: Record<string, { description: string; columns: Record<string, { description?: string; business_name?: string; unit?: string }> }>;
@@ -698,7 +1240,7 @@ export const generateSemanticModel = (name: string) =>
     generated: { tables_with_descriptions: number; joins_added: number; glossary_terms_added: number };
   }>(`/api/connections/${name}/semantic-model/generate`, { method: "POST" });
 
-// Schema Diff
+// The following function returns schema differences.
 export const getConnectionSchemaDiff = (name: string) =>
   request<{
     connection_name: string; has_cached: boolean; table_count: number;
@@ -706,7 +1248,7 @@ export const getConnectionSchemaDiff = (name: string) =>
     message?: string;
   }>(`/api/connections/${name}/schema/diff`);
 
-// Schema DDL (Spider2.0 optimized format)
+// The following function returns schema DDL in the Spider 2.0 format.
 export const getConnectionSchemaDDL = (name: string, maxTables = 50) =>
   request<{
     connection_name: string; format: string; table_count: number;
@@ -721,7 +1263,7 @@ export const getConnectionSchemaLink = (name: string, question: string, format =
     scores?: Record<string, number>; tables?: Record<string, unknown>;
   }>(`/api/connections/${name}/schema/link?question=${encodeURIComponent(question)}&format=${format}&max_tables=${maxTables}`);
 
-// File Browser (for local DuckDB/SQLite — browses host filesystem via sandbox manager)
+// The following functions browse local DuckDB and SQLite files through the sandbox manager.
 export const browseFiles = (path?: string, pattern = "*.duckdb") => {
   const params = new URLSearchParams({ pattern });
   if (path) params.set("path", path);
@@ -733,8 +1275,8 @@ export const browseFiles = (path?: string, pattern = "*.duckdb") => {
   }>(`/api/files/browse?${params}`);
 };
 
-// Knowledge Base
-import type { KnowledgeDoc, KnowledgeEdit, KnowledgeUsage } from "./types";
+// The following functions support the knowledge base.
+import type { KnowledgeDoc, KnowledgeEdit, KnowledgeUsage, RetrievalStats } from "./types";
 import type { GitHubInstallation, GitHubRepo, GitHubRepoLink, GitCredentials } from "./types";
 
 export const listKnowledge = (params?: { scope?: string; scope_ref?: string; category?: string; status?: string }) => {
@@ -744,6 +1286,8 @@ export const listKnowledge = (params?: { scope?: string; scope_ref?: string; cat
   return request<KnowledgeDoc[]>(`/api/knowledge${qs ? `?${qs}` : ""}`);
 };
 export const getKnowledgeUsage = () => request<KnowledgeUsage>("/api/knowledge/usage");
+export const getKnowledgeRetrievals = (sinceDays = 30) =>
+  request<RetrievalStats>(`/api/knowledge/retrievals?since_days=${sinceDays}`);
 export const getKnowledgeDoc = (id: string) => request<KnowledgeDoc>(`/api/knowledge/${id}`);
 export const createKnowledgeDoc = (payload: {
   scope: KnowledgeDoc["scope"];
@@ -762,7 +1306,7 @@ export const approveKnowledgeDoc = (id: string) =>
 export const listKnowledgeEdits = (id: string, limit = 20) =>
   request<KnowledgeEdit[]>(`/api/knowledge/${id}/edits?limit=${limit}`);
 
-// Reports (rendered HTML)
+// The following functions support rendered HTML reports.
 import type { Report, ReportSummary } from "./types";
 
 export const listReports = (params?: { scope_ref?: string }) => {
@@ -775,7 +1319,7 @@ export const createReport = (payload: { title: string; html: string; scope_ref?:
 export const deleteReport = (id: string) =>
   request<void>(`/api/reports/${id}`, { method: "DELETE" });
 
-// Notion Integrations
+// The following functions support Notion integrations.
 export type NotionIntegration = { id: string; name: string; search_page_ids: string[]; report_parent_page_id: string | null; status: string; created_at: number; org_id: string | null };
 export type NotionOAuthInstallationConfig = {
   parent_page_id: string | null;
@@ -852,7 +1396,7 @@ export const provisionNotionOAuthInstallation = (installationId: string, payload
 export const deleteNotionOAuthInstallation = (installationId: string) =>
   request<void>(`/api/integrations/notion/oauth/${installationId}`, { method: "DELETE" });
 
-// Slack Integrations
+// The following functions support Slack integrations.
 export type SlackOAuthInstallationConfig = {
   enabled: boolean;
   default_project_id: string | null;
@@ -896,17 +1440,17 @@ export const provisionSlackOAuthInstallation = (installationId: string, payload:
 export const deleteSlackOAuthInstallation = (installationId: string) =>
   request<void>(`/api/integrations/slack/oauth/${installationId}`, { method: "DELETE" });
 
-// Metrics SSE (uses fetch instead of EventSource so we can send auth headers)
+// The metrics stream uses fetch because EventSource does not support authentication headers.
 export function subscribeMetrics(cb: (data: import("./types").MetricsSnapshot) => void): () => void {
   let aborted = false;
   const controller = new AbortController();
 
   (async () => {
-    // Retry loop: wait for auth to be ready, then connect
+    // Wait for authentication before each connection attempt.
     for (let attempt = 0; attempt < 10 && !aborted; attempt++) {
       const authHeader = await _getAuthHeader();
       if (!authHeader) {
-        // Auth not ready yet (Clerk still loading) — wait and retry
+        // Wait and retry while Clerk loads.
         await new Promise((r) => setTimeout(r, 1000));
         continue;
       }
@@ -917,7 +1461,7 @@ export function subscribeMetrics(cb: (data: import("./types").MetricsSnapshot) =
           signal: controller.signal,
         });
         if (res.status === 401 || res.status === 403) {
-          // Token may have expired or wasn't ready — retry
+          // Retry when the token is expired or unavailable.
           await new Promise((r) => setTimeout(r, 2000));
           continue;
         }

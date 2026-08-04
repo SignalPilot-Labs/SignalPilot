@@ -43,11 +43,11 @@ export function TeamStep({ onTeamCreated }: TeamStepProps) {
             className="w-4 h-4 text-[var(--color-text-dim)]"
             strokeWidth={1.5}
           />
-          <h2 className="text-lg font-light text-[var(--color-text)] tracking-wider">
+          <h2 className="text-lg font-semibold text-[var(--color-text)] tracking-[-0.01em]">
             name your team
           </h2>
         </div>
-        <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+        <p className="text-[12px] text-[var(--color-text-dim)] leading-relaxed">
           you can invite people later. solo? use your name or make something up.
         </p>
       </div>
@@ -56,7 +56,7 @@ export function TeamStep({ onTeamCreated }: TeamStepProps) {
         <div>
           <label
             htmlFor="team-name"
-            className="block text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] mb-1.5"
+            className="block text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em] mb-1.5"
           >
             team name
           </label>
@@ -68,14 +68,14 @@ export function TeamStep({ onTeamCreated }: TeamStepProps) {
             placeholder="e.g. acme corp, solo ops, my workspace"
             autoFocus
             disabled={loading}
-            className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-[13px] text-[var(--color-text)] font-mono tracking-wide focus:outline-none focus:border-[var(--color-border-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-text)] focus-visible:border-[var(--color-text)] disabled:opacity-50"
+            className="w-full px-3 py-2 rounded-[10px] bg-[var(--color-bg-input)] border border-[var(--color-border)] text-[13px] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-border-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-text)] focus-visible:border-[var(--color-text)] disabled:opacity-50"
           />
         </div>
 
         {error && (
           <p
             role="alert"
-            className="text-[12px] text-[var(--color-error)] tracking-wider"
+            className="text-[12px] text-[var(--color-error)]"
           >
             {error}
           </p>

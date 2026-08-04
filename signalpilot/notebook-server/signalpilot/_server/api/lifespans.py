@@ -96,7 +96,7 @@ async def logging(app: Starlette) -> AsyncIterator[None]:
         file = workspace.single_file()
         print_startup(
             file_name=file.name if file else None,
-            url=_startup_url(state),
+            url=_startup_url(state, include_token=not state.headless),
             run=manager.mode == SessionMode.RUN,
             new=workspace.get_unique_file_key() == NEW_FILE,
             network=state.host == "0.0.0.0",
@@ -106,7 +106,7 @@ async def logging(app: Starlette) -> AsyncIterator[None]:
         print_experimental_features(state.config_manager.get_config())
 
         if mcp_server_enabled:
-            mcp_url = _mcp_startup_url(state)
+            mcp_url = _mcp_startup_url(state, include_token=not state.headless)
             server_token = None
             if skew_protection_enabled:
                 server_token = str(state.session_manager.skew_protection_token)
@@ -241,7 +241,7 @@ def _pretty_host(host: str, port: int) -> str:
     return host
 
 
-def _startup_url(state: AppStateBase) -> str:
+def _startup_url(state: AppStateBase, include_token: bool = True) -> str:
     host = state.host.strip(
         "[]"
     )  # normalize: remove brackets if user passed [addr]
@@ -265,12 +265,12 @@ def _startup_url(state: AppStateBase) -> str:
     elif port == 443:
         url = f"https://{url_host}{state.base_url}"
 
-    if AuthToken.is_empty(state.session_manager.auth_token):
+    if AuthToken.is_empty(state.session_manager.auth_token) or not include_token:
         return url
     return f"{url}?access_token={state.session_manager.auth_token!s}"
 
 
-def _mcp_startup_url(state: AppStateBase) -> str:
+def _mcp_startup_url(state: AppStateBase, include_token: bool = True) -> str:
     host = state.host.strip(
         "[]"
     )  # normalize: remove brackets if user passed [addr]
@@ -294,6 +294,6 @@ def _mcp_startup_url(state: AppStateBase) -> str:
         url = f"https://{url_host}{base_url}{full_mcp_path}"
 
     # Add access token if not empty
-    if AuthToken.is_empty(state.session_manager.auth_token):
+    if AuthToken.is_empty(state.session_manager.auth_token) or not include_token:
         return url
     return f"{url}?access_token={state.session_manager.auth_token!s}"

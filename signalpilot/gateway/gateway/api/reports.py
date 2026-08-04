@@ -53,7 +53,7 @@ async def update_report(report_id: uuid.UUID, payload: ReportUpdate, store: Stor
         raise HTTPException(status_code=413, detail=str(exc)) from exc
 
 
-@router.delete("/reports/{report_id}", status_code=204, dependencies=[RequireScope("admin")])
+@router.delete("/reports/{report_id}", status_code=204, response_model=None, dependencies=[RequireScope("admin")])
 async def delete_report(report_id: uuid.UUID, store: StoreD):
     """Permanently delete a report (admin only)."""
     deleted = await store.delete_report(str(report_id))

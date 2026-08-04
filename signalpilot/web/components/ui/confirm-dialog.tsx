@@ -52,7 +52,7 @@ export function ConfirmDialog({
       onKeyDown={handleKeyDown}
     >
       <div
-        className="w-[360px] bg-[var(--color-bg-card)] border border-[var(--color-border)] shadow-2xl animate-scale-in"
+        className="w-[360px] rounded-[14px] overflow-hidden bg-[var(--color-bg-card)] border border-[var(--color-border)] shadow-2xl animate-scale-in"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -71,14 +71,14 @@ export function ConfirmDialog({
               </>
             )}
           </svg>
-          <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+          <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
             {title}
           </span>
         </div>
 
         {/* Body */}
         <div className="px-5 py-4">
-          <p className="text-xs text-[var(--color-text-muted)] tracking-wider leading-relaxed">
+          <p className="text-xs text-[var(--color-text-muted)] leading-relaxed">
             {message}
           </p>
           {body ? <div className="mt-3">{body}</div> : null}
@@ -88,14 +88,14 @@ export function ConfirmDialog({
         <div className="px-5 py-3 border-t border-[var(--color-border)] flex items-center justify-end gap-2">
           <button
             onClick={onCancel}
-            className="px-4 py-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider uppercase"
+            className="px-4 py-2 rounded-[10px] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors duration-150"
           >
             {cancelLabel}
           </button>
           <button
             ref={confirmRef}
             onClick={onConfirm}
-            className={`px-4 py-2 text-[12px] font-medium tracking-wider uppercase transition-all ${
+            className={`px-4 py-2 rounded-[10px] text-[12px] font-medium transition-opacity duration-150 ${
               isDanger
                 ? "bg-[var(--color-error)] text-white hover:opacity-90"
                 : "bg-[var(--color-text)] text-[var(--color-bg)] hover:opacity-90"

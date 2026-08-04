@@ -1,6 +1,6 @@
 """Store-layer tests for the Knowledge Base module.
 
-All tests use mocked SQLAlchemy sessions — no live DB required.
+All tests use mocked SQLAlchemy sessions. no live DB required.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ def _make_doc_row(
     org_id: str = "test-org",
     scope: str = "org",
     scope_ref: str | None = None,
-    category: str = "conventions",
+    category: str = "rules",
     title: str = "test-doc",
     body: str = "hello world",
     status: str = "active",
@@ -84,7 +84,7 @@ def _make_settings(override: int | None = None):
 
 
 class TestKnowledgeGovernance:
-    """Tests for governance helpers — no DB required."""
+    """Tests for governance helpers. no DB required."""
 
     def test_check_doc_size_passes_under_limit(self):
         check_doc_size(MAX_DOC_BYTES - 1)  # No exception
@@ -112,7 +112,7 @@ class TestKnowledgeGovernance:
     def test_check_org_storage_accounts_for_old_bytes(self):
         limits = _make_limits(storage_mb=2)  # 2 MB cap
         # current=1.5MB, replacing 800KB with 900KB: projected = 1.5MB - 800KB + 900KB = ~1.6MB < 2MB
-        check_org_storage(1_500_000, 900_000, 800_000, limits)  # within cap — no exception
+        check_org_storage(1_500_000, 900_000, 800_000, limits)  # within cap. no exception
 
 
 class TestDocSizeCap:
@@ -153,7 +153,7 @@ class TestApproveKnowledgeDoc:
         session.commit = AsyncMock()
         session.refresh = AsyncMock()
 
-        doc = await approve_knowledge_doc(session, org_id="test-org", doc_id=row.id, user_id="user1")
+        await approve_knowledge_doc(session, org_id="test-org", doc_id=row.id, user_id="user1")
         assert row.status == "active"
 
     @pytest.mark.asyncio
@@ -275,15 +275,15 @@ class TestPlanLimitsTiersUpdated:
 
 
 class TestKnowledgeDocCreateValidation:
-    def test_valid_org_conventions(self):
+    def test_valid_org_rules(self):
         doc = KnowledgeDocCreate(
             scope=KnowledgeScope.org,
             scope_ref=None,
-            category=KnowledgeCategory.conventions,
-            title="my-conventions",
+            category=KnowledgeCategory.rules,
+            title="my-rules",
             body="content",
         )
-        assert doc.title == "my-conventions"
+        assert doc.title == "my-rules"
 
     def test_invalid_slug_title_rejected(self):
         import pydantic
@@ -292,7 +292,7 @@ class TestKnowledgeDocCreateValidation:
             KnowledgeDocCreate(
                 scope=KnowledgeScope.org,
                 scope_ref=None,
-                category=KnowledgeCategory.conventions,
+                category=KnowledgeCategory.rules,
                 title="Invalid Title!",
                 body="content",
             )
@@ -304,7 +304,7 @@ class TestKnowledgeDocCreateValidation:
             KnowledgeDocCreate(
                 scope=KnowledgeScope.org,
                 scope_ref=None,
-                category=KnowledgeCategory.quirks,  # quirks only for connection
+                category=KnowledgeCategory.troubleshooting,  # not permitted at org scope
                 title="wrong-cat",
                 body="content",
             )
@@ -316,7 +316,7 @@ class TestKnowledgeDocCreateValidation:
             KnowledgeDocCreate(
                 scope=KnowledgeScope.project,
                 scope_ref=None,
-                category=KnowledgeCategory.conventions,
+                category=KnowledgeCategory.rules,
                 title="my-doc",
                 body="content",
             )
@@ -328,7 +328,7 @@ class TestKnowledgeDocCreateValidation:
             KnowledgeDocCreate(
                 scope=KnowledgeScope.org,
                 scope_ref="some-ref",
-                category=KnowledgeCategory.conventions,
+                category=KnowledgeCategory.rules,
                 title="my-doc",
                 body="content",
             )
@@ -395,11 +395,11 @@ def _make_insert_session(existing_bytes: int = 0) -> AsyncMock:
     row.org_id = "test-org"
     row.scope = "org"
     row.scope_ref = None
-    row.category = "conventions"
+    row.category = "rules"
     row.title = "test-doc"
     row.body = "content"
     row.status = "active"
-    row.bytes = len("content".encode("utf-8"))
+    row.bytes = len(b"content")
     row.view_count = 0
     row.created_at = time.time()
     row.updated_at = time.time()
@@ -437,7 +437,7 @@ class TestAgentProposalCloudGating:
         payload = KnowledgeDocCreate(
             scope=KnowledgeScope.org,
             scope_ref=None,
-            category=KnowledgeCategory.conventions,
+            category=KnowledgeCategory.rules,
             title="test-doc",
             body="content",
         )
@@ -472,7 +472,7 @@ class TestAgentProposalCloudGating:
         payload = KnowledgeDocCreate(
             scope=KnowledgeScope.org,
             scope_ref=None,
-            category=KnowledgeCategory.conventions,
+            category=KnowledgeCategory.rules,
             title="test-doc",
             body="content",
         )
@@ -524,7 +524,7 @@ class TestAgentProposalCloudGating:
         payload = KnowledgeDocCreate(
             scope=KnowledgeScope.org,
             scope_ref=None,
-            category=KnowledgeCategory.conventions,
+            category=KnowledgeCategory.rules,
             title=existing.title,
             body="new content",
         )
@@ -573,7 +573,7 @@ class TestAgentProposalCloudGating:
         payload = KnowledgeDocCreate(
             scope=KnowledgeScope.org,
             scope_ref=None,
-            category=KnowledgeCategory.conventions,
+            category=KnowledgeCategory.rules,
             title=existing.title,
             body="new content",
         )
@@ -592,7 +592,13 @@ class TestAgentProposalCloudGating:
         assert existing.status == "active"
 
     @pytest.mark.asyncio
-    async def test_upsert_update_revives_archived_doc(self, monkeypatch):
+    async def test_upsert_update_leaves_archived_doc_archived(self, monkeypatch):
+        """An overwrite must not resurrect a tombstoned doc.
+
+        Archived is a tombstone: reviving it on upsert let a guessed
+        (scope, scope_ref, category, title) key silently bring back deleted
+        knowledge via overwrite=True. Unarchiving is now explicit only.
+        """
         """Editing an archived doc (local mode) revives it to active, not hidden."""
         monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
 
@@ -622,7 +628,7 @@ class TestAgentProposalCloudGating:
         payload = KnowledgeDocCreate(
             scope=KnowledgeScope.org,
             scope_ref=None,
-            category=KnowledgeCategory.conventions,
+            category=KnowledgeCategory.rules,
             title=existing.title,
             body="new content",
         )
@@ -638,5 +644,5 @@ class TestAgentProposalCloudGating:
             limits=limits,
             settings=settings,
         )
-        assert existing.status == "active"
+        assert existing.status == "archived"
         assert existing.body == "new content"

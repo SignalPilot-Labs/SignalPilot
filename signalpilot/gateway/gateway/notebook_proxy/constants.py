@@ -41,8 +41,8 @@ HOP_BY_HOP_HEADERS: frozenset[str] = frozenset(
 # Headers stripped from outbound (gateway → pod) requests.
 # In addition to HOP_BY_HOP_HEADERS, Cookie and Authorization are stripped:
 # - Cookie: forwarding Cookie would leak the Clerk __session cookie into pod logs.
-# - Authorization: the caller's Clerk bearer JWT must never reach the pod
-#   (the pod runs --no-token; the gateway proxy is the sole auth gate).
+# - Authorization: the caller's Clerk bearer JWT must never reach the pod. The proxy
+#   re-sets Authorization AFTER this strip, to the pod's own auth token.
 # - sec-websocket-protocol: carries our auth sentinel + JWT; must not reach the pod.
 # Host is also not forwarded (let httpx synthesize it from the URL).
 OUTBOUND_STRIP_HEADERS: frozenset[str] = HOP_BY_HOP_HEADERS | frozenset({
@@ -55,3 +55,8 @@ OUTBOUND_STRIP_HEADERS: frozenset[str] = HOP_BY_HOP_HEADERS | frozenset({
 # Set-Cookie is stripped to prevent the notebook server's own session cookie from
 # colliding with the gateway origin.
 INBOUND_STRIP_HEADERS: frozenset[str] = HOP_BY_HOP_HEADERS | frozenset({"set-cookie"})
+
+# Local/compose only: where the notebook container persists its self-generated auth
+# token. Cloud pods get a per-pod token off the session row instead, so this is never
+# consulted there. SP_NOTEBOOK_TOKEN (env) takes precedence over the file.
+LOCAL_NOTEBOOK_TOKEN_FILE = "/notebook-token/token"

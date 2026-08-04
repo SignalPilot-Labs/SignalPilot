@@ -41,7 +41,7 @@ class ApiKeyRecord(BaseModel):
 
     id: str
     name: str
-    prefix: str  # e.g. "sp_a1b2" — first 7 chars for display
+    prefix: str  # e.g. "sp_a1b2": first 7 chars for display
     key_hash: str  # SHA-256 hex digest of the full raw key
     scopes: list[str]
     created_at: str  # ISO 8601
@@ -49,10 +49,16 @@ class ApiKeyRecord(BaseModel):
     expires_at: str | None = None
     user_id: str = "local"
     org_id: str = "local"
+    # Eval binding (server-side; never client-supplied). A key carrying an
+    # eval_run_id may act only as that run/task, pinned to eval_connection.
+    eval_run_id: str | None = None
+    eval_task_id: str | None = None
+    eval_connection: str | None = None
+    eval_doc_ids: list[str] | None = None
 
 
 class ApiKeyResponse(BaseModel):
-    """Returned to clients — never includes hash."""
+    """Returned to clients: never includes hash."""
 
     id: str
     name: str
@@ -64,6 +70,6 @@ class ApiKeyResponse(BaseModel):
 
 
 class ApiKeyCreatedResponse(ApiKeyResponse):
-    """Returned only on creation — includes the raw key once."""
+    """Returned only on creation: includes the raw key once."""
 
     raw_key: str

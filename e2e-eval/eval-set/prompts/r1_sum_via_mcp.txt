@@ -1,0 +1,2 @@
+What is the total order amount?
+[[e2e:mcp=query_database:{"connection_name":"evalwh_conn","sql":"SELECT sum(amount) AS total FROM marts.fct_orders"}]]

@@ -20,7 +20,7 @@ from gateway.store.projects import (
     delete_project,
 )
 
-# ── Fixtures ───────────────────────────────────────────────────────────────────
+# Define test fixtures.
 
 
 @pytest_asyncio.fixture
@@ -57,7 +57,7 @@ def _make_proj(name: str) -> ProjectCreate:
     return ProjectCreate(name=name, connection_name="conn", source="new")
 
 
-# ── Tests ──────────────────────────────────────────────────────────────────────
+# Run the following tests.
 
 
 class TestProjectOrgIsolation:
@@ -78,7 +78,7 @@ class TestProjectOrgIsolation:
         assert dir_a.exists()
 
     def test_create_refuses_existing_dir(self, data_dir, dummy_connection):
-        """Pre-existing non-empty dir causes ValueError — no silent overwrite."""
+        """Pre-existing non-empty dir causes ValueError. no silent overwrite."""
         org_id = "test-org"
         pre = _org_projects_root(org_id) / "myproj"
         pre.mkdir(parents=True)
@@ -141,61 +141,30 @@ class TestProjectOrgIsolation:
         assert external_dir.exists()
 
     @pytest.mark.asyncio
-    async def test_migrate_unambiguous_legacy_dir_moves_on_delete(self, data_dir, db_session):
-        """Legacy DATA_DIR/projects/<name> is migrated to org-keyed path on delete."""
-        legacy_dir = data_dir / "projects" / "legacy-proj"
-        legacy_dir.mkdir(parents=True)
-        (legacy_dir / "profiles.yml").write_text("target: dev")
+    async def test_old_layout_dir_is_refused_not_migrated(self, data_dir, db_session):
+        """Verify that deletion rejects a project outside the organization directory.
+
+        Deletion does not move the directory. Deletion does not remove a path
+        outside the organization root.
+        """
+        old_layout_dir = data_dir / "projects" / "old-proj"
+        old_layout_dir.mkdir(parents=True)
+        (old_layout_dir / "profiles.yml").write_text("target: dev")
 
         row = GatewayProject(
             id=str(uuid.uuid4()),
             org_id="org-z",
-            name="legacy-proj",
+            name="old-proj",
             connection_name="conn",
-            project_dir=str(legacy_dir),
+            project_dir=str(old_layout_dir),
             storage="managed",
         )
         db_session.add(row)
         await db_session.commit()
 
-        result = await delete_project(db_session, org_id="org-z", name="legacy-proj")
+        with pytest.raises(ValueError, match="outside org root"):
+            await delete_project(db_session, org_id="org-z", name="old-proj")
 
-        assert result is True
-        # Legacy dir should be gone (migrated then rmtree'd).
-        assert not legacy_dir.exists()
-        # New org-keyed path should also be gone (rmtree'd after migration).
-        new_dir = _org_projects_root("org-z") / "legacy-proj"
-        assert not new_dir.exists()
-
-    @pytest.mark.asyncio
-    async def test_migrate_ambiguous_legacy_dir_raises(self, data_dir, db_session):
-        """Two rows in different orgs sharing a legacy dir raise; dir and rows untouched."""
-        legacy_dir = data_dir / "projects" / "shared-proj"
-        legacy_dir.mkdir(parents=True)
-        (legacy_dir / "dbt_project.yml").write_text("name: shared")
-
-        row_a = GatewayProject(
-            id=str(uuid.uuid4()),
-            org_id="org-alpha",
-            name="shared-proj",
-            connection_name="conn",
-            project_dir=str(legacy_dir),
-            storage="managed",
-        )
-        row_b = GatewayProject(
-            id=str(uuid.uuid4()),
-            org_id="org-beta",
-            name="shared-proj",
-            connection_name="conn",
-            project_dir=str(legacy_dir),
-            storage="managed",
-        )
-        db_session.add(row_a)
-        db_session.add(row_b)
-        await db_session.commit()
-
-        with pytest.raises(ValueError, match="shared by multiple orgs"):
-            await delete_project(db_session, org_id="org-alpha", name="shared-proj")
-
-        # On-disk dir untouched.
-        assert legacy_dir.exists()
+        # On-disk dir untouched, and nothing was moved into the org root.
+        assert old_layout_dir.exists()
+        assert not (_org_projects_root("org-z") / "old-proj").exists()

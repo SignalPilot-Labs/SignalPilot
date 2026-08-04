@@ -13,7 +13,7 @@ export interface IconButtonProps
 }
 
 const BASE =
-  "p-1.5 transition-colors focus:outline-none focus-visible:outline-none " +
+  "p-1.5 rounded-[6px] transition-colors duration-150 focus:outline-none focus-visible:outline-none " +
   "focus-visible:ring-1 focus-visible:ring-[var(--color-text)] " +
   "focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-bg-card)] " +
   "disabled:opacity-50 disabled:cursor-not-allowed";

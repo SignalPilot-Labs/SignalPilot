@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock
 
@@ -375,6 +376,7 @@ async def test_ensure_notion_session_marks_error_on_pod_spawn_failure(monkeypatc
     monkeypatch.setattr(session_service.ns, "delete_stopped", AsyncMock())
     monkeypatch.setattr(session_service.ns, "create_session", AsyncMock(return_value=created))
     monkeypatch.setattr(session_service.ns, "update_session_status", AsyncMock())
+    monkeypatch.setattr(session_service.ns, "get_session_internal", AsyncMock(return_value=_internal()))
     monkeypatch.setattr(
         session_service.org_secrets_store,
         "resolve_anthropic_key",
@@ -397,6 +399,40 @@ async def test_ensure_notion_session_marks_error_on_pod_spawn_failure(monkeypatc
     orch.delete_pod.assert_awaited_once_with(
         session_service.pod_name_for("org-1", "user-1"),
         org_id="org-1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_pod_is_not_created_when_no_notebook_token_was_minted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Absent token must fail the session, never degrade to a tokenless pod."""
+    monkeypatch.delenv("SP_NOTEBOOK_DIRECT_URL", raising=False)
+    created = _info()
+
+    orch = AsyncMock()
+    orch._core_api = object()
+    orch._ensure_client = AsyncMock()
+    orch.ensure_namespace.return_value = "sp-nb-org-1"
+
+    monkeypatch.setattr(session_service.ns, "get_active_session", AsyncMock(return_value=None))
+    monkeypatch.setattr(session_service.ns, "delete_stopped", AsyncMock())
+    monkeypatch.setattr(session_service.ns, "create_session", AsyncMock(return_value=created))
+    monkeypatch.setattr(session_service.ns, "update_session_status", AsyncMock())
+    monkeypatch.setattr(
+        session_service.ns,
+        "get_session_internal",
+        AsyncMock(return_value=replace(_internal(), access_token=None)),
+    )
+    monkeypatch.setattr(session_service, "_get_orchestrator", AsyncMock(return_value=orch))
+    monkeypatch.setattr(session_service, "get_k8s_settings", lambda: _settings())
+
+    with pytest.raises(session_service.NotebookSessionError, match="without a notebook auth token"):
+        await session_service.ensure_notion_notebook_session(AsyncMock(), "org-1", "user-1")
+
+    orch.create_pod.assert_not_awaited()
+    session_service.ns.update_session_status.assert_awaited_once_with(
+        ANY, session_id="session-1", org_id="org-1", status="error"
     )
 
 

@@ -113,6 +113,7 @@ signalpilot/notebook-server/signalpilot/_server/ai/.chat_sessions.json
 
 # Internal documents are not part of the public repository.
 # This group includes roadmaps, work logs, and customer, vendor, or operational material.
+/docs/
 signalpilot/web/clerk-research.md
 signalpilot/web/enterprise-connections.md
 signalpilot/web/UX.md
@@ -157,6 +158,7 @@ dh.json
 eval-format.md
 eval-upload-spec.md
 knowledge-base-redesign.md
+/.vscode/settings.json
 .codex/
 codex-signalpilot-plugin/
 redshift_export/

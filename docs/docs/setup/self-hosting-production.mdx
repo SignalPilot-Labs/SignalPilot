@@ -14,14 +14,11 @@ If you want a fully managed gateway, see [SignalPilot Cloud](/docs/setup/cloud).
 
 ## 1. Overview
 
-A production deployment has three parts:
+A production deployment has two parts:
 
 - **Gateway** — a single container (FastAPI + MCP server) that owns connections,
   governance, audit logs, auth, and the Kubernetes orchestrator. It runs behind a
   TLS reverse proxy.
-- **Chat worker** — the same gateway image with the `signalpilot-chat-worker`
-  command. It owns durable standalone-chat execution leases and must share the
-  gateway database, notebook JWT secret, and orchestrator configuration.
 - **Notebook pods** — short-lived, per-session pods scheduled by the gateway onto a
   Kubernetes cluster. Each runs user/agent-supplied code, so each is wrapped in a
   kernel-level sandbox (gVisor `runsc`) and isolated by per-org namespace plus
@@ -170,17 +167,6 @@ Example Caddy config:
 not the internal container address. The gateway must run as the
 `signalpilot-gateway` ServiceAccount (see RBAC in section 6) so it can manage org
 namespaces and notebook pods.
-
-When enabling standalone data chat, set `SP_FEATURE_STANDALONE_CHAT=true` on both
-processes and start the durable worker from the same digest-pinned gateway image:
-
-<MiniCopyBlock
-  label="run standalone chat worker"
-  code={`docker run -d --name signalpilot-chat-worker \\\n+  --env-file /secure/signalpilot-gateway.env \\\n+  -e SP_FEATURE_STANDALONE_CHAT=true \\\n+  -e CHAT_WORKER_CONCURRENCY=4 \\\n+  your-registry/gateway:VERSION signalpilot-chat-worker`}
-/>
-
-Do not run this queue as a request-local FastAPI background task. Multiple worker
-replicas are supported because PostgreSQL leases and row locks coordinate claims.
 
 ## 6. Deploy notebook orchestration
 

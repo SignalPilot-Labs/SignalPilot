@@ -73,6 +73,7 @@ import { useToast } from "~/components/ui/toast";
 import { Md, fmtNum } from "./_components/Markdown";
 import { RunProgressBar, SandboxPanel } from "./_components/SandboxPanel";
 import { ControlDeck } from "./_components/ControlDeck";
+import { EvalOnboarding } from "./_components/EvalOnboarding";
 import { TranscriptSlideOver } from "./_components/TranscriptView";
 import "./evals.css";
 
@@ -227,7 +228,7 @@ function ConfigForm({ onSaved }: { onSaved: () => void }) {
       </div>
       <div>
         <label className="block text-xs text-[var(--color-text-muted)] mb-1.5">Max tasks per run (0 = all)</label>
-        <input className={inputCls} type="number" min={0} max={100} value={form.max_tasks} onChange={(e) => setForm({ ...form, max_tasks: Number(e.target.value) || 0 })} />
+        <input className={inputCls} type="number" min={0} max={200} value={form.max_tasks} onChange={(e) => setForm({ ...form, max_tasks: Number(e.target.value) || 0 })} />
       </div>
       <div>
         <label className="block text-xs text-[var(--color-text-muted)] mb-1.5">Connection — warehouse connection the graded agent must use</label>
@@ -1418,7 +1419,7 @@ function EvalsPageInner() {
   const { data: availability, isLoading: availLoading } = useSWR("eval-availability", getEvalAvailability);
   const enabled = availability?.enabled === true;
 
-  const { data: cfg } = useSWR(enabled ? "eval-config" : null, getEvalConfig);
+  const { data: cfg, isLoading: cfgLoading } = useSWR(enabled ? "eval-config" : null, getEvalConfig);
   const { data: evalSet, error: tasksError } = useSWR(
     enabled && cfg?.repo_url ? `eval-tasks-${cfg.repo_url}` : null,
     () => listEvalTasks(),
@@ -1456,6 +1457,24 @@ function EvalsPageInner() {
     );
   }
 
+  if (cfgLoading || !cfg) {
+    return (
+      <div className="min-h-screen p-8 animate-fade-in">
+        <div className="ev-onboarding-loading">
+          <Loader2 className="w-4 h-4 animate-spin" /> Loading eval workspace...
+        </div>
+      </div>
+    );
+  }
+
+  if (!cfg.repo_url) {
+    return (
+      <div className="min-h-screen p-8 animate-fade-in ev-onboarding-page">
+        <EvalOnboarding config={cfg} onComplete={() => setConfigOpen(false)} />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen p-8 animate-fade-in">
       {header}
@@ -1471,7 +1490,7 @@ function EvalsPageInner() {
           onConfigure={() => setConfigOpen((open) => !open)}
         />
 
-        {(configOpen || (!!cfg && !cfg.repo_url)) && (
+        {configOpen && (
           <div className="ev-card px-6 pb-6">
             <ConfigForm onSaved={() => setConfigOpen(false)} />
           </div>

@@ -40,6 +40,7 @@ export const RunApp: React.FC<AppProps> = ({ appConfig }) => {
     autoInstantiate: true,
     setCells: setCells,
     sessionId: getSessionId(),
+    static: false,
   });
 
   const isRunning = useAtomValue(notebookIsRunningAtom);

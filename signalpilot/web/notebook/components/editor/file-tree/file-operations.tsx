@@ -11,6 +11,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { invalidateFileKind } from "@/core/active-file";
 import { useRequestClient } from "@/core/network/requests";
 import type { FileInfo } from "@/core/network/types";
 import {
@@ -50,7 +51,12 @@ export function useFileOperations({ root }: { root: string }) {
         root,
       });
       const resp = await sendRenameFileOrFolder({ path, newPath });
-      return handleFileResponse(resp);
+      const result = handleFileResponse(resp);
+      if (result) {
+        invalidateFileKind(path);
+        invalidateFileKind(newPath);
+      }
+      return result;
     },
     [root, sendRenameFileOrFolder],
   );

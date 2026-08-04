@@ -127,12 +127,13 @@ async def _resolve_via_notebook_jwt(connection: HTTPConnection, token: str) -> s
         "org_id": org_id,
         "session_id": session_id,
         "scopes": token_scopes,
+        "project_id": claims.get("project_id"),
+        "branch": claims.get("branch"),
+        "connection_name": claims.get("connection_name"),
+        "capabilities": claims.get("capabilities") or [],
+        "execution_identity": claims.get("execution_identity"),
     }
-    connection.state._jwt_claims = {
-        "sub": user_id,
-        "org_id": org_id,
-        "session_id": session_id,
-    }
+    connection.state._jwt_claims = claims
     return user_id
 
 
@@ -200,10 +201,25 @@ async def resolve_user_id(connection: HTTPConnection) -> str:
     # 1. Check if auth middleware already resolved user_id (MCP / API-key)
     auth_state = getattr(connection.state, "auth", None)
     if auth_state and isinstance(auth_state, dict) and "user_id" in auth_state:
-        connection.state._jwt_claims = {
-            "sub": auth_state["user_id"],
-            "org_id": auth_state.get("org_id"),
-        }
+        existing_claims = getattr(connection.state, "_jwt_claims", None)
+        if not isinstance(existing_claims, dict) or not existing_claims:
+            connection.state._jwt_claims = {
+                "sub": auth_state["user_id"],
+                "org_id": auth_state.get("org_id"),
+                **{
+                    name: auth_state[name]
+                    for name in (
+                        "session_id",
+                        "project_id",
+                        "branch",
+                        "connection_name",
+                        "capabilities",
+                        "execution_identity",
+                        "scopes",
+                    )
+                    if auth_state.get(name) is not None
+                },
+            }
         return auth_state["user_id"]
 
     # 2. Check for sp_-prefixed local API key (short-circuit, no JWT decode)
@@ -215,6 +231,12 @@ async def resolve_user_id(connection: HTTPConnection) -> str:
             raise HTTPException(status_code=401, detail="Invalid local API key")
         # Cloud mode: sp_ keys are not supported
         raise HTTPException(status_code=401, detail="Authentication required")
+
+    # Run-scoped notebook tokens must retain their identity claims in local
+    # direct mode exactly as they do in cloud mode. Anonymous local browser
+    # requests still fall through to the synthetic local identity below.
+    if bearer is not None:
+        return await verify_jwt_token(connection, bearer)
 
     if not is_cloud_mode():
         # Local mode without a sp_ bearer: synthetic local identity

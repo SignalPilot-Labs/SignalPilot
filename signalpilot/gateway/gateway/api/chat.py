@@ -8,7 +8,7 @@ from ..models.workspace import ChatMessageCreate, ConversationCreate, Conversati
 from ..security.scope_guard import RequireScope
 from .deps import StoreD
 
-router = APIRouter(prefix="/api/chat")
+router = APIRouter(prefix="/api/notebook-chat")
 
 
 @router.post("/conversations", status_code=201, response_model=ConversationInfo, dependencies=[RequireScope("write")])

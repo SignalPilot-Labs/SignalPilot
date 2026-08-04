@@ -45,6 +45,19 @@ pending rotation. An in-place upgrade with unmigrated ciphertext fails closed.
 |----------|---------|-------------|
 | `SP_DEPLOYMENT_MODE` | `local` | Set to `cloud` to enable multi-tenant plan enforcement, SSRF validation for TCP connections, and Clerk JWT authentication. |
 
+## Standalone data chat
+
+Run `signalpilot-chat-worker` as a separate service from the gateway, using the same
+gateway image, `DATABASE_URL`, notebook JWT secret, repository storage, and notebook
+orchestrator configuration.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SP_FEATURE_STANDALONE_CHAT` | `true` locally, `false` in cloud mode | Server-side rollout flag for the standalone `/chats` APIs and worker. |
+| `CHAT_WORKER_CONCURRENCY` | `4` | Maximum runs executed concurrently by one worker process. Runs in one conversation remain sequential. |
+| `CHAT_WORKER_LEASE_SECONDS` | `45` | Renewable database lease duration. Expired running work may be reclaimed by another worker. |
+| `CHAT_WORKER_POLL_SECONDS` | `1` | Queue polling interval in seconds. |
+
 ## Rate limiting
 
 | Variable | Default | Description |

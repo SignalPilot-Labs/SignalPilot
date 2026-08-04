@@ -550,7 +550,10 @@ export default function Sidebar() {
   }
 
   return (
-    <aside className="fixed left-0 top-0 h-screen w-56 bg-[var(--color-sidebar)] border-r border-[var(--color-border)] flex flex-col z-50">
+    <aside
+      aria-label="Platform navigation"
+      className="fixed left-0 top-0 h-screen w-56 bg-[var(--color-sidebar)] border-r border-[var(--color-border)] flex flex-col z-50"
+    >
       {/* Logo */}
       <div className="px-5 py-5 border-b border-[var(--color-border)]">
         <Link href="/dashboard" className="flex items-center gap-3 group">

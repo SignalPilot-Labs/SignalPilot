@@ -380,6 +380,137 @@ async def _ensure_chat_columns(engine) -> None:
     logger.info("Ensured chat conversation columns")
 
 
+async def _ensure_standalone_chat_schema(engine) -> None:
+    """Add standalone-chat columns and privacy/queue indexes idempotently."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_chat_conversations "
+                "ADD COLUMN IF NOT EXISTS surface VARCHAR(20) NOT NULL DEFAULT 'notebook'"
+            )
+        )
+        await conn.execute(text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS branch VARCHAR(100)"))
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_chat_conversations "
+                "ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active'"
+            )
+        )
+        await conn.execute(
+            text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ")
+        )
+        await conn.execute(
+            text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS internal_summary TEXT")
+        )
+        await conn.execute(
+            text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS commit_sha VARCHAR(40)")
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS per_query_budget_usd DOUBLE PRECISION NOT NULL DEFAULT 0.25"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS chat_budget_usd DOUBLE PRECISION NOT NULL DEFAULT 1.0"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS estimated_spend_usd DOUBLE PRECISION NOT NULL DEFAULT 0"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS actual_spend_usd DOUBLE PRECISION NOT NULL DEFAULT 0"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS reserved_spend_usd DOUBLE PRECISION NOT NULL DEFAULT 0"
+            )
+        )
+        await conn.execute(
+            text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS forked_from_conversation_id VARCHAR")
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_chat_user_preferences ADD COLUMN IF NOT EXISTS default_per_query_budget_usd DOUBLE PRECISION NOT NULL DEFAULT 0.25"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_chat_user_preferences ADD COLUMN IF NOT EXISTS default_chat_budget_usd DOUBLE PRECISION NOT NULL DEFAULT 1.0"
+            )
+        )
+        await conn.execute(text("UPDATE gateway_chat_conversations SET surface = 'notebook' WHERE surface IS NULL"))
+        await conn.execute(
+            text("ALTER TABLE gateway_chat_messages ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(200)")
+        )
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_gw_conv_standalone_history "
+                "ON gateway_chat_conversations "
+                "(org_id, user_id, surface, status, updated_at)"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_gw_chat_message_idempotency "
+                "ON gateway_chat_messages (idempotency_key) "
+                "WHERE idempotency_key IS NOT NULL"
+            )
+        )
+        await conn.execute(text("DROP INDEX IF EXISTS uq_gw_chat_run_nonterminal_conversation"))
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_gw_chat_run_nonterminal_conversation "
+                "ON gateway_chat_runs (conversation_id) "
+                "WHERE status IN ('queued','running','waiting_for_user','waiting_for_query_approval')"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_gw_chat_artifact_publication "
+                "ON gateway_chat_artifacts (run_id, kind, filename)"
+            )
+        )
+    logger.info("Ensured standalone chat columns and indexes")
+
+
+async def _ensure_hybrid_chat_runtime_schema(engine) -> None:
+    """Add object-backed result, artifact, and runtime-routing columns."""
+    statements = (
+        "ALTER TABLE gateway_chat_artifacts ADD COLUMN IF NOT EXISTS storage_kind VARCHAR(20) NOT NULL DEFAULT 'inline'",
+        "ALTER TABLE gateway_chat_artifacts ADD COLUMN IF NOT EXISTS object_key TEXT",
+        "ALTER TABLE gateway_chat_artifacts ADD COLUMN IF NOT EXISTS source_object_key TEXT",
+        "ALTER TABLE gateway_chat_artifacts ADD COLUMN IF NOT EXISTS byte_size BIGINT",
+        "ALTER TABLE gateway_chat_artifacts ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64)",
+        "ALTER TABLE gateway_structured_query_results ALTER COLUMN execution_id DROP NOT NULL",
+        "ALTER TABLE gateway_structured_query_results ADD COLUMN IF NOT EXISTS conversation_id VARCHAR",
+        "ALTER TABLE gateway_structured_query_results ADD COLUMN IF NOT EXISTS run_id VARCHAR",
+        "ALTER TABLE gateway_structured_query_results ADD COLUMN IF NOT EXISTS preview_rows_json JSONB NOT NULL DEFAULT '[]'::jsonb",
+        "ALTER TABLE gateway_structured_query_results ADD COLUMN IF NOT EXISTS storage_kind VARCHAR(20) NOT NULL DEFAULT 'inline'",
+        "ALTER TABLE gateway_structured_query_results ADD COLUMN IF NOT EXISTS object_key TEXT",
+        "ALTER TABLE gateway_structured_query_results ADD COLUMN IF NOT EXISTS byte_size BIGINT",
+        "ALTER TABLE gateway_structured_query_results ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64)",
+        "ALTER TABLE gateway_structured_query_results ADD COLUMN IF NOT EXISTS source_result_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb",
+        "ALTER TABLE gateway_structured_query_results ADD COLUMN IF NOT EXISTS code_hash VARCHAR(64)",
+        "ALTER TABLE gateway_structured_query_results ADD COLUMN IF NOT EXISTS result_origin VARCHAR(20) NOT NULL DEFAULT 'mcp'",
+        "ALTER TABLE gateway_governed_query_executions ADD COLUMN IF NOT EXISTS plan_id VARCHAR",
+        "ALTER TABLE gateway_governed_query_executions ADD COLUMN IF NOT EXISTS actual_scan_bytes BIGINT",
+        "ALTER TABLE gateway_governed_query_executions ADD COLUMN IF NOT EXISTS actual_output_bytes BIGINT",
+        "ALTER TABLE gateway_governed_query_executions ADD COLUMN IF NOT EXISTS execution_ms DOUBLE PRECISION",
+        "ALTER TABLE gateway_query_proposals ADD COLUMN IF NOT EXISTS plan_id VARCHAR",
+        "ALTER TABLE gateway_chat_runs ADD COLUMN IF NOT EXISTS runtime_archive_id VARCHAR",
+        "UPDATE gateway_structured_query_results SET preview_rows_json = rows_json WHERE preview_rows_json = '[]'::jsonb",
+    )
+    async with engine.begin() as conn:
+        for statement in statements:
+            await conn.execute(text(statement))
+    logger.info("Ensured hybrid chat runtime schema")
+
+
 async def _ensure_chat_trace_indexes(engine) -> None:
     """Create durable trace lookup indexes idempotently."""
     async with engine.begin() as conn:
@@ -641,6 +772,8 @@ async def init_db() -> None:
     await _ensure_audit_indexes(engine)
     await _ensure_knowledge_columns(engine)
     await _ensure_chat_columns(engine)
+    await _ensure_standalone_chat_schema(engine)
+    await _ensure_hybrid_chat_runtime_schema(engine)
     await _ensure_chat_trace_indexes(engine)
     await _ensure_notion_installation_config_analysis_columns(engine)
     await _ensure_report_deliverable_columns(engine)

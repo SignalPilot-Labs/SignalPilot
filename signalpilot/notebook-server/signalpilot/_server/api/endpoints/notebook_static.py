@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 from http import HTTPStatus
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from starlette.authentication import requires
@@ -11,10 +10,16 @@ from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 
 from signalpilot._server.api.deps import AppState
-from signalpilot._server.files.path_validator import PathValidator
+from signalpilot._server.api.endpoints.notebook_file import (
+    ResolvedNotebookFile,
+    resolve_notebook_file,
+    resolve_safe_file_path,
+)
 from signalpilot._server.router import APIRouter
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from starlette.requests import Request
 
 router = APIRouter()
@@ -92,11 +97,7 @@ def _resolve_and_validate(raw_file: str, directory: str | None) -> Path:
     if directory is None:
         raise HTTPException(HTTPStatus.BAD_REQUEST, "no workspace configured")
 
-    candidate = Path(raw_file)
-    if not candidate.is_absolute():
-        candidate = Path(directory) / raw_file
-    PathValidator().validate_inside_directory(Path(directory), candidate)
-    return candidate
+    return resolve_safe_file_path(raw_file, directory)
 
 
 def _validate_session_shape(data: Any) -> bool:
@@ -112,6 +113,22 @@ def _build_static_payload(resolved: Path, directory: str | None) -> dict[str, An
     Intended to run inside asyncio.to_thread since all operations are
     blocking IO or CPU-bound (file reads, parse, serialization).
     """
+    resolved_file: ResolvedNotebookFile = resolve_notebook_file(
+        str(resolved),
+        directory,
+    )
+    resolved = resolved_file.path
+    code = resolved.read_text(encoding="utf-8")
+
+    if resolved_file.raw_fallback:
+        return {
+            "code": code,
+            "session": None,
+            "notebook": None,
+            "filename": _relative_filename(resolved, directory),
+            "rawFallback": True,
+        }
+
     from signalpilot._server.export._session_cache import (
         is_session_snapshot_stale,
     )
@@ -122,8 +139,6 @@ def _build_static_payload(resolved: Path, directory: str | None) -> dict[str, An
     )
     from signalpilot._session.state.session_view import SessionView
     from signalpilot._utils.sp_path import SpPath
-
-    code = resolved.read_text(encoding="utf-8")
 
     # Build notebook structural snapshot from an empty SessionView.
     # serialize_notebook reads view.last_executed_code per cell; an empty
@@ -149,19 +164,20 @@ def _build_static_payload(resolved: Path, directory: str | None) -> dict[str, An
         except (OSError, json.JSONDecodeError):
             session = None
 
-    # Return the relative filename (basename) rather than the absolute server
-    # path to avoid leaking pod filesystem layout to the client.
-    if directory is not None:
-        try:
-            filename = str(resolved.relative_to(directory))
-        except ValueError:
-            filename = resolved.name
-    else:
-        filename = resolved.name
-
     return {
         "code": code,
         "session": session,
         "notebook": notebook,
-        "filename": filename,
+        "filename": _relative_filename(resolved, directory),
+        "rawFallback": False,
     }
+
+
+def _relative_filename(resolved: Path, directory: str | None) -> str:
+    """Return a client-safe workspace-relative filename."""
+    if directory is not None:
+        try:
+            return str(resolved.relative_to(directory))
+        except ValueError:
+            pass
+    return resolved.name

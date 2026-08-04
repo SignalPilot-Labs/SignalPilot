@@ -156,13 +156,13 @@ class GatewayChatTraceClient:
     async def upsert_thread(self, thread: ChatThread) -> dict[str, Any]:
         return await self._request(
             "POST",
-            "/api/chat/traces/threads",
+            "/api/notebook-chat/traces/threads",
             body=asdict(thread),
         )
 
     async def clear_events(self, thread_id: str) -> None:
         await self._request(
-            "DELETE", f"/api/chat/traces/threads/{thread_id}/events"
+            "DELETE", f"/api/notebook-chat/traces/threads/{thread_id}/events"
         )
 
     async def append_event(
@@ -175,7 +175,7 @@ class GatewayChatTraceClient:
         body = _trace_event_body(event, metadata)
         result = await self._request(
             "POST",
-            f"/api/chat/traces/threads/{thread_id}/events",
+            f"/api/notebook-chat/traces/threads/{thread_id}/events",
             body=body,
         )
         if not isinstance(result, dict) or "idx" not in result:
@@ -187,7 +187,7 @@ class GatewayChatTraceClient:
     ) -> list[dict[str, Any]]:
         result = await self._request(
             "GET",
-            f"/api/chat/traces/threads/{thread_id}/events",
+            f"/api/notebook-chat/traces/threads/{thread_id}/events",
             params={"after_index": after_index},
         )
         if isinstance(result, dict) and isinstance(result.get("events"), list):
@@ -197,7 +197,7 @@ class GatewayChatTraceClient:
     async def list_threads(self, session_id: str) -> list[dict[str, Any]]:
         result = await self._request(
             "GET",
-            "/api/chat/traces/threads",
+            "/api/notebook-chat/traces/threads",
             params={"session_id": session_id},
         )
         if isinstance(result, dict) and isinstance(result.get("threads"), list):
@@ -209,7 +209,7 @@ class GatewayChatTraceClient:
     ) -> list[dict[str, Any]]:
         result = await self._request(
             "GET",
-            "/api/chat/traces/threads",
+            "/api/notebook-chat/traces/threads",
             params={"source": source, "limit": limit},
         )
         if isinstance(result, dict) and isinstance(result.get("threads"), list):
@@ -219,7 +219,7 @@ class GatewayChatTraceClient:
     async def get_thread(self, thread_id: str) -> dict[str, Any] | None:
         try:
             result = await self._request(
-                "GET", f"/api/chat/traces/threads/{thread_id}"
+                "GET", f"/api/notebook-chat/traces/threads/{thread_id}"
             )
         except GatewayTraceNotFound:
             return None

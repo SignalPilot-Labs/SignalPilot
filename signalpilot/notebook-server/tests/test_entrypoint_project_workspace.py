@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib
+import subprocess
 
+from signalpilot._server.files.project_sync_boot import _checkout_frozen_commit
 
 entrypoint = importlib.import_module("signalpilot._server.entrypoint")
 
@@ -34,3 +36,25 @@ def test_rewrite_workspace_args_replaces_default_workspace() -> None:
         "/home/notebook/.sp/projects/p/demo",
     ]
 
+
+def test_checkout_frozen_commit_detaches_exact_revision(tmp_path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    tracked = tmp_path / "model.sql"
+    tracked.write_text("select 1\n")
+    subprocess.run(["git", "add", "model.sql"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "first"], cwd=tmp_path, check=True)
+    frozen = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    tracked.write_text("select 2\n")
+    subprocess.run(["git", "commit", "-qam", "second"], cwd=tmp_path, check=True)
+
+    assert _checkout_frozen_commit(tmp_path, frozen)
+    assert tracked.read_text() == "select 1\n"
+    assert subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+    ).strip() == frozen
+
+
+def test_checkout_frozen_commit_rejects_non_sha(tmp_path) -> None:
+    assert not _checkout_frozen_commit(tmp_path, "main")

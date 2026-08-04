@@ -8,6 +8,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 from signalpilot import _loggers
+from signalpilot._server.concurrent_sessions import (
+    allow_concurrent_edit_sessions,
+)
 from signalpilot._session.model import ConnectionState, SessionMode
 from signalpilot._session.session import Session
 from signalpilot._session.session_repository import SessionRepository
@@ -43,7 +46,9 @@ class EditModeResumeStrategy(SessionResumeStrategy):
     """Resume strategy for edit mode.
 
     In edit mode, we can resume orphaned sessions for the same file.
-    Only one session per file is allowed in edit mode.
+    One session per file is the default. Local direct-mode development can
+    opt into multiple sessions and resumes the first orphan without disturbing
+    live sessions.
     """
 
     def __init__(self, repository: SessionRepository) -> None:
@@ -67,6 +72,20 @@ class EditModeResumeStrategy(SessionResumeStrategy):
                 sessions_with_file.append((session_id, session))
 
         if len(sessions_with_file) == 0:
+            return None
+
+        if allow_concurrent_edit_sessions():
+            for session_id, session in sessions_with_file:
+                if session.connection_state() == ConnectionState.ORPHANED:
+                    LOGGER.debug(
+                        "Found a resumable concurrent EDIT session: prev_id=%s",
+                        session_id,
+                    )
+                    self._repository.update_session_id_sync(
+                        session_id,
+                        new_session_id,
+                    )
+                    return session
             return None
 
         if len(sessions_with_file) > 1:

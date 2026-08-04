@@ -195,6 +195,12 @@ class RedshiftConnector(BaseConnector):
                 pass
             raise RuntimeError(f"Redshift query error: {e}") from e
 
+    async def cancel_current_query(self) -> bool:
+        if self._conn is None:
+            return False
+        await self._run_in_thread(self._conn.cancel, 10, label="Redshift cancellation")
+        return True
+
     async def _get_schema_impl(self) -> dict[str, Any]:
         if self._conn is None:
             raise RuntimeError("Not connected")

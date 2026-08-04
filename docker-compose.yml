@@ -70,6 +70,18 @@ services:
       SP_PUBLIC_GATEWAY_PORT: "${SP_GATEWAY_PORT:-3300}"
       SP_REPOS_DIR: /repos
       SP_WEB_URL: http://localhost:${SP_WEB_PORT:-3200}
+      SP_FEATURE_STANDALONE_CHAT: "true"
+      SP_FEATURE_CHAT_QUERY_APPROVAL: ${SP_FEATURE_CHAT_QUERY_APPROVAL:-false}
+      SP_FEATURE_CHAT_STRUCTURED_RESULTS: ${SP_FEATURE_CHAT_STRUCTURED_RESULTS:-true}
+      SP_FEATURE_CHAT_SIZE_ROUTER: ${SP_FEATURE_CHAT_SIZE_ROUTER:-true}
+      SP_FEATURE_CHAT_NOTEBOOK_ANALYSIS: ${SP_FEATURE_CHAT_NOTEBOOK_ANALYSIS:-true}
+      SP_FEATURE_CHAT_RUNTIME_RESULTS: ${SP_FEATURE_CHAT_RUNTIME_RESULTS:-true}
+      SP_FEATURE_CHAT_RUNTIME_ARTIFACTS: ${SP_FEATURE_CHAT_RUNTIME_ARTIFACTS:-true}
+      SP_FEATURE_CHAT_DATASET_REFS: ${SP_FEATURE_CHAT_DATASET_REFS:-false}
+      SP_CHAT_OBJECTS_BUCKET: sp-chat-runtime
+      SP_CHAT_OBJECTS_S3_ENDPOINT: http://minio:9000
+      SP_CHAT_OBJECTS_S3_ACCESS_KEY: minioadmin
+      SP_CHAT_OBJECTS_S3_SECRET_KEY: minioadmin
       SIGNALPILOT_NOTEBOOK_INTERNAL_URL: http://notebook:2718
       SIGNALPILOT_NOTEBOOK_PUBLIC_URL: http://localhost:${SP_WEB_PORT:-3200}/notebook
       SIGNALPILOT_DELIVERY_MODEL: ${SIGNALPILOT_DELIVERY_MODEL:-claude-sonnet-4-5-20250929}
@@ -188,6 +200,65 @@ services:
     restart: unless-stopped
 
   # Notebook server.
+
+  # ─── Durable standalone-chat worker ───────────────────────────
+  gateway-chat-worker:
+    build:
+      context: ./signalpilot/gateway
+      dockerfile: ../../Dockerfile.gateway
+    env_file:
+      - path: ./.slack.local.env
+        required: false
+      - path: ./benchmark/.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://signalpilot:changeme_dev_only@db:5432/signalpilot
+      SP_DATA_DIR: /data
+      SP_DEPLOYMENT_MODE: local
+      SP_ENCRYPTION_KEY: 5d1aa5ETRcln8vkPWrzDkdfSEuqAua5xcZCWMLMDXmc=
+      SP_FEATURE_STANDALONE_CHAT: "true"
+      SP_FEATURE_CHAT_QUERY_APPROVAL: ${SP_FEATURE_CHAT_QUERY_APPROVAL:-false}
+      SP_FEATURE_CHAT_STRUCTURED_RESULTS: ${SP_FEATURE_CHAT_STRUCTURED_RESULTS:-true}
+      SP_FEATURE_CHAT_SIZE_ROUTER: ${SP_FEATURE_CHAT_SIZE_ROUTER:-true}
+      SP_FEATURE_CHAT_NOTEBOOK_ANALYSIS: ${SP_FEATURE_CHAT_NOTEBOOK_ANALYSIS:-true}
+      SP_FEATURE_CHAT_RUNTIME_RESULTS: ${SP_FEATURE_CHAT_RUNTIME_RESULTS:-true}
+      SP_FEATURE_CHAT_RUNTIME_ARTIFACTS: ${SP_FEATURE_CHAT_RUNTIME_ARTIFACTS:-true}
+      SP_FEATURE_CHAT_DATASET_REFS: ${SP_FEATURE_CHAT_DATASET_REFS:-false}
+      SP_CHAT_OBJECTS_BUCKET: sp-chat-runtime
+      SP_CHAT_OBJECTS_S3_ENDPOINT: http://minio:9000
+      SP_CHAT_OBJECTS_S3_ACCESS_KEY: minioadmin
+      SP_CHAT_OBJECTS_S3_SECRET_KEY: minioadmin
+      CHAT_WORKER_CONCURRENCY: "4"
+      SP_NOTEBOOK_DIRECT_URL: http://notebook:2718
+      SP_NOTEBOOK_UPSTREAM_MODE: direct
+      SP_NOTEBOOK_TOKEN_FILE: /notebook-token/token
+      SP_NOTEBOOK_IMAGE: signalpilot-notebook:latest
+      SP_NOTEBOOK_NETWORK_POLICY: "false"
+      SP_PUBLIC_GATEWAY_URL: http://gateway:3300
+      SP_PUBLIC_GATEWAY_PORT: "3300"
+      SP_REPOS_DIR: /repos
+      SP_WEB_URL: http://localhost:${SP_WEB_PORT:-3200}
+      SP_K8S_HOST: ""
+      KUBECONFIG: ""
+      SP_K8S_NAMESPACE: default
+      SP_GATEWAY_NAMESPACE: signalpilot
+      SP_GATEWAY_POD_SELECTOR: "app=signalpilot-gateway"
+    volumes:
+      - signalpilot-data:/data
+      - signalpilot-gateway-secrets:/gateway-secrets
+      - signalpilot-repos:/repos:ro
+      - signalpilot-notebook-token:/notebook-token:ro
+    command: signalpilot-chat-worker
+    depends_on:
+      db:
+        condition: service_healthy
+      gateway:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ─── Notebook Server ──────────────────────────────────────────
   notebook:
     build:
       context: ./signalpilot/notebook-server
@@ -295,6 +366,7 @@ services:
         mc alias set local http://minio:9000 minioadmin minioadmin &&
         mc mb --ignore-existing local/sp-eval-uploads &&
         mc mb --ignore-existing local/sp-eval-runs &&
+        mc mb --ignore-existing local/sp-chat-runtime &&
         mc ilm rule add local/sp-eval-uploads --prefix "uploads/" --expire-days 7 || true
 
   mailpit:

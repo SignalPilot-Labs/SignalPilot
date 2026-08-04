@@ -2,7 +2,7 @@ import { usePrevious } from "@dnd-kit/utilities";
 import { Tooltip } from "radix-ui";
 import { apiCall } from "@/core/network/api-call";
 import { useAtomValue, useSetAtom } from "jotai";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { NotebookLoadingState } from "@/components/editor/alerts/connecting-alert";
 import { Controls } from "@/components/editor/controls/Controls";
 import { AppHeader } from "@/components/editor/header/app-header";
@@ -12,7 +12,14 @@ import { cn } from "@/utils/cn";
 import { Paths } from "@/utils/paths";
 import { KnownQueryParams } from "./constants";
 import { SPA_NAVIGATE_EVENT } from "./router/spa-navigate";
-import { activeTabIdAtom, openFileInTab, openTabsAtom, useActiveTab } from "./file-tabs";
+import { resolveFileKind, type FileKind } from "./active-file";
+import {
+  activeTabIdAtom,
+  normalizePersistedTabs,
+  openFileInTab,
+  openTabsAtom,
+  useActiveTab,
+} from "./file-tabs";
 import { isSwitchingNotebookAtom } from "./notebook-switcher";
 import { dbtProjectDirAtom, dbtProjectInfoAtom } from "@/components/editor/dbt/use-dbt";
 import { fileTreeRefreshNonceAtom } from "@/components/editor/file-tree/state";
@@ -136,6 +143,9 @@ export const EditApp: React.FC<AppProps> = ({
   const filename = useFilename();
   const setLastSavedNotebook = useSetAtom(lastSavedNotebookAtom);
   const { sendComponentValues, sendInterrupt } = useRequestClient();
+  const activeTab = useActiveTab();
+  const initialRawFallback = useAtomValue(rawFallbackAtom);
+  const [fileNavigationReady, setFileNavigationReady] = useState(false);
 
   const isEditing = viewState.mode === "edit";
   const isPresenting = viewState.mode === "present";
@@ -159,6 +169,10 @@ export const EditApp: React.FC<AppProps> = ({
       setLastSavedNotebook({ names, codes, configs, layout });
     },
     sessionId: getSessionId(),
+    static:
+      !fileNavigationReady ||
+      activeTab?.type === "raw" ||
+      (!activeTab && initialRawFallback),
   });
 
   // Update document title whenever filename or app_title changes
@@ -202,7 +216,23 @@ export const EditApp: React.FC<AppProps> = ({
     expandAllCells();
   });
 
-  const activeTab = useActiveTab();
+  const navigationRequestRef = useRef(0);
+
+  const resolveAndOpenFile = async (
+    filePath: string,
+    knownKind?: FileKind,
+  ): Promise<void> => {
+    const requestId = ++navigationRequestRef.current;
+    try {
+      const kind = knownKind ?? await resolveFileKind(filePath);
+      if (requestId !== navigationRequestRef.current) {
+        return;
+      }
+      openFileInTab(filePath, kind);
+    } catch (error) {
+      console.error("[file-navigation] Failed to open file:", error);
+    }
+  };
 
   // On mount: read branch from URL, sync cloud project files, set up tabs
   useEffect(() => {
@@ -272,10 +302,16 @@ export const EditApp: React.FC<AppProps> = ({
 
       if (filePath && !filePath.startsWith("__new__")) {
         console.log("[EditApp.init] opening file tab:", filePath.slice(-50));
-        openFileInTab(filePath, isRawFallback);
+        await resolveAndOpenFile(
+          filePath,
+          isRawFallback ? "raw" : "notebook",
+        );
+        setFileNavigationReady(true);
+        void normalizePersistedTabs(resolveFileKind);
       } else if (!fileInUrl || fileInUrl.startsWith("__new__")) {
         console.log("[EditApp.init] __new__ project — clearing tabs");
         clearEditorTabState();
+        setFileNavigationReady(true);
       }
     };
 
@@ -311,7 +347,7 @@ export const EditApp: React.FC<AppProps> = ({
         return;
       }
       console.log("[onUrlChange] opening:", filePath.slice(-50));
-      openFileInTab(filePath);
+      void resolveAndOpenFile(filePath);
     };
     window.addEventListener("popstate", onUrlChange);
     window.addEventListener(SPA_NAVIGATE_EVENT, onUrlChange);
@@ -381,33 +417,40 @@ export const EditApp: React.FC<AppProps> = ({
     });
   }, [activeTab, filename]);
 
-  // Reconnect the kernel WS when the active notebook file changes.
+  useEffect(() => {
+    store.set(rawFallbackAtom, activeTab?.type === "raw");
+    if (activeTab?.type === "notebook" && activeTab.path) {
+      store.set(filenameAtom, activeTab.path);
+      if (activeTab.sessionId) {
+        setSessionId(activeTab.sessionId);
+      }
+    }
+  }, [
+    activeTab?.path,
+    activeTab?.sessionId,
+    activeTab?.type,
+  ]);
+
+  // Reconnect the kernel WS when switching between notebook files. Crossing
+  // the raw/notebook boundary replaces the transport and connects on its own.
   const currentWsPath = useRef<string | null>(null);
   useEffect(() => {
-    if (activeTab?.type !== "notebook") {return;}
+    if (activeTab?.type !== "notebook") {
+      currentWsPath.current = null;
+      return;
+    }
     const newPath = activeTab.path;
     if (currentWsPath.current === newPath) {return;}
 
     const wasNull = currentWsPath.current === null;
     currentWsPath.current = newPath;
 
-    // On initial mount the WS hasn't connected yet — skip reconnect.
-    // But if cells already exist (kernel session active from a previous
-    // file, e.g. __new__project), we MUST reconnect to load the new file.
-    if (wasNull && !store.get(hasCellsAtom)) {return;}
+    if (wasNull) {return;}
 
     console.log("[WS-RECONNECT] path changed:", newPath.slice(-40), "wasNull:", wasNull);
     store.set(isSwitchingNotebookAtom, true);
     forceReconnect();
   }, [activeTab?.path, activeTab?.type, forceReconnect]);
-
-  // Sync the active tab's path to filenameAtom so the save logic
-  // knows the file is persistent (not new/unnamed).
-  useEffect(() => {
-    if (activeTab?.type === "notebook" && activeTab.path) {
-      store.set(filenameAtom, activeTab.path);
-    }
-  }, [activeTab?.path, activeTab?.type]);
 
   // Reconnect the kernel WS when the git branch changes.
   // rebootMountConfig() writes gatewayBranchIdAtom; this effect is the

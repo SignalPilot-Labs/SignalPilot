@@ -18,7 +18,6 @@ import sys
 import threading
 import traceback
 import uuid
-from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -28,7 +27,8 @@ from signalpilot import _loggers
 from signalpilot._server.auth.session_token import load_session_jwt
 
 if TYPE_CHECKING:
-    from signalpilot._server.ai.tools.base import ToolContext
+    from collections.abc import AsyncGenerator, Callable
+
     from signalpilot._types.ids import SessionId
 
 LOGGER = _loggers.sp_logger()
@@ -74,6 +74,7 @@ def _get_dbt_project_context(search_dir: str | None = None) -> str:
         f"and dbt commands must be scoped to {project_dir}."
     )
 
+
 _DONE = object()
 FILE_EDIT_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"]
 PLACEHOLDER_SP_API_KEYS = {"", "sp_test_key_here"}
@@ -83,6 +84,7 @@ PLACEHOLDER_SP_API_KEYS = {"", "sp_test_key_here"}
 
 _SESSIONS_FILE = Path(__file__).parent / ".chat_sessions.json"
 
+
 def _load_chat_sessions() -> dict[str, str]:
     try:
         if _SESSIONS_FILE.exists():
@@ -90,6 +92,7 @@ def _load_chat_sessions() -> dict[str, str]:
     except Exception:
         pass
     return {}
+
 
 def _save_chat_sessions() -> None:
     try:
@@ -99,6 +102,7 @@ def _save_chat_sessions() -> None:
         )
     except Exception:
         pass
+
 
 _chat_sessions: dict[str, str] = _load_chat_sessions()
 
@@ -158,20 +162,26 @@ def clear_event_buffer(session_id: str, *, thread_id: str | None = None) -> None
     _event_buffers.pop(thread_id or session_id, None)
 
 
-def _get_or_create_chat_session(notebook_session_id: str) -> tuple[str, bool]:
+def _get_or_create_chat_session(
+    notebook_session_id: str,
+    *,
+    persist: bool = True,
+) -> tuple[str, bool]:
     """Get existing chat session ID or create a new one. Returns (id, is_resume)."""
     if notebook_session_id in _chat_sessions:
         return _chat_sessions[notebook_session_id], True
     chat_id = str(uuid.uuid4())
     _chat_sessions[notebook_session_id] = chat_id
-    _save_chat_sessions()
+    if persist:
+        _save_chat_sessions()
     return chat_id, False
 
 
-def clear_chat_session(notebook_session_id: str) -> None:
+def clear_chat_session(notebook_session_id: str, *, persist: bool = True) -> None:
     """Clear the chat session (for 'new chat' button)."""
     _chat_sessions.pop(notebook_session_id, None)
-    _save_chat_sessions()
+    if persist:
+        _save_chat_sessions()
 
 
 @dataclass
@@ -235,6 +245,23 @@ def _get_auth_config() -> dict[str, str]:
         "ANTHROPIC_API_KEY, or ask your admin to add the Anthropic API key "
         "on the integrations page."
     )
+
+
+def _apply_auth_config(
+    agent_env: dict[str, str],
+    auth_config: dict[str, str] | None,
+) -> None:
+    """Apply one execution's credential without mutating process-global auth."""
+    if not auth_config:
+        return
+    if auth_config["type"] == "oauth":
+        agent_env.pop("ANTHROPIC_API_KEY", None)
+        agent_env.pop("OAUTH_TOKEN", None)
+        agent_env["CLAUDE_CODE_OAUTH_TOKEN"] = auth_config["token"]
+    elif auth_config["type"] == "api_key":
+        agent_env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+        agent_env.pop("OAUTH_TOKEN", None)
+        agent_env["ANTHROPIC_API_KEY"] = auth_config["token"]
 
 
 def _get_oauth_token() -> str:
@@ -328,8 +355,11 @@ def _run_agent_in_thread(
     chat_session_id: str,
     is_resume: bool,
     disallowed_tools: list[str] | None = None,
+    allowed_tools: list[str] | None = None,
     app: Any | None = None,
     cwd: str | None = None,
+    auth_config: dict[str, str] | None = None,
+    notebook_session_authorizer: Callable[[str], bool] | None = None,
 ) -> None:
     """Run the agent SDK in a separate thread with session resume support."""
     event_queue = agent_state.event_queue
@@ -362,6 +392,7 @@ def _run_agent_in_thread(
         turn_count = 0
 
         agent_env = dict(os.environ)
+        _apply_auth_config(agent_env, auth_config)
         if _normalized_sp_api_key(agent_env.get("SP_API_KEY", "")) == "":
             agent_env.pop("SP_API_KEY", None)
         # On Windows, python3 doesn't exist — create a shim so skills work
@@ -382,19 +413,24 @@ def _run_agent_in_thread(
         }
         if disallowed_tools:
             agent_options_kwargs["disallowed_tools"] = disallowed_tools
+        if allowed_tools:
+            agent_options_kwargs["allowed_tools"] = allowed_tools
 
         # MCP servers: external (SignalPilot gateway) + notebook tools
         all_mcp = dict(mcp_servers) if mcp_servers else {}
 
         if app is not None:
             try:
-                from signalpilot._server.ai.tools.base import ToolContext
                 from signalpilot._server.ai.notebook_mcp import (
                     build_notebook_mcp_server,
                 )
+                from signalpilot._server.ai.tools.base import ToolContext
 
                 tool_context = ToolContext(app=app)
-                notebook_mcp = build_notebook_mcp_server(tool_context)
+                notebook_mcp = build_notebook_mcp_server(
+                    tool_context,
+                    session_authorizer=notebook_session_authorizer,
+                )
                 all_mcp["signalpilot-notebook"] = notebook_mcp
                 LOGGER.info("Notebook MCP server attached to agent")
             except Exception as e:
@@ -600,6 +636,11 @@ async def run_notebook_agent(
     cwd: str | None = None,
     disallow_file_edits: bool = False,
     additional_disallowed_tools: list[str] | None = None,
+    allowed_tools: list[str] | None = None,
+    additional_mcp_servers: dict[str, Any] | None = None,
+    persist_session_mapping: bool = True,
+    auth_config_override: dict[str, str] | None = None,
+    notebook_session_authorizer: Callable[[str], bool] | None = None,
 ) -> AsyncGenerator[AgentEvent, None]:
     """
     Run the Claude Agent SDK for a chat message.
@@ -610,22 +651,23 @@ async def run_notebook_agent(
 
     Uses session resume for multi-turn conversations.
     """
-    auth = _get_auth_config()
-    if auth["type"] == "oauth":
-        os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = auth["token"]
-    elif auth["type"] == "api_key":
-        os.environ["ANTHROPIC_API_KEY"] = auth["token"]
+    auth = auth_config_override or _get_auth_config()
 
     effective_app = notebook_mcp_app or app
     chat_session_key = thread_id or str(session_id)
 
     if new_chat:
-        clear_chat_session(chat_session_key)
+        clear_chat_session(chat_session_key, persist=persist_session_mapping)
 
-    chat_session_id, is_resume = _get_or_create_chat_session(chat_session_key)
+    chat_session_id, is_resume = _get_or_create_chat_session(
+        chat_session_key,
+        persist=persist_session_mapping,
+    )
 
     effective_cwd = cwd or os.getcwd()
     mcp_servers = _get_mcp_servers_config(mcp_config)
+    if additional_mcp_servers:
+        mcp_servers.update(additional_mcp_servers)
     system_prompt = system_prompt_override or _get_system_prompt()
     disallowed_tools = _build_disallowed_tools(
         disallow_file_edits=disallow_file_edits,
@@ -668,8 +710,7 @@ async def run_notebook_agent(
                     LOGGER.info(f"[Agent Context] Session {sid} -> {fp_str}")
                     if (
                         fp_str == cf_normalized
-                        or fp_str.endswith("/" + cf_normalized)
-                        or fp_str.endswith(cf_normalized)
+                        or fp_str.endswith(("/" + cf_normalized, cf_normalized))
                         or os.path.basename(fp_str) == os.path.basename(cf_normalized)
                     ):
                         context_block += f"This notebook's session_id is: `{sid}`\n"
@@ -711,7 +752,10 @@ async def run_notebook_agent(
         target=_run_agent_in_thread,
         args=(
             agent, message, model, max_turns, mcp_servers,
-            system_prompt, chat_session_id, is_resume, disallowed_tools, effective_app, effective_cwd,
+            system_prompt, chat_session_id, is_resume, disallowed_tools, allowed_tools,
+            effective_app, effective_cwd,
+            auth,
+            notebook_session_authorizer,
         ),
         daemon=True,
     )

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -10,11 +9,14 @@ if TYPE_CHECKING:
 from signalpilot import _loggers
 from signalpilot._server.api.auth import validate_auth
 from signalpilot._server.api.deps import AppState
+from signalpilot._server.api.endpoints.notebook_file import (
+    resolve_notebook_file,
+)
 from signalpilot._server.api.endpoints.ws.analysis_trails import (
     is_generated_analysis_trail_notebook,
 )
 from signalpilot._server.codes import WebSocketCodes
-from signalpilot._server.workspace import SpFileKey
+from signalpilot._server.workspace import NEW_FILE, SpFileKey
 from signalpilot._types.ids import SessionId
 
 LOGGER = _loggers.sp_logger()
@@ -86,24 +88,39 @@ class WebSocketConnectionValidator:
             )
             return None
 
-        # For cloud projects, resolve relative file_key to absolute synced path
+        # Resolve and semantically classify the requested file before any
+        # notebook session can be created.
         project_id = self.app_state.query_params("project")
         branch = self.app_state.query_params("branch") or "main"
-        if project_id and file_key and not Path(file_key).is_absolute():
+        directory = self.app_state.session_manager.workspace.directory
+        if project_id:
             try:
-                from signalpilot._server.files.project_sync import local_project_dir
+                from signalpilot._server.files.project_sync import (
+                    local_project_dir,
+                )
+
                 local_dir = local_project_dir(project_id, branch)
                 if local_dir.exists():
-                    candidate = local_dir / file_key
-                    if candidate.exists():
-                        file_key = str(candidate)
-                    else:
-                        fname = Path(file_key).name
-                        for match in local_dir.rglob(fname):
-                            file_key = str(match)
-                            break
+                    directory = str(local_dir)
             except Exception:
                 pass
+
+        if not file_key.startswith(NEW_FILE):
+            try:
+                resolved_file = resolve_notebook_file(file_key, directory)
+            except Exception:
+                await self.websocket.close(
+                    WebSocketCodes.FORBIDDEN,
+                    "SP_INVALID_FILE",
+                )
+                return None
+            if resolved_file.raw_fallback:
+                await self.websocket.close(
+                    WebSocketCodes.NORMAL_CLOSE,
+                    "SP_RAW_FILE",
+                )
+                return None
+            file_key = SpFileKey(str(resolved_file.path))
 
         # Extract kiosk mode
         kiosk = self.app_state.query_params(KIOSK_QUERY_PARAM_KEY) == "true"

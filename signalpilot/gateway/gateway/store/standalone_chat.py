@@ -7,6 +7,7 @@ import hashlib
 import secrets
 import time
 import uuid
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -18,9 +19,16 @@ from gateway.db.models import (
     GatewayChatArtifact,
     GatewayChatConversation,
     GatewayChatMessage,
+    GatewayChatObjectDeletion,
     GatewayChatRun,
     GatewayChatRunEvent,
     GatewayChatShareGrant,
+    GatewayChatUserPreference,
+    GatewayGovernedQueryExecution,
+    GatewayQueryApproval,
+    GatewayQueryProposal,
+    GatewayRuntimeDataset,
+    GatewayStructuredQueryResult,
     GatewayWorkspaceProject,
 )
 from gateway.models.standalone_chat import (
@@ -40,8 +48,10 @@ from gateway.standalone_chat.artifacts import (
     safe_filename,
     sanitize_chart_snapshot,
     sanitize_report_html,
+    table_to_csv,
     validate_artifact_size,
 )
+from gateway.standalone_chat.config import enterprise_chat_feature_flags
 from gateway.standalone_chat.domain import (
     NONTERMINAL_RUN_STATUSES,
     TERMINAL_RUN_STATUSES,
@@ -50,10 +60,25 @@ from gateway.standalone_chat.domain import (
     fallback_conversation_title,
     redact_public_payload,
 )
+from gateway.standalone_chat.object_storage import chat_object_storage, conversation_prefix, runtime_object_key
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+async def _retain_runtime_datasets_after_terminal_run(
+    db: AsyncSession,
+    *,
+    run: GatewayChatRun,
+) -> None:
+    if run.terminal_at is None:
+        return
+    await db.execute(
+        update(GatewayRuntimeDataset)
+        .where(GatewayRuntimeDataset.run_id == run.id)
+        .values(expires_at=run.terminal_at + timedelta(hours=24))
+    )
 
 
 async def _owned_conversation_row(
@@ -118,6 +143,7 @@ def _run_info(row: GatewayChatRun) -> ChatRunInfo:
         started_at=row.started_at,
         terminal_at=row.terminal_at,
         last_event_sequence=row.last_event_sequence,
+        runtime_archive_available=bool(row.runtime_archive_id),
     )
 
 
@@ -206,19 +232,13 @@ async def _append_status_message(
 ) -> GatewayChatMessage:
     idempotency_key = f"chat-run:{run.id}:{status}"
     existing = (
-        await db.execute(
-            select(GatewayChatMessage).where(
-                GatewayChatMessage.idempotency_key == idempotency_key
-            )
-        )
+        await db.execute(select(GatewayChatMessage).where(GatewayChatMessage.idempotency_key == idempotency_key))
     ).scalar_one_or_none()
     if existing:
         return existing
     conversation = (
         await db.execute(
-            select(GatewayChatConversation)
-            .where(GatewayChatConversation.id == run.conversation_id)
-            .with_for_update()
+            select(GatewayChatConversation).where(GatewayChatConversation.id == run.conversation_id).with_for_update()
         )
     ).scalar_one()
     sequence = conversation.message_count + 1
@@ -253,6 +273,9 @@ async def create_conversation_with_run(
     project: GatewayWorkspaceProject,
     branch: str,
     message: str,
+    commit_sha: str | None = None,
+    per_query_budget_usd: float = 0.25,
+    chat_budget_usd: float = 1.0,
 ) -> tuple[GatewayChatConversation, GatewayChatRun]:
     """Atomically create the first conversation, message, and queued run."""
     now = time.time()
@@ -263,6 +286,9 @@ async def create_conversation_with_run(
         project_id=project.id,
         surface="standalone",
         branch=branch,
+        commit_sha=commit_sha,
+        per_query_budget_usd=per_query_budget_usd,
+        chat_budget_usd=chat_budget_usd,
         status="active",
         title="New chat",
         message_count=1,
@@ -349,6 +375,12 @@ async def list_conversations(
                 created_at=conversation.created_at,
                 updated_at=conversation.updated_at,
                 run_status=latest_run.status if latest_run else None,
+                commit_sha=conversation.commit_sha,
+                per_query_budget_usd=conversation.per_query_budget_usd,
+                chat_budget_usd=conversation.chat_budget_usd,
+                estimated_spend_usd=conversation.estimated_spend_usd,
+                actual_spend_usd=conversation.actual_spend_usd,
+                reserved_spend_usd=conversation.reserved_spend_usd,
             )
         )
     return result
@@ -378,27 +410,35 @@ async def get_conversation_detail(
         )
     ).scalar_one_or_none()
     messages = (
-        await db.execute(
-            select(GatewayChatMessage)
-            .where(
-                GatewayChatMessage.conversation_id == conversation_id,
-                GatewayChatMessage.org_id == org_id,
-                GatewayChatMessage.user_id == user_id,
+        (
+            await db.execute(
+                select(GatewayChatMessage)
+                .where(
+                    GatewayChatMessage.conversation_id == conversation_id,
+                    GatewayChatMessage.org_id == org_id,
+                    GatewayChatMessage.user_id == user_id,
+                )
+                .order_by(GatewayChatMessage.sequence)
             )
-            .order_by(GatewayChatMessage.sequence)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     artifacts = (
-        await db.execute(
-            select(GatewayChatArtifact)
-            .where(
-                GatewayChatArtifact.conversation_id == conversation_id,
-                GatewayChatArtifact.org_id == org_id,
-                GatewayChatArtifact.user_id == user_id,
+        (
+            await db.execute(
+                select(GatewayChatArtifact)
+                .where(
+                    GatewayChatArtifact.conversation_id == conversation_id,
+                    GatewayChatArtifact.org_id == org_id,
+                    GatewayChatArtifact.user_id == user_id,
+                )
+                .order_by(GatewayChatArtifact.created_at)
             )
-            .order_by(GatewayChatArtifact.created_at)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     current_run = (
         await db.execute(
             select(GatewayChatRun)
@@ -427,6 +467,12 @@ async def get_conversation_detail(
             created_at=conversation.created_at,
             updated_at=conversation.updated_at,
             run_status=current_run.status if current_run else None,
+            commit_sha=conversation.commit_sha,
+            per_query_budget_usd=conversation.per_query_budget_usd,
+            chat_budget_usd=conversation.chat_budget_usd,
+            estimated_spend_usd=conversation.estimated_spend_usd,
+            actual_spend_usd=conversation.actual_spend_usd,
+            reserved_spend_usd=conversation.reserved_spend_usd,
         ),
         messages=[_message_info(row) for row in messages],
         artifacts=[_artifact_info(row) for row in artifacts],
@@ -488,6 +534,22 @@ async def archive_conversation(
         )
         .values(state="revoked", revoked_at=_now())
     )
+    existing_deletion = await db.scalar(
+        select(GatewayChatObjectDeletion.id).where(
+            GatewayChatObjectDeletion.conversation_id == conversation_id,
+            GatewayChatObjectDeletion.org_id == org_id,
+        )
+    )
+    if existing_deletion is None:
+        db.add(
+            GatewayChatObjectDeletion(
+                id=str(uuid.uuid4()),
+                org_id=org_id,
+                conversation_id=conversation_id,
+                object_prefix=conversation_prefix(org_id, conversation_id),
+                status="pending",
+            )
+        )
     await db.commit()
     return True
 
@@ -712,6 +774,8 @@ async def fork_shared_conversation(
     org_id: str,
     user_id: str,
     token: str,
+    per_query_budget_usd: float,
+    chat_budget_usd: float,
 ) -> GatewayChatConversation | None:
     """Copy the share-safe snapshot into a new private conversation."""
     shared = await _shared_grant_row(db, org_id=org_id, token=token, lock=True)
@@ -765,6 +829,10 @@ async def fork_shared_conversation(
         project_id=source.project_id,
         surface="standalone",
         branch=source.branch,
+        commit_sha=source.commit_sha,
+        per_query_budget_usd=per_query_budget_usd,
+        chat_budget_usd=chat_budget_usd,
+        forked_from_conversation_id=source.id,
         status="active",
         title=(source.title or "New chat")[:200],
         internal_summary=None,
@@ -795,37 +863,123 @@ async def fork_shared_conversation(
 
     artifact_ids = {row.id: str(uuid.uuid4()) for row in artifacts}
     copied_run_ids: dict[str, str] = {}
-    for row in artifacts:
-        copied_run_id = copied_run_ids.setdefault(row.run_id, str(uuid.uuid4()))
-        db.add(
-            GatewayChatArtifact(
-                id=artifact_ids[row.id],
-                org_id=org_id,
-                user_id=user_id,
-                conversation_id=fork.id,
-                run_id=copied_run_id,
-                assistant_message_id=message_ids.get(row.assistant_message_id or ""),
-                kind=row.kind,
-                filename=row.filename,
-                mime_type=row.mime_type,
-                snapshot_json=row.snapshot_json,
-                binary_data=row.binary_data,
-                provenance_json=None,
-                freshness_at=row.freshness_at,
-                assumptions=list(row.assumptions or []),
-                exclusions=list(row.exclusions or []),
-                caveats=list(row.caveats or []),
-                parent_artifact_id=artifact_ids.get(row.parent_artifact_id or ""),
-                created_at=row.created_at,
-            )
-        )
+    storage = chat_object_storage()
     try:
+        for row in artifacts:
+            copied_run_id = copied_run_ids.setdefault(row.run_id, str(uuid.uuid4()))
+            copied_artifact_id = artifact_ids[row.id]
+            object_key = None
+            source_object_key = None
+            byte_size = row.byte_size
+            content_hash = row.content_hash
+            if row.storage_kind == "object":
+                if not row.object_key:
+                    raise RuntimeError("Shared artifact object is unavailable")
+                object_key = runtime_object_key(
+                    org_id=org_id,
+                    conversation_id=fork.id,
+                    run_id=copied_run_id,
+                    category="forked-artifacts",
+                    object_id=copied_artifact_id,
+                    filename=row.filename,
+                )
+                copied = await storage.copy(
+                    source_key=row.object_key,
+                    destination_key=object_key,
+                )
+                byte_size = copied.byte_size
+                content_hash = copied.content_hash or row.content_hash
+                if row.source_object_key:
+                    source_filename = f"{row.filename.rsplit('.', 1)[0]}.csv"
+                    source_object_key = runtime_object_key(
+                        org_id=org_id,
+                        conversation_id=fork.id,
+                        run_id=copied_run_id,
+                        category="forked-artifact-sources",
+                        object_id=copied_artifact_id,
+                        filename=source_filename,
+                    )
+                    await storage.copy(
+                        source_key=row.source_object_key,
+                        destination_key=source_object_key,
+                    )
+            db.add(
+                GatewayChatArtifact(
+                    id=copied_artifact_id,
+                    org_id=org_id,
+                    user_id=user_id,
+                    conversation_id=fork.id,
+                    run_id=copied_run_id,
+                    assistant_message_id=message_ids.get(row.assistant_message_id or ""),
+                    kind=row.kind,
+                    filename=row.filename,
+                    mime_type=row.mime_type,
+                    snapshot_json=row.snapshot_json,
+                    binary_data=row.binary_data,
+                    storage_kind=row.storage_kind,
+                    object_key=object_key,
+                    source_object_key=source_object_key,
+                    byte_size=byte_size,
+                    content_hash=content_hash,
+                    provenance_json={
+                        **dict(row.provenance_json or {}),
+                        "forked_from_artifact_id": row.id,
+                        "forked_from_conversation_id": source.id,
+                    },
+                    freshness_at=row.freshness_at,
+                    assumptions=list(row.assumptions or []),
+                    exclusions=list(row.exclusions or []),
+                    caveats=list(row.caveats or []),
+                    parent_artifact_id=artifact_ids.get(row.parent_artifact_id or ""),
+                    created_at=row.created_at,
+                )
+            )
         await db.commit()
     except Exception:
         await db.rollback()
+        if any(row.storage_kind == "object" for row in artifacts):
+            try:
+                await storage.delete_prefix(conversation_prefix(org_id, fork.id))
+            except Exception:
+                pass
         raise
     await db.refresh(fork)
     return fork
+
+
+async def get_fork_preview(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    token: str,
+) -> dict[str, Any] | None:
+    shared = await _shared_grant_row(db, org_id=org_id, token=token)
+    if shared is None:
+        return None
+    _, source = shared
+    project = await db.get(GatewayWorkspaceProject, source.project_id)
+    if project is None or project.org_id != org_id or not source.commit_sha:
+        return None
+    preference = (
+        await db.execute(
+            select(GatewayChatUserPreference).where(
+                GatewayChatUserPreference.org_id == org_id,
+                GatewayChatUserPreference.user_id == user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    return {
+        "project_id": project.id,
+        "project_name": project.display_name or project.name,
+        "commit_sha": source.commit_sha,
+        "per_query_budget_usd": preference.default_per_query_budget_usd if preference else 0.25,
+        "chat_budget_usd": preference.default_chat_budget_usd if preference else 1.0,
+        "warehouse_cost_notice": (
+            "New questions run against live warehouse data and may incur warehouse cost. "
+            "The dbt project remains frozen at the displayed commit."
+        ),
+    }
 
 
 async def create_run(
@@ -908,7 +1062,11 @@ async def request_cancellation(
     }:
         return run
     run.cancellation_requested_at = run.cancellation_requested_at or _now()
-    if run.status in {RunStatus.queued.value, RunStatus.waiting_for_user.value}:
+    if run.status in {
+        RunStatus.queued.value,
+        RunStatus.waiting_for_user.value,
+        RunStatus.waiting_for_query_approval.value,
+    }:
         assert_run_transition(run.status, RunStatus.cancelled.value)
         run.status = RunStatus.cancelled.value
         run.terminal_at = _now()
@@ -920,6 +1078,13 @@ async def request_cancellation(
             status=RunStatus.cancelled.value,
             content="This run was stopped.",
         )
+        _stage_run_event(
+            db,
+            run=run,
+            event_type="status",
+            payload={"status": RunStatus.cancelled.value},
+        )
+        await _retain_runtime_datasets_after_terminal_run(db, run=run)
     await db.commit()
     return run
 
@@ -1029,11 +1194,31 @@ async def append_event(
     event_type: str,
     payload: dict[str, Any],
 ) -> GatewayChatRunEvent:
-    run = (
-        await db.execute(
-            select(GatewayChatRun).where(GatewayChatRun.id == run_id).with_for_update()
-        )
-    ).scalar_one()
+    run = (await db.execute(select(GatewayChatRun).where(GatewayChatRun.id == run_id).with_for_update())).scalar_one()
+    event = _stage_run_event(
+        db,
+        run=run,
+        event_type=event_type,
+        payload=payload,
+    )
+    await db.execute(
+        update(GatewayChatConversation)
+        .where(GatewayChatConversation.id == run.conversation_id)
+        .values(updated_at=time.time())
+    )
+    await db.commit()
+    await db.refresh(event)
+    return event
+
+
+def _stage_run_event(
+    db: AsyncSession,
+    *,
+    run: GatewayChatRun,
+    event_type: str,
+    payload: dict[str, Any],
+) -> GatewayChatRunEvent:
+    """Add an event to the run's current transaction without committing it."""
     sequence = run.last_event_sequence + 1
     event = GatewayChatRunEvent(
         id=str(uuid.uuid4()),
@@ -1047,13 +1232,6 @@ async def append_event(
     )
     db.add(event)
     run.last_event_sequence = sequence
-    await db.execute(
-        update(GatewayChatConversation)
-        .where(GatewayChatConversation.id == run.conversation_id)
-        .values(updated_at=time.time())
-    )
-    await db.commit()
-    await db.refresh(event)
     return event
 
 
@@ -1069,15 +1247,19 @@ async def list_run_events(
     if run is None:
         return None
     events = (
-        await db.execute(
-            select(GatewayChatRunEvent)
-            .where(
-                GatewayChatRunEvent.run_id == run_id,
-                GatewayChatRunEvent.sequence > after,
+        (
+            await db.execute(
+                select(GatewayChatRunEvent)
+                .where(
+                    GatewayChatRunEvent.run_id == run_id,
+                    GatewayChatRunEvent.sequence > after,
+                )
+                .order_by(GatewayChatRunEvent.sequence)
             )
-            .order_by(GatewayChatRunEvent.sequence)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [_event_info(row) for row in events]
 
 
@@ -1090,22 +1272,26 @@ async def claim_runs(
 ) -> list[str]:
     now = _now()
     candidates = (
-        await db.execute(
-            select(GatewayChatRun)
-            .where(
-                or_(
-                    GatewayChatRun.status == RunStatus.queued.value,
-                    and_(
-                        GatewayChatRun.status == RunStatus.running.value,
-                        GatewayChatRun.lease_expires_at < now,
-                    ),
+        (
+            await db.execute(
+                select(GatewayChatRun)
+                .where(
+                    or_(
+                        GatewayChatRun.status == RunStatus.queued.value,
+                        and_(
+                            GatewayChatRun.status == RunStatus.running.value,
+                            GatewayChatRun.lease_expires_at < now,
+                        ),
+                    )
                 )
+                .order_by(GatewayChatRun.created_at)
+                .with_for_update(skip_locked=True)
+                .limit(limit)
             )
-            .order_by(GatewayChatRun.created_at)
-            .with_for_update(skip_locked=True)
-            .limit(limit)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     claimed: list[str] = []
     for run in candidates:
         if run.cancellation_requested_at:
@@ -1120,6 +1306,13 @@ async def claim_runs(
                 status=RunStatus.cancelled.value,
                 content="This run was stopped.",
             )
+            _stage_run_event(
+                db,
+                run=run,
+                event_type="status",
+                payload={"status": RunStatus.cancelled.value},
+            )
+            await _retain_runtime_datasets_after_terminal_run(db, run=run)
             continue
         if run.status == RunStatus.queued.value:
             assert_run_transition(run.status, RunStatus.running.value)
@@ -1188,24 +1381,81 @@ async def worker_context(db: AsyncSession, *, run: GatewayChatRun) -> dict[str, 
         )
     ).scalar_one()
     messages = (
-        await db.execute(
-            select(GatewayChatMessage)
-            .where(GatewayChatMessage.conversation_id == run.conversation_id)
-            .order_by(GatewayChatMessage.sequence)
+        (
+            await db.execute(
+                select(GatewayChatMessage)
+                .where(GatewayChatMessage.conversation_id == run.conversation_id)
+                .order_by(GatewayChatMessage.sequence)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     artifacts = (
-        await db.execute(
-            select(GatewayChatArtifact)
-            .where(GatewayChatArtifact.conversation_id == run.conversation_id)
-            .order_by(GatewayChatArtifact.created_at)
+        (
+            await db.execute(
+                select(GatewayChatArtifact)
+                .where(GatewayChatArtifact.conversation_id == run.conversation_id)
+                .order_by(GatewayChatArtifact.created_at)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
+    proposals = list(
+        (
+            await db.execute(
+                select(GatewayQueryProposal)
+                .where(GatewayQueryProposal.conversation_id == run.conversation_id)
+                .order_by(GatewayQueryProposal.created_at)
+            )
+        ).scalars()
+    )
+    proposal_ids = [proposal.id for proposal in proposals]
+    approvals = (
+        list(
+            (
+                await db.execute(
+                    select(GatewayQueryApproval)
+                    .where(GatewayQueryApproval.proposal_id.in_(proposal_ids))
+                    .order_by(GatewayQueryApproval.created_at)
+                )
+            ).scalars()
+        )
+        if proposal_ids
+        else []
+    )
+    executions = list(
+        (
+            await db.execute(
+                select(GatewayGovernedQueryExecution)
+                .where(GatewayGovernedQueryExecution.conversation_id == run.conversation_id)
+                .order_by(GatewayGovernedQueryExecution.created_at)
+            )
+        ).scalars()
+    )
+    results = list(
+        (
+            await db.execute(
+                select(GatewayStructuredQueryResult)
+                .where(
+                    GatewayStructuredQueryResult.org_id == run.org_id,
+                    GatewayStructuredQueryResult.owner_user_id == run.user_id,
+                    GatewayStructuredQueryResult.conversation_id == run.conversation_id,
+                )
+                .order_by(GatewayStructuredQueryResult.created_at)
+            )
+        ).scalars()
+    )
     return {
         "conversation": conversation,
         "project": project,
         "messages": messages,
         "artifacts": artifacts,
+        "query_proposals": proposals,
+        "query_approvals": approvals,
+        "query_executions": executions,
+        "query_results": results,
     }
 
 
@@ -1243,6 +1493,7 @@ async def persist_artifact(
     snapshot = payload.get("snapshot")
     if not isinstance(snapshot, dict):
         raise ValueError("Artifact snapshot must be an object")
+    full_snapshot = snapshot
     binary_data: bytes | None = None
     encoded = payload.get("binary_base64")
     if encoded:
@@ -1288,6 +1539,23 @@ async def persist_artifact(
     if supplied_mime_type != expected_mime_type:
         raise ValueError("Artifact MIME type does not match its kind")
     mime_type = expected_mime_type
+    object_bytes = (
+        table_to_csv(full_snapshot)
+        if kind == "table"
+        else binary_data
+        if kind == "chart"
+        else str(snapshot.get("html") or "").encode("utf-8")
+    )
+    assert object_bytes is not None
+    if len(object_bytes) > 10 * 1024 * 1024:
+        raise ValueError("Artifact exceeds the 10 MiB limit")
+    chart_source_bytes: bytes | None = None
+    if kind == "chart":
+        source = full_snapshot.get("source") if isinstance(full_snapshot.get("source"), dict) else full_snapshot
+        chart_source_bytes = table_to_csv(source)
+        if len(chart_source_bytes) > 10 * 1024 * 1024:
+            raise ValueError("Artifact source exceeds the 10 MiB limit")
+    candidate_hash = hashlib.sha256(object_bytes).hexdigest()
     existing = (
         await db.execute(
             select(GatewayChatArtifact).where(
@@ -1298,9 +1566,56 @@ async def persist_artifact(
         )
     ).scalar_one_or_none()
     if existing is not None:
+        if existing.content_hash and existing.content_hash != candidate_hash:
+            raise ValueError("Artifact filename is already bound to different content in this run")
         return existing
+    artifact_id = str(uuid.uuid4())
+    storage_kind = "inline"
+    object_key = None
+    source_object_key = None
+    byte_size = None
+    content_hash = None
+    uploaded_keys: list[str] = []
+    if enterprise_chat_feature_flags().runtime_artifacts:
+        storage = chat_object_storage()
+        object_key = runtime_object_key(
+            org_id=run.org_id,
+            conversation_id=run.conversation_id,
+            run_id=run.id,
+            category="artifacts",
+            object_id=artifact_id,
+            filename=filename,
+        )
+        try:
+            stored = await storage.put_bytes(key=object_key, data=object_bytes, content_type=mime_type)
+            uploaded_keys.append(object_key)
+            storage_kind = "object"
+            byte_size = stored.byte_size
+            content_hash = stored.content_hash
+            if kind == "chart":
+                assert chart_source_bytes is not None
+                source_object_key = runtime_object_key(
+                    org_id=run.org_id,
+                    conversation_id=run.conversation_id,
+                    run_id=run.id,
+                    category="artifact-sources",
+                    object_id=artifact_id,
+                    filename=f"{filename.rsplit('.', 1)[0]}.csv",
+                )
+                await storage.put_bytes(
+                    key=source_object_key,
+                    data=chart_source_bytes,
+                    content_type="text/csv",
+                )
+                uploaded_keys.append(source_object_key)
+        except Exception:
+            for uploaded_key in reversed(uploaded_keys):
+                with suppress(Exception):
+                    await storage.delete(uploaded_key)
+            raise
+        binary_data = None
     artifact = GatewayChatArtifact(
-        id=str(uuid.uuid4()),
+        id=artifact_id,
         org_id=run.org_id,
         user_id=run.user_id,
         conversation_id=run.conversation_id,
@@ -1310,6 +1625,11 @@ async def persist_artifact(
         mime_type=mime_type,
         snapshot_json=snapshot,
         binary_data=binary_data,
+        storage_kind=storage_kind,
+        object_key=object_key,
+        source_object_key=source_object_key,
+        byte_size=byte_size,
+        content_hash=content_hash,
         provenance_json=provenance,
         freshness_at=_parse_datetime(payload.get("freshness_at")),
         assumptions=assumptions,
@@ -1331,7 +1651,16 @@ async def persist_artifact(
         if parent is None:
             raise ValueError("Parent artifact not found")
     db.add(artifact)
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        if uploaded_keys:
+            storage = chat_object_storage()
+            for uploaded_key in reversed(uploaded_keys):
+                with suppress(Exception):
+                    await storage.delete(uploaded_key)
+        raise
     await db.refresh(artifact)
     return artifact
 
@@ -1357,19 +1686,19 @@ async def complete_run(
 ) -> GatewayChatMessage | None:
     run = (
         await db.execute(
-            select(GatewayChatRun).where(
+            select(GatewayChatRun)
+            .where(
                 GatewayChatRun.id == run_id,
                 GatewayChatRun.lease_owner == worker_id,
-            ).with_for_update()
+            )
+            .with_for_update()
         )
     ).scalar_one_or_none()
     if run is None:
         return None
     existing = (
         await db.execute(
-            select(GatewayChatMessage).where(
-                GatewayChatMessage.idempotency_key == f"chat-run:{run.id}:final"
-            )
+            select(GatewayChatMessage).where(GatewayChatMessage.idempotency_key == f"chat-run:{run.id}:final")
         )
     ).scalar_one_or_none()
     if existing:
@@ -1378,6 +1707,13 @@ async def complete_run(
             run.terminal_at = run.terminal_at or _now()
             run.lease_owner = None
             run.lease_expires_at = None
+            _stage_run_event(
+                db,
+                run=run,
+                event_type="status",
+                payload={"status": RunStatus.completed.value},
+            )
+            await _retain_runtime_datasets_after_terminal_run(db, run=run)
             await db.commit()
         return existing
 
@@ -1393,13 +1729,18 @@ async def complete_run(
             status=RunStatus.cancelled.value,
             content="This run was stopped.",
         )
+        _stage_run_event(
+            db,
+            run=run,
+            event_type="status",
+            payload={"status": RunStatus.cancelled.value},
+        )
+        await _retain_runtime_datasets_after_terminal_run(db, run=run)
         await db.commit()
         return None
     conversation = (
         await db.execute(
-            select(GatewayChatConversation).where(
-                GatewayChatConversation.id == run.conversation_id
-            ).with_for_update()
+            select(GatewayChatConversation).where(GatewayChatConversation.id == run.conversation_id).with_for_update()
         )
     ).scalar_one()
     sequence = conversation.message_count + 1
@@ -1411,7 +1752,12 @@ async def complete_run(
         conversation_id=run.conversation_id,
         role="assistant",
         content=content.strip(),
-        metadata_json={"surface": "standalone", "run_id": run.id, "status": "completed"},
+        metadata_json={
+            "surface": "standalone",
+            "run_id": run.id,
+            "status": "completed",
+            "runtime_archive_available": bool(run.runtime_archive_id),
+        },
         idempotency_key=f"chat-run:{run.id}:final",
         sequence=sequence,
         created_at=time.time(),
@@ -1431,23 +1777,32 @@ async def complete_run(
                 .limit(1)
             )
         ).scalar_one_or_none()
-        conversation.title = fallback_conversation_title(
-            first_question.content if first_question else content
-        )
+        conversation.title = fallback_conversation_title(first_question.content if first_question else content)
     assert_run_transition(run.status, RunStatus.completed.value)
     run.status = RunStatus.completed.value
     run.terminal_at = _now()
     run.lease_owner = None
     run.lease_expires_at = None
+    _stage_run_event(
+        db,
+        run=run,
+        event_type="status",
+        payload={"status": RunStatus.completed.value},
+    )
+    await _retain_runtime_datasets_after_terminal_run(db, run=run)
     await db.flush()
     artifacts = (
-        await db.execute(
-            select(GatewayChatArtifact).where(
-                GatewayChatArtifact.run_id == run.id,
-                GatewayChatArtifact.assistant_message_id.is_(None),
+        (
+            await db.execute(
+                select(GatewayChatArtifact).where(
+                    GatewayChatArtifact.run_id == run.id,
+                    GatewayChatArtifact.assistant_message_id.is_(None),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     for artifact in artifacts:
         artifact.assistant_message_id = message.id
     await db.commit()
@@ -1463,29 +1818,25 @@ async def wait_for_clarification(
 ) -> GatewayChatMessage | None:
     run = (
         await db.execute(
-            select(GatewayChatRun).where(
+            select(GatewayChatRun)
+            .where(
                 GatewayChatRun.id == run_id,
                 GatewayChatRun.lease_owner == worker_id,
-            ).with_for_update()
+            )
+            .with_for_update()
         )
     ).scalar_one_or_none()
     if run is None:
         return None
     idempotency_key = f"chat-run:{run.id}:clarification:{run.execution_attempt}"
     existing = (
-        await db.execute(
-            select(GatewayChatMessage).where(
-                GatewayChatMessage.idempotency_key == idempotency_key
-            )
-        )
+        await db.execute(select(GatewayChatMessage).where(GatewayChatMessage.idempotency_key == idempotency_key))
     ).scalar_one_or_none()
     if existing:
         return existing
     conversation = (
         await db.execute(
-            select(GatewayChatConversation).where(
-                GatewayChatConversation.id == run.conversation_id
-            ).with_for_update()
+            select(GatewayChatConversation).where(GatewayChatConversation.id == run.conversation_id).with_for_update()
         )
     ).scalar_one()
     sequence = conversation.message_count + 1
@@ -1514,6 +1865,12 @@ async def wait_for_clarification(
     run.status = RunStatus.waiting_for_user.value
     run.lease_owner = None
     run.lease_expires_at = None
+    _stage_run_event(
+        db,
+        run=run,
+        event_type="status",
+        payload={"status": RunStatus.waiting_for_user.value},
+    )
     await db.commit()
     return message
 
@@ -1528,19 +1885,17 @@ async def fail_run(
 ) -> bool:
     run = (
         await db.execute(
-            select(GatewayChatRun).where(
+            select(GatewayChatRun)
+            .where(
                 GatewayChatRun.id == run_id,
                 GatewayChatRun.lease_owner == worker_id,
-            ).with_for_update()
+            )
+            .with_for_update()
         )
     ).scalar_one_or_none()
     if run is None:
         return False
-    target = (
-        RunStatus.cancelled.value
-        if run.cancellation_requested_at
-        else RunStatus.failed.value
-    )
+    target = RunStatus.cancelled.value if run.cancellation_requested_at else RunStatus.failed.value
     assert_run_transition(run.status, target)
     run.status = target
     run.public_error_code = str(code)[:100]
@@ -1554,6 +1909,13 @@ async def fail_run(
         status=target,
         content=run.public_error_message or "The run could not be completed.",
     )
+    _stage_run_event(
+        db,
+        run=run,
+        event_type="status",
+        payload={"status": target},
+    )
+    await _retain_runtime_datasets_after_terminal_run(db, run=run)
     await db.commit()
     return True
 
@@ -1590,11 +1952,7 @@ async def update_internal_summary(
     summary: str,
 ) -> None:
     conversation = (
-        await db.execute(
-            select(GatewayChatConversation).where(
-                GatewayChatConversation.id == conversation_id
-            )
-        )
+        await db.execute(select(GatewayChatConversation).where(GatewayChatConversation.id == conversation_id))
     ).scalar_one_or_none()
     if conversation is None:
         return

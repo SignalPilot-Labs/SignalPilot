@@ -18,13 +18,20 @@ import { useToast } from "~/components/ui/toast";
 import {
   downloadSharedStandaloneArtifact,
   forkSharedStandaloneConversation,
+  getSharedStandaloneForkPreview,
   getSharedStandaloneConversation,
+  type StandaloneForkPreview,
 } from "~/lib/api";
 
 export function SharedStandaloneDataChat({ token }: { token: string }) {
   const router = useRouter();
   const { toast } = useToast();
   const [forking, setForking] = useState(false);
+  const [forkPreview, setForkPreview] = useState<StandaloneForkPreview | null>(
+    null,
+  );
+  const [perQueryBudget, setPerQueryBudget] = useState(0.25);
+  const [chatBudget, setChatBudget] = useState(1);
   const { data, error, isLoading } = useSWR(
     `shared-standalone-chat:${token}`,
     () => getSharedStandaloneConversation(token),
@@ -42,19 +49,37 @@ export function SharedStandaloneDataChat({ token }: { token: string }) {
     ) ?? [];
   const downloadArtifact = useCallback(
     (artifactId: string, format: string, filename: string) =>
-      downloadSharedStandaloneArtifact(
-        token,
-        artifactId,
-        format,
-        filename,
-      ),
+      downloadSharedStandaloneArtifact(token, artifactId, format, filename),
     [token],
   );
 
-  const forkConversation = async () => {
+  const prepareFork = async () => {
     setForking(true);
     try {
-      const fork = await forkSharedStandaloneConversation(token);
+      const preview = await getSharedStandaloneForkPreview(token);
+      setForkPreview(preview);
+      setPerQueryBudget(preview.per_query_budget_usd);
+      setChatBudget(preview.chat_budget_usd);
+    } catch (forkError) {
+      toast(
+        forkError instanceof Error
+          ? forkError.message
+          : "Could not fork this conversation",
+        "error",
+      );
+    } finally {
+      setForking(false);
+    }
+  };
+
+  const confirmFork = async () => {
+    setForking(true);
+    try {
+      const fork = await forkSharedStandaloneConversation(
+        token,
+        perQueryBudget,
+        chatBudget,
+      );
       router.push(`/chats/${fork.id}`);
     } catch (forkError) {
       toast(
@@ -134,7 +159,7 @@ export function SharedStandaloneDataChat({ token }: { token: string }) {
             <button
               type="button"
               disabled={forking}
-              onClick={() => void forkConversation()}
+              onClick={() => void prepareFork()}
               className="inline-flex items-center gap-2 rounded-lg bg-[var(--color-text)] px-3 py-2 text-xs text-[var(--color-bg)] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {forking ? (
@@ -146,6 +171,69 @@ export function SharedStandaloneDataChat({ token }: { token: string }) {
             </button>
           </div>
         </header>
+
+        {forkPreview && (
+          <section
+            role="dialog"
+            aria-label="Confirm chat fork"
+            className="border-b border-[var(--color-border)] bg-[var(--color-bg-card)] px-6 py-4"
+          >
+            <div className="mx-auto max-w-3xl text-xs text-[var(--color-text-muted)]">
+              <div className="font-medium text-[var(--color-text)]">
+                Confirm a private fork of {forkPreview.project_name}
+              </div>
+              <div className="mt-1 font-mono text-[10px]">
+                Frozen commit {forkPreview.commit_sha}
+              </div>
+              <p className="mt-2">{forkPreview.warehouse_cost_notice}</p>
+              <div className="mt-3 flex items-end gap-3">
+                <label>
+                  <span className="block pb-1">Per-query budget (USD)</span>
+                  <input
+                    aria-label="Fork per-query budget in USD"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={perQueryBudget}
+                    onChange={(event) =>
+                      setPerQueryBudget(Number(event.target.value))
+                    }
+                    className="w-32 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5"
+                  />
+                </label>
+                <label>
+                  <span className="block pb-1">Chat budget (USD)</span>
+                  <input
+                    aria-label="Fork cumulative chat budget in USD"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={chatBudget}
+                    onChange={(event) =>
+                      setChatBudget(Number(event.target.value))
+                    }
+                    className="w-32 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5"
+                  />
+                </label>
+                <button
+                  type="button"
+                  disabled={forking || chatBudget < perQueryBudget}
+                  onClick={() => void confirmFork()}
+                  className="rounded bg-[var(--color-text)] px-3 py-2 text-[var(--color-bg)] disabled:opacity-50"
+                >
+                  Confirm and create fork
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setForkPreview(null)}
+                  className="rounded border border-[var(--color-border)] px-3 py-2"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
 
         <main className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-3xl px-6 py-6">

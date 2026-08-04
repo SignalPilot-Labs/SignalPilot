@@ -151,7 +151,8 @@
     "vscode-jsonrpc": "^8.2.1",
     "vscode-languageserver-protocol": "^3.17.5",
     "web-vitals": "^4.2.4",
-    "zod": "^4.3.6"
+    "zod": "^4.3.6",
+    "zustand": "5.0.14"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",

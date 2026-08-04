@@ -18,10 +18,12 @@ from gateway.db.models import (
     GatewayChatConversation,
     GatewayChatMessage,
     GatewayChatRun,
+    GatewayChatRunEvent,
     GatewayChatShareGrant,
     GatewayChatUserPreference,
     GatewayConnection,
     GatewayCredential,
+    GatewayStructuredQueryResult,
     GatewayWorkspaceProject,
 )
 from gateway.mcp.audit import standalone_chat_tool_denial
@@ -60,9 +62,39 @@ from gateway.standalone_chat.projects import (
     generate_starter_questions,
     resolve_default_project,
 )
+from gateway.standalone_chat.worker import _merge_text_delta
 from gateway.store import chat as notebook_chat_store
 from gateway.store import standalone_chat as chat_store
 from gateway.store.store import Store
+
+
+def test_merge_text_delta_separates_semantic_text_blocks() -> None:
+    updated, emitted = _merge_text_delta(
+        "underlying data.",
+        "Perfect!",
+        starts_new_block=True,
+    )
+
+    assert updated == "underlying data.\n\nPerfect!"
+    assert emitted == "\n\nPerfect!"
+
+
+def test_merge_text_delta_preserves_token_whitespace_and_existing_newlines() -> None:
+    updated, emitted = _merge_text_delta(
+        "and the",
+        " underlying data.",
+        starts_new_block=False,
+    )
+    assert updated == "and the underlying data."
+    assert emitted == " underlying data."
+
+    updated, emitted = _merge_text_delta(
+        "done.\n",
+        "\nNext",
+        starts_new_block=True,
+    )
+    assert updated == "done.\n\nNext"
+    assert emitted == "\nNext"
 
 
 @pytest_asyncio.fixture
@@ -111,6 +143,7 @@ async def _conversation_and_run(
         project=project,
         branch="main",
         message="What changed in revenue?",
+        commit_sha="a" * 40,
     )
     return conversation.id, run
 
@@ -120,11 +153,7 @@ async def _completed_shared_conversation(
 ) -> tuple[str, GatewayChatRun, str]:
     conversation_id, run = await _conversation_and_run(db)
     conversation = (
-        await db.execute(
-            select(GatewayChatConversation).where(
-                GatewayChatConversation.id == conversation_id
-            )
-        )
+        await db.execute(select(GatewayChatConversation).where(GatewayChatConversation.id == conversation_id))
     ).scalar_one()
     assistant_message_id = "assistant-message-a"
     db.add(
@@ -287,7 +316,7 @@ def test_artifact_security_helpers():
     assert "calculate" not in serialized
     assert "datum.value" not in serialized
     assert chart["source"]["rows"] == [{"label": "A", "value": 1}]
-    assert len(normalize_table_snapshot({"rows": list(range(1_100))})["rows"]) == 1_000
+    assert len(normalize_table_snapshot({"rows": list(range(1_100))})["rows"]) == 200
 
 
 def test_chart_theme_is_enforced_after_sanitization_and_limits_visual_density():
@@ -367,7 +396,9 @@ def test_chart_theme_is_enforced_after_sanitization_and_limits_visual_density():
         "omitted_rows": len(rows) - (MAX_CHART_CATEGORIES * MAX_CHART_SERIES),
     }
     assert len(chart["rows"]) == MAX_CHART_CATEGORIES * MAX_CHART_SERIES
-    assert chart["source"]["rows"] == rows
+    assert chart["source"]["rows"] == rows[:200]
+    assert chart["source"]["display_limited"] is True
+    assert chart["source"]["saved_row_count"] == len(rows)
 
 
 def test_chart_theme_text_contrast_is_at_least_wcag_aa():
@@ -517,9 +548,7 @@ async def test_rotating_revoking_and_archiving_share_returns_not_found(db_sessio
 
 @pytest.mark.asyncio
 async def test_same_org_viewer_can_fork_share_safe_snapshot(db_session):
-    conversation_id, _, assistant_message_id = await _completed_shared_conversation(
-        db_session
-    )
+    conversation_id, _, assistant_message_id = await _completed_shared_conversation(db_session)
     shared = await chat_store.create_share_grant(
         db_session,
         org_id="org-a",
@@ -534,11 +563,17 @@ async def test_same_org_viewer_can_fork_share_safe_snapshot(db_session):
         org_id="org-a",
         user_id="user-b",
         token=token,
+        per_query_budget_usd=0.5,
+        chat_budget_usd=2.0,
     )
     assert fork is not None
     assert fork.id != conversation_id
     assert fork.user_id == "user-b"
     assert fork.internal_summary is None
+    assert fork.commit_sha == "a" * 40
+    assert fork.forked_from_conversation_id == conversation_id
+    assert fork.per_query_budget_usd == 0.5
+    assert fork.chat_budget_usd == 2.0
 
     detail = await chat_store.get_conversation_detail(
         db_session,
@@ -557,13 +592,9 @@ async def test_same_org_viewer_can_fork_share_safe_snapshot(db_session):
     assert detail.artifacts[0].assistant_message_id == detail.messages[1].id
 
     copied_artifact = (
-        await db_session.execute(
-            select(GatewayChatArtifact).where(
-                GatewayChatArtifact.id == detail.artifacts[0].id
-            )
-        )
+        await db_session.execute(select(GatewayChatArtifact).where(GatewayChatArtifact.id == detail.artifacts[0].id))
     ).scalar_one()
-    assert copied_artifact.provenance_json is None
+    assert copied_artifact.provenance_json["forked_from_conversation_id"] == conversation_id
     assert copied_artifact.snapshot_json["rows"] == [{"revenue": 112}]
 
     reshared = await chat_store.create_share_grant(
@@ -581,6 +612,41 @@ async def test_same_org_viewer_can_fork_share_safe_snapshot(db_session):
     )
     assert reshared_detail is not None
     assert len(reshared_detail.artifacts) == 1
+
+
+@pytest.mark.asyncio
+async def test_fork_preview_preserves_project_commit_and_recipient_budgets(db_session):
+    conversation_id, _, _ = await _completed_shared_conversation(db_session)
+    shared = await chat_store.create_share_grant(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation_id,
+    )
+    assert shared is not None
+    _, token = shared
+    db_session.add(
+        GatewayChatUserPreference(
+            org_id="org-a",
+            user_id="user-b",
+            default_per_query_budget_usd=0.4,
+            default_chat_budget_usd=1.5,
+        )
+    )
+    await db_session.commit()
+
+    preview = await chat_store.get_fork_preview(
+        db_session,
+        org_id="org-a",
+        user_id="user-b",
+        token=token,
+    )
+    assert preview is not None
+    assert preview["project_id"] == "project-a"
+    assert preview["commit_sha"] == "a" * 40
+    assert preview["per_query_budget_usd"] == 0.4
+    assert preview["chat_budget_usd"] == 1.5
+    assert "live warehouse data" in preview["warehouse_cost_notice"]
 
 
 @pytest.mark.asyncio
@@ -633,6 +699,8 @@ async def test_share_fork_rejects_active_run_and_cross_org(db_session):
             org_id="org-a",
             user_id="user-b",
             token=token,
+            per_query_budget_usd=0.25,
+            chat_budget_usd=1.0,
         )
     assert (
         await chat_store.fork_shared_conversation(
@@ -640,15 +708,15 @@ async def test_share_fork_rejects_active_run_and_cross_org(db_session):
             org_id="org-b",
             user_id="user-b",
             token=token,
+            per_query_budget_usd=0.25,
+            chat_budget_usd=1.0,
         )
         is None
     )
     grants = list(
         (
             await db_session.execute(
-                select(GatewayChatShareGrant).where(
-                    GatewayChatShareGrant.conversation_id == conversation_id
-                )
+                select(GatewayChatShareGrant).where(GatewayChatShareGrant.conversation_id == conversation_id)
             )
         ).scalars()
     )
@@ -881,6 +949,17 @@ async def test_claim_completion_and_final_message_are_idempotent(db_session):
         )
     )
     assert count == 1
+    terminal_events = list(
+        (
+            await db_session.execute(
+                select(GatewayChatRunEvent).where(
+                    GatewayChatRunEvent.run_id == run.id,
+                    GatewayChatRunEvent.event_type == "status",
+                )
+            )
+        ).scalars()
+    )
+    assert [event.payload_json for event in terminal_events] == [{"status": "completed"}]
     detail = await chat_store.get_conversation_detail(
         db_session,
         org_id="org-a",
@@ -934,6 +1013,14 @@ async def test_cancelled_and_failed_runs_leave_inspectable_status_messages(db_se
     )
     assert detail is not None
     assert detail.messages[-1].metadata["status"] == "cancelled"
+    cancelled_events = await chat_store.list_run_events(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        run_id=queued_run.id,
+    )
+    assert cancelled_events is not None
+    assert cancelled_events[-1].payload == {"status": "cancelled"}
 
     failed_run = await chat_store.create_run(
         db_session,
@@ -963,6 +1050,14 @@ async def test_cancelled_and_failed_runs_leave_inspectable_status_messages(db_se
     )
     assert detail is not None
     assert detail.messages[-1].metadata["status"] == "failed"
+    failed_events = await chat_store.list_run_events(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        run_id=failed_run.id,
+    )
+    assert failed_events is not None
+    assert failed_events[-1].payload == {"status": "failed"}
 
 
 @pytest.mark.asyncio
@@ -1155,6 +1250,42 @@ async def test_artifact_parent_scope_and_immutable_snapshots(db_session):
 
 
 @pytest.mark.asyncio
+async def test_fresh_runtime_context_includes_durable_derived_result_references(db_session):
+    conversation_id, run = await _conversation_and_run(db_session)
+    db_session.add(
+        GatewayStructuredQueryResult(
+            id="derived-result-a",
+            execution_id=None,
+            org_id=run.org_id,
+            owner_user_id=run.user_id,
+            conversation_id=conversation_id,
+            run_id=run.id,
+            columns_json=[{"name": "total", "logical_type": "integer"}],
+            rows_json=[],
+            preview_rows_json=[{"total": 42}],
+            storage_kind="object",
+            object_key="private/result.json",
+            byte_size=14,
+            content_hash="a" * 64,
+            source_result_ids_json=["source-a"],
+            code_hash="b" * 64,
+            result_origin="runtime",
+            query_row_count=1,
+            saved_row_count=1,
+            source_completeness="complete",
+            result_completeness="complete",
+            display_completeness="complete",
+            provenance_json={"name": "total"},
+        )
+    )
+    await db_session.commit()
+
+    context = await chat_store.worker_context(db_session, run=run)
+
+    assert [result.id for result in context["query_results"]] == ["derived-result-a"]
+
+
+@pytest.mark.asyncio
 async def test_store_connection_claim_limits_visibility(db_session):
     db_session.add_all(
         [
@@ -1205,12 +1336,14 @@ def test_standalone_session_claims_and_mcp_allowlist(monkeypatch):
         project_id="project-a",
         branch="main",
         connection_name="production",
+        commit_sha="a" * 40,
         capabilities=["schema:read", "query:read"],
         execution_identity="chat:run-a",
         scopes=["read", "query", "execute"],
         ttl=60,
     )
     claims = verify_session_jwt(token)
+    assert claims["commit_sha"] == "a" * 40
     assert claims["connection_name"] == "production"
     assert "write" not in claims["scopes"]
 
@@ -1218,6 +1351,7 @@ def test_standalone_session_claims_and_mcp_allowlist(monkeypatch):
     connection_token = mcp_allowed_connection_var.set("production")
     try:
         assert standalone_chat_tool_denial("query_database", "production") is None
+        assert standalone_chat_tool_denial("plan_query", "production") is None
         assert "outside" in (standalone_chat_tool_denial("query_database", "secondary") or "")
         assert "unavailable" in (standalone_chat_tool_denial("notion_create_page", None) or "")
     finally:

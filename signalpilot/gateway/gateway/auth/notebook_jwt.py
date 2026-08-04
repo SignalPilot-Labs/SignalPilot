@@ -42,6 +42,7 @@ def mint_session_jwt(
     ttl: int,
     project_id: str | None = None,
     connection_name: str | None = None,
+    commit_sha: str | None = None,
     capabilities: list[str] | None = None,
     execution_identity: str | None = None,
     scopes: list[str] | None = None,
@@ -75,6 +76,8 @@ def mint_session_jwt(
     }
     if connection_name:
         payload["connection_name"] = connection_name
+    if commit_sha:
+        payload["commit_sha"] = commit_sha
     if capabilities is not None:
         payload["capabilities"] = capabilities
     if execution_identity:
@@ -130,6 +133,9 @@ def verify_session_jwt(token: str) -> dict:
             raise NotebookSessionJWTError("Standalone chat token missing project_id")
         if not claims.get("connection_name"):
             raise NotebookSessionJWTError("Standalone chat token missing connection_name")
+        commit_sha = claims.get("commit_sha")
+        if not isinstance(commit_sha, str) or len(commit_sha) != 40:
+            raise NotebookSessionJWTError("Standalone chat token missing commit_sha")
         capabilities = claims.get("capabilities")
         if not isinstance(capabilities, list) or not capabilities:
             raise NotebookSessionJWTError("Standalone chat token missing capabilities")

@@ -5,19 +5,28 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import AsyncGenerator
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.auth.notebook_jwt import mint_session_jwt
 from gateway.config.k8s import get_k8s_settings
-from gateway.db.models import GatewayChatRun
+from gateway.db.models import (
+    GatewayChatObjectDeletion,
+    GatewayChatRun,
+    GatewayQueryProposal,
+    GatewayRuntimeDataset,
+)
 from gateway.notebooks.session_service import (
     NotebookRuntime,
     ensure_standalone_chat_notebook_session,
     runtime_for_session,
 )
+from gateway.standalone_chat.config import enterprise_chat_feature_flags
+from gateway.standalone_chat.object_storage import chat_object_storage
 from gateway.store import notebook_sessions as notebook_session_store
 from gateway.store.standalone_chat import set_execution_session
 from gateway.store.user_secrets import get_user_anthropic_key
@@ -34,6 +43,7 @@ async def ensure_execution_runtime(
     worker_id: str,
     branch: str,
     connection_name: str,
+    commit_sha: str,
 ) -> NotebookRuntime:
     runtime = await ensure_standalone_chat_notebook_session(
         db,
@@ -43,6 +53,7 @@ async def ensure_execution_runtime(
         project_id=run.project_id,
         branch=branch,
         connection_name=connection_name,
+        commit_sha=commit_sha,
     )
     if not await set_execution_session(
         db,
@@ -61,6 +72,7 @@ async def stream_execution(
     worker_id: str,
     branch: str,
     connection_name: str,
+    commit_sha: str,
     prompt: str,
     messages: list[dict[str, str]],
     warm_context: dict[str, Any],
@@ -71,6 +83,7 @@ async def stream_execution(
         worker_id=worker_id,
         branch=branch,
         connection_name=connection_name,
+        commit_sha=commit_sha,
     )
     anthropic_api_key = await get_user_anthropic_key(
         db,
@@ -91,6 +104,7 @@ async def stream_execution(
         "project_id": run.project_id,
         "branch": branch,
         "connection_name": connection_name,
+        "commit_sha": commit_sha,
         "gateway_session_token": mint_session_jwt(
             user_id=run.user_id,
             org_id=run.org_id,
@@ -98,12 +112,14 @@ async def stream_execution(
             project_id=run.project_id,
             branch=branch,
             connection_name=connection_name,
+            commit_sha=commit_sha,
             capabilities=[
                 "artifact:publish",
                 "dbt:read",
+                "notebook:analysis",
                 "query:read",
                 "schema:read",
-                "scratch:python",
+                "runtime:publish",
             ],
             execution_identity=f"chat:{run.id}",
             scopes=["read", "query", "execute"],
@@ -112,7 +128,17 @@ async def stream_execution(
         "prompt": prompt,
         "messages": messages,
         "warm_context": warm_context,
-        "new_execution": run.execution_attempt == 1,
+        "features": {
+            "size_router": enterprise_chat_feature_flags().size_router,
+            "size_router_shadow": enterprise_chat_feature_flags().size_router_shadow,
+            "notebook_analysis": enterprise_chat_feature_flags().notebook_analysis,
+            "runtime_results": enterprise_chat_feature_flags().runtime_results,
+            "runtime_artifacts": enterprise_chat_feature_flags().runtime_artifacts,
+            "dataset_refs": enterprise_chat_feature_flags().dataset_refs,
+        },
+        # Standalone runs are reconstructed from gateway state. Never resume
+        # a Claude/runtime-local session, including retries of the same run.
+        "new_execution": True,
     }
     if runtime_auth:
         # Direct-mode notebooks are shared and outlive individual requests.
@@ -124,6 +150,7 @@ async def stream_execution(
         "X-Gateway-Project-Id": run.project_id,
         "X-Gateway-Branch-Id": branch,
         "X-Gateway-Connection-Name": connection_name,
+        "X-Gateway-Commit-Sha": commit_sha,
     }
     timeout = httpx.Timeout(connect=30.0, read=None, write=30.0, pool=30.0)
     async with (
@@ -198,3 +225,101 @@ async def cleanup_finished_execution(db: AsyncSession, *, run_id: str) -> None:
         session_id=session_info.id,
         org_id=run.org_id,
     )
+
+
+async def cleanup_expired_approval_sandboxes(db: AsyncSession) -> int:
+    """Destroy approval-waiting sandboxes after the configured warm window."""
+    try:
+        warm_seconds = max(0, int(os.getenv("SP_CHAT_APPROVAL_WARM_SECONDS", "900")))
+    except ValueError:
+        warm_seconds = 900
+    cutoff = datetime.now(UTC) - timedelta(seconds=warm_seconds)
+    run_ids = list(
+        (
+            await db.execute(
+                select(GatewayChatRun.id)
+                .join(GatewayQueryProposal, GatewayQueryProposal.run_id == GatewayChatRun.id)
+                .where(
+                    GatewayChatRun.status == "waiting_for_query_approval",
+                    GatewayChatRun.execution_session_id.is_not(None),
+                    GatewayQueryProposal.status == "waiting_for_approval",
+                    GatewayQueryProposal.created_at <= cutoff,
+                )
+                .distinct()
+            )
+        ).scalars()
+    )
+    cleaned = 0
+    for run_id in run_ids:
+        run = await db.get(GatewayChatRun, run_id)
+        if run is None or not run.execution_session_id:
+            continue
+        session_info = await notebook_session_store.get_session_by_id(
+            db,
+            session_id=run.execution_session_id,
+            org_id=run.org_id,
+        )
+        if session_info is None:
+            continue
+        if not os.getenv("SP_NOTEBOOK_DIRECT_URL") and session_info.pod_name:
+            try:
+                from gateway.notebooks.session_service import _get_orchestrator
+
+                orchestrator = await _get_orchestrator()
+                await orchestrator.delete_pod(session_info.pod_name, org_id=run.org_id)
+            except Exception:
+                continue
+        await notebook_session_store.mark_stopped(
+            db,
+            session_id=session_info.id,
+            org_id=run.org_id,
+        )
+        run.execution_session_id = None
+        await db.commit()
+        cleaned += 1
+    return cleaned
+
+
+async def cleanup_expired_runtime_objects(db: AsyncSession) -> int:
+    """Delete expired DatasetRefs and idempotent conversation object prefixes."""
+    storage = chat_object_storage()
+    if not storage.enabled:
+        return 0
+    now = datetime.now(UTC)
+    cleaned = 0
+    expired = list(
+        (
+            await db.execute(
+                select(GatewayRuntimeDataset).where(GatewayRuntimeDataset.expires_at <= now).limit(100)
+            )
+        ).scalars()
+    )
+    for dataset in expired:
+        try:
+            await storage.delete(dataset.object_key)
+        except Exception:
+            continue
+        await db.delete(dataset)
+        cleaned += 1
+    pending = list(
+        (
+            await db.execute(
+                select(GatewayChatObjectDeletion)
+                .where(GatewayChatObjectDeletion.status == "pending")
+                .order_by(GatewayChatObjectDeletion.created_at)
+                .limit(20)
+            )
+        ).scalars()
+    )
+    for request in pending:
+        request.attempt_count += 1
+        try:
+            await storage.delete_prefix(request.object_prefix)
+        except Exception:
+            continue
+        request.status = "completed"
+        request.completed_at = now
+        cleaned += 1
+    if cleaned or expired or pending:
+        await db.commit()
+    return cleaned

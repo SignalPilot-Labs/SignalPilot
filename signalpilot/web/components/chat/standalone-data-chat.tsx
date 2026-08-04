@@ -1,20 +1,6 @@
 "use client";
 
 import {
-  ActionBarPrimitive,
-  AssistantRuntimeProvider,
-  ComposerPrimitive,
-  MessagePartPrimitive,
-  MessagePrimitive,
-  ThreadPrimitive,
-  useAui,
-  useAuiState,
-  useExternalStoreRuntime,
-  useMessagePartText,
-  type AppendMessage,
-  type ThreadMessageLike,
-} from "@assistant-ui/react";
-import {
   AlertCircle,
   ArrowDownToLine,
   ChevronRight,
@@ -26,7 +12,6 @@ import {
   MoreHorizontal,
   PanelLeft,
   Play,
-  Send,
   Share2,
   Sparkles,
   Table2,
@@ -39,10 +24,10 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  type ReactNode,
 } from "react";
 import ReactMarkdown from "react-markdown";
 import { VegaEmbed } from "react-vega";
@@ -55,11 +40,14 @@ import {
   clarifyStandaloneRun,
   createStandaloneConversation,
   createStandaloneRun,
+  decideStandaloneQueryProposal,
   downloadStandaloneArtifact,
+  getStandaloneArtifactObjectUrl,
   getStandaloneChatBootstrap,
   getStandaloneChatProjectReadiness,
   getStandaloneConversation,
   listStandaloneConversations,
+  openStandaloneNotebookArchive,
   renameStandaloneConversation,
   retryStandaloneRun,
   revokeStandaloneConversationShare,
@@ -73,7 +61,19 @@ import {
   type StandaloneConversation,
   type StandaloneConversationDetail,
 } from "~/lib/api";
+import { StandaloneArtifactContext } from "~/components/chat/standalone-artifact-context";
+import { StandaloneChatComposer } from "~/components/chat/standalone-chat-composer";
 import { useToast } from "~/components/ui/toast";
+import {
+  appendOptimisticUserMessage,
+  applyStandaloneChatEvent,
+  assembleStandaloneRunText,
+  containsStandaloneSubmission,
+  isStandaloneRunReconciled,
+  standaloneMessageKey,
+  upsertStandaloneConversation,
+  type OptimisticUserMessage,
+} from "~/lib/standalone-chat-state";
 
 type UiMessage = StandaloneChatMessage & {
   runId?: string;
@@ -102,6 +102,7 @@ function statusLabel(status: StandaloneChatRunStatus | null): string | null {
     queued: "Queued",
     running: "Running",
     waiting_for_user: "Waiting for you",
+    waiting_for_query_approval: "Waiting for query approval",
     completed: "Completed",
     failed: "Failed",
     cancelled: "Stopped",
@@ -111,7 +112,8 @@ function statusLabel(status: StandaloneChatRunStatus | null): string | null {
 function statusTone(status: StandaloneChatRunStatus | null): string {
   if (status === "running" || status === "queued")
     return "text-[var(--color-success)]";
-  if (status === "waiting_for_user") return "text-[var(--color-warning)]";
+  if (status === "waiting_for_user" || status === "waiting_for_query_approval")
+    return "text-[var(--color-warning)]";
   if (status === "failed") return "text-[var(--color-error)]";
   return "text-[var(--color-text-dim)]";
 }
@@ -137,55 +139,12 @@ function projectSetupSuffix(message: string): string {
   return " · setup needed";
 }
 
-function extractText(message: AppendMessage): string {
-  return message.content
-    .filter((part) => part.type === "text")
-    .map((part) => ("text" in part ? part.text : ""))
-    .join("\n")
-    .trim();
-}
-
-function mergeEvents(
-  current: StandaloneChatEvent[],
-  incoming: StandaloneChatEvent[],
-): StandaloneChatEvent[] {
-  const byId = new Map(
-    current.map((event) => [`${event.run_id}:${event.sequence}`, event]),
-  );
-  for (const event of incoming) {
-    byId.set(`${event.run_id}:${event.sequence}`, event);
-  }
-  return [...byId.values()].sort((a, b) => {
-    const timestamp = Date.parse(a.created_at) - Date.parse(b.created_at);
-    return timestamp || a.sequence - b.sequence;
-  });
-}
-
 function eventText(
   event: StandaloneChatEvent | null | undefined,
   key: string,
 ): string {
   const value = event?.payload?.[key];
   return typeof value === "string" ? value : "";
-}
-
-function MarkdownText() {
-  const { text } = useMessagePartText();
-  return (
-    <div className="chat-markdown">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
-    </div>
-  );
-}
-
-function PlainText() {
-  return (
-    <MessagePartPrimitive.Text
-      component="div"
-      smooth={false}
-      className="whitespace-pre-wrap"
-    />
-  );
 }
 
 function WorkTimeline({ runId }: { runId: string }) {
@@ -271,6 +230,41 @@ type ArtifactDownload = (
   filename: string,
 ) => Promise<void>;
 
+function RuntimeChartPreview({
+  artifactId,
+  filename,
+}: {
+  artifactId: string;
+  filename: string;
+}) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | null = null;
+    void getStandaloneArtifactObjectUrl(artifactId, "png")
+      .then((value) => {
+        objectUrl = value;
+        if (active) setUrl(value);
+      })
+      .catch(() => setUrl(null));
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [artifactId]);
+  return url ? (
+    <img
+      src={url}
+      alt={filename}
+      className="mx-auto max-h-[520px] max-w-full"
+    />
+  ) : (
+    <div className="flex min-h-64 items-center justify-center text-xs text-[var(--color-text-dim)]">
+      Loading chart preview…
+    </div>
+  );
+}
+
 function ArtifactDownloads({
   artifact,
   onDownload,
@@ -286,36 +280,15 @@ function ArtifactDownloads({
           key={format}
           type="button"
           onClick={() =>
-            onDownload(
-              artifact.id,
-              format,
-              artifact.filename,
-            ).catch(() => toast("Download failed", "error"))
+            onDownload(artifact.id, format, artifact.filename).catch(() =>
+              toast("Download failed", "error"),
+            )
           }
           className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-text-muted)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)]"
         >
           <ArrowDownToLine className="h-3 w-3" />
           {format.toUpperCase()}
         </button>
-      ))}
-    </div>
-  );
-}
-
-function ArtifactContext({ artifact }: { artifact: ArtifactPreviewData }) {
-  const notes = [
-    ...artifact.assumptions.map((value) => `Assumption: ${value}`),
-    ...artifact.exclusions.map((value) => `Exclusion: ${value}`),
-    ...artifact.caveats.map((value) => `Caveat: ${value}`),
-  ];
-  if (!artifact.freshness_at && notes.length === 0) return null;
-  return (
-    <div className="border-t border-[var(--color-border)] px-3 py-2 text-[11px] leading-5 text-[var(--color-text-dim)]">
-      {artifact.freshness_at && (
-        <p>Fresh through {new Date(artifact.freshness_at).toLocaleString()}.</p>
-      )}
-      {notes.map((note) => (
-        <p key={note}>{note}</p>
       ))}
     </div>
   );
@@ -410,7 +383,7 @@ export function ArtifactPreview({
             Preview and download are limited by the governed query row limit.
           </p>
         )}
-        <ArtifactContext artifact={artifact} />
+        <StandaloneArtifactContext artifact={artifact} />
       </div>
     );
   }
@@ -429,11 +402,9 @@ export function ArtifactPreview({
       typeof snapshot.display === "object" && snapshot.display
         ? snapshot.display
         : {};
-    const displayLimited =
-      "limited" in display && display.limited === true;
+    const displayLimited = "limited" in display && display.limited === true;
     const categoryLimit =
-      "category_limit" in display &&
-      typeof display.category_limit === "number"
+      "category_limit" in display && typeof display.category_limit === "number"
         ? display.category_limit
         : 24;
     const legendLimit =
@@ -456,12 +427,19 @@ export function ArtifactPreview({
           <ArtifactDownloads artifact={artifact} onDownload={onDownload} />
         </div>
         <div className="min-h-64 overflow-x-auto p-4">
-          <div className="mx-auto w-fit min-w-[640px]">
-            <VegaEmbed
-              spec={spec}
-              options={{ actions: false, mode: "vega-lite", renderer: "svg" }}
+          {snapshot.runtime_png === true ? (
+            <RuntimeChartPreview
+              artifactId={artifact.id}
+              filename={artifact.filename}
             />
-          </div>
+          ) : (
+            <div className="mx-auto w-fit min-w-[640px]">
+              <VegaEmbed
+                spec={spec}
+                options={{ actions: false, mode: "vega-lite", renderer: "svg" }}
+              />
+            </div>
+          )}
         </div>
         {displayLimited && (
           <p className="border-t border-[var(--color-border)] px-3 py-2 text-[11px] text-[var(--color-text-muted)]">
@@ -474,12 +452,13 @@ export function ArtifactPreview({
             The chart uses a row-limited data snapshot.
           </p>
         )}
-        <ArtifactContext artifact={artifact} />
+        <StandaloneArtifactContext artifact={artifact} />
       </div>
     );
   }
   const html = typeof snapshot.html === "string" ? snapshot.html : "";
-  const reportBody = /<body(?:\s[^>]*)?>([\s\S]*?)<\/body>/i.exec(html)?.[1] ?? html;
+  const reportBody =
+    /<body(?:\s[^>]*)?>([\s\S]*?)<\/body>/i.exec(html)?.[1] ?? html;
   const hasRenderableReport = Boolean(
     reportBody
       .replace(/<style(?:\s[^>]*)?>[\s\S]*?<\/style>/gi, "")
@@ -518,31 +497,38 @@ export function ArtifactPreview({
           </div>
         </div>
       )}
-      <ArtifactContext artifact={artifact} />
+      <StandaloneArtifactContext artifact={artifact} />
     </div>
   );
 }
 
-function AssistantMessage() {
-  const custom = useAuiState((state) => state.message.metadata.custom) as
-    Record<string, unknown> | undefined;
-  const runId = typeof custom?.runId === "string" ? custom.runId : "";
+function AssistantMessage({ message }: { message: UiMessage }) {
+  const runId =
+    message.runId ??
+    (typeof message.metadata.run_id === "string"
+      ? message.metadata.run_id
+      : "");
   const runStatus =
-    typeof custom?.runStatus === "string"
-      ? (custom.runStatus as StandaloneChatRunStatus)
-      : "completed";
+    message.runStatus ??
+    (typeof message.metadata.status === "string"
+      ? (message.metadata.status as StandaloneChatRunStatus)
+      : "completed");
   const [showWork, setShowWork] = useState(false);
   const { artifacts, onRetry, onStop } = useChatUi();
-  const messageId = useAuiState((state) => state.message.id);
+  const { toast } = useToast();
   const attachedArtifacts = artifacts.filter(
     (artifact) =>
-      artifact.assistant_message_id === messageId ||
-      (!artifact.assistant_message_id && artifact.run_id === runId),
+      artifact.assistant_message_id === message.id || artifact.run_id === runId,
   );
   const successful = runStatus === "completed";
   const running = runStatus === "queued" || runStatus === "running";
+  const runtimeArchiveAvailable =
+    message.metadata.runtime_archive_available === true;
   return (
-    <MessagePrimitive.Root className="group mx-auto w-full max-w-3xl px-6 py-5">
+    <article
+      data-chat-message-id={message.id}
+      className="group mx-auto w-full max-w-3xl px-6 py-5"
+    >
       <div className="flex gap-3">
         <div className="mt-0.5 flex h-7 w-7 flex-none items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)]">
           {running ? (
@@ -554,7 +540,11 @@ function AssistantMessage() {
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <MessagePrimitive.Parts components={{ Text: MarkdownText }} />
+          <div className="chat-markdown">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {message.content}
+            </ReactMarkdown>
+          </div>
           {attachedArtifacts.length > 0 && (
             <div className="mt-5 space-y-4">
               {attachedArtifacts.map((artifact) => (
@@ -574,24 +564,40 @@ function AssistantMessage() {
           )}
           <div className="mt-3 flex flex-wrap items-center gap-1.5">
             {successful && (
-              <ActionBarPrimitive.Root>
-                <ActionBarPrimitive.Copy className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]">
-                  <Copy className="h-3 w-3" />
-                  Copy
-                </ActionBarPrimitive.Copy>
-              </ActionBarPrimitive.Root>
+              <button
+                type="button"
+                onClick={() =>
+                  void navigator.clipboard
+                    .writeText(message.content)
+                    .catch(() => toast("Could not copy answer", "error"))
+                }
+                className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+              >
+                <Copy className="h-3 w-3" />
+                Copy
+              </button>
             )}
             {runId && (
               <button
                 type="button"
-                onClick={() => setShowWork((value) => !value)}
+                onClick={() => {
+                  if (runtimeArchiveAvailable) {
+                    void openStandaloneNotebookArchive(runId).catch(() =>
+                      toast("Archived notebook is unavailable", "error"),
+                    );
+                  } else {
+                    setShowWork((value) => !value);
+                  }
+                }}
                 className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
               >
                 <Wrench className="h-3 w-3" />
                 View work
-                <ChevronRight
-                  className={`h-3 w-3 transition-transform ${showWork ? "rotate-90" : ""}`}
-                />
+                {!runtimeArchiveAvailable && (
+                  <ChevronRight
+                    className={`h-3 w-3 transition-transform ${showWork ? "rotate-90" : ""}`}
+                  />
+                )}
               </button>
             )}
             {running && runId && (
@@ -615,42 +621,45 @@ function AssistantMessage() {
               </button>
             )}
           </div>
-          {showWork && runId && (
+          {showWork && runId && !runtimeArchiveAvailable && (
             <div className="mt-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-input)] p-4">
               <WorkTimeline runId={runId} />
             </div>
           )}
         </div>
       </div>
-    </MessagePrimitive.Root>
+    </article>
   );
 }
 
-function UserMessage() {
+function UserMessage({ message }: { message: UiMessage }) {
   return (
-    <MessagePrimitive.Root className="mx-auto w-full max-w-3xl px-6 py-4">
+    <article
+      data-chat-message-id={message.id}
+      className="mx-auto w-full max-w-3xl px-6 py-4"
+    >
       <div className="ml-auto max-w-[78%] rounded-2xl rounded-br-md border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-4 py-3 text-sm leading-6 text-[var(--color-text)]">
-        <MessagePrimitive.Parts components={{ Text: PlainText }} />
+        <div className="whitespace-pre-wrap">{message.content}</div>
       </div>
-    </MessagePrimitive.Root>
+    </article>
   );
 }
 
-function ChatMessage() {
-  return (
-    <>
-      <MessagePrimitive.If user>
-        <UserMessage />
-      </MessagePrimitive.If>
-      <MessagePrimitive.If assistant>
-        <AssistantMessage />
-      </MessagePrimitive.If>
-    </>
+function ChatMessage({ message }: { message: UiMessage }) {
+  return message.role === "user" ? (
+    <UserMessage message={message} />
+  ) : (
+    <AssistantMessage message={message} />
   );
 }
 
-function StarterQuestions({ questions }: { questions: string[] }) {
-  const aui = useAui();
+function StarterQuestions({
+  questions,
+  onSelect,
+}: {
+  questions: string[];
+  onSelect: (question: string) => void;
+}) {
   return (
     <div className="grid grid-cols-2 gap-3">
       {questions.slice(0, 4).map((question) => (
@@ -658,7 +667,7 @@ function StarterQuestions({ questions }: { questions: string[] }) {
           key={question}
           type="button"
           onClick={() => {
-            aui.composer.setText(question);
+            onSelect(question);
             requestAnimationFrame(() =>
               document
                 .querySelector<HTMLTextAreaElement>("[data-chat-composer]")
@@ -702,26 +711,37 @@ function ReadinessNotice({
 function ConversationRail({
   conversations,
   activeId,
+  historyLoading,
+  loadingConversationId,
+  onNewConversation,
+  onSelectConversation,
+  onPrefetchConversation,
   onRename,
   onArchive,
   onShare,
   onRevokeShare,
+  sharingEnabled,
 }: {
   conversations: StandaloneConversation[];
   activeId?: string;
+  historyLoading: boolean;
+  loadingConversationId: string | null;
+  onNewConversation: () => void;
+  onSelectConversation: (conversationId: string) => void;
+  onPrefetchConversation: (conversationId: string) => void;
   onRename: (conversation: StandaloneConversation) => void;
   onArchive: (conversation: StandaloneConversation) => void;
   onShare: (conversation: StandaloneConversation) => void;
   onRevokeShare: (conversation: StandaloneConversation) => void;
+  sharingEnabled: boolean;
 }) {
-  const router = useRouter();
   const [menuId, setMenuId] = useState<string | null>(null);
   return (
     <aside className="flex w-72 flex-none flex-col border-r border-[var(--color-border)] bg-[var(--color-sidebar)]">
       <div className="p-3 pr-7">
         <button
           type="button"
-          onClick={() => router.push("/chats")}
+          onClick={onNewConversation}
           className="flex w-full items-center gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-2.5 text-sm text-[var(--color-text)] hover:border-[var(--color-border-hover)]"
         >
           <MessageSquarePlus className="h-4 w-4" />
@@ -732,7 +752,20 @@ function ConversationRail({
         Your chats
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
-        {conversations.length === 0 ? (
+        {historyLoading && conversations.length === 0 ? (
+          <div
+            aria-label="Loading chat history"
+            role="status"
+            className="space-y-2 px-2 py-1"
+          >
+            {[0, 1, 2, 3].map((index) => (
+              <div
+                key={index}
+                className="h-14 animate-pulse rounded-xl bg-[var(--color-bg-card)]"
+              />
+            ))}
+          </div>
+        ) : conversations.length === 0 ? (
           <p className="px-3 py-4 text-xs text-[var(--color-text-dim)]">
             Your private conversations will appear here.
           </p>
@@ -748,11 +781,18 @@ function ConversationRail({
             >
               <button
                 type="button"
-                onClick={() => router.push(`/chats/${conversation.id}`)}
+                onPointerEnter={() => onPrefetchConversation(conversation.id)}
+                onFocus={() => onPrefetchConversation(conversation.id)}
+                onClick={() => onSelectConversation(conversation.id)}
                 className="w-full px-3 py-2.5 pr-9 text-left"
               >
-                <div className="truncate text-[13px] text-[var(--color-text)]">
-                  {conversation.title}
+                <div className="flex items-center gap-2 text-[13px] text-[var(--color-text)]">
+                  <span className="min-w-0 flex-1 truncate">
+                    {conversation.title}
+                  </span>
+                  {loadingConversationId === conversation.id && (
+                    <Loader2 className="h-3 w-3 flex-none animate-spin text-[var(--color-text-dim)]" />
+                  )}
                 </div>
                 <div className="mt-1 flex items-center gap-2 text-[10px]">
                   <span className="truncate text-[var(--color-text-dim)]">
@@ -779,27 +819,31 @@ function ConversationRail({
               </button>
               {menuId === conversation.id && (
                 <div className="absolute right-2 top-9 z-20 w-44 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-1 shadow-2xl">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMenuId(null);
-                      onShare(conversation);
-                    }}
-                    className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
-                  >
-                    <Share2 className="h-3 w-3" />
-                    Share with team
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMenuId(null);
-                      onRevokeShare(conversation);
-                    }}
-                    className="w-full rounded-lg px-3 py-2 text-left text-xs text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
-                  >
-                    Revoke team link
-                  </button>
+                  {sharingEnabled && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenuId(null);
+                        onShare(conversation);
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+                    >
+                      <Share2 className="h-3 w-3" />
+                      Share with team
+                    </button>
+                  )}
+                  {sharingEnabled && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenuId(null);
+                        onRevokeShare(conversation);
+                      }}
+                      className="w-full rounded-lg px-3 py-2 text-left text-xs text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+                    >
+                      Revoke team link
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => {
@@ -834,43 +878,94 @@ function ConversationRail({
   );
 }
 
-function Composer({
-  placeholder,
-  projectPicker,
+function QueryApprovalCard({
+  event,
+  onDecision,
 }: {
-  placeholder: string;
-  projectPicker?: ReactNode;
+  event: StandaloneChatEvent;
+  onDecision: (
+    decision: "approve" | "decline",
+    scope?: "run_once" | "current_chat" | "user_defaults",
+  ) => Promise<void>;
 }) {
-  const canSend = useAuiState((state) => state.composer.canSend);
+  const purpose = eventText(event, "purpose") || "Run the proposed query";
+  const estimate = Number(event.payload.estimated_cost_usd ?? 0);
+  const remaining = Number(event.payload.remaining_chat_budget_usd ?? 0);
+  const quality =
+    eventText(event, "estimate_quality") || "estimate unavailable";
+  return (
+    <section
+      role="status"
+      aria-live="polite"
+      aria-label="Query approval required"
+      className="mx-auto mb-2 w-full max-w-3xl rounded-xl border border-[var(--color-warning)]/40 bg-[var(--color-bg-card)] p-4"
+    >
+      <p className="text-sm font-medium text-[var(--color-text)]">
+        Query approval required
+      </p>
+      <p className="mt-1 text-xs text-[var(--color-text-muted)]">{purpose}</p>
+      <div className="mt-3 flex gap-5 text-xs text-[var(--color-text-dim)]">
+        <span>Estimated cost: ${estimate.toFixed(4)}</span>
+        <span>Remaining chat budget: ${remaining.toFixed(4)}</span>
+        <span>Quality: {quality.replaceAll("_", " ")}</span>
+      </div>
+      <details className="mt-3 text-xs text-[var(--color-text-dim)]">
+        <summary>Technical details</summary>
+        <code className="mt-2 block break-all">
+          SQL hash: {eventText(event, "sql_hash")}
+        </code>
+      </details>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => void onDecision("approve", "run_once")}
+          className="rounded-lg bg-[var(--color-text)] px-3 py-2 text-xs text-[var(--color-bg)]"
+        >
+          Run once
+        </button>
+        <button
+          type="button"
+          onClick={() => void onDecision("approve", "current_chat")}
+          className="rounded-lg border border-[var(--color-border)] px-3 py-2 text-xs"
+        >
+          Increase this chat budgets
+        </button>
+        <button
+          type="button"
+          onClick={() => void onDecision("approve", "user_defaults")}
+          className="rounded-lg border border-[var(--color-border)] px-3 py-2 text-xs"
+        >
+          Use as future defaults
+        </button>
+        <button
+          type="button"
+          onClick={() => void onDecision("decline")}
+          className="rounded-lg px-3 py-2 text-xs text-[var(--color-error)]"
+        >
+          Decline
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function ConversationMessagesSkeleton() {
   return (
     <div
-      data-testid="standalone-chat-composer"
-      className="mx-auto w-full max-w-3xl px-6 pb-6 pt-3"
+      role="status"
+      aria-label="Loading conversation"
+      className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-end gap-5 px-6 py-10"
     >
-      <ComposerPrimitive.Root className="relative overflow-hidden rounded-2xl border border-[var(--color-border-hover)] bg-[var(--color-bg-input)] shadow-2xl shadow-black/20 transition-colors focus-within:border-[var(--color-border-active)]">
-        {projectPicker && (
-          <div className="flex items-center border-b border-[var(--color-border)] px-4 py-2.5">
-            {projectPicker}
-          </div>
-        )}
-        <ComposerPrimitive.Input
-          data-chat-composer
-          rows={1}
-          autoFocus
-          placeholder={placeholder}
-          className="max-h-48 min-h-14 w-full resize-none border-0 bg-transparent px-4 py-4 pr-14 text-sm leading-6 text-[var(--color-text)] shadow-none outline-none placeholder:text-[var(--color-text-dim)] focus:border-0 focus:shadow-none focus:outline-none focus-visible:outline-none focus-visible:ring-0"
-        />
-        <ComposerPrimitive.Send
-          disabled={!canSend}
-          aria-label="Send message"
-          className="absolute bottom-3 right-3 flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--color-text)] text-[var(--color-bg)] disabled:cursor-not-allowed disabled:opacity-30"
-        >
-          <Send className="h-3.5 w-3.5" />
-        </ComposerPrimitive.Send>
-      </ComposerPrimitive.Root>
-      <p className="mt-2 text-center text-[10px] text-[var(--color-text-dim)]">
-        Answers use governed, read-only access. Check freshness and caveats.
-      </p>
+      <div className="ml-auto h-12 w-2/5 animate-pulse rounded-2xl bg-[var(--color-bg-card)]" />
+      <div className="flex max-w-2xl items-start gap-3">
+        <Loader2 className="mt-1 h-4 w-4 flex-none animate-spin text-[var(--color-text-dim)]" />
+        <div className="w-full space-y-2">
+          <div className="h-3 w-5/6 animate-pulse rounded bg-[var(--color-bg-card)]" />
+          <div className="h-3 w-2/3 animate-pulse rounded bg-[var(--color-bg-card)]" />
+          <div className="h-3 w-3/4 animate-pulse rounded bg-[var(--color-bg-card)]" />
+        </div>
+      </div>
+      <span className="sr-only">Loading conversation</span>
     </div>
   );
 }
@@ -882,7 +977,7 @@ export function StandaloneDataChat({
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { mutate: mutateCache } = useSWRConfig();
+  const { cache, mutate: mutateCache } = useSWRConfig();
   const { toast } = useToast();
   const {
     data: bootstrap,
@@ -891,14 +986,17 @@ export function StandaloneDataChat({
   } = useSWR("standalone-chat-bootstrap", getStandaloneChatBootstrap, {
     revalidateOnFocus: false,
   });
-  const { data: historyData, mutate: mutateHistory } = useSWR(
-    "standalone-chat-conversations",
-    listStandaloneConversations,
-    { refreshInterval: 4_000 },
-  );
+  const {
+    data: historyData,
+    isLoading: historyLoading,
+    mutate: mutateHistory,
+  } = useSWR("standalone-chat-conversations", listStandaloneConversations, {
+    refreshInterval: 4_000,
+  });
   const {
     data: detail,
     error: detailError,
+    isLoading: detailLoading,
     mutate: mutateDetail,
   } = useSWR(
     conversationId ? `standalone-chat-conversation:${conversationId}` : null,
@@ -912,8 +1010,22 @@ export function StandaloneDataChat({
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     null,
   );
+  const [perQueryBudgetUsd, setPerQueryBudgetUsd] = useState(0.25);
+  const [chatBudgetUsd, setChatBudgetUsd] = useState(1);
+  const [draft, setDraft] = useState("");
   const [isConversationRailOpen, setIsConversationRailOpen] = useState(true);
-  const [events, setEvents] = useState<StandaloneChatEvent[]>([]);
+  const [pendingSubmission, setPendingSubmission] =
+    useState<OptimisticUserMessage | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [loadingConversationId, setLoadingConversationId] = useState<
+    string | null
+  >(null);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const shouldStickToBottomRef = useRef(true);
+  const previousConversationIdRef = useRef(conversationId);
+  const conversationPrefetches = useRef(
+    new Map<string, Promise<StandaloneConversationDetail>>(),
+  );
   const selectedInitialized = useRef(false);
 
   useEffect(() => {
@@ -927,6 +1039,8 @@ export function StandaloneDataChat({
         bootstrap.projects[0]?.id ??
         null,
     );
+    setPerQueryBudgetUsd(bootstrap.default_per_query_budget_usd);
+    setChatBudgetUsd(bootstrap.default_chat_budget_usd);
     selectedInitialized.current = true;
   }, [bootstrap, requestedProject]);
 
@@ -937,16 +1051,6 @@ export function StandaloneDataChat({
     }
   }, [detail?.conversation.project_id]);
 
-  useEffect(() => {
-    setEvents([]);
-  }, [conversationId]);
-
-  useEffect(() => {
-    if (detail?.run_events) {
-      setEvents((current) => mergeEvents(current, detail.run_events));
-    }
-  }, [detail?.run_events]);
-
   const { data: readiness } = useSWR(
     selectedProjectId ? `standalone-chat-readiness:${selectedProjectId}` : null,
     () => getStandaloneChatProjectReadiness(selectedProjectId!),
@@ -954,141 +1058,315 @@ export function StandaloneDataChat({
   );
 
   const currentRun = detail?.current_run ?? null;
+  const events = detail?.run_events ?? [];
+  const eventsRef = useRef(events);
+  useEffect(() => {
+    eventsRef.current = events;
+  }, [events]);
+  const conversationLoading = Boolean(
+    conversationId && !detail && !detailError && detailLoading,
+  );
+  const approvalEvent = useMemo(() => {
+    if (currentRun?.status !== "waiting_for_query_approval") return null;
+    const decisions = new Set(
+      events
+        .filter(
+          (event) =>
+            event.type === "query_approved" || event.type === "query_declined",
+        )
+        .map((event) => eventText(event, "proposal_id")),
+    );
+    return (
+      [...events]
+        .reverse()
+        .find(
+          (event) =>
+            event.run_id === currentRun.id &&
+            event.type === "query_approval_requested" &&
+            !decisions.has(eventText(event, "proposal_id")),
+        ) ?? null
+    );
+  }, [currentRun, events]);
+  const onQueryDecision = useCallback(
+    async (
+      decision: "approve" | "decline",
+      scope: "run_once" | "current_chat" | "user_defaults" = "run_once",
+    ) => {
+      if (!approvalEvent || !detail) return;
+      const estimate = Number(approvalEvent.payload.estimated_cost_usd ?? 0);
+      const proposalId = eventText(approvalEvent, "proposal_id");
+      const budgets =
+        scope === "run_once"
+          ? undefined
+          : {
+              perQueryBudgetUsd: Math.max(
+                detail.conversation.per_query_budget_usd,
+                estimate,
+              ),
+              chatBudgetUsd: Math.max(
+                detail.conversation.chat_budget_usd,
+                detail.conversation.actual_spend_usd + estimate,
+                estimate,
+              ),
+            };
+      try {
+        await decideStandaloneQueryProposal(
+          proposalId,
+          decision,
+          scope,
+          budgets,
+        );
+        await mutateDetail();
+        await mutateHistory();
+      } catch (error) {
+        toast(
+          error instanceof Error
+            ? error.message
+            : "Could not save the query decision",
+          "error",
+        );
+      }
+    },
+    [approvalEvent, detail, mutateDetail, mutateHistory, toast],
+  );
+  const currentRunId = currentRun?.id;
   const streamStatus = currentRun?.status;
   useEffect(() => {
-    if (!currentRun || !isStreamingStatus(currentRun.status)) {
+    if (!currentRunId) {
       return;
     }
     const controller = new AbortController();
-    const currentEvents = events.filter(
-      (event) => event.run_id === currentRun.id,
+    const currentEvents = eventsRef.current.filter(
+      (event) => event.run_id === currentRunId,
     );
     const after = currentEvents.reduce(
       (maximum, event) => Math.max(maximum, event.sequence),
       0,
     );
-    streamStandaloneRunEvents(
-      currentRun.id,
-      after,
-      controller.signal,
-      (event) => {
-        setEvents((value) => mergeEvents(value, [event]));
-        if (
-          event.type === "status" ||
-          event.type === "artifact_created" ||
-          event.type === "clarification_requested"
-        ) {
-          void mutateDetail();
-          void mutateHistory();
+    let cursor = after;
+    let retryDelay = 250;
+    const followRun = async () => {
+      while (!controller.signal.aborted) {
+        try {
+          await streamStandaloneRunEvents(
+            currentRunId,
+            cursor,
+            controller.signal,
+            (event) => {
+              cursor = Math.max(cursor, event.sequence);
+              void mutateDetail(
+                (current) =>
+                  current ? applyStandaloneChatEvent(current, event) : current,
+                { revalidate: false },
+              );
+              if (event.type === "status") {
+                const status = event.payload.status;
+                if (typeof status === "string") {
+                  void mutateHistory(
+                    (current) =>
+                      current
+                        ? {
+                            conversations: current.conversations.map(
+                              (conversation) =>
+                                conversation.id === conversationId
+                                  ? {
+                                      ...conversation,
+                                      run_status:
+                                        status as StandaloneChatRunStatus,
+                                    }
+                                  : conversation,
+                            ),
+                          }
+                        : current,
+                    { revalidate: false },
+                  );
+                }
+              }
+            },
+          );
+        } catch (error) {
+          if (controller.signal.aborted) return;
+          if (error instanceof DOMException && error.name === "AbortError") {
+            return;
+          }
         }
-      },
-    )
-      .then(() => {
-        void mutateDetail();
-        void mutateHistory();
-      })
-      .catch((error) => {
-        if (error instanceof DOMException && error.name === "AbortError")
-          return;
-        window.setTimeout(() => void mutateDetail(), 1_000);
-      });
+        if (controller.signal.aborted) return;
+        try {
+          const latest = await mutateDetail();
+          void mutateHistory();
+          if (latest && isStandaloneRunReconciled(latest, currentRunId)) {
+            return;
+          }
+        } catch {
+          // The next bounded retry reconciles transient network failures.
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, retryDelay));
+        retryDelay = Math.min(retryDelay * 2, 5_000);
+      }
+    };
+    void followRun();
     return () => controller.abort();
-    // `events` intentionally does not restart the stream for every received event.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentRun?.id, streamStatus, mutateDetail, mutateHistory]);
+  }, [conversationId, currentRunId, streamStatus, mutateDetail, mutateHistory]);
 
   const uiMessages = useMemo<UiMessage[]>(() => {
     const messages: UiMessage[] = [...(detail?.messages ?? [])];
-    if (!currentRun) return messages;
-    const runMessages = messages.filter(
-      (message) => message.metadata.run_id === currentRun.id,
-    );
-    const hasTerminalMessage = runMessages.some(
-      (message) =>
-        message.role === "assistant" &&
-        ["completed", "failed", "cancelled"].includes(
-          typeof message.metadata.status === "string"
-            ? message.metadata.status
-            : "",
-        ),
-    );
-    const hasWaitingMessage = runMessages.some(
-      (message) =>
-        message.role === "assistant" &&
-        message.metadata.status === "waiting_for_user",
-    );
-    if (
-      hasTerminalMessage ||
-      (currentRun.status === "waiting_for_user" && hasWaitingMessage)
-    ) {
-      return messages;
+    if (currentRun) {
+      const runMessages = messages.filter(
+        (message) => message.metadata.run_id === currentRun.id,
+      );
+      const hasTerminalMessage = runMessages.some(
+        (message) =>
+          message.role === "assistant" &&
+          ["completed", "failed", "cancelled"].includes(
+            typeof message.metadata.status === "string"
+              ? message.metadata.status
+              : "",
+          ),
+      );
+      const hasWaitingMessage = runMessages.some(
+        (message) =>
+          message.role === "assistant" &&
+          message.metadata.status === "waiting_for_user",
+      );
+      if (
+        !hasTerminalMessage &&
+        !(currentRun.status === "waiting_for_user" && hasWaitingMessage)
+      ) {
+        const runEvents = events.filter(
+          (event) => event.run_id === currentRun.id,
+        );
+        const resetSequence = runEvents.reduce(
+          (latest, event) =>
+            event.type === "status" && event.payload?.reset_text === true
+              ? Math.max(latest, event.sequence)
+              : latest,
+          0,
+        );
+        const streamed = assembleStandaloneRunText(
+          runEvents,
+          currentRun.id,
+          resetSequence,
+        );
+        const clarification = [...runEvents]
+          .reverse()
+          .find((event) => event.type === "clarification_requested");
+        const error = [...runEvents]
+          .reverse()
+          .find((event) => event.type === "error");
+        const progress = [...runEvents]
+          .reverse()
+          .find((event) => event.type === "progress");
+        const content =
+          (clarification && eventText(clarification, "message")) ||
+          streamed ||
+          (error && eventText(error, "message")) ||
+          (currentRun.status === "cancelled"
+            ? "This run was stopped."
+            : eventText(progress, "label") || "Preparing your answer…");
+        messages.push({
+          id: `run-${currentRun.id}`,
+          role: "assistant",
+          content,
+          sequence: Number.MAX_SAFE_INTEGER,
+          created_at: Date.parse(currentRun.created_at) / 1_000,
+          metadata: { run_id: currentRun.id, optimistic: true },
+          runId: currentRun.id,
+          runStatus: currentRun.status,
+          synthetic: true,
+        });
+      }
     }
-    const runEvents = events.filter((event) => event.run_id === currentRun.id);
-    const resetSequence = runEvents.reduce(
-      (latest, event) =>
-        event.type === "status" && event.payload?.reset_text === true
-          ? Math.max(latest, event.sequence)
-          : latest,
-      0,
-    );
-    const streamed = runEvents
-      .filter(
-        (event) =>
-          event.type === "text_delta" && event.sequence > resetSequence,
-      )
-      .map((event) => eventText(event, "delta"))
-      .join("");
-    const clarification = [...runEvents]
-      .reverse()
-      .find((event) => event.type === "clarification_requested");
-    const error = [...runEvents]
-      .reverse()
-      .find((event) => event.type === "error");
-    const progress = [...runEvents]
-      .reverse()
-      .find((event) => event.type === "progress");
-    const content =
-      (clarification && eventText(clarification, "message")) ||
-      streamed ||
-      (error && eventText(error, "message")) ||
-      (currentRun.status === "cancelled"
-        ? "This run was stopped."
-        : eventText(progress, "label") ||
-          "Preparing your answer…");
-    messages.push({
-      id: `run-${currentRun.id}`,
-      role: "assistant",
-      content,
-      sequence: Number.MAX_SAFE_INTEGER,
-      created_at: Date.parse(currentRun.created_at) / 1_000,
-      metadata: { run_id: currentRun.id },
-      runId: currentRun.id,
-      runStatus: currentRun.status,
-      synthetic: true,
-    });
+    if (
+      pendingSubmission &&
+      !containsStandaloneSubmission(messages, pendingSubmission)
+    ) {
+      messages.push({
+        id: pendingSubmission.id,
+        role: "user",
+        content: pendingSubmission.content,
+        sequence: Number.MAX_SAFE_INTEGER - 1,
+        created_at: pendingSubmission.createdAt,
+        metadata: { optimistic: true },
+      });
+    }
+    if (
+      pendingSubmission &&
+      isSubmitting &&
+      !isStreamingStatus(currentRun?.status)
+    ) {
+      messages.push({
+        id: `pending-assistant-${pendingSubmission.id}`,
+        role: "assistant",
+        content: "Preparing your answer…",
+        sequence: Number.MAX_SAFE_INTEGER,
+        created_at: pendingSubmission.createdAt,
+        metadata: { optimistic: true },
+        runStatus: "queued",
+        synthetic: true,
+      });
+    }
     return messages;
-  }, [currentRun, detail?.messages, events]);
+  }, [currentRun, detail?.messages, events, isSubmitting, pendingSubmission]);
 
-  const submitMessage = useCallback(
-    async (appendMessage: AppendMessage) => {
-      const text = extractText(appendMessage);
-      if (!text) return;
+  useEffect(() => {
+    if (
+      pendingSubmission &&
+      containsStandaloneSubmission(
+        detail?.messages ?? [],
+        pendingSubmission,
+        true,
+      )
+    ) {
+      setPendingSubmission(null);
+    }
+  }, [detail?.messages, pendingSubmission]);
+
+  const submitText = useCallback(
+    async (text: string) => {
+      text = text.trim();
+      if (!text || isSubmitting) return;
+      shouldStickToBottomRef.current = true;
+      const optimistic: OptimisticUserMessage = {
+        id: `optimistic-${crypto.randomUUID()}`,
+        content: text,
+        createdAt: Date.now() / 1_000,
+      };
+      setPendingSubmission(optimistic);
+      setIsSubmitting(true);
       try {
         if (!conversationId) {
           if (!selectedProjectId) throw new Error("Select a project first");
           const created = await createStandaloneConversation(
             selectedProjectId,
             text,
+            perQueryBudgetUsd,
+            chatBudgetUsd,
           );
           await mutateCache(
             `standalone-chat-conversation:${created.conversation.id}`,
             created,
             { revalidate: false },
           );
-          await mutateHistory();
+          await mutateHistory(
+            (current) => ({
+              conversations: upsertStandaloneConversation(
+                current?.conversations ?? [],
+                created.conversation,
+              ),
+            }),
+            { revalidate: false },
+          );
           router.replace(`/chats/${created.conversation.id}`);
+          void mutateHistory();
           return;
         }
+        await mutateDetail(
+          (current) =>
+            current
+              ? appendOptimisticUserMessage(current, optimistic)
+              : current,
+          { revalidate: false },
+        );
         let run;
         if (currentRun?.status === "waiting_for_user") {
           run = await clarifyStandaloneRun(currentRun.id, text);
@@ -1100,28 +1378,83 @@ export function StandaloneDataChat({
             current
               ? {
                   ...current,
+                  conversation: {
+                    ...current.conversation,
+                    run_status: run.status,
+                    updated_at: Date.now() / 1_000,
+                  },
+                  messages: current.messages.map((message) =>
+                    message.id === optimistic.id
+                      ? {
+                          ...message,
+                          metadata: {
+                            ...message.metadata,
+                            run_id: run.id,
+                          },
+                        }
+                      : message,
+                  ),
                   current_run: run,
                 }
               : current,
           { revalidate: false },
         );
+        await mutateHistory(
+          (current) =>
+            current
+              ? {
+                  conversations: current.conversations.map((conversation) =>
+                    conversation.id === conversationId
+                      ? {
+                          ...conversation,
+                          run_status: run.status,
+                          updated_at: Date.now() / 1_000,
+                        }
+                      : conversation,
+                  ),
+                }
+              : current,
+          { revalidate: false },
+        );
+        setPendingSubmission(null);
         void mutateDetail();
-        await mutateHistory();
+        void mutateHistory();
       } catch (error) {
+        if (conversationId) {
+          await mutateDetail(
+            (current) =>
+              current
+                ? {
+                    ...current,
+                    messages: current.messages.filter(
+                      (message) => message.id !== optimistic.id,
+                    ),
+                  }
+                : current,
+            { revalidate: false },
+          );
+        }
+        setPendingSubmission(null);
+        setDraft(text);
         toast(
           error instanceof Error ? error.message : "Could not send message",
           "error",
         );
+      } finally {
+        setIsSubmitting(false);
       }
     },
     [
       conversationId,
       currentRun,
+      isSubmitting,
       mutateDetail,
       mutateCache,
       mutateHistory,
       router,
       selectedProjectId,
+      perQueryBudgetUsd,
+      chatBudgetUsd,
       toast,
     ],
   );
@@ -1167,89 +1500,81 @@ export function StandaloneDataChat({
     [mutateDetail, mutateHistory, toast],
   );
 
-  const runtime = useExternalStoreRuntime({
-    messages: uiMessages,
-    convertMessage: (message: UiMessage): ThreadMessageLike => {
-      const metadataRunId =
-        message.runId ??
-        (typeof message.metadata.run_id === "string"
-          ? message.metadata.run_id
-          : undefined);
-      const metadataStatus =
-        message.runStatus ??
-        (typeof message.metadata.status === "string"
-          ? (message.metadata.status as StandaloneChatRunStatus)
-          : "completed");
-      return {
-        id: message.id,
-        role: message.role,
-        content: [{ type: "text", text: message.content }],
-        createdAt: new Date(message.created_at * 1_000),
-        ...(message.role === "assistant"
-          ? {
-              status:
-                metadataStatus === "queued" || metadataStatus === "running"
-                  ? ({ type: "running" } as const)
-                  : metadataStatus === "failed"
-                    ? ({
-                        type: "incomplete",
-                        reason: "error",
-                      } as const)
-                    : metadataStatus === "cancelled"
-                      ? ({
-                          type: "incomplete",
-                          reason: "cancelled",
-                        } as const)
-                      : ({ type: "complete", reason: "stop" } as const),
-              metadata: {
-                custom: {
-                  runId: metadataRunId,
-                  runStatus: metadataStatus,
-                  synthetic: message.synthetic ?? false,
-                },
-              },
-            }
-          : {}),
-      };
+  const loadConversation = useCallback(
+    (id: string): Promise<StandaloneConversationDetail> => {
+      const key = `standalone-chat-conversation:${id}`;
+      const cached = cache.get(key) as
+        { data?: StandaloneConversationDetail } | undefined;
+      if (cached?.data) return Promise.resolve(cached.data);
+      const existing = conversationPrefetches.current.get(id);
+      if (existing) return existing;
+      const request = getStandaloneConversation(id)
+        .then(async (conversation) => {
+          await mutateCache(key, conversation, { revalidate: false });
+          return conversation;
+        })
+        .finally(() => conversationPrefetches.current.delete(id));
+      conversationPrefetches.current.set(id, request);
+      return request;
     },
-    isRunning:
-      currentRun?.status === "queued" || currentRun?.status === "running",
-    isSendDisabled:
-      !selectedProjectId ||
-      (readiness?.ready === false &&
-        currentRun?.status !== "waiting_for_user") ||
-      currentRun?.status === "queued" ||
-      currentRun?.status === "running",
-    onNew: submitMessage,
-    onCancel: currentRun ? () => onStop(currentRun.id) : undefined,
-    adapters: {
-      threadList: {
-        threadId: conversationId,
-        threads: (historyData?.conversations ?? []).map((conversation) => ({
-          status: "regular" as const,
-          id: conversation.id,
-          remoteId: conversation.id,
-          title: conversation.title,
-          custom: {
-            projectId: conversation.project_id,
-            runStatus: conversation.run_status,
-          },
-        })),
-        onSwitchToNewThread: () => router.push("/chats"),
-        onSwitchToThread: (threadId) => router.push(`/chats/${threadId}`),
-        onRename: async (threadId, title) => {
-          await renameStandaloneConversation(threadId, title);
-          await mutateHistory();
-        },
-        onArchive: async (threadId) => {
-          await archiveStandaloneConversation(threadId);
-          await mutateHistory();
-          if (threadId === conversationId) router.push("/chats");
-        },
-      },
+    [cache, mutateCache],
+  );
+  const prefetchConversation = useCallback(
+    (id: string) => {
+      router.prefetch(`/chats/${id}`);
+      void loadConversation(id).catch(() => undefined);
     },
-    unstable_capabilities: { copy: true },
-  });
+    [loadConversation, router],
+  );
+  const selectConversation = useCallback(
+    async (id: string) => {
+      if (id === conversationId) return;
+      shouldStickToBottomRef.current = true;
+      setLoadingConversationId(id);
+      router.prefetch(`/chats/${id}`);
+      try {
+        await loadConversation(id);
+        router.push(`/chats/${id}`);
+      } catch (error) {
+        toast(
+          error instanceof Error
+            ? error.message
+            : "Could not load the conversation",
+          "error",
+        );
+      } finally {
+        setLoadingConversationId(null);
+      }
+    },
+    [conversationId, loadConversation, router, toast],
+  );
+
+  const submitDisabled =
+    isSubmitting ||
+    conversationLoading ||
+    !selectedProjectId ||
+    (readiness?.ready === false && currentRun?.status !== "waiting_for_user") ||
+    currentRun?.status === "queued" ||
+    currentRun?.status === "running" ||
+    currentRun?.status === "waiting_for_query_approval";
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    const switchedConversation =
+      previousConversationIdRef.current !== conversationId;
+    previousConversationIdRef.current = conversationId;
+    if (switchedConversation) shouldStickToBottomRef.current = true;
+    if (!viewport || !shouldStickToBottomRef.current) return;
+    viewport.scrollTop = viewport.scrollHeight;
+  }, [conversationId, uiMessages]);
+
+  const onViewportScroll = useCallback(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const distanceFromBottom =
+      viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    shouldStickToBottomRef.current = distanceFromBottom < 96;
+  }, []);
 
   const conversations = historyData?.conversations ?? [];
   const starters =
@@ -1393,42 +1718,47 @@ export function StandaloneDataChat({
         onRetry,
       }}
     >
-      <AssistantRuntimeProvider runtime={runtime}>
-        <div className="h-screen min-w-[960px] overflow-hidden p-4">
-          <div className="relative flex h-full overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)] shadow-2xl shadow-black/20">
-            <button
-              type="button"
-              aria-label={
-                isConversationRailOpen
-                  ? "Collapse chat history"
-                  : "Expand chat history"
+      <div className="h-screen min-w-[960px] overflow-hidden p-4">
+        <div className="relative flex h-full overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)] shadow-2xl shadow-black/20">
+          <button
+            type="button"
+            aria-label={
+              isConversationRailOpen
+                ? "Collapse chat history"
+                : "Expand chat history"
+            }
+            aria-expanded={isConversationRailOpen}
+            onClick={() => setIsConversationRailOpen((isOpen) => !isOpen)}
+            className={`absolute top-3 z-30 flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-dim)] shadow-lg shadow-black/20 transition-[left,color,background-color] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] ${
+              isConversationRailOpen ? "left-[17rem]" : "left-3"
+            }`}
+          >
+            <PanelLeft className="h-4 w-4" />
+          </button>
+          {isConversationRailOpen && (
+            <ConversationRail
+              conversations={conversations}
+              activeId={conversationId}
+              historyLoading={historyLoading}
+              loadingConversationId={loadingConversationId}
+              onNewConversation={() => router.push("/chats")}
+              onSelectConversation={(id) => void selectConversation(id)}
+              onPrefetchConversation={prefetchConversation}
+              onRename={(conversation) => void renameConversation(conversation)}
+              onArchive={(conversation) =>
+                void archiveConversation(conversation)
               }
-              aria-expanded={isConversationRailOpen}
-              onClick={() =>
-                setIsConversationRailOpen((isOpen) => !isOpen)
-              }
-              className={`absolute top-3 z-30 flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-dim)] shadow-lg shadow-black/20 transition-[left,color,background-color] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] ${
-                isConversationRailOpen ? "left-[17rem]" : "left-3"
-              }`}
-            >
-              <PanelLeft className="h-4 w-4" />
-            </button>
-            {isConversationRailOpen && (
-              <ConversationRail
-                conversations={conversations}
-                activeId={conversationId}
-                onRename={(conversation) =>
-                  void renameConversation(conversation)
-                }
-                onArchive={(conversation) =>
-                  void archiveConversation(conversation)
-                }
-                onShare={(conversation) => void shareConversation(conversation)}
-                onRevokeShare={(conversation) => void revokeShare(conversation)}
-              />
-            )}
-            <ThreadPrimitive.Root className="relative flex min-w-0 flex-1 flex-col">
-              {conversationId && detail && (
+              onShare={(conversation) => void shareConversation(conversation)}
+              onRevokeShare={(conversation) => void revokeShare(conversation)}
+              sharingEnabled={Boolean(
+                bootstrap.enterprise_features.organization_sharing,
+              )}
+            />
+          )}
+          <main className="relative flex min-w-0 flex-1 flex-col">
+            {conversationId &&
+              detail &&
+              bootstrap.enterprise_features.organization_sharing && (
                 <button
                   type="button"
                   aria-label="Share conversation"
@@ -1439,65 +1769,92 @@ export function StandaloneDataChat({
                   <Share2 className="h-4 w-4" />
                 </button>
               )}
-              {conversationId && unreadyMessage && (
-                <div className="flex-none px-6 pt-4">
-                  <ReadinessNotice
-                    message={unreadyMessage}
-                    showSetup={showSetupCta}
-                    onSetup={() => router.push("/projects")}
-                  />
+            {conversationId && unreadyMessage && (
+              <div className="flex-none px-6 pt-4">
+                <ReadinessNotice
+                  message={unreadyMessage}
+                  showSetup={showSetupCta}
+                  onSetup={() => router.push("/projects")}
+                />
+              </div>
+            )}
+            <div
+              ref={viewportRef}
+              onScroll={onViewportScroll}
+              className="min-h-0 flex-1 overflow-y-auto"
+            >
+              {conversationLoading ? (
+                <ConversationMessagesSkeleton />
+              ) : empty ? (
+                <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center px-6 py-12">
+                  <div className="mb-8">
+                    <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+                      <Sparkles className="h-4 w-4 text-[var(--color-success)]" />
+                    </div>
+                    <h1 className="text-2xl font-medium tracking-[-0.025em] text-[var(--color-text)]">
+                      What would you like to understand?
+                    </h1>
+                    <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--color-text-muted)]">
+                      Ask in plain English. SignalPilot will inspect the
+                      project, query governed production data, and choose the
+                      clearest answer format.
+                    </p>
+                  </div>
+                  {unreadyMessage ? (
+                    <ReadinessNotice
+                      message={unreadyMessage}
+                      showSetup={showSetupCta}
+                      onSetup={() => router.push("/projects")}
+                    />
+                  ) : starters.length === 4 ? (
+                    <StarterQuestions
+                      questions={starters}
+                      onSelect={setDraft}
+                    />
+                  ) : (
+                    <div className="grid grid-cols-2 gap-3">
+                      {[0, 1, 2, 3].map((index) => (
+                        <div
+                          key={index}
+                          className="h-24 animate-pulse rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)]"
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div data-testid="standalone-chat-messages">
+                  {uiMessages.map((message) => (
+                    <ChatMessage
+                      key={standaloneMessageKey(conversationId, message)}
+                      message={message}
+                    />
+                  ))}
                 </div>
               )}
-              <ThreadPrimitive.Viewport className="min-h-0 flex-1 overflow-y-auto">
-                {empty ? (
-                  <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center px-6 py-12">
-                    <div className="mb-8">
-                      <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)]">
-                        <Sparkles className="h-4 w-4 text-[var(--color-success)]" />
-                      </div>
-                      <h1 className="text-2xl font-medium tracking-[-0.025em] text-[var(--color-text)]">
-                        What would you like to understand?
-                      </h1>
-                      <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--color-text-muted)]">
-                        Ask in plain English. SignalPilot will inspect the
-                        project, query governed production data, and choose the
-                        clearest answer format.
-                      </p>
-                    </div>
-                    {unreadyMessage ? (
-                      <ReadinessNotice
-                        message={unreadyMessage}
-                        showSetup={showSetupCta}
-                        onSetup={() => router.push("/projects")}
-                      />
-                    ) : starters.length === 4 ? (
-                      <StarterQuestions questions={starters} />
-                    ) : (
-                      <div className="grid grid-cols-2 gap-3">
-                        {[0, 1, 2, 3].map((index) => (
-                          <div
-                            key={index}
-                            className="h-24 animate-pulse rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)]"
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <ThreadPrimitive.Messages
-                    components={{ Message: ChatMessage }}
+              <div className="sticky bottom-0 bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)] to-transparent pt-3">
+                {approvalEvent && (
+                  <QueryApprovalCard
+                    event={approvalEvent}
+                    onDecision={onQueryDecision}
                   />
                 )}
-                <ThreadPrimitive.ViewportFooter className="sticky bottom-0 bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)] to-transparent pt-3">
-                  <Composer
-                    placeholder={
-                      currentRun?.status === "waiting_for_user"
-                        ? "Answer the clarification…"
+                <StandaloneChatComposer
+                  value={draft}
+                  onValueChange={setDraft}
+                  onSubmit={(text) => void submitText(text)}
+                  submitDisabled={submitDisabled}
+                  placeholder={
+                    currentRun?.status === "waiting_for_user"
+                      ? "Answer the clarification…"
+                      : currentRun?.status === "waiting_for_query_approval"
+                        ? "Approve or decline the proposed query above…"
                         : "Ask a question about this project…"
-                    }
-                    projectPicker={
-                      !conversationId ? (
-                        <label className="flex items-center gap-2 text-xs text-[var(--color-text-dim)]">
+                  }
+                  projectPicker={
+                    !conversationId ? (
+                      <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--color-text-dim)]">
+                        <label className="flex items-center gap-2">
                           <span>Project</span>
                           <select
                             value={selectedProjectId ?? ""}
@@ -1524,15 +1881,54 @@ export function StandaloneDataChat({
                             ))}
                           </select>
                         </label>
-                      ) : undefined
-                    }
-                  />
-                </ThreadPrimitive.ViewportFooter>
-              </ThreadPrimitive.Viewport>
-            </ThreadPrimitive.Root>
-          </div>
+                        {bootstrap.enterprise_features.query_approval && (
+                          <>
+                            <label className="flex items-center gap-2">
+                              <span>Per-query budget</span>
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={perQueryBudgetUsd}
+                                onChange={(event) =>
+                                  setPerQueryBudgetUsd(
+                                    Math.max(0, Number(event.target.value)),
+                                  )
+                                }
+                                aria-label="Per-query budget in USD"
+                                className="w-20 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-1.5"
+                              />
+                            </label>
+                            <label className="flex items-center gap-2">
+                              <span>Chat budget</span>
+                              <input
+                                type="number"
+                                min={perQueryBudgetUsd}
+                                step="0.01"
+                                value={chatBudgetUsd}
+                                onChange={(event) =>
+                                  setChatBudgetUsd(
+                                    Math.max(
+                                      perQueryBudgetUsd,
+                                      Number(event.target.value),
+                                    ),
+                                  )
+                                }
+                                aria-label="Chat budget in USD"
+                                className="w-20 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-1.5"
+                              />
+                            </label>
+                          </>
+                        )}
+                      </div>
+                    ) : undefined
+                  }
+                />
+              </div>
+            </div>
+          </main>
         </div>
-      </AssistantRuntimeProvider>
+      </div>
     </ChatUiContext.Provider>
   );
 }

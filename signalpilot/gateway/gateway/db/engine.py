@@ -255,10 +255,7 @@ async def _ensure_github_authorized_repos_column(engine) -> None:
     """
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "ALTER TABLE gateway_github_installations "
-                "ADD COLUMN IF NOT EXISTS authorized_repository_ids JSON"
-            )
+            text("ALTER TABLE gateway_github_installations ADD COLUMN IF NOT EXISTS authorized_repository_ids JSON")
         )
     logger.info("Ensured authorized_repository_ids column on gateway_github_installations")
 
@@ -366,13 +363,19 @@ async def _ensure_knowledge_columns(engine) -> None:
 async def _ensure_chat_columns(engine) -> None:
     """Add columns to gateway_chat_conversations that were added after initial table creation."""
     async with engine.begin() as conn:
-        await conn.execute(text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS agent_session_id VARCHAR"))
+        await conn.execute(
+            text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS agent_session_id VARCHAR")
+        )
         await conn.execute(text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS model VARCHAR(50)"))
         await conn.execute(
-            text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS total_tokens INTEGER NOT NULL DEFAULT 0")
+            text(
+                "ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS total_tokens INTEGER NOT NULL DEFAULT 0"
+            )
         )
         await conn.execute(
-            text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS total_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0.0")
+            text(
+                "ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS total_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0.0"
+            )
         )
     logger.info("Ensured chat conversation columns")
 
@@ -386,9 +389,7 @@ async def _ensure_standalone_chat_schema(engine) -> None:
                 "ADD COLUMN IF NOT EXISTS surface VARCHAR(20) NOT NULL DEFAULT 'notebook'"
             )
         )
-        await conn.execute(
-            text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS branch VARCHAR(100)")
-        )
+        await conn.execute(text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS branch VARCHAR(100)"))
         await conn.execute(
             text(
                 "ALTER TABLE gateway_chat_conversations "
@@ -402,8 +403,47 @@ async def _ensure_standalone_chat_schema(engine) -> None:
             text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS internal_summary TEXT")
         )
         await conn.execute(
-            text("UPDATE gateway_chat_conversations SET surface = 'notebook' WHERE surface IS NULL")
+            text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS commit_sha VARCHAR(40)")
         )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS per_query_budget_usd DOUBLE PRECISION NOT NULL DEFAULT 0.25"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS chat_budget_usd DOUBLE PRECISION NOT NULL DEFAULT 1.0"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS estimated_spend_usd DOUBLE PRECISION NOT NULL DEFAULT 0"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS actual_spend_usd DOUBLE PRECISION NOT NULL DEFAULT 0"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS reserved_spend_usd DOUBLE PRECISION NOT NULL DEFAULT 0"
+            )
+        )
+        await conn.execute(
+            text("ALTER TABLE gateway_chat_conversations ADD COLUMN IF NOT EXISTS forked_from_conversation_id VARCHAR")
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_chat_user_preferences ADD COLUMN IF NOT EXISTS default_per_query_budget_usd DOUBLE PRECISION NOT NULL DEFAULT 0.25"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_chat_user_preferences ADD COLUMN IF NOT EXISTS default_chat_budget_usd DOUBLE PRECISION NOT NULL DEFAULT 1.0"
+            )
+        )
+        await conn.execute(text("UPDATE gateway_chat_conversations SET surface = 'notebook' WHERE surface IS NULL"))
         await conn.execute(
             text("ALTER TABLE gateway_chat_messages ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(200)")
         )
@@ -421,11 +461,12 @@ async def _ensure_standalone_chat_schema(engine) -> None:
                 "WHERE idempotency_key IS NOT NULL"
             )
         )
+        await conn.execute(text("DROP INDEX IF EXISTS uq_gw_chat_run_nonterminal_conversation"))
         await conn.execute(
             text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_gw_chat_run_nonterminal_conversation "
                 "ON gateway_chat_runs (conversation_id) "
-                "WHERE status IN ('queued','running','waiting_for_user')"
+                "WHERE status IN ('queued','running','waiting_for_user','waiting_for_query_approval')"
             )
         )
         await conn.execute(
@@ -435,6 +476,39 @@ async def _ensure_standalone_chat_schema(engine) -> None:
             )
         )
     logger.info("Ensured standalone chat columns and indexes")
+
+
+async def _ensure_hybrid_chat_runtime_schema(engine) -> None:
+    """Add object-backed result, artifact, and runtime-routing columns."""
+    statements = (
+        "ALTER TABLE gateway_chat_artifacts ADD COLUMN IF NOT EXISTS storage_kind VARCHAR(20) NOT NULL DEFAULT 'inline'",
+        "ALTER TABLE gateway_chat_artifacts ADD COLUMN IF NOT EXISTS object_key TEXT",
+        "ALTER TABLE gateway_chat_artifacts ADD COLUMN IF NOT EXISTS source_object_key TEXT",
+        "ALTER TABLE gateway_chat_artifacts ADD COLUMN IF NOT EXISTS byte_size BIGINT",
+        "ALTER TABLE gateway_chat_artifacts ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64)",
+        "ALTER TABLE gateway_structured_query_results ALTER COLUMN execution_id DROP NOT NULL",
+        "ALTER TABLE gateway_structured_query_results ADD COLUMN IF NOT EXISTS conversation_id VARCHAR",
+        "ALTER TABLE gateway_structured_query_results ADD COLUMN IF NOT EXISTS run_id VARCHAR",
+        "ALTER TABLE gateway_structured_query_results ADD COLUMN IF NOT EXISTS preview_rows_json JSONB NOT NULL DEFAULT '[]'::jsonb",
+        "ALTER TABLE gateway_structured_query_results ADD COLUMN IF NOT EXISTS storage_kind VARCHAR(20) NOT NULL DEFAULT 'inline'",
+        "ALTER TABLE gateway_structured_query_results ADD COLUMN IF NOT EXISTS object_key TEXT",
+        "ALTER TABLE gateway_structured_query_results ADD COLUMN IF NOT EXISTS byte_size BIGINT",
+        "ALTER TABLE gateway_structured_query_results ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64)",
+        "ALTER TABLE gateway_structured_query_results ADD COLUMN IF NOT EXISTS source_result_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb",
+        "ALTER TABLE gateway_structured_query_results ADD COLUMN IF NOT EXISTS code_hash VARCHAR(64)",
+        "ALTER TABLE gateway_structured_query_results ADD COLUMN IF NOT EXISTS result_origin VARCHAR(20) NOT NULL DEFAULT 'mcp'",
+        "ALTER TABLE gateway_governed_query_executions ADD COLUMN IF NOT EXISTS plan_id VARCHAR",
+        "ALTER TABLE gateway_governed_query_executions ADD COLUMN IF NOT EXISTS actual_scan_bytes BIGINT",
+        "ALTER TABLE gateway_governed_query_executions ADD COLUMN IF NOT EXISTS actual_output_bytes BIGINT",
+        "ALTER TABLE gateway_governed_query_executions ADD COLUMN IF NOT EXISTS execution_ms DOUBLE PRECISION",
+        "ALTER TABLE gateway_query_proposals ADD COLUMN IF NOT EXISTS plan_id VARCHAR",
+        "ALTER TABLE gateway_chat_runs ADD COLUMN IF NOT EXISTS runtime_archive_id VARCHAR",
+        "UPDATE gateway_structured_query_results SET preview_rows_json = rows_json WHERE preview_rows_json = '[]'::jsonb",
+    )
+    async with engine.begin() as conn:
+        for statement in statements:
+            await conn.execute(text(statement))
+    logger.info("Ensured hybrid chat runtime schema")
 
 
 async def _ensure_chat_trace_indexes(engine) -> None:
@@ -499,7 +573,9 @@ async def _ensure_report_deliverable_columns(engine) -> None:
         )
         await conn.execute(text("ALTER TABLE notion_deliverables ADD COLUMN IF NOT EXISTS latest_html_bytes INTEGER"))
         await conn.execute(
-            text("ALTER TABLE notion_deliverables ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active'")
+            text(
+                "ALTER TABLE notion_deliverables ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active'"
+            )
         )
         await conn.execute(text("ALTER TABLE notion_deliverables ADD COLUMN IF NOT EXISTS error TEXT"))
         await conn.execute(
@@ -516,8 +592,7 @@ async def _ensure_analysis_trail_indexes(engine) -> None:
     async with engine.begin() as conn:
         await conn.execute(
             text(
-                "CREATE INDEX IF NOT EXISTS ix_gw_analysis_trail_thread "
-                "ON gateway_analysis_trails (org_id, thread_id)"
+                "CREATE INDEX IF NOT EXISTS ix_gw_analysis_trail_thread ON gateway_analysis_trails (org_id, thread_id)"
             )
         )
         await conn.execute(
@@ -539,7 +614,9 @@ async def _ensure_branch_columns(engine) -> None:
     """Add branch columns to gateway_workspace_projects."""
     async with engine.begin() as conn:
         await conn.execute(
-            text("ALTER TABLE gateway_workspace_projects ADD COLUMN IF NOT EXISTS default_branch VARCHAR(100) NOT NULL DEFAULT 'main'")
+            text(
+                "ALTER TABLE gateway_workspace_projects ADD COLUMN IF NOT EXISTS default_branch VARCHAR(100) NOT NULL DEFAULT 'main'"
+            )
         )
         await conn.execute(
             text("ALTER TABLE gateway_workspace_projects ADD COLUMN IF NOT EXISTS protected_branches JSONB")
@@ -548,7 +625,9 @@ async def _ensure_branch_columns(engine) -> None:
             text("ALTER TABLE gateway_workspace_projects ADD COLUMN IF NOT EXISTS git_remote VARCHAR(500)")
         )
         await conn.execute(
-            text("ALTER TABLE gateway_workspace_projects ADD COLUMN IF NOT EXISTS source VARCHAR(20) NOT NULL DEFAULT 'managed'")
+            text(
+                "ALTER TABLE gateway_workspace_projects ADD COLUMN IF NOT EXISTS source VARCHAR(20) NOT NULL DEFAULT 'managed'"
+            )
         )
     logger.info("Ensured branch columns on gateway_workspace_projects")
 
@@ -571,9 +650,7 @@ async def _ensure_notebook_session_pod_ip_internal(engine) -> None:
     from pod_ip which is the legacy NodePort address kept for R3 cleanup.
     """
     async with engine.begin() as conn:
-        await conn.execute(
-            text("ALTER TABLE gateway_notebook_sessions ADD COLUMN IF NOT EXISTS pod_ip_internal TEXT")
-        )
+        await conn.execute(text("ALTER TABLE gateway_notebook_sessions ADD COLUMN IF NOT EXISTS pod_ip_internal TEXT"))
     logger.info("Ensured pod_ip_internal column on gateway_notebook_sessions")
 
 
@@ -584,9 +661,7 @@ async def _ensure_drop_s3_prefix_column(engine) -> None:
     (column never existed) and existing deployments (column present from R4).
     """
     async with engine.begin() as conn:
-        await conn.execute(
-            text("ALTER TABLE gateway_workspace_projects DROP COLUMN IF EXISTS s3_prefix")
-        )
+        await conn.execute(text("ALTER TABLE gateway_workspace_projects DROP COLUMN IF EXISTS s3_prefix"))
     logger.info("Ensured s3_prefix column dropped from gateway_workspace_projects")
 
 
@@ -600,12 +675,8 @@ async def _ensure_notebook_session_org_id(engine) -> None:
     legacy rows.
     """
     async with engine.begin() as conn:
-        await conn.execute(
-            text("ALTER TABLE gateway_notebook_sessions ADD COLUMN IF NOT EXISTS org_id TEXT")
-        )
-        await conn.execute(
-            text("UPDATE gateway_notebook_sessions SET org_id = user_id WHERE org_id IS NULL")
-        )
+        await conn.execute(text("ALTER TABLE gateway_notebook_sessions ADD COLUMN IF NOT EXISTS org_id TEXT"))
+        await conn.execute(text("UPDATE gateway_notebook_sessions SET org_id = user_id WHERE org_id IS NULL"))
     logger.info("Ensured org_id column on gateway_notebook_sessions")
 
 
@@ -627,6 +698,7 @@ async def init_db() -> None:
     await _ensure_knowledge_columns(engine)
     await _ensure_chat_columns(engine)
     await _ensure_standalone_chat_schema(engine)
+    await _ensure_hybrid_chat_runtime_schema(engine)
     await _ensure_chat_trace_indexes(engine)
     await _ensure_notion_installation_config_analysis_columns(engine)
     await _ensure_report_deliverable_columns(engine)

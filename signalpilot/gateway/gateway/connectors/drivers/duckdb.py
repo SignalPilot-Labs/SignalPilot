@@ -6,6 +6,7 @@ Feature #9 from the feature table — P0 for demos and local dev.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from ..base import BaseConnector
@@ -123,6 +124,12 @@ class DuckDBConnector(BaseConnector):
             raise RuntimeError(f"DuckDB query timed out after {effective_timeout}s")
         except duckdb.Error as e:
             raise RuntimeError(f"DuckDB query error: {e}") from e
+
+    async def cancel_current_query(self) -> bool:
+        if self._conn is None:
+            return False
+        await asyncio.to_thread(self._conn.interrupt)
+        return True
 
     async def _get_schema_impl(self) -> dict[str, Any]:
         # For file-based DBs, open a transient connection to avoid holding a write lock

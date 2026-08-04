@@ -1,21 +1,106 @@
-"""Query tools: query_database, validate_sql, explain_query, check_budget, etc."""
+"""Query tools: plan_query, query_database, validation, and budgets."""
 
-import time
+import json
 
 import httpx
+from sqlalchemy import select
 
-from gateway.engine import inject_limit, sqlglot_dialect
-from gateway.engine import validate_sql as engine_validate_sql
+from gateway.db.models import GatewayChatConversation, GatewayChatRun
 from gateway.errors import query_error_hint
 from gateway.errors.mcp import sanitize_mcp_error, sanitize_proxy_response
+from gateway.governance.query_executor import (
+    GovernedQueryContext,
+    GovernedQueryError,
+    governed_query_executor,
+)
+from gateway.governance.query_planner import (
+    QueryPlanError,
+    create_query_plan,
+    require_execution_plan,
+)
 from gateway.mcp.audit import audited_tool
-from gateway.mcp.context import _gateway_url, _gw_headers, _store_session
+from gateway.mcp.context import (
+    _gateway_url,
+    _gw_headers,
+    _store_session,
+    mcp_execution_identity_var,
+)
 from gateway.mcp.server import mcp
 from gateway.mcp.validation import _CONN_NAME_RE, _validate_connection_name, _validate_sql
+from gateway.standalone_chat.config import enterprise_chat_feature_flags
+
+
+async def _chat_query_context(store, *, path: str, plan_id: str | None = None) -> GovernedQueryContext:
+    identity = mcp_execution_identity_var.get(None)
+    if not identity or not identity.startswith("chat:"):
+        return GovernedQueryContext(path=path)  # type: ignore[arg-type]
+    run_id = identity.removeprefix("chat:")
+    scoped = (
+        await store.session.execute(
+            select(GatewayChatRun, GatewayChatConversation)
+            .join(GatewayChatConversation, GatewayChatConversation.id == GatewayChatRun.conversation_id)
+            .where(
+                GatewayChatRun.id == run_id,
+                GatewayChatRun.org_id == store._require_org_id(),
+                GatewayChatRun.user_id == (store.user_id or "local"),
+                GatewayChatRun.status == "running",
+                GatewayChatRun.cancellation_requested_at.is_(None),
+                GatewayChatConversation.surface == "standalone",
+            )
+        )
+    ).one_or_none()
+    if scoped is None:
+        raise QueryPlanError("scope_mismatch", "Standalone query scope mismatch")
+    run, conversation = scoped
+    return GovernedQueryContext(
+        path=path,  # type: ignore[arg-type]
+        conversation_id=run.conversation_id,
+        run_id=run.id,
+        project_id=run.project_id,
+        commit_sha=conversation.commit_sha,
+        branch=conversation.branch,
+        plan_id=plan_id,
+    )
 
 
 @audited_tool(mcp)
-async def query_database(connection_name: str, sql: str, row_limit: int = 1000) -> str:
+async def plan_query(
+    connection_name: str,
+    sql: str,
+    purpose: str,
+    execution_need: str = "sql",
+    row_level_analysis_justified: bool = False,
+) -> str:
+    """Plan a governed query and select MCP, notebook SDK, DatasetRef, aggregation, or refusal."""
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
+    if execution_need not in {"sql", "python"}:
+        return "Error: execution_need must be sql or python"
+    async with _store_session() as store:
+        try:
+            context = await _chat_query_context(store, path="mcp")
+            plan = await create_query_plan(
+                store,
+                connection_name=connection_name,
+                sql=sql,
+                purpose=purpose,
+                execution_need=execution_need,  # type: ignore[arg-type]
+                context=context,
+                row_level_analysis_justified=row_level_analysis_justified,
+            )
+        except QueryPlanError as exc:
+            return f"Planning error: {sanitize_mcp_error(str(exc), cap=300)}"
+    return json.dumps(plan.as_dict(), default=str)
+
+
+@audited_tool(mcp)
+async def query_database(
+    connection_name: str,
+    sql: str,
+    row_limit: int = 1000,
+    purpose: str = "Run a governed SQL query",
+    plan_id: str | None = None,
+) -> str:
     """
     Execute a governed, read-only SQL query against a connected database.
 
@@ -29,6 +114,8 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
         connection_name: Name of a configured database connection
         sql: SQL query (SELECT only)
         row_limit: Max rows to return (default 1000, max 10000)
+        purpose: Business purpose used by the planner and audit trail
+        plan_id: Optional unexpired plan returned by plan_query for this exact query scope
 
     Returns:
         Query results as formatted text, or an error message.
@@ -39,111 +126,84 @@ async def query_database(connection_name: str, sql: str, row_limit: int = 1000) 
     if err := _validate_sql(sql):
         return f"Error: {err}"
 
-    from gateway.governance.annotations import load_annotations
-    from gateway.governance.plan_limits import check_query_limit, get_org_limits
-
     async with _store_session() as store:
-        # Enforce daily query limit
-        plan = await get_org_limits(store.org_id)
         try:
-            check_query_limit(store.org_id, plan)
-        except Exception as e:
-            return f"Error: {e}"
-
-        conn_info = await store.get_connection(connection_name)
-        if not conn_info:
-            available = [c.name for c in await store.list_connections()]
-            return f"Error: Connection '{connection_name}' not found. Available: {available}"
-
-        # Load annotations for blocked tables (Feature #19)
-        from gateway.governance.context import require_org_id
-
-        annotations = load_annotations(require_org_id(), connection_name)
-        blocked_tables = annotations.blocked_tables
-
-        dialect = sqlglot_dialect(conn_info.db_type)
-
-        # Validate SQL (with blocked tables from annotations)
-        validation = engine_validate_sql(sql, blocked_tables=blocked_tables or None, dialect=dialect)
-        if not validation.ok:
-            return f"Query blocked: {validation.blocked_reason}"
-
-        # Inject LIMIT
-        row_limit = min(row_limit, 10_000)
-        try:
-            safe_sql = inject_limit(sql, row_limit, dialect=dialect)
-        except ValueError as exc:
-            return f"Query blocked: {exc}"
-
-        conn_str = await store.get_connection_string(connection_name)
-        if not conn_str:
-            return "Error: No credentials stored for this connection (restart gateway to reload)"
-
-        from gateway.connectors.health_monitor import health_monitor
-        from gateway.connectors.pool_manager import pool_manager
-
-        extras = await store.get_credential_extras(connection_name)
-        start = time.monotonic()
-        try:
-            async with pool_manager.connection(
-                conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name
-            ) as connector:
-                rows = await connector.execute(safe_sql)
-        except Exception as e:
-            elapsed_err = (time.monotonic() - start) * 1000
-            health_monitor.record(connection_name, elapsed_err, False, str(e)[:200], conn_info.db_type)
-            err_str = str(e)
-            hint = query_error_hint(err_str, conn_info.db_type)
-            sanitized = sanitize_mcp_error(err_str, cap=300)
-            return f"Query error: {sanitized}" + (f"\n\nHint: {hint}" if hint else "")
-
-        elapsed_ms = (time.monotonic() - start) * 1000
-        health_monitor.record(connection_name, elapsed_ms, True, db_type=conn_info.db_type)
-
-        # Apply PII redaction if enabled on this connection
-        from gateway.governance.pii import PIIRedactor
-
-        pii_redactor = PIIRedactor()
-        if conn_info.pii_enabled and conn_info.pii_rules:
-            for col_name, rule in conn_info.pii_rules.items():
-                pii_redactor.add_rule(col_name, rule)
-        for col_name, rule in annotations.pii_columns.items():
-            pii_redactor.add_rule(col_name, rule)
-        if pii_redactor.has_rules():
-            rows = pii_redactor.redact_rows(rows)
-
-        # Charge query cost to budget
-        from gateway.governance.budget import budget_ledger
-
-        query_cost_usd = (elapsed_ms / 1000) * 0.000014
-        budget_ok = await budget_ledger.charge("default", query_cost_usd)
-        if not budget_ok:
-            return f"Query budget exhausted. This query would cost ~${query_cost_usd:.6f}. Remaining budget: $0.00"
+            context = await _chat_query_context(store, path="mcp")
+            flags = enterprise_chat_feature_flags()
+            if context.run_id and (flags.size_router or flags.size_router_shadow):
+                if plan_id:
+                    plan = await require_execution_plan(
+                        store,
+                        plan_id=plan_id,
+                        sql=sql,
+                        connection_name=connection_name,
+                        context=context,
+                        allowed_routes={"mcp", "notebook_sdk", "dataset_ref", "aggregate_required", "refuse"},
+                    )
+                    selected_plan_id = plan.id
+                else:
+                    plan = await create_query_plan(
+                        store,
+                        connection_name=connection_name,
+                        sql=sql,
+                        purpose=purpose,
+                        execution_need="sql",
+                        context=context,
+                    )
+                    selected_plan_id = plan.plan_id
+                if flags.size_router and plan.route != "mcp":
+                    return json.dumps(
+                        {
+                            "status": "runtime_required",
+                            "plan_id": selected_plan_id,
+                            "route": plan.route,
+                            "route_reason": plan.route_reason,
+                            "approval_required": plan.approval_required,
+                        }
+                    )
+                context = await _chat_query_context(store, path="mcp", plan_id=selected_plan_id)
+            result = await governed_query_executor.execute(
+                store,
+                connection_name=connection_name,
+                sql=sql,
+                row_limit=min(row_limit, 10_000),
+                timeout_seconds=150,
+                context=context,
+            )
+        except (GovernedQueryError, QueryPlanError) as exc:
+            return f"Query error: {sanitize_mcp_error(str(exc), cap=300)}"
 
     # Build status footer
-    meta_parts = [f"{len(rows)} rows", f"{elapsed_ms:.0f}ms"]
+    meta_parts = [
+        f"{result.row_count} rows",
+        f"{result.execution_ms:.0f}ms",
+        f"result {result.result_id}",
+        f"completeness: {result.completeness}",
+    ]
 
     # PII redaction notice for the LLM
     redaction_notice = ""
-    if pii_redactor.last_redacted_columns:
-        redacted_cols = ", ".join(pii_redactor.last_redacted_columns)
+    if result.pii_redacted:
+        redacted_cols = ", ".join(result.pii_redacted)
         redaction_notice = (
             f"\n\n[PII REDACTED] The following columns were redacted by policy: {redacted_cols}. "
             f"Values shown as ***** (hide), sha256:... (hash), or partially masked. "
             f"Do not attempt to reverse or infer the original values."
         )
 
-    if not rows:
+    if not result.rows:
         return f"Query returned 0 rows ({', '.join(meta_parts)})" + redaction_notice
 
     # Format as readable table
-    columns = list(rows[0].keys())
+    columns = list(result.rows[0].keys())
     lines = [" | ".join(str(c) for c in columns)]
     lines.append("-" * len(lines[0]))
-    for row in rows[:50]:  # Cap display at 50 rows
+    for row in result.rows[:50]:  # Cap model display, not the durable structured result.
         lines.append(" | ".join(str(row.get(c, "")) for c in columns))
-    if len(rows) > 50:
-        lines.append(f"... ({len(rows)} rows total, showing first 50)")
+    if result.row_count > 50:
+        lines.append(f"... ({result.row_count} saved rows, showing first 50)")
+    if result.truncation_reason:
+        lines.append(f"Completeness note: {result.truncation_reason}")
 
     return "\n".join(lines) + f"\n\n[{', '.join(meta_parts)}]" + redaction_notice
 

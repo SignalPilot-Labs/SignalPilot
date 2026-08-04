@@ -15,7 +15,12 @@ export default defineConfig({
     // is the environment DOMPurify itself supports and tests against.
     environment: "jsdom",
     globals: false,
-    include: ["notebook/**/*.test.ts", "notebook/**/*.test.tsx", "lib/**/*.test.ts"],
+    include: [
+      "notebook/**/*.test.ts",
+      "notebook/**/*.test.tsx",
+      "lib/**/*.test.ts",
+      "lib/**/*.test.tsx",
+    ],
     // Playwright specs under e2e/ are run by `npx playwright test`, not vitest.
     exclude: ["node_modules/**", ".next/**", "e2e/**"],
   },

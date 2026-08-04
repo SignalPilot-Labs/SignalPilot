@@ -260,6 +260,12 @@ class MSSQLConnector(BaseConnector):
         except pymssql.Error as e:
             raise RuntimeError(f"SQL Server query error: {e}") from e
 
+    async def cancel_current_query(self) -> bool:
+        if self._conn is None:
+            return False
+        await self._run_in_thread(self._conn.cancel, 10, label="SQL Server cancellation")
+        return True
+
     async def _get_schema_impl(self) -> dict[str, Any]:
         import time as _time
 

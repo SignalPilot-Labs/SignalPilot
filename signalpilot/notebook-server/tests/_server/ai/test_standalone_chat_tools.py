@@ -5,12 +5,24 @@ from __future__ import annotations
 import base64
 import io
 import json
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any
 
 import pytest
+from mcp.types import CallToolRequest, CallToolRequestParams, TextContent
 from PIL import Image
 from starlette.exceptions import HTTPException
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 from signalpilot._server.ai import claude_agent
+from signalpilot._server.ai.chat_runtime_output import (
+    ChatRuntimeSessionScopeError,
+    authorize_chat_runtime_session,
+    compact_chat_runtime_output,
+    notebook_server_headers,
+)
 from signalpilot._server.ai.claude_agent import _apply_auth_config
 from signalpilot._server.ai.standalone_chat_chart_theme import (
     CHART_BACKGROUND,
@@ -20,8 +32,11 @@ from signalpilot._server.ai.standalone_chat_chart_theme import (
     prepare_signalpilot_chart,
 )
 from signalpilot._server.ai.standalone_chat_tools import (
+    StandaloneArtifactCollector,
+    StandaloneNotebookLifecycle,
     _render_chart_png,
     _run_restricted_python,
+    build_standalone_chat_mcp_server,
 )
 from signalpilot._server.api.endpoints.standalone_chat import (
     STANDALONE_ALLOWED_TOOLS,
@@ -48,6 +63,106 @@ def test_restricted_python_allows_in_memory_analysis_only():
     ):
         with pytest.raises(ValueError):
             _run_restricted_python(source, None)
+
+
+def test_chat_runtime_notebook_outputs_are_redacted_and_preview_bounded():
+    payload = json.dumps({"rows": [{"token": "secret-token", "value": value} for value in range(100)]})
+    rendered = compact_chat_runtime_output(
+        payload,
+        mimetype="application/json",
+        redactions=("secret-token",),
+    )
+
+    assert "secret-token" not in rendered
+    assert "[REDACTED]" in rendered
+    assert "__omitted_items__" in rendered
+    assert len(rendered) <= 4_024
+
+
+def test_chat_runtime_notebook_tools_are_bound_to_the_current_kernel():
+    def authorize(session_id: str) -> bool:
+        return session_id == "run-kernel"
+
+    authorize_chat_runtime_session("run_cells", {"session_id": "run-kernel"}, authorize)
+    with pytest.raises(ChatRuntimeSessionScopeError, match="NOTEBOOK_SESSION_SCOPE_MISMATCH"):
+        authorize_chat_runtime_session("run_cells", {"session_id": "other-kernel"}, authorize)
+    with pytest.raises(ChatRuntimeSessionScopeError, match="NOTEBOOK_SESSION_SCOPE_MISMATCH"):
+        authorize_chat_runtime_session("start_notebook_session", {}, authorize)
+
+
+def test_internal_notebook_http_headers_include_both_auth_tokens():
+    assert notebook_server_headers(
+        auth_token="session-token",
+        server_token="server-token",
+        session_id="session-a",
+    ) == {
+        "Authorization": "Bearer session-token",
+        "Content-Type": "application/json",
+        "Sp-Server-Token": "server-token",
+        "Sp-Session-Id": "session-a",
+    }
+
+
+@pytest.mark.asyncio
+async def test_publication_failures_are_mcp_tool_errors():
+    config = build_standalone_chat_mcp_server(StandaloneArtifactCollector())
+    server = config["instance"]
+    response = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="publish_table",
+                arguments={"filename": "revenue.csv", "result_id": "missing"},
+            )
+        )
+    )
+
+    assert response.root.isError is True
+    assert "governed structured result ID is required" in response.root.content[0].text
+
+
+@pytest.mark.asyncio
+async def test_analysis_notebook_start_is_plan_gated_and_uses_only_the_seeded_path(
+    tmp_path: Path,
+) -> None:
+    seeded = tmp_path / "analysis.py"
+    seeded.write_text("import marimo\n", encoding="utf-8")
+    calls: list[dict[str, Any]] = []
+
+    def start_notebook(_context: Any, arguments: dict[str, Any]) -> list[TextContent]:
+        calls.append(arguments)
+        return [TextContent(type="text", text=json.dumps({"session_id": "session-a"}))]
+
+    runtime_session = SimpleNamespace()
+
+    async def check_plan(plan_id: str) -> dict[str, str]:
+        assert plan_id == "plan-a"
+        return {"route": "notebook_sdk"}
+
+    lifecycle = StandaloneNotebookLifecycle()
+    config = build_standalone_chat_mcp_server(
+        StandaloneArtifactCollector(),
+        notebook_mcp_app=object(),
+        analysis_notebook_path=seeded,
+        plan_checker=check_plan,
+        notebook_lifecycle=lifecycle,
+        notebook_starter=start_notebook,
+        notebook_session_resolver=lambda _session_id: runtime_session,
+    )
+    server = config["instance"]
+    response = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="start_analysis_notebook",
+                arguments={"plan_id": "plan-a", "file_path": "/tmp/attacker.py"},
+            )
+        )
+    )
+
+    assert response.root.isError is False
+    assert calls == [{"file_path": str(seeded), "auto_run": True}]
+    assert lifecycle.session_id == "session-a"
+    assert lifecycle.plan_id == "plan-a"
+    assert runtime_session._signalpilot_chat_runtime is True
 
 
 def test_ephemeral_agent_session_mapping_never_writes_to_disk(monkeypatch):
@@ -238,6 +353,7 @@ def test_execution_scope_is_frozen_to_claimed_run(monkeypatch):
     monkeypatch.setenv("SP_CHAT_PROJECT_ID", "project-a")
     monkeypatch.setenv("SP_CHAT_BRANCH", "main")
     monkeypatch.setenv("SP_CHAT_CONNECTION_NAME", "production")
+    monkeypatch.setenv("SP_CHAT_COMMIT_SHA", "a" * 40)
 
     assert _require_execution_scope(
         {
@@ -245,8 +361,9 @@ def test_execution_scope_is_frozen_to_claimed_run(monkeypatch):
             "project_id": "project-a",
             "branch": "main",
             "connection_name": "production",
+            "commit_sha": "a" * 40,
         }
-    ) == ("run-12345678", "project-a", "main", "production")
+    ) == ("run-12345678", "project-a", "main", "production", "a" * 40)
     with pytest.raises(HTTPException, match="Execution scope mismatch"):
         _require_execution_scope(
             {
@@ -254,6 +371,7 @@ def test_execution_scope_is_frozen_to_claimed_run(monkeypatch):
                 "project_id": "project-a",
                 "branch": "main",
                 "connection_name": "another-connection",
+                "commit_sha": "a" * 40,
             }
         )
 
@@ -264,6 +382,7 @@ def test_gateway_mcp_uses_the_per_run_read_only_identity(monkeypatch):
         "project_id": "project-a",
         "branch": "main",
         "connection_name": "production",
+        "commit_sha": "a" * 40,
         "scopes": ["read", "query", "execute"],
     }
     payload = (
@@ -279,6 +398,7 @@ def test_gateway_mcp_uses_the_per_run_read_only_identity(monkeypatch):
         project_id="project-a",
         branch="main",
         connection_name="production",
+        commit_sha="a" * 40,
     )
     server = config["mcpServers"]["signalpilot"]
     assert server["url"] == "http://gateway:3300/mcp"
@@ -299,6 +419,7 @@ def test_gateway_mcp_uses_the_per_run_read_only_identity(monkeypatch):
             project_id="project-a",
             branch="main",
             connection_name="production",
+            commit_sha="a" * 40,
         )
 
 
@@ -306,6 +427,11 @@ def test_agent_contract_excludes_mutating_and_external_tools():
     assert "English only" in STANDALONE_SYSTEM_PROMPT
     assert "Never guess" in STANDALONE_SYSTEM_PROMPT
     assert "chain-of-thought" in STANDALONE_SYSTEM_PROMPT
+    assert "sp.publish_result(dataframe" in STANDALONE_SYSTEM_PROMPT
+    assert "sp.publish_artifact(path" in STANDALONE_SYSTEM_PROMPT
+    assert "Do not catch or suppress publication exceptions" in STANDALONE_SYSTEM_PROMPT
+    assert "Never edit, remove, or redefine the seeded" in STANDALONE_SYSTEM_PROMPT
+    assert "sp.init()` returns None" in STANDALONE_SYSTEM_PROMPT
     assert all(
         "notion" not in tool.lower() for tool in STANDALONE_ALLOWED_TOOLS
     )
@@ -316,3 +442,16 @@ def test_agent_contract_excludes_mutating_and_external_tools():
         forbidden not in STANDALONE_ALLOWED_TOOLS
         for forbidden in ("Bash", "Write", "Edit", "WebFetch", "WebSearch")
     )
+
+
+def test_runtime_publication_sdk_is_exposed_from_top_level_package():
+    # tests/conftest.py intentionally replaces the top-level package with a
+    # lightweight shim, so verify the real package exports without importing it.
+    from pathlib import Path
+
+    package_source = (
+        Path(__file__).parents[3] / "signalpilot" / "__init__.py"
+    ).read_text(encoding="utf-8")
+    assert '"publish_result"' in package_source
+    assert '"publish_artifact"' in package_source
+    assert '"open_dataset"' in package_source

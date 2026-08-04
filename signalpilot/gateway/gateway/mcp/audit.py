@@ -37,6 +37,7 @@ STANDALONE_CHAT_TOOL_ALLOWLIST = frozenset(
         "list_database_connections",
         "list_semantic_metrics",
         "list_tables",
+        "plan_query",
         "query_database",
         "schema_ddl",
         "schema_link",

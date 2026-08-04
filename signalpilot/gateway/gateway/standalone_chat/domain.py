@@ -11,6 +11,7 @@ class RunStatus(StrEnum):
     queued = "queued"
     running = "running"
     waiting_for_user = "waiting_for_user"
+    waiting_for_query_approval = "waiting_for_query_approval"
     completed = "completed"
     failed = "failed"
     cancelled = "cancelled"
@@ -21,6 +22,7 @@ NONTERMINAL_RUN_STATUSES = frozenset(
         RunStatus.queued.value,
         RunStatus.running.value,
         RunStatus.waiting_for_user.value,
+        RunStatus.waiting_for_query_approval.value,
     }
 )
 TERMINAL_RUN_STATUSES = frozenset(
@@ -43,12 +45,20 @@ _RUN_TRANSITIONS: dict[str, frozenset[str]] = {
         {
             RunStatus.queued.value,
             RunStatus.waiting_for_user.value,
+            RunStatus.waiting_for_query_approval.value,
             RunStatus.completed.value,
             RunStatus.failed.value,
             RunStatus.cancelled.value,
         }
     ),
     RunStatus.waiting_for_user.value: frozenset(
+        {
+            RunStatus.queued.value,
+            RunStatus.cancelled.value,
+            RunStatus.failed.value,
+        }
+    ),
+    RunStatus.waiting_for_query_approval.value: frozenset(
         {
             RunStatus.queued.value,
             RunStatus.cancelled.value,

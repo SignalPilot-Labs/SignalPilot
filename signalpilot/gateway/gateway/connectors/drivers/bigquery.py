@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from typing import Any
 
 from ..base import BaseConnector
@@ -31,6 +32,7 @@ class BigQueryConnector(BaseConnector):
         self._location: str = ""  # e.g. "US", "EU", "us-east1"
         self._maximum_bytes_billed: int | None = None  # safety limit — query fails if exceeded
         self._last_job_stats: dict | None = None  # stats from most recent query job
+        self._active_query_job = None
         # Auth method: "service_account" | "oauth" | "impersonation" | "adc"
         self._auth_method: str = "adc"
         self._oauth_token: str = ""
@@ -203,6 +205,7 @@ class BigQueryConnector(BaseConnector):
                 job_config.maximum_bytes_billed = max_bytes
 
             query_job = client.query(sql, job_config=job_config, timeout=timeout)
+            self._active_query_job = query_job
             results = query_job.result(timeout=timeout)
             rows = [dict(row) for row in results]
 
@@ -220,6 +223,7 @@ class BigQueryConnector(BaseConnector):
         try:
             rows, stats = await asyncio.to_thread(_run)
             self._last_job_stats = stats
+            self._active_query_job = None
             return rows
         except Exception as e:
             err_str = str(e).lower()
@@ -230,6 +234,64 @@ class BigQueryConnector(BaseConnector):
                     f"Reduce query scope or increase maximum_bytes_billed."
                 ) from e
             raise RuntimeError(f"BigQuery query error: {e}") from e
+
+    async def cancel_current_query(self) -> bool:
+        job = self._active_query_job
+        if job is None:
+            return False
+        return bool(await asyncio.to_thread(job.cancel))
+
+    async def stream_batches(
+        self,
+        sql: str,
+        *,
+        batch_size: int = 10_000,
+        timeout: int | None = None,
+    ) -> AsyncIterator[list[dict[str, Any]]]:
+        if self._client is None:
+            raise RuntimeError("Not connected")
+        job_config = bigquery.QueryJobConfig()
+        if self._dataset:
+            job_config.default_dataset = f"{self._project}.{self._dataset}"
+        if self._maximum_bytes_billed is not None:
+            job_config.maximum_bytes_billed = self._maximum_bytes_billed
+        query_job = await asyncio.to_thread(
+            self._client.query,
+            sql,
+            job_config=job_config,
+            timeout=timeout,
+        )
+        self._active_query_job = query_job
+        try:
+            result = await asyncio.to_thread(query_job.result, timeout=timeout, page_size=batch_size)
+            pages = iter(result.pages)
+
+            def _next_page():
+                try:
+                    return [dict(row) for row in next(pages)]
+                except StopIteration:
+                    return None
+
+            while (batch := await asyncio.to_thread(_next_page)) is not None:
+                if batch:
+                    yield batch
+            self._last_job_stats = {
+                "total_bytes_processed": query_job.total_bytes_processed,
+                "total_bytes_billed": query_job.total_bytes_billed,
+                "cache_hit": query_job.cache_hit,
+                "estimated_cost_usd": round((query_job.total_bytes_billed or 0) / (1024**4) * 6.25, 6),
+                "slot_millis": getattr(query_job, "slot_millis", None),
+                "job_id": query_job.job_id,
+            }
+        finally:
+            self._active_query_job = None
+
+    def get_last_query_id(self) -> str | None:
+        stats = self._last_job_stats or {}
+        return stats.get("job_id")
+
+    def get_last_query_stats(self) -> dict[str, Any] | None:
+        return dict(self._last_job_stats) if self._last_job_stats else None
 
     # ─── Dry run ──────────────────────────────────────────────────────
 

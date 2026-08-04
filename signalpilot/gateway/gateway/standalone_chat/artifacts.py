@@ -92,7 +92,7 @@ _TAG_ATTRS = {
     "th": {"colspan", "rowspan", "scope"},
     "col": {"span", "width"},
 }
-MAX_TABLE_ROWS = 1_000
+MAX_TABLE_ROWS = 200
 
 
 def safe_filename(filename: str, *, fallback: str) -> str:
@@ -110,15 +110,16 @@ def protect_csv_cell(value: Any) -> Any:
 
 
 def normalize_table_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
-    """Apply the governed row ceiling even when a publisher is adversarial."""
+    """Bound only the UI preview; full governed downloads live in object storage."""
     rows = snapshot.get("rows")
     if not isinstance(rows, list):
         rows = []
-    truncated = bool(snapshot.get("truncated")) or len(rows) > MAX_TABLE_ROWS
     return {
         **snapshot,
         "rows": rows[:MAX_TABLE_ROWS],
-        "truncated": truncated,
+        "display_limited": len(rows) > MAX_TABLE_ROWS,
+        "saved_row_count": snapshot.get("saved_row_count", len(rows)),
+        "truncated": bool(snapshot.get("truncated")),
     }
 
 
@@ -152,12 +153,13 @@ def sanitize_chart_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
         else snapshot.get("rows")
     )
     normalized_rows = source_rows if isinstance(source_rows, list) else []
-    truncated = bool(snapshot.get("truncated")) or len(normalized_rows) > MAX_TABLE_ROWS
-    clean_rows = [row for row in normalized_rows[:MAX_TABLE_ROWS] if isinstance(row, dict)]
+    truncated = bool(snapshot.get("truncated"))
+    governed_rows = [row for row in normalized_rows if isinstance(row, dict)]
+    clean_rows = governed_rows[:MAX_TABLE_ROWS]
     clean_spec = _sanitize_chart_value(spec)
     if not isinstance(clean_spec, dict):
         clean_spec = {}
-    display_rows, display = limit_chart_rows(clean_spec, clean_rows)
+    display_rows, display = limit_chart_rows(clean_spec, governed_rows)
     themed_spec = apply_signalpilot_chart_theme(clean_spec, display_rows)
     columns = [
         {"name": str(name), "type": "unknown"}
@@ -171,6 +173,10 @@ def sanitize_chart_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
             "columns": columns,
             "rows": clean_rows,
             "truncated": truncated,
+            "display_limited": len(normalized_rows) > MAX_TABLE_ROWS,
+            "saved_row_count": (supplied_source or {}).get("saved_row_count", len(normalized_rows))
+            if isinstance(supplied_source, dict)
+            else len(normalized_rows),
         },
         "display": display,
         "truncated": truncated,
@@ -319,4 +325,6 @@ def validate_artifact_size(snapshot: dict[str, Any], binary_data: bytes | None =
     size = len(json.dumps(snapshot, ensure_ascii=False, default=str).encode("utf-8"))
     size += len(binary_data or b"")
     if size > MAX_ARTIFACT_BYTES:
-        raise ValueError("Artifact exceeds the 10 MiB limit")
+        raise ValueError(
+            "Artifact exceeds the 10 MiB limit; aggregate, filter, segment, or narrow the governed result"
+        )

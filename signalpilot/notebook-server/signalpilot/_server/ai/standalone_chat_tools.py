@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import base64
 import io
 import json
 import math
 import statistics
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+    from pathlib import Path
 
 from signalpilot._server.ai.standalone_chat_chart_theme import (
     CHART_BACKGROUND,
@@ -23,13 +28,18 @@ from signalpilot._server.ai.standalone_chat_chart_theme import (
     prepare_signalpilot_chart,
 )
 
-MAX_SNAPSHOT_ROWS = 1_000
 MAX_PYTHON_SOURCE_CHARS = 12_000
 
 
 @dataclass
 class StandaloneArtifactCollector:
     artifacts: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class StandaloneNotebookLifecycle:
+    session_id: str | None = None
+    plan_id: str | None = None
 
 
 def _clean_metadata(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -448,6 +458,18 @@ def _run_restricted_python(source: str, data: Any) -> dict[str, Any]:
 
 def build_standalone_chat_mcp_server(
     collector: StandaloneArtifactCollector,
+    *,
+    result_loader: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
+    project_directory: Path | None = None,
+    scratch_directory: Path | None = None,
+    notebook_mcp_app: Any | None = None,
+    analysis_notebook_path: Path | None = None,
+    plan_checker: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
+    event_sink: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
+    notebook_lifecycle: StandaloneNotebookLifecycle | None = None,
+    runtime_redactions: tuple[str, ...] = (),
+    notebook_starter: Callable[[Any, dict[str, Any]], list[Any]] | None = None,
+    notebook_session_resolver: Callable[[str], Any] | None = None,
 ) -> Any:
     """Build the isolated artifact publication server used by one run."""
     from claude_agent_sdk import McpSdkServerConfig
@@ -465,6 +487,32 @@ def build_standalone_chat_mcp_server(
         "parent_artifact_id": {"type": ["string", "null"]},
     }
     tools = [
+        Tool(
+            name="start_analysis_notebook",
+            description=(
+                "Start the run-bound analysis notebook only after plan_query selects notebook_sdk or dataset_ref. "
+                "The notebook path is fixed by the runtime and cannot be supplied by the caller."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {"plan_id": {"type": "string"}},
+                "required": ["plan_id"],
+            },
+        ),
+        Tool(
+            name="inspect_dbt",
+            description=(
+                "Inspect the frozen dbt project with a read-only command. Only dbt parse, ls, and compile are available."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "enum": ["parse", "ls", "compile"]},
+                    "select": {"type": ["string", "null"], "maxLength": 500},
+                },
+                "required": ["command"],
+            },
+        ),
         Tool(
             name="run_scratch_python",
             description=(
@@ -488,12 +536,13 @@ def build_standalone_chat_mcp_server(
                 "type": "object",
                 "properties": {
                     **common_properties,
+                    "result_id": {"type": "string"},
                     "columns": {"type": "array", "items": {"type": "object"}},
                     "rows": {"type": "array", "items": {"type": "object"}},
                     "column_descriptions": {"type": "object"},
                     "truncated": {"type": "boolean"},
                 },
-                "required": ["filename", "columns", "rows"],
+                "required": ["filename", "result_id"],
             },
         ),
         Tool(
@@ -505,11 +554,12 @@ def build_standalone_chat_mcp_server(
                 "type": "object",
                 "properties": {
                     **common_properties,
+                    "result_id": {"type": "string"},
                     "spec": {"type": "object"},
                     "rows": {"type": "array", "items": {"type": "object"}},
                     "truncated": {"type": "boolean"},
                 },
-                "required": ["filename", "spec", "rows"],
+                "required": ["filename", "result_id", "spec"],
             },
         ),
         Tool(
@@ -520,6 +570,8 @@ def build_standalone_chat_mcp_server(
                 "properties": {
                     **common_properties,
                     "html": {"type": "string"},
+                    "result_ids": {"type": "array", "items": {"type": "string"}},
+                    "artifact_references": {"type": "array", "items": {"type": "string"}},
                 },
                 "required": ["filename", "html"],
             },
@@ -535,6 +587,125 @@ def build_standalone_chat_mcp_server(
         name: str, arguments: dict[str, Any]
     ) -> list[TextContent]:
         try:
+            if name == "start_analysis_notebook":
+                plan_id = str(arguments.get("plan_id") or "").strip()
+                if (
+                    not plan_id
+                    or plan_checker is None
+                    or notebook_mcp_app is None
+                    or analysis_notebook_path is None
+                ):
+                    raise ValueError("The run-bound analysis notebook is unavailable")
+                plan = await plan_checker(plan_id)
+                if plan.get("route") not in {"notebook_sdk", "dataset_ref"}:
+                    raise ValueError("The selected plan does not permit a notebook kernel")
+                if notebook_lifecycle is not None and notebook_lifecycle.session_id:
+                    return [
+                        TextContent(
+                            type="text",
+                            text=json.dumps(
+                                {
+                                    "session_id": notebook_lifecycle.session_id,
+                                    "status": "already_running",
+                                    "plan_id": notebook_lifecycle.plan_id,
+                                }
+                            ),
+                        )
+                    ]
+                if notebook_starter is None:
+                    from signalpilot._server.ai.notebook_mcp import (
+                        _handle_start_notebook_session,
+                    )
+                    from signalpilot._server.ai.tools.base import ToolContext
+
+                    result = _handle_start_notebook_session(
+                        ToolContext(app=notebook_mcp_app),
+                        {"file_path": str(analysis_notebook_path), "auto_run": True},
+                    )
+                else:
+                    result = notebook_starter(
+                        notebook_mcp_app,
+                        {"file_path": str(analysis_notebook_path), "auto_run": True},
+                    )
+                if not result:
+                    raise ValueError("Notebook kernel did not start")
+                raw = str(getattr(result[0], "text", ""))
+                try:
+                    started = json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    raise ValueError("Notebook kernel returned an invalid response") from exc
+                session_id = str(started.get("session_id") or "")
+                if not session_id or str(started.get("status") or "").startswith("error"):
+                    raise ValueError("Notebook kernel did not start")
+                if notebook_lifecycle is not None:
+                    notebook_lifecycle.session_id = session_id
+                    notebook_lifecycle.plan_id = plan_id
+                if notebook_session_resolver is not None:
+                    runtime_session = notebook_session_resolver(session_id)
+                else:
+                    from signalpilot._server.ai.tools.base import ToolContext
+
+                    runtime_session = ToolContext(app=notebook_mcp_app).get_session(session_id)
+                runtime_session._signalpilot_chat_runtime = True
+                runtime_session._signalpilot_chat_redactions = runtime_redactions
+                if event_sink is not None:
+                    await event_sink("notebook_started", {"plan_id": plan_id})
+                return [
+                    TextContent(
+                        type="text",
+                        text=json.dumps(
+                            {
+                                "session_id": session_id,
+                                "status": "started",
+                                "plan_id": plan_id,
+                                "cell_ids": started.get("cell_ids") or [],
+                            }
+                        ),
+                    )
+                ]
+            if name == "inspect_dbt":
+                if project_directory is None or scratch_directory is None:
+                    raise ValueError("The frozen dbt project is unavailable")
+                command = str(arguments.get("command") or "")
+                if command not in {"parse", "ls", "compile"}:
+                    raise ValueError("Only dbt parse, ls, and compile are allowed")
+                target_path = scratch_directory / "dbt-target"
+                target_path.mkdir(parents=True, exist_ok=True)
+                argv = [
+                    "dbt",
+                    "--no-use-colors",
+                    "--log-path",
+                    str(scratch_directory / "dbt-logs"),
+                    command,
+                    "--project-dir",
+                    str(project_directory),
+                    "--target-path",
+                    str(target_path),
+                ]
+                selection = str(arguments.get("select") or "").strip()
+                if selection:
+                    argv.extend(["--select", selection])
+                process = await asyncio.create_subprocess_exec(
+                    *argv,
+                    cwd=project_directory,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+                try:
+                    output, _ = await asyncio.wait_for(process.communicate(), timeout=120)
+                except TimeoutError:
+                    process.kill()
+                    await process.wait()
+                    raise ValueError("dbt inspection timed out") from None
+                text_output = output.decode(errors="replace")[-50_000:]
+                if process.returncode != 0:
+                    raise ValueError(f"dbt {command} failed: {text_output[-2_000:]}")
+                return [
+                    TextContent(
+                        type="text",
+                        text=json.dumps({"command": command, "output": text_output}),
+                    )
+                ]
             if name == "run_scratch_python":
                 result = _run_restricted_python(
                     str(arguments.get("source") or ""),
@@ -543,24 +714,43 @@ def build_standalone_chat_mcp_server(
                 return [TextContent(type="text", text=json.dumps(result))]
 
             metadata = _clean_metadata(arguments)
+            loaded_result: dict[str, Any] | None = None
+            result_id = str(arguments.get("result_id") or "").strip()
+            if name in {"publish_table", "publish_chart"}:
+                if not result_id or result_loader is None:
+                    raise ValueError("A governed structured result ID is required")
+                loaded_result = await result_loader(result_id)
+                metadata["provenance"] = {
+                    **dict(loaded_result.get("provenance") or {}),
+                    **metadata["provenance"],
+                    "result_id": result_id,
+                    "execution_id": loaded_result.get("execution_id"),
+                }
             if name == "publish_table":
-                rows = list(arguments.get("rows") or [])[:MAX_SNAPSHOT_ROWS]
+                assert loaded_result is not None
+                source_rows = list(loaded_result.get("rows") or [])
+                rows = source_rows
                 artifact = {
                     **metadata,
                     "kind": "table",
                     "mime_type": "text/csv",
                     "payload": {
-                        "columns": list(arguments.get("columns") or []),
+                        "columns": list(loaded_result.get("columns") or []),
                         "rows": rows,
                         "column_descriptions": dict(
                             arguments.get("column_descriptions") or {}
                         ),
-                        "truncated": bool(arguments.get("truncated"))
-                        or len(arguments.get("rows") or []) > len(rows),
+                        "query_row_count": loaded_result.get("query_row_count"),
+                        "saved_row_count": loaded_result.get("saved_row_count"),
+                        "completeness": loaded_result.get("completeness"),
+                        "truncation_reason": loaded_result.get("truncation_reason"),
+                        "truncated": loaded_result.get("completeness") != "complete",
                     },
                 }
             elif name == "publish_chart":
-                rows = list(arguments.get("rows") or [])[:MAX_SNAPSHOT_ROWS]
+                assert loaded_result is not None
+                source_rows = list(loaded_result.get("rows") or [])
+                rows = source_rows
                 spec, display_rows, display = prepare_signalpilot_chart(
                     dict(arguments.get("spec") or {}),
                     rows,
@@ -569,9 +759,7 @@ def build_standalone_chat_mcp_server(
                     {"name": str(name), "type": "unknown"}
                     for name in (rows[0].keys() if rows else [])
                 ]
-                truncated = bool(arguments.get("truncated")) or len(
-                    arguments.get("rows") or []
-                ) > len(rows)
+                truncated = loaded_result.get("completeness") != "complete"
                 binary_base64 = _render_chart_png(
                     spec,
                     display_rows,
@@ -592,6 +780,8 @@ def build_standalone_chat_mcp_server(
                             "columns": columns,
                             "rows": rows,
                             "truncated": truncated,
+                            "completeness": loaded_result.get("completeness"),
+                            "truncation_reason": loaded_result.get("truncation_reason"),
                         },
                         "display": display,
                         "truncated": truncated,
@@ -599,6 +789,25 @@ def build_standalone_chat_mcp_server(
                     "binary_base64": binary_base64,
                 }
             elif name == "publish_report":
+                result_ids = [str(value) for value in arguments.get("result_ids") or []]
+                if result_ids and result_loader is None:
+                    raise ValueError("Governed result loading is unavailable")
+                result_refs = []
+                for report_result_id in result_ids:
+                    loaded = await result_loader(report_result_id)  # type: ignore[misc]
+                    result_refs.append(
+                        {
+                            "result_id": report_result_id,
+                            "execution_id": loaded.get("execution_id"),
+                            "completeness": loaded.get("completeness"),
+                            "provenance": loaded.get("provenance"),
+                        }
+                    )
+                metadata["provenance"] = {
+                    **metadata["provenance"],
+                    "result_references": result_refs,
+                    "artifact_references": list(arguments.get("artifact_references") or []),
+                }
                 artifact = {
                     **metadata,
                     "kind": "report",
@@ -622,9 +831,10 @@ def build_standalone_chat_mcp_server(
                 )
             ]
         except Exception as exc:
-            return [
-                TextContent(type="text", text=json.dumps({"error": str(exc)}))
-            ]
+            # Raising lets the MCP protocol mark the tool result as an error.
+            # Returning an error-shaped TextContent reports isError=false and
+            # makes failed artifact publication look successful to Data Chat.
+            raise ValueError(str(exc)) from exc
 
     return McpSdkServerConfig(
         type="sdk", name="standalone-chat", instance=server

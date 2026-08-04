@@ -217,6 +217,44 @@ class TestNotebookJWTVerifierDispatch:
         assert request.state.auth["session_id"] == "sess-xyz"
 
     @pytest.mark.asyncio
+    async def test_notebook_session_jwt_retains_run_scope_in_local_mode(self, monkeypatch):
+        _patch_jwt_secret(monkeypatch)
+
+        import gateway.auth.user as user_mod
+
+        monkeypatch.setattr(user_mod, "is_cloud_mode", lambda: False)
+        token = mint_session_jwt(
+            user_id="local",
+            org_id="local",
+            session_id="sess-local",
+            project_id="project-a",
+            branch="main",
+            connection_name="warehouse",
+            commit_sha="a" * 40,
+            capabilities=["query:read"],
+            execution_identity="chat:run-a",
+            scopes=["read", "query", "execute"],
+            ttl=60,
+        )
+        request = MagicMock()
+        request.state = MagicMock()
+        request.state.auth = None
+        request.headers = {"authorization": f"Bearer {token}"}
+        request.cookies = {}
+
+        user_id = await user_mod.resolve_user_id(request)
+
+        assert user_id == "local"
+        assert request.state._jwt_claims["execution_identity"] == "chat:run-a"
+        assert request.state._jwt_claims["project_id"] == "project-a"
+
+        # A second dependency resolution must not collapse the verified claims
+        # to only the synthetic local user and organization.
+        assert await user_mod.resolve_user_id(request) == "local"
+        assert request.state._jwt_claims["execution_identity"] == "chat:run-a"
+        assert request.state._jwt_claims["commit_sha"] == "a" * 40
+
+    @pytest.mark.asyncio
     async def test_clerk_shaped_jwt_not_routed_to_notebook_verifier(self, monkeypatch):
         """A Clerk-shaped JWT (different iss) is NOT sent to notebook-session verifier."""
         _patch_jwt_secret(monkeypatch)

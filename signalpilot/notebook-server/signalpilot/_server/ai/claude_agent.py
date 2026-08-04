@@ -27,7 +27,7 @@ from signalpilot import _loggers
 from signalpilot._server.auth.session_token import load_session_jwt
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Callable
 
     from signalpilot._types.ids import SessionId
 
@@ -359,6 +359,7 @@ def _run_agent_in_thread(
     app: Any | None = None,
     cwd: str | None = None,
     auth_config: dict[str, str] | None = None,
+    notebook_session_authorizer: Callable[[str], bool] | None = None,
 ) -> None:
     """Run the agent SDK in a separate thread with session resume support."""
     event_queue = agent_state.event_queue
@@ -426,7 +427,10 @@ def _run_agent_in_thread(
                 from signalpilot._server.ai.tools.base import ToolContext
 
                 tool_context = ToolContext(app=app)
-                notebook_mcp = build_notebook_mcp_server(tool_context)
+                notebook_mcp = build_notebook_mcp_server(
+                    tool_context,
+                    session_authorizer=notebook_session_authorizer,
+                )
                 all_mcp["signalpilot-notebook"] = notebook_mcp
                 LOGGER.info("Notebook MCP server attached to agent")
             except Exception as e:
@@ -636,6 +640,7 @@ async def run_notebook_agent(
     additional_mcp_servers: dict[str, Any] | None = None,
     persist_session_mapping: bool = True,
     auth_config_override: dict[str, str] | None = None,
+    notebook_session_authorizer: Callable[[str], bool] | None = None,
 ) -> AsyncGenerator[AgentEvent, None]:
     """
     Run the Claude Agent SDK for a chat message.
@@ -750,6 +755,7 @@ async def run_notebook_agent(
             system_prompt, chat_session_id, is_resume, disallowed_tools, allowed_tools,
             effective_app, effective_cwd,
             auth,
+            notebook_session_authorizer,
         ),
         daemon=True,
     )

@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _is_local_url(url: str) -> bool:
@@ -36,10 +39,16 @@ class GatewayClient:
         req = Request(url, headers=self._headers())
         return self._send(req, timeout)
 
-    def post(self, path: str, body: dict[str, Any] | None = None, timeout: int = 60) -> Any:
+    def post(
+        self,
+        path: str,
+        body: dict[str, Any] | None = None,
+        timeout: int = 60,
+        headers: dict[str, str] | None = None,
+    ) -> Any:
         url = f"{self._url}{path}"
         data = json.dumps(body or {}).encode()
-        req = Request(url, data=data, headers=self._headers())
+        req = Request(url, data=data, headers=self._headers(headers))
         return self._send(req, timeout)
 
     def _send(self, req: Request, timeout: int) -> Any:
@@ -49,6 +58,19 @@ class GatewayClient:
                 if not raw:
                     return None
                 return json.loads(raw)
+        except HTTPError as e:
+            body_text = e.read().decode("utf-8", errors="replace")[:500]
+            raise RuntimeError(f"Gateway error (HTTP {e.code}): {body_text}") from None
+        except URLError as e:
+            raise RuntimeError(f"Cannot reach gateway: {e.reason}") from None
+
+    def download(self, path: str, destination: Path, timeout: int = 300) -> None:
+        """Stream an authenticated private object to a runtime-local file."""
+        req = Request(f"{self._url}{path}", headers=self._headers())
+        try:
+            with urlopen(req, timeout=timeout) as response, destination.open("wb") as output:
+                while chunk := response.read(1024 * 1024):
+                    output.write(chunk)
         except HTTPError as e:
             body_text = e.read().decode("utf-8", errors="replace")[:500]
             raise RuntimeError(f"Gateway error (HTTP {e.code}): {body_text}") from None

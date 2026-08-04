@@ -30,6 +30,8 @@ PROJECTS_ROOT = Path.home() / ".sp" / "projects"
 
 _BRANCH_RE = re.compile(r"^[A-Za-z0-9._/\-]+$")
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
+_CHECKOUT_ID_RE = re.compile(r"^[A-Za-z0-9-]{8,80}$")
 
 # TTL for the project-name and clone-info caches.  Auth tokens embedded in
 # clone-info become stale when the gateway rotates installation tokens / PATs;
@@ -121,6 +123,127 @@ def _make_basic_auth_header(username: str, token: str) -> str:
     """Return the value for an Authorization header using HTTP Basic Auth."""
     encoded = base64.b64encode(f"{username}:{token}".encode()).decode()
     return f"Basic {encoded}"
+
+
+def checkout_frozen_commit(project_dir: Path, commit_sha: str) -> bool:
+    """Detach a clean project workspace at an exact commit."""
+    if not _COMMIT_RE.fullmatch(commit_sha):
+        LOGGER.error("Invalid frozen project commit")
+        return False
+    verify = subprocess.run(
+        ["git", "cat-file", "-e", f"{commit_sha}^{{commit}}"],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if verify.returncode != 0:
+        LOGGER.error("Frozen commit is not available in the project repository")
+        return False
+    checkout = subprocess.run(
+        ["git", "checkout", "--detach", "--force", commit_sha],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if checkout.returncode != 0:
+        LOGGER.error("Frozen commit checkout failed")
+        return False
+    subprocess.run(
+        ["git", "clean", "-fdx"],
+        cwd=project_dir,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return head.returncode == 0 and head.stdout.strip().lower() == commit_sha.lower()
+
+
+def materialize_frozen_checkout(
+    *,
+    project_id: str,
+    branch: str,
+    commit_sha: str,
+    checkout_id: str,
+    gateway_token: str,
+) -> Path:
+    """Clone one isolated, read-only analysis checkout at an exact commit."""
+    _validate_project_id(project_id)
+    _validate_branch(branch)
+    if not _COMMIT_RE.fullmatch(commit_sha):
+        raise ValueError("Invalid frozen project commit")
+    if not _CHECKOUT_ID_RE.fullmatch(checkout_id):
+        raise ValueError("Invalid frozen checkout id")
+    if not gateway_token:
+        raise ValueError("Scoped gateway identity required")
+
+    root = (PROJECTS_ROOT / ".standalone-chat" / project_id).resolve()
+    checkout = (root / checkout_id).resolve()
+    if root not in checkout.parents:
+        raise ValueError("Invalid frozen checkout path")
+
+    response = httpx.get(
+        f"{_gateway_url_raw()}/api/workspace-projects/{project_id}/clone-url",
+        headers={"Authorization": f"Bearer {gateway_token}"},
+        timeout=10.0,
+    )
+    response.raise_for_status()
+    clone_info = response.json()
+    clone_url = str(clone_info.get("clone_url") or "").strip()
+    if not clone_url:
+        raise ValueError("No clone URL available")
+    auth_token = str(clone_info.get("auth_token") or "")
+    auth_header = (
+        _make_basic_auth_header(
+            str(clone_info.get("auth_username") or "x-access-token"),
+            auth_token,
+        )
+        if auth_token
+        else None
+    )
+
+    if checkout.exists():
+        shutil.rmtree(checkout)
+    root.mkdir(parents=True, exist_ok=True)
+    if auth_header:
+        code, _, error = _run_git_authed(
+            root,
+            auth_header,
+            "clone",
+            "--no-checkout",
+            "--branch",
+            branch,
+            clone_url,
+            str(checkout),
+            timeout=120,
+        )
+    else:
+        code, _, error = _run_git(
+            root,
+            "clone",
+            "--no-checkout",
+            "--branch",
+            branch,
+            clone_url,
+            str(checkout),
+            timeout=120,
+        )
+    if code != 0:
+        shutil.rmtree(checkout, ignore_errors=True)
+        LOGGER.error("Frozen project clone failed: %s", _redact_url(error.strip()))
+        raise ValueError("Frozen project clone failed")
+    if not checkout_frozen_commit(checkout, commit_sha):
+        shutil.rmtree(checkout, ignore_errors=True)
+        raise ValueError("Frozen project commit is unavailable")
+    return checkout
 
 
 # ── Project name cache ───────────────────────────────────────────

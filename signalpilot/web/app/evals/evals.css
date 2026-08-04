@@ -622,6 +622,51 @@
 .ev-onboarding-field small { display: block; margin-top: 0.45rem; color: var(--color-text-dim); font-size: 10px; }
 .ev-onboarding-field-wide { grid-column: 1 / -1; }
 
+.ev-source-kinds {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.65rem;
+  margin-bottom: 1.4rem;
+}
+
+.ev-source-kinds > button {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 0.75rem;
+  color: var(--color-text-dim);
+  text-align: left;
+  transition: border-color 130ms ease, background 130ms ease, color 130ms ease;
+}
+
+.ev-source-kinds > button:hover { border-color: var(--color-border-hover); color: var(--color-text-muted); }
+.ev-source-kinds > button.is-selected { border-color: color-mix(in srgb, var(--color-success) 65%, var(--color-border)); background: color-mix(in srgb, var(--color-success) 7%, transparent); color: var(--color-success); }
+.ev-source-kinds > button > svg { width: 17px; height: 17px; flex: 0 0 auto; stroke-width: 1.6; }
+.ev-source-kinds > button span { min-width: 0; }
+.ev-source-kinds strong { display: block; overflow: hidden; color: var(--color-text); font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.ev-source-kinds small { display: block; margin-top: 0.2rem; overflow: hidden; color: var(--color-text-dim); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+
+.ev-private-source { min-height: 85px; }
+.ev-private-grid { display: grid; grid-template-columns: 1fr 1.5fr; gap: 1rem; }
+.ev-private-loading { display: flex; align-items: center; gap: 0.5rem; min-height: 85px; color: var(--color-text-dim); font-size: 11px; }
+.ev-private-loading svg { width: 14px; height: 14px; }
+.ev-connect-github { display: grid; grid-template-columns: 32px 1fr auto; align-items: center; gap: 0.9rem; min-height: 85px; border: 1px solid var(--color-border); border-radius: 6px; padding: 1rem; }
+.ev-connect-github > svg { width: 24px; height: 24px; color: var(--color-text-muted); stroke-width: 1.5; }
+.ev-connect-github strong { display: block; color: var(--color-text); font-size: 12px; font-weight: 500; }
+.ev-connect-github p { margin: 0.3rem 0 0; color: var(--color-text-dim); font-size: 10px; line-height: 1.5; }
+.ev-connect-github button,
+.ev-connect-github-secondary { display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; border: 1px solid color-mix(in srgb, var(--color-success) 55%, var(--color-border)); border-radius: 6px; padding: 0.55rem 0.75rem; color: var(--color-text); font-size: 11px; white-space: nowrap; }
+.ev-connect-github button:hover:not(:disabled),
+.ev-connect-github-secondary:hover:not(:disabled) { background: color-mix(in srgb, var(--color-success) 10%, transparent); }
+.ev-connect-github button:disabled,
+.ev-connect-github-secondary:disabled { opacity: 0.45; }
+.ev-connect-github button svg,
+.ev-connect-github-secondary svg { width: 13px; height: 13px; }
+.ev-connect-github-secondary { margin-top: 0.75rem; border-color: var(--color-border); color: var(--color-text-muted); }
+
 .ev-onboarding-manifest {
   display: flex;
   align-items: center;
@@ -713,6 +758,10 @@
   .ev-onboarding-body { min-height: 440px; padding: 1.5rem; }
   .ev-onboarding-grid,
   .ev-onboarding-review { grid-template-columns: 1fr; }
+  .ev-source-kinds { grid-template-columns: 1fr; }
+  .ev-private-grid { grid-template-columns: 1fr; }
+  .ev-connect-github { grid-template-columns: 26px 1fr; }
+  .ev-connect-github button { grid-column: 1 / -1; }
   .ev-onboarding-footer { align-items: flex-start; flex-direction: column; padding: 1rem 1.5rem; }
   .ev-onboarding-footer > div:last-child { width: 100%; margin-left: 0; }
   .ev-onboarding-footer button { flex: 1; }

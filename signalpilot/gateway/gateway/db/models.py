@@ -1177,6 +1177,8 @@ class GatewayEvalConfig(GatewayBase):
 
     org_id: Mapped[str] = mapped_column(String, primary_key=True)
     repo_url: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    repo_installation_id: Mapped[str | None] = mapped_column(String(64))
+    repo_id: Mapped[int | None] = mapped_column(BigInteger)
     model: Mapped[str] = mapped_column(String(64), nullable=False, default="sonnet")
     max_tasks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     prompt_preamble: Mapped[str] = mapped_column(Text, nullable=False, default="")

@@ -61,6 +61,8 @@ class TestConfig:
         cfg = await evals_store.get_config(session, org_id=ORG)
         assert cfg == {
             "repo_url": "",
+            "repo_installation_id": None,
+            "repo_id": None,
             "model": "sonnet",
             "max_tasks": 0,
             "prompt_preamble": "",
@@ -86,6 +88,19 @@ class TestConfig:
         assert cfg["notify_emails"] == ["a@example.com", "b@example.com"]
         # Untouched fields keep their defaults.
         assert cfg["model"] == "sonnet"
+
+    async def test_private_repo_binding_roundtrip(self, session) -> None:
+        saved = await evals_store.save_config(
+            session,
+            org_id=ORG,
+            cfg={
+                "repo_url": "https://github.com/acme/private-evals.git",
+                "repo_installation_id": "installation-1",
+                "repo_id": 42,
+            },
+        )
+        assert saved["repo_installation_id"] == "installation-1"
+        assert saved["repo_id"] == 42
 
     async def test_partial_update_keeps_other_fields(self, session) -> None:
         await evals_store.save_config(

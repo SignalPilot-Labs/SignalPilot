@@ -35,6 +35,8 @@ TRACE_RUN_WINDOW = 100
 
 _CONFIG_FIELDS = (
     "repo_url",
+    "repo_installation_id",
+    "repo_id",
     "model",
     "max_tasks",
     "prompt_preamble",
@@ -48,6 +50,8 @@ def _config_dict(row: GatewayEvalConfig | None) -> dict[str, Any]:
     if row is None:
         return {
             "repo_url": "",
+            "repo_installation_id": None,
+            "repo_id": None,
             "model": "sonnet",
             "max_tasks": 0,
             "prompt_preamble": "",
@@ -57,6 +61,8 @@ def _config_dict(row: GatewayEvalConfig | None) -> dict[str, Any]:
         }
     return {
         "repo_url": row.repo_url,
+        "repo_installation_id": row.repo_installation_id,
+        "repo_id": row.repo_id,
         "model": row.model,
         "max_tasks": row.max_tasks,
         "prompt_preamble": row.prompt_preamble,

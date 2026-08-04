@@ -16,7 +16,7 @@ import zipfile
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse, Response, StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..config import get_governance_settings
 from ..config.evals import get_eval_run_settings
@@ -64,6 +64,8 @@ EXPORT_MAX_BYTES = 256 * 1024 * 1024
 
 class EvalConfig(BaseModel):
     repo_url: str = Field("", max_length=2048)
+    repo_installation_id: str | None = Field(None, max_length=64)
+    repo_id: int | None = Field(None, gt=0)
     model: str = Field("sonnet", max_length=64)
     max_tasks: int = Field(0, ge=0, le=200)  # 0 = all
     prompt_preamble: str = Field("", max_length=4000)
@@ -91,6 +93,12 @@ class EvalConfig(BaseModel):
             if len(e) > 254 or "@" not in e or " " in e or e.count("@") != 1:
                 raise ValueError(f"not an email address: {e!r}")
         return v
+
+    @model_validator(mode="after")
+    def _private_repo_binding_is_complete(self):
+        if (self.repo_installation_id is None) != (self.repo_id is None):
+            raise ValueError("repo_installation_id and repo_id must be set together")
+        return self
 
 
 class EvalRunRequest(BaseModel):
@@ -128,8 +136,43 @@ async def get_eval_config(store: StoreD):
 @router.put("/evals/config", dependencies=EVAL_EXECUTE_GUARDS)
 async def put_eval_config(store: StoreD, cfg: EvalConfig):
     pin = await _require_pinned_connection(store, cfg.connection)
-    cfg = cfg.model_copy(update={"connection": pin})
+    cfg = await _verify_private_eval_repo(store, cfg.model_copy(update={"connection": pin}))
     return await store.save_eval_config(cfg.model_dump(mode="json"))
+
+
+async def _verify_private_eval_repo(store: StoreD, cfg: EvalConfig) -> EvalConfig:
+    """Verify that the selected installation can read the bound eval repository."""
+    if cfg.repo_installation_id is None:
+        return cfg
+    prefix = "https://github.com/"
+    if not cfg.repo_url.startswith(prefix):
+        raise HTTPException(status_code=422, detail="A private eval repository must use a GitHub HTTPS URL")
+    full_name = cfg.repo_url.removeprefix(prefix).removesuffix(".git").strip("/")
+    if full_name.count("/") != 1:
+        raise HTTPException(status_code=422, detail="The private eval repository URL is invalid")
+
+    from ..github_client import list_installation_repos
+    from ..store import github as github_store
+
+    installation = await github_store.get_installation(
+        store.session,
+        org_id=store.org_id,
+        installation_id=cfg.repo_installation_id,
+    )
+    if installation is None or installation.status != "active":
+        raise HTTPException(status_code=422, detail="The selected GitHub installation is not connected")
+    try:
+        token = await github_store.get_valid_token(store.session, installation)
+        repos = await list_installation_repos(token)
+    except Exception as exc:
+        logger.warning("Could not verify eval repository access for org=%s: %s", store.org_id, type(exc).__name__)
+        raise HTTPException(status_code=502, detail="GitHub repository access could not be verified") from exc
+
+    selected = next((repo for repo in repos if int(repo.get("id", 0)) == cfg.repo_id), None)
+    if selected is None or str(selected.get("full_name", "")).casefold() != full_name.casefold():
+        raise HTTPException(status_code=422, detail="The selected GitHub installation cannot access this repository")
+    canonical_url = f"https://github.com/{selected['full_name']}.git"
+    return cfg.model_copy(update={"repo_url": canonical_url})
 
 
 async def _require_pinned_connection(store: StoreD, connection: str | None) -> str:

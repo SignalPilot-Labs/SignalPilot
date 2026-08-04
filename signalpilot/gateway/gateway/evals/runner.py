@@ -301,7 +301,13 @@ def _assert_repo_allowed(repo_url: str, *, settings: EvalRunSettings, what: str)
         raise RepoRefused(f"{what}: local paths must live under {settings.projects_dir} — refused {url[:120]!r}")
 
 
-async def _authed_clone_url(org_id: str, repo_url: str) -> str:
+async def _authed_clone_url(
+    org_id: str,
+    repo_url: str,
+    *,
+    repo_installation_id: str | None = None,
+    repo_id: int | None = None,
+) -> str:
     """Swap in a short-lived installation token for a private GitHub repo.
 
     The resolver rejects a repository that belongs to another organization.
@@ -314,7 +320,20 @@ async def _authed_clone_url(org_id: str, repo_url: str) -> str:
 
     factory = get_session_factory()
     async with factory() as session:
-        token = await gh_store.get_org_token_for_repo(session, org_id=org_id, repo_full_name=full_name)
+        if repo_installation_id:
+            installation = await gh_store.get_installation(
+                session,
+                org_id=org_id,
+                installation_id=repo_installation_id,
+            )
+            if installation is None or installation.status != "active":
+                raise RepoRefused("the GitHub installation for this eval repository is not connected")
+            authorized_ids = installation.authorized_repository_ids
+            if authorized_ids is not None and repo_id not in {int(value) for value in authorized_ids}:
+                raise RepoRefused("the GitHub installation is not authorized for this eval repository")
+            token = await gh_store.get_valid_token(session, installation)
+        else:
+            token = await gh_store.get_org_token_for_repo(session, org_id=org_id, repo_full_name=full_name)
     if token:
         return f"https://x-access-token:{token}@github.com/{full_name}.git"
     # Public repositories can clone without GitHub App authorization.
@@ -322,11 +341,24 @@ async def _authed_clone_url(org_id: str, repo_url: str) -> str:
     return repo_url
 
 
-async def fetch_eval_repo(org_id: str, repo_url: str, dest: Path, settings: EvalRunSettings) -> str:
+async def fetch_eval_repo(
+    org_id: str,
+    repo_url: str,
+    dest: Path,
+    settings: EvalRunSettings,
+    *,
+    repo_installation_id: str | None = None,
+    repo_id: int | None = None,
+) -> str:
     """Clone (or resolve) the eval set into dest. Returns the git ref."""
     _assert_repo_allowed(repo_url, settings=settings, what="eval repo")
     if repo_url.startswith(("http://", "https://", "git@")):
-        url = await _authed_clone_url(org_id, repo_url)
+        url = await _authed_clone_url(
+            org_id,
+            repo_url,
+            repo_installation_id=repo_installation_id,
+            repo_id=repo_id,
+        )
         code, out = await _git(["clone", "--depth", "1", url, str(dest)])
         if code != 0:
             # Do not include `url` in output because it can contain a token.
@@ -357,8 +389,11 @@ async def get_eval_set(org_id: str, cfg: dict, settings: EvalRunSettings) -> Eva
     repo_url = str(cfg.get("repo_url", "") or "")
     if not repo_url:
         raise FileNotFoundError("no eval repo configured")
+    repo_installation_id = cfg.get("repo_installation_id")
+    repo_id = cfg.get("repo_id")
+    cache_key = f"{repo_url}\x00{repo_installation_id or ''}\x00{repo_id or ''}"
     cache_root = Path(tempfile.gettempdir()) / "sp-eval-cache"
-    slug = hashlib.sha256(f"{org_id}\x00{repo_url}".encode()).hexdigest()[:16]
+    slug = hashlib.sha256(f"{org_id}\x00{cache_key}".encode()).hexdigest()[:16]
     dest = cache_root / slug
     meta = dest / ".sp-cache-meta"
     fresh = False
@@ -370,15 +405,22 @@ async def get_eval_set(org_id: str, cfg: dict, settings: EvalRunSettings) -> Eva
     if meta.is_file():
         try:
             cached = json.loads(meta.read_text())
-            fresh = cached.get("url") == repo_url and time.time() - cached.get("at", 0) < _REPO_CACHE_SECONDS
+            fresh = cached.get("key") == cache_key and time.time() - cached.get("at", 0) < _REPO_CACHE_SECONDS
             ref = str(cached.get("ref", ""))
         except ValueError:
             fresh = False
     if not fresh:
         shutil.rmtree(dest, ignore_errors=True)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        ref = await fetch_eval_repo(org_id, repo_url, dest, settings)
-        meta.write_text(json.dumps({"url": repo_url, "at": time.time(), "ref": ref}))
+        ref = await fetch_eval_repo(
+            org_id,
+            repo_url,
+            dest,
+            settings,
+            repo_installation_id=repo_installation_id,
+            repo_id=repo_id,
+        )
+        meta.write_text(json.dumps({"key": cache_key, "at": time.time(), "ref": ref}))
     eval_set = load_eval_set(dest)
     eval_set.ref = ref
     return eval_set
@@ -812,7 +854,14 @@ async def _execute_run_inner(org_id: str, run_id: str, api_key: str | None) -> N
     try:
         try:
             shutil.rmtree(repo_dir, ignore_errors=True)
-            eval_ref = await fetch_eval_repo(org_id, run["repo_url"], repo_dir, settings)
+            eval_ref = await fetch_eval_repo(
+                org_id,
+                run["repo_url"],
+                repo_dir,
+                settings,
+                repo_installation_id=(cfg.get("repo_installation_id") if cfg.get("repo_url") == run["repo_url"] else None),
+                repo_id=(cfg.get("repo_id") if cfg.get("repo_url") == run["repo_url"] else None),
+            )
             eval_set = load_eval_set(repo_dir)
             eval_set.ref = eval_ref
         except (ManifestError, RuntimeError, ValueError, FileNotFoundError) as exc:

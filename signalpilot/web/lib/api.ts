@@ -278,6 +278,8 @@ export type EvalConfig = {
   enabled?: boolean;
   runner_image?: string;
   repo_url: string;
+  repo_installation_id?: string | null;
+  repo_id?: number | null;
   model: string;
   max_tasks: number;
   prompt_preamble: string;

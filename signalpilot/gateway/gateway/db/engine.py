@@ -610,6 +610,17 @@ async def _ensure_eval_run_lease_columns(engine) -> None:
     logger.info("Ensured lease columns on gateway_eval_runs")
 
 
+async def _ensure_eval_config_repo_binding_columns(engine) -> None:
+    """Add the GitHub installation binding used by private eval repositories."""
+    async with engine.begin() as conn:
+        for ddl in (
+            "ALTER TABLE gateway_eval_configs ADD COLUMN IF NOT EXISTS repo_installation_id VARCHAR(64)",
+            "ALTER TABLE gateway_eval_configs ADD COLUMN IF NOT EXISTS repo_id BIGINT",
+        ):
+            await conn.execute(text(ddl))
+    logger.info("Ensured private repository binding columns on gateway_eval_configs")
+
+
 async def _ensure_notebook_session_org_id(engine) -> None:
     """Add org_id to gateway_notebook_sessions and fill NULL values.
 
@@ -653,6 +664,7 @@ async def init_db() -> None:
     await _ensure_github_authorized_repos_column(engine)
     await _ensure_notebook_token_plaintext_dropped(engine)
     await _ensure_api_key_eval_binding_columns(engine)
+    await _ensure_eval_config_repo_binding_columns(engine)
     await _ensure_eval_run_lease_columns(engine)
     await _ensure_eval_regression_change_columns(engine)
     logger.info("Gateway database tables initialized")

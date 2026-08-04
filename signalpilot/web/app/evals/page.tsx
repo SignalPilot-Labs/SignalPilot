@@ -161,6 +161,8 @@ function ConfigForm({ onSaved }: { onSaved: () => void }) {
   const { data, mutate } = useSWR("eval-config", getEvalConfig);
   const [form, setForm] = useState({
     repo_url: "",
+    repo_installation_id: null as string | null,
+    repo_id: null as number | null,
     model: "sonnet",
     max_tasks: 0,
     prompt_preamble: "",
@@ -175,6 +177,8 @@ function ConfigForm({ onSaved }: { onSaved: () => void }) {
     if (data && !loaded) {
       setForm({
         repo_url: data.repo_url ?? "",
+        repo_installation_id: data.repo_installation_id ?? null,
+        repo_id: data.repo_id ?? null,
         model: data.model ?? "sonnet",
         max_tasks: data.max_tasks ?? 0,
         prompt_preamble: data.prompt_preamble ?? "",
@@ -191,6 +195,8 @@ function ConfigForm({ onSaved }: { onSaved: () => void }) {
     try {
       await putEvalConfig({
         repo_url: form.repo_url,
+        repo_installation_id: form.repo_installation_id,
+        repo_id: form.repo_id,
         model: form.model,
         max_tasks: form.max_tasks,
         prompt_preamble: form.prompt_preamble,
@@ -220,7 +226,7 @@ function ConfigForm({ onSaved }: { onSaved: () => void }) {
         <label className="block text-xs text-[var(--color-text-muted)] mb-1.5">
           Repo — public git URL, or a local path under /eval-projects (format: eval-format.md)
         </label>
-        <input className={inputCls} value={form.repo_url} onChange={(e) => setForm({ ...form, repo_url: e.target.value })} placeholder="https://github.com/org/eval-set.git  ·  /eval-projects/northwind" />
+        <input className={inputCls} value={form.repo_url} onChange={(e) => setForm({ ...form, repo_url: e.target.value, repo_installation_id: null, repo_id: null })} placeholder="https://github.com/org/eval-set.git  ·  /eval-projects/northwind" />
       </div>
       <div>
         <label className="block text-xs text-[var(--color-text-muted)] mb-1.5">Model</label>

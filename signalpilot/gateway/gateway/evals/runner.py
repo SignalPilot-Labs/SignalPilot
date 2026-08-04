@@ -111,6 +111,15 @@ class RunDB:
         async with self._factory() as session:
             await evals_store.renew_lease(session, org_id=self.org_id, run_id=self.run_id, ttl_s=ttl_s)
 
+    async def cancel_open_tasks(self, finished_at: str) -> None:
+        async with self._factory() as session:
+            await evals_store.cancel_open_tasks(
+                session,
+                org_id=self.org_id,
+                run_id=self.run_id,
+                finished_at=finished_at,
+            )
+
     async def store(self):
         """A short-lived Store for org-scoped operations (connections, KB)."""
         session = self._factory()
@@ -181,7 +190,11 @@ def derive_progress(run: dict) -> dict:
     return {
         "run_id": run["id"],
         "status": run.get("status"),
-        "phase": progress.get("phase") or ("finished" if run.get("status") in ("completed", "failed") else "preparing"),
+        "phase": progress.get("phase") or (
+            "finished"
+            if run.get("status") in ("completed", "failed", "cancelled")
+            else "preparing"
+        ),
         "done": progress.get("done", 0),
         "total": progress.get("total", 0),
         "active": progress.get("active", []),
@@ -645,6 +658,12 @@ async def execute_run(
     lease_task = asyncio.create_task(lease_loop())
     try:
         await _execute_run_inner(org_id, run_id, api_key)
+    except asyncio.CancelledError:
+        logger.info("eval run %s was cancelled", run_id)
+        try:
+            await mark_run_cancelled(org_id, run_id)
+        except Exception:
+            logger.exception("could not mark run %s cancelled", run_id)
     except Exception as exc:  # last-resort: the run row must never stay "running"
         logger.exception("eval run %s crashed", run_id)
         try:
@@ -663,6 +682,44 @@ async def execute_run(
             await db.update_run(lease_expires_at=None)
         except Exception:
             logger.warning("could not clear lease for run %s", run_id)
+
+
+async def mark_run_cancelled(org_id: str, run_id: str) -> None:
+    """Finish the persisted state for a run that no longer executes."""
+    db = RunDB(org_id, run_id)
+    finished_at = _now()
+    await db.cancel_open_tasks(finished_at)
+    run = await db.get_run()
+    tasks = list((run or {}).get("tasks") or [])
+    summary = {
+        "total": len(tasks),
+        "correct": sum(1 for task in tasks if task.get("verdict") == "CORRECT"),
+        "partial": sum(1 for task in tasks if task.get("verdict") == "PARTIAL"),
+        "off": sum(1 for task in tasks if task.get("verdict") == "OFF"),
+        "unknown": sum(1 for task in tasks if task.get("verdict") == "UNKNOWN"),
+        "ungraded": sum(1 for task in tasks if task.get("verdict") == "UNGRADED"),
+        "error": sum(1 for task in tasks if task.get("verdict") == "ERROR"),
+        "setup_failed": sum(1 for task in tasks if task.get("verdict") == "SETUP_FAILED"),
+        "cancelled": sum(1 for task in tasks if task.get("verdict") == "CANCELLED"),
+    }
+    progress = dict((run or {}).get("progress") or {})
+    progress.update(
+        {
+            "phase": "cancelled",
+            "done": len(tasks),
+            "total": len(tasks),
+            "active": [],
+            "updated_at": finished_at,
+        }
+    )
+    await db.update_run(
+        status="cancelled",
+        summary=summary,
+        progress=progress,
+        error=None,
+        finished_at=finished_at,
+        lease_expires_at=None,
+    )
 
 
 async def revoke_run_keys(org_id: str, run_id: str, api_key_id: str | None = None) -> None:
@@ -1035,6 +1092,7 @@ async def _run_task(ctx: TaskContext, task: EvalTask) -> None:
     transcript = ""
     verdict, check_results, answer, error = "ERROR", [], "", None
 
+    cancelled = False
     try:
         if task.task_class == "write":
             verdict, check_results, answer, transcript, error = await _run_write_task(ctx, task)
@@ -1046,6 +1104,11 @@ async def _run_task(ctx: TaskContext, task: EvalTask) -> None:
                 error = f"agent container exited {exit_code}"
             else:
                 verdict, check_results = _grade_answer(task, answer)
+    except asyncio.CancelledError:
+        cancelled = True
+        verdict = "CANCELLED"
+        answer = "Run cancelled by user."
+        raise
     except Exception as exc:
         logger.exception("task %s failed", task.id)
         from .sandboxes import redact
@@ -1060,7 +1123,7 @@ async def _run_task(ctx: TaskContext, task: EvalTask) -> None:
                 logger.exception("could not store transcript for %s", task.id)
         await db.update_task(
             task.id,
-            status="done",
+            status="cancelled" if cancelled else "done",
             verdict=verdict,
             check_results=check_results,
             answer=(answer or "")[:2000],

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useMemo } from "react";
 import dynamic from "next/dynamic";
-import { KeyRound, CreditCard, Plug, BarChart3, Shield, Lock, Users, GitBranch, BookOpen } from "lucide-react";
+import { KeyRound, CreditCard, Plug, BarChart3, Shield, Lock, Users, GitBranch, BookOpen, Menu, X } from "lucide-react";
 import { Tooltip } from "~/components/ui/tooltip";
 import { useAppAuth } from "~/lib/auth-context";
 import { getProjects, getWorkspaceProjects } from "~/lib/api";
@@ -142,6 +142,16 @@ function NavIconEvals({ active }: { active: boolean }) {
   );
 }
 
+function NavIconAccuracy({ active }: { active: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <path d="M2 11V8M5.3 11V5M8.7 11V7M12 11V2" stroke="currentColor" strokeWidth="1" />
+      <path d="M1 12.5H13" stroke="currentColor" strokeWidth="1" />
+      {active && <circle cx="12" cy="2" r="1.25" fill="var(--color-success)" />}
+    </svg>
+  );
+}
+
 function NavIconChats({ active }: { active: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -195,6 +205,7 @@ const navGroups: { label: string | null; items: NavItem[] }[] = [
       { href: "/projects", label: "Projects", icon: NavIconProject, shortcut: "5" },
       { href: "/knowledge", label: "Knowledge Base", icon: NavIconKnowledge, shortcut: "8" },
       { href: "/evals", label: "Evals", icon: NavIconEvals, shortcut: "" },
+      { href: "/evals/accuracy", label: "Accuracy", icon: NavIconAccuracy, shortcut: "" },
       { href: "/integrations", label: "Integrations", icon: NavIconIntegrations, shortcut: "3" },
     ],
   },
@@ -488,6 +499,7 @@ function GitHubNavLink({ pathname }: { pathname: string }) {
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const [mobileOpen, setMobileOpen] = useState(false);
   const router = useRouter();
   const { isCloudMode, isAuthenticated } = useAppAuth();
   const [projectCount, setProjectCount] = useState(0);
@@ -545,12 +557,24 @@ export default function Sidebar() {
   const tierBranding = useTierBranding();
   const showWordmark = tierBranding.enabled && tierBranding.tier !== "free";
 
+  useEffect(() => setMobileOpen(false), [pathname]);
+
   if (HIDDEN_SIDEBAR_PREFIXES.some((prefix) => matchesRoutePrefix(pathname, prefix))) {
     return null;
   }
 
   return (
-    <aside className="fixed left-0 top-0 h-screen w-56 bg-[var(--color-sidebar)] border-r border-[var(--color-border)] flex flex-col z-50">
+    <>
+      <button
+        onClick={() => setMobileOpen((open) => !open)}
+        className="fixed right-4 top-4 z-[60] flex h-9 w-9 items-center justify-center rounded-[6px] border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text)] md:hidden"
+        aria-label={mobileOpen ? "Close navigation" : "Open navigation"}
+        aria-expanded={mobileOpen}
+      >
+        {mobileOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
+      </button>
+      {mobileOpen && <button className="fixed inset-0 z-40 bg-black/60 md:hidden" onClick={() => setMobileOpen(false)} aria-label="Close navigation" />}
+      <aside className={`${mobileOpen ? "flex" : "hidden"} fixed left-0 top-0 z-50 h-screen w-56 flex-col border-r border-[var(--color-border)] bg-[var(--color-sidebar)] md:flex`}>
       {/* Logo */}
       <div className="px-5 py-5 border-b border-[var(--color-border)]">
         <Link href="/dashboard" className="flex items-center gap-3 group">
@@ -601,7 +625,7 @@ export default function Sidebar() {
         {navGroups.map((group, gi) => {
           const items = group.items.filter(
             ({ href }) =>
-              !(isCloudMode && href === "/settings") && !(href === "/evals" && !evalsEnabled)
+              !(isCloudMode && href === "/settings") && !(href.startsWith("/evals") && !evalsEnabled)
           );
           if (items.length === 0) return null;
           return (
@@ -613,7 +637,7 @@ export default function Sidebar() {
               )}
               <div className="space-y-0.5">
                 {items.map(({ href, label, icon: Icon, shortcut }) => {
-                  const active = pathname.startsWith(href);
+                  const active = href === "/evals" ? pathname === href : pathname.startsWith(href);
                   const showHealthDot =
                     href === "/connections" && connHealth.total > 0 && connHealth.healthy < connHealth.total;
                   return (
@@ -730,6 +754,7 @@ export default function Sidebar() {
           </Tooltip>
         </div>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }

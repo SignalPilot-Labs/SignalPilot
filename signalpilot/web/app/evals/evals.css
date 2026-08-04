@@ -1,6 +1,74 @@
 /* These styles apply only to the evaluation management page.
    The styles use the tokens, radii, labels, and evidence fonts from UX.md. */
 
+.ev-command-stage {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--color-border-hover);
+  border-radius: 8px;
+  background: var(--color-bg-card);
+}
+.ev-command-stage.is-live { border-color: color-mix(in srgb, var(--color-success) 55%, var(--color-border)); }
+.ev-command-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.ev-command-head h2 { color: var(--color-text); font-size: 15px; font-weight: 600; }
+.ev-command-head p { margin-top: 0.25rem; color: var(--color-text-dim); font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-command-state { padding: 0.15rem 0.45rem; border: 1px solid var(--color-border); border-radius: 4px; color: var(--color-text-dim); font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; }
+.ev-command-state.is-live { border-color: color-mix(in srgb, var(--color-success) 50%, transparent); color: var(--color-success); }
+.ev-primary-command, .ev-secondary-command, .ev-stop-command, .ev-icon-command {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  height: 34px;
+  border-radius: 6px;
+  padding: 0 0.8rem;
+  font-size: 12px;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.ev-primary-command { border: 1px solid color-mix(in srgb, var(--color-success) 65%, var(--color-border)); background: color-mix(in srgb, var(--color-success) 10%, var(--color-bg-card)); color: var(--color-text); }
+.ev-primary-command:hover:not(:disabled) { background: color-mix(in srgb, var(--color-success) 17%, var(--color-bg-card)); }
+.ev-primary-command:disabled, .ev-stop-command:disabled { cursor: not-allowed; opacity: 0.45; }
+.ev-secondary-command, .ev-icon-command { border: 1px solid var(--color-border); color: var(--color-text-muted); }
+.ev-secondary-command:hover, .ev-icon-command:hover { border-color: var(--color-border-hover); color: var(--color-text); }
+.ev-icon-command { width: 34px; padding: 0; }
+.ev-stop-command { border: 1px solid color-mix(in srgb, #e5484d 58%, var(--color-border)); background: color-mix(in srgb, #e5484d 8%, var(--color-bg-card)); color: #f07178; }
+.ev-stop-command:hover:not(:disabled) { background: color-mix(in srgb, #e5484d 15%, var(--color-bg-card)); }
+.ev-flightdeck { position: relative; min-height: 245px; padding: 2rem 1.5rem 1.25rem; background: color-mix(in srgb, var(--color-bg) 65%, var(--color-bg-card)); }
+.ev-flightdeck-grid { position: absolute; inset: 0; opacity: 0.28; background-image: linear-gradient(var(--color-border) 1px, transparent 1px), linear-gradient(90deg, var(--color-border) 1px, transparent 1px); background-size: 32px 32px; mask-image: linear-gradient(to bottom, black, transparent 82%); }
+.ev-stage-rail { position: relative; z-index: 1; display: grid; grid-template-columns: repeat(4, minmax(80px, 1fr)); max-width: 900px; margin: 1rem auto 3.5rem; }
+.ev-stage-rail::before { content: ""; position: absolute; top: 9px; left: 12.5%; right: 12.5%; height: 1px; background: var(--color-border-hover); }
+.ev-stage-node { position: relative; display: flex; flex-direction: column; align-items: center; gap: 0.65rem; color: var(--color-text-dim); font-family: var(--font-mono, ui-monospace, monospace); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+.ev-stage-signal { z-index: 1; width: 18px; height: 18px; border: 1px solid var(--color-border-hover); border-radius: 50%; background: var(--color-bg-card); box-shadow: 0 0 0 5px var(--color-bg-card); }
+.ev-stage-node.is-active { color: var(--color-text); }
+.ev-stage-node.is-active .ev-stage-signal { border-color: var(--color-success); background: var(--color-success); box-shadow: 0 0 0 5px var(--color-bg-card), 0 0 24px color-mix(in srgb, var(--color-success) 65%, transparent); animation: ev-signal 1.35s ease-in-out infinite; }
+.ev-stage-node.is-done .ev-stage-signal { border-color: var(--color-success); background: color-mix(in srgb, var(--color-success) 30%, var(--color-bg-card)); }
+.ev-run-pulse { position: absolute; z-index: 2; top: 6px; left: 12.5%; width: 7px; height: 7px; border-radius: 50%; background: #8fd3ca; box-shadow: 0 0 12px #8fd3ca; animation: ev-run-flight 3.2s linear infinite; }
+.ev-flightdeck-readout { position: relative; z-index: 1; display: grid; grid-template-columns: minmax(180px, 1.6fr) repeat(2, minmax(120px, 1fr)) 64px; align-items: end; gap: 1.25rem; max-width: 960px; margin: 0 auto; padding-top: 1rem; border-top: 1px solid var(--color-border); }
+.ev-flightdeck-readout > div:not(.ev-progress-dial) { min-width: 0; }
+.ev-flightdeck-readout .label { display: block; margin-bottom: 0.3rem; color: var(--color-text-dim); font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; }
+.ev-flightdeck-readout strong { display: block; overflow: hidden; color: var(--color-text); font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.ev-progress-dial { --progress: 0deg; display: grid; width: 56px; height: 56px; place-items: center; border-radius: 50%; background: conic-gradient(var(--color-success) var(--progress), var(--color-border) 0); position: relative; }
+.ev-progress-dial::after { content: ""; position: absolute; inset: 4px; border-radius: inherit; background: var(--color-bg-card); }
+.ev-progress-dial span { z-index: 1; color: var(--color-text); font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; }
+.ev-command-error { margin: 0; padding: 0.75rem 1.25rem; border-top: 1px solid color-mix(in srgb, #e5484d 40%, var(--color-border)); color: #e5484d; font-size: 12px; }
+@keyframes ev-signal { 50% { transform: scale(0.72); opacity: 0.72; } }
+@keyframes ev-run-flight { from { left: 12.5%; } to { left: 87.5%; } }
+@media (prefers-reduced-motion: reduce) { .ev-stage-node.is-active .ev-stage-signal, .ev-run-pulse { animation: none; } }
+@media (max-width: 760px) {
+  .ev-command-head { align-items: flex-start; flex-direction: column; }
+  .ev-flightdeck { min-height: 280px; padding-inline: 1rem; }
+  .ev-flightdeck-readout { grid-template-columns: 1fr 1fr; }
+  .ev-progress-dial { display: none; }
+  .ev-stage-node { font-size: 8px; }
+}
+
 .ev-card {
   border: 1px solid var(--color-border);
   background: var(--color-bg-card);

@@ -5,7 +5,7 @@ const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1720, height: 1300 } });
 
 // Capture data from the active service.
-await page.goto("http://localhost:3210/evals", { waitUntil: "networkidle" });
+await page.goto("http://localhost:3260/evals", { waitUntil: "networkidle" });
 await page.waitForTimeout(2500);
 await page.screenshot({ path: "e2e-evals-redesign-real.png", fullPage: false });
 
@@ -63,6 +63,26 @@ const runs = Array.from({ length: 40 }, (_, i) => ({
   traces_pruned: false,
 }));
 
+const martModels = Array.from({ length: 32 }, (_, i) => ({
+  name: `mart_${["revenue", "claims", "orders", "sessions"][i % 4]}_${String(i + 1).padStart(2, "0")}`,
+  layer: "marts",
+  covered: i % 7 !== 0,
+  declared_by: i % 7 === 0 ? [] : [`t-${String((i % 24) + 1).padStart(3, "0")}_${["revenue", "claims", "orders", "sessions"][i % 4]}`],
+  observed_by: i % 3 === 0 && i % 7 !== 0 ? [`t-${String((i % 24) + 1).padStart(3, "0")}_${["revenue", "claims", "orders", "sessions"][i % 4]}`] : [],
+}));
+runs[1].coverage = {
+  declared: martModels.filter((model) => model.declared_by.length).map((model) => model.name),
+  observed: martModels.filter((model) => model.observed_by.length).map((model) => model.name),
+  observed_not_declared: [],
+  per_task_observed: {},
+  models_total: 80,
+  models_covered: 70,
+  pct: 87.5,
+  marts_pct: 84.4,
+  by_layer: { marts: { total: 32, covered: 27 }, staging: { total: 30, covered: 28 }, intermediate: { total: 18, covered: 15 } },
+  models: martModels,
+};
+
 const history = Array.from({ length: 12 }, (_, i) => ({
   run_id: runs[Math.min(i + 1, runs.length - 1)].id,
   created_at: `2026-07-${String(2 + i * 2).padStart(2, "0")}T12:00:00Z`,
@@ -97,6 +117,22 @@ const accuracy = {
       recipients: [],
     },
   ],
+  task_performance: tasks.slice(0, 70).map((task, i) => ({
+    task_id: task.id,
+    title: task.title,
+    kind: task.kind,
+    class: task.class,
+    covers: task.covers,
+    attempts: 8 + (i % 5),
+    correct: i % 9 === 0 ? 3 : 7 + (i % 4),
+    partial: i % 4,
+    off: i % 9 === 0 ? 5 : i % 3,
+    errors: i % 13 === 0 ? 1 : 0,
+    pass_rate_pct: i % 9 === 0 ? 37.5 : 72 + (i % 29),
+    avg_duration_s: 24 + i * 1.8,
+    last_verdict: i % 9 === 0 ? "OFF" : "CORRECT",
+    last_run_id: runs[1].id,
+  })),
 };
 
 await page.route("**/api/evals/tasks", (r) =>
@@ -113,6 +149,13 @@ await page.route("**/api/evals/tasks", (r) =>
   }));
 await page.route("**/api/evals/runs", (r) =>
   r.fulfill({ json: { runs } }));
+await page.route("**/api/evals/runs/*/progress", (r) =>
+  r.fulfill({ json: { run_id: runs[0].id, status: "running", phase: "running", done: 63, total: 180, active: [{ task_id: tasks[63].id, title: tasks[63].title, phase: "agent", started_at: new Date().toISOString() }], started_at: new Date(Date.now() - 90000).toISOString(), elapsed_s: 90, updated_at: new Date().toISOString(), error: null } }));
+await page.route("**/api/evals/runs/*/cancel", (r) => {
+  runs[0].status = "cancelled";
+  runs[0].finished_at = new Date().toISOString();
+  r.fulfill({ json: { ...runs[0], tasks: [] } });
+});
 await page.route("**/api/evals/accuracy", (r) =>
   r.fulfill({ json: accuracy }));
 await page.route("**/api/evals/config", (r) =>
@@ -130,9 +173,14 @@ await page.route("**/api/evals/config", (r) =>
   }));
 await page.route("**/api/evals/availability", (r) => r.fulfill({ json: { enabled: true, reason: "ok" } }));
 
-await page.goto("http://localhost:3210/evals", { waitUntil: "networkidle" });
+await page.goto("http://localhost:3260/evals", { waitUntil: "networkidle" });
 await page.waitForTimeout(2500);
 await page.screenshot({ path: "e2e-evals-redesign-scale-list.png", fullPage: false });
+
+await page.getByRole("button", { name: "Stop run" }).first().click();
+await page.waitForTimeout(700);
+if (await page.getByRole("button", { name: "Stop run" }).count()) throw new Error("Stop control remained after cancellation");
+await page.screenshot({ path: "e2e-evals-cancelled.png", fullPage: false });
 
 // Test the search and task-type filters.
 await page.fill('input[aria-label="search tasks"]', "claims");
@@ -144,6 +192,21 @@ await page.fill('input[aria-label="search tasks"]', "");
 await page.click('button[aria-label="card view"]');
 await page.waitForTimeout(600);
 await page.screenshot({ path: "e2e-evals-redesign-scale-cards.png", fullPage: false });
+
+await page.goto("http://localhost:3260/evals/accuracy", { waitUntil: "networkidle" });
+await page.waitForTimeout(1200);
+await page.screenshot({ path: "e2e-accuracy-overview.png", fullPage: false });
+await page.locator("text=Which tests protect each mart").scrollIntoViewIfNeeded();
+await page.waitForTimeout(500);
+await page.screenshot({ path: "e2e-accuracy-mart-coverage.png", fullPage: false });
+
+await page.setViewportSize({ width: 390, height: 844 });
+await page.goto("http://localhost:3260/evals", { waitUntil: "networkidle" });
+await page.waitForTimeout(700);
+await page.screenshot({ path: "e2e-evals-mobile.png", fullPage: false });
+await page.goto("http://localhost:3260/evals/accuracy", { waitUntil: "networkidle" });
+await page.waitForTimeout(700);
+await page.screenshot({ path: "e2e-accuracy-mobile.png", fullPage: false });
 
 await browser.close();
 console.log("done");

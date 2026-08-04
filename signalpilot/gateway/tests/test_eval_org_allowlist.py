@@ -157,6 +157,7 @@ EXPECTED_TIERS: dict[tuple[str, str], str] = {
     ("PUT", "/api/evals/config"): "admin",
     ("GET", "/api/evals/tasks"): "read",
     ("POST", "/api/evals/runs"): "admin",
+    ("POST", "/api/evals/runs/{run_id}/cancel"): "admin",
     ("GET", "/api/evals/runs"): "read",
     ("GET", "/api/evals/runs/{run_id}"): "read",
     ("GET", "/api/evals/runs/{run_id}/progress"): "read",

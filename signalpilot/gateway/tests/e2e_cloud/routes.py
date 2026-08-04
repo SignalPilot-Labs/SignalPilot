@@ -25,6 +25,7 @@ ADMIN_PROBE_SKIP: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/api/demo/connector"),  # provisions a real Xata branch
         ("POST", "/api/github/bot/scan"),  # calls the GitHub API
         ("POST", "/api/evals/runs"),  # can launch an eval runner
+        ("POST", "/api/evals/runs/{run_id}/cancel"),
     }
 )
 

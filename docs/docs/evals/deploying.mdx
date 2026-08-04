@@ -37,12 +37,14 @@ self-hosted configuration:
   code={`SP_EVAL_RUNNER_IMAGE=your-registry/sp-eval-runner:1.4.0\nSP_EVAL_CLAUDE_TOKEN=...            # or SP_EVAL_ANTHROPIC_KEY\nSP_EVAL_S3_BUCKET=sp-eval-evidence\nSP_EVAL_S3_ENDPOINT=http://minio:9000\nSP_EVAL_S3_ACCESS_KEY=...\nSP_EVAL_S3_SECRET_KEY=...\nSP_EVAL_MCP_URL=http://gateway:3300/mcp`}
 />
 
-Add a branch provider if the set has write tasks:
+Add a branch provider if the set has write tasks. `SP_EVAL_PG_ADMIN_DSN` is a
+libpq connection URI — `postgresql` scheme, the admin role and its password in
+the userinfo section, and the maintenance database as the path:
 
 <MiniCopyBlock
   label=".env — local Postgres branch provider"
   plain
-  code={`SP_EVAL_PG_ADMIN_DSN=postgresql://<host>:5432/postgres\nSP_EVAL_PG_PARENT_DB=northwind`}
+  code={`SP_EVAL_PG_ADMIN_DSN=postgresql://warehouse-host:5432/postgres\nSP_EVAL_PG_PARENT_DB=northwind`}
 />
 
 The local provider has two hard prerequisites. Read both before pointing it at a

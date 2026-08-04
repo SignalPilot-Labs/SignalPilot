@@ -18,6 +18,19 @@ from gateway.store.crypto import _decrypt_with_migration, _encrypt
 from gateway.string_utils import optional_string_value
 
 
+async def _reencrypt_if_rotated(
+    session, row, field: str, encrypted: bytes
+) -> str:
+    """Decrypt a value and rotate ciphertext to the primary key when necessary.
+
+    Rewrite ciphertext when decryption uses the secondary rotation key.
+    """
+    plaintext, needs_migration = _decrypt_with_migration(encrypted)
+    if needs_migration:
+        setattr(row, field, _encrypt(plaintext))
+        await session.commit()
+    return plaintext
+
 def _scope_list(value: object) -> list[str]:
     if isinstance(value, str):
         return [scope.strip() for scope in value.split(",") if scope.strip()]
@@ -281,6 +294,6 @@ async def list_active_installation_records_for_team(
         config = await _get_config(session, row.id)
         if config is None or not config.enabled or not config.default_project_id:
             continue
-        token, _ = _decrypt_with_migration(row.bot_access_token_enc)
+        token = await _reencrypt_if_rotated(session, row, "bot_access_token_enc", row.bot_access_token_enc)
         records.append((row, config, token))
     return records

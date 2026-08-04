@@ -1,20 +1,12 @@
-"""Eval upload endpoints — presigned S3 multipart upload, notify the team.
+"""Provide presigned S3 multipart upload endpoints for evaluation files.
 
-Deliberately minimal (see eval-upload-spec.md at repo root): no download path,
-no processing, and the only database row is the short-lived quota reservation
-for an in-flight multipart upload. S3 is the record; a bucket lifecycle rule
-handles the 7-day deletion (and aborts stale multipart uploads); the
-notification is one email.
+The gateway stores only a temporary quota reservation for an active upload.
+An S3 lifecycle rule deletes objects after seven days and aborts incomplete uploads.
 
-Flow (industry-standard direct-to-S3 multipart):
-  1. POST /api/evals/upload/initiate  — validate name/size, CreateMultipartUpload,
-     return presigned per-part PUT URLs. The browser uploads parts straight to
-     S3 in parallel; the gateway never touches file bytes.
-  2. POST /api/evals/upload/complete  — CompleteMultipartUpload, verify final
-     size, email the team.
-  3. POST /api/evals/upload/abort     — best-effort cleanup on client failure.
-
-A legacy single-POST endpoint remains for small files / older clients.
+The initiate endpoint validates the request and returns presigned part URLs.
+The complete endpoint verifies the final size and sends one notification.
+The abort endpoint attempts to remove an incomplete upload.
+File content does not pass through the gateway.
 """
 
 from __future__ import annotations
@@ -26,7 +18,7 @@ import smtplib
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 
-from fastapi import APIRouter, Form, HTTPException, UploadFile
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
@@ -45,7 +37,7 @@ _FILENAME_SAFE = re.compile(r"[^a-zA-Z0-9._-]")
 # can't point these endpoints at arbitrary bucket keys.
 _KEY_PATTERN = re.compile(r"^uploads/\d{4}-\d{2}-\d{2}/[0-9a-f]{8}/[A-Za-z0-9._-]+\.zip$")
 
-PART_SIZE = 64 * 1024 * 1024  # 64 MB parts → 8 GB ≈ 128 parts (S3 max 10k)
+PART_SIZE = 64 * 1024 * 1024  # An 8 GB upload uses approximately 128 parts.
 # Each part URL is signed for one exact Content-Length, so a stalled client must
 # re-initiate rather than reuse a long-lived signature.
 _PRESIGN_EXPIRY_S = 30 * 60
@@ -89,14 +81,14 @@ def _s3_client(cfg: EvalUploadsSettings, *, presign: bool = False):
     """Build the S3 client; presign=True uses the browser-reachable endpoint.
 
     Locally the gateway reaches MinIO at http://minio:9000 (compose DNS) but
-    the browser must hit http://localhost:9000 — presigned URLs embed the host
+    the browser must hit http://localhost:9000: presigned URLs embed the host
     in the signature, so they are signed against the public endpoint.
     """
     import boto3
     from botocore.config import Config
 
-    # SigV4 explicitly: presigned URLs default to legacy SigV2 with custom
-    # endpoints, and real S3 rejects V2 in modern regions.
+    # Select SigV4 explicitly because custom endpoints can default to SigV2.
+    # S3 rejects SigV2 in current regions.
     kwargs: dict = {
         "config": Config(s3={"addressing_style": "path"}, signature_version="s3v4")
     }
@@ -114,7 +106,7 @@ def _s3_client(cfg: EvalUploadsSettings, *, presign: bool = False):
 
 def _notify(cfg: EvalUploadsSettings, *, user_id: str, filename: str, size_mb: float,
             notes: str, key: str, expires: str) -> None:
-    """Send the team notification. Plain text on purpose — notes is user input."""
+    """Send the team notification. Plain text on purpose: notes is user input."""
     if not cfg.notify_email:
         return
     body = (
@@ -136,7 +128,7 @@ def _notify(cfg: EvalUploadsSettings, *, user_id: str, filename: str, size_mb: f
     else:
         import boto3
 
-        # Same scoped credentials/region as the S3 client — the container has
+        # Same scoped credentials/region as the S3 client: the container has
         # no ambient AWS region or role, so the default chain NoRegionErrors.
         ses_kwargs: dict = {}
         if cfg.s3_region:
@@ -257,14 +249,14 @@ async def initiate_eval_upload(user_id: UserID, store: StoreD, req: InitiateRequ
             Key=key,
             Metadata={
                 "uploader-user-id": user_id,
-                # S3 metadata must be ASCII — notes travel in full via the email.
+                # S3 metadata must be ASCII: notes travel in full via the email.
                 "notes": req.notes.encode("ascii", "replace").decode()[:512],
             },
         )
         upload_id = mpu["UploadId"]
         signer = _s3_client(cfg, presign=True)
         # ContentLength lands in X-Amz-SignedHeaders, so S3 rejects any part whose
-        # body length differs from the plan — the claimed size becomes binding.
+        # body length differs from the plan: the claimed size becomes binding.
         part_urls = [
             signer.generate_presigned_url(
                 "upload_part",
@@ -377,64 +369,3 @@ async def abort_eval_upload(user_id: UserID, store: StoreD, req: AbortRequest) -
             logger.warning("Abort failed for %s (lifecycle rule will clean up)", req.key)
 
     await run_in_threadpool(_abort)
-
-
-# ---------------------------------------------------------------------------
-# Legacy single-POST flow (small files / older clients)
-# ---------------------------------------------------------------------------
-
-
-@router.post("/evals/upload", status_code=201, dependencies=[RequireScope("write")])
-async def upload_eval(user_id: UserID, file: UploadFile, notes: str = Form("")):
-    """Store an uploaded eval .zip in S3 and email the team."""
-    cfg = _require_enabled()
-
-    filename = _sanitize_filename(file.filename or "")
-    if not filename.lower().endswith(".zip"):
-        raise HTTPException(status_code=415, detail="Only .zip files are accepted")
-
-    # FastAPI has already spooled the body; measure and sniff from the spool.
-    file.file.seek(0, 2)
-    size = file.file.tell()
-    file.file.seek(0)
-    if size > cfg.max_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File is {size // (1024 * 1024)} MB — the limit is {cfg.max_mb} MB",
-        )
-    if file.file.read(2) != b"PK":
-        raise HTTPException(status_code=415, detail="File is not a valid zip archive")
-    file.file.seek(0)
-
-    key, reference_id, expires = _new_key(filename)
-    notes = notes[:2000]
-
-    client = _s3_client(cfg)
-    await run_in_threadpool(
-        client.upload_fileobj,
-        file.file,
-        cfg.bucket,
-        key,
-        ExtraArgs={
-            "Metadata": {
-                "uploader-user-id": user_id,
-                "notes": notes.encode("ascii", "replace").decode()[:512],
-            }
-        },
-    )
-
-    try:
-        await run_in_threadpool(
-            _notify,
-            cfg,
-            user_id=user_id,
-            filename=filename,
-            size_mb=size / (1024 * 1024),
-            notes=notes,
-            key=key,
-            expires=expires,
-        )
-    except Exception:
-        logger.exception("Eval upload notification failed (upload succeeded: %s)", key)
-
-    return {"reference_id": reference_id, "expires_at": expires}

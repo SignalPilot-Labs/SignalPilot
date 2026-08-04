@@ -1,4 +1,4 @@
-"""Snowflake connector — snowflake-connector-python backed.
+"""Snowflake connector: snowflake-connector-python backed.
 
 Supports account/user/password auth, key-pair auth, and warehouse/role configuration.
 Tier 1 connector matching HEX's Snowflake integration.
@@ -28,7 +28,7 @@ class SnowflakeConnector(BaseConnector):
         self._connect_params: dict = {}
         self._credential_extras: dict = {}
         self._login_timeout: int = 15
-        self._network_timeout: int = 150  # was 120 — large-warehouse schema pulls need headroom
+        self._network_timeout: int = 150  # was 120: large-warehouse schema pulls need headroom
         self._keepalive: bool = True
         self._keepalive_heartbeat: int = 900  # 15 min default
 
@@ -61,12 +61,18 @@ class SnowflakeConnector(BaseConnector):
         )
 
     async def connect(self, connection_string: str) -> None:
+        # Reject auth_method. Use authenticator to select the authentication method.
+        if self._credential_extras.get("auth_method"):
+            raise RuntimeError(
+                "Snowflake 'auth_method' is no longer supported — set 'authenticator' "
+                "instead (password | key_pair | oauth | pat | mfa | <Okta URL>)."
+            )
         if not HAS_SNOWFLAKE:
             raise RuntimeError("snowflake-connector-python not installed. Run: pip install snowflake-connector-python")
         params = self._parse_connection(connection_string)
         self._connect_params = params
 
-        # Merge in credential_extras (takes precedence — they have the actual secrets)
+        # Merge in credential_extras (takes precedence: they have the actual secrets)
         if self._credential_extras:
             for key in (
                 "account",
@@ -78,7 +84,6 @@ class SnowflakeConnector(BaseConnector):
                 "private_key",
                 "private_key_passphrase",
                 "oauth_access_token",
-                "auth_method",
                 "authenticator",
                 "passcode",
                 "snowflake_host",
@@ -103,7 +108,7 @@ class SnowflakeConnector(BaseConnector):
             "disable_ocsp_checks": params.get("disable_ocsp_checks", False),
         }
 
-        # Host override + port/protocol — required for PrivateLink, China (.cn),
+        # Host override + port/protocol: required for PrivateLink, China (.cn),
         # SnowGov, and VPS accounts where the account identifier alone is insufficient.
         # account is still passed (the connector requires it even with an explicit host).
         if params.get("snowflake_host"):
@@ -113,10 +118,10 @@ class SnowflakeConnector(BaseConnector):
         if params.get("snowflake_protocol"):
             connect_args["protocol"] = params["snowflake_protocol"]
 
-        # Auth dispatch. `authenticator` (or legacy `auth_method`) selects the method:
+        # Auth dispatch. `authenticator` selects the method:
         #   oauth | key_pair | pat | mfa | password | <Okta URL https://...>.
-        # Back-compat: an oauth token or a private_key alone still picks the right path.
-        authr = (params.get("authenticator") or params.get("auth_method") or "").strip()
+        # An oauth token or a private_key alone still picks the right path.
+        authr = (params.get("authenticator") or "").strip()
         al = authr.lower()
         token = params.get("oauth_access_token")
         if al == "oauth" or (token and al in ("", "oauth")):
@@ -143,7 +148,7 @@ class SnowflakeConnector(BaseConnector):
             if params.get("passcode"):
                 connect_args["passcode"] = params["passcode"]
         elif al == "pat":
-            # Programmatic Access Token — used in place of a password (works across
+            # Programmatic Access Token: used in place of a password (works across
             # all account types; bypasses MFA). The PAT is supplied in the password field.
             connect_args["password"] = params.get("password") or token or ""
         elif params.get("password"):
@@ -179,25 +184,20 @@ class SnowflakeConnector(BaseConnector):
         """Parse Snowflake connection strings.
 
         Supports:
-        - snowflake://account|user|pass|db|wh|schema|role (legacy SignalPilot format)
         - snowflake://user:pass@account/db/schema?warehouse=WH&role=ROLE (standard URL)
         - account identifier only (for use with credential_extras)
+
+        The parser rejects pipe-delimited connection strings.
         """
         if conn_str.startswith("snowflake://"):
             inner = conn_str[len("snowflake://") :]
 
-            # Check for pipe-delimited format (legacy)
             if "|" in inner:
-                parts = inner.split("|")
-                return {
-                    "account": parts[0] if len(parts) > 0 else "",
-                    "user": parts[1] if len(parts) > 1 else "",
-                    "password": parts[2] if len(parts) > 2 else "",
-                    "database": parts[3] if len(parts) > 3 else "",
-                    "warehouse": parts[4] if len(parts) > 4 else "",
-                    "schema": parts[5] if len(parts) > 5 else "",
-                    "role": parts[6] if len(parts) > 6 else "",
-                }
+                raise ValueError(
+                    "Pipe-delimited Snowflake connection strings are no longer supported. "
+                    "Use snowflake://user:pass@account/db/schema?warehouse=WH&role=ROLE, "
+                    "or an account identifier with structured credentials."
+                )
 
             # Standard URL format: snowflake://user:pass@account/db/schema?warehouse=WH&role=ROLE
             from urllib.parse import parse_qs, unquote, urlparse
@@ -345,13 +345,13 @@ class SnowflakeConnector(BaseConnector):
         fk_sql = "SHOW IMPORTED KEYS IN DATABASE"
         pk_sql = "SHOW PRIMARY KEYS IN DATABASE"
 
-        # Clustering keys — SHOW TABLES returns cluster_by (not in information_schema)
+        # Clustering keys: SHOW TABLES returns cluster_by (not in information_schema)
         # Run as a 5th parallel query
         cluster_sql = "SHOW TABLES IN DATABASE"
 
         # All work runs in one background thread (the connection is not thread-safe),
         # but the 5 metadata queries are submitted with execute_async so Snowflake runs
-        # them CONCURRENTLY server-side — wall time ≈ the slowest query, not the sum.
+        # them CONCURRENTLY server-side: wall time ≈ the slowest query, not the sum.
         import time as _t
 
         def _collect(cur):
@@ -432,7 +432,7 @@ class SnowflakeConnector(BaseConnector):
                     cu.close()
                 except Exception as e:
                     # Columns is the only query that can be too big for one statement
-                    # (cap OR statement-timeout) on a massive DB — recover via bounded,
+                    # (cap OR statement-timeout) on a massive DB: recover via bounded,
                     # parallel per-schema pulls so a huge warehouse never fails the pull.
                     if label == "columns":
                         logger.info("columns whole-DB pull failed (%s) — parallel per-schema fallback", e)
@@ -578,7 +578,7 @@ class SnowflakeConnector(BaseConnector):
             return result
 
     async def health_check(self) -> bool:
-        """Use Snowflake's built-in is_valid() — sends heartbeat, no cursor overhead."""
+        """Use Snowflake's built-in is_valid(): sends heartbeat, no cursor overhead."""
         if self._conn is None:
             return False
         try:

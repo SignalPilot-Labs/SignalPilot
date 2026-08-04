@@ -1,0 +1,3 @@
+The marts.fct_orders table was dropped. Rebuild it from raw.orders.
+[[e2e:sql=CREATE TABLE marts.fct_orders AS SELECT order_id, amount FROM raw.orders]]
+[[e2e:answer=Rebuilt marts.fct_orders from raw.orders.]]

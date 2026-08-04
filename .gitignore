@@ -46,6 +46,7 @@ gcp-service-account.json
 .env.*
 !.env.example
 !.env.local.example
+!.env.evalprod.example
 .slack.local.env
 
 # SignalPilot web
@@ -110,16 +111,14 @@ signalpilot/gateway/data/local_api_key
 signalpilot/notebook-server/signalpilot/_server/ai/.chat_sessions.json
 *.bak
 
-# Internal docs (not for public repo)
-# Internal roadmap, work-log, customer, vendor and operational material. Untracked
-# rather than deleted — the files stay on disk. Note this only stops FUTURE commits:
-# they remain in the existing history and need a separate history rewrite to remove.
+# Internal documents are not part of the public repository.
+# This group includes roadmaps, work logs, and customer, vendor, or operational material.
 signalpilot/web/clerk-research.md
 signalpilot/web/enterprise-connections.md
 signalpilot/web/UX.md
 writeups/
-# Security audit reports: findings, credential names, deployment locations
-# and customer-identifying detail. Kept on disk, out of the repo.
+# Security audit reports can contain findings, credential names, deployment locations, and customer details.
+# Keep these reports outside the repository.
 security/
 
 # Vendored GitHub Copilot LSP binaries (~81MB, disabled by default; install at build if needed)
@@ -163,10 +162,10 @@ codex-signalpilot-plugin/
 redshift_export/
 redshift_*.py
 
-# Credentials — never commit
-# Broad on purpose: a credentials filename can name the environment it
-# belongs to, and this list is public even when the files are not.
+# Never commit credentials.
+# Match all credential filenames because their names can identify an environment.
 /*creds*
 /*credentials*
 /.*creds*
 /.*credentials*
+e2e-eval/project-repo/

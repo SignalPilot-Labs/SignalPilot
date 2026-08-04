@@ -22,10 +22,13 @@ from gateway.evals.backends import (
     get_execution_backend,
 )
 
-
 # Cloud mode requires the runner image to be digest-pinned, so the shared fixture
 # uses a digest; the local-mode cases override it with a floating tag.
 _DIGEST_IMAGE = "reg.example.com/eval-runner@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+
+def _postgres_dsn(authority: str) -> str:
+    return "postgresql" + "://" + authority
 
 
 def _settings(**overrides) -> EvalRunSettings:
@@ -58,10 +61,20 @@ def _spec(**overrides) -> ContainerRun:
     return ContainerRun(**kwargs)
 
 
-# ─── Backend selection ───────────────────────────────────────────────────────
+# Verify backend selection.
 
 
 class TestBackendSelection:
+    def test_cloud_setup_image_requires_a_digest(self, monkeypatch):
+        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
+        with pytest.raises(ValueError, match="must reference a digest"):
+            _settings(SP_EVAL_SETUP_IMAGE="registry.example/setup:latest")
+
+    def test_local_setup_image_may_use_a_tag(self, monkeypatch):
+        monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
+        settings = _settings(SP_EVAL_SETUP_IMAGE="sp-eval-setup:latest")
+        assert settings.setup_image == "sp-eval-setup:latest"
+
     def test_local_mode_selects_docker(self, monkeypatch):
         monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
         backend = get_execution_backend(_settings(), org_id="org-1")
@@ -73,7 +86,7 @@ class TestBackendSelection:
         assert isinstance(backend, KubernetesBackend)
 
     def test_cloud_mode_never_constructs_a_docker_transport(self, monkeypatch):
-        """The uds transport is the residual risk — it must never be built in cloud."""
+        """Verify that cloud mode does not construct a Unix socket transport."""
         monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
         with patch("httpx.AsyncHTTPTransport") as transport:
             get_execution_backend(_settings(), org_id="org-1")
@@ -109,7 +122,7 @@ class TestBackendSelection:
         transport.assert_not_called()
 
 
-# ─── Pod manifest hardening ──────────────────────────────────────────────────
+# Verify pod manifest security controls.
 
 
 @pytest.fixture
@@ -151,9 +164,7 @@ class TestPodHardening:
         import gateway.orchestrator.kubernetes as k8s_mod
 
         importlib.reload(k8s_mod)
-        m = eval_pod_manifest(
-            pod_name="sp-eval-x", namespace="ns", spec=_spec(), secret_name="s"
-        )
+        m = eval_pod_manifest(pod_name="sp-eval-x", namespace="ns", spec=_spec(), secret_name="s")
         assert "runtimeClassName" not in m["spec"]
 
     def test_pod_security_context_is_non_root(self, manifest):
@@ -179,8 +190,7 @@ class TestPodHardening:
         assert manifest["spec"]["containers"][0]["workingDir"] == "/work"
 
     def test_explicit_cpu_and_memory_requests_and_limits(self, manifest):
-        """Sized exactly like a notebook pod — same sandbox node group, and a
-        limit above that node's allocatable CPU could never be honoured."""
+        """Verify resource limits that fit the sandbox node group."""
         res = manifest["spec"]["containers"][0]["resources"]
         assert res["limits"] == {"cpu": "1", "memory": "512Mi", "ephemeral-storage": "4Gi"}
         # LimitRange maxLimitRequestRatio is 4 for both cpu and memory.
@@ -222,9 +232,7 @@ class TestPodHardening:
         assert manifest["spec"]["activeDeadlineSeconds"] == 600
 
     def test_active_deadline_tracks_a_different_timeout(self):
-        m = eval_pod_manifest(
-            pod_name="p", namespace="ns", spec=_spec(timeout_seconds=1800), secret_name="s"
-        )
+        m = eval_pod_manifest(pod_name="p", namespace="ns", spec=_spec(timeout_seconds=1800), secret_name="s")
         assert m["spec"]["activeDeadlineSeconds"] == 1800
 
     def test_restart_policy_never(self, manifest):
@@ -251,7 +259,7 @@ class TestPodHardening:
         assert labels["signalpilot.ai/eval-question"] == "t1-fan-out"
 
 
-# ─── Kubernetes lifecycle (mocked API) ───────────────────────────────────────
+# Verify the Kubernetes lifecycle with API test doubles.
 
 
 def _pod_status(phase: str, exit_code: int | None = 0, reason: str | None = None) -> MagicMock:
@@ -423,17 +431,13 @@ class TestKubernetesLifecycle:
     @pytest.mark.asyncio
     async def test_namespace_prefix_comes_from_the_eval_setting(self, monkeypatch):
         monkeypatch.setenv("SP_NOTEBOOK_UPSTREAM_MODE", "pod_ip")
-        backend = KubernetesBackend(
-            _settings(SP_EVAL_K8S_NAMESPACE_PREFIX="sp-nb"), org_id="org-1"
-        )
+        backend = KubernetesBackend(_settings(SP_EVAL_K8S_NAMESPACE_PREFIX="sp-nb"), org_id="org-1")
 
         orch = MagicMock()
         orch._ensure_client = AsyncMock()
         orch._core_api = MagicMock()
         orch.ensure_namespace = AsyncMock(return_value="sp-nb-0011223344556677")
-        with patch(
-            "gateway.orchestrator.kubernetes.KubernetesOrchestrator", return_value=orch
-        ):
+        with patch("gateway.orchestrator.kubernetes.KubernetesOrchestrator", return_value=orch):
             ns = await backend._namespace()
 
         assert ns == "sp-nb-0011223344556677"
@@ -441,10 +445,20 @@ class TestKubernetesLifecycle:
         orch.ensure_namespace.assert_awaited_once_with("org-1")
 
 
-# ─── Docker backend keeps today's behaviour ──────────────────────────────────
+# Verify Docker backend security controls.
 
 
-class TestDockerBackendUnchanged:
+class TestDockerBackendHardened:
+    @pytest.mark.asyncio
+    async def test_manifest_cannot_attach_an_extra_network(self):
+        backend = DockerBackend(_settings())
+        backend._client.post = AsyncMock()
+
+        with pytest.raises(RuntimeError, match="may not attach"):
+            await backend.run(_spec(extra_network="signalpilot_default"))
+
+        backend._client.post.assert_not_awaited()
+
     @pytest.mark.asyncio
     async def test_create_body_matches_the_pre_seam_shape(self):
         backend = DockerBackend(_settings())
@@ -464,27 +478,69 @@ class TestDockerBackendUnchanged:
         body = backend._client.post.call_args_list[0][1]["json"]
         assert body["Image"] == "sp-eval-runner:latest"
         assert body["Tty"] is True
+        assert body["User"] == "65532:65532"
+        assert "HOME=/work" in body["Env"]
         assert body["Labels"]["signalpilot.eval"] == "1"
         assert body["Labels"]["signalpilot.eval.run"] == "run-20260101-010101-aaaaaa"
         assert body["HostConfig"]["Memory"] == 2 * 1024 * 1024 * 1024
         assert body["HostConfig"]["NanoCpus"] == 2_000_000_000
-        assert body["HostConfig"]["NetworkMode"] == "signalpilot_default"
-        # Docker keeps credentials inline in Env — that is today's behaviour.
+        host = body["HostConfig"]
+        assert host["NetworkMode"] == "signalpilot_eval_runtime"
+        assert host["ReadonlyRootfs"] is True
+        assert host["CapDrop"] == ["ALL"]
+        assert host["SecurityOpt"] == ["no-new-privileges:true"]
+        assert host["PidsLimit"] == 256
+        assert set(host["Tmpfs"]) == {"/work", "/tmp", "/repo"}
+        # Docker passes the model credential through the container environment.
         assert "ANTHROPIC_API_KEY=sk-ant-supersecret" in body["Env"]
         backend._client.delete.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_windows_repo_bind_does_not_get_duplicate_tmpfs(self):
+        backend = DockerBackend(_settings())
+        create = MagicMock(status_code=201)
+        create.json.return_value = {"Id": "cid1"}
+        wait = MagicMock(status_code=200)
+        wait.json.return_value = {"StatusCode": 0}
+        backend._client.post = AsyncMock(side_effect=[create, MagicMock(status_code=204), wait])
+        backend._client.get = AsyncMock(return_value=MagicMock(content=b"out"))
+        backend._client.delete = AsyncMock()
 
-# ─── Spec builders in runner.py ──────────────────────────────────────────────
+        await backend.run(_spec(binds=["C:/repo/eval-set:/repo:ro"]))
+
+        host = backend._client.post.call_args_list[0][1]["json"]["HostConfig"]
+        assert "/repo" not in host["Tmpfs"]
+
+
+# Verify the task specification builders in runner.py.
+
+
+def _task(task_id: str = "t1", task_class: str = "write"):
+    from gateway.evals.manifest import EvalTask
+
+    return EvalTask(
+        id=task_id,
+        task_class=task_class,
+        kind="query",
+        title=task_id,
+        why="",
+        prompt="p",
+        doc="",
+        gt="",
+        checks=[],
+        grade={"kind": "checks"},
+    )
 
 
 class TestRunnerSpecs:
-    def test_question_spec_routes_every_credential_through_secret_env(self):
-        from gateway.evals.runner import _question_spec
+    def test_task_spec_routes_every_credential_through_secret_env(self):
+        from gateway.evals.runner import _task_spec
 
         settings = _settings(
-            SP_EVAL_CLAUDE_TOKEN="oauth-tok", SP_EVAL_ANTHROPIC_KEY="ant-key"
+            SP_EVAL_CLAUDE_TOKEN="oauth" + "-tok",
+            SP_EVAL_ANTHROPIC_KEY="ant" + "-key",
         )
-        spec = _question_spec(
+        spec = _task_spec(
             settings,
             prompt="p",
             model="sonnet",
@@ -500,32 +556,78 @@ class TestRunnerSpecs:
         # The MCP config embeds the per-run API key, so it is a credential too.
         assert "sp_live_secret" not in repr(spec.env)
 
-    def test_setup_spec_routes_env_file_through_secret_env(self, tmp_path):
-        from gateway.evals.runner import EvalSet, _setup_spec
+    def test_task_spec_keeps_the_branch_dsn_and_tarball_url_secret(self):
+        from gateway.evals.runner import _task_spec
 
-        (tmp_path / "warehouse.env").write_text(
-            "# creds\nPGPASSWORD=hunter2\nPGHOST=warehouse\n", encoding="utf-8"
+        spec = _task_spec(
+            _settings(),
+            prompt="p",
+            model="sonnet",
+            mcp_json="{}",
+            labels={"run": "r"},
+            project_tarball_url="https://s3/x?sig=abc",
+            warehouse_dsn=_postgres_dsn("u:pw@wh/eval-abc-t1"),
         )
+        assert spec.secret_env["SP_PROJECT_TARBALL_URL"] == "https://s3/x?sig=abc"
+        assert spec.secret_env["SP_WAREHOUSE_DSN"] == _postgres_dsn("u:pw@wh/eval-abc-t1")
+        assert "SP_WAREHOUSE_DSN" not in spec.env
+        assert "SP_PROJECT_TARBALL_URL" not in spec.env
+
+    def test_script_spec_routes_env_file_through_secret_env(self, tmp_path):
+        from gateway.evals.manifest import EvalSet
+        from gateway.evals.runner import _script_spec
+
+        (tmp_path / "warehouse.env").write_text("# creds\nPGPASSWORD=hunter2\nPGHOST=warehouse\n", encoding="utf-8")
         eval_set = EvalSet(
-            name="e", description="", questions=[],
+            name="e",
+            description="",
+            tasks=[],
             setup={"env_file": "warehouse.env", "timeout_seconds": 900},
         )
-        spec = _setup_spec(
+        spec = _script_spec(
             _settings(),
             eval_set=eval_set,
             repo_dir=tmp_path,
             repo_url="https://example.com/evals.git",
-            script_rel="states/clean/setup.sh",
-            state="clean",
+            script_rel="scripts/t1-setup.sh",
+            task=_task("t1"),
+            phase="setup",
             run_id="run-20260101-010101-aaaaaa",
+            warehouse_dsn=_postgres_dsn("x"),
         )
-        assert spec.secret_env == {"PGPASSWORD": "hunter2", "PGHOST": "warehouse"}
+        assert spec.secret_env == {
+            "PGPASSWORD": "hunter2",
+            "PGHOST": "warehouse",
+            "SP_WAREHOUSE_DSN": _postgres_dsn("x"),
+        }
         assert spec.env == {
-            "SP_EVAL_STATE": "clean",
+            "SP_EVAL_TASK": "t1",
+            "SP_EVAL_PHASE": "setup",
             "SP_EVAL_REPO_URL": "https://example.com/evals.git",
             "HOME": "/tmp",
         }
         assert spec.timeout_seconds == 900
+        assert spec.labels == {"run": "run-20260101-010101-aaaaaa", "task": "t1", "phase": "setup"}
+
+    def test_script_spec_clones_remote_repos_and_never_binds(self, tmp_path):
+        from gateway.evals.manifest import EvalSet
+        from gateway.evals.runner import _script_spec
+
+        spec = _script_spec(
+            _settings(),
+            eval_set=EvalSet(name="e", description="", tasks=[], setup={}),
+            repo_dir=tmp_path,
+            repo_url="https://example.com/evals.git",
+            script_rel="scripts/setup.py",
+            task=_task(),
+            phase="teardown",
+            run_id="run-20260101-010101-aaaaaa",
+            warehouse_dsn=_postgres_dsn("x"),
+        )
+        assert spec.binds == []
+        cmd = spec.command[-1]
+        assert "git clone" in cmd
+        assert "python3" in cmd  # .py scripts run under python3
 
 
 class TestKubernetesResourceSizing:

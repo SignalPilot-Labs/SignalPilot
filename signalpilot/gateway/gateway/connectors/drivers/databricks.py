@@ -1,10 +1,10 @@
-"""Databricks connector — databricks-sql-connector backed.
+"""Databricks connector: databricks-sql-connector backed.
 
 Supports Databricks SQL Warehouses and Unity Catalog.
 Authentication methods:
-  - Personal Access Token (PAT) — simplest, workspace-scoped
-  - OAuth M2M (service principal) — production-grade, uses client_id/client_secret
-  - OAuth U2M — user-to-machine, browser-based OAuth flow
+  - Personal Access Token (PAT): simplest, workspace-scoped
+  - OAuth M2M (service principal): production-grade, uses client_id/client_secret
+  - OAuth U2M: user-to-machine, browser-based OAuth flow
 
 HEX pattern: Databricks recommends OAuth M2M for automated/service connections.
 """
@@ -95,7 +95,7 @@ class DatabricksConnector(BaseConnector):
         auth_method = params.get("auth_method", self._auth_method)
 
         if auth_method == "oauth_m2m":
-            # OAuth Machine-to-Machine (service principal) — production-grade
+            # OAuth Machine-to-Machine (service principal): production-grade
             client_id = params.get("oauth_client_id", self._oauth_client_id)
             client_secret = params.get("oauth_client_secret", self._oauth_client_secret)
             if not client_id or not client_secret:
@@ -128,7 +128,7 @@ class DatabricksConnector(BaseConnector):
                     raise RuntimeError("OAuth M2M requires databricks-sdk. Run: pip install databricks-sdk")
             logger.info("Databricks: using OAuth M2M (service principal) auth")
         elif auth_method == "oauth_u2m":
-            # OAuth User-to-Machine — browser-based, for interactive use
+            # OAuth User-to-Machine: browser-based, for interactive use
             try:
                 from databricks.sdk.core import Config
 
@@ -138,7 +138,7 @@ class DatabricksConnector(BaseConnector):
             except ImportError:
                 raise RuntimeError("OAuth U2M requires databricks-sdk. Run: pip install databricks-sdk")
         else:
-            # PAT (Personal Access Token) — default
+            # PAT (Personal Access Token): default
             if not params.get("access_token"):
                 raise RuntimeError(
                     "PAT auth requires an access_token. "
@@ -164,23 +164,20 @@ class DatabricksConnector(BaseConnector):
         """Parse Databricks connection strings.
 
         Supported formats:
-        - databricks://host|http_path|token|catalog|schema (pipe-delimited)
         - databricks://token@host/http_path?catalog=CAT&schema=SCH (URL format)
         - host only (use with credential_extras)
+
+        The parser rejects pipe-delimited connection strings.
         """
         if conn_str.startswith("databricks://"):
             inner = conn_str[len("databricks://") :]
 
-            # Pipe-delimited format (legacy)
             if "|" in inner:
-                parts = inner.split("|")
-                return {
-                    "host": parts[0] if len(parts) > 0 else "",
-                    "http_path": parts[1] if len(parts) > 1 else "",
-                    "access_token": parts[2] if len(parts) > 2 else "",
-                    "catalog": parts[3] if len(parts) > 3 else "",
-                    "schema": parts[4] if len(parts) > 4 else "",
-                }
+                raise ValueError(
+                    "Pipe-delimited Databricks connection strings are no longer supported. "
+                    "Use databricks://token@host/http_path?catalog=CAT&schema=SCH, or a "
+                    "host with structured credentials."
+                )
 
             # URL format: databricks://token@host/http_path?catalog=CAT&schema=SCH
             from urllib.parse import parse_qs, unquote, urlparse
@@ -228,7 +225,7 @@ class DatabricksConnector(BaseConnector):
                 try:
                     cursor.execute(f"SET statement_timeout = {effective_timeout}")
                 except Exception:
-                    pass  # Best-effort — not all Databricks runtimes support this
+                    pass  # Best-effort: not all Databricks runtimes support this
             cursor.execute(sql, params or ())
             columns = [desc[0] for desc in cursor.description] if cursor.description else []
             rows = cursor.fetchall()
@@ -251,8 +248,8 @@ class DatabricksConnector(BaseConnector):
         schema: dict[str, Any] = {}
         cursor = self._conn.cursor()
 
-        # Prefer information_schema (Unity Catalog, Databricks SQL) — single query for all columns
-        # Falls back to SHOW TABLES + DESCRIBE TABLE for legacy Hive metastore
+        # Use one information_schema query for Unity Catalog and Databricks SQL.
+        # Use SHOW TABLES and DESCRIBE TABLE when information_schema is unavailable.
         try:
             _col_sql = """
                 SELECT
@@ -394,7 +391,7 @@ class DatabricksConnector(BaseConnector):
 
                 logging.getLogger(__name__).debug("FK query not supported: %s", e)
 
-            # Size/file metadata via DESCRIBE DETAIL (Delta tables — cap 50 tables)
+            # Size/file metadata via DESCRIBE DETAIL (Delta tables: cap 50 tables)
             tables_to_detail = [(k, v) for k, v in schema.items() if v.get("type") != "view"][:_DETAIL_TABLE_CAP]
             for _key, table_data in tables_to_detail:
                 try:
@@ -412,7 +409,7 @@ class DatabricksConnector(BaseConnector):
                         if "numFiles" in row_dict:
                             table_data["num_files"] = row_dict["numFiles"]
                         # NULL sizeInBytes = non-Delta/unknown size: leave
-                        # size_mb absent so the COUNT backfill skips it — an
+                        # size_mb absent so the COUNT backfill skips it: an
                         # external multi-TB Parquet table must not get scanned.
                         if row_dict.get("sizeInBytes") is not None:
                             table_data["size_mb"] = round(row_dict["sizeInBytes"] / (1024 * 1024), 2)
@@ -428,7 +425,7 @@ class DatabricksConnector(BaseConnector):
             # Row counts: DESCRIBE DETAIL has no rowCount, so every table used
             # to report 0. Backfill with batched COUNT(*) for small tables
             # (≤_COUNT_SIZE_LIMIT_MB per DESCRIBE DETAIL; unknown sizes
-            # excluded) — cheap on Delta, and grain/fan-out tooling depends on
+            # excluded): cheap on Delta, and grain/fan-out tooling depends on
             # non-zero counts. Effective cap is the DESCRIBE DETAIL cap above.
             def _esc_lit(s: str) -> str:
                 return s.replace("'", "''")
@@ -481,7 +478,7 @@ class DatabricksConnector(BaseConnector):
 
             logging.getLogger(__name__).info("information_schema not available, falling back to SHOW/DESCRIBE: %s", e)
 
-        # Fallback: SHOW TABLES + DESCRIBE TABLE (legacy Hive metastore)
+        # Use SHOW TABLES and DESCRIBE TABLE when information_schema is unavailable.
         try:
             _show_schemas_sql = "SHOW SCHEMAS"
             t0 = _time.monotonic()

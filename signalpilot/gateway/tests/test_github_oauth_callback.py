@@ -1,21 +1,11 @@
-"""Tests for the GitHub App OAuth install callback (SP-SEC-004).
+"""Verify the GitHub App OAuth installation callback.
 
-Two layers:
+Unit tests replace ``gateway.github_client`` coroutines. Integration tests
+replace the GitHub HTTP transport. The integration tests exercise pagination,
+installation details, token creation, RS256 signing, and Fernet encryption.
 
-1. Unit-ish tests (top of file) that monkeypatch ``gateway.github_client``
-   coroutines directly.
-2. Integration tests (``TestCallbackSecurityMatrix``) that mock GitHub at the
-   **HTTP transport** layer, so the real ``github_client`` code —
-   ``exchange_code_for_token``, ``list_user_installations`` (including its
-   pagination loop), ``get_installation_details``, ``create_installation_token``
-   — executes for real, real RS256 app JWTs are signed with a throwaway RSA
-   key, and real Fernet encryption runs. Those tests can therefore assert on
-   *which GitHub endpoints were hit*, which is what proves the SP-SEC-004 fix:
-   the installation-token mint must never be reached for a foreign
-   installation_id.
-
-No real credentials are used here; see ``test_github_live.py`` for the
-real-network coverage.
+The callback must not request an installation token for a foreign installation.
+``test_github_live.py`` provides network coverage with configured credentials.
 """
 
 from __future__ import annotations
@@ -205,9 +195,9 @@ def test_github_callback_invalid_state_redirects_to_settings_error(monkeypatch) 
     assert response.headers["location"] == "https://app.test/settings/github?error=oauth_state_invalid"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SP-SEC-004 security matrix — GitHub mocked at the HTTP transport layer
-# ─────────────────────────────────────────────────────────────────────────────
+# Verify installation token permissions.
+# Verify callback security with a GitHub HTTP transport test double.
+# Verify installation token permissions.
 
 # Sentinel secrets. These are fake, but they stand in for the real ones so the
 # "nothing leaks into a response body or a log line" assertions are meaningful.
@@ -222,7 +212,7 @@ VICTIM_INSTALLATION_ID = 111111  # belongs to another tenant; the attacker targe
 ATTACKER_ORG = "org_attacker"
 OWNED_INSTALLATION_ID = 222222  # genuinely accessible to the authorizing user
 
-# SP-SEC-005: repo the authorizing user can actually open, vs. sibling repos
+# Distinguish accessible repositories from other installation repositories.
 # that live in the same installation but are off-limits to that user.
 USER_REPO_ID = 5001
 SIBLING_REPO_IDS = (5002, 5003)
@@ -267,7 +257,7 @@ class GitHubTransportMock:
         self.user_repos_status = user_repos_status
         self.requests: list[dict] = []  # {method, path, json}
 
-    # ── request log helpers ──────────────────────────────────────────────
+    # Define request log helper functions.
     @property
     def paths(self) -> list[str]:
         return [r["path"] for r in self.requests]
@@ -435,20 +425,14 @@ def _full_page(count: int = 100, start_id: int = 900000) -> list[dict]:
 
 
 class TestCallbackSecurityMatrix:
-    # ── THE exploit ──────────────────────────────────────────────────────
+    # Verify installation ownership.
 
     def test_foreign_installation_id_is_rejected_and_no_token_is_minted(self, make_harness) -> None:
-        """SP-SEC-004: the original cross-tenant exploit.
+        """Verify that the callback rejects a foreign installation identifier.
 
-        The attacker holds a *validly signed* state for their OWN org and a
-        legitimate OAuth code for their OWN GitHub user, then swaps in the
-        installation_id of a victim tenant. Before the fix this minted a real
-        installation token for the victim repos and stored it under the
-        attacker org (private-repo read AND write).
-
-        The assertions that matter are the negative ones: the
-        ``/access_tokens`` mint endpoint must never be requested, and nothing
-        may be written to the store.
+        The caller supplies a valid state and OAuth code for its organization.
+        The caller also supplies another organization's installation identifier.
+        The callback must not request an access token or write to the store.
         """
         h = make_harness(installation_pages=[[{"id": OWNED_INSTALLATION_ID}]])
 
@@ -462,9 +446,9 @@ class TestCallbackSecurityMatrix:
         assert response.status_code == 302
         assert response.headers["location"] == "https://app.test/settings/github?error=installation_not_authorized"
 
-        # The fix: ownership was actually checked against GitHub...
+        # Verify installation ownership through GitHub.
         assert h.http.user_installations_calls, "user-authorization leg was never performed"
-        # ...and the privileged mint never happened.
+        # Verify that the callback does not mint a token.
         assert h.http.mint_calls == [], "installation token was minted for a foreign installation"
         assert not any(p.startswith("api.github.com/app/installations/") for p in h.http.paths), (
             "app-JWT installation endpoints were reached for a foreign installation"
@@ -506,7 +490,7 @@ class TestCallbackSecurityMatrix:
         assert response.status_code == 302
         assert h.upserts[0]["org_id"] == "org_from_state"
 
-    # ── pagination ───────────────────────────────────────────────────────
+    # Verify pagination.
 
     def test_installation_on_second_page_is_accepted(self, make_harness) -> None:
         """Proves list_user_installations paginates instead of trusting page 1."""
@@ -553,7 +537,7 @@ class TestCallbackSecurityMatrix:
         assert h.http.mint_calls == []
         assert h.upserts == []
 
-    # ── code / secret preconditions ──────────────────────────────────────
+    # Verify code and secret preconditions.
 
     def test_missing_code_rejected_without_any_github_call(self, make_harness) -> None:
         h = make_harness()
@@ -634,7 +618,7 @@ class TestCallbackSecurityMatrix:
         assert h.http.mint_calls == []
         assert h.upserts == []
 
-    # ── state handling ───────────────────────────────────────────────────
+    # Verify state handling.
 
     def test_tampered_state_org_rejected(self, make_harness) -> None:
         """Rewriting the org inside a signed state breaks the HMAC."""
@@ -705,7 +689,7 @@ class TestCallbackSecurityMatrix:
         assert response.headers["location"] == "https://app.test/settings/github?error=oauth_state_invalid"
         assert h.http.requests == []
 
-    # ── local-mode regression guard ──────────────────────────────────────
+    # Verify local-mode behavior.
 
     def test_local_mode_unchanged_no_user_authorization_check(self, make_harness) -> None:
         """Local mode has no tenant boundary: no code, no /user/installations call."""
@@ -727,7 +711,7 @@ class TestCallbackSecurityMatrix:
         assert response.headers["location"] == "https://app.test/settings/github?installed=true"
         assert h.upserts[0]["org_id"] == "local"
 
-    # ── no secret leakage (requirement C) ────────────────────────────────
+    # Verify that responses contain no secrets.
 
     @pytest.mark.parametrize(
         ("scenario", "expected_error"),
@@ -808,15 +792,15 @@ class TestCallbackSecurityMatrix:
         assert FAKE_USER_TOKEN not in response.headers["location"]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SP-SEC-005 — installation-token permission amplification
+# Verify installation token permissions.
+# Verify installation token repository restrictions.
 #
 # Seeing an installation is not the same as being able to reach every repo in
 # it. A body-less POST to /access_tokens mints a token with the installation's
 # full permissions on ALL its repositories, discarding the user∩app
 # intersection GitHub's user-access-token model would enforce. The token must be
 # restricted to the repositories the authorizing user can actually access.
-# ─────────────────────────────────────────────────────────────────────────────
+# Verify installation token permissions.
 
 
 def _repo_page(ids) -> list[dict]:
@@ -873,7 +857,7 @@ class TestInstallationTokenRepositoryScoping:
         assert body["repository_ids"] == [USER_REPO_ID, *SIBLING_REPO_IDS]
 
     def test_empty_user_repo_list_rejected_without_minting(self, make_harness) -> None:
-        """User can see the installation but reach none of its repos → refuse."""
+        """Verify refusal when a user cannot access any installation repository."""
         h = make_harness(
             installation_pages=[[{"id": OWNED_INSTALLATION_ID}]],
             user_repo_pages=[[]],
@@ -892,7 +876,7 @@ class TestInstallationTokenRepositoryScoping:
         assert h.upserts == []
 
     def test_per_installation_repositories_endpoint_is_paginated(self, make_harness) -> None:
-        first_page = _repo_page(range(6000, 6100))  # exactly per_page → loop continues
+        first_page = _repo_page(range(6000, 6100))  # A full page continues pagination.
         assert len(first_page) == 100
         h = make_harness(
             installation_pages=[[{"id": OWNED_INSTALLATION_ID}]],
@@ -942,7 +926,7 @@ class TestInstallationTokenRepositoryScoping:
         assert h.upserts == []
 
     def test_foreign_installation_never_reaches_the_repo_enumeration(self, make_harness) -> None:
-        """The SP-SEC-004 gate still short-circuits ahead of SP-SEC-005."""
+        """Verify that installation ownership is checked before repository access."""
         h = make_harness(installation_pages=[[{"id": OWNED_INSTALLATION_ID}]])
 
         h.callback(
@@ -958,7 +942,7 @@ class TestInstallationTokenRepositoryScoping:
     def test_local_mode_mints_installation_wide_token_by_design(self, make_harness) -> None:
         """Local/single-tenant: no user token exists, so no intersection to take.
 
-        Documented, explicit exception — it goes through
+        Documented, explicit exception. it goes through
         ``create_unrestricted_installation_token`` and sends no body.
         """
         h = make_harness(cloud=False)
@@ -1004,7 +988,7 @@ class TestTokenRefreshKeepsRepositoryScope:
             "github_account_login": "acme",
             "github_account_type": "Organization",
             "access_token_enc": b"enc",
-            "token_expires_at": 0.0,  # expired → forces a refresh
+            "token_expires_at": 0.0,  # An expired token requires a refresh.
             "authorized_repository_ids": None,
             "status": "active",
             "created_at": 0.0,
@@ -1074,16 +1058,28 @@ class TestTokenRefreshKeepsRepositoryScope:
         assert self.restricted == [[USER_REPO_ID]], "refresh did not reuse the stored repository scope"
         assert self.unrestricted == []
 
-    async def test_legacy_row_refresh_falls_back_to_linked_repos(self, monkeypatch) -> None:
+    async def test_null_scope_row_infers_nothing_from_linked_repos(self) -> None:
+        """Verify that linked projects do not define a missing authorization set.
+
+        An installation without an authorization set must reconnect.
+        """
         from gateway.store import github as gh_store
 
-        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
         row = self._row(authorized_repository_ids=None)
 
-        await gh_store.get_valid_token(self._session([USER_REPO_ID]), row)
+        scope = await gh_store._refresh_repository_scope(self._session([USER_REPO_ID]), row)
 
-        assert self.restricted == [[USER_REPO_ID]]
-        assert self.unrestricted == []
+        assert scope is None, "refresh inferred a repository scope from linked projects"
+
+    async def test_stored_scope_row_returns_exactly_the_stored_ids(self) -> None:
+        from gateway.store import github as gh_store
+
+        row = self._row(authorized_repository_ids=[USER_REPO_ID])
+
+    # Use only the authorization set captured during installation.
+        scope = await gh_store._refresh_repository_scope(self._session([*SIBLING_REPO_IDS]), row)
+
+        assert scope == [USER_REPO_ID]
 
     async def test_legacy_row_with_no_scope_refuses_in_cloud_mode(self, monkeypatch) -> None:
         from gateway.store import github as gh_store
@@ -1121,3 +1117,27 @@ class TestTokenRefreshKeepsRepositoryScope:
         assert token == "stale-token"
         assert self.restricted == []
         assert self.unrestricted == []
+
+
+class TestLegacyLocalModeInstallRedirectRemoved:
+    """Verify that GET /auth/github does not provide an installation redirect.
+
+    GET /api/github/install-url provides the authenticated installation URL.
+    Only the OAuth callback uses the /auth/github path.
+    """
+
+    def _paths(self) -> set[str]:
+        return {route.path for route in github.router.routes}
+
+    def test_install_url_and_callback_are_registered(self) -> None:
+        paths = self._paths()
+        assert "/api/github/install-url" in paths
+        assert "/auth/github/callback" in paths
+
+    def test_legacy_redirect_route_is_not_registered(self) -> None:
+        assert "/auth/github" not in self._paths()
+
+    def test_legacy_redirect_returns_404(self, monkeypatch) -> None:
+        client = _client(monkeypatch)
+
+        assert client.get("/auth/github", follow_redirects=False).status_code == 404

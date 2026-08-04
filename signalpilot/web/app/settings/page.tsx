@@ -57,7 +57,7 @@ export default function SettingsPage() {
       setSettings(s);
       setBlockedTables(s.blocked_tables || []);
     }).catch(() => {});
-    const stored = sessionStorage.getItem("sp_api_key") || localStorage.getItem("sp_api_key") || "";
+    const stored = sessionStorage.getItem("sp_api_key") || "";
     setBrowserApiKey(stored);
   }, []);
 
@@ -89,7 +89,7 @@ export default function SettingsPage() {
     finally { setTestingHealth(false); }
   }
 
-  // Keyboard shortcut: ctrl+s to save
+  // Press Ctrl+S to save the settings.
   const handleSaveShortcut = useCallback((e: KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && e.key === "s") {
       e.preventDefault();
@@ -127,7 +127,7 @@ export default function SettingsPage() {
         </div>
       </TerminalBar>
 
-      {/* BYOS Sandbox Configuration */}
+        {/* The following controls configure the BYOS sandbox. */}
       {!IS_CLOUD_MODE && (
       <section className="mb-8">
         <SectionHeader icon={Server} title="sandbox configuration (byos)" />
@@ -201,7 +201,7 @@ export default function SettingsPage() {
       </section>
       )}
 
-      {/* Governance Defaults */}
+        {/* The following controls configure governance defaults. */}
       <section className="mb-8">
         <SectionHeader icon={Shield} title="governance defaults" iconColor="text-[var(--color-success)]" />
         <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] overflow-hidden">
@@ -226,7 +226,7 @@ export default function SettingsPage() {
               ))}
             </div>
 
-            {/* Knowledge history versions — local-mode only */}
+            {/* The following controls display knowledge history in local mode. */}
             <div className="mt-4 pt-4 border-t border-[var(--color-border)]">
               <div className="grid grid-cols-3 gap-4">
                 <div>
@@ -248,7 +248,7 @@ export default function SettingsPage() {
               </div>
             </div>
 
-            {/* Blocked Tables */}
+        {/* The following controls configure blocked tables. */}
             <div className="mt-6 pt-6 border-t border-[var(--color-border)]">
               <div className="flex items-center gap-2 mb-3">
                 <Ban className="w-3 h-3 text-[var(--color-error)]" strokeWidth={1.5} />
@@ -312,7 +312,7 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      {/* Gateway Config */}
+        {/* The following controls configure the gateway. */}
       <section className="mb-8">
         <SectionHeader icon={SettingsIcon} title="gateway" />
         <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] overflow-hidden">
@@ -358,7 +358,7 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      {/* Browser Authentication */}
+        {/* The following controls configure browser authentication. */}
       <section className="mb-8">
         <SectionHeader icon={Key} title="browser authentication" />
         <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] overflow-hidden">
@@ -400,7 +400,7 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      {/* Save button */}
+        {/* This button saves the settings. */}
       <div className="flex items-center gap-3">
         <button onClick={handleSave} disabled={saving}
           className="flex items-center gap-2 px-5 py-2.5 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium rounded-[10px] transition-opacity duration-150 hover:opacity-90 disabled:opacity-30">

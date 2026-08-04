@@ -65,10 +65,8 @@ def strip_schema(schema: dict) -> dict:
     return out
 
 
-def render_diff_markdown(
-    *, connection_name: str, diff: dict, old_fp: str | None, new_fp: str, table_count: int
-) -> str:
-    when = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+def render_diff_markdown(*, connection_name: str, diff: dict, old_fp: str | None, new_fp: str, table_count: int) -> str:
+    when = dt.datetime.now(dt.UTC).strftime("%Y-%m-%d %H:%M UTC")
     lines = [
         f"# Schema change — `{connection_name}`",
         "",
@@ -109,9 +107,7 @@ def render_diff_markdown(
 
 
 def diff_is_empty(diff: dict) -> bool:
-    return not (
-        diff.get("added_tables") or diff.get("removed_tables") or diff.get("modified_tables")
-    )
+    return not (diff.get("added_tables") or diff.get("removed_tables") or diff.get("modified_tables"))
 
 
 def _pr_title(connection_name: str, diff: dict) -> str:
@@ -164,7 +160,11 @@ async def _resolve_watch_token(session: AsyncSession, watch: GatewaySchemaWatch)
             try:
                 return await get_valid_token(session, inst)
             except Exception as exc:
-                logger.warning("Installation token failed for %s: %r", watch.github_repo, exc)
+                logger.warning(
+                    "GitHub App refresh failed for repository %s (%s).",
+                    watch.github_repo,
+                    type(exc).__name__,
+                )
     if is_cloud_mode():
         return None
     return get_github_bot_settings().token or None
@@ -190,7 +190,7 @@ async def open_schema_diff_pr(
 
     base = base_branch or await client.get_default_branch(repo)
     base_sha = await client.get_ref_sha(repo, base)
-    now = dt.datetime.now(dt.timezone.utc)
+    now = dt.datetime.now(dt.UTC)
     branch = f"schema-watch/{connection_name}-{new_fp[:12]}"
     try:
         await client.create_branch(repo, branch, base_sha)
@@ -360,9 +360,7 @@ async def run_due_watches(session_factory) -> int:
             ).where(GatewaySchemaWatch.enabled.is_(True))
         )
         due_ids = [
-            row.id
-            for row in result.fetchall()
-            if not row.last_run_at or now - row.last_run_at >= row.interval_s
+            row.id for row in result.fetchall() if not row.last_run_at or now - row.last_run_at >= row.interval_s
         ]
 
     if not due_ids:

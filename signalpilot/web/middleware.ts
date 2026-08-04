@@ -2,24 +2,20 @@ import { NextResponse } from "next/server";
 import type { NextMiddleware, NextRequest } from "next/server";
 
 /**
- * Next.js middleware — security headers + optional Clerk auth.
- *
- * When Clerk keys are present (cloud mode or local-with-keys), routes through
- * clerkMiddleware for session management. When absent, applies security headers
- * only. The conditional dynamic import avoids loading @clerk/nextjs/server
- * when CLERK_SECRET_KEY is absent — clerkMiddleware() will throw without it.
+ * This Next.js middleware applies security headers and optional Clerk authentication.
+ * It uses clerkMiddleware for session management when Clerk keys are available.
+ * It applies only security headers when Clerk keys are absent.
+ * The conditional import does not load @clerk/nextjs/server without CLERK_SECRET_KEY.
  */
 
 const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 const clerkEnabled = IS_CLOUD_MODE;
 
-// ---------------------------------------------------------------------------
-// Security header helper — applied in BOTH paths
-// ---------------------------------------------------------------------------
+// The following function applies security headers to all request paths.
 
 /**
- * Validate that a string is a safe URL (http: or https: protocol, no injection chars).
- * Prevents a compromised env var from injecting arbitrary CSP directives.
+ * Validate that a string contains a safe HTTP or HTTPS URL.
+ * Reject characters that can add CSP directives through an environment variable.
  */
 function isSafeUrl(url: string): boolean {
   try {
@@ -41,7 +37,7 @@ function applySecurityHeaders(
   let connectSrc = "'self'";
   if (isSafeUrl(gatewayUrl)) {
     connectSrc += ` ${gatewayUrl}`;
-    // WebSocket connections to the gateway (notebook kernel) use ws:// or wss://
+// Notebook WebSocket connections to the gateway use ws or wss.
     try {
       const gwUrl = new URL(gatewayUrl);
       const wsScheme = gwUrl.protocol === "https:" ? "wss:" : "ws:";
@@ -50,28 +46,27 @@ function applySecurityHeaders(
   } else {
     console.warn(`CSP: NEXT_PUBLIC_GATEWAY_URL is not a valid URL, omitting from connect-src: ${gatewayUrl}`);
   }
-  // Eval uploads PUT parts directly to S3 (presigned multipart) — the S3
-  // origin must be allowed in connect-src. Locally this is MinIO.
+// Evaluation uploads send multipart PUT requests directly to S3.
+// The connect-src directive includes the S3 origin. Local mode uses MinIO.
   const evalUploadsS3Origin =
     process.env.NEXT_PUBLIC_EVAL_UPLOADS_S3_ORIGIN ||
     (IS_CLOUD_MODE ? "https://s3.us-east-2.amazonaws.com" : "http://localhost:9000");
   if (isSafeUrl(evalUploadsS3Origin)) {
     connectSrc += ` ${evalUploadsS3Origin}`;
   }
-  // CSP script-src: 'unsafe-inline' is required because Next.js injects inline
-  // scripts for hydration/chunk preloading that cannot carry a nonce.
-  // 'unsafe-eval' is required because Vega (used by Altair charts) compiles
-  // expressions via new Function(). Without it, all Altair/Vega charts fail.
+// The script-src directive permits unsafe-inline for Next.js hydration and chunk preload scripts.
+// These inline scripts cannot contain a nonce.
+// The script-src directive permits unsafe-eval because Vega compiles expressions with new Function().
+// Altair and Vega charts require this permission.
   let scriptSrc = "'self' 'unsafe-inline' 'unsafe-eval'";
   let imgSrc = `'self' data: blob: ${gatewayUrl}`;
   const fontSrc = "'self' data: https://cdn.jsdelivr.net";
 
   let workerSrc = "'self'";
 
-  // frame-src: always allow 'self'. Add the gateway origin if it differs from
-  // the web app origin (cross-origin gateway deployment). NEXT_PUBLIC_GATEWAY_URL
-  // is a build-time constant — never sourced from a runtime API response so a
-  // malicious script cannot swap it to a different origin.
+// The frame-src directive always permits self.
+// It also permits the gateway origin for a cross-origin gateway deployment.
+// NEXT_PUBLIC_GATEWAY_URL is a build-time constant and does not use runtime API data.
   let frameSrc = "'self'";
   const gatewayOrigin = (() => {
     try {
@@ -81,10 +76,8 @@ function applySecurityHeaders(
       return null;
     }
   })();
-  // Include localhost wildcard for dev convenience only — in production the
-  // gatewayOrigin covers the exact gateway host and there is no need to allow
-  // arbitrary localhost ports. L-1: gate on NODE_ENV to avoid widening frame-src
-  // in production builds.
+// Development mode permits all localhost ports.
+// Production mode permits only the configured gateway origin.
   if (process.env.NODE_ENV === "development") {
     frameSrc += " http://localhost:* https://localhost:*";
   }
@@ -144,16 +137,11 @@ function applySecurityHeaders(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Middleware export — conditional on Clerk being enabled.
-// Top-level await works in Next.js 16 middleware (edge runtime).
-// When clerkEnabled is false, the dynamic import is skipped entirely,
-// so @clerk/nextjs/server is never loaded and CLERK_SECRET_KEY is not needed.
-// ---------------------------------------------------------------------------
+// The middleware export uses Clerk only when Clerk is enabled.
+// Next.js 16 middleware supports top-level await in the edge runtime.
+// The conditional import skips @clerk/nextjs/server when Clerk is disabled.
 
-// ---------------------------------------------------------------------------
-// Notebook proxy — rewrite /notebook/* to the gateway
-// ---------------------------------------------------------------------------
+// The following function rewrites /notebook/* requests to the gateway.
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
 const NOTEBOOK_PROXY_TARGET_URL =
@@ -206,9 +194,7 @@ function proxyNotebook(req: NextRequest): NextResponse {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Middleware export
-// ---------------------------------------------------------------------------
+// The following constant exports the middleware.
 
 let middlewareExport: NextMiddleware;
 
@@ -273,11 +259,11 @@ export default middlewareExport;
 
 export const config = {
   matcher: [
-    // Notebook proxy must include static assets such as fonts and JS chunks.
+// Include notebook static assets such as fonts and JavaScript chunks.
     "/notebook/:path*",
-    // Skip Next.js internals and all static files (Clerk-recommended pattern)
+// Skip Next.js internal paths and static files.
     "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
-    // Always run for API routes
+// Run the middleware for all API routes.
     "/(api|trpc)(.*)",
   ],
 };

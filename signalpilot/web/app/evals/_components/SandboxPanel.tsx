@@ -1,31 +1,39 @@
 "use client";
 
 /**
- * Sandbox panel for /evals — the containers an eval run is actually executing in.
- *
- * Three questions it has to answer at a glance: what is alive, what is it doing
- * right now, and if it is not moving, is that because it is slow or because it
- * is broken. The last one is why pod events are surfaced automatically for any
- * sandbox that is not Running — "Pending" alone never distinguishes a node that
- * is still pulling the image from one that will never schedule.
+ * This component displays evaluation sandboxes.
+ * It shows sandbox status, current activity, and scheduling delays.
+ * It displays pod events automatically for a sandbox that is not Running.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import { Activity, AlertTriangle, Box, Loader2, RefreshCw, Terminal } from "lucide-react";
 import {
+  evalSandboxName,
   getEvalSandboxEvents,
   listEvalSandboxes,
   subscribeEvalSandboxLogs,
+  type EvalActiveTask,
   type EvalLogEvent,
   type EvalRunProgress,
   type EvalSandbox,
 } from "~/lib/api";
 
+/**
+ * An active-task card sends a DOM event to select its sandbox row.
+ * The event keeps RunDetail independent of SandboxPanel.
+ */
+export const OPEN_SANDBOX_EVENT = "ev-open-sandbox";
+export function requestOpenSandbox(name: string) {
+  window.dispatchEvent(new CustomEvent(OPEN_SANDBOX_EVENT, { detail: name }));
+}
+
 const LOG_TAIL_LINES = 400;
-// What the viewer keeps in the DOM. The stream itself is capped server-side.
+// The viewer retains this number of log entries in the DOM.
+// The server limits the stream size.
 const MAX_LOG_CHARS = 400_000;
-// A live sandbox that has said nothing for this long is called out as stalled.
+// The interface marks a live sandbox as stalled after this interval without output.
 const SILENCE_WARN_SECONDS = 90;
 
 const PHASE_COLOR: Record<string, string> = {
@@ -43,44 +51,80 @@ function fmtAge(seconds: number | null | undefined): string {
   return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
 }
 
-/* ─── run progress ──────────────────────────────────────────────────────── */
+/* The following code displays run progress. */
 
-export function RunProgressBar({ progress }: { progress: EvalRunProgress }) {
-  const total = progress.total || 0;
-  const done = progress.done || 0;
-  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-  const label =
-    progress.phase === "finished" ? "finished"
-    : progress.phase === "setup" ? `state setup · ${progress.state}`
-    : progress.phase === "question" ? `question ${(progress.index ?? 0) + 1} of ${total}`
-    : "preparing";
-
+function ActiveTaskCard({ task, now }: { task: EvalActiveTask; now: number }) {
+  const startedMs = Date.parse(task.started_at);
+  const elapsed = Number.isFinite(startedMs) ? Math.max(0, Math.round(now - startedMs / 1000)) : null;
+  const sandbox = evalSandboxName(task.sandbox);
   return (
-    <div className="mt-4 border border-[var(--color-border)] rounded-[10px] bg-[var(--color-bg)] px-3 py-2.5">
-      <div className="flex items-center gap-3 flex-wrap text-xs">
-        {progress.phase !== "finished" && <Loader2 className="w-3 h-3 animate-spin text-[var(--color-warning,#f5a623)]" />}
-        <span className="text-[var(--color-text)]">{label}</span>
-        {progress.question_title && progress.phase !== "finished" && (
-          <span className="text-[var(--color-text-muted)] truncate max-w-[40ch]">{progress.question_title}</span>
-        )}
-        <span className="ml-auto text-[var(--color-text-dim)] font-mono tabular-nums">
-          {done}/{total} done
-          {progress.elapsed_s != null && progress.phase !== "finished" && ` · ${fmtAge(progress.elapsed_s)} on this step`}
+    <div className="border border-[var(--color-border)] rounded-[10px] bg-[var(--color-bg-card)] px-3 py-2">
+      <div className="flex items-center gap-2 text-xs">
+        <Loader2 className="w-3 h-3 animate-spin flex-shrink-0 text-[var(--color-warning,#f5a623)]" />
+        <span className="text-[var(--color-text)] truncate min-w-0">{task.title || task.task_id}</span>
+        <span className="ev-badge flex-shrink-0">{task.phase}</span>
+        <span className="ml-auto text-[var(--color-text-dim)] font-mono tabular-nums whitespace-nowrap">
+          {elapsed != null ? fmtAge(elapsed) : "—"}
         </span>
       </div>
-      <div className="mt-2 h-[3px] rounded-full bg-[var(--color-border)] overflow-hidden">
-        <div className="h-full rounded-full transition-[width] duration-500" style={{ width: `${pct}%`, background: "var(--color-success)" }} />
-      </div>
-      {progress.sandbox?.name && (
-        <p className="mt-1.5 text-[11px] font-mono text-[var(--color-text-dim)]">
-          sandbox {progress.sandbox.name} · {progress.sandbox.backend}
-        </p>
+      {sandbox && (
+        <button
+          onClick={() => requestOpenSandbox(sandbox)}
+          title="Open this sandbox's live logs below"
+          className="mt-1 text-[11px] font-mono text-[var(--color-text-dim)] hover:text-[var(--color-text)] underline underline-offset-2 truncate max-w-full block text-left"
+        >
+          {sandbox}
+        </button>
       )}
     </div>
   );
 }
 
-/* ─── pod events ────────────────────────────────────────────────────────── */
+/** Show the completed-task count and one card for each active task. */
+export function RunProgressBar({ progress }: { progress: EvalRunProgress }) {
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now() / 1000), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const total = progress.total || 0;
+  const done = progress.done || 0;
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  const finished = progress.phase === "finished";
+  const active = progress.active ?? [];
+  const label =
+    finished ? "finished"
+    : progress.phase === "preparing" ? "preparing"
+    : active.length > 0 ? `${active.length} task${active.length === 1 ? "" : "s"} running`
+    : progress.phase;
+
+  return (
+    <div className="mt-4 border border-[var(--color-border)] rounded-[10px] bg-[var(--color-bg)] px-3 py-2.5">
+      <div className="flex items-center gap-3 flex-wrap text-xs">
+        {!finished && <Loader2 className="w-3 h-3 animate-spin text-[var(--color-warning,#f5a623)]" />}
+        <span className="text-[var(--color-text)]">{label}</span>
+        <span className="ml-auto text-[var(--color-text-dim)] font-mono tabular-nums">
+          {done}/{total} done
+          {progress.elapsed_s != null && !finished && ` · ${fmtAge(progress.elapsed_s)} elapsed`}
+        </span>
+      </div>
+      <div className="mt-2 h-[3px] rounded-full bg-[var(--color-border)] overflow-hidden">
+        <div className="h-full rounded-full transition-[width] duration-500" style={{ width: `${pct}%`, background: "var(--color-success)" }} />
+      </div>
+      {progress.error && <p className="mt-1.5 text-[11px] text-[#e5484d]">{progress.error}</p>}
+      {active.length > 0 && (
+        <div className="mt-2.5 grid grid-cols-1 md:grid-cols-2 gap-2">
+          {active.map((t) => (
+            <ActiveTaskCard key={t.task_id} task={t} now={now} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* The following code displays pod events. */
 
 function SandboxEvents({ name }: { name: string }) {
   const { data, isLoading } = useSWR(`eval-sandbox-events-${name}`, () => getEvalSandboxEvents(name), {
@@ -111,7 +155,7 @@ function SandboxEvents({ name }: { name: string }) {
   );
 }
 
-/* ─── live log viewer ───────────────────────────────────────────────────── */
+/* The following code displays live logs. */
 
 function LogViewer({ sandbox }: { sandbox: EvalSandbox }) {
   const [text, setText] = useState("");
@@ -148,7 +192,7 @@ function LogViewer({ sandbox }: { sandbox: EvalSandbox }) {
     return subscribeEvalSandboxLogs(sandbox.name, LOG_TAIL_LINES, onEvent);
   }, [sandbox.name, nonce, onEvent]);
 
-  // Drives the "signs of life" readout; the stream itself is push-based.
+// This value supplies the activity status. The server pushes stream updates.
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now() / 1000), 1000);
     return () => clearInterval(t);
@@ -203,7 +247,7 @@ function LogViewer({ sandbox }: { sandbox: EvalSandbox }) {
   );
 }
 
-/* ─── sandbox row ───────────────────────────────────────────────────────── */
+/* The following code displays a sandbox row. */
 
 function SandboxRow({ sandbox, open, onToggle }: { sandbox: EvalSandbox; open: boolean; onToggle: () => void }) {
   const color = PHASE_COLOR[sandbox.phase] ?? "var(--color-text-dim)";
@@ -229,9 +273,9 @@ function SandboxRow({ sandbox, open, onToggle }: { sandbox: EvalSandbox; open: b
           </span>
         </div>
         <div className="mt-1 flex items-center gap-2 text-[11px] text-[var(--color-text-muted)]">
-          <span className="ev-badge">{sandbox.kind}</span>
+          <span className="ev-badge">{sandbox.task_phase}</span>
           <span className="truncate">
-            {sandbox.question_title || sandbox.question_id || sandbox.setup_state || "unattributed"}
+            {sandbox.task_title || sandbox.task_id || "unattributed"}
           </span>
           {sandbox.run_id && <code className="text-[var(--color-text-dim)] ml-auto whitespace-nowrap">{sandbox.run_id}</code>}
         </div>
@@ -247,8 +291,7 @@ function SandboxRow({ sandbox, open, onToggle }: { sandbox: EvalSandbox; open: b
         <p className="mt-1.5 text-[11px] text-[var(--color-text-muted)] break-words">{sandbox.message}</p>
       )}
 
-      {/* A pod that is not Running is a scheduling story, so its events come up
-          without waiting for anyone to ask. */}
+      {/* Display scheduling events automatically when a pod is not Running. */}
       {troubled && (
         <div className="mt-2 pt-2 border-t border-[var(--color-border)]">
           <div className="text-[10px] uppercase tracking-[0.14em] text-[var(--color-text-dim)] mb-1.5">pod events</div>
@@ -275,10 +318,11 @@ function SandboxRow({ sandbox, open, onToggle }: { sandbox: EvalSandbox; open: b
   );
 }
 
-/* ─── panel ─────────────────────────────────────────────────────────────── */
+/* The following code displays the sandbox panel. */
 
 export function SandboxPanel() {
   const [openName, setOpenName] = useState<string | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const { data, error, isLoading } = useSWR("eval-sandboxes", listEvalSandboxes, {
     refreshInterval: 4000,
   });
@@ -286,15 +330,27 @@ export function SandboxPanel() {
   const sandboxes = data?.sandboxes ?? [];
   const active = sandboxes.filter((s) => s.phase === "running" || s.phase === "pending").length;
 
-  // Keep the log viewer attached to the one live sandbox without a click.
+  // Select the active sandbox automatically in the log viewer.
   useEffect(() => {
     if (openName && sandboxes.some((s) => s.name === openName)) return;
     const live = sandboxes.find((s) => s.phase === "running") ?? sandboxes[0];
     setOpenName(live ? live.name : null);
   }, [sandboxes, openName]);
 
+  // Handle the RunDetail event that selects a sandbox log.
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const name = (e as CustomEvent<string>).detail;
+      if (!name) return;
+      setOpenName(name);
+      rootRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    };
+    window.addEventListener(OPEN_SANDBOX_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_SANDBOX_EVENT, onOpen);
+  }, []);
+
   return (
-    <div className="ev-card p-5">
+    <div className="ev-card p-5" ref={rootRef}>
       <div className="flex items-center gap-3 flex-wrap mb-3">
         <h2 className="text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">Sandboxes</h2>
         {data && (

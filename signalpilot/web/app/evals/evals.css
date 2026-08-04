@@ -1,6 +1,5 @@
-/* Eval management page — scoped layer aligned with the UX.md design system:
-   warm-ink tokens (inherited), 10/14px radii, 0.08em micro-labels, mono for
-   evidence (SQL, tool names, transcripts). */
+/* These styles apply only to the evaluation management page.
+   The styles use the tokens, radii, labels, and evidence fonts from UX.md. */
 
 .ev-card {
   border: 1px solid var(--color-border);
@@ -27,6 +26,128 @@
 }
 
 
+/* This compact task row supports the list view. */
+.ev-qrow {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+  padding: 0.55rem 1rem;
+  cursor: pointer;
+  text-align: left;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.ev-qrow:hover { background: var(--color-bg); }
+.ev-qrow-id {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--color-text-dim);
+  flex-shrink: 0;
+  width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ev-qrow-title {
+  font-size: 13px;
+  color: var(--color-text);
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ev-qrow-badges { display: inline-flex; gap: 0.35rem; flex-shrink: 0; }
+.ev-qrow-checks {
+  font-size: 11px;
+  color: var(--color-text-dim);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  flex-shrink: 0;
+  width: 5.5rem;
+  text-align: right;
+  white-space: nowrap;
+}
+@media (max-width: 720px) {
+  .ev-qrow-id, .ev-qrow-checks { display: none; }
+}
+
+/* The task toolbar contains search, filter, and view controls. */
+.ev-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.ev-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-card);
+  border-radius: 10px;
+  padding: 0.4rem 0.7rem;
+  min-width: 220px;
+  transition: border-color 0.15s ease;
+}
+.ev-search:focus-within { border-color: var(--color-border-hover); }
+.ev-search input {
+  background: transparent;
+  border: none;
+  outline: none;
+  font-size: 12.5px;
+  color: var(--color-text);
+  width: 100%;
+}
+.ev-search input::placeholder { color: var(--color-text-dim); }
+.ev-search--sm { min-width: 160px; padding: 0.25rem 0.6rem; }
+.ev-search--sm input { font-size: 11.5px; }
+
+.ev-filter-group { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; }
+.ev-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  background: transparent;
+  white-space: nowrap;
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+.ev-filter:hover { border-color: var(--color-border-hover); color: var(--color-text); }
+.ev-filter .n { color: var(--color-text-dim); font-size: 9px; }
+.ev-filter--on {
+  border-color: color-mix(in srgb, var(--color-success) 55%, transparent);
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-success) 7%, transparent);
+}
+.ev-filter--on .n { color: var(--color-text-muted); }
+
+.ev-view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.ev-view-toggle button {
+  padding: 0.35rem 0.6rem;
+  color: var(--color-text-dim);
+  background: transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+.ev-view-toggle button:hover { color: var(--color-text); }
+.ev-view-toggle button.on { color: var(--color-text); background: var(--color-bg-card); }
+.ev-view-toggle button + button { border-left: 1px solid var(--color-border); }
+
 .ev-badge {
   display: inline-flex;
   align-items: center;
@@ -42,6 +163,23 @@
 }
 .ev-badge--broken { color: var(--color-warning, #f5a623); border-color: color-mix(in srgb, var(--color-warning, #f5a623) 40%, transparent); }
 .ev-badge--control { color: var(--color-success); border-color: color-mix(in srgb, var(--color-success) 40%, transparent); }
+/* Task classes distinguish query tasks from model build tasks. */
+.ev-badge--read { color: #6e9fd6; border-color: color-mix(in srgb, #6e9fd6 45%, transparent); }
+.ev-badge--write { color: #c678aa; border-color: color-mix(in srgb, #c678aa 45%, transparent); }
+
+/* The layer bars show coverage. */
+.ev-cov-bar {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-border);
+  overflow: hidden;
+}
+.ev-cov-bar > div {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--color-success);
+  transition: width 0.4s ease;
+}
 
 .ev-chip {
   display: inline-flex;
@@ -59,7 +197,7 @@
 .ev-chip--pass { border-color: color-mix(in srgb, var(--color-success) 50%, transparent); }
 .ev-chip--fail { border-color: color-mix(in srgb, #e5484d 55%, transparent); color: #e5484d; }
 
-/* Slide-over question detail */
+/* The task detail panel slides over the page. */
 .ev-overlay {
   position: fixed;
   inset: 0;
@@ -83,7 +221,7 @@
 @keyframes ev-fade { from { opacity: 0; } }
 @keyframes ev-slide { from { transform: translateX(24px); opacity: 0; } }
 
-/* Markdown (question writeups, agent answers) */
+/* These styles format Markdown documents and agent answers. */
 .emd { font-size: 13.5px; line-height: 1.65; color: var(--color-text-muted); }
 .emd h1 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; color: var(--color-text); margin: 0 0 0.75rem; }
 .emd h2 { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-text); margin: 1.4rem 0 0.5rem; }
@@ -101,11 +239,11 @@
 .emd th { color: var(--color-text-dim); text-transform: uppercase; letter-spacing: 0.08em; font-size: 10px; font-weight: 500; }
 .emd a { color: var(--color-success); text-decoration: underline; text-underline-offset: 2px; }
 
-/* Slide-over expansion to full page */
+/* The task detail panel can expand to fill the page. */
 .ev-panel--wide { width: min(860px, 96vw); }
 .ev-panel--full { width: 100vw; border-left: none; }
 
-/* ─── Agent transcript turn cards ──────────────────────────────────────── */
+/* These styles format agent transcript turn cards. */
 
 .tr-item { margin: 0.9rem 0; animation: tr-in 0.18s ease both; }
 @keyframes tr-in { from { opacity: 0; transform: translateY(4px); } }
@@ -207,7 +345,7 @@
 }
 .tr-footer b { color: var(--color-text); font-weight: 400; }
 
-/* Transcript viewer */
+/* These styles format the transcript viewer. */
 .ev-turn { border: 1px solid var(--color-border); background: var(--color-bg); border-radius: 10px; overflow: hidden; margin-top: 0.5rem; }
 .ev-turn-head {
   display: flex;

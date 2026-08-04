@@ -1,559 +1,537 @@
-"""Eval run execution: clone the eval repo, spawn one container per question
-(claude CLI wired to this gateway's MCP with the proposed knowledge docs
-overlaid), grade answers against ground truth.
+"""Orchestrate production evaluation runs.
 
-Deliberately simple: sequential questions, file-based state. Containers run
-through the execution backend seam (gateway/evals/backends.py) — the host Docker
-Engine API locally, short-lived sandboxed pods in cloud.
+A run executes evaluation tasks concurrently against the customer's dbt project.
+Read tasks use the shared build branch through the pinned MCP connection.
+Each write task uses a disposable warehouse branch.
+Task cleanup always removes the disposable branch.
 
-Eval-set format (trap-arena compatible — see demo-generator/trap-arena):
-    <repo>/traps.tsv           id \t kind \t state \t gt \t [mode] \t title \t why
-    <repo>/prompts/<id>.txt    the natural-language question
+PostgreSQL stores run state. S3 stores transcripts, setup logs, and captures.
+Only temporary repository checkouts use the gateway-local disk.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import logging
-import re
 import shutil
+import tarfile
+import tempfile
 import time
 import uuid
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from ..config.evals import EvalRunSettings, get_eval_run_settings
-from .backends import ContainerRun, ExecutionBackend, get_execution_backend
+from ..db.engine import get_session_factory
+from ..store import Store
+from ..store import evals as evals_store
+from .backends import ContainerRun, get_execution_backend
+from .branches import (
+    BranchProvider,
+    branch_name_for,
+    enforce_branch_quota,
+)
+from .manifest import EvalSet, EvalTask, ManifestError, load_eval_set, read_claude_md
+from .object_store import EvalObjectStore, get_object_store
+from .provision import (
+    ProvisioningError,
+    create_task_connection,
+    delete_task_connection,
+    resolve_branch_provider,
+)
 
 logger = logging.getLogger(__name__)
 
-
-def get_data_dir() -> str:
-    import os
-
-    return os.getenv("SP_DATA_DIR", str(Path.home() / ".signalpilot"))
+_CONTAINER_HOME = "/tmp"  # nosec B108 - This path is a mounted container directory.
 
 
-# ─── Paths & config ───────────────────────────────────────────────────────────
+# Prepended to every WRITE task's prompt. The governed MCP path deliberately
+# refuses DDL/DML, so an agent asked to rebuild a mart will read the model,
+# try to build it, and stop at "I hit a wall" — which is what happened the
+# first time this ran for real. The disposable branch is the thing that makes
+# writing safe, so the agent has to be told the branch exists and how to
+# reach it; otherwise "agent-writable branch" is only true on paper.
+WRITE_ACCESS_NOTE = """\
+[WRITE TASK — you have a private, disposable copy of the warehouse]
 
+This task runs against your own throwaway branch. Nothing you do here can
+touch the shared warehouse, and the branch is destroyed when the task ends.
 
-def _org_slug(org_id: str) -> str:
-    """Directory name for an org's eval state.
+The governed MCP tools stay read-only, so use them to INSPECT. To WRITE
+(CREATE/DROP/INSERT), use the branch credential in the environment variable
+SP_WAREHOUSE_DSN with psql, which is installed:
 
-    The hash suffix keeps two org ids that sanitize to the same characters from
-    ever sharing a directory.
-    """
-    if not org_id or not str(org_id).strip():
-        raise ValueError("org_id is required for eval state")
-    org_id = str(org_id)
-    safe = re.sub(r"[^a-zA-Z0-9_-]", "-", org_id)[:48]
-    return f"{safe}-{hashlib.sha256(org_id.encode()).hexdigest()[:8]}"
+    psql "$SP_WAREHOUSE_DSN" -v ON_ERROR_STOP=1 -c "CREATE TABLE ... AS SELECT ..."
 
-
-def eval_root(org_id: str) -> Path:
-    root = Path(get_data_dir()) / "eval-runs" / _org_slug(org_id)
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
-def config_path(org_id: str) -> Path:
-    return eval_root(org_id) / "eval-config.json"
-
-
-def load_eval_config(org_id: str) -> dict:
-    try:
-        return json.loads(config_path(org_id).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-
-
-def save_eval_config(org_id: str, cfg: dict) -> dict:
-    config_path(org_id).write_text(json.dumps(cfg, indent=2), encoding="utf-8")
-    return cfg
-
-
-# ─── Run state (file-based) ──────────────────────────────────────────────────
-
-
-def _run_dir(org_id: str, run_id: str) -> Path:
-    return eval_root(org_id) / run_id
-
-
-def _write_run(org_id: str, run: dict) -> None:
-    (_run_dir(org_id, run["id"]) / "run.json").write_text(json.dumps(run, indent=2), encoding="utf-8")
-
-
-def read_run(org_id: str, run_id: str) -> dict | None:
-    try:
-        return json.loads((_run_dir(org_id, run_id) / "run.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-
-
-def list_runs(org_id: str, limit: int = 50) -> list[dict]:
-    runs = []
-    for p in eval_root(org_id).iterdir():
-        if (p / "run.json").exists():
-            run = read_run(org_id, p.name)
-            if run:
-                run.pop("questions_detail", None)
-                runs.append(run)
-    runs.sort(key=lambda r: r.get("created_at", ""), reverse=True)
-    return runs[:limit]
-
-
-def read_setup_log(org_id: str, run_id: str, state: str) -> str | None:
-    path = _run_dir(org_id, run_id) / f"setup-{_sanitize_state(state)}.log"
-    try:
-        return path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-
-
-def read_transcript(org_id: str, run_id: str, question_id: str) -> str | None:
-    safe_q = re.sub(r"[^a-zA-Z0-9_-]", "_", question_id)
-    path = _run_dir(org_id, run_id) / "questions" / f"{safe_q}.log"
-    try:
-        return path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-
-
-# ─── In-flight progress ──────────────────────────────────────────────────────
+Verify your work the same way. If a tool tells you writes are blocked, that
+is the read-only MCP path — switch to psql with $SP_WAREHOUSE_DSN rather
+than concluding the task is impossible."""
 
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _mark_progress(org_id: str, run: dict, **fields) -> None:
-    """Record what the run is doing *now*, before the work happens.
-
-    Everything else in run.json is written after the fact, which is why a live
-    view could previously only show completed questions. These markers are the
-    in-flight half: one small dict, rewritten with the run file that was already
-    being rewritten at each transition, so no extra write pattern is introduced.
-    """
-    progress = run.setdefault("progress", {})
-    progress.update(fields)
-    progress["updated_at"] = _now()
-    _write_run(org_id, run)
+def new_run_id() -> str:
+    return f"run-{datetime.now(UTC):%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}"
 
 
-def run_progress(run: dict) -> dict:
-    """Derived, UI-ready view of where a run is."""
-    questions = run.get("questions") or []
+# DB access for the background task.
+# The run executes outside any request, so every write opens its own short
+# session (the schema-watch idiom). Chatty but correct across replicas.
+
+
+class RunDB:
+    def __init__(self, org_id: str, run_id: str) -> None:
+        self.org_id = org_id
+        self.run_id = run_id
+        self._factory = get_session_factory()
+
+    async def update_run(self, **fields: Any) -> None:
+        async with self._factory() as session:
+            await evals_store.update_run(session, org_id=self.org_id, run_id=self.run_id, **fields)
+
+    async def update_task(self, task_id: str, **fields: Any) -> None:
+        async with self._factory() as session:
+            await evals_store.update_task(session, org_id=self.org_id, run_id=self.run_id, task_id=task_id, **fields)
+
+    async def seed_tasks(self, tasks: list[dict]) -> None:
+        async with self._factory() as session:
+            await evals_store.seed_tasks(session, org_id=self.org_id, run_id=self.run_id, tasks=tasks)
+
+    async def get_run(self) -> dict | None:
+        async with self._factory() as session:
+            return await evals_store.get_run(session, org_id=self.org_id, run_id=self.run_id)
+
+    async def renew_lease(self, ttl_s: float) -> None:
+        async with self._factory() as session:
+            await evals_store.renew_lease(session, org_id=self.org_id, run_id=self.run_id, ttl_s=ttl_s)
+
+    async def store(self):
+        """A short-lived Store for org-scoped operations (connections, KB)."""
+        session = self._factory()
+        return session, Store(session, org_id=self.org_id, user_id="eval-runner")
+
+
+# Progress (multi-task).
+
+
+class ProgressBoard:
+    """In-run progress fan-in: tasks report phase changes, the board writes
+    one JSON blob on the run row. Serialized by a lock so concurrent tasks
+    never interleave partial writes."""
+
+    def __init__(self, db: RunDB, total: int) -> None:
+        self._db = db
+        self._lock = asyncio.Lock()
+        self._active: dict[str, dict[str, Any]] = {}
+        self._done = 0
+        self._total = total
+        self._started_at = _now()
+
+    async def task_phase(self, task: EvalTask, phase: str, sandbox: dict | None = None) -> None:
+        async with self._lock:
+            entry = self._active.setdefault(
+                task.id,
+                {"task_id": task.id, "title": task.title, "started_at": _now()},
+            )
+            entry["phase"] = phase
+            if sandbox is not None:
+                entry["sandbox"] = sandbox
+            await self._flush()
+
+    async def task_done(self, task: EvalTask) -> None:
+        async with self._lock:
+            self._active.pop(task.id, None)
+            self._done += 1
+            await self._flush()
+
+    async def finished(self) -> None:
+        async with self._lock:
+            self._active.clear()
+            await self._flush(phase="finished")
+
+    async def _flush(self, phase: str = "running") -> None:
+        await self._db.update_run(
+            progress={
+                "phase": phase if not self._active else "running",
+                "done": self._done,
+                "total": self._total,
+                "active": sorted(self._active.values(), key=lambda e: e["task_id"]),
+                "started_at": self._started_at,
+                "updated_at": _now(),
+            }
+        )
+
+
+def derive_progress(run: dict) -> dict:
+    """The shape the dashboard polls."""
     progress = dict(run.get("progress") or {})
-    done = sum(1 for q in questions if q.get("status") == "done")
-    started_at = progress.get("started_at") or ""
+    started = progress.get("started_at") or run.get("created_at")
     elapsed = None
-    if started_at:
+    if started:
         try:
-            started = datetime.fromisoformat(started_at)
-            elapsed = max(0, int((datetime.now(UTC) - started).total_seconds()))
+            elapsed = max(0, int((datetime.now(UTC) - datetime.fromisoformat(started)).total_seconds()))
         except ValueError:
             elapsed = None
-    phase = progress.get("phase") or ("finished" if run.get("status") in ("completed", "failed") else "preparing")
     return {
-        "run_id": run.get("id", ""),
-        "status": run.get("status", ""),
-        "phase": phase,
-        "state": progress.get("state", ""),
-        "index": progress.get("index"),
-        "total": progress.get("total", len(questions)),
-        "done": done,
-        "question_id": progress.get("question_id", ""),
-        "question_title": progress.get("question_title", ""),
-        "started_at": started_at,
+        "run_id": run["id"],
+        "status": run.get("status"),
+        "phase": progress.get("phase") or ("finished" if run.get("status") in ("completed", "failed") else "preparing"),
+        "done": progress.get("done", 0),
+        "total": progress.get("total", 0),
+        "active": progress.get("active", []),
+        "started_at": started,
         "elapsed_s": elapsed,
-        "updated_at": progress.get("updated_at", ""),
-        "sandbox": progress.get("sandbox"),
+        "updated_at": progress.get("updated_at"),
         "error": run.get("error"),
     }
 
 
-def sandbox_index(org_id: str, limit: int = 25) -> dict[str, dict]:
-    """Map sandbox name -> what it is running, from this org's recent run state.
+# Sandbox attribution (dashboard).
 
-    The sandbox panel needs exact question ids and titles, which pod labels
-    cannot carry (they are sanitized to the Kubernetes label grammar). It is
-    also the ownership proof in local mode, where Docker has no namespaces.
+
+async def sandbox_index(org_id: str, limit: int = 25) -> dict[str, dict]:
+    """sandbox name -> {run_id, task_id, task_title}."""
+    factory = get_session_factory()
+    async with factory() as session:
+        return await evals_store.tasks_with_live_sandboxes(session, org_id=org_id, limit_runs=limit)
+
+
+async def run_exists(org_id: str, run_id: str) -> bool:
+    factory = get_session_factory()
+    async with factory() as session:
+        return await evals_store.run_exists(session, org_id=org_id, run_id=run_id)
+
+
+# Eval repo fetch.
+
+
+_GIT_GLOBAL_CONFIG: str | None = None
+
+
+def _git_global_config() -> str:
+    """Return a GIT_CONFIG_GLOBAL file that sets safe.directory to an asterisk.
+
+    A local repository bind mount can have a different user identifier.
+    Git accepts safe.directory only from global or system configuration.
+    This file permits the local transport to read the bind mount.
     """
-    index: dict[str, dict] = {}
-    try:
-        dirs = sorted(
-            (p for p in eval_root(org_id).iterdir() if (p / "run.json").exists()),
-            key=lambda p: p.name,
-            reverse=True,
-        )[:limit]
-    except OSError:
-        return index
-    for run_dir in dirs:
-        run = read_run(org_id, run_dir.name)
-        if not run:
-            continue
-        run_id = run.get("id", run_dir.name)
-        for entry in run.get("questions") or []:
-            sandbox = entry.get("sandbox") or {}
-            name = str(sandbox.get("name") or "")
-            if name:
-                index[name] = {
-                    "run_id": run_id,
-                    "question_id": entry.get("id", ""),
-                    "question_title": entry.get("title", ""),
-                    "setup_state": "",
-                    "kind": "question",
-                }
-        for entry in run.get("setup") or []:
-            sandbox = entry.get("sandbox") or {}
-            name = str(sandbox.get("name") or "")
-            if name:
-                index[name] = {
-                    "run_id": run_id,
-                    "question_id": "",
-                    "question_title": f"state setup · {entry.get('state', '')}",
-                    "setup_state": entry.get("state", ""),
-                    "kind": "setup",
-                }
-    return index
+    global _GIT_GLOBAL_CONFIG
+    if _GIT_GLOBAL_CONFIG is None:
+        fd, path = tempfile.mkstemp(prefix="sp-eval-gitconfig-")
+        with open(fd, "w", encoding="utf-8") as f:
+            f.write("[safe]\n\tdirectory = *\n")
+        _GIT_GLOBAL_CONFIG = path
+    return _GIT_GLOBAL_CONFIG
 
 
-# ─── Eval set parsing ────────────────────────────────────────────────────────
+async def _git(args: list[str], cwd: str | None = None, timeout: int = 120) -> tuple[int, str]:
+    import os
 
-
-@dataclass
-class EvalQuestion:
-    id: str
-    kind: str
-    gt: str
-    title: str
-    prompt: str
-    why: str = ""
-    state: str = ""
-    doc: str = ""  # markdown writeup from docs/<id>.md
-    checks: list = field(default_factory=list)  # [{name, value, tolerance}]
-    extra: dict = field(default_factory=dict)
-
-
-def _load_checks(repo_dir: Path, qid: str, gt: str) -> list[dict]:
-    """Gold checks for a question.
-
-    golds/<id>.json ({"checks":[{"name","value","tolerance"}]}) wins — it
-    supports multi-value golds (mart-building evals checking row counts, table
-    counts, totals...). Otherwise a numeric gt column becomes a single check.
-    """
-    gold_file = repo_dir / "golds" / f"{qid}.json"
-    if gold_file.exists():
-        try:
-            raw = json.loads(gold_file.read_text(encoding="utf-8"))
-            checks = []
-            for c in raw.get("checks", []):
-                checks.append(
-                    {
-                        "name": str(c.get("name", "value")),
-                        "value": float(c["value"]),
-                        "tolerance": float(c.get("tolerance", 0.15)),
-                    }
-                )
-            if checks:
-                return checks
-        except (ValueError, KeyError, TypeError) as exc:
-            logger.warning("Bad golds/%s.json: %s", qid, exc)
-    try:
-        return [{"name": "answer", "value": float(gt.replace(",", "").replace("$", "")), "tolerance": 0.15}]
-    except (ValueError, AttributeError):
-        return []
-
-
-def _parse_manifest_row(line: str) -> dict | None:
-    """traps.tsv: id, kind, state, gt, [mount_mode], title, why (tab-separated)."""
-    f = [c.strip() for c in line.rstrip("\n").split("\t")]
-    if len(f) < 4 or f[0].startswith("#") or not f[0]:
-        return None
-    row = {"id": f[0], "kind": f[1], "state": f[2], "gt": f[3], "title": "", "why": ""}
-    rest = f[4:]
-    # Optional mount-mode column: a known token in position 4 means title shifts right.
-    if rest and rest[0] in ("stripped", "project", "raw"):
-        rest = rest[1:]
-    if rest:
-        row["title"] = rest[0]
-    if len(rest) > 1:
-        row["why"] = rest[1]
-    return row
-
-
-@dataclass
-class EvalSet:
-    name: str
-    description: str
-    questions: list[EvalQuestion]
-    setup: dict = field(default_factory=dict)  # {image, env_file, timeout_seconds}
-
-
-def _read_rel(repo_dir: Path, rel: str) -> str:
-    """Read a repo-relative file, refusing path escapes."""
-    path = (repo_dir / rel).resolve()
-    if not str(path).startswith(str(repo_dir.resolve())):
-        raise ValueError(f"Path escapes the eval repo: {rel}")
-    return path.read_text(encoding="utf-8", errors="replace")
-
-
-def _load_json_manifest(repo_dir: Path, manifest_path: Path) -> EvalSet:
-    """eval.json index (eval-format.md): the JSON describes, files contain."""
-    try:
-        m = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except ValueError as exc:
-        raise RuntimeError(f"eval.json is not valid JSON: {exc}")
-    defaults = m.get("defaults", {})
-    default_tol = float(defaults.get("tolerance", 0.15))
-    default_state = str(defaults.get("state", "clean"))
-    questions: list[EvalQuestion] = []
-    for entry in m.get("questions", []):
-        qid = str(entry.get("id", "")).strip()
-        if not qid:
-            raise RuntimeError("eval.json: every question needs an id")
-        prompt_rel = entry.get("prompt", f"prompts/{qid}.txt")
-        try:
-            prompt = _read_rel(repo_dir, prompt_rel).strip()
-        except OSError:
-            raise RuntimeError(f"eval.json: question '{qid}' has no prompt file ({prompt_rel})")
-        doc_rel = entry.get("doc", f"docs/{qid}.md")
-        try:
-            doc = _read_rel(repo_dir, doc_rel)
-        except OSError:
-            doc = ""
-        checks = [
-            {
-                "name": str(c.get("name", "answer")),
-                "value": float(c["value"]),
-                "tolerance": float(c.get("tolerance", default_tol)),
-            }
-            for c in entry.get("checks", [])
-        ]
-        if not checks:
-            checks = _load_checks(repo_dir, qid, str(entry.get("gt", "")))
-        gt = str(entry.get("gt", "")) or (str(checks[0]["value"]) if checks else "")
-        questions.append(
-            EvalQuestion(
-                id=qid,
-                kind=str(entry.get("kind", "query")),
-                state=str(entry.get("state", default_state)),
-                gt=gt,
-                title=str(entry.get("title", "")) or qid,
-                why=str(entry.get("why", "")),
-                prompt=prompt,
-                doc=doc,
-                checks=checks,
-            )
-        )
-    return EvalSet(
-        name=str(m.get("name", "")) or repo_dir.name,
-        description=str(m.get("description", "")),
-        questions=questions,
-        setup=m.get("setup", {}) if isinstance(m.get("setup"), dict) else {},
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": _git_global_config()}
+    proc = await asyncio.create_subprocess_exec(
+        "git",
+        *args,
+        cwd=cwd,
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
     )
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except TimeoutError:
+        proc.kill()
+        return 124, "git timed out"
+    return proc.returncode or 0, out.decode(errors="replace")
 
 
-def load_eval_set(repo_dir: Path) -> EvalSet:
-    """Load an eval set: eval.json index preferred, legacy traps.tsv fallback."""
-    json_manifest = repo_dir / "eval.json"
-    if json_manifest.exists():
-        return _load_json_manifest(repo_dir, json_manifest)
-
-    manifest = repo_dir / "traps.tsv"
-    if not manifest.exists():
-        # Also accept evals.tsv for non-trap eval repos
-        manifest = repo_dir / "evals.tsv"
-    if not manifest.exists():
-        raise FileNotFoundError(f"No eval.json or traps.tsv/evals.tsv manifest found in {repo_dir}")
-    questions: list[EvalQuestion] = []
-    for line in manifest.read_text(encoding="utf-8", errors="replace").splitlines():
-        row = _parse_manifest_row(line)
-        if not row:
-            continue
-        prompt_file = repo_dir / "prompts" / f"{row['id']}.txt"
-        if not prompt_file.exists():
-            continue
-        doc_file = repo_dir / "docs" / f"{row['id']}.md"
-        questions.append(
-            EvalQuestion(
-                id=row["id"],
-                kind=row["kind"],
-                state=row["state"],
-                gt=row["gt"],
-                title=row["title"] or row["id"],
-                why=row["why"],
-                prompt=prompt_file.read_text(encoding="utf-8", errors="replace").strip(),
-                doc=doc_file.read_text(encoding="utf-8", errors="replace") if doc_file.exists() else "",
-                checks=_load_checks(repo_dir, row["id"], row["gt"]),
-            )
-        )
-    return EvalSet(name=repo_dir.name, description="", questions=questions)
+class RepoRefused(RuntimeError):
+    """The configured repo is not one this org may acquire. User-facing."""
 
 
-async def fetch_eval_repo(repo_url: str, dest: Path, settings: EvalRunSettings) -> Path:
-    """Clone a public git repo, or use a local path under the mounted projects dir."""
-    if repo_url.startswith(("http://", "https://", "git@")):
-        proc = await asyncio.create_subprocess_exec(
-            "git", "clone", "--depth", "1", repo_url, str(dest),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
-        if proc.returncode != 0:
-            raise RuntimeError(f"git clone failed: {out.decode(errors='replace')[-500:]}")
-        return dest
-    # Local path: must live under the read-only mounted eval projects dir.
-    local = Path(repo_url).resolve()
-    allowed = Path(settings.projects_dir).resolve()
-    if not str(local).startswith(str(allowed)):
-        raise ValueError(f"Local eval paths must be under {settings.projects_dir}")
-    if not local.is_dir():
-        raise FileNotFoundError(f"Eval path not found: {repo_url}")
-    return local
+_GITHUB_PREFIX = "https://github.com/"
 
 
-async def get_eval_set(org_id: str) -> EvalSet:
-    """Load the configured eval set for browsing (UI question breakdown).
+def _assert_repo_allowed(repo_url: str, *, settings: EvalRunSettings, what: str) -> None:
+    """Gate every repo the gateway will fetch on behalf of a run.
 
-    Git repos are shallow-cloned into a cache refreshed at most every 5 minutes;
-    local paths are read directly.
+    The operator configuration and the evaluation manifest provide repository URLs.
+    An unvalidated URL can read gateway files or access an unauthorized host.
+    Cloud mode permits only a GitHub HTTPS URL linked to the organization installation.
+    Self-hosted mode also permits local paths inside projects_dir.
     """
-    cfg = load_eval_config(org_id)
-    repo_url = cfg.get("repo_url", "")
+    from ..runtime.mode import is_cloud_mode
+
+    url = (repo_url or "").strip()
+    if not url:
+        raise RepoRefused(f"{what}: no repository configured")
+    if url.startswith(_GITHUB_PREFIX):
+        return
+    if is_cloud_mode():
+        raise RepoRefused(f"{what}: only https://github.com/ repositories are allowed — refused {url[:120]!r}")
+    if url.startswith(("http://", "https://", "git@", "ssh://", "git://", "file://")):
+        raise RepoRefused(
+            f"{what}: only https://github.com/ repositories or local paths under "
+            f"{settings.projects_dir} are allowed — refused {url[:120]!r}"
+        )
+    root = Path(settings.projects_dir).resolve()
+    try:
+        resolved = Path(url).resolve()
+    except OSError as exc:
+        raise RepoRefused(f"{what}: unreadable path {url[:120]!r} ({exc})") from exc
+    if not (resolved == root or root in resolved.parents):
+        raise RepoRefused(f"{what}: local paths must live under {settings.projects_dir} — refused {url[:120]!r}")
+
+
+async def _authed_clone_url(org_id: str, repo_url: str) -> str:
+    """Swap in a short-lived installation token for a private GitHub repo.
+
+    The resolver rejects a repository that belongs to another organization.
+    The credentialed URL remains in the gateway. Containers receive a tarball.
+    """
+    if not repo_url.startswith(_GITHUB_PREFIX):
+        return repo_url
+    full_name = repo_url.removeprefix(_GITHUB_PREFIX).removesuffix(".git").strip("/")
+    from ..store import github as gh_store
+
+    factory = get_session_factory()
+    async with factory() as session:
+        token = await gh_store.get_org_token_for_repo(session, org_id=org_id, repo_full_name=full_name)
+    if token:
+        return f"https://x-access-token:{token}@github.com/{full_name}.git"
+    # Public repositories can clone without GitHub App authorization.
+    logger.info("No GitHub App authorization for repository %s. Cloning anonymously.", full_name)
+    return repo_url
+
+
+async def fetch_eval_repo(org_id: str, repo_url: str, dest: Path, settings: EvalRunSettings) -> str:
+    """Clone (or resolve) the eval set into dest. Returns the git ref."""
+    _assert_repo_allowed(repo_url, settings=settings, what="eval repo")
+    if repo_url.startswith(("http://", "https://", "git@")):
+        url = await _authed_clone_url(org_id, repo_url)
+        code, out = await _git(["clone", "--depth", "1", url, str(dest)])
+        if code != 0:
+            # Do not include `url` in output because it can contain a token.
+            raise RuntimeError(f"could not clone eval repo {repo_url}: {out[-400:]}")
+        code, out = await _git(["rev-parse", "HEAD"], cwd=str(dest))
+        return out.strip()[:40] if code == 0 else ""
+    src = Path(repo_url)
+    projects_root = Path(settings.projects_dir).resolve()
+    resolved = src.resolve()
+    if resolved != projects_root and projects_root not in resolved.parents:
+        raise ValueError(f"local eval paths must live under {settings.projects_dir}")
+    if not src.is_dir():
+        raise FileNotFoundError(f"eval repo not found: {repo_url}")
+    shutil.copytree(src, dest, dirs_exist_ok=True)
+    digest = hashlib.sha256()
+    for p in sorted(src.rglob("*")):
+        if p.is_file():
+            digest.update(p.relative_to(src).as_posix().encode())
+            digest.update(p.read_bytes())
+    return f"local-{digest.hexdigest()[:16]}"
+
+
+# Refresh the GET /api/evals/tasks repository cache at most every five minutes.
+_REPO_CACHE_SECONDS = 300
+
+
+async def get_eval_set(org_id: str, cfg: dict, settings: EvalRunSettings) -> EvalSet:
+    repo_url = str(cfg.get("repo_url", "") or "")
     if not repo_url:
-        raise ValueError("No eval repo configured")
-    settings = get_eval_run_settings()
-    if repo_url.startswith(("http://", "https://", "git@")):
-        cache = eval_root(org_id) / ".repo-cache"
-        marker = cache / ".sp-cache-meta"
-        stale = True
+        raise FileNotFoundError("no eval repo configured")
+    cache_root = Path(tempfile.gettempdir()) / "sp-eval-cache"
+    slug = hashlib.sha256(f"{org_id}\x00{repo_url}".encode()).hexdigest()[:16]
+    dest = cache_root / slug
+    meta = dest / ".sp-cache-meta"
+    fresh = False
+    ref = ""
+    is_git = repo_url.startswith(("http://", "https://", "git@"))
+    if not is_git:
+        # Local paths can change without a new reference. Do not cache their manifests.
+        meta.unlink(missing_ok=True)
+    if meta.is_file():
         try:
-            meta = json.loads(marker.read_text(encoding="utf-8"))
-            stale = meta.get("url") != repo_url or time.time() - meta.get("at", 0) > 300
-        except (OSError, ValueError):
-            pass
-        if stale:
-            shutil.rmtree(cache, ignore_errors=True)
-            await fetch_eval_repo(repo_url, cache, settings)
-            marker.write_text(json.dumps({"url": repo_url, "at": time.time()}), encoding="utf-8")
-        return load_eval_set(cache)
-    repo_dir = await fetch_eval_repo(repo_url, eval_root(org_id) / ".unused", settings)
-    return load_eval_set(repo_dir)
-
-
-# ─── Grading ─────────────────────────────────────────────────────────────────
-
-_NUM_RE = re.compile(r"[-+]?\$?\d[\d,]*\.?\d*\s*(?:billion|million|thousand|[bmk])?", re.IGNORECASE)
-_SUFFIX = {"b": 1e9, "billion": 1e9, "m": 1e6, "million": 1e6, "k": 1e3, "thousand": 1e3}
-
-
-def _extract_numbers(text: str) -> list[float]:
-    nums: list[float] = []
-    for m in _NUM_RE.finditer(text):
-        raw = m.group(0).lower().replace("$", "").replace(",", "").strip()
-        mult = 1.0
-        for suffix, factor in _SUFFIX.items():
-            if raw.endswith(suffix):
-                raw = raw[: -len(suffix)].strip()
-                mult = factor
-                break
-        try:
-            nums.append(float(raw) * mult)
+            cached = json.loads(meta.read_text())
+            fresh = cached.get("url") == repo_url and time.time() - cached.get("at", 0) < _REPO_CACHE_SECONDS
+            ref = str(cached.get("ref", ""))
         except ValueError:
-            continue
-    return nums
+            fresh = False
+    if not fresh:
+        shutil.rmtree(dest, ignore_errors=True)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        ref = await fetch_eval_repo(org_id, repo_url, dest, settings)
+        meta.write_text(json.dumps({"url": repo_url, "at": time.time(), "ref": ref}))
+    eval_set = load_eval_set(dest)
+    eval_set.ref = ref
+    return eval_set
 
 
-def _check_passes(check: dict, numbers: list[float]) -> bool:
-    target = check["value"]
-    tol = check.get("tolerance", 0.15)
-    for n in numbers:
-        if target == 0:
-            if abs(n) < 1e-9:
-                return True
-        elif abs(n - target) / abs(target) <= tol:
-            return True
-    return False
+# Build fingerprint.
 
 
-def grade_checks(checks: list[dict], answer: str) -> tuple[str, list[dict]]:
-    """Grade the answer against gold checks.
+async def compute_build_fingerprint(dsn: str) -> str:
+    """Return a SHA-256 digest of the build schema and row counts.
 
-    Returns (verdict, per-check results). Verdict:
-      CORRECT  — every check found within tolerance
-      PARTIAL  — some checks pass (multi-check golds, e.g. mart builds)
-      OFF      — numbers present, none within tolerance
-      UNKNOWN  — no numbers in the answer
-      UNGRADED — question has no numeric gold
+    Row counts do not detect column type changes, renames, or table replacements.
+    The digest includes each column name, type, nullability, ordinal, and exact row count.
+    A declared manifest fingerprint must match this digest.
     """
-    if not checks:
-        return "UNGRADED", []
-    numbers = _extract_numbers(answer)
-    results = [
-        {
-            "name": c["name"],
-            "value": c["value"],
-            "tolerance": c.get("tolerance", 0.15),
-            "passed": _check_passes(c, numbers),
-        }
-        for c in checks
-    ]
-    if not numbers:
-        return "UNKNOWN", results
-    passed = sum(1 for r in results if r["passed"])
-    if passed == len(results):
-        return "CORRECT", results
-    if passed > 0:
-        return "PARTIAL", results
-    return "OFF", results
+    import asyncpg
+
+    conn = await asyncpg.connect(dsn=dsn, timeout=30)
+    try:
+        tables = await conn.fetch(
+            "SELECT table_schema, table_name FROM information_schema.tables "
+            "WHERE table_type = 'BASE TABLE' AND table_schema NOT IN "
+            "('pg_catalog', 'information_schema') ORDER BY 1, 2"
+        )
+        digest = hashlib.sha256()
+        digest.update(b"sp-eval-fingerprint-v2\n")
+        for t in tables:
+            schema, name = t["table_schema"], t["table_name"]
+            cols = await conn.fetch(
+                "SELECT column_name, data_type, is_nullable, ordinal_position "
+                "FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 "
+                "ORDER BY ordinal_position",
+                schema,
+                name,
+            )
+            count = await conn.fetchval(f'SELECT count(*) FROM "{schema}"."{name}"')
+            digest.update(f"{schema}.{name}:{count}\n".encode())
+            for c in cols:
+                digest.update(
+                    f"  {c['ordinal_position']}:{c['column_name']}:{c['data_type']}:{c['is_nullable']}\n".encode()
+                )
+        return f"fp-{digest.hexdigest()[:32]}"
+    finally:
+        await conn.close()
 
 
-# ─── Question containers ─────────────────────────────────────────────────────
+# Containers.
 
-# The container writes the MCP config from env (base64 — immune to any shell
-# quoting), pre-approves project MCP servers (claude 2.x gates them behind an
-# interactive approval otherwise), then runs one claude -p turn.
+# The container writes the base64-encoded MCP configuration from the environment.
+# It approves project MCP servers before it runs one Claude command.
+# A presigned URL sends the dbt project tarball through the secret channel.
+# The pod does not receive a Git credential.
 _RUNNER_SCRIPT = (
+    '{ [ -n "$SP_PROJECT_TARBALL_URL" ] && curl -fsSL "$SP_PROJECT_TARBALL_URL" '
+    "| tar xz -C /work; true; } && "
     "mkdir -p /work/.claude && cd /work && "
     'echo "$SP_MCP_JSON_B64" | base64 -d > /work/.mcp.json && '
     "printf '{\"enableAllProjectMcpServers\": true}' > /work/.claude/settings.local.json && "
+    # Project context, when the eval set ships a CLAUDE.md. Written after the
+    # tarball unpack so the eval set's instructions win over the project's.
+    '{ [ -n "$SP_CLAUDE_MD_B64" ] && echo "$SP_CLAUDE_MD_B64" | base64 -d > /work/CLAUDE.md; true; } && '
     'claude -p "$SP_PROMPT" --mcp-config /work/.mcp.json --strict-mcp-config '
     '--output-format stream-json --verbose --model "$SP_MODEL" --dangerously-skip-permissions'
 )
 
 
-def _question_spec(
+def _task_spec(
     settings: EvalRunSettings,
     *,
     prompt: str,
     model: str,
     mcp_json: str,
     labels: dict[str, str],
+    claude_md: str = "",
+    project_tarball_url: str = "",
+    warehouse_dsn: str = "",
 ) -> ContainerRun:
-    """Describe one eval-question container."""
-    import base64
-
-    # The MCP config carries the per-run API key header, so it is a credential
-    # and rides the secret channel alongside the Anthropic tokens.
-    secret_env = {"SP_MCP_JSON_B64": base64.b64encode(mcp_json.encode()).decode()}
+    """One agent container for one task."""
+    # Add operator variables before gateway-controlled variables.
+    # SP_MCP_JSON_B64 contains the run key and connection pin.
+    # An operator variable must not override this value.
+    secret_env = dict(settings.project_env)
+    secret_env["SP_MCP_JSON_B64"] = base64.b64encode(mcp_json.encode()).decode()
     if settings.claude_token:
         secret_env["CLAUDE_CODE_OAUTH_TOKEN"] = settings.claude_token
     if settings.anthropic_key:
         secret_env["ANTHROPIC_API_KEY"] = settings.anthropic_key
+    if project_tarball_url:
+        secret_env["SP_PROJECT_TARBALL_URL"] = project_tarball_url
+    if warehouse_dsn:
+        # A write task receives the DSN for its disposable branch.
+        # A read task accesses the warehouse only through MCP.
+        secret_env["SP_WAREHOUSE_DSN"] = warehouse_dsn
+
+    env = {"SP_PROMPT": prompt, "SP_MODEL": model}
+    if claude_md.strip():
+        env["SP_CLAUDE_MD_B64"] = base64.b64encode(claude_md.encode()).decode()
 
     return ContainerRun(
         image=settings.runner_image,
         command=["sh", "-lc", _RUNNER_SCRIPT],
-        env={"SP_PROMPT": prompt, "SP_MODEL": model},
+        env=env,
         secret_env=secret_env,
         labels=labels,
         memory_bytes=2 * 1024 * 1024 * 1024,
         nano_cpus=2_000_000_000,
         timeout_seconds=settings.timeout_seconds,
+    )
+
+
+def _script_spec(
+    settings: EvalRunSettings,
+    *,
+    eval_set: EvalSet,
+    repo_dir: Path,
+    repo_url: str,
+    script_rel: str,
+    task: EvalTask,
+    phase: str,
+    run_id: str,
+    warehouse_dsn: str,
+) -> ContainerRun:
+    """One setup/teardown script container, run against the task's branch."""
+    image = settings.setup_image or settings.runner_image
+    runner_cmd = f'sh "/repo/{script_rel}" "{task.id}"'
+    if script_rel.endswith(".py"):
+        runner_cmd = f'python3 "/repo/{script_rel}" "{task.id}"'
+
+    binds: list[str] = []
+    if repo_url.startswith(("http://", "https://", "git@")):
+        cmd = f'git clone --depth 1 "$SP_EVAL_REPO_URL" /repo && cd /repo && {runner_cmd}'
+    else:
+        if not settings.projects_host_dir:
+            raise RuntimeError("SP_EVAL_PROJECTS_HOST_DIR is not set — required to mount local eval repos")
+        rel = str(Path(repo_url).resolve()).replace(str(Path(settings.projects_dir).resolve()), "", 1).lstrip("/\\")
+        host_repo = f"{settings.projects_host_dir.rstrip('/')}/{rel}".replace("\\", "/")
+        binds.append(f"{host_repo}:/repo:ro")
+        cmd = f"cd /repo && {runner_cmd}"
+
+    secret_env: dict[str, str] = {}
+    env_file = str(eval_set.setup.get("env_file", "") or "")
+    if env_file:
+        # The manifest controls env_file and the setup code that receives its values.
+        # Use the confined reader to prevent access to files outside the repository.
+        try:
+            from .manifest import read_confined
+
+            for line in read_confined(repo_dir, env_file).splitlines():
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    secret_env[k] = v
+        except (ManifestError, OSError) as exc:
+            raise RuntimeError(f"setup.env_file {env_file!r} is not readable: {exc}") from exc
+    secret_env["SP_WAREHOUSE_DSN"] = warehouse_dsn
+
+    return ContainerRun(
+        image=image,
+        command=["sh", "-lc", cmd],
+        env={"SP_EVAL_TASK": task.id, "SP_EVAL_PHASE": phase, "SP_EVAL_REPO_URL": repo_url, "HOME": _CONTAINER_HOME},
+        secret_env=secret_env,
+        labels={"run": run_id, "task": task.id, "phase": phase},
+        memory_bytes=4 * 1024 * 1024 * 1024,
+        nano_cpus=4_000_000_000,
+        timeout_seconds=int(eval_set.setup.get("timeout_seconds", settings.setup_timeout_seconds)),
+        binds=binds,
     )
 
 
@@ -568,132 +546,74 @@ def _extract_result_text(logs: str) -> str:
                     return obj["result"]
             except ValueError:
                 continue
-    return logs[-3000:]  # fallback: tail of raw output
+    return logs[-3000:]
 
 
-# ─── Setup-state containers ──────────────────────────────────────────────────
+# Project tarball (spec §3.2).
 
 
-def _sanitize_state(state: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9_-]", "-", state) or "default"
-
-
-def _setup_script_for(repo_dir: Path, eval_set: EvalSet, state: str) -> str | None:
-    """Repo-relative setup script for a state: explicit manifest map, then the
-    states/<sanitized>/setup.(sh|py) convention."""
-    explicit = (eval_set.setup.get("states") or {}).get(state)
-    if explicit:
-        return str(explicit)
-    for candidate in (f"states/{_sanitize_state(state)}/setup.sh", f"states/{_sanitize_state(state)}/setup.py"):
-        if (repo_dir / candidate).exists():
-            return candidate
-    return None
-
-
-def _parse_env_file(repo_dir: Path, rel: str) -> list[str]:
-    out: list[str] = []
-    try:
-        for line in _read_rel(repo_dir, rel).splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                out.append(line)
-    except (OSError, ValueError):
-        pass
-    return out
-
-
-def _setup_spec(
-    settings: EvalRunSettings,
-    *,
-    eval_set: EvalSet,
-    repo_dir: Path,
-    repo_url: str,
-    script_rel: str,
-    state: str,
+async def _ship_project_tarball(
+    org_id: str,
     run_id: str,
-) -> ContainerRun:
-    """Describe one state-setup container.
+    project_repo: str,
+    obj: EvalObjectStore,
+) -> tuple[str, str, list[dict]]:
+    """Clone the dbt project gateway-side, strip .git, upload as tgz, presign.
 
-    The eval repo lands at /repo: bind-mounted read-only for local-path repos
-    (host path via SP_EVAL_PROJECTS_HOST_DIR), cloned inside the container for
-    git repos. Manifest setup.mounts bind extra host dirs (external dbt trees)
-    under /mnt/<name>, resolved against SP_EVAL_SETUP_HOST_ROOT. Bind mounts are
-    a local-mode affordance — the Kubernetes backend refuses a spec that needs
-    them rather than running the setup script against the wrong tree.
+    Return the presigned URL, project reference, and model list.
+    The pod receives the time-limited presigned URL instead of a Git credential.
+    Enumerate models before the function deletes the checkout.
     """
-    image = eval_set.setup.get("image") or settings.runner_image
-    runner_cmd = f'sh "/repo/{script_rel}" "{state}"'
-    if script_rel.endswith(".py"):
-        runner_cmd = f'python3 "/repo/{script_rel}" "{state}"'
+    from .coverage import enumerate_models
 
-    binds: list[str] = []
-    if repo_url.startswith(("http://", "https://", "git@")):
-        cmd = f'git clone --depth 1 "$SP_EVAL_REPO_URL" /repo && cd /repo && {runner_cmd}'
-    else:
-        if not settings.projects_host_dir:
-            raise RuntimeError("SP_EVAL_PROJECTS_HOST_DIR is not set — required to mount local eval repos into setup containers")
-        rel = str(Path(repo_url).resolve()).replace(str(Path(settings.projects_dir).resolve()), "", 1).lstrip("/\\")
-        host_repo = f"{settings.projects_host_dir.rstrip('/\\')}/{rel}".replace("\\", "/")
-        binds.append(f"{host_repo}:/repo:ro")
-        cmd = f"cd /repo && {runner_cmd}"
+    # Apply the repository access check to the project repository from the manifest.
+    _assert_repo_allowed(project_repo, settings=get_eval_run_settings(), what="dbt project repo")
 
-    for mount in eval_set.setup.get("mounts") or []:
-        entry = {"path": mount, "rw": False} if isinstance(mount, str) else dict(mount)
-        rel_path = str(entry.get("path", "")).strip().strip("/\\")
-        if not rel_path or ".." in rel_path:
-            raise RuntimeError(f"Invalid setup mount path: {mount!r}")
-        if not settings.setup_host_root:
-            raise RuntimeError("SP_EVAL_SETUP_HOST_ROOT is not set — required for setup.mounts")
-        host_src = f"{settings.setup_host_root.rstrip('/\\')}/{rel_path}".replace("\\", "/")
-        mode = "rw" if entry.get("rw") else "ro"
-        binds.append(f"{host_src}:/mnt/{Path(rel_path).name}:{mode}")
-
-    # env_file typically carries warehouse credentials, so it takes the secret
-    # channel; only the run's own coordinates are plain env.
-    secret_env = dict(
-        pair.split("=", 1)
-        for pair in _parse_env_file(repo_dir, str(eval_set.setup.get("env_file", "")))
-    )
-
-    return ContainerRun(
-        image=image,
-        command=["sh", "-lc", cmd],
-        env={"SP_EVAL_STATE": state, "SP_EVAL_REPO_URL": repo_url, "HOME": "/tmp"},
-        secret_env=secret_env,
-        labels={"setup": state, "run": run_id},
-        memory_bytes=4 * 1024 * 1024 * 1024,
-        nano_cpus=4_000_000_000,
-        timeout_seconds=int(eval_set.setup.get("timeout_seconds", settings.setup_timeout_seconds)),
-        binds=binds,
-        # Setup scripts talk to the warehouse directly (unlike question
-        # containers, which go through gateway MCP) — join its network too.
-        extra_network=str(eval_set.setup.get("network", "")).strip(),
-    )
+    with tempfile.TemporaryDirectory(prefix="sp-eval-proj-") as tmp:
+        dest = Path(tmp) / "proj"
+        url = await _authed_clone_url(org_id, project_repo)
+        code, out = await _git(["clone", "--depth", "1", url, str(dest)], timeout=300)
+        if code != 0:
+            raise RuntimeError(f"could not clone dbt project {project_repo}: {out[-400:]}")
+        code, ref_out = await _git(["rev-parse", "HEAD"], cwd=str(dest))
+        project_ref = ref_out.strip()[:40] if code == 0 else ""
+        models = enumerate_models(dest)
+        # Remove Git history because the agent requires only the project files.
+        shutil.rmtree(dest / ".git", ignore_errors=True)
+        tar_path = Path(tmp) / "project.tgz"
+        with tarfile.open(tar_path, "w:gz") as tar:
+            for p in sorted(dest.rglob("*")):
+                tar.add(p, arcname=str(p.relative_to(dest)))
+        key = obj.project_tarball_key(org_id, run_id)
+        await obj.upload_file(key, str(tar_path), "application/gzip")
+    # Short-lived: long enough for every task to start, not for the URL to be
+    # a durable handle on the customer's source.
+    url = await obj.presign_get(key, expires_s=3600)
+    return url, project_ref, models
 
 
-# ─── Run orchestration ───────────────────────────────────────────────────────
+async def _drop_project_tarball(org_id: str, run_id: str, obj: EvalObjectStore) -> None:
+    """Delete the transport tarball once every task has fetched it.
+
+    The tarball contains the customer's complete dbt project.
+    Delete it before retention and export can include the source files.
+    """
+    try:
+        await obj.delete_prefix(obj.project_tarball_key(org_id, run_id))
+    except Exception:
+        logger.exception("could not delete project tarball for run %s", run_id)
 
 
-def create_run(org_id: str, *, doc_ids: list[str], doc_titles: list[str], question_ids: list[str] | None) -> dict:
-    run_id = f"run-{datetime.now(UTC):%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}"
-    cfg = load_eval_config(org_id)
-    run = {
-        "id": run_id,
-        "status": "preparing",
-        "created_at": datetime.now(UTC).isoformat(),
-        "doc_ids": doc_ids,
-        "doc_titles": doc_titles,
-        "question_ids": question_ids,
-        "repo_url": cfg.get("repo_url", ""),
-        "model": cfg.get("model", "sonnet"),
-        "summary": {},
-        "questions": [],
-        "error": None,
-    }
-    _run_dir(org_id, run_id).mkdir(parents=True, exist_ok=True)
-    (_run_dir(org_id, run_id) / "questions").mkdir(exist_ok=True)
-    _write_run(org_id, run)
-    return run
+# Run lifecycle.
+
+
+# A run refreshes its lease during this interval.
+# Recovery and the reaper classify an expired lease as an inactive run.
+LEASE_TTL_S = 180.0
+_LEASE_REFRESH_S = 45.0
+# Per-task credentials outlive the task only by the slack a slow container
+# needs to finish its last MCP call.
+TASK_KEY_TTL_S = 3 * 3600
 
 
 async def execute_run(
@@ -702,251 +622,666 @@ async def execute_run(
     api_key: str | None = None,
     api_key_id: str | None = None,
 ) -> None:
-    """Background task: fetch eval set, run each question, grade."""
+    """Background task: fetch, fan out tasks, grade, finalize.
+
+    api_key/api_key_id are the run-level credential minted by the caller; each
+    task additionally gets its own bound, expiring key (see _task_credential).
+    """
+    db = RunDB(org_id, run_id)
+    stop_lease = asyncio.Event()
+
+    async def lease_loop() -> None:
+        while not stop_lease.is_set():
+            try:
+                await db.renew_lease(LEASE_TTL_S)
+            except Exception:
+                logger.warning("could not renew lease for run %s", run_id)
+            try:
+                await asyncio.wait_for(stop_lease.wait(), timeout=_LEASE_REFRESH_S)
+            except TimeoutError:
+                continue
+
+    await db.renew_lease(LEASE_TTL_S)
+    lease_task = asyncio.create_task(lease_loop())
     try:
         await _execute_run_inner(org_id, run_id, api_key)
+    except Exception as exc:  # last-resort: the run row must never stay "running"
+        logger.exception("eval run %s crashed", run_id)
+        try:
+            await db.update_run(status="failed", error=str(exc)[:500], finished_at=_now())
+        except Exception:
+            logger.exception("could not mark run %s failed", run_id)
     finally:
-        if api_key_id:
-            await _revoke_run_key(api_key_id, org_id)
+        stop_lease.set()
+        lease_task.cancel()
+        try:
+            await lease_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        await revoke_run_keys(org_id, run_id, api_key_id)
+        try:
+            await db.update_run(lease_expires_at=None)
+        except Exception:
+            logger.warning("could not clear lease for run %s", run_id)
 
 
-async def _revoke_run_key(key_id: str, org_id: str) -> None:
-    """Delete the per-run MCP API key minted by start_eval_run."""
+async def revoke_run_keys(org_id: str, run_id: str, api_key_id: str | None = None) -> None:
+    """Delete the run key and each task key.
+
+    Run cleanup and recovery both call this function.
+    """
+    from sqlalchemy import delete as sa_delete
+
+    from ..db.models import GatewayApiKey
+
     try:
-        from ..db.engine import get_session_factory
-        from ..store import Store
+        factory = get_session_factory()
+        async with factory() as session:
+            await session.execute(
+                sa_delete(GatewayApiKey).where(GatewayApiKey.org_id == org_id, GatewayApiKey.eval_run_id == run_id)
+            )
+            if api_key_id:
+                await session.execute(
+                    sa_delete(GatewayApiKey).where(GatewayApiKey.org_id == org_id, GatewayApiKey.id == api_key_id)
+                )
+            await session.commit()
+    except Exception:
+        logger.exception("Failed to revoke eval keys for run %s", run_id)
 
+
+async def _task_credential(ctx: TaskContext, task: EvalTask, connection: str) -> tuple[str, str]:
+    """Create the key for a task container.
+
+    The server binds the key to the run, task, connection, and document overlay.
+    The key expires and grants access only to the assigned task resources.
+    """
+    from datetime import timedelta
+
+    factory = get_session_factory()
+    async with factory() as session:
+        # The run executes without a human request principal.
+        # Attribute the key to the evaluation harness.
+        store = Store(session, org_id=ctx.org_id, user_id="eval-runner")
+        record, raw = await store.create_api_key(
+            f"eval-{ctx.run_id}-{task.id}"[:100],
+            ["read", "query"],
+            expires_at=(datetime.now(UTC) + timedelta(seconds=TASK_KEY_TTL_S)).isoformat(),
+            eval_binding={
+                "run_id": ctx.run_id,
+                "task_id": task.id,
+                "connection": connection,
+                "doc_ids": list(ctx.doc_ids or []),
+            },
+        )
+        await session.commit()
+    return record.id, raw
+
+
+async def _revoke_key(org_id: str, key_id: str) -> None:
+    try:
         factory = get_session_factory()
         async with factory() as session:
             store = Store(session, org_id=org_id)
             await store.delete_api_key(key_id)
             await session.commit()
     except Exception:
-        logger.exception("Failed to revoke eval run API key %s", key_id)
+        logger.exception("Failed to revoke eval task key %s", key_id)
 
 
-async def _execute_run_inner(org_id: str, run_id: str, api_key: str | None = None) -> None:
+async def _execute_run_inner(org_id: str, run_id: str, api_key: str | None) -> None:
     settings = get_eval_run_settings()
-    run = read_run(org_id, run_id)
+    db = RunDB(org_id, run_id)
+    run = await db.get_run()
+    if not run:
+        return None
+
+    async def fail(msg: str) -> None:
+        await db.update_run(status="failed", error=msg, finished_at=_now())
+
+    session, store = await db.store()
+    try:
+        cfg = await store.get_eval_config()
+        kb_docs = await store.list_knowledge_docs(status="active", limit=500)
+        kb_doc_ids = [d.id for d in kb_docs]
+    finally:
+        await session.close()
+
+    if not settings.s3_bucket:
+        return await fail("SP_EVAL_S3_BUCKET is not set — the harness has nowhere durable for evidence")
+    obj = get_object_store()
+
+    # 1. Eval set
+    repo_dir = Path(tempfile.mkdtemp(prefix=f"sp-eval-{run_id}-"))
+    try:
+        try:
+            shutil.rmtree(repo_dir, ignore_errors=True)
+            eval_ref = await fetch_eval_repo(org_id, run["repo_url"], repo_dir, settings)
+            eval_set = load_eval_set(repo_dir)
+            eval_set.ref = eval_ref
+        except (ManifestError, RuntimeError, ValueError, FileNotFoundError) as exc:
+            return await fail(str(exc)[:500])
+
+        tasks = eval_set.tasks
+        task_filter = run.get("task_filter")
+        if task_filter:
+            wanted = set(task_filter)
+            tasks = [t for t in tasks if t.id in wanted]
+        max_tasks = int(cfg.get("max_tasks", 0) or 0)
+        if max_tasks > 0:
+            tasks = tasks[:max_tasks]
+        if not tasks:
+            return await fail("no tasks selected — check the manifest and the task filter")
+
+        needs_branches = any(t.task_class == "write" for t in tasks)
+
+        # 2. Branch provider + build fingerprint
+        provider: BranchProvider | None = None
+        parent_dsn = ""
+        parent_size: int | None = None
+        session, store = await db.store()
+        try:
+            try:
+                provider = await resolve_branch_provider(store, cfg, settings)
+            except ProvisioningError as exc:
+                if needs_branches:
+                    return await fail(str(exc))
+                provider = None
+        finally:
+            await session.close()
+
+        fingerprint = ""
+        if provider is not None:
+            try:
+                parent_dsn = await provider.parent_dsn()
+                fingerprint = await compute_build_fingerprint(parent_dsn)
+                parent_size = await provider.database_size_bytes(parent_dsn.rsplit("/", 1)[-1].split("?")[0])
+            except Exception as exc:
+                if needs_branches:
+                    return await fail(f"could not reach the build branch: {str(exc)[:300]}")
+
+        if eval_set.build_fingerprint and fingerprint and eval_set.build_fingerprint != fingerprint:
+            return await fail(
+                f"warehouse does not match the eval set's build fingerprint "
+                f"(expected {eval_set.build_fingerprint}, found {fingerprint}) — "
+                "rebuild the warehouse or update the eval set. Running anyway would "
+                "grade against golds computed for a different build."
+            )
+
+        # 3. dbt project tarball
+        project_tarball_url = ""
+        project_ref = ""
+        project_models: list[dict] = []
+        if eval_set.project_repo:
+            try:
+                project_tarball_url, project_ref, project_models = await _ship_project_tarball(
+                    org_id, run_id, eval_set.project_repo, obj
+                )
+            except RuntimeError as exc:
+                return await fail(str(exc)[:500])
+
+        # 4. Persist run coordinates + seed task rows
+        await db.update_run(
+            status="running",
+            eval_set_name=eval_set.name,
+            eval_set_ref=eval_set.ref,
+            project_repo=eval_set.project_repo,
+            project_ref=project_ref,
+            build_fingerprint=fingerprint,
+            kb_doc_ids=kb_doc_ids,
+        )
+        await db.seed_tasks(
+            [
+                {
+                    "task_id": t.id,
+                    "title": t.title,
+                    "kind": t.kind,
+                    "task_class": t.task_class,
+                    "gt": t.gt,
+                    "checks": t.checks,
+                    "grade": t.grade,
+                    "covers": t.covers,
+                    "builds": t.builds,
+                    "capture_spec": t.capture,
+                }
+                for t in tasks
+            ]
+        )
+
+        claude_md = read_claude_md(repo_dir)
+        preamble = str(cfg.get("prompt_preamble", "") or "")
+        board = ProgressBoard(db, total=len(tasks))
+        backend = get_execution_backend(settings, org_id=org_id)
+        artifact_budget = ArtifactBudget(settings.artifact_bytes_per_run)
+
+        ctx = TaskContext(
+            org_id=org_id,
+            run_id=run_id,
+            settings=settings,
+            cfg=cfg,
+            db=db,
+            obj=obj,
+            board=board,
+            backend=backend,
+            eval_set=eval_set,
+            repo_dir=repo_dir,
+            claude_md=claude_md,
+            preamble=preamble,
+            api_key=api_key,
+            doc_ids=list(run.get("doc_ids") or []),
+            provider=provider,
+            parent_size=parent_size,
+            project_tarball_url=project_tarball_url,
+            project_models=project_models,
+            artifact_budget=artifact_budget,
+            fork_lock=asyncio.Lock(),
+        )
+
+        # Run tasks concurrently. This limit controls capacity and model cost.
+        semaphore = asyncio.Semaphore(max(1, settings.max_parallel_tasks))
+
+        async def bounded(task: EvalTask) -> None:
+            async with semaphore:
+                await _run_task(ctx, task)
+
+        try:
+            await asyncio.gather(*(bounded(t) for t in tasks))
+        finally:
+            await backend.aclose()
+            if provider is not None:
+                await provider.aclose()
+            # The tarball contains the customer's complete dbt project.
+            # Delete it after pod delivery so retention and export cannot include it.
+            if project_tarball_url:
+                await _drop_project_tarball(org_id, run_id, obj)
+
+        # 6. Finalize
+        ctx.executed_task_ids = {t.id for t in tasks}
+        await board.finished()
+        await _finalize_run(ctx)
+    finally:
+        shutil.rmtree(repo_dir, ignore_errors=True)
+
+
+class ArtifactBudget:
+    """Per-run artifact byte budget (spec §3.4c), shared across tasks."""
+
+    def __init__(self, total: int) -> None:
+        self._remaining = total
+        self._lock = asyncio.Lock()
+        self.spent = 0
+
+    async def take(self, n: int) -> bool:
+        async with self._lock:
+            if n > self._remaining:
+                return False
+            self._remaining -= n
+            self.spent += n
+            return True
+
+    @property
+    def remaining(self) -> int:
+        return self._remaining
+
+
+class TaskContext:
+    """Everything a task needs, bundled so _run_task stays readable."""
+
+    def __init__(self, **kw: Any) -> None:
+        self.__dict__.update(kw)
+
+
+def _mcp_json(ctx: TaskContext, task: EvalTask, task_key: str) -> str:
+    """MCP config for one task.
+
+    Send only the key to the task.
+    The server stores the pin, document overlay, run attribution, and task attribution.
+    Request headers cannot define these boundaries because the agent controls them.
+    """
+    headers = {}
+    if task_key:
+        headers["X-API-Key"] = task_key
+    return json.dumps(
+        {
+            "mcpServers": {
+                "signalpilot": {
+                    "type": "http",
+                    "url": ctx.settings.mcp_url,
+                    "headers": headers,
+                }
+            }
+        }
+    )
+
+
+async def _pg_query(dsn: str):
+    """A QueryFn over asyncpg for model_rebuilt grading."""
+    import asyncpg
+
+    conn = await asyncpg.connect(dsn=dsn, timeout=30)
+
+    async def query(sql: str) -> list[tuple]:
+        rows = await conn.fetch(sql)
+        return [tuple(r) for r in rows]
+
+    return conn, query
+
+
+async def _run_agent(ctx: TaskContext, task: EvalTask, connection: str, warehouse_dsn: str) -> tuple[int, str, str]:
+    """Launch the agent container; returns (exit_code, transcript, answer).
+
+    Create a bound credential that expires for this task.
+    Revoke the credential when the container exits.
+    """
+    key_id, raw_key = await _task_credential(ctx, task, connection)
+    try:
+        prompt = f"{ctx.preamble}\n\n{task.prompt}" if ctx.preamble else task.prompt
+        if warehouse_dsn:
+            prompt = f"{WRITE_ACCESS_NOTE}\n\n{prompt}"
+        spec = _task_spec(
+            ctx.settings,
+            prompt=prompt,
+            model=ctx.cfg.get("model", "sonnet"),
+            mcp_json=_mcp_json(ctx, task, raw_key),
+            labels={"run": ctx.run_id, "task": task.id, "phase": "agent"},
+            claude_md=ctx.claude_md,
+            project_tarball_url=ctx.project_tarball_url,
+            warehouse_dsn=warehouse_dsn,
+        )
+
+        async def on_start(info: dict) -> None:
+            await ctx.db.update_task(task.id, sandbox=info)
+            await ctx.board.task_phase(task, "agent", sandbox=info)
+
+        spec.on_start = lambda info: asyncio.ensure_future(on_start(info))
+        from .sandboxes import redact
+
+        exit_code, raw_logs = await ctx.backend.run(spec)
+        secrets = tuple(spec.secret_env.values())
+        answer = redact(_extract_result_text(raw_logs), extra_secrets=secrets)
+        return exit_code, redact(raw_logs, extra_secrets=secrets), answer
+    finally:
+        await _revoke_key(ctx.org_id, key_id)
+
+
+async def _run_script(
+    ctx: TaskContext, task: EvalTask, script_rel: str, phase: str, warehouse_dsn: str
+) -> tuple[bool, str]:
+    spec = _script_spec(
+        ctx.settings,
+        eval_set=ctx.eval_set,
+        repo_dir=ctx.repo_dir,
+        repo_url=ctx.cfg.get("repo_url", ""),
+        script_rel=script_rel,
+        task=task,
+        phase=phase,
+        run_id=ctx.run_id,
+        warehouse_dsn=warehouse_dsn,
+    )
+    from .sandboxes import redact
+
+    exit_code, raw_logs = await ctx.backend.run(spec)
+    logs = redact(raw_logs, extra_secrets=tuple(spec.secret_env.values()))
+    key = ctx.obj.setup_log_key(ctx.org_id, ctx.run_id, task.id, phase)
+    await ctx.obj.put_text(key, logs)
+    return exit_code == 0, logs
+
+
+async def _run_task(ctx: TaskContext, task: EvalTask) -> None:
+    db: RunDB = ctx.db
+    started = time.monotonic()
+    await db.update_task(task.id, status="running", started_at=_now())
+    await ctx.board.task_phase(task, "provisioning" if task.task_class == "write" else "agent")
+
+    transcript = ""
+    verdict, check_results, answer, error = "ERROR", [], "", None
+
+    try:
+        if task.task_class == "write":
+            verdict, check_results, answer, transcript, error = await _run_write_task(ctx, task)
+        else:
+            connection = str(ctx.cfg.get("connection", "") or "")
+            exit_code, transcript, answer = await _run_agent(ctx, task, connection, "")
+            if exit_code != 0 and not answer.strip():
+                verdict, check_results = "ERROR", []
+                error = f"agent container exited {exit_code}"
+            else:
+                verdict, check_results = _grade_answer(task, answer)
+    except Exception as exc:
+        logger.exception("task %s failed", task.id)
+        from .sandboxes import redact
+
+        error = redact(str(exc))[:500]
+        answer = answer or error
+    finally:
+        if transcript:
+            try:
+                await ctx.obj.put_text(ctx.obj.transcript_key(ctx.org_id, ctx.run_id, task.id), transcript)
+            except Exception:
+                logger.exception("could not store transcript for %s", task.id)
+        await db.update_task(
+            task.id,
+            status="done",
+            verdict=verdict,
+            check_results=check_results,
+            answer=(answer or "")[:2000],
+            duration_s=round(time.monotonic() - started, 1),
+            finished_at=_now(),
+            error=error,
+            sandbox=None,
+        )
+        await ctx.board.task_done(task)
+
+
+def _grade_answer(task: EvalTask, answer: str) -> tuple[str, list[dict]]:
+    from .grading import grade_checks
+
+    return grade_checks(task.checks, answer)
+
+
+async def _run_write_task(ctx: TaskContext, task: EvalTask) -> tuple[str, list[dict], str, str, str | None]:
+    """The write-task lifecycle (spec §3.4):
+
+    fork -> connection -> setup -> agent -> grade -> capture -> teardown
+    with connection+branch deleted in the finally, always.
+    """
+    from .grading import grade_model_rebuilt
+
+    provider: BranchProvider = ctx.provider
+    if provider is None:
+        return "ERROR", [], "", "", "no branch provider for write tasks"
+
+    settings: EvalRunSettings = ctx.settings
+    branch_name = branch_name_for(ctx.run_id, task.id)
+
+    # Quota and fork under one lock: checking then forking concurrently lets
+    # N tasks all observe "under the ceiling" and then all fork past it.
+    async with ctx.fork_lock:
+        await enforce_branch_quota(provider, settings.max_eval_branches)
+        info = await provider.fork(branch_name)
+    await ctx.db.update_task(task.id, branch_name=branch_name)
+
+    transcript, answer, error = "", "", None
+    verdict: str = "ERROR"
+    check_results: list[dict] = []
+    setup_ran = False
+    conn_name = branch_name[:64]
+    try:
+        session, store = await ctx.db.store()
+        try:
+            await create_task_connection(store, name=conn_name, dsn=info.dsn)
+        finally:
+            await session.close()
+
+        if task.setup:
+            await ctx.board.task_phase(task, "setup")
+            setup_ran = True
+            ok, logs = await _run_script(ctx, task, task.setup, "setup", info.dsn)
+            if not ok:
+                return "SETUP_FAILED", [], "task setup script failed — see the setup log", "", None
+
+        exit_code, transcript, answer = await _run_agent(ctx, task, conn_name, info.dsn)
+        if exit_code != 0 and not answer.strip():
+            return "ERROR", [], "", transcript, f"agent container exited {exit_code}"
+
+        # Storage-delta quota, before capture: a runaway build fails the task.
+        if ctx.parent_size is not None:
+            size = await provider.database_size_bytes(branch_name)
+            if size is not None and size - ctx.parent_size > settings.branch_storage_delta_bytes:
+                return (
+                    "ERROR",
+                    [],
+                    answer,
+                    transcript,
+                    f"branch grew {size - ctx.parent_size} bytes — over the "
+                    f"{settings.branch_storage_delta_bytes}-byte delta quota",
+                )
+
+        await ctx.board.task_phase(task, "grading")
+        if task.grade.get("kind") == "model_rebuilt":
+            conn, query = await _pg_query(info.dsn)
+            try:
+                verdict, check_results = await grade_model_rebuilt(task.grade, query)
+            finally:
+                await conn.close()
+        else:
+            verdict, check_results = _grade_answer(task, answer)
+
+        # Capture before teardown; a capture bug must never leak a branch, so
+        # everything here is caught and reported, never raised.
+        if task.capture:
+            await ctx.board.task_phase(task, "capture")
+            try:
+                grain = [str(g) for g in (task.grade.get("expect") or {}).get("grain") or []]
+                from .capture import capture_tables
+
+                summary, files = await capture_tables(
+                    info.dsn,
+                    task.capture,
+                    grain=grain,
+                    byte_budget=ctx.artifact_budget.remaining,
+                    full_max_bytes=settings.capture_full_max_bytes,
+                )
+                stored = []
+                for fname, data in files:
+                    if await ctx.artifact_budget.take(len(data)):
+                        key = ctx.obj.artifact_key(ctx.org_id, ctx.run_id, task.id, fname)
+                        await ctx.obj.put_bytes(key, data)
+                        stored.append(fname)
+                    else:
+                        summary.setdefault("truncated", []).append(fname)
+                summary["stored"] = stored
+                await ctx.db.update_task(task.id, capture_result=summary)
+                await ctx.db.update_run(artifact_bytes=ctx.artifact_budget.spent)
+            except Exception as exc:
+                from .sandboxes import redact
+
+                capture_error = redact(str(exc), extra_secrets=[info.dsn])[:300]
+                logger.error("capture failed for %s: %s", task.id, capture_error)
+                await ctx.db.update_task(
+                    task.id,
+                    capture_result={"error": capture_error},
+                )
+
+        return verdict, check_results, answer, transcript, error
+    except Exception as exc:
+        from .sandboxes import redact
+
+        raise RuntimeError(redact(str(exc), extra_secrets=[info.dsn])) from None
+    finally:
+        # Always run task cleanup after setup starts.
+        # Cleanup can release warehouse resources that branch deletion does not release.
+        if task.teardown and setup_ran:
+            try:
+                await ctx.board.task_phase(task, "teardown")
+                await _run_script(ctx, task, task.teardown, "teardown", info.dsn)
+            except Exception:
+                logger.exception("teardown script failed for %s", task.id)
+        # The branch is deleted the moment the task finishes (spec C2). The
+        # reaper handles anything this finally cannot reach.
+        session, store = await ctx.db.store()
+        try:
+            await delete_task_connection(store, conn_name)
+        finally:
+            await session.close()
+        try:
+            await provider.delete(branch_name)
+        except Exception:
+            logger.exception("could not delete branch %s — reaper will retry", branch_name)
+
+
+async def _finalize_run(ctx: TaskContext) -> None:
+    db: RunDB = ctx.db
+    factory = get_session_factory()
+    async with factory() as session:
+        tasks = await evals_store.get_tasks(session, org_id=ctx.org_id, run_id=ctx.run_id)
+
+    summary = {
+        "total": len(tasks),
+        "correct": sum(1 for t in tasks if t["verdict"] == "CORRECT"),
+        "partial": sum(1 for t in tasks if t["verdict"] == "PARTIAL"),
+        "off": sum(1 for t in tasks if t["verdict"] == "OFF"),
+        "unknown": sum(1 for t in tasks if t["verdict"] == "UNKNOWN"),
+        "ungraded": sum(1 for t in tasks if t["verdict"] == "UNGRADED"),
+        "error": sum(1 for t in tasks if t["verdict"] == "ERROR"),
+        "setup_failed": sum(1 for t in tasks if t["verdict"] == "SETUP_FAILED"),
+    }
+
+    # Observed coverage from the audit trail + declared covers (spec §3.1).
+    coverage = None
+    try:
+        from .coverage import compute_coverage
+
+        coverage = await compute_coverage(
+            ctx.org_id,
+            ctx.run_id,
+            ctx.eval_set,
+            ctx.project_models,
+            executed_task_ids=getattr(ctx, "executed_task_ids", None),
+        )
+    except Exception:
+        logger.exception("coverage computation failed for %s", ctx.run_id)
+
+    status = "completed" if summary["error"] + summary["setup_failed"] < summary["total"] else "failed"
+    await db.update_run(status=status, summary=summary, coverage=coverage, finished_at=_now())
+
+    run = await db.get_run()
     if run is None:
         return
-    cfg = load_eval_config(org_id)
 
-    def fail(msg: str) -> None:
-        run["status"] = "failed"
-        run["error"] = msg
-        _mark_progress(org_id, run, phase="finished", sandbox=None, started_at="")
-        logger.error("Eval run %s failed: %s", run_id, msg)
-
-    try:
-        repo_dir = await fetch_eval_repo(cfg.get("repo_url", ""), _run_dir(org_id, run_id) / "repo", settings)
-        eval_set = load_eval_set(repo_dir)
-        questions = eval_set.questions
-    except Exception as exc:
-        fail(str(exc))
-        return
-
-    if run.get("question_ids"):
-        wanted = set(run["question_ids"])
-        questions = [q for q in questions if q.id in wanted]
-    max_q = int(cfg.get("max_questions", 0) or 0)
-    if max_q > 0:
-        questions = questions[:max_q]
-    if not questions:
-        fail("No questions matched (check the manifest and prompts/ directory)")
-        return
-
-    # Group questions by state (first-appearance order) so each state's setup
-    # script runs once per run, not once per question.
-    state_order: list[str] = []
-    for q in questions:
-        if q.state not in state_order:
-            state_order.append(q.state)
-    questions.sort(key=lambda q: state_order.index(q.state))
-
-    headers: dict[str, str] = {"X-SP-Eval-Docs": ",".join(run["doc_ids"])}
-    if api_key:
-        headers["X-API-Key"] = api_key
-    mcp_json = json.dumps(
-        {"mcpServers": {"signalpilot": {"type": "http", "url": settings.mcp_url, "headers": headers}}}
-    )
-    preamble = cfg.get("prompt_preamble", "").strip()
-
-    run["status"] = "running"
-    run["questions"] = [
-        {
-            "id": q.id,
-            "title": q.title,
-            "gt": q.gt,
-            "kind": q.kind,
-            "checks": q.checks,
-            "status": "pending",
-            "verdict": None,
-            "check_results": [],
-        }
-        for q in questions
-    ]
-    run["setup"] = []
-    _write_run(org_id, run)
-
-    def sandbox_recorder(entry: dict):
-        """Attach the live sandbox's identity to both the entry and the run's
-        current-position marker as soon as the backend creates it."""
-
-        def record(info: dict) -> None:
-            entry["sandbox"] = info
-            _mark_progress(org_id, run, sandbox=info)
-
-        return record
-
-    backend: ExecutionBackend = get_execution_backend(settings, org_id=org_id)
-    try:
-        current_state: str | None = None
-        state_ok = True
-        for i, q in enumerate(questions):
-            if q.state != current_state:
-                current_state = q.state
-                state_ok = True
-                script = _setup_script_for(repo_dir, eval_set, q.state)
-                if script:
-                    setup_entry = {
-                        "state": q.state,
-                        "script": script,
-                        "status": "running",
-                        "exit_code": None,
-                        "duration_s": None,
-                    }
-                    run["setup"].append(setup_entry)
-                    _mark_progress(
-                        org_id,
-                        run,
-                        phase="setup",
-                        state=q.state,
-                        index=i,
-                        total=len(questions),
-                        question_id="",
-                        question_title=f"state setup · {q.state}",
-                        started_at=_now(),
-                        sandbox=None,
-                    )
-                    t0 = time.monotonic()
-                    try:
-                        spec = _setup_spec(
-                            settings,
-                            eval_set=eval_set,
-                            repo_dir=repo_dir,
-                            repo_url=cfg.get("repo_url", ""),
-                            script_rel=script,
-                            state=q.state,
-                            run_id=run_id,
-                        )
-                        spec.on_start = sandbox_recorder(setup_entry)
-                        exit_code, slogs = await backend.run(spec)
-                        (_run_dir(org_id, run_id) / f"setup-{_sanitize_state(q.state)}.log").write_text(
-                            slogs, encoding="utf-8"
-                        )
-                        setup_entry.update(
-                            exit_code=exit_code,
-                            duration_s=round(time.monotonic() - t0, 1),
-                            status="ok" if exit_code == 0 else "failed",
-                        )
-                    except Exception as exc:
-                        logger.exception("Eval run %s setup for state %s errored", run_id, q.state)
-                        setup_entry.update(status="failed", error=str(exc)[:300], duration_s=round(time.monotonic() - t0, 1))
-                    state_ok = setup_entry["status"] == "ok"
-                    _write_run(org_id, run)
-
-            entry = run["questions"][i]
-            if not state_ok:
-                entry.update(
-                    status="done",
-                    verdict="SETUP_FAILED",
-                    answer=f"State setup for '{q.state}' failed — see the setup log.",
-                )
-                _write_run(org_id, run)
-                continue
-            entry["status"] = "running"
-            entry["started_at"] = _now()
-            entry["sandbox"] = None
-            _mark_progress(
-                org_id,
-                run,
-                phase="question",
-                state=q.state,
-                index=i,
-                total=len(questions),
-                question_id=q.id,
-                question_title=q.title,
-                started_at=entry["started_at"],
-                sandbox=None,
+    graded = summary["total"] - summary["ungraded"]
+    accuracy = (summary["correct"] / graded * 100.0) if graded else 0.0
+    async with factory() as session:
+        try:
+            await evals_store.append_accuracy(
+                session,
+                org_id=ctx.org_id,
+                entry={
+                    "run_id": ctx.run_id,
+                    "created_at": run["created_at"],
+                    "trigger": run.get("trigger", "manual"),
+                    "eval_set_name": run.get("eval_set_name", ""),
+                    "eval_set_ref": run.get("eval_set_ref", ""),
+                    "build_fingerprint": run.get("build_fingerprint", ""),
+                    "tasks_total": summary["total"],
+                    "tasks_passed": summary["correct"],
+                    "accuracy_pct": round(accuracy, 2),
+                    "coverage_pct": (coverage or {}).get("marts_pct"),
+                    "kb_doc_ids": run.get("kb_doc_ids") or [],
+                },
             )
-            started = time.monotonic()
-            try:
-                prompt = f"{preamble}\n\n{q.prompt}" if preamble else q.prompt
-                spec = _question_spec(
-                    settings,
-                    prompt=prompt,
-                    model=run["model"],
-                    mcp_json=mcp_json,
-                    labels={"run": run_id, "question": q.id},
-                )
-                spec.on_start = sandbox_recorder(entry)
-                exit_code, logs = await backend.run(spec)
-                answer = _extract_result_text(logs)
-                if exit_code != 0 and not answer.strip():
-                    verdict, check_results = "ERROR", []
-                else:
-                    verdict, check_results = grade_checks(q.checks, answer)
-                safe_q = re.sub(r"[^a-zA-Z0-9_-]", "_", q.id)
-                (_run_dir(org_id, run_id) / "questions" / f"{safe_q}.log").write_text(
-                    logs, encoding="utf-8"
-                )
-                (_run_dir(org_id, run_id) / "questions" / f"{safe_q}.json").write_text(
-                    json.dumps(
-                        {
-                            "id": q.id,
-                            "title": q.title,
-                            "prompt": q.prompt,
-                            "gt": q.gt,
-                            "checks": q.checks,
-                            "check_results": check_results,
-                            "answer": answer,
-                            "verdict": verdict,
-                            "exit_code": exit_code,
-                            "duration_s": round(time.monotonic() - started, 1),
-                        },
-                        indent=2,
-                    ),
-                    encoding="utf-8",
-                )
-                entry.update(
-                    status="done",
-                    verdict=verdict,
-                    check_results=check_results,
-                    answer=answer[:2000],
-                    duration_s=round(time.monotonic() - started, 1),
-                )
-            except Exception as exc:
-                logger.exception("Eval run %s question %s errored", run_id, q.id)
-                entry.update(status="done", verdict="ERROR", answer=str(exc)[:500])
-            _write_run(org_id, run)
-    finally:
-        await backend.aclose()
+        except Exception:
+            logger.exception("accuracy history append failed for %s", ctx.run_id)
 
-    verdicts = [e.get("verdict") for e in run["questions"]]
-    run["summary"] = {
-        "total": len(verdicts),
-        "correct": verdicts.count("CORRECT"),
-        "partial": verdicts.count("PARTIAL"),
-        "off": verdicts.count("OFF"),
-        "unknown": verdicts.count("UNKNOWN"),
-        "ungraded": verdicts.count("UNGRADED"),
-        "error": verdicts.count("ERROR"),
-        "setup_failed": verdicts.count("SETUP_FAILED"),
-    }
-    run["status"] = "completed"
-    _mark_progress(
-        org_id, run, phase="finished", question_id="", question_title="", sandbox=None, started_at=""
-    )
-    # Cloned repos can be big — clean up.
-    shutil.rmtree(_run_dir(org_id, run_id) / "repo", ignore_errors=True)
+    try:
+        from .notifications import check_regression_and_notify
+
+        await check_regression_and_notify(ctx.org_id, run, tasks, accuracy)
+    except Exception:
+        logger.exception("regression check failed for %s", ctx.run_id)
+
+    try:
+        from .retention import enforce_retention
+
+        await enforce_retention(ctx.org_id)
+    except Exception:
+        logger.exception("retention enforcement failed for %s", ctx.run_id)

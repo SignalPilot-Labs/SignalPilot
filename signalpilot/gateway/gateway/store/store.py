@@ -1,4 +1,4 @@
-"""Store class — all DB-backed operations scoped by org_id."""
+"""Store class: all DB-backed operations scoped by org_id."""
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Store class — all DB-backed operations scoped by user_id
+# Store class: all DB-backed operations scoped by user_id
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -74,12 +74,14 @@ class Store:
         org_id: str | None = None,
         user_id: str | None = None,
         allow_unscoped: bool = False,
+        eval_connection: str | None = None,
         allowed_connection_name: str | None = None,
     ):
         self.session = session
         self.org_id = org_id
         self.user_id = user_id
         self._allow_unscoped = allow_unscoped
+        self.eval_connection = eval_connection
         self.allowed_connection_name = allowed_connection_name
         # Intentional: we do not store the token for reset. FastAPI runs each request in a
         # dedicated asyncio task whose contextvars copy is isolated; the var dies with the task.
@@ -97,7 +99,7 @@ class Store:
             )
         return "local"
 
-    # ─── Settings ────────────────────────────────────────────────────────
+    # Settings.
 
     async def load_settings(self) -> GatewaySettings:
         oid = self._require_org_id()
@@ -107,7 +109,7 @@ class Store:
         oid = self._require_org_id()
         await settings_mod.save_settings(self.session, org_id=oid, user_id=self.user_id, settings=settings)
 
-    # ─── Connections ─────────────────────────────────────────────────────
+    # Connections.
 
     def _conn_filter(self):
         if self.org_id is not None:
@@ -130,10 +132,15 @@ class Store:
             raise ValueError("Connection is outside this execution's allowed scope")
 
     async def list_connections(self) -> list[ConnectionInfo]:
-        result = await self.session.execute(select(GatewayConnection).where(self._conn_filter()))
+        conditions = [self._conn_filter()]
+        if self.eval_connection:
+            conditions.append(GatewayConnection.name == self.eval_connection)
+        result = await self.session.execute(select(GatewayConnection).where(*conditions))
         return [ConnectionInfo(**row.to_info_dict()) for row in result.scalars()]
 
     async def get_connection(self, name: str) -> ConnectionInfo | None:
+        if self.eval_connection and name != self.eval_connection:
+            return None
         self._require_allowed_connection(name)
         result = await self.session.execute(
             select(GatewayConnection).where(self._conn_filter(), GatewayConnection.name == name)
@@ -180,7 +187,7 @@ class Store:
                     }
                 )
             except Exception:
-                pass  # URL parsing failed — keep original fields
+                pass  # URL parsing failed: keep original fields
 
         # Strip sensitive fields from SSH/SSL for metadata storage
         ssh_tunnel_safe = None
@@ -235,7 +242,7 @@ class Store:
 
         # Store encrypted credentials
         raw_cred = conn.connection_string or _build_connection_string(conn)
-        # Validate DuckDB/SQLite paths — but only for non-sandboxed modes.
+        # Validate DuckDB/SQLite paths: but only for non-sandboxed modes.
         # Local file paths (host paths like C:\Users\...) are executed via the
         # gVisor sandbox which provides its own isolation. Only in-DATA_DIR
         # paths (direct connector) need the traversal check.
@@ -374,17 +381,10 @@ class Store:
                 "ssl",
                 "ssl_config",
                 # Xata-specific fields stored only in encrypted extras
-                "workspace",
-                "region",
                 "branch",
                 "xata_api_url",
                 "xata_org",
-                "xata_token_url",
-                "xata_client_id",
-                "xata_client_secret",
-                "xata_username",
-                "xata_password",
-                # Extras-only credential fields — PATCH-only changes must still rewrite extras_enc
+                # Extras-only credential fields: PATCH-only changes must still rewrite extras_enc
                 "private_key",
                 "private_key_passphrase",
                 "motherduck_token",
@@ -399,10 +399,8 @@ class Store:
         if needs_cred_rebuild:
             existing_extras = await self.get_credential_extras(name)
             # Back-translate stored extras keys into ConnectionCreate kwarg names.
-            # Four Xata fields are stored prefixed; the rest are stored identically.
+            # Two Xata fields are stored prefixed; the rest are stored identically.
             _extras_key_map = {
-                "xata_workspace": "workspace",
-                "xata_region": "region",
                 "xata_database": "database",
                 "xata_branch": "branch",
             }
@@ -428,7 +426,7 @@ class Store:
                 "status",
                 "last_schema_refresh",
                 "endorsements",
-                # NOTE: do NOT add 'location' here — it IS a valid ConnectionCreate kwarg;
+                # NOTE: do NOT add 'location' here: it IS a valid ConnectionCreate kwarg;
                 # popping it wiped BQ location on every cred-rebuild PATCH after round-3
                 # from_extras backfill (round 4).
             ):
@@ -486,6 +484,8 @@ class Store:
         return ConnectionInfo(**row.to_info_dict())
 
     async def get_connection_string(self, name: str) -> str | None:
+        if self.eval_connection and name != self.eval_connection:
+            return None
         self._require_allowed_connection(name)
         oid = self._require_org_id()
         result = await self.session.execute(
@@ -526,10 +526,11 @@ class Store:
                 credential_id=cred_row.id,
             )
 
-        # Managed (default) path — existing Fernet-based decryption
+        # Managed (default) path: existing Fernet-based decryption
         plaintext, needs_migration = _decrypt_with_migration(cred_row.connection_string_enc)
-        # Re-encrypt if using legacy key derivation OR if key_version is behind current.
-        # Concurrent reads may both re-encrypt — this is safe because re-encryption
+        # Re-encrypt if an explicitly configured rotation key was used or the
+        # stored key version is behind current.
+        # Concurrent reads may both re-encrypt: this is safe because re-encryption
         # with the same key is idempotent (same plaintext, same key version result).
         needs_version_upgrade = cred_row.key_version != CURRENT_KEY_VERSION
         if needs_migration or needs_version_upgrade:
@@ -543,6 +544,8 @@ class Store:
         return plaintext
 
     async def get_credential_extras(self, name: str) -> dict:
+        if self.eval_connection and name != self.eval_connection:
+            return {}
         self._require_allowed_connection(name)
         oid = self._require_org_id()
         result = await self.session.execute(
@@ -587,10 +590,11 @@ class Store:
             extras = json.loads(extras_json)
             return self._with_pool_identity(extras, cred_row)
 
-        # Managed (default) path — existing Fernet-based decryption
+        # Managed (default) path: existing Fernet-based decryption
         plaintext, needs_migration = _decrypt_with_migration(cred_row.extras_enc)
-        # Re-encrypt if using legacy key derivation OR if key_version is behind current.
-        # Concurrent reads may both re-encrypt — this is safe because re-encryption
+        # Re-encrypt if an explicitly configured rotation key was used or the
+        # stored key version is behind current.
+        # Concurrent reads may both re-encrypt: this is safe because re-encryption
         # with the same key is idempotent (same plaintext, same key version result).
         needs_version_upgrade = cred_row.key_version != CURRENT_KEY_VERSION
         if needs_migration or needs_version_upgrade:
@@ -604,7 +608,7 @@ class Store:
         return self._with_pool_identity(json.loads(plaintext), cred_row)
 
     async def _byok_decrypt_provider(self, org_id: str, key_id: str | None, key_alias: str):
-        """Provider that wrapped this credential's DEK — never the process default."""
+        """Provider that wrapped this credential's DEK: never the process default."""
         try:
             return await byok_state.resolve_decrypt_provider(self.session, org_id, key_id, key_alias)
         except byok_state.BYOKProviderUnavailable as exc:
@@ -614,8 +618,8 @@ class Store:
     def _with_pool_identity(extras: dict, cred_row: GatewayCredential) -> dict:
         """Attach the non-secret credential identity consumed by the pool manager.
 
-        Derived from the credential row id plus a digest of the stored ciphertext —
-        never plaintext — so the value rotates whenever the credential is rewritten
+        Derived from the credential row id plus a digest of the stored ciphertext:
+        never plaintext: so the value rotates whenever the credential is rewritten
         and carries nothing sensitive.
         """
         if not isinstance(extras, dict):
@@ -624,7 +628,7 @@ class Store:
         digest = hashlib.sha256(material).hexdigest()[:16]
         return {**extras, CREDENTIAL_IDENTITY_KEY: f"{cred_row.id}.{digest}"}
 
-    # ─── Projects ────────────────────────────────────────────────────────
+    # Projects.
 
     async def list_projects(self) -> list[projects.ProjectInfo]:
         oid = self._require_org_id()
@@ -662,7 +666,7 @@ class Store:
         oid = self._require_org_id()
         return await projects.delete_project(self.session, org_id=oid, name=name)
 
-    # ─── Audit ───────────────────────────────────────────────────────────
+    # Audit.
 
     async def append_audit(self, entry: AuditEntry) -> None:
         oid = self._require_org_id()
@@ -677,6 +681,8 @@ class Store:
         return_total: bool = False,
     ) -> list[AuditEntry] | tuple[list[AuditEntry], int]:
         oid = self._require_org_id()
+        if self.eval_connection:
+            connection_name = self.eval_connection
         return await audit_log.read_audit(
             self.session,
             org_id=oid,
@@ -687,7 +693,7 @@ class Store:
             return_total=return_total,
         )
 
-    # ─── Schema Endorsements ─────────────────────────────────────────────
+    # Schema Endorsements.
 
     async def get_schema_endorsements(self, name: str) -> dict:
         oid = self._require_org_id()
@@ -699,7 +705,7 @@ class Store:
             self.session, org_id=oid, name=name, endorsements=endorsements
         )
 
-    # ─── PII Redaction Config ──────────────────────────────────────────────
+    # PII Redaction Config.
 
     async def get_pii_config(self, name: str) -> dict:
         oid = self._require_org_id()
@@ -717,7 +723,7 @@ class Store:
         oid = self._require_org_id()
         return await endorsements_mod.apply_endorsement_filter(self.session, org_id=oid, name=name, schema=schema)
 
-    # ─── Notion Integrations ─────────────────────────────────────────────
+    # Notion Integrations.
 
     async def list_notion_integrations(self) -> list[notion_mod.NotionIntegrationInfo]:
         """List all Notion integrations for this org."""
@@ -851,7 +857,7 @@ class Store:
             installation_id=installation_id,
         )
 
-    # ─── Slack Integrations ─────────────────────────────────────────────
+    # Slack Integrations.
 
     async def create_slack_oauth_state(self, redirect_after: str | None, ttl_seconds: int = 600) -> str:
         """Create a short-lived Slack OAuth state value."""
@@ -908,12 +914,16 @@ class Store:
             installation_id=installation_id,
         )
 
-    # ─── API Keys ───────────────────────────────────────────────────────
+    # API Keys.
     async def list_api_keys(self) -> list[ApiKeyRecord]:
         return await api_keys.list_api_keys(self.session, org_id=self.org_id, allow_unscoped=self._allow_unscoped)
 
     async def create_api_key(
-        self, name: str, scopes: list[str], expires_at: str | None = None
+        self,
+        name: str,
+        scopes: list[str],
+        expires_at: str | None = None,
+        eval_binding: dict | None = None,
     ) -> tuple[ApiKeyRecord, str]:
         oid = self._require_org_id()
         return await api_keys.create_api_key(
@@ -923,6 +933,7 @@ class Store:
             name=name,
             scopes=scopes,
             expires_at=expires_at,
+            eval_binding=eval_binding,
         )
 
     async def delete_api_key(self, key_id: str) -> bool:
@@ -932,20 +943,20 @@ class Store:
     async def validate_stored_api_key(self, raw_key: str) -> ApiKeyRecord | None:
         return await api_keys.validate_stored_api_key(self.session, raw_key)
 
-    # ─── Key Rotation ────────────────────────────────────────────────────
+    # Key Rotation.
 
     async def get_credentials_needing_rotation(self, org_scoped: bool = True) -> int:
         """Return count of credentials encrypted with a key version below CURRENT_KEY_VERSION.
 
         ORG-SCOPED by default (org_scoped=True): filters to the current org via
         _require_org_id(). Cross-org count is opt-in (org_scoped=False) and
-        intended only for future operator-only callers — no production caller
+        intended only for future operator-only callers: no production caller
         currently passes org_scoped=False.
         """
         org_id = self._require_org_id() if org_scoped else None
         return await settings_mod.get_credentials_needing_rotation(self.session, org_id=org_id)
 
-    # ─── Knowledge Base ──────────────────────────────────────────────────
+    # Knowledge Base.
 
     async def _knowledge_limits(self):
         """Resolve the org's plan limits for knowledge enforcement."""
@@ -1125,9 +1136,8 @@ class Store:
     ) -> list[knowledge_search_mod.SearchHit]:
         """Hybrid (FTS + lexical + vector) search with retrieval-event logging.
 
-        Falls back to plain ILIKE search on any hybrid failure so search never
-        regresses below the legacy behavior. Logging and view bumps for all
-        hits are batched into a single background task (one pool checkout).
+        Use plain ILIKE search when hybrid search fails.
+        One background task records retrieval events and view counts for all results.
         """
         oid = self._require_org_id()
         try:
@@ -1205,7 +1215,7 @@ class Store:
         async with factory() as session:
             await knowledge_mod.increment_knowledge_view(session, org_id=oid, doc_id=doc_id)
 
-    # ─── Reports (rendered HTML) ─────────────────────────────────────────────
+    # Reports (rendered HTML).
 
     async def insert_report(self, payload, *, user_id: str | None, agent: str | None = None):
         from . import reports as reports_mod
@@ -1254,7 +1264,7 @@ class Store:
         async with factory() as session:
             await reports_mod.increment_report_view(session, org_id=oid, report_id=report_id)
 
-    # ─── Workspace Projects ─────────────────────────────────────────────────
+    # Workspace Projects.
 
     async def create_workspace_project(self, **kwargs):
         from . import workspace_projects as wp
@@ -1286,7 +1296,7 @@ class Store:
         oid = self._require_org_id()
         return await wp.delete_project(self.session, org_id=oid, project_id=project_id)
 
-    # ─── Upload Sessions ─────────────────────────────────────────────────────
+    # Upload Sessions.
 
     async def reserve_upload_session(
         self,
@@ -1334,7 +1344,7 @@ class Store:
             self.session, org_id=oid, user_id=user_id, key=key, upload_id=upload_id
         )
 
-    # ─── Chat ────────────────────────────────────────────────────────────────
+    # Chat.
 
     async def create_conversation(self, **kwargs):
         from . import chat
@@ -1380,7 +1390,7 @@ class Store:
             self.session, org_id=oid, user_id=self.user_id or "local", conversation_id=conversation_id, **kwargs
         )
 
-    # ─── Chat Traces ─────────────────────────────────────────────────────────
+    # Chat Traces.
 
     async def upsert_chat_trace_thread(self, thread):
         from . import chat_traces
@@ -1426,7 +1436,7 @@ class Store:
             self.session, org_id=oid, user_id=self.user_id or "local", thread_id=thread_id, **kwargs
         )
 
-    # ─── Agent Runs ──────────────────────────────────────────────────────────
+    # Agent Runs.
 
     async def create_agent_run(self, **kwargs):
         from . import agent_runs
@@ -1452,6 +1462,62 @@ class Store:
         oid = self._require_org_id()
         return await agent_runs.update_run(self.session, org_id=oid, run_id=run_id, updates=updates)
 
-    # ─── Branches ────────────────────────────────────────────────────────────
+    # Branches.
 
-    # Branch methods removed — branches are git refs now. Use git CLI directly.
+    # Use the Git CLI to manage branch references.
+
+    # Evals.
+
+    async def get_eval_config(self) -> dict:
+        from . import evals
+
+        oid = self._require_org_id()
+        return await evals.get_config(self.session, org_id=oid)
+
+    async def save_eval_config(self, cfg: dict) -> dict:
+        from . import evals
+
+        oid = self._require_org_id()
+        return await evals.save_config(self.session, org_id=oid, cfg=cfg)
+
+    async def get_eval_run(self, run_id: str) -> dict | None:
+        from . import evals
+
+        oid = self._require_org_id()
+        return await evals.get_run(self.session, org_id=oid, run_id=run_id)
+
+    async def list_eval_runs(self, limit: int = 50) -> list[dict]:
+        from . import evals
+
+        oid = self._require_org_id()
+        return await evals.list_runs(self.session, org_id=oid, limit=limit)
+
+    async def list_live_eval_runs(self) -> list[dict]:
+        from . import evals
+
+        oid = self._require_org_id()
+        return await evals.list_live_runs(self.session, org_id=oid)
+
+    async def get_eval_tasks(self, run_id: str) -> list[dict]:
+        from . import evals
+
+        oid = self._require_org_id()
+        return await evals.get_tasks(self.session, org_id=oid, run_id=run_id)
+
+    async def eval_sandbox_index(self, limit_runs: int = 25) -> dict[str, dict]:
+        from . import evals
+
+        oid = self._require_org_id()
+        return await evals.tasks_with_live_sandboxes(self.session, org_id=oid, limit_runs=limit_runs)
+
+    async def list_eval_accuracy(self, limit: int = 500) -> list[dict]:
+        from . import evals
+
+        oid = self._require_org_id()
+        return await evals.list_accuracy(self.session, org_id=oid, limit=limit)
+
+    async def list_eval_regressions(self, limit: int = 100) -> list[dict]:
+        from . import evals
+
+        oid = self._require_org_id()
+        return await evals.list_regressions(self.session, org_id=oid, limit=limit)

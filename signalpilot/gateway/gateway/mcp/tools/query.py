@@ -26,7 +26,7 @@ from gateway.mcp.context import (
     mcp_execution_identity_var,
 )
 from gateway.mcp.server import mcp
-from gateway.mcp.validation import _CONN_NAME_RE, _validate_connection_name, _validate_sql
+from gateway.mcp.validation import _validate_connection_name, _validate_sql
 from gateway.standalone_chat.config import enterprise_chat_feature_flags
 
 
@@ -255,8 +255,8 @@ async def explain_query(connection_name: str, sql: str) -> str:
         connection_name: Name of the database connection
         sql: SQL query to explain
     """
-    if not _CONN_NAME_RE.match(connection_name):
-        return "Error: Invalid connection name"
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
     if err := _validate_sql(sql):
         return f"Error: {err}"
 
@@ -305,8 +305,8 @@ async def validate_sql(connection_name: str, sql: str) -> str:
         connection_name: Name of the database connection
         sql: SQL query to validate
     """
-    if not _CONN_NAME_RE.match(connection_name):
-        return "Error: Invalid connection name"
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
     if err := _validate_sql(sql):
         return f"Error: {err}"
 
@@ -371,8 +371,8 @@ async def query_history(connection_name: str, limit: int = 10) -> str:
         connection_name: Name of the database connection
         limit: Max queries to return (default 10, max 50)
     """
-    if not _CONN_NAME_RE.match(connection_name):
-        return "Error: Invalid connection name"
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
 
     limit = min(limit, 50)
     gw = _gateway_url()

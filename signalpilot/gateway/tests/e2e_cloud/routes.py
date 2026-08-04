@@ -34,9 +34,7 @@ ADMIN_PROBE_SKIP: frozenset[tuple[str, str]] = frozenset(
 # the refusal rather than the "admin is not locked out" probe, and asserts a staff
 # identity gets through.
 STAFF_ONLY_PATH_PREFIXES: tuple[str, ...] = (
-    "/api/evals/config",
-    "/api/evals/questions",
-    "/api/evals/runs",
+    "/api/evals/",
 )
 STAFF_ONLY_ROUTES: frozenset[tuple[str, str]] = frozenset({("GET", "/api/security/status")})
 
@@ -47,12 +45,15 @@ STAFF_USER_ID = "user_staff"
 def is_staff_only(method: str, path: str) -> bool:
     return (method, path) in STAFF_ONLY_ROUTES or path.startswith(STAFF_ONLY_PATH_PREFIXES)
 
-# Non-authorization reasons a route may legitimately answer 403. Used to distinguish
-# a real authorization denial from an unrelated policy denial.
+# These markers identify policy-based status 403 responses.
+# They distinguish policy denials from authorization denials.
 NON_AUTHZ_403_MARKERS: tuple[str, ...] = (
     "not available on the free plan",
     "Upgrade to",
     "plan limit",
+# The test gateway has an empty SP_EVAL_ALLOWED_ORGS allowlist.
+# This policy denial does not indicate an authorization failure.
+    "Evals are not enabled for this workspace.",
 )
 
 # Exact detail strings the authorization layer emits. Seeing any of these on a member
@@ -114,6 +115,7 @@ def _collect() -> list[dict]:
     """Walk the live FastAPI dependency tree. Runs inside the cloud-mode child."""
     from fastapi.routing import APIRoute
 
+    from gateway.api.deps import require_platform_staff
     from gateway.auth.user import require_org_admin
     from gateway.main import app
 
@@ -129,6 +131,8 @@ def _collect() -> list[dict]:
         for dep in deps:
             if dep.call is require_org_admin:
                 guards.add("OrgAdmin")
+            if dep.call is require_platform_staff:
+                guards.add("PlatformStaff")
             found = _scopes_of(dep.call)
             if found is not None:
                 all_scopes |= set(found)
@@ -145,16 +149,13 @@ def _collect() -> list[dict]:
 
 @lru_cache(maxsize=1)
 def discover() -> tuple[list[RouteSpec], list[RouteSpec]]:
-    """Return (admin_routes, non_admin_scoped_routes) as registered in CLOUD mode.
+    """Return admin and non-admin routes registered in cloud mode.
 
-    Route registration is mode-dependent — gateway/api/__init__.py skips the files,
-    projects and sandboxes routers in cloud mode — so discovery must run with
-    SP_DEPLOYMENT_MODE=cloud or the matrix asks for routes that legitimately 404.
+    Cloud mode does not register the files, projects, or sandboxes routers.
+    Discovery uses SP_DEPLOYMENT_MODE=cloud to match the deployed route set.
 
-    Importing the app in cloud mode mutates process-global state (auth/user.py raises
-    at import without CLERK_PUBLISHABLE_KEY, and caches a JWKS client), so this runs
-    in a throwaway subprocess. The dummy publishable key is never used to fetch
-    anything: _get_jwks_client only constructs the client at import time.
+    A subprocess isolates the process state that app import creates. The dummy
+    publishable key constructs the JWKS client without a network request.
     """
     import base64
     import json
@@ -173,9 +174,7 @@ def discover() -> tuple[list[RouteSpec], list[RouteSpec]]:
         "CLERK_PUBLISHABLE_KEY": f"pk_test_{dummy_domain}",
         "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
         "PYTHONIOENCODING": "utf-8",
-        # Two collection-time callers used to race each other writing __pycache__ for
-        # the gateway package, which surfaced as a spurious circular-import error.
-        # discover() is lru_cached now, but keep bytecode writing off regardless.
+        # Disable bytecode writes to prevent concurrent collection from sharing __pycache__.
         "PYTHONDONTWRITEBYTECODE": "1",
     }
     script = (

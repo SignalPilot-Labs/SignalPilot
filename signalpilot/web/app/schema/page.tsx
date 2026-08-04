@@ -81,7 +81,7 @@ function getTypeColor(type: string): string {
   return typeColorMap[type.toLowerCase()] || "text-[var(--color-text-dim)]";
 }
 
-/* ── Type legend SVG dots ── */
+/* The SVG displays the type legend. */
 function TypeLegend() {
   const types = [
     { label: "int", color: "text-blue-400" },
@@ -129,7 +129,7 @@ export default function SchemaExplorerPage() {
       setSchema(data);
       const keys = Object.keys(data.tables).slice(0, 5);
       setExpandedTables(new Set(keys));
-      // Fetch refresh status
+  // Fetch the refresh status.
       getSchemaRefreshStatus(selectedConn).then((status) => {
         setLastRefresh(status.last_schema_refresh);
         setRefreshInterval(status.schema_refresh_interval);
@@ -270,7 +270,7 @@ export default function SchemaExplorerPage() {
         </div>
       </TerminalBar>
 
-      {/* Search + stats + type legend */}
+      {/* The following controls provide search, statistics, and the type legend. */}
       {schema && (
         <div className="space-y-3 mb-4">
           <div className="flex items-center gap-3">
@@ -295,7 +295,7 @@ export default function SchemaExplorerPage() {
               </span>
             </div>
             <div className="flex items-center gap-1">
-              {/* View mode toggle */}
+        {/* This control selects the view mode. */}
               <div className="flex items-center rounded-[10px] overflow-hidden border border-[var(--color-border)] mr-2">
                 <button
                   onClick={() => setViewMode("table")}
@@ -332,7 +332,7 @@ export default function SchemaExplorerPage() {
           </div>
           <TypeLegend />
 
-          {/* Column type distribution bar */}
+          {/* This bar shows the column type distribution. */}
           {(() => {
             const allCols = Object.values(schema.tables).flatMap(t => t.columns);
             const typeCounts: Record<string, number> = {};
@@ -370,14 +370,14 @@ export default function SchemaExplorerPage() {
         </div>
       )}
 
-      {/* Error */}
+      {/* The following code displays an error. */}
       {error && (
         <div className="mb-4 p-4 rounded-[14px] border border-[var(--color-error)]/30 bg-[var(--color-error)]/5 animate-fade-in">
           <p className="text-xs text-[var(--color-error)]">{error}</p>
         </div>
       )}
 
-      {/* Loading */}
+      {/* The following code displays the loading state. */}
       {loading && !schema && (
         <div className="flex flex-col items-center justify-center py-24">
           <Loader2 className="w-5 h-5 animate-spin text-[var(--color-text-dim)] mb-3" />
@@ -385,7 +385,7 @@ export default function SchemaExplorerPage() {
         </div>
       )}
 
-      {/* Empty */}
+      {/* The following code displays the empty state. */}
       {!loading && !schema && !error && (
         <EmptyState
           icon={EmptyDatabase}
@@ -394,7 +394,7 @@ export default function SchemaExplorerPage() {
         />
       )}
 
-      {/* DDL view */}
+      {/* The following code displays the DDL view. */}
       {schema && viewMode === "ddl" && (
         <div className="rounded-[14px] overflow-hidden bg-[var(--color-bg-card)] border border-[var(--color-border)] animate-fade-in">
           <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)]">
@@ -421,7 +421,7 @@ export default function SchemaExplorerPage() {
         </div>
       )}
 
-      {/* Schema tree */}
+      {/* The following code displays the schema tree. */}
       {schema && viewMode === "table" && (
         <div className="space-y-px stagger-fade-in">
           {filteredTables.length === 0 ? (
@@ -442,7 +442,7 @@ export default function SchemaExplorerPage() {
                     ) : (
                       <ChevronRight className="w-3 h-3 text-[var(--color-text-dim)]" />
                     )}
-                    {/* Tree-style table icon SVG */}
+            {/* The SVG displays a table icon for the tree. */}
                     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="flex-shrink-0">
                       <rect x="1" y="1" width="12" height="12" stroke="var(--color-text-muted)" strokeWidth="1" fill="none" rx="0" />
                       <line x1="1" y1="5" x2="13" y2="5" stroke="var(--color-text-dim)" strokeWidth="0.5" />
@@ -612,7 +612,7 @@ export default function SchemaExplorerPage() {
                                 <td className="px-4 py-1.5">
                                   {piiDetections[col.name.toLowerCase()] && (
                                     <span className={`text-[11px] px-1.5 py-0.5 rounded-[6px] border tracking-wider uppercase ${
-                                      piiDetections[col.name.toLowerCase()] === "drop"
+                                      piiDetections[col.name.toLowerCase()] === "hide"
                                         ? "badge-error"
                                         : piiDetections[col.name.toLowerCase()] === "hash"
                                           ? "border-purple-500/30 text-purple-400"

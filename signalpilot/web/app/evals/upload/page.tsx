@@ -1,9 +1,12 @@
 "use client";
 
 /**
- * Hidden eval-upload page (/evals/upload) — not linked from the sidebar.
- * Spec: eval-upload-spec.md §2. Three states: ready → uploading → done.
- * Backend: POST /api/evals/upload (gateway/api/uploads.py).
+ * The sidebar does not link to the /evals/upload page.
+ * The page has ready, uploading, and done states.
+ * The upload uses the S3 multipart flow.
+ * The client calls POST /api/evals/upload/initiate.
+ * The client sends each part directly to S3.
+ * The client calls POST /api/evals/upload/complete.
  */
 
 import { useCallback, useRef, useState } from "react";
@@ -30,7 +33,6 @@ function formatSize(bytes: number): string {
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${bytes} B`;
 }
-
 function validate(file: File): string | null {
   if (!file.name.toLowerCase().endsWith(".zip")) {
     return `"${file.name}" isn't a .zip file — please zip your eval materials first.`;
@@ -228,4 +230,3 @@ export default function EvalUploadPage() {
     </div>
   );
 }
-

@@ -1,6 +1,6 @@
 """Read-only introspection of live eval sandboxes (the /evals sandbox panel).
 
-backends.py owns the write side — creating, waiting on and deleting the
+backends.py owns the write side: creating, waiting on and deleting the
 container that runs one eval question. This is the read side: what is alive
 right now, why a pod that is not Running is not Running, and a bounded live tail
 of its output. Nothing here mutates cluster or daemon state.
@@ -15,7 +15,7 @@ Org scoping differs by backend and both are enforced here:
 
 Nothing that could carry a credential is emitted. Pod/container specs are never
 returned (that is where env lives); free text that a cluster can put in front of
-us — event messages, container state messages — goes through `redact` first.
+us: event messages, container state messages: goes through `redact` first.
 """
 
 from __future__ import annotations
@@ -24,9 +24,10 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from datetime import UTC, datetime
 from typing import Protocol
+from urllib.parse import unquote, urlsplit
 
 import httpx
 
@@ -55,7 +56,7 @@ def is_valid_sandbox_name(name: str) -> bool:
     return bool(_SANDBOX_NAME_RE.fullmatch(name or ""))
 
 
-# ─── Redaction ───────────────────────────────────────────────────────────────
+# Redaction.
 
 REDACTED = "[redacted]"
 
@@ -63,17 +64,32 @@ REDACTED = "[redacted]"
 # not known to this process (the per-run MCP key, for instance, is minted by the
 # route that started the run and is gone by the time anyone watches).
 _SK_TOKEN = re.compile(r"\bsk-[A-Za-z0-9_-]{12,}")
-_BEARER = re.compile(r"(?i)\b(bearer|x-api-key|authorization)\s*[:=]\s*\S+")
+_SP_TOKEN = re.compile(r"\bsp_[0-9a-f]{32}\b")
+_AUTH_HEADER = re.compile(
+    r"(?i)\b(authorization|proxy-authorization)\s*[:=]\s*(?:bearer\s+)?[^\s'\"<>]+"
+)
+_BEARER = re.compile(r"(?i)\bbearer\s+[^\s'\"<>]+")
+_API_KEY_HEADER = re.compile(r"(?i)\b(x-api-key)\s*[:=]\s*[^\s'\"<>]+")
+_ENV_SECRET = re.compile(
+    r"(?i)\b(PGPASSWORD|DATABASE_URL|SP_API_KEY|ANTHROPIC_API_KEY|"
+    r"CLAUDE_CODE_OAUTH_TOKEN|GITHUB_TOKEN|GH_TOKEN|AWS_SECRET_ACCESS_KEY|"
+    r"AWS_SESSION_TOKEN)\s*[:=]\s*[^\s'\"<>]+"
+)
+_SIGNED_URL_SECRET = re.compile(
+    r"(?i)([?&](?:X-Amz-(?:Credential|Signature|Security-Token)|AWSAccessKeyId|Signature)=)"
+    r"[^&\s'\"<>]+"
+)
 _BLOB = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{40,}={0,2}(?![A-Za-z0-9+/])")
+_DSN_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^:/@\s]+:[^@\s]+@")
 
 
 def _redact_blob(match: re.Match[str]) -> str:
-    # An all-hex run is an image digest or a container id, not a credential —
+    # An all-hex run is an image digest or a container id, not a credential:
     # redacting those would hide exactly what a pull failure needs to show.
     return match.group(0) if re.fullmatch(r"[0-9a-f]+", match.group(0)) else REDACTED
 
 
-def redact(text: str) -> str:
+def redact(text: str, *, extra_secrets: Iterable[str] = ()) -> str:
     """Strip credentials from text the cluster or daemon hands us."""
     if not text:
         return ""
@@ -82,15 +98,56 @@ def redact(text: str) -> str:
         known = [settings.claude_token, settings.anthropic_key]
     except Exception:
         known = []
-    for value in known:
+    secrets = [*known, *extra_secrets]
+    # Drivers often log only a DSN password rather than the complete URL.
+    for value in list(secrets):
+        if "://" not in value:
+            continue
+        try:
+            password = urlsplit(value).password
+        except ValueError:
+            password = None
+        if password:
+            secrets.append(unquote(password))
+    for value in secrets:
         if value and len(value) >= 8:
             text = text.replace(value, REDACTED)
-    text = _BEARER.sub(lambda m: f"{m.group(1)}: {REDACTED}", text)
+    text = _AUTH_HEADER.sub(lambda m: f"{m.group(1)}: {REDACTED}", text)
+    text = _BEARER.sub(f"Bearer {REDACTED}", text)
+    text = _API_KEY_HEADER.sub(lambda m: f"{m.group(1)}: {REDACTED}", text)
+    text = _ENV_SECRET.sub(lambda m: f"{m.group(1)}={REDACTED}", text)
+    text = _SIGNED_URL_SECRET.sub(lambda m: f"{m.group(1)}{REDACTED}", text)
     text = _SK_TOKEN.sub(REDACTED, text)
+    text = _SP_TOKEN.sub(REDACTED, text)
+    text = _DSN_USERINFO.sub(lambda m: f"{m.group(1)}{REDACTED}:{REDACTED}@", text)
     return _BLOB.sub(_redact_blob, text)
 
 
-# ─── Shared shaping helpers ──────────────────────────────────────────────────
+class _RedactionBuffer:
+    """Keep a tail so credentials split across transport chunks stay intact."""
+
+    _TAIL = 256
+
+    def __init__(self) -> None:
+        self._pending = ""
+
+    def feed(self, chunk: str) -> str:
+        self._pending += chunk
+        newline = self._pending.rfind("\n")
+        if newline >= 0:
+            ready, self._pending = self._pending[: newline + 1], self._pending[newline + 1 :]
+            return redact(ready)
+        if len(self._pending) > self._TAIL * 2:
+            ready, self._pending = self._pending[: -self._TAIL], self._pending[-self._TAIL :]
+            return redact(ready)
+        return ""
+
+    def flush(self) -> str:
+        ready, self._pending = self._pending, ""
+        return redact(ready)
+
+
+# Shared shaping helpers.
 
 
 def _iso(value) -> str:
@@ -119,7 +176,7 @@ def _age_seconds(value) -> int | None:
 
 
 def _pick(d: dict, *names, default=None):
-    """Read the first present key — kubernetes_asyncio `to_dict()` is snake_case
+    """Read the first present key: kubernetes_asyncio `to_dict()` is snake_case
     but a raw manifest dict is camelCase, and tests feed both."""
     for name in names:
         if name in d and d[name] is not None:
@@ -134,7 +191,7 @@ class SandboxView(Protocol):
     async def aclose(self) -> None: ...
 
 
-# ─── Kubernetes ──────────────────────────────────────────────────────────────
+# Kubernetes.
 
 
 class KubernetesSandboxView:
@@ -190,7 +247,7 @@ class KubernetesSandboxView:
                 "message": "No reachable Kubernetes cluster — sandbox introspection is unavailable.",
                 "sandboxes": [],
             }
-        owners = runner.sandbox_index(self._org_id)
+        owners = await runner.sandbox_index(self._org_id)
         try:
             resp = await core.list_namespaced_pod(
                 namespace=ns, label_selector=_POD_LABEL_SELECTOR
@@ -262,19 +319,27 @@ class KubernetesSandboxView:
             return
 
         sent = 0
+        redactor = _RedactionBuffer()
         deadline = asyncio.get_event_loop().time() + LOG_STREAM_MAX_SECONDS
         try:
             async for chunk in resp.content.iter_chunked(4096):
                 text = chunk.decode("utf-8", errors="replace")
                 sent += len(chunk)
-                yield "log", text
+                if safe := redactor.feed(text):
+                    yield "log", safe
                 if sent >= LOG_STREAM_MAX_BYTES:
+                    if safe := redactor.flush():
+                        yield "log", safe
                     yield "end", "byte-cap"
                     return
                 if asyncio.get_event_loop().time() >= deadline:
+                    if safe := redactor.flush():
+                        yield "log", safe
                     yield "end", "deadline"
                     return
             # The API server closes the follow stream when the container exits.
+            if safe := redactor.flush():
+                yield "log", safe
             yield "end", "sandbox-exited"
         finally:
             _release(resp)
@@ -321,7 +386,7 @@ def _container_state(status: dict) -> tuple[str, str, int, bool, bool]:
     them will ever finish.
 
     OOMKilled is called out separately because eval pods are sized like notebook
-    pods (512Mi), which a heavy question — a dbt build, say — can exceed. The
+    pods (512Mi), which a heavy question: a dbt build, say: can exceed. The
     kubelet reports that as a terminated container with a non-zero exit code
     like any other crash, so without this flag "the agent failed" and "we did
     not give it enough memory" look identical in the panel.
@@ -377,14 +442,12 @@ def _shape_pod(pod: dict, owners: dict[str, dict]) -> dict:
         "created_at": _iso(created),
         "started_at": _iso(_pick(status, "start_time", "startTime")),
         "age_seconds": _age_seconds(created),
-        # Run state is authoritative: pod labels are sanitized to fit the
-        # Kubernetes label grammar, so a question id like "t1:fan/out" comes
-        # back as "t1-fan-out" and would not match anything in the UI.
+        # Run state provides the original task identifier.
+        # Kubernetes labels replace unsupported characters and cannot provide this identifier.
         "run_id": owner.get("run_id") or str(labels.get(f"{_EVAL_POD_LABEL}-run") or ""),
-        "question_id": owner.get("question_id") or str(labels.get(f"{_EVAL_POD_LABEL}-question") or ""),
-        "question_title": owner.get("question_title", ""),
-        "setup_state": owner.get("setup_state") or str(labels.get(f"{_EVAL_POD_LABEL}-setup") or ""),
-        "kind": owner.get("kind") or ("setup" if labels.get(f"{_EVAL_POD_LABEL}-setup") else "question"),
+        "task_id": owner.get("task_id") or str(labels.get(f"{_EVAL_POD_LABEL}-task") or ""),
+        "task_title": owner.get("task_title", ""),
+        "task_phase": owner.get("task_phase") or str(labels.get(f"{_EVAL_POD_LABEL}-phase") or "agent"),
     }
 
 
@@ -408,13 +471,13 @@ def _shape_event(event: dict) -> dict:
     }
 
 
-# ─── Docker ──────────────────────────────────────────────────────────────────
+# Docker.
 
 
 class DockerSandboxView:
     """Local mode: the same panel over the host Docker daemon.
 
-    Docker has no namespaces, so ownership is proven against run state — a
+    Docker has no namespaces, so ownership is proven against run state: a
     container is this org's only if the run id in its labels names a run
     directory under this org's eval root.
     """
@@ -432,9 +495,9 @@ class DockerSandboxView:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    def _owns(self, labels: dict) -> bool:
+    async def _owns(self, labels: dict) -> bool:
         run_id = str(labels.get(f"{_DOCKER_LABEL}.run") or "")
-        return bool(run_id) and runner.read_run(self._org_id, run_id) is not None
+        return bool(run_id) and await runner.run_exists(self._org_id, run_id)
 
     async def _list_raw(self) -> list[dict]:
         resp = await self._client.get(
@@ -457,8 +520,8 @@ class DockerSandboxView:
                 "message": f"Could not reach the Docker daemon: {type(exc).__name__}",
                 "sandboxes": [],
             }
-        owners = runner.sandbox_index(self._org_id)
-        mine = [c for c in raw if self._owns(c.get("Labels") or {})]
+        owners = await runner.sandbox_index(self._org_id)
+        mine = [c for c in raw if await self._owns(c.get("Labels") or {})]
         return {
             "backend": self.backend,
             "live": True,
@@ -484,7 +547,7 @@ class DockerSandboxView:
             return ""
         for c in raw:
             cid = str(c.get("Id") or "")
-            if cid.startswith(name) and self._owns(c.get("Labels") or {}):
+            if cid.startswith(name) and await self._owns(c.get("Labels") or {}):
                 return cid
         return ""
 
@@ -494,6 +557,7 @@ class DockerSandboxView:
             yield "end", "not-found"
             return
         sent = 0
+        redactor = _RedactionBuffer()
         deadline = asyncio.get_event_loop().time() + LOG_STREAM_MAX_SECONDS
         try:
             async with self._client.stream(
@@ -508,13 +572,20 @@ class DockerSandboxView:
                     return
                 async for chunk in resp.aiter_bytes(4096):
                     sent += len(chunk)
-                    yield "log", chunk.decode("utf-8", errors="replace")
+                    if safe := redactor.feed(chunk.decode("utf-8", errors="replace")):
+                        yield "log", safe
                     if sent >= LOG_STREAM_MAX_BYTES:
+                        if safe := redactor.flush():
+                            yield "log", safe
                         yield "end", "byte-cap"
                         return
                     if asyncio.get_event_loop().time() >= deadline:
+                        if safe := redactor.flush():
+                            yield "log", safe
                         yield "end", "deadline"
                         return
+            if safe := redactor.flush():
+                yield "log", safe
             yield "end", "sandbox-exited"
         except Exception as exc:
             yield "error", f"log stream ended: {type(exc).__name__}"
@@ -543,21 +614,20 @@ def _shape_container(c: dict, owners: dict[str, dict]) -> dict:
         "started_at": "",
         "age_seconds": _age_seconds(c.get("Created")),
         "run_id": owner.get("run_id") or str(labels.get(f"{_DOCKER_LABEL}.run") or ""),
-        "question_id": owner.get("question_id") or str(labels.get(f"{_DOCKER_LABEL}.question") or ""),
-        "question_title": owner.get("question_title", ""),
-        "setup_state": owner.get("setup_state") or str(labels.get(f"{_DOCKER_LABEL}.setup") or ""),
-        "kind": owner.get("kind") or ("setup" if labels.get(f"{_DOCKER_LABEL}.setup") else "question"),
+        "task_id": owner.get("task_id") or str(labels.get(f"{_DOCKER_LABEL}.task") or ""),
+        "task_title": owner.get("task_title", ""),
+        "task_phase": owner.get("task_phase") or str(labels.get(f"{_DOCKER_LABEL}.phase") or "agent"),
     }
 
 
-# ─── Selection ───────────────────────────────────────────────────────────────
+# Selection.
 
 
 def get_sandbox_view(org_id: str) -> SandboxView:
     """Pick the introspection view for the current deployment mode.
 
     Mirrors `get_execution_backend` so the panel always reads the same runtime
-    the runner writes to — cloud never falls back to the Docker socket.
+    the runner writes to: cloud never falls back to the Docker socket.
     """
     from ..runtime.mode import is_cloud_mode
 

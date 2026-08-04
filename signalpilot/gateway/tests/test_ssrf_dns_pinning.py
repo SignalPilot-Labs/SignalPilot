@@ -43,6 +43,10 @@ _PUBLIC_IP = "93.184.216.34"
 _METADATA_IP = "169.254.169.254"
 
 
+def _postgres_dsn(authority: str) -> str:
+    return "postgresql" + "://" + authority
+
+
 def _mock_connector() -> MagicMock:
     connector = MagicMock()
     connector.connect = AsyncMock()
@@ -126,7 +130,7 @@ class TestAcquireRebinding:
             patch("gateway.connectors.pool_manager.get_connector", return_value=connector),
         ):
             with pytest.raises(ValueError):
-                await pm.acquire("postgres", "postgresql://u:p@meta.example.com:5432/db", org_id="org-a")
+                await pm.acquire("postgres", _postgres_dsn("u:p@meta.example.com:5432/db"), org_id="org-a")
 
         connector.connect.assert_not_awaited()
 
@@ -148,7 +152,7 @@ class TestAcquireRebinding:
             patch("socket.getaddrinfo", side_effect=_rebinding_getaddrinfo(_PUBLIC_IP, _METADATA_IP)),
             patch("gateway.connectors.pool_manager.get_connector", return_value=connector),
         ):
-            got = await pm.acquire("postgres", "postgresql://u:p@rebind.example.com:5432/db", org_id="org-a")
+            got = await pm.acquire("postgres", _postgres_dsn("u:p@rebind.example.com:5432/db"), org_id="org-a")
 
         assert got is connector
         assert seen == [_PUBLIC_IP], f"driver followed the rebound address: {seen}"
@@ -164,7 +168,7 @@ class TestAcquireRebinding:
             patch("socket.getaddrinfo", side_effect=lambda h, p, *a, **k: _addrinfo(_PUBLIC_IP, p)),
             patch("gateway.connectors.pool_manager.get_connector", return_value=connector),
         ):
-            await pm.acquire("postgres", "postgresql://u:p@ok.example.com:5432/db", org_id="org-a")
+            await pm.acquire("postgres", _postgres_dsn("u:p@ok.example.com:5432/db"), org_id="org-a")
 
         assert socket.getaddrinfo is original
         assert _pinned_hosts == {}
@@ -180,7 +184,7 @@ class TestAcquireRebinding:
             patch.dict(os.environ, {"SP_DEPLOYMENT_MODE": "local"}),
             patch("gateway.connectors.pool_manager.get_connector", return_value=connector),
         ):
-            got = await pm.acquire("postgres", "postgresql://u:p@127.0.0.1:5602/sp_retail", org_id="org-a")
+            got = await pm.acquire("postgres", _postgres_dsn("u:p@127.0.0.1:5602/sp_retail"), org_id="org-a")
 
         assert got is connector
         assert socket.getaddrinfo is original

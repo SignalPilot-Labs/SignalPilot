@@ -27,7 +27,7 @@ from ..config.evals import EvalRunSettings
 
 logger = logging.getLogger(__name__)
 
-# Unversioned path — the daemon serves its newest supported API version.
+# Unversioned path: the daemon serves its newest supported API version.
 _DOCKER_API = "http://docker"
 
 # Exit code reported when the workload outlived its timeout.
@@ -42,7 +42,7 @@ class ContainerRun:
 
     `secret_env` carries credentials (Anthropic tokens, the per-run MCP API key
     embedded in the MCP config). Backends must keep those out of any spec a
-    cluster operator can read back — on Kubernetes they ride a Secret, never the
+    cluster operator can read back: on Kubernetes they ride a Secret, never the
     pod spec.
 
     `binds` and `extra_network` are Docker-only host affordances used by the
@@ -93,7 +93,7 @@ class ExecutionBackend(Protocol):
     async def aclose(self) -> None: ...
 
 
-# ─── Docker ──────────────────────────────────────────────────────────────────
+# Docker.
 
 
 class DockerBackend:
@@ -108,15 +108,25 @@ class DockerBackend:
         await self._client.aclose()
 
     async def run(self, spec: ContainerRun) -> tuple[int, str]:
+        if spec.extra_network:
+            raise RuntimeError("Eval workloads may not attach an extra Docker network")
         docker = self._client
-        env = [f"{k}={v}" for k, v in {**spec.env, **spec.secret_env}.items()]
+        env = [f"{k}={v}" for k, v in {"HOME": "/work", **spec.env, **spec.secret_env}.items()]
+        tmpfs = {
+            "/work": "rw,size=512m,mode=1777",
+            "/tmp": "rw,size=512m,mode=1777",  # nosec B108 - This path is a container tmpfs.
+        }
+        if not any(bind.rsplit(":", 2)[-2] == "/repo" for bind in spec.binds):
+            tmpfs["/repo"] = "rw,size=512m,mode=1777"
         create = await docker.post(
             f"{_DOCKER_API}/containers/create",
             json={
                 "Image": spec.image,
                 "Cmd": spec.command,
                 "Env": env,
+                "User": "65532:65532",
                 "Tty": True,  # raw (non-multiplexed) log stream
+                "WorkingDir": "/work",
                 "Labels": {
                     "signalpilot.eval": "1",
                     **{f"signalpilot.eval.{k}": v for k, v in spec.labels.items()},
@@ -126,6 +136,11 @@ class DockerBackend:
                     "Binds": spec.binds,
                     "Memory": spec.memory_bytes,
                     "NanoCpus": spec.nano_cpus,
+                    "ReadonlyRootfs": True,
+                    "CapDrop": ["ALL"],
+                    "SecurityOpt": ["no-new-privileges:true"],
+                    "PidsLimit": 256,
+                    "Tmpfs": tmpfs,
                 },
             },
         )
@@ -134,15 +149,6 @@ class DockerBackend:
         cid = create.json()["Id"]
 
         try:
-            if spec.extra_network:
-                net_resp = await docker.post(
-                    f"{_DOCKER_API}/networks/{spec.extra_network}/connect", json={"Container": cid}
-                )
-                if net_resp.status_code not in (200, 201):
-                    raise RuntimeError(
-                        f"setup network '{spec.extra_network}' attach failed "
-                        f"({net_resp.status_code}): {net_resp.text[:200]}"
-                    )
             start = await docker.post(f"{_DOCKER_API}/containers/{cid}/start")
             if start.status_code not in (204, 304):
                 raise RuntimeError(f"container start failed ({start.status_code}): {start.text[:300]}")
@@ -167,7 +173,7 @@ class DockerBackend:
             await docker.delete(f"{_DOCKER_API}/containers/{cid}", params={"force": "1"})
 
 
-# ─── Kubernetes ──────────────────────────────────────────────────────────────
+# Kubernetes.
 
 # Everything the runner script writes goes to one of these emptyDirs, so the
 # image's root filesystem can stay read-only: /work is the claude CLI's project
@@ -175,7 +181,7 @@ class DockerBackend:
 # scratch for node and the CLI, /repo is where a setup script's `git clone`
 # lands (unused by question pods, and an empty dir costs nothing there).
 _WORK_DIR = "/work"
-_TMP_DIR = "/tmp"
+_TMP_DIR = "/tmp"  # nosec B108 - This path is a mounted container directory.
 _REPO_DIR = "/repo"
 
 
@@ -195,7 +201,7 @@ def eval_pod_manifest(
     second object to garbage-collect. It also matches the notebook machinery,
     so both sandboxed workloads share one scheduling and hardening story.
 
-    Credentials are never in this spec — they arrive via envFrom on the
+    Credentials are never in this spec: they arrive via envFrom on the
     ownerRef'd Secret, so `kubectl describe pod` and pod events show nothing.
 
     `spec.memory_bytes`/`nano_cpus` size the Docker path only. Pod sizing comes
@@ -219,10 +225,7 @@ def eval_pod_manifest(
             "labels": {
                 "app": "signalpilot-eval",
                 _EVAL_POD_LABEL: "1",
-                **{
-                    f"{_EVAL_POD_LABEL}-{k}": _k8s_label_value(v, k)
-                    for k, v in spec.labels.items()
-                },
+                **{f"{_EVAL_POD_LABEL}-{k}": _k8s_label_value(v, k) for k, v in spec.labels.items()},
             },
         },
         "spec": {
@@ -250,10 +253,7 @@ def eval_pod_manifest(
                     "image": spec.image,
                     "imagePullPolicy": "IfNotPresent",
                     "command": spec.command,
-                    "env": [
-                        {"name": k, "value": v}
-                        for k, v in {"HOME": _WORK_DIR, **spec.env}.items()
-                    ],
+                    "env": [{"name": k, "value": v} for k, v in {"HOME": _WORK_DIR, **spec.env}.items()],
                     "envFrom": [{"secretRef": {"name": secret_name}}],
                     "workingDir": _WORK_DIR,
                     "resources": resources,
@@ -287,7 +287,7 @@ class KubernetesBackend:
     `ensure_org_namespace`, which installs the RoleBinding that grants this
     gateway pods/secrets inside it, plus default-deny + allow-gateway
     NetworkPolicies, a ResourceQuota and a LimitRange. The prefix is
-    SP_EVAL_K8S_NAMESPACE_PREFIX — see config/evals.py for why it defaults to
+    SP_EVAL_K8S_NAMESPACE_PREFIX: see config/evals.py for why it defaults to
     the notebook tenant prefix rather than a dedicated one.
     """
 
@@ -306,7 +306,22 @@ class KubernetesBackend:
     async def _namespace(self) -> str:
         """Resolve (and bootstrap) the eval namespace for this org."""
         if self._orchestrator is None:
+            import os
+
             from ..orchestrator.kubernetes import KubernetesOrchestrator
+
+            # An eval pod runs model-authored code with a warehouse
+            # credential. Default-deny egress is not a hardening extra here,
+            # it is the wall between that pod and every notebook, in-cluster
+            # service and VPC endpoint around it. If the deployment has opted
+            # out of NetworkPolicy, this backend refuses to start rather than
+            # run the agent on a flat network.
+            if os.getenv("SP_NOTEBOOK_NETWORK_POLICY", "true").lower() == "false":
+                raise RuntimeError(
+                    "Eval runs refuse to start: SP_NOTEBOOK_NETWORK_POLICY=false leaves eval "
+                    "pods on a flat network with notebooks, cluster services and VPC endpoints. "
+                    "Enable NetworkPolicy for eval namespaces before enabling the harness."
+                )
 
             orch = KubernetesOrchestrator()
             await orch._ensure_client()
@@ -366,7 +381,7 @@ class KubernetesBackend:
             status = pod.get("status") or {}
             phase = (status.get("phase") or "").lower()
             if phase in ("succeeded", "failed"):
-                # activeDeadlineSeconds fired — report it the way the Docker
+                # activeDeadlineSeconds fired: report it the way the Docker
                 # path reports its own timeout, so grading treats them alike.
                 if status.get("reason") == "DeadlineExceeded":
                     return TIMED_OUT
@@ -380,9 +395,7 @@ class KubernetesBackend:
 
     async def _read_logs(self, core, pod_name: str, ns: str) -> str:
         try:
-            return str(
-                await core.read_namespaced_pod_log(name=pod_name, namespace=ns, container="eval")
-            )
+            return str(await core.read_namespaced_pod_log(name=pod_name, namespace=ns, container="eval"))
         except Exception as exc:
             logger.warning("Failed to read eval pod logs %s/%s: %s", ns, pod_name, exc)
             return ""
@@ -402,13 +415,13 @@ class KubernetesBackend:
                     logger.warning("Failed to delete eval %s %s/%s: %s", what, ns, pod_name, exc)
 
 
-# ─── Selection ───────────────────────────────────────────────────────────────
+# Selection.
 
 
 def get_execution_backend(settings: EvalRunSettings, *, org_id: str) -> ExecutionBackend:
     """Pick the backend for the current deployment mode.
 
-    Cloud never reaches DockerBackend — a cluster this gateway cannot talk to is
+    Cloud never reaches DockerBackend: a cluster this gateway cannot talk to is
     a failed run, not a reason to hand untrusted eval workloads the host daemon.
     """
     from ..runtime.mode import is_cloud_mode

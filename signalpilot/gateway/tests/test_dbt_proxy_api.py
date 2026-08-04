@@ -1,7 +1,7 @@
 """FastAPI TestClient tests for the dbt-proxy run-token API.
 
 Uses a minimal test app with only the dbt_proxy router and mocked app.state.
-No lifespan/DB is needed — token operations are in-memory.
+No lifespan/DB is needed. token operations are in-memory.
 """
 
 from __future__ import annotations
@@ -117,8 +117,9 @@ class TestDbtProxyApi:
         assert get_resp.status_code == 404
 
     def test_without_dbt_proxy_scope_returns_403(self) -> None:
-        """API-key auth without dbt_proxy scope → 403 from RequireScope."""
+        """Verify that RequireScope returns status 403 without dbt_proxy scope."""
         from unittest.mock import MagicMock
+
         from fastapi import HTTPException
 
         request = MagicMock()
@@ -130,7 +131,7 @@ class TestDbtProxyApi:
     def test_mint_does_not_log_org_id_or_connector_name(self) -> None:
         """Mint log line must not include org_id or connector_name."""
         import logging
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         run_id = uuid.uuid4()
         app = _make_test_app()
@@ -139,7 +140,7 @@ class TestDbtProxyApi:
         original_info = logging.Logger.info
 
         def capture_info(self, msg, *args, **kwargs):
-            log_calls.append((msg,) + args)
+            log_calls.append((msg, *args))
             return original_info(self, msg, *args, **kwargs)
 
         with patch.object(logging.Logger, "info", capture_info):

@@ -555,7 +555,7 @@ export default function NotebooksPage() {
               const config = await buildConfig(session.id, apiKey, "projects");
               setNotebookConfig(config);
               setState("booting");
-              startPing();
+              startPing(session.id);
               return;
             }
           } else if (runtimeMode === "notion-trail") {
@@ -568,7 +568,7 @@ export default function NotebooksPage() {
               const config = await buildConfig(session.id, apiKey, "notebooks", trail);
               setNotebookConfig(config);
               setState("booting");
-              startPing();
+              startPing(session.id);
               return;
             }
             await deleteNotebookSession().catch(() => {});
@@ -579,7 +579,7 @@ export default function NotebooksPage() {
             const config = await buildConfig(session.id, apiKey, "notebooks");
             setNotebookConfig(config);
             setState("booting");
-            startPing();
+            startPing(session.id);
             return;
           } else {
             setActiveNotebookSession(session);
@@ -706,7 +706,7 @@ export default function NotebooksPage() {
 
       setNotebookConfig(config);
       setState("booting");
-      startPing();
+      startPing(session.id);
     } catch (e) {
       toast(String(e), "error");
       setState("no-session");
@@ -740,10 +740,12 @@ export default function NotebooksPage() {
     };
   }
 
-  function startPing() {
+  function startPing(sessionId: string) {
     if (pingRef.current) clearInterval(pingRef.current);
     pingRef.current = setInterval(() => {
-      pingNotebookSession().catch((err) => console.warn("Ping failed:", err));
+      pingNotebookSession(sessionId).catch((err) =>
+        console.warn("Ping failed:", err),
+      );
     }, 60_000);
   }
 
@@ -794,12 +796,12 @@ export default function NotebooksPage() {
     return `/notebook${qs ? `?${qs}` : ""}`;
   }
 
-  // ─── Render: Paywall (free-tier cloud users) ──────────────────
+  // The following code displays the cloud paywall.
   if (gated) {
     return <NotebooksProjectsPaywall />;
   }
 
-  // ─── Render: Loading ──────────────────────────────────────────
+  // The following code displays the loading state.
   if (state === "loading") {
     return (
       <div className="flex flex-col h-screen bg-background text-foreground">
@@ -817,7 +819,7 @@ export default function NotebooksPage() {
     );
   }
 
-  // ─── Render: Booting / Ready ──────────────────────────────────
+  // The following code displays the boot and ready states.
   if ((state === "booting" || state === "ready") && notebookConfig) {
     const effectiveNotebookConfig = getEffectiveNotebookConfig(notebookConfig);
     const bootKey = [
@@ -883,7 +885,7 @@ export default function NotebooksPage() {
     );
   }
 
-  // ─── Render: No session (landing) ─────────────────────────────
+  // The following code displays the page without a session.
   return (
     <div className="p-8 animate-fade-in">
       <div className="max-w-6xl mx-auto mt-16">

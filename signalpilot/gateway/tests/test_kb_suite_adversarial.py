@@ -296,9 +296,7 @@ def test_default_min_score_zero_excludes_zero_score_docs_strict_gt():
 
 
 def test_negative_min_score_still_excludes_non_matching_docs():
-    # Hardened after review: a doc matching NO query term must never be
-    # returned, however lenient min_score is (scores are strictly positive
-    # for any doc sharing >= 1 token, and only matching docs are scored).
+    # Exclude a document that contains no query term at any minimum score.
     docs = [("a", "", "kiwi fern"), ("b", "", "lime dune")]
     result = bm25_rank("kiwi", docs, min_score=-1.0)
     assert ids(result) == ["a"]
@@ -315,8 +313,7 @@ def test_limit_zero_returns_empty_slice():
 
 
 def test_negative_limit_clamped_to_zero():
-    # Hardened after review: negative limits are clamped to 0 instead of
-    # silently slicing off the tail (the old scored[:-1] footgun).
+    # Clamp a negative result limit to zero.
     docs = [
         ("a", "", "zeta zeta zeta lime"),
         ("b", "", "zeta zeta lime dune"),
@@ -364,7 +361,7 @@ def test_adding_unrelated_doc_does_not_change_winner():
     # the higher-tf doc stays on top.
     base = [("a", "", "zeta zeta zeta lime"), ("b", "", "zeta lime kelp dune")]
     before = bm25_rank("zeta", base)
-    after = bm25_rank("zeta", base + [("x", "", "milk fern oaks pine")])
+    after = bm25_rank("zeta", [*base, ("x", "", "milk fern oaks pine")])
     assert ids(before)[0] == "a"
     assert ids(after)[0] == "a"
 
@@ -378,8 +375,7 @@ def test_duplicate_doc_ids_are_scored_independently_and_both_returned():
 
 
 def test_none_body_treated_as_empty():
-    # Hardened after review: None fields are treated as empty strings rather
-    # than crashing the whole search on one malformed row.
+    # Treat a null field as an empty string.
     result = bm25_rank("title", [("a", "title", None)])  # type: ignore[list-item]
     assert ids(result) == ["a"]
 

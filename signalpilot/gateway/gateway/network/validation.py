@@ -117,14 +117,14 @@ def _is_blocked_address(addr: ipaddress.IPv4Address | ipaddress.IPv6Address, all
       fe80::/10
     - Unspecified: 0.0.0.0, ::
     - ALWAYS_BLOCKED_NETWORKS: CGNAT 100.64.0.0/10 (RFC 6598), 6to4 relay
-      192.88.99.0/24 (RFC 7526) — no stdlib property covers these ranges
+      192.88.99.0/24 (RFC 7526): no stdlib property covers these ranges
 
     Blocked only when SP_ALLOW_PRIVATE_CONNECTIONS is unset/false:
     - RFC1918 private ranges: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
     - IPv6 unique-local: fc00::/7
 
     Note: _check_ip_address() is the single call site for both direct IPv4/IPv6
-    and IPv4-mapped IPv6 paths — no changes to _check_ip_address() are needed.
+    and IPv4-mapped IPv6 paths: no changes to _check_ip_address() are needed.
     """
     if addr.is_loopback:
         return True
@@ -168,8 +168,7 @@ def _check_ip_address(ip_str: str, allow_private: bool) -> None:
 def assert_address_allowed(ip: str) -> None:
     """Raise ValueError if a literal IP address is on the SSRF denylist.
 
-    Used to re-check the address a driver actually connected to, which is the only
-    control available for drivers that resolve outside socket.getaddrinfo.
+    Recheck the driver connection address when the driver does not use socket.getaddrinfo.
     """
     _check_ip_address(ip, _allow_private_connections())
 
@@ -214,7 +213,7 @@ def validate_connection_host(host: str) -> None:
         raise ValueError(f"DNS resolution returned no addresses for host {host!r}. Refusing connection.")
 
     # Check ALL resolved addresses to prevent DNS rebinding.
-    # sockaddr is always (ip_str, port, ...) — position 0 is always str.
+    # sockaddr is always (ip_str, port, ...): position 0 is always str.
     for _family, _socktype, _proto, _canonname, sockaddr in results:
         ip_str = cast(str, sockaddr[0])
         _check_ip_address(ip_str, allow_private)
@@ -275,8 +274,8 @@ def resolve_and_validate(host: str, port: int, db_type: str) -> list[str]:
 # DSN would close that window but breaks TLS hostname verification
 # (sslmode=verify-full) and SNI-based routing, which managed Postgres/Snowflake
 # style endpoints depend on. Instead the resolver itself is pinned for the
-# duration of the connect: the driver still receives the hostname — so the
-# certificate check and the SNI extension are unchanged — but its lookup can only
+# duration of the connect: the driver still receives the hostname: so the
+# certificate check and the SNI extension are unchanged: but its lookup can only
 # return addresses that were already validated.
 #
 # Coverage is exactly "lookups that go through socket.getaddrinfo", which
@@ -285,7 +284,7 @@ def resolve_and_validate(host: str, port: int, db_type: str) -> list[str]:
 # (psycopg2/libpq, pymssql/FreeTDS) never call it and are NOT pinned.
 
 # Captured at import so pinned entries are always resolved by the real stdlib
-# function — never by a wrapper or a patched-in replacement.
+# function: never by a wrapper or a patched-in replacement.
 _STDLIB_GETADDRINFO = socket.getaddrinfo
 
 _pin_lock = threading.RLock()
@@ -418,7 +417,7 @@ def validate_connection_params(
 
 
 def validate_xata_control_url(url: str) -> None:
-    """Reject non-https or SSRF-risky xata_api_url / xata_token_url.
+    """Reject a non-https or SSRF-risky xata_api_url.
 
     https scheme + non-empty hostname are enforced in any mode. The SSRF
     deny-list (loopback / link-local / private / IMDS) is applied in cloud
@@ -428,10 +427,10 @@ def validate_xata_control_url(url: str) -> None:
 
     parsed = urlparse(url)
     if parsed.scheme != "https":
-        raise ValueError("xata_api_url/xata_token_url must use https://")
+        raise ValueError("xata_api_url must use https://")
     hostname = parsed.hostname
     if not hostname:
-        raise ValueError("xata_api_url/xata_token_url must include a valid hostname")
+        raise ValueError("xata_api_url must include a valid hostname")
     if is_cloud_mode():
         validate_connection_host(hostname)
 

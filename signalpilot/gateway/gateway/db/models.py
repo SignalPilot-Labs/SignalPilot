@@ -157,7 +157,7 @@ class GatewayBYOKKey(GatewayBase):
     key_alias: Mapped[str] = mapped_column(String(200), nullable=False)
     # "local", "aws_kms", "gcp_kms", "azure_kv"
     provider_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    # KMS ARN, key URI, etc. — provider-specific config blob
+    # KMS ARN, key URI, etc. provider-specific config blob
     provider_config: Mapped[dict | None] = mapped_column(JSON)
     # "active", "revoked", "rotating"
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
@@ -183,9 +183,9 @@ class GatewayCredential(GatewayBase):
     # BYOK columns (Phase 1: read path only; Phase 2 adds write path and API)
     # "managed" (existing Fernet) or "byok" (envelope encryption)
     encryption_mode: Mapped[str] = mapped_column(String(20), nullable=False, server_default="managed")
-    # Wrapped (KMS-encrypted) DEK — only set for BYOK mode
+    # Wrapped (KMS-encrypted) DEK: only set for BYOK mode
     wrapped_dek: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
-    # FK-like reference to gateway_byok_keys.id — only set for BYOK mode
+    # FK-like reference to gateway_byok_keys.id: only set for BYOK mode
     byok_key_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
     __table_args__ = (
@@ -264,7 +264,7 @@ class GatewayProject(GatewayBase):
 class GatewayOrg(GatewayBase):
     """Organization record for BYOK key management.
 
-    org_id is the primary key — it is the same string used in
+    org_id is the primary key: it is the same string used in
     GatewayConnection.org_id and GatewayBYOKKey.org_id, eliminating any
     identity ambiguity between a UUID id and a name.
     """
@@ -652,6 +652,13 @@ class GatewayApiKey(GatewayBase):
     created_at: Mapped[str | None] = mapped_column(String)
     last_used_at: Mapped[str | None] = mapped_column(String)
     expires_at: Mapped[str | None] = mapped_column(String, nullable=True)
+    # The evaluation binding limits this key to one run and one task.
+    # The credential stores the warehouse pin and the proposed document overlay.
+    # Request headers cannot define this boundary because the agent controls them.
+    eval_run_id: Mapped[str | None] = mapped_column(String(64))
+    eval_task_id: Mapped[str | None] = mapped_column(String(200))
+    eval_connection: Mapped[str | None] = mapped_column(String(64))
+    eval_doc_ids: Mapped[list | None] = mapped_column(JSON)
 
     __table_args__ = (
         Index("ix_gw_api_keys_org", "org_id"),
@@ -660,7 +667,7 @@ class GatewayApiKey(GatewayBase):
 
 
 class GatewayKnowledgeDoc(GatewayBase):
-    """Knowledge Base documents — org/project/connection-scoped markdown docs."""
+    """Knowledge Base documents: org/project/connection-scoped markdown docs."""
 
     __tablename__ = "gateway_knowledge_docs"
 
@@ -718,7 +725,7 @@ class GatewaySchemaWatch(GatewayBase):
     open a GitHub PR documenting any structural drift.
 
     The last snapshot is stored inline (schema JSON + fingerprint) so diffs
-    survive gateway restarts — unlike the in-memory schema_cache history.
+    survive gateway restarts: unlike the in-memory schema_cache history.
     """
 
     __tablename__ = "gateway_schema_watches"
@@ -746,7 +753,7 @@ class GatewaySchemaWatch(GatewayBase):
 
 
 class GatewayReport(GatewayBase):
-    """Rendered HTML reports — org-scoped, optionally grouped by project (scope_ref)."""
+    """Rendered HTML reports: org-scoped, optionally grouped by project (scope_ref)."""
 
     __tablename__ = "gateway_reports"
 
@@ -791,7 +798,7 @@ class GatewayKnowledgeEdit(GatewayBase):
     )
 
 
-# ─── Workspace Projects ─────────────────────────────────────────────────────
+# Workspace Projects.
 
 
 class GatewayWorkspaceProject(GatewayBase):
@@ -869,7 +876,7 @@ class GatewayUserSession(GatewayBase):
     )
 
 
-# ─── Chat ────────────────────────────────────────────────────────────────────
+# Chat.
 
 
 class GatewayChatConversation(GatewayBase):
@@ -1459,7 +1466,7 @@ class GatewayAnalysisTrail(GatewayBase):
     )
 
 
-# ─── Agent Runs ──────────────────────────────────────────────────────────────
+# Agent Runs.
 
 
 class GatewayAgentRun(GatewayBase):
@@ -1493,7 +1500,7 @@ class GatewayAgentRun(GatewayBase):
     )
 
 
-# ─── Notebook Sessions ──────────────────────────────────────────────────────
+# Notebook Sessions.
 
 
 class GatewayNotebookSession(GatewayBase):
@@ -1508,10 +1515,9 @@ class GatewayNotebookSession(GatewayBase):
     branch: Mapped[str] = mapped_column(String(100), nullable=False, default="main")
     pod_name: Mapped[str | None] = mapped_column(String)
     pod_ip: Mapped[str | None] = mapped_column(String)
-    # pod_ip_internal: raw pod IP used by the gateway proxy to reach the pod inside
-    # the cluster. Distinct from pod_ip which is the legacy NodePort address.
+    # pod_ip_internal is the cluster address that the gateway proxy uses.
+    # pod_ip is the external NodePort address.
     pod_ip_internal: Mapped[str | None] = mapped_column(Text, nullable=True)
-    access_token: Mapped[str | None] = mapped_column(String)
     access_token_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="creating")
     last_ping: Mapped[float | None] = mapped_column(Float)
@@ -1523,11 +1529,11 @@ class GatewayNotebookSession(GatewayBase):
     )
 
 
-# ─── GitHub App Installations ──────────────────────────────────────────────
+# GitHub App Installations.
 
 
 class GatewayUserSecrets(GatewayBase):
-    """Per-user secrets — encrypted at rest."""
+    """Per-user secrets: encrypted at rest."""
 
     __tablename__ = "gateway_user_secrets"
 
@@ -1544,7 +1550,7 @@ class GatewayUserSecrets(GatewayBase):
 
 
 class GatewayOrgSecrets(GatewayBase):
-    """Org-scoped secrets — encrypted at rest."""
+    """Org-scoped secrets: encrypted at rest."""
 
     __tablename__ = "gateway_org_secrets"
 
@@ -1569,9 +1575,9 @@ class GatewayGitHubInstallation(GatewayBase):
     access_token_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
     token_expires_at: Mapped[float | None] = mapped_column(Float)
     permissions: Mapped[dict | None] = mapped_column(JSON)
-    # SP-SEC-005: repository ids the authorizing user could reach at install
-    # time. Installation tokens are minted restricted to this set, including on
-    # refresh. NULL means "legacy row, installed before repository scoping".
+    # These repository identifiers record the installation authorization scope.
+    # New and refreshed installation tokens remain restricted to this set.
+    # NULL requires the installation to reconnect before token issuance.
     authorized_repository_ids: Mapped[list | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     created_by: Mapped[str | None] = mapped_column(String)
@@ -1606,3 +1612,171 @@ class GatewayGitHubRepoLink(GatewayBase):
         Index("ix_gw_ghrepo_org_id", "org_id"),
         Index("ix_gw_ghrepo_installation", "installation_id"),
     )
+
+
+# Evaluation harness state.
+# Retention windows remove run and task details.
+# Accuracy history is the permanent record for the accuracy page.
+# S3 stores transcripts, setup logs, and captures under evals/<org>/runs/<run_id>/.
+
+
+class GatewayEvalConfig(GatewayBase):
+    """Store the evaluation harness configuration for one organization."""
+
+    __tablename__ = "gateway_eval_configs"
+
+    org_id: Mapped[str] = mapped_column(String, primary_key=True)
+    repo_url: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    model: Mapped[str] = mapped_column(String(64), nullable=False, default="sonnet")
+    max_tasks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    prompt_preamble: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    connection: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    autorun_on_knowledge_add: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Opt-in regression notifications (spec §3.7). Empty list = nobody opted in.
+    notify_emails: Mapped[list | None] = mapped_column(JSON)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+
+class GatewayEvalRun(GatewayBase):
+    """Store one evaluation harness run.
+
+    Retention removes detail rows after the trace window.
+    gateway_eval_accuracy_history stores the permanent record.
+    """
+
+    __tablename__ = "gateway_eval_runs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="preparing")
+    trigger: Mapped[str] = mapped_column(String(20), nullable=False, default="manual")
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    finished_at: Mapped[str | None] = mapped_column(String(40))
+    doc_ids: Mapped[list | None] = mapped_column(JSON)
+    doc_titles: Mapped[list | None] = mapped_column(JSON)
+    task_filter: Mapped[list | None] = mapped_column(JSON)
+    repo_url: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    model: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    eval_set_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    # Exact references support regression attribution.
+    # A notification identifies a cause only when all other inputs are unchanged.
+    eval_set_ref: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    project_repo: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    project_ref: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    build_fingerprint: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    kb_doc_ids: Mapped[list | None] = mapped_column(JSON)
+    summary: Mapped[dict | None] = mapped_column(JSON)
+    progress: Mapped[dict | None] = mapped_column(JSON)
+    coverage: Mapped[dict | None] = mapped_column(JSON)
+    error: Mapped[str | None] = mapped_column(Text)
+    artifact_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    artifacts_pruned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    traces_pruned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # A live run refreshes the heartbeat lease.
+    # Startup recovery and the reaper classify a run with an expired lease as inactive.
+    # This classification releases credentials and branches after an interrupted gateway process.
+    lease_expires_at: Mapped[float | None] = mapped_column(Float)
+    api_key_id: Mapped[str | None] = mapped_column(String)
+    # This hash contains the model, preamble, connection, and task limit.
+    # Two runs must have the same hash for regression attribution.
+    config_hash: Mapped[str | None] = mapped_column(String(40))
+
+    __table_args__ = (
+        Index("ix_gw_evalrun_org_created", "org_id", "created_at"),
+        Index("ix_gw_evalrun_org_status", "org_id", "status"),
+    )
+
+
+class GatewayEvalRunTask(GatewayBase):
+    """One task inside a run (read-only analytics question or write task)."""
+
+    __tablename__ = "gateway_eval_run_tasks"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    task_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    title: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    kind: Mapped[str] = mapped_column(String(40), nullable=False, default="query")
+    task_class: Mapped[str] = mapped_column(String(10), nullable=False, default="read")
+    gt: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    checks: Mapped[list | None] = mapped_column(JSON)
+    grade: Mapped[dict | None] = mapped_column(JSON)
+    covers: Mapped[list | None] = mapped_column(JSON)
+    builds: Mapped[list | None] = mapped_column(JSON)
+    capture_spec: Mapped[dict | None] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    verdict: Mapped[str | None] = mapped_column(String(20))
+    check_results: Mapped[list | None] = mapped_column(JSON)
+    answer: Mapped[str | None] = mapped_column(Text)
+    duration_s: Mapped[float | None] = mapped_column(Float)
+    started_at: Mapped[str | None] = mapped_column(String(40))
+    finished_at: Mapped[str | None] = mapped_column(String(40))
+    sandbox: Mapped[dict | None] = mapped_column(JSON)
+    branch_name: Mapped[str | None] = mapped_column(String(120))
+    capture_result: Mapped[dict | None] = mapped_column(JSON)
+    observed_tables: Mapped[list | None] = mapped_column(JSON)
+    error: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "task_id", name="uq_gw_evaltask_run_task"),
+        Index("ix_gw_evaltask_org_run", "org_id", "run_id"),
+    )
+
+
+class GatewayEvalAccuracyHistory(GatewayBase):
+    """Store one immutable accuracy record for each completed run.
+
+    Retention does not remove this record.
+    """
+
+    __tablename__ = "gateway_eval_accuracy_history"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    trigger: Mapped[str] = mapped_column(String(20), nullable=False, default="manual")
+    eval_set_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    eval_set_ref: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    build_fingerprint: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    tasks_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tasks_passed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    accuracy_pct: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    coverage_pct: Mapped[float | None] = mapped_column(Float)
+    kb_doc_ids: Mapped[list | None] = mapped_column(JSON)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "run_id", name="uq_gw_evalacc_org_run"),
+        Index("ix_gw_evalacc_org_created", "org_id", "created_at"),
+    )
+
+
+class GatewayEvalRegression(GatewayBase):
+    """A detected accuracy drop, attributed (carefully) to KB changes."""
+
+    __tablename__ = "gateway_eval_regressions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    baseline_run_ids: Mapped[list | None] = mapped_column(JSON)
+    baseline_accuracy_pct: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    run_accuracy_pct: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    drop_pct: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    # "Coincided with", not "caused by", unless sole_change is true.
+    suspected_doc_ids: Mapped[list | None] = mapped_column(JSON)
+    sole_change: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    flipped_tasks: Mapped[list | None] = mapped_column(JSON)
+    notified_at: Mapped[str | None] = mapped_column(String(40))
+    recipients: Mapped[list | None] = mapped_column(JSON)
+    # These fields identify all differences between the baseline and this run.
+    # suspected_doc_ids contains both added and removed identifiers.
+    # other_changes contains model and prompt configuration differences.
+    added_doc_ids: Mapped[list | None] = mapped_column(JSON)
+    removed_doc_ids: Mapped[list | None] = mapped_column(JSON)
+    other_changes: Mapped[list | None] = mapped_column(JSON)
+
+    __table_args__ = (Index("ix_gw_evalreg_org_created", "org_id", "created_at"),)

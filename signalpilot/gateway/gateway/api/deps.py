@@ -26,16 +26,17 @@ from ..connectors.schema_cache import schema_cache
 from ..network import SandboxClient
 from ..store import Store
 
-# ─── Store dependency ────────────────────────────────────────────────────────
+# Store dependency.
 
 
 async def get_store(
+    request: Request,
     org_id: OrgID,
     user_id: UserID,
     db: DBSession,
-    request: Request,
 ) -> Store:
     """FastAPI dependency: yields a Store scoped to the current org."""
+    auth = getattr(request.state, "auth", None) or {}
     claims = getattr(request.state, "_jwt_claims", {}) or {}
     execution_identity = claims.get("execution_identity")
     allowed_connection_name = (
@@ -47,6 +48,7 @@ async def get_store(
         db,
         org_id=org_id,
         user_id=user_id,
+        eval_connection=auth.get("eval_connection"),
         allowed_connection_name=allowed_connection_name,
     )
 
@@ -54,7 +56,18 @@ async def get_store(
 StoreD = Annotated[Store, Depends(get_store)]
 
 
-# ─── Plan-gate dependency ────────────────────────────────────────────────────
+async def require_platform_staff(store: StoreD) -> None:
+    """Restrict platform-operated surfaces to the deployment staff allowlist."""
+    from ..config import get_governance_settings
+
+    if not store.user_id or store.user_id not in get_governance_settings().admin_user_ids:
+        raise HTTPException(status_code=403, detail="Platform staff access required")
+
+
+RequirePlatformStaff = Depends(require_platform_staff)
+
+
+# Plan-gate dependency.
 
 
 async def require_projects_feature(org_id: OrgID) -> None:
@@ -62,7 +75,7 @@ async def require_projects_feature(org_id: OrgID) -> None:
 
     Resolves the org's plan tier and raises 403 if the projects feature is not
     available (free tier). In local mode the tier resolves to "unlimited", so
-    this is a no-op — local deployments are never gated.
+    this is a no-op: local deployments are never gated.
     """
     from ..governance.plan_limits import check_feature, get_org_limits
 
@@ -72,7 +85,7 @@ async def require_projects_feature(org_id: OrgID) -> None:
 
 ProjectsGate = Depends(require_projects_feature)
 
-# ─── Error sanitization ──────────────────────────────────────────────────────
+# Error sanitization.
 
 _SENSITIVE_PATTERNS = [
     re.compile(r"postgresql://[^\s]+", re.IGNORECASE),
@@ -116,7 +129,7 @@ def sanitize_db_error(error: str, db_type: str | None = None) -> str:
     return sanitized
 
 
-# ─── Connection lookup ────────────────────────────────────────────────────────
+# Connection lookup.
 
 
 async def require_connection(store: Store, name: str):
@@ -127,7 +140,7 @@ async def require_connection(store: Store, name: str):
     return info
 
 
-# ─── Schema fetch-or-cache ───────────────────────────────────────────────────
+# Schema fetch-or-cache.
 
 
 async def get_or_fetch_schema(store: Store, name: str, info=None, force_refresh: bool = False) -> dict[str, Any]:
@@ -167,7 +180,7 @@ async def get_filtered_schema(store: Store, name: str, info=None, force_refresh:
     return await apply_filters(store, name, raw)
 
 
-# ─── Schema filtering ────────────────────────────────────────────────────────
+# Schema filtering.
 
 
 def apply_schema_filter(
@@ -199,10 +212,10 @@ async def get_schema_filters(store: Store, name: str) -> tuple[list[str], list[s
     return include, exclude
 
 
-# ─── Sandbox client ───────────────────────────────────────────────────────────
+# Sandbox client.
 
 # Sandbox endpoint + credentials are org-scoped settings, so clients are cached
-# per org and per resolved config — never shared across orgs.
+# per org and per resolved config: never shared across orgs.
 _sandbox_clients: dict[str, tuple[str, SandboxClient]] = {}
 _platform_sandbox_client: SandboxClient | None = None
 
@@ -245,10 +258,9 @@ async def get_sandbox_client_with_store(store: Store) -> SandboxClient:
 
 
 def get_sandbox_client() -> SandboxClient:
-    """Legacy: sandbox client for callers with no org context.
+    """Return the platform sandbox client for a caller without organization context.
 
-    Only ever the platform-operated sandbox — an org's BYOS endpoint must not be
-    reachable from a request whose org is unknown.
+    Do not expose an organization BYOS endpoint when the request has no organization.
     """
     global _platform_sandbox_client
     if _platform_sandbox_client is None:

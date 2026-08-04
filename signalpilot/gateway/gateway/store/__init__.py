@@ -30,8 +30,6 @@ from gateway.store.crypto import (
     CredentialEncryptionError,
     _decrypt,
     _decrypt_with_migration,
-    _derive_key_legacy_cloud_salt,
-    _derive_key_legacy_sha256,
     _derive_key_pbkdf2,
     _encrypt,
     _get_encryption_key,
@@ -68,8 +66,6 @@ __all__ = [
     # Crypto primitives (read-only callables; module-level state stays in submodules)
     "_decrypt",
     "_decrypt_with_migration",
-    "_derive_key_legacy_cloud_salt",
-    "_derive_key_legacy_sha256",
     "_derive_key_pbkdf2",
     "_encrypt",
     "_get_encryption_key",

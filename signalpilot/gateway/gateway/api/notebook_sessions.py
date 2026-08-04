@@ -1,4 +1,4 @@
-"""Notebook session endpoints — lifecycle management for user notebook pods."""
+"""Notebook session endpoints: lifecycle management for user notebook pods."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def _is_quota_exceeded_error(exc: Exception) -> bool:
 async def create_session(body: NotebookSessionCreate, store: StoreD, _response: Response):
     """Create or return existing notebook session for the current user."""
     org_id = store.org_id
-    # org_id is required in all modes — no fallback namespace allowed (R3).
+    # org_id is required in all modes: no fallback namespace allowed (R3).
     if not org_id:
         raise HTTPException(status_code=400, detail="org_id required")
 
@@ -77,7 +77,7 @@ async def get_session_by_id(session_id: str, store: StoreD):
     """Get a specific session by id, scoped to the caller's org and user.
 
     Returns 404 on missing, cross-org, OR cross-user (same-org peers cannot
-    read each other's sessions — sharing is a future feature).
+    read each other's sessions: sharing is a future feature).
     """
     from ..store import notebook_sessions as ns
 
@@ -90,7 +90,7 @@ async def get_session_by_id(session_id: str, store: StoreD):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # M-1: Ownership check — same-org non-owners get 404 (not 403) to avoid
+    # M-1: Ownership check: same-org non-owners get 404 (not 403) to avoid
     # leaking existence information. Mirrors the proxy's resolve_proxy_session check.
     user_id = store.user_id or "local"
     if session.user_id != user_id:
@@ -137,7 +137,7 @@ async def delete_session_by_id(session_id: str, store: StoreD):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # M-1: Ownership check — same-org peers cannot delete each other's sessions.
+    # M-1: Ownership check: same-org peers cannot delete each other's sessions.
     user_id = store.user_id or "local"
     if session.user_id != user_id:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -174,16 +174,3 @@ async def ping_session_by_id(session_id: str, store: StoreD):
         raise HTTPException(status_code=404, detail="Session not found")
 
     return await ns.ping_session_by_id(store.session, session_id=session_id, org_id=org_id)
-
-
-@router.post("/ping", response_model=NotebookSessionInfo | None, dependencies=[RequireScope("read")])
-async def ping_session(store: StoreD):
-    """Keep session alive. Call every 60 seconds.
-
-    Deprecated: use POST /api/notebook-sessions/{session_id}/ping instead.
-    This shim routes to the collection-style ping for backward compatibility.
-    """
-    from ..store import notebook_sessions as ns
-
-    org_id = store.org_id or ""
-    return await ns.ping_session(store.session, org_id=org_id, user_id=store.user_id or "local")

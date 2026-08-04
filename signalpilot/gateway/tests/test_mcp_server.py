@@ -5,7 +5,7 @@ Covers:
 - check_budget resolves org from contextvar (no RuntimeError)
 - cache_status resolves org from contextvar (no RuntimeError)
 - fix_nondeterminism_hazards: schema_cache.get sees correct org when called after block
-- create_project scoped to org (uses Store, not legacy project_store)
+- create_project uses organization-scoped Store methods
 - list_projects scoped to org
 """
 
@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from gateway.governance.context import current_org_id_var
-from gateway.mcp import _store_session, mcp_org_id_var, mcp_user_id_var
+from gateway.mcp import _store_session, mcp_org_id_var, mcp_scopes_var, mcp_user_id_var
 
 
 class TestStoreSessionOrgAssert:
@@ -38,6 +38,7 @@ class TestStoreSessionOrgAssert:
         """_store_session with org_id='local' must not raise the org assertion."""
         token_org = mcp_org_id_var.set("local")
         token_user = mcp_user_id_var.set("local")
+        token_scopes = mcp_scopes_var.set(["read"])
 
         mock_session_cm = MagicMock()
         mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_cm)
@@ -53,6 +54,7 @@ class TestStoreSessionOrgAssert:
                     async with _store_session() as store:
                         assert store is mock_store_instance
         finally:
+            mcp_scopes_var.reset(token_scopes)
             mcp_org_id_var.reset(token_org)
             mcp_user_id_var.reset(token_user)
 
@@ -67,6 +69,7 @@ class TestCheckBudgetOrgScoping:
 
         token_org = mcp_org_id_var.set("local")
         token_user = mcp_user_id_var.set("local")
+        token_scopes = mcp_scopes_var.set(["read"])
 
         mock_session_cm = MagicMock()
         mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_cm)
@@ -82,6 +85,7 @@ class TestCheckBudgetOrgScoping:
                         result = await check_budget("default")
             assert "No budget tracking" in result
         finally:
+            mcp_scopes_var.reset(token_scopes)
             mcp_org_id_var.reset(token_org)
             mcp_user_id_var.reset(token_user)
 
@@ -135,7 +139,7 @@ class TestFixNondeterminismHazardsOrgScoping:
 
         def fake_schema_cache_get(connection_name: str):
             observed_org_ids.append(current_org_id_var.get())
-            return {}  # cache miss — triggers fetch
+            return {}  # A cache miss triggers a fetch.
 
         mock_session_cm = MagicMock()
         mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_cm)
@@ -195,7 +199,7 @@ class TestStdioRefusesCloudMode:
 
 
 class TestMCPProjectToolsOrgScoping:
-    """MCP project tools use Store methods instead of legacy project_store."""
+    """Verify organization-scoped Store access in MCP project tools."""
 
     @pytest.mark.asyncio
     async def test_mcp_create_project_scoped_to_org(self):

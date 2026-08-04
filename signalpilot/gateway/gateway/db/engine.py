@@ -108,7 +108,7 @@ async def _ensure_key_version_column(engine) -> None:
 
     SQLAlchemy's create_all does not add columns to existing tables, so this
     idempotent ALTER TABLE handles existing deployments. Postgres-only (no
-    SQLite fallback — the gateway DB is always Postgres).
+    SQLite fallback: the gateway DB is always Postgres).
     """
     async with engine.begin() as conn:
         await conn.execute(
@@ -133,7 +133,7 @@ async def _ensure_byok_columns(engine) -> None:
 
     SQLAlchemy's create_all does not add columns to existing tables, so this
     idempotent ALTER TABLE handles existing deployments. Postgres-only (no
-    SQLite fallback — the gateway DB is always Postgres).
+    SQLite fallback: the gateway DB is always Postgres).
 
     gateway_credentials gains:
       - encryption_mode TEXT NOT NULL DEFAULT 'managed'
@@ -249,9 +249,9 @@ async def _ensure_audit_ip_columns(engine) -> None:
 async def _ensure_github_authorized_repos_column(engine) -> None:
     """Add authorized_repository_ids to gateway_github_installations if absent.
 
-    SP-SEC-005: records the repository ids the authorizing user could reach, so
-    token refresh can stay scoped. NULL on rows created before the fix; the
-    refresh path falls back to linked repos for those.
+    The column stores the repository identifiers that the authorizing user can access.
+    Token refresh remains restricted to this set.
+    A NULL value requires the installation to reconnect before token issuance.
     """
     async with engine.begin() as conn:
         await conn.execute(
@@ -646,8 +646,8 @@ async def _ensure_notebook_session_pod_ip_internal(engine) -> None:
     """Add pod_ip_internal column to gateway_notebook_sessions if it does not exist.
 
     Idempotent ADD COLUMN IF NOT EXISTS. No index needed (lookup is by PK).
-    The proxy uses this column to reach the pod inside the cluster, distinct
-    from pod_ip which is the legacy NodePort address kept for R3 cleanup.
+    The proxy uses this column to reach the pod inside the cluster.
+    The pod_ip column contains the external NodePort address.
     """
     async with engine.begin() as conn:
         await conn.execute(text("ALTER TABLE gateway_notebook_sessions ADD COLUMN IF NOT EXISTS pod_ip_internal TEXT"))
@@ -665,14 +665,89 @@ async def _ensure_drop_s3_prefix_column(engine) -> None:
     logger.info("Ensured s3_prefix column dropped from gateway_workspace_projects")
 
 
+async def _ensure_notebook_token_plaintext_dropped(engine) -> None:
+    """Drop the plaintext notebook access_token column.
+
+    Store tokens only in encrypted form.
+    Stop a session that contains a plaintext token before dropping the column.
+    The next connection provisions a new ephemeral notebook session.
+    """
+    async with engine.begin() as conn:
+        exists = (
+            await conn.execute(
+                text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = 'gateway_notebook_sessions' "
+                    "AND column_name = 'access_token'"
+                )
+            )
+        ).first()
+        if not exists:
+            return
+        stopped = await conn.execute(
+            text("UPDATE gateway_notebook_sessions SET status = 'stopped' WHERE access_token IS NOT NULL")
+        )
+        if stopped.rowcount:
+            logger.warning(
+                "Stopped %d notebook session(s) that held a plaintext token",
+                stopped.rowcount,
+            )
+        await conn.execute(text("ALTER TABLE gateway_notebook_sessions DROP COLUMN IF EXISTS access_token"))
+    logger.info("Dropped plaintext access_token from gateway_notebook_sessions")
+
+
+async def _ensure_api_key_eval_binding_columns(engine) -> None:
+    """Idempotent: eval binding columns on gateway_api_keys.
+
+    A key minted for an eval run carries its run/task/connection/doc overlay
+    here so the pin cannot be dropped by the party holding the key.
+    """
+    async with engine.begin() as conn:
+        for ddl in (
+            "ALTER TABLE gateway_api_keys ADD COLUMN IF NOT EXISTS eval_run_id VARCHAR(64)",
+            "ALTER TABLE gateway_api_keys ADD COLUMN IF NOT EXISTS eval_task_id VARCHAR(200)",
+            "ALTER TABLE gateway_api_keys ADD COLUMN IF NOT EXISTS eval_connection VARCHAR(64)",
+            "ALTER TABLE gateway_api_keys ADD COLUMN IF NOT EXISTS eval_doc_ids JSON",
+        ):
+            await conn.execute(text(ddl))
+    logger.info("Ensured eval binding columns on gateway_api_keys")
+
+
+async def _ensure_eval_regression_change_columns(engine) -> None:
+    """Idempotent: the full change-set columns on gateway_eval_regressions."""
+    async with engine.begin() as conn:
+        for ddl in (
+            "ALTER TABLE gateway_eval_regressions ADD COLUMN IF NOT EXISTS added_doc_ids JSON",
+            "ALTER TABLE gateway_eval_regressions ADD COLUMN IF NOT EXISTS removed_doc_ids JSON",
+            "ALTER TABLE gateway_eval_regressions ADD COLUMN IF NOT EXISTS other_changes JSON",
+        ):
+            await conn.execute(text(ddl))
+    logger.info("Ensured change-set columns on gateway_eval_regressions")
+
+
+async def _ensure_eval_run_lease_columns(engine) -> None:
+    """Idempotent: lease columns on gateway_eval_runs.
+
+    A run holds a heartbeat lease during execution.
+    Startup recovery and the reaper use the lease to identify an active run.
+    """
+    async with engine.begin() as conn:
+        for ddl in (
+            "ALTER TABLE gateway_eval_runs ADD COLUMN IF NOT EXISTS lease_expires_at DOUBLE PRECISION",
+            "ALTER TABLE gateway_eval_runs ADD COLUMN IF NOT EXISTS api_key_id VARCHAR",
+            "ALTER TABLE gateway_eval_runs ADD COLUMN IF NOT EXISTS config_hash VARCHAR(40)",
+        ):
+            await conn.execute(text(ddl))
+    logger.info("Ensured lease columns on gateway_eval_runs")
+
+
 async def _ensure_notebook_session_org_id(engine) -> None:
-    """Idempotent: ensure org_id column on gateway_notebook_sessions and backfill legacy NULLs.
+    """Add org_id to gateway_notebook_sessions and fill NULL values.
 
-    1. ADD COLUMN IF NOT EXISTS org_id TEXT (no-op if already present).
-    2. Backfill org_id = user_id WHERE org_id IS NULL (safe default for personal/local mode).
+    Add the column only when it does not exist.
+    Set org_id to user_id when org_id is NULL.
 
-    In local/personal mode the org_id collapses to user_id; this backfill is safe for all
-    legacy rows.
+    Local and personal modes use the user identifier as the organization identifier.
     """
     async with engine.begin() as conn:
         await conn.execute(text("ALTER TABLE gateway_notebook_sessions ADD COLUMN IF NOT EXISTS org_id TEXT"))
@@ -709,6 +784,10 @@ async def init_db() -> None:
     await _ensure_notebook_session_pod_ip_internal(engine)
     await _ensure_drop_s3_prefix_column(engine)
     await _ensure_github_authorized_repos_column(engine)
+    await _ensure_notebook_token_plaintext_dropped(engine)
+    await _ensure_api_key_eval_binding_columns(engine)
+    await _ensure_eval_run_lease_columns(engine)
+    await _ensure_eval_regression_change_columns(engine)
     logger.info("Gateway database tables initialized")
 
 

@@ -35,6 +35,20 @@ from gateway.store.crypto import _decrypt_with_migration, _encrypt
 logger = logging.getLogger(__name__)
 
 
+
+async def _reencrypt_if_rotated(
+    session, row, field: str, encrypted: bytes
+) -> str:
+    """Decrypt a value and rotate ciphertext to the primary key when necessary.
+
+    Rewrite ciphertext when decryption uses the secondary rotation key.
+    """
+    plaintext, needs_migration = _decrypt_with_migration(encrypted)
+    if needs_migration:
+        setattr(row, field, _encrypt(plaintext))
+        await session.commit()
+    return plaintext
+
 def _looks_like_closed_connection(exc: BaseException) -> bool:
     if isinstance(exc, DBAPIError) and getattr(exc, "connection_invalidated", False):
         return True
@@ -182,11 +196,10 @@ async def get_api_key(
     row = result.scalar_one_or_none()
     if not row:
         return None
-    plaintext, _ = _decrypt_with_migration(row.api_key_enc)
-    return plaintext
+    return await _reencrypt_if_rotated(session, row, "api_key_enc", row.api_key_enc)
 
 
-# ─── OAuth Installations ────────────────────────────────────────────────────
+# OAuth Installations.
 
 
 def _owner_user_id(owner: dict | None) -> str | None:
@@ -696,8 +709,7 @@ async def get_oauth_installation_token(
     row = result.scalar_one_or_none()
     if row is None:
         return None
-    token, _ = _decrypt_with_migration(row.access_token_enc)
-    return token
+    return await _reencrypt_if_rotated(session, row, "access_token_enc", row.access_token_enc)
 
 
 async def get_oauth_installation_tokens(
@@ -714,10 +726,10 @@ async def get_oauth_installation_tokens(
     row = result.scalar_one_or_none()
     if row is None:
         return None
-    access_token, _ = _decrypt_with_migration(row.access_token_enc)
+    access_token = await _reencrypt_if_rotated(session, row, "access_token_enc", row.access_token_enc)
     refresh_token = None
     if row.refresh_token_enc:
-        refresh_token, _ = _decrypt_with_migration(row.refresh_token_enc)
+        refresh_token = await _reencrypt_if_rotated(session, row, "refresh_token_enc", row.refresh_token_enc)
     return access_token, refresh_token
 
 
@@ -823,7 +835,7 @@ async def list_active_installation_records_for_workspace(
     rows = list(result.scalars())
     records: list[tuple[NotionInstallation, NotionInstallationConfig | None, str]] = []
     for row in rows:
-        token, _ = _decrypt_with_migration(row.access_token_enc)
+        token = await _reencrypt_if_rotated(session, row, "access_token_enc", row.access_token_enc)
         records.append((row, await _get_config(session, row.id), token))
     return records
 
@@ -836,7 +848,7 @@ async def get_installation_record(
     row = result.scalar_one_or_none()
     if row is None:
         return None
-    token, _ = _decrypt_with_migration(row.access_token_enc)
+    token = await _reencrypt_if_rotated(session, row, "access_token_enc", row.access_token_enc)
     return row, await _get_config(session, row.id), token
 
 

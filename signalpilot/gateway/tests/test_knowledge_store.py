@@ -1,6 +1,6 @@
 """Store-layer tests for the Knowledge Base module.
 
-All tests use mocked SQLAlchemy sessions — no live DB required.
+All tests use mocked SQLAlchemy sessions. no live DB required.
 """
 
 from __future__ import annotations
@@ -84,7 +84,7 @@ def _make_settings(override: int | None = None):
 
 
 class TestKnowledgeGovernance:
-    """Tests for governance helpers — no DB required."""
+    """Tests for governance helpers. no DB required."""
 
     def test_check_doc_size_passes_under_limit(self):
         check_doc_size(MAX_DOC_BYTES - 1)  # No exception
@@ -112,7 +112,7 @@ class TestKnowledgeGovernance:
     def test_check_org_storage_accounts_for_old_bytes(self):
         limits = _make_limits(storage_mb=2)  # 2 MB cap
         # current=1.5MB, replacing 800KB with 900KB: projected = 1.5MB - 800KB + 900KB = ~1.6MB < 2MB
-        check_org_storage(1_500_000, 900_000, 800_000, limits)  # within cap — no exception
+        check_org_storage(1_500_000, 900_000, 800_000, limits)  # within cap. no exception
 
 
 class TestDocSizeCap:
@@ -153,7 +153,7 @@ class TestApproveKnowledgeDoc:
         session.commit = AsyncMock()
         session.refresh = AsyncMock()
 
-        doc = await approve_knowledge_doc(session, org_id="test-org", doc_id=row.id, user_id="user1")
+        await approve_knowledge_doc(session, org_id="test-org", doc_id=row.id, user_id="user1")
         assert row.status == "active"
 
     @pytest.mark.asyncio
@@ -399,7 +399,7 @@ def _make_insert_session(existing_bytes: int = 0) -> AsyncMock:
     row.title = "test-doc"
     row.body = "content"
     row.status = "active"
-    row.bytes = len("content".encode("utf-8"))
+    row.bytes = len(b"content")
     row.view_count = 0
     row.created_at = time.time()
     row.updated_at = time.time()

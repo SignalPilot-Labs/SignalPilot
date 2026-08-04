@@ -44,7 +44,7 @@ def test_discovery_found_the_expected_surface():
                      "/api/evals/config", "/api/settings", "/api/keys",
                      "/api/byok/keys"):
         assert expected in paths, f"{expected} missing from discovered admin routes"
-    # The staff classification must not go vacuous — that would silently drop the
+    # The staff classification must not go vacuous. that would silently drop the
     # tenant-escalation assertions below.
     assert len(STAFF_ROUTES) >= 7, f"only {len(STAFF_ROUTES)} staff-only routes discovered"
 
@@ -98,8 +98,11 @@ _PROBE_IDS = [r.id for r in _PROBEABLE]
 
 @pytest.mark.parametrize("route", _PROBEABLE, ids=_PROBE_IDS)
 def test_admin_is_not_locked_out(client, admin_token, route):
-    """An org admin must get past the gate. Any other 4xx/5xx is acceptable here —
-    the routes are driven with placeholder ids and empty bodies on a pristine DB."""
+    """Verify that an organization administrator passes the authorization check.
+
+    Other errors are valid because the test uses placeholder identifiers and
+    empty request bodies.
+    """
     r = call(client, route.method, route.url, admin_token, default_body(route.method))
     assert r.status_code not in (401, 403), (
         f"ADMIN LOCKED OUT: {route.id} returned {r.status_code} for an org-admin JWT "
@@ -117,7 +120,7 @@ def test_admin_short_claim_is_not_locked_out(client, clerk_shaped_admin_token, r
     )
 
 
-# ── staff-only routes: the org-admin role is deliberately not enough ─────────
+# Verify that organization administrators cannot access staff routes.
 
 _STAFF_PROBEABLE = [r for r in STAFF_ROUTES if (r.method, r.path) not in ADMIN_PROBE_SKIP]
 _STAFF_PROBE_IDS = [r.id for r in _STAFF_PROBEABLE]
@@ -125,7 +128,7 @@ _STAFF_PROBE_IDS = [r.id for r in _STAFF_PROBEABLE]
 
 @pytest.mark.parametrize("route", STAFF_ROUTES, ids=_STAFF_IDS)
 def test_org_admin_is_forbidden_on_staff_routes(client, admin_token, route):
-    """An org admin is a tenant identity — it must not reach platform-staff routes."""
+    """An org admin is a tenant identity. it must not reach platform-staff routes."""
     r = call(client, route.method, route.url, admin_token, default_body(route.method))
     assert r.status_code == 403, (
         f"TENANT ESCALATION: {route.id} returned {r.status_code} for an org-admin JWT; "
@@ -144,12 +147,39 @@ def test_org_admin_short_claim_is_forbidden_on_staff_routes(client, clerk_shaped
 
 @pytest.mark.parametrize("route", _STAFF_PROBEABLE, ids=_STAFF_PROBE_IDS)
 def test_staff_identity_is_not_locked_out(client, staff_token, route):
-    """The positive half: a user listed in SP_ADMIN_USER_IDS does get through."""
+    """Verify that a user in SP_ADMIN_USER_IDS passes authorization.
+
+    Another policy can deny a staff-only route. The test accepts status 403
+    only when the response identifies that policy and contains no authorization denial.
+    """
     r = call(client, route.method, route.url, staff_token, default_body(route.method))
-    assert r.status_code not in (401, 403), (
-        f"STAFF LOCKED OUT: {route.id} returned {r.status_code} for a platform-staff JWT. "
+    assert r.status_code != 401, (
+        f"STAFF LOCKED OUT: {route.id} returned 401 for a platform-staff JWT. "
         f"Body: {r.text[:400]}"
     )
+    if r.status_code == 403:
+        assert any(m in r.text for m in NON_AUTHZ_403_MARKERS), (
+            f"STAFF LOCKED OUT: {route.id} returned an authorization 403 for a "
+            f"platform-staff JWT. Body: {r.text[:400]}"
+        )
+    for denial in AUTHZ_DENIAL_DETAILS:
+        assert denial not in r.text, (
+            f"STAFF LOCKED OUT: {route.id} carries the authorization denial "
+            f"{denial!r} for a platform-staff JWT. Body: {r.text[:400]}"
+        )
+
+
+def test_put_eval_config_requires_the_admin_scope():
+    """Verify that evaluation repository selection requires the admin scope.
+
+    PUT /api/evals/config appears in the admin matrix because it uses
+    RequireScope("admin").
+    """
+    route = next(
+        (r for r in ADMIN_ROUTES if r.id == "PUT /api/evals/config"), None
+    )
+    assert route is not None, "PUT /api/evals/config is no longer admin-gated"
+    assert 'RequireScope("admin")' in route.guards, route.guards
 
 
 def test_prefixed_admin_role_spelling_also_passes(client, admin_token_short_claim_prefixed):
@@ -158,7 +188,7 @@ def test_prefixed_admin_role_spelling_also_passes(client, admin_token_short_clai
     assert r.status_code not in (401, 403), r.text
 
 
-# ── the non-admin side: a false-positive lockout is as bad as a bypass ────────
+# Verify member route access.
 
 
 def _assert_not_authz_denial(r, label: str) -> None:

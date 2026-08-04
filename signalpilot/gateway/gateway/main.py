@@ -1,7 +1,7 @@
-"""SignalPilot Gateway — FastAPI application.
+"""Create the SignalPilot FastAPI gateway.
 
-All endpoint handlers live in gateway/api/ router modules.
-This file is the app shell: lifespan, middleware, and router registration.
+The modules in gateway/api define the endpoint handlers.
+This module defines lifespan, middleware, and router registration.
 """
 
 from __future__ import annotations
@@ -46,17 +46,15 @@ from .store.crypto import _validate_encryption_health
 logger = logging.getLogger(__name__)
 
 
-# ─── Lifespan ─────────────────────────────────────────────────────────────────
+# Lifespan.
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage background tasks: DB init, pool cleanup, and scheduled schema refresh."""
 
-    # F-11: refuse to boot in cloud mode if any security kill-switch is disabled
-    # (network policy off, no sandbox runtime class, direct-URL bypass, sandbox
-    # disabled). Complements the pydantic-settings validators with a runtime check
-    # that catches paths bypassing settings instantiation.
+    # Cloud mode requires the network policy, sandbox runtime class, URL controls,
+    # and sandbox service. This check detects invalid settings during startup.
     from .runtime.mode import assert_cloud_hardening_intact
 
     assert_cloud_hardening_intact()
@@ -68,9 +66,9 @@ async def lifespan(app: FastAPI):
         PROXY_WRITE_TIMEOUT_SECONDS,
     )
 
-    # Shared httpx client for the notebook proxy — one client, shared across requests.
-    # Closed in lifespan teardown. Timeouts: connect=5s, read=None (SSE/long-poll),
-    # write=10s, pool=10s. Per-chunk idle watchdog wraps each chunk read in the proxy.
+    # One httpx client serves all notebook proxy requests.
+    # Lifespan teardown closes the client. The proxy applies individual connect,
+    # write, and pool timeouts. The proxy also monitors idle chunk reads.
     proxy_client = httpx.AsyncClient(
         timeout=httpx.Timeout(
             connect=PROXY_CONNECT_TIMEOUT_SECONDS,
@@ -110,8 +108,8 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("STARTUP: Encryption health check passed.")
 
-    # Legacy plaintext TLS material blocks readiness in cloud mode rather than
-    # being migrated implicitly — /health reports 503 until an operator runs it.
+    # Plaintext TLS material blocks cloud readiness.
+    # The health endpoint returns 503 until the operator completes the explicit migration.
     if is_cloud_mode():
         from .store.tls_migration import check_plaintext_tls_readiness
 
@@ -119,11 +117,11 @@ async def lifespan(app: FastAPI):
         if tls_blocked:
             logger.error("STARTUP: %s", tls_blocked)
 
-    # Verify OAuth state-signing key is resolvable (cloud mode raises if SP_ENCRYPTION_KEY absent)
+    # Verify that cloud mode can resolve the OAuth state-signing key.
     from .api._oauth_state import get_state_hmac_key
-    get_state_hmac_key()  # raises RuntimeError in cloud mode when key missing — fail fast
+    get_state_hmac_key()  # Raise at startup when the cloud encryption key is absent.
 
-    # Configure BYOK provider — type and config are read from env vars at startup.
+    # Configure the BYOK provider from startup environment variables.
     # SP_BYOK_PROVIDER: provider type string (default: "local")
     # SP_BYOK_PROVIDER_CONFIG: JSON-encoded provider config dict (optional)
     byok_provider_type = os.getenv("SP_BYOK_PROVIDER", "local")
@@ -152,10 +150,8 @@ async def lifespan(app: FastAPI):
     if is_cloud_mode():
         logger.info("STARTUP: Cloud mode — sandbox, file browser, dbt projects disabled")
 
-    # Clean up stale notebook sessions on startup.
-    # After a deploy/restart, pods from the previous run may be gone but
-    # sessions still show "running" in the DB. Mark them stopped so users
-    # get a fresh pod on next connect instead of 502s or SP_ALREADY_CONNECTED loops.
+    # Stop sessions whose pods do not exist after gateway startup.
+    # The next connection creates a new pod for the user.
     try:
         from .orchestrator.kubernetes import KubernetesOrchestrator
         from .store.notebook_sessions import list_stale_sessions, mark_stopped
@@ -353,8 +349,7 @@ async def lifespan(app: FastAPI):
     async def _knowledge_retention_loop():
         """Prune knowledge retrieval events past the retention window.
 
-        Search itself needs no maintenance — BM25 ranks in-process at query
-        time (store/kb_rank.py), so this loop only bounds event-log growth.
+        BM25 ranks documents during each query. This loop limits event log growth.
         """
         from .store.knowledge_search import prune_retrieval_events
 
@@ -371,7 +366,10 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(3600)
 
     async def _schema_watch_loop():
-        """Execute due schema-diff watches (drift → GitHub PR) every minute."""
+        """Run scheduled schema-difference checks every minute.
+
+        A detected difference can create a GitHub pull request.
+        """
         from .schema_watch.runner import run_due_watches
 
         while True:
@@ -383,6 +381,42 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("Schema watch loop error: %s", e)
 
+    async def _eval_reaper_loop():
+        """Recover stale runs and remove orphaned eval branches every two minutes.
+
+        Recovery marks stale runs before the reaper checks their branches.
+        """
+        from .evals.retention import reap_orphans, recover_stale_runs
+
+        # A run from an earlier process cannot continue in this process.
+        try:
+            recovered = await recover_stale_runs()
+            if recovered:
+                logger.warning("Eval startup recovery: failed %d stale run(s)", recovered)
+        except Exception as e:
+            logger.warning("Eval startup recovery error: %s", e)
+
+        while True:
+            await asyncio.sleep(120)
+            try:
+                await recover_stale_runs()
+                reaped = await reap_orphans()
+                if reaped["branches"] or reaped["connections"]:
+                    logger.warning("Eval reaper: %s", reaped)
+            except Exception as e:
+                logger.warning("Eval reaper loop error: %s", e)
+
+    async def _eval_retention_loop():
+        """Backstop for the on-write retention enforcement, hourly."""
+        from .evals.retention import retention_sweep
+
+        while True:
+            await asyncio.sleep(3600)
+            try:
+                await retention_sweep()
+            except Exception as e:
+                logger.warning("Eval retention loop error: %s", e)
+
     health_flush_task = asyncio.create_task(_health_flush_loop())
     health_cleanup_task = asyncio.create_task(_health_cleanup_loop())
     health_ping_task = asyncio.create_task(_health_ping_loop())
@@ -391,6 +425,8 @@ async def lifespan(app: FastAPI):
     notebook_cleanup_task = asyncio.create_task(_notebook_cleanup_loop())
     knowledge_retention_task = asyncio.create_task(_knowledge_retention_loop())
     schema_watch_task = asyncio.create_task(_schema_watch_loop())
+    eval_reaper_task = asyncio.create_task(_eval_reaper_loop())
+    eval_retention_task = asyncio.create_task(_eval_retention_loop())
 
     # Start MCP session manager if mounted
     mcp_ctx = None
@@ -444,6 +480,8 @@ async def lifespan(app: FastAPI):
         notebook_cleanup_task.cancel()
         knowledge_retention_task.cancel()
         schema_watch_task.cancel()
+        eval_reaper_task.cancel()
+        eval_retention_task.cancel()
         await pool_manager.close_all()
         dek_cache.clear()
         await close_db()
@@ -453,7 +491,7 @@ async def lifespan(app: FastAPI):
         await close_sandbox_clients()
 
 
-# ─── App ──────────────────────────────────────────────────────────────────────
+# Application.
 
 app = FastAPI(
     title="SignalPilot Gateway",
@@ -493,29 +531,24 @@ def _build_allowed_origins() -> list[str]:
 _ALLOWED_ORIGINS = _build_allowed_origins()
 _CSRF_ENABLED = is_cloud_mode()
 
-# Middleware stack (last added = outermost = runs first)
-# Execution order (outermost → innermost):
-#   CORS → BodySizeLimit → SecurityHeaders → RateLimit → Correlation → CSRF → Auth
+# Middleware runs in reverse registration order. The last registered middleware runs first.
+# The order starts with CORS. Auth is nearest to the application handlers.
+# BodySizeLimit, SecurityHeaders, RateLimit, Correlation, and CSRF run between them.
 # CORS is outermost so all error responses (including auth errors) get CORS headers.
 # RequestCorrelationMiddleware runs before CSRF so CSRF logs already have a request ID.
-# CookieAuthCsrfMiddleware runs after Correlation and before Auth — it inspects
-#   headers/cookies directly (same primitives as auth.py) without coupling to
-#   request.state.auth set by Auth.  RateLimit is outer of CSRF so a CSRF-blocked
-#   flood still costs the attacker general-tier quota.
-# APIKeyAuthMiddleware is innermost — closest to the application handlers.
+# CookieAuthCsrfMiddleware runs after Correlation and before Auth.
+# CookieAuthCsrfMiddleware reads headers and cookies directly.
+# CookieAuthCsrfMiddleware does not depend on request.state.auth.
+# RateLimit runs before CSRF and applies the general quota to rejected requests.
+# APIKeyAuthMiddleware is nearest to the application handlers.
 app.add_middleware(APIKeyAuthMiddleware)
 app.add_middleware(CookieAuthCsrfMiddleware, allowed_origins=_ALLOWED_ORIGINS, enabled=_CSRF_ENABLED)
 app.add_middleware(RequestCorrelationMiddleware)
 app.add_middleware(RateLimitMiddleware, general_rpm=10000, expensive_rpm=1000, auth_rpm=100)
 app.add_middleware(SecurityHeadersMiddleware)
-from gateway.config.uploads import get_eval_uploads_settings as _eval_uploads_settings
-
 app.add_middleware(
     RequestBodySizeLimitMiddleware,
     max_body_bytes=2_097_152,
-    # Eval zip uploads are capped by their own setting (default 8 GB); the
-    # extra 1 MB covers multipart form framing around the file bytes.
-    path_max_bytes={"/api/evals/upload": _eval_uploads_settings().max_bytes + 1_048_576},
 )
 app.add_middleware(
     CORSMiddleware,
@@ -536,15 +569,14 @@ app.add_middleware(
     allow_credentials=True,
 )
 
-# ─── Global Exception Handler ─────────────────────────────────────────────────
+# Global exception handler.
 
 
 @app.exception_handler(Exception)
 async def _global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """Safety net: return a generic 500 for any unhandled exception.
+    """Return a generic response for an unhandled exception.
 
-    HTTPException variants (intentional 4xx/5xx) are re-raised so FastAPI's
-    built-in handler processes them normally and they reach the client unchanged.
+    This function raises HTTPException values again. FastAPI returns their intended status and body.
     """
     if isinstance(exc, (HTTPException, StarletteHTTPException)):
         raise exc

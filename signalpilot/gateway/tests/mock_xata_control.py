@@ -17,7 +17,7 @@ from pathlib import Path
 
 LOG = Path(__file__).with_name("mock_xata_control.log")
 
-# Seeded parent branch — the "shared contoso demo db".
+# Seeded parent branch. the "shared contoso demo db".
 BRANCHES: dict[str, dict] = {
     "parent0main": {"id": "parent0main", "name": "main", "region": "us-east-1"},
 }
@@ -36,7 +36,7 @@ class Handler(BaseHTTPRequestHandler):
         with LOG.open("a") as f:
             f.write(line + "\n")
 
-    def do_GET(self):  # noqa: N802
+    def do_GET(self):
         self._log(f"GET {self.path}")
         if self.path.endswith("/credentials") or "/credentials?" in self.path:
             self._send(200, {"username": "xata", "password": "mock-pw"})
@@ -45,7 +45,7 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send(404, {"message": "not found"})
 
-    def do_POST(self):  # noqa: N802
+    def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length) or b"{}")
         self._log(f"POST {self.path} {json.dumps(body)}")
@@ -58,7 +58,7 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send(404, {"message": "not found"})
 
-    def do_DELETE(self):  # noqa: N802
+    def do_DELETE(self):
         self._log(f"DELETE {self.path}")
         bid = self.path.rstrip("/").split("/")[-1]
         if bid in BRANCHES:

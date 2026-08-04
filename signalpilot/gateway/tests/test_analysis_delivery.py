@@ -23,29 +23,45 @@ from gateway.analysis_delivery.renderer import fallback_delivery
 from gateway.trace_markers import redact_trace_control_markers
 
 
+def _marker_event(idx: int, marker: str, payload: dict, *, type_: str = "text") -> dict:
+    """Build a trace event in the stored format.
+
+    ``store.chat_traces`` applies ``redact_trace_control_markers`` during input.
+    The function stores control markers in metadata. The loader does not parse
+    markers from visible content.
+    """
+    import json as _json
+
+    content, metadata = redact_trace_control_markers(f"{marker}: {_json.dumps(payload)}")
+    return {"idx": idx, "type": type_, "content": content, "metadata": metadata}
+
+
+
 def test_trace_loader_extracts_latest_worker_plan_progress_and_final_statement() -> None:
     packet = load_delivery_packet_from_events(
         [
             {"idx": 0, "type": "user", "content": "Analyze revenue"},
-            {"idx": 1, "type": "text", "content": 'PLAN: {"steps":["Inspect schema","Run revenue query"]}'},
-            {
-                "idx": 2,
-                "type": "text",
-                "content": 'PROGRESS: {"currentStep":"Inspect schema","completedSteps":[],"status":"checking tables"}',
-            },
-            {
-                "idx": 3,
-                "type": "text",
-                "content": 'PLAN: {"steps":["Inspect schema","Run revenue query","Validate totals"]}',
-            },
-            {
-                "idx": 4,
-                "type": "text",
-                "content": (
-                    'FINAL_STATEMENT: {"statement":"Revenue increased.","confidenceScore":"high",'
-                    '"caveats":["Excludes refunds"],"handoffNotes":["Used notebook SDK."]}'
-                ),
-            },
+            _marker_event(1, "PLAN", {"steps": ["Inspect schema", "Run revenue query"]}),
+            _marker_event(
+                2,
+                "PROGRESS",
+                {"currentStep": "Inspect schema", "completedSteps": [], "status": "checking tables"},
+            ),
+            _marker_event(
+                3,
+                "PLAN",
+                {"steps": ["Inspect schema", "Run revenue query", "Validate totals"]},
+            ),
+            _marker_event(
+                4,
+                "FINAL_STATEMENT",
+                {
+                    "statement": "Revenue increased.",
+                    "confidenceScore": "high",
+                    "caveats": ["Excludes refunds"],
+                    "handoffNotes": ["Used notebook SDK."],
+                },
+            ),
             {
                 "idx": 5,
                 "type": "done",
@@ -90,15 +106,16 @@ def test_trace_loader_extracts_latest_worker_plan_progress_and_final_statement()
 def test_html_payload_excludes_audit_and_confidence_fields() -> None:
     packet = load_delivery_packet_from_events(
         [
-            {
-                "idx": 1,
-                "type": "text",
-                "content": (
-                    'FINAL_STATEMENT: {"statement":"Revenue increased.",'
-                    '"confidenceScore":"high","caveats":["Excludes refunds"],'
-                    '"handoffNotes":["Used notebook SDK."]}'
-                ),
-            }
+            _marker_event(
+                1,
+                "FINAL_STATEMENT",
+                {
+                    "statement": "Revenue increased.",
+                    "confidenceScore": "high",
+                    "caveats": ["Excludes refunds"],
+                    "handoffNotes": ["Used notebook SDK."],
+                },
+            )
         ],
         user_request="Build a revenue dashboard",
         status_payload={
@@ -127,14 +144,16 @@ def test_html_payload_excludes_audit_and_confidence_fields() -> None:
 def test_trace_loader_drops_numeric_confidence_score() -> None:
     packet = load_delivery_packet_from_events(
         [
-            {
-                "idx": 1,
-                "type": "text",
-                "content": (
-                    'FINAL_STATEMENT: {"statement":"Revenue increased.",'
-                    '"confidenceScore":0.8,"caveats":[],"handoffNotes":[]}'
-                ),
-            }
+            _marker_event(
+                1,
+                "FINAL_STATEMENT",
+                {
+                    "statement": "Revenue increased.",
+                    "confidenceScore": 0.8,
+                    "caveats": [],
+                    "handoffNotes": [],
+                },
+            )
         ],
         status_payload={"status": "Done"},
     )
@@ -280,6 +299,7 @@ def test_trace_loader_uses_final_statement_metadata_with_empty_content() -> None
 
 
 def test_trace_loader_falls_back_to_done_result_final_statement() -> None:
+    """The canonical result payload (asdict of AnalysisResult) is snake_case."""
     packet = load_delivery_packet_from_events(
         [
             {
@@ -288,7 +308,7 @@ def test_trace_loader_falls_back_to_done_result_final_statement() -> None:
                 "content": "",
                 "metadata": {
                     "result": {
-                        "final_answer": "Legacy result completed.",
+                        "final_answer": "Result-derived statement.",
                         "confidence_score": "medium",
                         "gotchas": ["Limited rows"],
                         "analysis_method": "Used notebook SDK.",
@@ -301,13 +321,14 @@ def test_trace_loader_falls_back_to_done_result_final_statement() -> None:
     )
 
     assert packet.final_statement is not None
-    assert packet.final_statement.statement == "Legacy result completed."
+    assert packet.final_statement.statement == "Result-derived statement."
     assert packet.final_statement.confidence_score == "medium"
     assert packet.final_statement.caveats == ["Limited rows"]
     assert packet.final_statement.handoff_notes == ["Used notebook SDK."]
 
 
-def test_markdown_wrapped_trace_marker_is_compatibility_parsed() -> None:
+def test_markdown_wrapped_marker_is_redacted_into_metadata() -> None:
+    """The ** wrapper the agent sometimes adds is still stripped on ingest."""
     content, metadata = redact_trace_control_markers(
         '**FINAL_STATEMENT: {"statement":"Revenue increased.",'
         '"confidenceScore":"high","caveats":[],"handoffNotes":[]}**'
@@ -318,21 +339,95 @@ def test_markdown_wrapped_trace_marker_is_compatibility_parsed() -> None:
     assert metadata["control_markers"][0]["payload"]["statement"] == "Revenue increased."
 
     packet = load_delivery_packet_from_events(
-        [
-            {
-                "idx": 1,
-                "type": "text",
-                "content": (
-                    '**FINAL_STATEMENT: {"statement":"Revenue increased.",'
-                    '"confidenceScore":"high","caveats":[],"handoffNotes":[]}**'
-                ),
-            }
-        ],
+        [{"idx": 1, "type": "text", "content": content, "metadata": metadata}],
         status_payload={"status": "Done"},
     )
 
     assert packet.final_statement is not None
     assert packet.final_statement.statement == "Revenue increased."
+
+
+def test_inline_marker_without_metadata_is_not_parsed() -> None:
+    """Verify that the loader ignores an inline control marker.
+
+    ``redact_trace_control_markers`` stores control markers in metadata during
+    input. An event with a marker only in visible content contributes no data.
+    """
+    packet = load_delivery_packet_from_events(
+        [
+            {
+                "idx": 1,
+                "type": "text",
+                "content": 'PLAN: {"steps":["Inspect schema"]}',
+            },
+            {
+                "idx": 2,
+                "type": "text",
+                "content": (
+                    'FINAL_STATEMENT: {"statement":"Revenue increased.",'
+                    '"confidenceScore":"high","caveats":[],"handoffNotes":[]}'
+                ),
+            },
+        ],
+        status_payload={"status": "Done"},
+    )
+
+    assert packet.plan is None
+    assert packet.final_statement is None
+
+
+def test_marker_payload_snake_case_keys_are_not_accepted() -> None:
+    """Verify that control-marker payloads accept only camel case names."""
+    packet = load_delivery_packet_from_events(
+        [
+            _marker_event(
+                1,
+                "PROGRESS",
+                {"current_step": "Inspect schema", "completed_steps": ["Load data"]},
+            ),
+            _marker_event(
+                2,
+                "FINAL_STATEMENT",
+                {
+                    "statement": "Revenue increased.",
+                    "confidence_score": "high",
+                    "handoff_notes": ["Used notebook SDK."],
+                },
+            ),
+        ],
+        status_payload={"status": "Done"},
+    )
+
+    assert packet.latest_progress is None
+    assert packet.final_statement is not None
+    assert packet.final_statement.confidence_score is None
+    assert packet.final_statement.handoff_notes == []
+
+
+def test_done_result_with_legacy_camel_case_keys_is_rejected() -> None:
+    """A done-event result must use the canonical AnalysisResult field names."""
+    with pytest.raises(trace_loader_module.UnsupportedResultPayload) as exc_info:
+        load_delivery_packet_from_events(
+            [
+                {
+                    "idx": 1,
+                    "type": "done",
+                    "content": "",
+                    "metadata": {
+                        "result": {
+                            "finalAnswer": "Revenue increased.",
+                            "analysisMethod": "Used notebook SDK.",
+                            "notionComment": "Revenue increased.",
+                        }
+                    },
+                }
+            ],
+            status_payload={"status": "Done"},
+        )
+
+    message = str(exc_info.value)
+    assert "final_answer" in message
+    assert "analysis_method" in message
 
 
 def test_slack_progress_waits_for_worker_plan_then_uses_exact_steps() -> None:
@@ -342,15 +437,16 @@ def test_slack_progress_waits_for_worker_plan_then_uses_exact_steps() -> None:
 
     packet = load_delivery_packet_from_events(
         [
-            {"idx": 1, "type": "text", "content": 'PLAN: {"steps":["Inspect schema","Run revenue query"]}'},
-            {
-                "idx": 2,
-                "type": "text",
-                "content": (
-                    'PROGRESS: {"currentStep":"Run revenue query",'
-                    '"completedSteps":["Inspect schema"],"status":"querying fin-db"}'
-                ),
-            },
+            _marker_event(1, "PLAN", {"steps": ["Inspect schema", "Run revenue query"]}),
+            _marker_event(
+                2,
+                "PROGRESS",
+                {
+                    "currentStep": "Run revenue query",
+                    "completedSteps": ["Inspect schema"],
+                    "status": "querying fin-db",
+                },
+            ),
         ],
     )
 
@@ -406,14 +502,16 @@ async def test_delivery_api_key_for_org_disables_model_delivery_without_org_key(
 async def test_delivery_renderer_falls_back_to_final_statement_without_model() -> None:
     packet = load_delivery_packet_from_events(
         [
-            {
-                "idx": 1,
-                "type": "text",
-                "content": (
-                    'FINAL_STATEMENT: {"statement":"Revenue increased.","confidenceScore":"high",'
-                    '"caveats":["Excludes refunds"],"handoffNotes":["Used notebook SDK."]}'
-                ),
-            }
+            _marker_event(
+                1,
+                "FINAL_STATEMENT",
+                {
+                    "statement": "Revenue increased.",
+                    "confidenceScore": "high",
+                    "caveats": ["Excludes refunds"],
+                    "handoffNotes": ["Used notebook SDK."],
+                },
+            )
         ],
         status_payload={"status": "Done"},
         trail_url="https://app.test/projects?file=analysis.py",
@@ -437,14 +535,16 @@ async def test_delivery_renderer_empty_api_key_ignores_server_env(monkeypatch: p
     monkeypatch.setenv("ANTHROPIC_API_KEY", "server-ant-key")
     packet = load_delivery_packet_from_events(
         [
-            {
-                "idx": 1,
-                "type": "text",
-                "content": (
-                    'FINAL_STATEMENT: {"statement":"Revenue increased.",'
-                    '"confidenceScore":"high","caveats":[],"handoffNotes":[]}'
-                ),
-            }
+            _marker_event(
+                1,
+                "FINAL_STATEMENT",
+                {
+                    "statement": "Revenue increased.",
+                    "confidenceScore": "high",
+                    "caveats": [],
+                    "handoffNotes": [],
+                },
+            )
         ],
         status_payload={"status": "Done"},
     )

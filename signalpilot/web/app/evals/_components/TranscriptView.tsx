@@ -1,13 +1,14 @@
 "use client";
 
 /**
- * Eval-run transcript: parses claude stream-json and renders it with the
- * shared agent-transcript turn components (turns.tsx). Tool results are
- * paired into their tool-call cards. TranscriptSlideOver presents it in a
- * right slide-over that can expand to take over the page.
+ * This component parses the Claude stream-json transcript.
+ * It renders the transcript with the shared turn components from turns.tsx.
+ * It associates each tool result with its tool call.
+ * TranscriptSlideOver displays an expandable panel on the right side.
  */
 
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Loader2, Maximize2, Minimize2, X } from "lucide-react";
 import { getEvalTranscript } from "~/lib/api";
 import {
@@ -62,7 +63,7 @@ function parseTranscript(raw: string): Turn[] {
         if (item.type === "text" && item.text?.trim()) {
           turns.push({ kind: e.type === "user" ? "user_text" : "text", text: item.text });
         } else if (item.type === "thinking") {
-          // Signature-only thinking blocks (empty text) are skipped entirely.
+      // The parser omits signature-only thinking blocks that contain no text.
           if (item.thinking?.trim()) turns.push({ kind: "thinking", text: item.thinking });
         } else if (item.type === "tool_use") {
           turns.push({ kind: "tool_use", name: String(item.name ?? "tool"), input: item.input ?? {} });
@@ -91,11 +92,9 @@ function parseTranscript(raw: string): Turn[] {
         costUsd: e.total_cost_usd ?? 0,
       });
     }
-    // Other top-level stream events (system:*, rate_limit_event, …) are
-    // harness telemetry, not conversation — skip rather than render noise.
+    // The parser omits top-level harness events such as system and rate_limit_event.
   }
-  // Pair each tool_result with the nearest preceding unresolved tool_use so
-  // the result renders inside its call card.
+  // Associate each tool_result with the nearest unresolved tool_use before it.
   const paired: Turn[] = [];
   const pending: Extract<Turn, { kind: "tool_use" }>[] = [];
   for (const t of turns) {
@@ -142,28 +141,33 @@ export function TranscriptItems({ turns }: { turns: Turn[] }) {
 
 export function TranscriptSlideOver({
   runId,
-  questionId,
+  taskId,
   title,
   onClose,
 }: {
   runId: string;
-  questionId: string;
+  taskId: string;
   title: string;
   onClose: () => void;
 }) {
   const [turns, setTurns] = useState<Turn[] | null>(null);
   const [error, setError] = useState(false);
   const [full, setFull] = useState(false);
+  // CSS positions this element relative to the nearest transformed ancestor.
+  // The animate-fade-in class leaves a transform on the page shell.
+  // Render the panel in document.body to use the viewport as its containing block.
+  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
+  useEffect(() => setPortalTarget(document.body), []);
 
   useEffect(() => {
     let alive = true;
-    getEvalTranscript(runId, questionId)
+    getEvalTranscript(runId, taskId)
       .then((raw) => alive && setTurns(parseTranscript(raw)))
       .catch(() => alive && setError(true));
     return () => {
       alive = false;
     };
-  }, [runId, questionId]);
+  }, [runId, taskId]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -171,7 +175,9 @@ export function TranscriptSlideOver({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  return (
+  if (!portalTarget) return null;
+
+  return createPortal(
     <>
       <div className="ev-overlay" onClick={onClose} />
       <div className={`ev-panel ev-panel--wide ${full ? "ev-panel--full" : ""}`}>
@@ -204,6 +210,7 @@ export function TranscriptSlideOver({
           )}
         </div>
       </div>
-    </>
+    </>,
+    portalTarget,
   );
 }

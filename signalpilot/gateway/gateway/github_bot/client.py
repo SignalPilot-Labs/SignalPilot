@@ -117,9 +117,7 @@ class GitHubBotClient:
             if len(batch) < 100:
                 break
             page += 1
-        return (
-            await self._request("POST", f"/repos/{repo}/issues/{pr_number}/comments", json={"body": body})
-        ).json()
+        return (await self._request("POST", f"/repos/{repo}/issues/{pr_number}/comments", json={"body": body})).json()
 
     async def set_commit_status(self, repo: str, sha: str, state: str, description: str, target_url: str = "") -> None:
         """state: pending | success | failure | error"""
@@ -147,9 +145,7 @@ class GitHubBotClient:
         return data["object"]["sha"]
 
     async def create_branch(self, repo: str, branch: str, from_sha: str) -> None:
-        await self._request(
-            "POST", f"/repos/{repo}/git/refs", json={"ref": f"refs/heads/{branch}", "sha": from_sha}
-        )
+        await self._request("POST", f"/repos/{repo}/git/refs", json={"ref": f"refs/heads/{branch}", "sha": from_sha})
 
     async def put_file(
         self, repo: str, path: str, *, content_b64: str, message: str, branch: str, sha: str | None = None
@@ -181,8 +177,10 @@ async def resolve_bot_token(repo_full_name: str) -> str | None:
             if token:
                 return token
     except Exception as exc:
-        # A DB failure here silently swaps identity to the shared PAT — make
-        # that visible.
-        logger.warning("Installation-token lookup failed for %s (falling back to PAT): %r", repo_full_name, exc)
+        logger.warning(
+            "GitHub App lookup failed for repository %s (%s). Using the configured fallback.",
+            repo_full_name,
+            type(exc).__name__,
+        )
     cfg = get_github_bot_settings()
     return cfg.token or None

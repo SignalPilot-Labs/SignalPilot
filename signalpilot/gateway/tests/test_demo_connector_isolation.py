@@ -4,7 +4,7 @@ The demo connector hands every workspace a branch of the *same* Xata project,
 authenticated by one org-wide control-plane key that lives in AWS Secrets
 Manager. Two properties therefore have to hold, and both are easy to regress:
 
-  1. that key is never written into a workspace's connection record — the
+  1. that key is never written into a workspace's connection record. the
      connection stores a reference and the gateway resolves it per request;
   2. a connection backed by that shared key can only ever address its own
      project and its own branch, so it cannot reach the read-only parent
@@ -42,22 +42,22 @@ FAKE_KEY = "xau_test_key_do_not_use"
 
 def _demo_connection(**overrides) -> ConnectionCreate:
     """A connection shaped exactly like the one the demo connector creates."""
-    kwargs = dict(
-        name="contoso-demo",
-        db_type=DBType.xata,
-        branch=BRANCH,
-        xata_credential_ref="demo",
-        xata_pinned=True,
-        xata_organization=ORG,
-        xata_project=PROJECT,
-        xata_database="xata",
-        tags=["sp-demo", "demo:contoso"],
-    )
+    kwargs = {
+        "name": "contoso-demo",
+        "db_type": DBType.xata,
+        "branch": BRANCH,
+        "xata_credential_ref": "demo",
+        "xata_pinned": True,
+        "xata_organization": ORG,
+        "xata_project": PROJECT,
+        "xata_database": "xata",
+        "tags": ["sp-demo", "demo:contoso"],
+    }
     kwargs.update(overrides)
     return ConnectionCreate(**kwargs)
 
 
-# ─── 1. the org key never goes to rest ───────────────────────────────────────
+# Verify the org key never goes to rest.
 
 
 def test_demo_connection_stores_a_reference_not_the_key(monkeypatch):
@@ -107,7 +107,7 @@ def test_byo_key_connections_are_untouched():
     assert resolve_xata_extras(extras) == extras
 
 
-# ─── 2. a shared-key connection is pinned to its own project and branch ──────
+# Verify a shared-key connection is pinned to its own project and branch.
 
 
 def test_demo_connection_is_pinned():
@@ -169,15 +169,17 @@ def test_pin_requires_something_to_pin_to():
         _demo_connection(branch=None)
 
 
-def test_credential_ref_satisfies_the_new_xata_field_requirements():
-    """Without an inline key the model must not fall back to the legacy
-    region+database path — the ref is a valid way to be a new-Xata connection."""
+def test_credential_ref_satisfies_the_xata_field_requirements():
+    """Verify that a Xata connection can use a credential reference.
+
+    The connection model does not contain a region field.
+    """
     conn = _demo_connection()
     assert conn.xata_api_key is None
-    assert conn.region is None
+    assert not hasattr(conn, "region")
 
 
-# ─── 3. the demo catalog ─────────────────────────────────────────────────────
+# Verify the demo catalog.
 
 
 def _set_catalog(monkeypatch, value: str) -> None:
@@ -239,27 +241,29 @@ def test_malformed_catalog_disables_the_demo_rather_than_crashing(monkeypatch):
     assert demo._catalog() == []
 
 
-def test_legacy_single_project_config_still_works(monkeypatch):
+def test_legacy_single_project_env_vars_are_ignored(monkeypatch):
+    """Verify that unsupported single-warehouse variables configure nothing."""
     monkeypatch.delenv("SP_DEMO_CATALOG", raising=False)
     monkeypatch.setenv("SP_DEMO_XATA_PROJECT", PROJECT)
     monkeypatch.setenv("SP_DEMO_CONNECTION_NAME", "contoso-demo")
     monkeypatch.setenv("SP_DEMO_REPO_URL", "https://github.com/kiwi0401/contoso-demo")
+    monkeypatch.setenv("SP_DEMO_XATA_PARENT_BRANCH", "main")
 
-    demos = demo._catalog()
-    assert len(demos) == 1
-    assert demos[0].project == PROJECT
-    assert demos[0].connection_name == "contoso-demo"
+    assert demo._catalog() == []
 
-
-def test_demo_disabled_without_configuration(monkeypatch):
-    monkeypatch.delenv("SP_DEMO_CATALOG", raising=False)
-    monkeypatch.delenv("SP_DEMO_XATA_PROJECT", raising=False)
     monkeypatch.setenv("XATA_KEY", FAKE_KEY)
     monkeypatch.setenv("SP_DEMO_XATA_ORG", ORG)
     assert not demo._demo_config().enabled
 
 
-# ─── 4. the endpoint guard maps scope violations to 403 ──────────────────────
+def test_demo_disabled_without_configuration(monkeypatch):
+    monkeypatch.delenv("SP_DEMO_CATALOG", raising=False)
+    monkeypatch.setenv("XATA_KEY", FAKE_KEY)
+    monkeypatch.setenv("SP_DEMO_XATA_ORG", ORG)
+    assert not demo._demo_config().enabled
+
+
+# Verify the endpoint guard maps scope violations to 403.
 
 
 def test_endpoint_guard_returns_403(pinned):

@@ -6,10 +6,10 @@ Three retrieval arms, fused with Reciprocal Rank Fusion (RRF):
     2. Lexical keyword search     (tokenized OR'd ILIKE, term-coverage ranked)
     3. BM25                       (pure-Python Okapi BM25, store/kb_rank.py)
 
-No embedding models anywhere — BM25 with word + char-4-gram tokens covers the
+No embedding models anywhere: BM25 with word + char-4-gram tokens covers the
 fuzzy/variant matching an embedder would, entirely in-process. RRF avoids
 score normalization across heterogeneous arms: each arm ranks its candidates
-and a doc's fused score is Σ weight/(K + rank). Arms degrade independently —
+and a doc's fused score is Σ weight/(K + rank). Arms degrade independently:
 on SQLite (tests) only arms 2+3 run; the search never fails because one arm
 does.
 """
@@ -43,16 +43,60 @@ _MAX_LEXICAL_KEYWORDS = 8
 
 _STOPWORDS = frozenset(
     {
-        "the", "a", "an", "and", "or", "for", "in", "on", "at", "to", "of",
-        "with", "by", "from", "as", "is", "it", "its", "be", "was", "are",
-        "were", "not", "but", "if", "do", "did", "has", "have", "had",
-        "this", "that", "these", "those", "can", "will", "would", "could",
-        "should", "may", "might", "shall", "use", "using", "used", "how",
-        "what", "when", "where", "which", "who", "why",
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "for",
+        "in",
+        "on",
+        "at",
+        "to",
+        "of",
+        "with",
+        "by",
+        "from",
+        "as",
+        "is",
+        "it",
+        "its",
+        "be",
+        "was",
+        "are",
+        "were",
+        "not",
+        "but",
+        "if",
+        "do",
+        "did",
+        "has",
+        "have",
+        "had",
+        "this",
+        "that",
+        "these",
+        "those",
+        "can",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "shall",
+        "use",
+        "using",
+        "used",
+        "how",
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "why",
     }
 )
-
-from gateway.util.tasks import fire_and_forget  # re-export; shared helper
 
 
 def _is_postgres(session: AsyncSession) -> bool:
@@ -81,7 +125,7 @@ class SearchHit:
     arms: list[str] = field(default_factory=list)
 
 
-# ── Retrieval arms ────────────────────────────────────────────────────────────
+# Retrieval arms.
 
 
 _fts_warned = False
@@ -120,10 +164,12 @@ async def _fts_arm(
         "LIMIT :n"
     )
     try:
-        result = await session.execute(text(sql), params)
+        # The statement contains fixed filter fragments. Request values use bound parameters.
+        statement = text(sql)  # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
+        result = await session.execute(statement, params)
         return [row[0] for row in result.fetchall()]
     except Exception as exc:
-        # A broken FTS arm silently degrades search quality — surface it once
+        # A broken FTS arm silently degrades search quality: surface it once
         # at WARNING so operators notice, then stay quiet.
         if not _fts_warned:
             _fts_warned = True
@@ -157,10 +203,7 @@ async def _lexical_arm(
         esc = kw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         return f"%{esc}%"
 
-    conds = [
-        GatewayKnowledgeDoc.title.ilike(_pat(kw)) | GatewayKnowledgeDoc.body.ilike(_pat(kw))
-        for kw in keywords
-    ]
+    conds = [GatewayKnowledgeDoc.title.ilike(_pat(kw)) | GatewayKnowledgeDoc.body.ilike(_pat(kw)) for kw in keywords]
     stmt = (
         select(GatewayKnowledgeDoc.id, GatewayKnowledgeDoc.title, GatewayKnowledgeDoc.body)
         .where(
@@ -223,9 +266,7 @@ async def _bm25_index_for_org(session: AsyncSession, org_id: str) -> Bm25Index:
 
     rows = (
         await session.execute(
-            select(
-                GatewayKnowledgeDoc.id, GatewayKnowledgeDoc.title, GatewayKnowledgeDoc.body
-            ).where(
+            select(GatewayKnowledgeDoc.id, GatewayKnowledgeDoc.title, GatewayKnowledgeDoc.body).where(
                 GatewayKnowledgeDoc.org_id == org_id,
                 GatewayKnowledgeDoc.status == KnowledgeStatus.active.value,
             )
@@ -277,7 +318,7 @@ async def _bm25_arm(
     return [doc_id for doc_id, _ in scored]
 
 
-# ── Fusion ────────────────────────────────────────────────────────────────────
+# Fusion.
 
 
 async def hybrid_search_knowledge(
@@ -291,15 +332,11 @@ async def hybrid_search_knowledge(
     limit: int,
 ) -> list[SearchHit]:
     """RRF-fused hybrid search. Returns hits sorted by fused score."""
-    fts_ids = await _fts_arm(
-        session, org_id=org_id, query=query, scope=scope, scope_ref=scope_ref, category=category
-    )
+    fts_ids = await _fts_arm(session, org_id=org_id, query=query, scope=scope, scope_ref=scope_ref, category=category)
     lex_ids = await _lexical_arm(
         session, org_id=org_id, query=query, scope=scope, scope_ref=scope_ref, category=category
     )
-    bm25_ids = await _bm25_arm(
-        session, org_id=org_id, query=query, scope=scope, scope_ref=scope_ref, category=category
-    )
+    bm25_ids = await _bm25_arm(session, org_id=org_id, query=query, scope=scope, scope_ref=scope_ref, category=category)
 
     fused: dict[str, float] = {}
     arms_by_doc: dict[str, list[str]] = {}
@@ -321,15 +358,14 @@ async def hybrid_search_knowledge(
         )
     )
     rows = {r.id: r for r in result.scalars().all()}
-    hits = [
+    return [
         SearchHit(doc=row_to_doc(rows[doc_id], include_body=True), score=fused[doc_id], arms=arms_by_doc[doc_id])
         for doc_id in top_ids
         if doc_id in rows
     ]
-    return hits
 
 
-# ── Retrieval-event logging ───────────────────────────────────────────────────
+# Retrieval-event logging.
 
 
 @dataclass
@@ -351,7 +387,7 @@ async def log_retrieval_events(events: list[RetrievalEvent], *, bump_view_ids: l
 
     Optionally batches view-count bumps into the same session/transaction so a
     search burst costs one pool checkout instead of one per hit. Swallows all
-    errors — losing a retrieval event must never fail a search — but warns
+    errors: losing a retrieval event must never fail a search: but warns
     once if writes are persistently failing (missing table, permissions).
     """
     global _retrieval_log_warned
@@ -400,7 +436,7 @@ async def prune_retrieval_events(session: AsyncSession, *, retention_days: int =
     return result.rowcount or 0
 
 
-# ── Retrieval stats (heat-map feed) ──────────────────────────────────────────
+# Retrieval stats (heat-map feed).
 
 
 async def retrieval_stats(
@@ -416,7 +452,7 @@ async def retrieval_stats(
     O(docs × sources × buckets) rows, not one row per event. Returns {
       "since_days", "bucket_days", "generated_at",
       "docs": [{doc_id, total, by_source: {src: n}, last_retrieved_at, series: [n, ...]}],
-    } — series buckets run oldest → newest, len == since_days // bucket_days.
+    }: series buckets run from oldest to newest, len == since_days // bucket_days.
     """
     since = time.time() - since_days * 86400
     n_buckets = max(1, since_days // bucket_days)

@@ -137,35 +137,18 @@ async def delete_installation(session: AsyncSession, *, org_id: str, installatio
 async def _refresh_repository_scope(session: AsyncSession, row: GatewayGitHubInstallation) -> list[int] | None:
     """Repository ids a refreshed token for *row* may cover.
 
-    SP-SEC-005: the refresh path must not widen a repository-scoped token back
-    to installation-wide scope an hour after install. Resolution order:
-
-    1. ``authorized_repository_ids`` captured at install time (the user∩app set).
-    2. Legacy rows (installed before the fix, so the column is NULL): fall back
-       to the repos this org has actually linked to projects. Still a narrowing,
-       and it keeps existing installs working without a reconnect.
-    3. Nothing to scope to → ``None``; the caller decides (local mode may mint
-       installation-wide, cloud mode must refuse).
+    A refreshed token must not exceed the repository scope recorded at installation.
+    Return None when ``authorized_repository_ids`` is NULL.
+    Do not infer authorization from linked projects.
     """
     stored = row.authorized_repository_ids
     if stored:
         return [int(i) for i in stored]
-
-    result = await session.execute(
-        select(GatewayGitHubRepoLink.repo_id).where(
-            GatewayGitHubRepoLink.org_id == row.org_id,
-            GatewayGitHubRepoLink.installation_id == row.id,
-            GatewayGitHubRepoLink.status == "active",
-        )
+    logger.warning(
+        "Installation %s has no captured repository authorization — reconnect the "
+        "GitHub App for this org; tokens will not be minted for it",
+        row.id,
     )
-    linked = sorted({int(r) for r in result.scalars().all()})
-    if linked:
-        logger.warning(
-            "Installation %s predates repository-scoped tokens; scoping refresh to %d linked repo(s)",
-            row.id,
-            len(linked),
-        )
-        return linked
     return None
 
 
@@ -221,7 +204,7 @@ async def get_valid_token(session: AsyncSession, row: GatewayGitHubInstallation)
     return new_token
 
 
-# ─── Repo Links ──────────────────────────────────────────────────────────
+# Repo Links.
 
 
 async def create_repo_link(
@@ -309,7 +292,7 @@ async def delete_repo_link(session: AsyncSession, *, org_id: str, link_id: str) 
 
 async def _resolve_repo_link(session: AsyncSession, repo_full_name: str) -> GatewayGitHubRepoLink | None:
     """Oldest active link for a repo. repo_full_name is not unique across
-    orgs/projects — the oldest-link tie-break keeps webhook attribution
+    orgs/projects: the oldest-link tie-break keeps webhook attribution
     deterministic and lives only here."""
     result = await session.execute(
         select(GatewayGitHubRepoLink)
@@ -344,8 +327,43 @@ async def get_token_for_repo(session: AsyncSession, *, repo_full_name: str) -> s
     try:
         return await get_valid_token(session, inst)
     except Exception as exc:
-        logger.warning("Could not resolve installation token for %s: %r", repo_full_name, exc)
+        logger.warning(
+            "GitHub App lookup failed for repository %s (%s).",
+            repo_full_name,
+            type(exc).__name__,
+        )
         return None
+
+
+async def get_org_token_for_repo(session: AsyncSession, *, org_id: str, repo_full_name: str) -> str | None:
+    """Installation token for a repo linked to THIS org.
+
+    Restrict the token to a repository that has an active link in this organization.
+    Return None when the organization has no active link for the repository.
+    """
+    link_result = await session.execute(
+        select(GatewayGitHubRepoLink)
+        .where(
+            GatewayGitHubRepoLink.org_id == org_id,
+            GatewayGitHubRepoLink.repo_full_name == repo_full_name,
+            GatewayGitHubRepoLink.status == "active",
+        )
+        .order_by(GatewayGitHubRepoLink.created_at)
+    )
+    link = link_result.scalars().first()
+    if link is None:
+        return None
+    inst_result = await session.execute(
+        select(GatewayGitHubInstallation).where(
+            GatewayGitHubInstallation.id == link.installation_id,
+            GatewayGitHubInstallation.org_id == org_id,
+            GatewayGitHubInstallation.status == "active",
+        )
+    )
+    inst = inst_result.scalars().first()
+    if inst is None:
+        return None
+    return await get_valid_token(session, inst)
 
 
 async def get_org_for_repo(session: AsyncSession, *, repo_full_name: str) -> str | None:

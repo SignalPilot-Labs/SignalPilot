@@ -56,7 +56,7 @@ See [Governance reference](/docs/reference/governance) for the complete rule set
 ## Authentication
 
 - **Clerk JWT** verification with JWKS rotation, clock leeway, and required claims (cloud mode)
-- **API keys** with AES-GCM encryption at rest, org-scoped, with brute-force rate limiting (60/min/IP)
+- **API keys** with Fernet encryption at rest, org-scoped, with brute-force rate limiting (60/min/IP)
 - **Org role enforcement**: Admin-only endpoints require `org:admin` role
 
 ## Network
@@ -72,6 +72,16 @@ See [Governance reference](/docs/reference/governance) for the complete rule set
 - **Read-only rootfs**: Pod root filesystem is mounted read-only.
 - **IMDS egress blocked**: Access to the cloud instance metadata service is denied from inside the pod.
 
+## Evaluation workloads
+
+- Eval configuration, execution, evidence, and live-sandbox routes require a user ID listed in `SP_ADMIN_USER_IDS` and an org listed in `SP_EVAL_ALLOWED_ORGS`.
+- Every task receives a short-lived API key bound to one run, one task, and one database connection. The key cannot access query history, workspace integrations, notebooks, connection mutation, or Xata branch-control tools.
+- Write tasks receive a disposable branch credential. The local Postgres provider refuses to start a task while its role can connect to any other non-template database.
+- Eval pods run non-root with a read-only root filesystem, all Linux capabilities dropped, no service-account token, resource limits, and mandatory NetworkPolicy in cloud mode.
+- The local eval runtime cannot join the control database or object-store networks. It receives artifacts through a signed, GET/HEAD-only proxy and uses a dedicated disposable warehouse service.
+
+Eval containers execute model-authored commands and hold the task's source checkout and branch credential. The current cloud policy permits public HTTPS so the agent can reach its model provider. Deployments that treat eval repositories as hostile must route that egress through an allowlisting proxy; Kubernetes NetworkPolicy alone cannot restrict destinations by hostname.
+
 ## Audit
 
 - **Every query logged** with timestamp, org, user, connection, and SQL
@@ -80,8 +90,7 @@ See [Governance reference](/docs/reference/governance) for the complete rule set
 
 ## Encryption
 
-- **AES-GCM** for credential storage (connection passwords, API key secrets)
-- **Legacy SHA-256** gated behind `SP_ALLOW_LEGACY_CRYPTO` flag (disabled by default)
+- **Fernet with MultiFernet rotation** for credential storage; prior keys are decrypt-only and rows are rewritten under the primary key on access
 
 ## Rate limiting
 

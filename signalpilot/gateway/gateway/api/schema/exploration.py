@@ -469,7 +469,7 @@ async def get_xata_branch_diff(
     """Diff two Xata branches addressed from ONE registered Xata connection.
 
     The gateway resolves each branch's Postgres endpoint server-side from the
-    stored control-plane API key (new Xata: <branchID>.<region>.xata.tech) — the
+    stored control-plane API key (new Xata: <branchID>.<region>.xata.tech): the
     agent only names the branches, never a URL or key.
     """
     from gateway.connectors.drivers.xata import XataConnector
@@ -536,7 +536,7 @@ async def get_xata_dbt_profile(
     """Resolve a NON-protected Xata branch to a dbt `profiles.yml` target block (write path).
 
     Enforces the protected-branch denylist server-side: main/staging/prod/etc. never yield
-    writable dbt credentials — only agent-created branches do, and those are throwaway
+    writable dbt credentials: only agent-created branches do, and those are throwaway
     copy-on-write branches. The gateway resolves the branch's Postgres endpoint from the
     stored control-plane key; this is the one place a branch credential is surfaced, and
     only for a non-protected branch.
@@ -550,7 +550,7 @@ async def get_xata_dbt_profile(
         raise HTTPException(status_code=400, detail=f"Connection '{name}' is not a Xata connection")
     extras = await store.get_credential_extras(name)
     # Pinned (demo) connections may only ever be handed credentials for their own
-    # branch — branch names are enumerable, so without this one demo user could
+    # branch: branch names are enumerable, so without this one demo user could
     # pull write credentials for another's sandbox.
     _require_xata_scope(extras, branch=branch)
     if branch.lower() in _resolve_protected(extras):
@@ -562,16 +562,15 @@ async def get_xata_dbt_profile(
             ),
         )
     # Resolve the parent branch for the audit log only. Forking a protected branch
-    # (e.g. an agent fork of `main`/`staging`) IS the intended workflow — the fork is an
+    # (e.g. an agent fork of `main`/`staging`) IS the intended workflow: the fork is an
     # isolated copy-on-write branch, so write credentials to it never touch the parent.
     # The branch-name denylist above is the real gate (creds are never issued for a
     # protected branch itself). Best-effort; never blocks issuance.
     parent: str | None = None
     try:
         project = extras.get("xata_project")
-        if project and (extras.get("xata_api_key") or extras.get("xata_token_url")):
-            conn_str_for_parent = await store.get_connection_string(name)
-            async with _xata_control_from_extras(conn_str_for_parent, extras) as client:
+        if project and extras.get("xata_api_key"):
+            async with _xata_control_from_extras(extras) as client:
                 branches = await client.list_branches(project)
                 match = next((b for b in branches if b.get("name") == branch), None)
                 parent_id = (match or {}).get("parentID")
@@ -579,7 +578,7 @@ async def get_xata_dbt_profile(
                     parent_branch_record = next((b for b in branches if b.get("id") == parent_id), None)
                     parent = (parent_branch_record or {}).get("name")
     except Exception:
-        parent = None  # control-plane hiccup — fall back to "?" in the audit log
+        parent = None  # Use "?" in the audit log when the control plane is unavailable.
     try:
         cs = await XataConnector._resolve_endpoint({**extras, "branch": branch})
     except Exception as e:
@@ -628,26 +627,22 @@ async def get_xata_dbt_profile(
         "profile": profile,
         "target": tgt,
         "params": params,  # non-secret connection params (no password)
-        "output": output,  # full dbt target incl. password — for direct fetch-to-file
-        "profiles_target_block": block,  # template only — password is redacted; fetch via 'output' field for automation
+        "output": output,  # full dbt target incl. password: for direct fetch-to-file
+        "profiles_target_block": block,  # template only: password is redacted; fetch via 'output' field for automation
     }
 
 
-def _xata_control_from_extras(conn_str: str | None, extras: dict) -> Any:
+def _xata_control_from_extras(extras: dict) -> Any:
     """Build a XataControlClient from a connection's stored extras.
 
-    New Xata (xata.tech): control-plane API key (xata_api_key) as Bearer token,
-    with xata_organization. Legacy paths are kept as fallbacks:
-      - OIDC self-hosted (xata_token_url + xata_client_id/secret/username/password)
-      - data-plane key as Bearer (parsed from a real connection string)
+    Send the control-plane API key as a bearer token with xata_organization.
+    Obtain the key from xata_api_key or xata_credential_ref.
     """
-    from urllib.parse import urlparse
-
     from gateway.connectors.xata_control import XataControlClient, XataControlConfig
     from gateway.connectors.xata_creds import XataCredentialError, resolve_xata_extras
 
-    # Demo connections reference the server-side secret instead of storing the
-    # org key; materialize it here so the rest of this function is unchanged.
+    # Demo connections reference the server-side secret instead of the organization key.
+    # Resolve the secret before the function creates the client.
     try:
         extras = resolve_xata_extras(extras)
     except XataCredentialError as e:
@@ -661,36 +656,13 @@ def _xata_control_from_extras(conn_str: str | None, extras: dict) -> Any:
             detail="xata_organization not configured for this connection",
         )
 
-    # New Xata: control-plane API key (preferred).
     api_key = extras.get("xata_api_key")
-    if api_key:
-        return XataControlClient(XataControlConfig(api_url=api_url, org=org, bearer_token=api_key))
-
-    # Legacy self-hosted OIDC password grant.
-    token_url = extras.get("xata_token_url")
-    if token_url:
-        client_id = extras.get("xata_client_id")
-        client_secret = extras.get("xata_client_secret")
-        username = extras.get("xata_username")
-        password = extras.get("xata_password")
-        if not (client_id and client_secret and username and password):
-            raise HTTPException(
-                status_code=400,
-                detail="xata_token_url is set but OIDC client_id/client_secret/username/password are not configured",
-            )
-        return XataControlClient(XataControlConfig(
-            api_url=api_url, org=org, bearer_token=None, token_url=token_url,
-            client_id=client_id, client_secret=client_secret, username=username, password=password,
-        ))
-
-    # Legacy bearer: data-plane key parsed from a real connection string.
-    bearer = urlparse(conn_str).password if conn_str and conn_str.startswith("postgres") else None
-    if not bearer:
+    if not api_key:
         raise HTTPException(
             status_code=400,
             detail="No Xata control-plane credentials configured (set xata_api_key)",
         )
-    return XataControlClient(XataControlConfig(api_url=api_url, org=org, bearer_token=bearer))
+    return XataControlClient(XataControlConfig(api_url=api_url, org=org, bearer_token=api_key))
 
 
 @router.get("/connections/{name}/xata/projects/{project}/branches", dependencies=[RequireScope("read")])
@@ -701,11 +673,10 @@ async def list_xata_branches(
 ):
     """List branches in a Xata project (control plane)."""
     info = await require_connection(store, name)
-    conn_str = await store.get_connection_string(name)
     extras = await store.get_credential_extras(name)
     _require_xata_scope(extras, project=project)
     try:
-        async with _xata_control_from_extras(conn_str, extras) as client:
+        async with _xata_control_from_extras(extras) as client:
             return {"branches": await client.list_branches(project)}
     except HTTPException:
         raise
@@ -722,7 +693,6 @@ async def create_xata_branch(
 ):
     """Create an instant copy-on-write branch from a parent (control plane, write scope)."""
     info = await require_connection(store, name)
-    conn_str = await store.get_connection_string(name)
     extras = await store.get_credential_extras(name)
     _require_xata_scope(extras, project=project)
     if is_pinned(extras):
@@ -733,7 +703,7 @@ async def create_xata_branch(
             detail="This connection is a fixed sandbox branch and cannot create further branches.",
         )
     try:
-        async with _xata_control_from_extras(conn_str, extras) as client:
+        async with _xata_control_from_extras(extras) as client:
             return await client.create_child_branch(project, body.branch_name, body.parent_id)
     except HTTPException:
         raise
@@ -754,7 +724,6 @@ async def delete_xata_branch(
     """Delete a Xata branch by NAME (control plane, write scope). Resolves the
     branch id server-side, then deletes. Used for post-merge cleanup."""
     info = await require_connection(store, name)
-    conn_str = await store.get_connection_string(name)
     extras = await store.get_credential_extras(name)
     _require_xata_scope(extras, project=project)
     if is_pinned(extras):
@@ -772,7 +741,7 @@ async def delete_xata_branch(
             ),
         )
     try:
-        async with _xata_control_from_extras(conn_str, extras) as client:
+        async with _xata_control_from_extras(extras) as client:
             b = next((x for x in await client.list_branches(project) if x.get("name") == branch), None)
             if not b:
                 raise HTTPException(status_code=404, detail=f"branch '{branch}' not found")

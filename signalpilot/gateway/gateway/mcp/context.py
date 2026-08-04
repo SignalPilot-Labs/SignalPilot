@@ -28,11 +28,24 @@ mcp_capabilities_var: contextvars.ContextVar[list[str] | None] = contextvars.Con
 mcp_execution_identity_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "mcp_execution_identity", default=None
 )
-# Eval mode: doc IDs from the X-SP-Eval-Docs header. When set, knowledge tools
-# serve these proposed (pending) docs alongside active ones so an eval run can
-# test the system with a knowledge change before it is approved.
+# Evaluation document identifiers are bound to the stored API key.
+# Knowledge tools include these proposed documents with active documents during a run.
 mcp_eval_doc_ids_var: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
     "mcp_eval_doc_ids", default=None
+)
+# The stored API key binds the run to one connection.
+# Access to another connection can disclose the expected result and invalidate the grade.
+# The server sets this binding. The agent cannot remove it through a request header.
+mcp_eval_connection_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "mcp_eval_connection", default=None
+)
+# The stored API key binds each tool call to a run and task.
+# Audit metadata records this attribution for observed coverage.
+mcp_eval_run_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "mcp_eval_run", default=None
+)
+mcp_eval_task_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "mcp_eval_task", default=None
 )
 
 _is_cloud = _os.environ.get("SP_DEPLOYMENT_MODE") == "cloud"
@@ -67,6 +80,7 @@ async def _store_session(user_id: str | None = None, org_id: str | None = None):
                 session,
                 org_id=org_id,
                 user_id=user_id,
+                eval_connection=mcp_eval_connection_var.get(None),
                 allowed_connection_name=mcp_allowed_connection_var.get(None),
             )
     finally:
@@ -76,19 +90,27 @@ async def _store_session(user_id: str | None = None, org_id: str | None = None):
 def _require_mcp_admin_scope() -> str | None:
     """Return None if the caller has admin scope; otherwise a user-facing error string.
 
-    Mirrors the HTTP-side RequireScope("admin") for MCP tools. Bypass:
-      - local-mode org_id "local" — same bypass as `scope_guard.require_scopes` Case 2.
+    Local no-key sessions receive every valid scope from MCPAuthMiddleware.
+    Stored local keys are checked exactly like stored cloud keys.
     """
-    if mcp_org_id_var.get(None) == "local":
-        return None
     scopes = mcp_scopes_var.get(None) or []
     if "admin" in scopes:
         return None
     return "Error: admin scope required for this action"
 
 
+def _require_mcp_scope(scope: str) -> str | None:
+    """Mirror the flat HTTP API-key scope model for every MCP tool call."""
+    scopes = mcp_scopes_var.get(None)
+    if scopes is None:
+        return f"Error: authentication context missing; {scope} scope required"
+    if scope in scopes:
+        return None
+    return f"Error: {scope} scope required for this action"
+
+
 def _gateway_url() -> str:
-    """Get the gateway API URL for internal MCP→REST calls."""
+    """Get the gateway API URL for internal calls from MCP to REST."""
     import os
 
     return os.environ.get("SP_GATEWAY_URL", "http://localhost:3300")

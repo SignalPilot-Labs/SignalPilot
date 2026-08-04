@@ -1,6 +1,6 @@
 """MCP tool tests for the Knowledge Base module.
 
-All tests mock the store and context variables — no live DB or MCP server required.
+All tests mock the store and context variables. no live DB or MCP server required.
 """
 
 from __future__ import annotations
@@ -306,48 +306,25 @@ class TestProposeKnowledgeTool:
         assert data["existing_id"] == existing_id
 
     @pytest.mark.asyncio
-    async def test_propose_knowledge_supersedes_is_deprecated_alias_for_overwrite(self, mock_store):
-        # supersedes now routes to the in-place upsert path (no archive + insert).
-        old_id = str(uuid.uuid4())
-        existing = _make_doc(
-            doc_id=old_id,
-            scope="project",
-            scope_ref="my-proj",
-            category="decisions",
-            title="my-decision",
-        )
-        updated = _make_doc(
-            doc_id=old_id,
-            scope="project",
-            scope_ref="my-proj",
-            category="decisions",
-            title="my-decision",
-            body="Updated decision.",
-            status="active",
-        )
-        mock_store.get_knowledge_doc_by_key = AsyncMock(return_value=existing)
-        mock_store.upsert_knowledge_doc = AsyncMock(return_value=updated)
+    async def test_propose_knowledge_rejects_removed_supersedes_argument(self, mock_store):
+    # The tool rejects supersedes. Callers must pass overwrite=True.
+        import inspect
 
         from gateway.mcp.tools.knowledge import propose_knowledge
 
-        with patch("gateway.mcp.tools.knowledge._store_session") as mock_ctx:
-            mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_store)
-            mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
-            result = await propose_knowledge.__wrapped__(
+        params = inspect.signature(propose_knowledge.__wrapped__).parameters
+        assert "supersedes" not in params
+        assert "overwrite" in params
+
+        with pytest.raises(TypeError, match="supersedes"):
+            await propose_knowledge.__wrapped__(
                 scope="project",
                 scope_ref="my-proj",
                 category="decisions",
                 title="my-decision",
                 body="Updated decision.",
-                supersedes=old_id,
+                supersedes=str(uuid.uuid4()),
             )
-
-        mock_store.upsert_knowledge_doc.assert_awaited_once()
-        mock_store.insert_knowledge_doc.assert_not_awaited()
-        mock_store.archive_knowledge_doc.assert_not_awaited()
-        data = json.loads(result)
-        assert data["status"] == "updated"
-        assert data["id"] == old_id
 
     @pytest.mark.asyncio
     async def test_propose_knowledge_overwrite_updates_existing_doc(self, mock_store):

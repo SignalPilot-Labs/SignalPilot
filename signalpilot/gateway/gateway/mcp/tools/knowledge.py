@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 
 from gateway.errors.mcp import sanitize_mcp_error
@@ -58,7 +57,7 @@ def _render_doc_section(doc: KnowledgeDoc, *, truncated: bool = False) -> str:
 
 
 async def _eval_overlay_docs(store) -> list[KnowledgeDoc]:
-    """Return proposed docs named by the X-SP-Eval-Docs header (eval mode).
+    """Return proposed docs bound to the current eval API key.
 
     An "Evaluate Change" run tests the system as if these pending docs were
     already approved. Empty outside eval mode. Docs that don't resolve
@@ -313,7 +312,6 @@ async def propose_knowledge(
     category: str,
     title: str,
     body: str,
-    supersedes: str | None = None,
     overwrite: bool = False,
 ) -> str:
     """Create a knowledge doc, or edit an existing one in place.
@@ -322,16 +320,13 @@ async def propose_knowledge(
     scope, scope_ref, category, and title. Without overwrite, a doc whose
     key already exists is rejected as a duplicate.
 
-    supersedes is DEPRECATED — it only ever versioned a same-key doc and
-    silently no-opped otherwise. Passing any value now behaves like
-    overwrite=True. To retire a doc under a different title, call
-    archive_knowledge instead.
+    To retire a doc under a different title, call archive_knowledge instead.
     """
     try:
         err = _require_mcp_admin_scope()
         if err:
             return err
-        # Validate via DTO — raises pydantic.ValidationError on bad input
+        # Validate via DTO: raises pydantic.ValidationError on bad input
         payload = KnowledgeDocCreate(
             scope=KnowledgeScope(scope),
             scope_ref=scope_ref,
@@ -339,9 +334,6 @@ async def propose_knowledge(
             title=title,
             body=body,
         )
-
-        # supersedes is a deprecated alias for overwrite.
-        overwrite = overwrite or supersedes is not None
 
         async with _store_session() as store:
             # Overwrite path: update the existing doc (matched by unique key) in

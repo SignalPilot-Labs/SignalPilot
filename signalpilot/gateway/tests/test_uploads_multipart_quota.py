@@ -102,7 +102,7 @@ async def _rows(session: AsyncSession) -> list[GatewayUploadSession]:
     return list(result.scalars())
 
 
-# ─── Part-length binding ─────────────────────────────────────────────────────
+# Verify part-length binding.
 
 
 class TestPartLengthBinding:
@@ -146,7 +146,7 @@ class TestPartLengthBinding:
         assert "content-length" in url.lower()
 
 
-# ─── Owner binding + quota ───────────────────────────────────────────────────
+# Verify owner binding and quota.
 
 
 class TestUploadSessionOwnership:
@@ -330,3 +330,40 @@ class TestPerPrincipalQuota:
             "user-1", store, uploads.InitiateRequest(filename="a.zip", size_bytes=10)
         )
         assert len(await _rows(db_session)) == 1
+
+
+class TestLegacySingleRequestUploadRemoved:
+    """Verify that POST /api/evals/upload does not accept a direct upload.
+
+    Clients initiate an upload, send each part directly to S3, and complete the
+    upload. The collection path does not accept a multipart form.
+    """
+
+    def _paths(self) -> set[str]:
+        return {route.path for route in uploads.router.routes}
+
+    def test_multipart_flow_routes_are_registered(self) -> None:
+        assert {
+            "/api/evals/upload/initiate",
+            "/api/evals/upload/complete",
+            "/api/evals/upload/abort",
+        } <= self._paths()
+
+    def test_legacy_single_post_route_is_not_registered(self) -> None:
+        assert "/api/evals/upload" not in self._paths()
+
+    def test_legacy_single_post_returns_404(self) -> None:
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        app = FastAPI()
+        app.include_router(uploads.router)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        resp = client.post(
+            "/api/evals/upload",
+            files={"file": ("evals.zip", b"PK\x03\x04", "application/zip")},
+            data={"notes": "legacy client"},
+        )
+
+        assert resp.status_code == 404

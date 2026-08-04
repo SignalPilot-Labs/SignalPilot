@@ -1,7 +1,5 @@
-"""Eval runs: "Evaluate Change" for knowledge-base entries.
+"""Production evaluation runs for knowledge-base and dbt workflows.
 
-Runs the agent system in docker against a linked eval-question repo, with
-proposed knowledge entries overlaid via the MCP X-SP-Eval-Docs header.
-State is file-based, partitioned per organization under
-SP_DATA_DIR/eval-runs/<org> — no database tables.
+Run state lives in Postgres, evidence lives in S3, and proposed knowledge
+entries plus run/task attribution are bound to short-lived stored API keys.
 """

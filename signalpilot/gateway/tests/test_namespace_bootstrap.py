@@ -1,4 +1,4 @@
-"""Tests for orchestrator/namespaces.py — per-org K8s namespace bootstrap.
+"""Verify organization namespace creation in orchestrator/namespaces.py.
 
 Pure-module tests against a fake K8s client. No FastAPI/DB imports.
 """
@@ -17,8 +17,7 @@ from gateway.orchestrator.namespaces import (
     namespace_for_org,
 )
 
-
-# ── Helpers ────────────────────────────────────────────────────────────────────
+# Helper functions.
 
 
 def _make_fake_core_api() -> MagicMock:
@@ -53,7 +52,7 @@ _DEFAULT_KWARGS = {
 }
 
 
-# ── namespace_for_org ──────────────────────────────────────────────────────────
+# Verify namespace_for_org.
 
 
 class TestNamespaceForOrg:
@@ -98,19 +97,16 @@ class TestNamespaceForOrg:
         assert ns.startswith("sp-nb-")
 
 
-# ── ensure_org_namespace ───────────────────────────────────────────────────────
+# Verify ensure_org_namespace.
 
 
 class TestEnsureNamespaceCreatesAllResourcesInOrder:
     @pytest.mark.asyncio
     async def test_ensure_namespace_creates_all_resources_in_order(self):
-        """All 6 resources created in the correct order: Namespace → RoleBinding →
-        deny NP → allow NP → ResourceQuota → LimitRange.
+        """Verify the creation order for all six namespace resources.
 
-        SP-SEC-009: the RoleBinding MUST come second. The gateway holds no cluster-wide
-        networkpolicy/resourcequota/limitrange verbs, so every write after the namespace
-        depends on the namespaced grant already existing. No per-namespace Role is
-        created any more — the binding targets the cluster-scoped workload template.
+        The RoleBinding follows the Namespace. The remaining writes depend on that
+        namespaced permission. The binding targets the cluster workload role.
         """
         core = _make_fake_core_api()
         networking = _make_fake_networking_api()
@@ -163,13 +159,13 @@ class TestEnsureNamespaceCreatesAllResourcesInOrder:
 class TestEnsureNamespaceIdempotent:
     @pytest.mark.asyncio
     async def test_ensure_namespace_idempotent_on_409(self):
-        """409 AlreadyExists errors are swallowed — second call succeeds."""
+        """Verify that status 409 does not fail a repeated operation."""
         core = _make_fake_core_api()
         networking = _make_fake_networking_api()
         rbac = _make_fake_rbac_api()
 
-        # All calls raise 409 — simulating resources already exist.
-        # Use an exception with .status=409 (R5: _is_409 now uses exc.status, not str(exc)).
+        # All calls return status 409 for existing resources.
+        # Use an exception with a status value of 409.
         _E = type("ApiException", (Exception,), {})
         error_409 = _E("AlreadyExists: namespace already exists")
         error_409.status = 409  # type: ignore[attr-defined]
@@ -180,12 +176,12 @@ class TestEnsureNamespaceIdempotent:
         rbac.create_namespaced_role.side_effect = error_409
         rbac.create_namespaced_role_binding.side_effect = error_409
 
-        # Should not raise — all 409s are swallowed.
+        # Status 409 must not raise an exception.
         await ensure_org_namespace(core, networking, rbac, **_DEFAULT_KWARGS)
 
     @pytest.mark.asyncio
     async def test_ensure_namespace_raises_on_non_409_error(self):
-        """Non-409 errors are re-raised — no silent fallback."""
+        """Verify that the function raises errors other than status 409."""
         core = _make_fake_core_api()
         networking = _make_fake_networking_api()
         rbac = _make_fake_rbac_api()
@@ -229,7 +225,7 @@ class TestEnsureNamespaceConcurrentLock:
             nonlocal first_call_done, call_count
             call_count += 1
             if first_call_done:
-                # R5: _is_409 uses exc.status, not str(exc).
+        # _is_409 reads the structured exception status.
                 _E = type("ApiException", (Exception,), {})
                 exc = _E("AlreadyExists")
                 exc.status = 409  # type: ignore[attr-defined]
@@ -250,7 +246,7 @@ class TestEnsureNamespaceConcurrentLock:
         assert call_count == 2
 
 
-# ── NetworkPolicy shape tests ──────────────────────────────────────────────────
+# Verify the NetworkPolicy structure.
 
 
 class TestDefaultDenyPolicyShape:
@@ -263,7 +259,7 @@ class TestDefaultDenyPolicyShape:
         assert spec["podSelector"] == {}
         assert "Ingress" in spec["policyTypes"]
         assert "Egress" in spec["policyTypes"]
-        # No ingress or egress keys — deny by omission.
+        # Missing ingress and egress rules deny all traffic.
         assert "ingress" not in spec
         assert "egress" not in spec
 
@@ -294,11 +290,10 @@ class TestAllowGatewayPolicyShape:
         assert ingress[0]["ports"][0]["protocol"] == "TCP"
 
     def test_allow_gateway_egress_dns_peers_are_separate(self):
-        """DNS egress uses two distinct `to:` entries — NOT collapsed into one peer.
+        """Verify that DNS egress uses two distinct destination entries.
 
-        A single peer's namespaceSelector + podSelector is intersected (AND logic),
-        which would match only pods that are BOTH kube-dns AND coredns — impossible.
-        We need two separate egress rules so they are unioned (OR logic).
+        One peer intersects its namespace and pod selectors. Two rules create the
+        required union for kube-dns and coredns pods.
         """
         policy = self._get_policy()
         egress_rules = policy["spec"]["egress"]
@@ -362,7 +357,7 @@ class TestAllowGatewayPolicyShape:
         assert ip_block_rules_yes[0]["to"][0]["ipBlock"]["cidr"] == "10.0.0.0/8"
 
     def test_allow_gateway_policy_no_pypi(self):
-        """No 0.0.0.0/0 rule — PyPI access is not permitted from notebook pods."""
+        """Verify that notebook pods have no unrestricted IPv4 egress rule."""
         policy = self._get_policy(egress_cidr=None)
         for rule in policy["spec"]["egress"]:
             for peer in rule.get("to", []):
@@ -373,10 +368,10 @@ class TestAllowGatewayPolicyShape:
 
 
 class TestRoleBindingShape:
-    """SP-SEC-009: the workload grant is a per-namespace RoleBinding to a cluster-scoped
-    ClusterRole template. The rules themselves now live in
-    deploy/k8s/gateway-rbac.yaml, so they are asserted against the manifest in
-    TestWorkloadClusterRoleManifest below."""
+    """Verify the namespace RoleBinding to the cluster workload role.
+
+    The manifest in deploy/k8s/gateway-rbac.yaml defines the role rules.
+    """
 
     def _get_role_binding(self, runtime_groups: tuple[str, ...] = ()) -> dict:
         from gateway.orchestrator.namespaces import _gateway_org_role_binding
@@ -424,18 +419,14 @@ class TestRoleBindingShape:
         assert group["apiGroup"] == "rbac.authorization.k8s.io"
 
     def test_no_per_namespace_role_builder_remains(self):
-        """The per-namespace Role is gone — creating one needs the `escalate` verb."""
+        """Verify that the namespace module defines no per-namespace Role builder."""
         from gateway.orchestrator import namespaces
 
         assert not hasattr(namespaces, "_gateway_org_role")
 
 
 class TestWorkloadClusterRoleManifest:
-    """SP-SEC-009 manifest invariants for deploy/k8s/*.yaml.
-
-    These are the checks that would have caught the original finding: a ClusterRole
-    carrying Secrets + pods/exec that was bound cluster-wide.
-    """
+    """Verify workload role invariants in deploy/k8s manifests."""
 
     @staticmethod
     def _load(rel: str) -> list[dict]:
@@ -488,7 +479,7 @@ class TestWorkloadClusterRoleManifest:
             assert "rolebindings" not in rule["resources"]
 
     def test_workload_clusterrole_is_never_bound_clusterwide(self):
-        """The core SP-SEC-009 invariant."""
+        """Verify that no ClusterRoleBinding grants the workload role."""
         from gateway.orchestrator.namespaces import GATEWAY_WORKLOAD_CLUSTER_ROLE
 
         offenders = [

@@ -202,36 +202,6 @@ async def update_project(
     return ProjectInfo(**{c.key: getattr(row, c.key) for c in GatewayProject.__table__.columns})
 
 
-async def _migrate_legacy_project_dir(
-    session: AsyncSession, org_id: str, name: str, stored_dir: Path
-) -> Path:
-    """Move a legacy DATA_DIR/projects/<name> dir under DATA_DIR/projects/<org_id>/<name>.
-
-    Unambiguous case (single DB row pointing at stored_dir): move dir, update row in-place,
-    flush. Returns the new path; caller commits.
-    Ambiguous case (multiple rows share stored_dir): raises ValueError. Leaves FS unchanged.
-    """
-    legacy_dir_str = str(stored_dir)
-    result = await session.execute(
-        select(GatewayProject).where(GatewayProject.project_dir == legacy_dir_str)
-    )
-    rows = result.scalars().all()
-    if len(rows) > 1:
-        raise ValueError(
-            f"Legacy project dir {stored_dir} is shared by multiple orgs; "
-            "operator must resolve manually before delete"
-        )
-    new_dir = _org_projects_root(org_id) / name
-    org_root = _org_projects_root(org_id)
-    org_root.mkdir(parents=True, exist_ok=True)
-    os.chmod(str(org_root), 0o700)
-    shutil.move(str(stored_dir), str(new_dir))
-    # rows[0] is the same DB row the caller loaded; update it in-place.
-    rows[0].project_dir = str(new_dir)
-    await session.flush()
-    return new_dir
-
-
 async def delete_project(session: AsyncSession, *, org_id: str, name: str) -> bool:
     result = await session.execute(
         select(GatewayProject).where(GatewayProject.org_id == org_id, GatewayProject.name == name)
@@ -242,9 +212,6 @@ async def delete_project(session: AsyncSession, *, org_id: str, name: str) -> bo
     if row.storage == "managed":
         if row.project_dir:
             stored_dir = Path(row.project_dir).resolve()
-            legacy_projects_root = (_constants.DATA_DIR / "projects").resolve()
-            if stored_dir.parent == legacy_projects_root:
-                stored_dir = await _migrate_legacy_project_dir(session, org_id, name, stored_dir)
             org_root = _org_projects_root(org_id).resolve()
             if not stored_dir.is_relative_to(org_root):
                 raise ValueError(

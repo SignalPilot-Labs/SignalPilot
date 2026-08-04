@@ -16,11 +16,16 @@ All configuration is via environment variables. Copy `.env.example` to `.env` an
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SP_ENCRYPTION_KEY` | — | Required. Primary key used for AES-GCM encryption of credentials at rest. |
-| `SP_ENCRYPTION_SALT` | — | Required. Salt used in key derivation. Must be set alongside `SP_ENCRYPTION_KEY`. |
-| `SP_ALLOW_LEGACY_CRYPTO` | `false` | Set to `true` to allow SHA-256 credential hashing during migration windows. AES-GCM is the canonical path. |
+| `SP_ENCRYPTION_KEY` | — | Required in cloud mode. Primary raw Fernet key or passphrase used for credential encryption. |
+| `SP_ENCRYPTION_SALT` | — | Required in cloud mode only when `SP_ENCRYPTION_KEY` is a passphrase. Preserve it across deployments. |
+| `SP_ENCRYPTION_KEY_OLD` | — | Comma-separated prior Fernet keys used only during explicit key rotation. Remove each key after all credentials have been read and rewritten under the primary key. |
 | `SP_BYOK_PROVIDER` | — | BYOK encryption provider name (e.g. `aws_kms`). Pro/Team/Enterprise plans only. |
 | `SP_BYOK_PROVIDER_CONFIG` | — | JSON-encoded configuration for the BYOK provider. |
+
+SignalPilot does not read ciphertext produced by retired pre-PBKDF2 key derivations.
+Before upgrading from a release that used one of those formats, run that release,
+rotate every credential to a current Fernet key, and verify that no credential is
+pending rotation. An in-place upgrade with unmigrated ciphertext fails closed.
 
 ## Network
 
@@ -73,7 +78,7 @@ orchestrator configuration.
 |----------|---------|-------------|
 | `SP_MAX_EXPORT_ROWS` | `50000` | Maximum rows allowed in a single audit export. |
 | `SP_ANNOTATIONS_TTL` | `60.0` | Cache TTL in seconds for schema annotation files. |
-| `SP_ADMIN_USER_IDS` | `local` | Comma-separated user IDs with admin access. The value `local` is the single-user local-deployment sentinel. |
+| `SP_ADMIN_USER_IDS` | `local` | Comma-separated platform-staff user IDs with access to security administration and eval operations. Set this explicitly in cloud; an unset cloud deployment fails closed on eval routes. The value `local` is the single-user local-deployment sentinel. |
 
 ## SSRF protection
 

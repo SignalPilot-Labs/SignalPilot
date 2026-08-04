@@ -2,10 +2,9 @@ const GATEWAY_URL =
   process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3300";
 const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 
-// ─── Cloud mode: Clerk token getter ─────────────────────────────────────────
-// Set by auth-context when Clerk is loaded so gateway requests use JWT auth.
-// _clerkReadyPromise lets early requests wait for Clerk to initialize instead
-// of firing without auth and failing with 401.
+// The following code gets Clerk tokens in cloud mode.
+// auth-context sets the token getter after Clerk loads.
+// Early requests wait for Clerk initialization before they use JWT authentication.
 let _clerkGetToken: (() => Promise<string | null>) | null = null;
 let _resolveClerkReady: (() => void) | null = null;
 const _clerkReadyPromise: Promise<void> | null = IS_CLOUD_MODE
@@ -22,18 +21,11 @@ export function setClerkTokenGetter(getter: () => Promise<string | null>) {
   }
 }
 
-// ─── Local mode: auto-fetch local API key ───────────────────────────────────
-// Migration: move from localStorage to sessionStorage (reduces XSS exposure)
-if (typeof window !== "undefined" && !IS_CLOUD_MODE) {
-  const oldKey = localStorage.getItem("sp_api_key");
-  if (oldKey) {
-    sessionStorage.setItem("sp_api_key", oldKey);
-    localStorage.removeItem("sp_api_key");
-  }
-}
-// Cloud mode cleanup: remove any stale localStorage key
+// The following code gets the local API key automatically.
+// sessionStorage contains the key.
+// This storage location reduces exposure to persistent XSS.
+// The browser removes the key when the tab closes.
 if (typeof window !== "undefined" && IS_CLOUD_MODE) {
-  localStorage.removeItem("sp_api_key");
   sessionStorage.removeItem("sp_api_key");
 }
 
@@ -57,8 +49,7 @@ function _fetchLocalKey(): Promise<string | null> {
 function getApiKey(): string | null {
   if (typeof window === "undefined") return null;
   if (IS_CLOUD_MODE) {
-    // Cloud mode uses Clerk JWT, not localStorage keys
-    localStorage.removeItem("sp_api_key");
+    // Cloud mode uses the Clerk JWT, never a stored sp_ key.
     return null;
   }
   const stored = sessionStorage.getItem("sp_api_key");
@@ -75,14 +66,12 @@ export function setApiKey(key: string | null) {
   } else {
     sessionStorage.removeItem("sp_api_key");
   }
-  // Always clean up localStorage regardless
-  localStorage.removeItem("sp_api_key");
 }
 
-// ─── Unified request function ───────────────────────────────────────────────
+// The following function sends API requests.
 
 async function _getAuthHeader(): Promise<string | null> {
-  // Cloud mode: wait for Clerk to initialize, then use JWT
+    // In cloud mode, wait for Clerk initialization and then use the JWT.
   if (IS_CLOUD_MODE) {
     if (_clerkReadyPromise && !_clerkGetToken) {
       // Wait up to 10s for Clerk to load — avoids firing unauthenticated requests
@@ -97,7 +86,7 @@ async function _getAuthHeader(): Promise<string | null> {
     }
     return null;
   }
-  // Local mode: use sp_ API key
+  // In local mode, use the sp_ API key.
   let apiKey = getApiKey();
   if (!apiKey && _localKeyPromise) {
     apiKey = await _localKeyPromise;
@@ -114,11 +103,12 @@ export async function getAuthHeaders(): Promise<Record<string, string>> {
 }
 
 /**
- * Resolve the raw gateway auth token (no "Bearer " prefix): the Clerk JWT in
- * cloud mode, the sp_ API key in local mode, or null when local-noauth. The
- * notebook proxy authenticates with this exact token — over the Authorization
- * header for HTTP and the Sec-WebSocket-Protocol two-token form for WS — so the
- * embed client is given this as its authToken thunk.
+ * Return the raw gateway authentication token without the Bearer prefix.
+ * Cloud mode returns the Clerk JWT.
+ * Local mode returns the sp_ API key or null when authentication is disabled.
+ * The notebook proxy sends this token in the HTTP Authorization header.
+ * WebSocket requests use the Sec-WebSocket-Protocol two-token format.
+ * The embedded client receives the token through its authToken callback.
  */
 export async function getGatewayAuthToken(): Promise<string | null> {
   const header = await _getAuthHeader();
@@ -143,13 +133,12 @@ export async function request<T>(
     ...options,
     headers,
   });
-  // On 401/403, clear stale credentials and retry once
+  // Clear stale credentials after a 401 or 403 response and retry once.
   if ((res.status === 401 || res.status === 403) && !_retried) {
     sessionStorage.removeItem("sp_api_key");
-    localStorage.removeItem("sp_api_key");
     _localKeyPromise = null;
-    // In cloud mode, the Clerk token getter will provide a fresh token on retry
-    // In local mode, re-fetch the local key
+    // In cloud mode, the Clerk token getter provides a fresh token.
+    // In local mode, fetch the local key again.
     if (!IS_CLOUD_MODE) {
       _localKeyPromise = _fetchLocalKey();
       await _localKeyPromise;
@@ -164,11 +153,12 @@ export async function request<T>(
   return res.json();
 }
 
-// Eval uploads (hidden /evals/upload page)
-// Industry-standard direct-to-S3 multipart: the gateway presigns per-part PUT
-// URLs, the browser uploads parts straight to S3 in parallel with per-part
-// retry, then asks the gateway to complete. File bytes never pass through the
-// gateway. XHR (not fetch) for the part PUTs: fetch has no upload progress.
+// The following functions support uploads from the /evals/upload page.
+// The gateway creates presigned PUT URLs for each S3 part.
+// The browser uploads parts directly to S3 in parallel.
+// The browser retries each part and then requests upload completion.
+// File data does not pass through the gateway.
+// The part uploads use XHR because fetch does not report upload progress.
 export type EvalUploadResult = { reference_id: string; expires_at: string };
 
 type EvalUploadInitiate = {
@@ -243,8 +233,8 @@ export async function uploadEval(
       }),
     });
   } catch (err) {
-    // request() throws Error("<status>: <body>"); surface status + detail so
-    // the page can show the server's friendly 413/415 messages.
+    // request() includes the status and body in the error.
+    // Return the status and detail for the page error message.
     const m = /^(\d{3}): (.*)$/s.exec((err as Error).message ?? "");
     if (m) {
       let detail = "";
@@ -285,7 +275,8 @@ export async function uploadEval(
       Array.from({ length: Math.min(PART_CONCURRENCY, partCount) }, worker),
     );
   } catch (err) {
-    // Best-effort abort; the bucket lifecycle rule is the backstop.
+    // Abort the upload when possible.
+    // The bucket lifecycle rule removes incomplete upload data.
     request("/api/evals/upload/abort", {
       method: "POST",
       body: JSON.stringify({ key: init.key, upload_id: init.upload_id }),
@@ -306,58 +297,130 @@ export async function uploadEval(
   return result;
 }
 
-// Eval runs (Evaluate Change on knowledge entries — /evals page)
+// The following types and functions support evaluation runs on the /evals page.
 export type EvalConfig = {
   enabled?: boolean;
   runner_image?: string;
   repo_url: string;
   model: string;
-  max_questions: number;
+  max_tasks: number;
   prompt_preamble: string;
+  connection: string;
+  autorun_on_knowledge_add: boolean;
+  notify_emails: string[];
 };
 export type EvalGoldCheck = { name: string; value: number; tolerance: number };
-export type EvalCheckResult = EvalGoldCheck & { passed: boolean };
-export type EvalRunQuestion = {
+/**
+ * A checks result contains a value and a tolerance.
+ * A model_rebuilt result contains a text description.
+ */
+export type EvalCheckResult = {
+  name: string;
+  passed: boolean;
+  value?: number;
+  tolerance?: number;
+  detail?: string;
+};
+export type EvalGradeExpectation = { name: string; value?: number; tolerance?: number };
+export type EvalGrade = {
+  kind: "checks" | "model_rebuilt";
+  expectations?: EvalGradeExpectation[];
+} & Record<string, unknown>;
+export type EvalCaptureSpec = { tables: string[]; mode: string; sample_rows: number };
+export type EvalCaptureResult = {
+  row_count?: number;
+  grain_unique?: boolean;
+  stored?: string[];
+} & Record<string, unknown>;
+export type EvalCoverageLayer = { total?: number; covered?: number; pct?: number | null };
+export type EvalCoverage = {
+  declared: string[];
+  observed: string[];
+  observed_not_declared: string[];
+  per_task_observed: Record<string, string[]>;
+  models_total: number | null;
+  models_covered?: number;
+  pct: number | null;
+  by_layer?: Record<string, EvalCoverageLayer>;
+  marts_pct?: number | null;
+};
+/** The server reports a sandbox as a name or an object. */
+export type EvalSandboxRef =
+  | string
+  | { name?: string; backend?: string; namespace?: string; started_at?: string }
+  | null;
+export function evalSandboxName(ref: EvalSandboxRef | undefined): string | null {
+  if (!ref) return null;
+  return typeof ref === "string" ? ref : ref.name ?? null;
+}
+export type EvalRunTask = {
   id: string;
   title: string;
+  kind: string;
+  task_class: "read" | "write";
   gt: string;
-  kind?: string;
-  checks?: EvalGoldCheck[];
-  check_results?: EvalCheckResult[];
+  checks: EvalGoldCheck[];
+  grade: EvalGrade | null;
+  covers: string[];
+  builds: string[];
+  capture_spec: EvalCaptureSpec | null;
   status: "pending" | "running" | "done";
   verdict: string | null;
+  check_results?: EvalCheckResult[];
   answer?: string;
   duration_s?: number;
+  started_at?: string | null;
+  finished_at?: string | null;
+  sandbox?: EvalSandboxRef;
+  branch_name?: string | null;
+  capture_result?: EvalCaptureResult | null;
+  observed_tables?: string[];
+  error?: string | null;
+  position: number;
 };
-export type EvalSetupPhase = {
-  state: string;
-  script: string;
-  status: "running" | "ok" | "failed";
-  exit_code: number | null;
-  duration_s: number | null;
-  error?: string;
+export type EvalRunSummary = {
+  total?: number;
+  correct?: number;
+  partial?: number;
+  off?: number;
+  unknown?: number;
+  ungraded?: number;
+  error?: number;
+  setup_failed?: number;
 };
 export type EvalRun = {
   id: string;
-  setup?: EvalSetupPhase[];
   status: "preparing" | "running" | "completed" | "failed";
+  trigger: string;
   created_at: string;
+  finished_at: string | null;
   doc_ids: string[];
   doc_titles: string[];
   repo_url: string;
   model: string;
-  summary: {
-    total?: number;
-    correct?: number;
-    partial?: number;
-    off?: number;
-    unknown?: number;
-    ungraded?: number;
-    error?: number;
-  };
-  questions: EvalRunQuestion[];
+  eval_set_name: string;
+  eval_set_ref: string;
+  project_repo: string;
+  project_ref: string;
+  build_fingerprint: string;
+  kb_doc_ids: string[];
+  summary: EvalRunSummary;
+  progress?: unknown;
+  coverage: EvalCoverage | null;
   error: string | null;
+  artifact_bytes: number;
+  artifacts_pruned: boolean;
+  traces_pruned: boolean;
 };
+/** The detail route returns tasks. The list route omits tasks. */
+export type EvalRunDetail = EvalRun & { tasks: EvalRunTask[] };
+
+/** Any authenticated user can read availability. Entitlement controls all other evaluation routes. */
+export type EvalAvailability = {
+  enabled: boolean;
+  reason: "ok" | "not_enabled_for_org";
+};
+export const getEvalAvailability = () => request<EvalAvailability>("/api/evals/availability");
 
 export const getEvalConfig = () => request<EvalConfig>("/api/evals/config");
 export const putEvalConfig = (
@@ -367,65 +430,261 @@ export const putEvalConfig = (
     method: "PUT",
     body: JSON.stringify(cfg),
   });
-export const startEvalRun = (docIds: string[], questionIds?: string[]) =>
+export const startEvalRun = (docIds: string[], taskIds?: string[]) =>
   request<EvalRun>("/api/evals/runs", {
     method: "POST",
-    body: JSON.stringify({
-      doc_ids: docIds,
-      question_ids: questionIds ?? null,
-    }),
+    body: JSON.stringify({ doc_ids: docIds, task_ids: taskIds ?? null }),
   });
+/** Grade the complete set against the stored knowledge base without document overlays. */
+export const startBaselineEvalRun = () => startEvalRun([]);
 export const listEvalRuns = () =>
   request<{ runs: EvalRun[] }>("/api/evals/runs");
 export const getEvalRun = (runId: string) =>
-  request<EvalRun>(`/api/evals/runs/${runId}`);
+  request<EvalRunDetail>(`/api/evals/runs/${runId}`);
 
-export type EvalQuestion = {
+export type EvalTask = {
   id: string;
+  class: "read" | "write";
   kind: string;
-  state: string;
   gt: string;
   title: string;
   why: string;
   prompt: string;
   doc: string;
   checks: EvalGoldCheck[];
+  grade: EvalGrade | null;
+  covers: string[];
+  builds: string[];
+  capture: EvalCaptureSpec | null;
+  setup: string;
+  teardown: string;
 };
 export type EvalSetInfo = {
   name: string;
   description: string;
-  setup: { image?: string; env_file?: string };
-  questions: EvalQuestion[];
+  ref: string;
+  project_repo: string;
+  build_fingerprint: string;
+  setup: Record<string, unknown>;
+  tasks: EvalTask[];
 };
-export const listEvalQuestions = () =>
-  request<EvalSetInfo>("/api/evals/questions");
+export const listEvalTasks = () => request<EvalSetInfo>("/api/evals/tasks");
+
+/** Return the setup or teardown log for a write task. */
 export async function getEvalSetupLog(
   runId: string,
-  state: string,
+  taskId: string,
+  phase: "setup" | "teardown",
 ): Promise<string> {
   const headers = await getAuthHeaders();
   const res = await fetch(
-    `${GATEWAY_URL}/api/evals/runs/${runId}/setup/${encodeURIComponent(state)}/log`,
+    `${GATEWAY_URL}/api/evals/runs/${runId}/tasks/${encodeURIComponent(taskId)}/setup/${phase}/log`,
     { headers },
   );
   if (!res.ok) throw new Error(`${res.status}`);
   return res.text();
 }
 
-export async function getEvalTranscript(
-  runId: string,
-  questionId: string,
-): Promise<string> {
+// The following types and functions support live evaluation sandboxes.
+export type EvalSandbox = {
+  name: string;
+  backend: "kubernetes" | "docker";
+  phase: "pending" | "running" | "succeeded" | "failed" | "unknown";
+  reason: string;
+  message: string;
+  ready: boolean;
+  oom_killed: boolean;
+  restart_count: number;
+  node: string;
+  created_at: string;
+  started_at: string;
+  age_seconds: number | null;
+  run_id: string;
+  task_id: string;
+  task_title: string;
+  task_phase: string;
+};
+export type EvalSandboxInventory = {
+  backend: "kubernetes" | "docker";
+  live: boolean;
+  supports_live_logs: boolean;
+  namespace: string;
+  message: string;
+  sandboxes: EvalSandbox[];
+};
+export type EvalSandboxEvent = {
+  type: string;
+  reason: string;
+  message: string;
+  count: number;
+  first_seen: string;
+  last_seen: string;
+  age_seconds: number | null;
+  source: string;
+};
+export type EvalActiveTask = {
+  task_id: string;
+  title: string;
+  phase: string;
+  started_at: string;
+  sandbox?: EvalSandboxRef;
+};
+export type EvalRunProgress = {
+  run_id: string;
+  status: string;
+  phase: string;
+  done: number;
+  total: number;
+  /** Tasks execute concurrently. Each active entry describes one task. */
+  active: EvalActiveTask[];
+  started_at: string;
+  elapsed_s: number | null;
+  updated_at: string;
+  error: string | null;
+};
+
+export const listEvalSandboxes = () => request<EvalSandboxInventory>("/api/evals/sandboxes");
+export const getEvalSandboxEvents = (name: string) =>
+  request<{ backend: string; supported: boolean; message: string; events: EvalSandboxEvent[] }>(
+    `/api/evals/sandboxes/${encodeURIComponent(name)}/events`,
+  );
+export const getEvalRunProgress = (runId: string) =>
+  request<EvalRunProgress>(`/api/evals/runs/${runId}/progress`);
+
+export type EvalLogEvent =
+  | { type: "open"; sandbox: string; at: number }
+  | { type: "log"; text: string; at: number }
+  | { type: "error"; text: string; at: number }
+  | { type: "heartbeat"; at: number }
+  | { type: "end"; reason: string; at: number };
+
+/**
+ * Stream live output from one evaluation sandbox through SSE over fetch.
+ * Fetch permits authentication headers on the request.
+ * The server ends the stream when the sandbox exits.
+ * The caller decides whether to create another subscription.
+ */
+export function subscribeEvalSandboxLogs(
+  name: string,
+  tail: number,
+  cb: (event: EvalLogEvent) => void,
+): () => void {
+  let aborted = false;
+  const controller = new AbortController();
+
+  (async () => {
+    const authHeader = await _getAuthHeader();
+    if (aborted) return;
+    try {
+      const res = await fetch(
+        `${GATEWAY_URL}/api/evals/sandboxes/${encodeURIComponent(name)}/logs/stream?tail=${tail}`,
+        {
+          headers: {
+            Accept: "text/event-stream",
+            ...(authHeader ? { Authorization: authHeader } : {}),
+          },
+          signal: controller.signal,
+        },
+      );
+      if (!res.ok || !res.body) {
+        cb({ type: "end", reason: `http-${res.status}`, at: Date.now() / 1000 });
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (!aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try { cb(JSON.parse(line.slice(6)) as EvalLogEvent); } catch {}
+        }
+      }
+    } catch {
+      if (!aborted) cb({ type: "end", reason: "disconnected", at: Date.now() / 1000 });
+    }
+  })();
+
+  return () => {
+    aborted = true;
+    controller.abort();
+  };
+}
+
+export async function getEvalTranscript(runId: string, taskId: string): Promise<string> {
   const headers = await getAuthHeaders();
   const res = await fetch(
-    `${GATEWAY_URL}/api/evals/runs/${runId}/questions/${encodeURIComponent(questionId)}/transcript`,
+    `${GATEWAY_URL}/api/evals/runs/${runId}/tasks/${encodeURIComponent(taskId)}/transcript`,
     { headers },
   );
   if (!res.ok) throw new Error(`${res.status}`);
   return res.text();
 }
 
-// Chat traces (the /chats reader page)
+// The following types and functions support accuracy history and regressions.
+export type EvalAccuracyPoint = {
+  run_id: string;
+  created_at: string;
+  trigger: string;
+  eval_set_name: string;
+  eval_set_ref: string;
+  build_fingerprint: string;
+  tasks_total: number;
+  tasks_passed: number;
+  accuracy_pct: number;
+  coverage_pct: number | null;
+  kb_doc_ids: string[];
+};
+export type EvalRegression = {
+  id: string;
+  run_id: string;
+  created_at: string;
+  baseline_run_ids: string[];
+  baseline_accuracy_pct: number;
+  run_accuracy_pct: number;
+  drop_pct: number;
+  suspected_doc_ids: string[];
+  sole_change: boolean;
+  flipped_tasks: { task_id: string; title: string; verdict: string }[];
+  notified_at: string | null;
+  recipients: string[];
+};
+export const getEvalAccuracy = () =>
+  request<{ history: EvalAccuracyPoint[]; regressions: EvalRegression[] }>("/api/evals/accuracy");
+
+// The following types and functions support run artifacts and exports.
+export type EvalArtifact = { path: string; bytes: number };
+export const listEvalArtifacts = (runId: string) =>
+  request<{ artifacts: EvalArtifact[] }>(`/api/evals/runs/${runId}/artifacts`);
+export const evalArtifactUrl = (runId: string, taskId: string, filename: string) =>
+  `${GATEWAY_URL}/api/evals/runs/${runId}/artifacts/${encodeURIComponent(taskId)}/${encodeURIComponent(filename)}`;
+export const evalExportUrl = (runId: string) => `${GATEWAY_URL}/api/evals/runs/${runId}/export`;
+
+/** Fetch the file with authentication and start a browser download. */
+async function downloadAuthed(url: string, filename: string): Promise<void> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(url, { headers });
+  if (!res.ok) throw new Error(`${res.status}`);
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objectUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(objectUrl);
+}
+export const downloadEvalArtifact = (runId: string, taskId: string, filename: string) =>
+  downloadAuthed(evalArtifactUrl(runId, taskId, filename), filename);
+export const downloadEvalRunExport = (runId: string) =>
+  downloadAuthed(evalExportUrl(runId), `eval-${runId}.zip`);
+
+// The following functions support chat traces on the /chats page.
 export type ChatTraceThread = {
   thread_id: string;
   session_id: string;
@@ -910,7 +1169,7 @@ export const updateConnection = (
 export const deleteConnection = (name: string) =>
   request<void>(`/api/connections/${name}`, { method: "DELETE" });
 
-// Demo connector (hidden /demo-db page)
+// The following functions support the /demo-db page.
 export const getDemoConnector = () =>
   request<import("./types").DemoConnectorStatus>("/api/demo/connector");
 export const createDemoConnector = (demo: string) =>
@@ -1093,7 +1352,7 @@ export const correctColumns = (
     body: JSON.stringify({ table, columns, threshold }),
   });
 
-// Schema Endorsements
+// The following functions support schema endorsements.
 export const getSchemaEndorsements = (name: string) =>
   request<{
     endorsed: string[];
@@ -1117,7 +1376,7 @@ export const setSchemaEndorsements = (
     body: JSON.stringify(endorsements),
   });
 
-// Connection Export/Import
+// The following functions support connection export and import.
 export const exportConnections = (includeCredentials = false) =>
   request<{
     version: string;
@@ -1167,7 +1426,7 @@ export const discoverDbtCloudProjects = (
     },
   );
 
-// Workspace Projects (S3-backed)
+// The following functions support workspace projects in S3.
 export const getWorkspaceProjects = (status?: string) =>
   request<{
     projects: import("./types").WorkspaceProjectInfo[];
@@ -1201,7 +1460,7 @@ export const updateWorkspaceProject = (
 export const deleteWorkspaceProject = (id: string) =>
   request<void>(`/api/workspace-projects/${id}`, { method: "DELETE" });
 
-// Workspace Project Branches
+// The following functions support workspace project branches.
 export const getWorkspaceBranches = (projectId: string) =>
   request<{ branches: import("./types").WorkspaceBranchInfo[] }>(
     `/api/workspace-projects/${projectId}/branches`,
@@ -1271,7 +1530,7 @@ export const deleteWorkspaceFile = (
     { method: "DELETE" },
   );
 
-// User Session
+// The following functions support the user session.
 export const getUserSession = (projectId: string) =>
   request<{
     user_id: string;
@@ -1290,7 +1549,7 @@ export const switchBranch = (projectId: string, branch: string) =>
     body: JSON.stringify({ branch }),
   });
 
-// API Keys (org-scoped)
+// The following functions support organization API keys.
 export const getApiKeys = () =>
   request<
     {
@@ -1336,7 +1595,7 @@ export const executeSandbox = (id: string, code: string, timeout = 30) =>
     body: JSON.stringify({ code, timeout }),
   });
 
-// Audit
+// The following functions support audit records.
 export const getAudit = (params?: Record<string, string | number>) => {
   const qs = params
     ? "?" +
@@ -1378,7 +1637,7 @@ export const executeQuery = (
     body: JSON.stringify({ connection_name, sql, row_limit }),
   });
 
-// Budget
+// The following functions support budgets.
 export const getBudgets = () =>
   request<{ sessions: Record<string, unknown>[]; total_spent_usd: number }>(
     "/api/budget",
@@ -1391,9 +1650,9 @@ export const createBudget = (session_id: string, budget_usd: number) =>
 export const getBudget = (session_id: string) =>
   request<Record<string, unknown>>(`/api/budget/${session_id}`);
 
-// Notebook Sessions
-// access_token is intentionally absent: the gateway issues an HttpOnly cookie
-// at /_init and never surfaces the token to frontend JavaScript.
+// The following functions support notebook sessions.
+// The gateway issues an HttpOnly cookie at /_init.
+// The access_token field is absent from frontend JavaScript.
 export type NotebookSession = {
   id: string;
   status: string;
@@ -1419,8 +1678,10 @@ export const getNotebookSession = () =>
 export const deleteNotebookSession = () =>
   request<void>("/api/notebook-sessions", { method: "DELETE" });
 
-export const pingNotebookSession = () =>
-  request<void>("/api/notebook-sessions/ping", { method: "POST" });
+export const pingNotebookSession = (sessionId: string) =>
+  request<void>(`/api/notebook-sessions/${encodeURIComponent(sessionId)}/ping`, {
+    method: "POST",
+  });
 
 export type AnalysisTrail = {
   id: string;
@@ -1456,7 +1717,7 @@ export const resolveAnalysisTrail = (params: {
   );
 };
 
-// GitHub App
+// The following functions support the GitHub App.
 export const getGitHubInstallUrl = () =>
   request<{ install_url: string }>("/api/github/install-url");
 
@@ -1492,10 +1753,10 @@ export const getGitHubRepoLinks = (projectId?: string) =>
 export const getGitCredentials = (projectId: string) =>
   request<GitCredentials>(`/api/github/credentials/${projectId}`);
 
-// Health
+// The following function returns gateway health.
 export const getHealth = () => request<Record<string, unknown>>("/health");
 
-// Plan & Usage
+// The following functions support plan limits and usage.
 export interface PlanUsage {
   tier: string;
   limits: {
@@ -1520,7 +1781,7 @@ export interface PlanUsage {
 }
 export const getPlan = () => request<PlanUsage>("/api/plan");
 
-// Connection Health
+// The following functions support connection health.
 export const getConnectionsHealth = () =>
   request<{ connections: import("./types").ConnectionHealthStats[] }>(
     "/api/connections/health",
@@ -1550,7 +1811,7 @@ export const getConnectionHealthHistory = (
     `/api/connections/${name}/health/history?window=${window}&bucket=${bucket}`,
   );
 
-// Cache
+// The following functions support the query and schema caches.
 export const getCacheStats = () =>
   request<{
     entries: number;
@@ -1566,7 +1827,7 @@ export const invalidateCache = (connection_name?: string) =>
     { method: "POST" },
   );
 
-// PII Detection
+// The following function detects PII.
 export const detectPII = (name: string) =>
   request<{
     connection_name: string;
@@ -1575,7 +1836,7 @@ export const detectPII = (name: string) =>
     detections: Record<string, Record<string, string>>;
   }>(`/api/connections/${name}/detect-pii`, { method: "POST" });
 
-// PII Redaction Config
+// The following functions configure PII redaction.
 export const getPIIConfig = (name: string) =>
   request<{ enabled: boolean; rules: Record<string, string> }>(
     `/api/connections/${name}/pii`,
@@ -1644,7 +1905,7 @@ export const revertToManaged = () =>
     { method: "POST" },
   );
 
-// Schema Cache
+// The following function clears the schema cache.
 export const getSchemaCache = () =>
   request<{
     cached_connections: number;
@@ -1657,7 +1918,7 @@ export const invalidateSchemaCache = (name?: string) =>
     { method: "POST" },
   );
 
-// Schema Warmup (parallel across all connections)
+// The following function warms schemas for all connections in parallel.
 export const warmupSchemas = () =>
   request<{
     warmed: number;
@@ -1687,7 +1948,7 @@ export const validateConnectionUrl = (
     body: JSON.stringify({ connection_string, db_type }),
   });
 
-// Pre-save Connection Test (HEX pattern: test before saving)
+// The following function tests a connection before save.
 export const testCredentials = (payload: Record<string, unknown>) =>
   request<{
     status: string;
@@ -1705,14 +1966,14 @@ export const testCredentials = (payload: Record<string, unknown>) =>
     body: JSON.stringify(payload),
   });
 
-// Parse Connection URL into credential fields (HEX paste-and-parse pattern)
+// The following function parses a connection URL into credential fields.
 export const parseConnectionUrl = (url: string, db_type?: string) =>
   request<Record<string, string | number | boolean>>(
     "/api/connections/parse-url",
     { method: "POST", body: JSON.stringify({ url, db_type }) },
   );
 
-// Connector Capabilities
+// The following function returns connector capabilities.
 export const getConnectorCapabilities = (dbType?: string) =>
   request<{
     tier_1?: {
@@ -1756,7 +2017,7 @@ export const getConnectionCapabilities = (name: string) =>
     configured: Record<string, boolean>;
   }>(`/api/connections/${name}/capabilities`);
 
-// Network info (IP whitelist helper)
+// The following function returns network information for IP allowlists.
 export const getNetworkInfo = () =>
   request<{
     hostname: string;
@@ -1765,7 +2026,7 @@ export const getNetworkInfo = () =>
     whitelist_instructions: Record<string, string>;
   }>("/api/network/info");
 
-// Connection diagnostics (DNS, TCP, TLS, auth)
+// The following function returns DNS, TCP, TLS, and authentication diagnostics.
 export const diagnoseConnection = (name: string) =>
   request<{
     host: string;
@@ -1779,7 +2040,7 @@ export const diagnoseConnection = (name: string) =>
     }[];
   }>(`/api/connections/${name}/diagnose`, { method: "POST" });
 
-// Semantic Model (HEX-style inline schema editing)
+// The following functions support semantic model editing.
 export const getSemanticModel = (name: string) =>
   request<{
     tables: Record<
@@ -1817,7 +2078,7 @@ export const generateSemanticModel = (name: string) =>
     };
   }>(`/api/connections/${name}/semantic-model/generate`, { method: "POST" });
 
-// Schema Diff
+// The following function returns schema differences.
 export const getConnectionSchemaDiff = (name: string) =>
   request<{
     connection_name: string;
@@ -1832,7 +2093,7 @@ export const getConnectionSchemaDiff = (name: string) =>
     message?: string;
   }>(`/api/connections/${name}/schema/diff`);
 
-// Schema DDL (Spider2.0 optimized format)
+// The following function returns schema DDL in the Spider 2.0 format.
 export const getConnectionSchemaDDL = (name: string, maxTables = 50) =>
   request<{
     connection_name: string;
@@ -1863,7 +2124,7 @@ export const getConnectionSchemaLink = (
     `/api/connections/${name}/schema/link?question=${encodeURIComponent(question)}&format=${format}&max_tables=${maxTables}`,
   );
 
-// File Browser (for local DuckDB/SQLite — browses host filesystem via sandbox manager)
+// The following functions browse local DuckDB and SQLite files through the sandbox manager.
 export const browseFiles = (path?: string, pattern = "*.duckdb") => {
   const params = new URLSearchParams({ pattern });
   if (path) params.set("path", path);
@@ -1935,7 +2196,7 @@ export const approveKnowledgeDoc = (id: string) =>
 export const listKnowledgeEdits = (id: string, limit = 20) =>
   request<KnowledgeEdit[]>(`/api/knowledge/${id}/edits?limit=${limit}`);
 
-// Reports (rendered HTML)
+// The following functions support rendered HTML reports.
 import type { Report, ReportSummary } from "./types";
 
 export const listReports = (params?: { scope_ref?: string }) => {
@@ -2082,7 +2343,7 @@ export const deleteNotionOAuthInstallation = (installationId: string) =>
     method: "DELETE",
   });
 
-// Slack Integrations
+// The following functions support Slack integrations.
 export type SlackOAuthInstallationConfig = {
   enabled: boolean;
   default_project_id: string | null;
@@ -2148,11 +2409,11 @@ export function subscribeMetrics(
   const controller = new AbortController();
 
   (async () => {
-    // Retry loop: wait for auth to be ready, then connect
+    // Wait for authentication before each connection attempt.
     for (let attempt = 0; attempt < 10 && !aborted; attempt++) {
       const authHeader = await _getAuthHeader();
       if (!authHeader) {
-        // Auth not ready yet (Clerk still loading) — wait and retry
+        // Wait and retry while Clerk loads.
         await new Promise((r) => setTimeout(r, 1000));
         continue;
       }
@@ -2163,7 +2424,7 @@ export function subscribeMetrics(
           signal: controller.signal,
         });
         if (res.status === 401 || res.status === 403) {
-          // Token may have expired or wasn't ready — retry
+          // Retry when the token is expired or unavailable.
           await new Promise((r) => setTimeout(r, 2000));
           continue;
         }

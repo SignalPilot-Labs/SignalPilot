@@ -82,7 +82,6 @@ Run a `.py` notebook in a sandboxed cloud Kubernetes pod. Writes the notebook in
 |-----------|------|----------|-------------|
 | `filename` | string | Yes | Name of the `.py` file (e.g. `analysis.py`), relative path inside the workspace |
 | `code` | string | Yes | Full contents of the `.py` notebook file |
-| `agent_branch` | string | No | Deprecated legacy label; ignored for project routing |
 
 **Returns:** stdout/stderr from the run plus a URL to view the notebook in the browser.
 

@@ -1,4 +1,4 @@
-"""Tests for the notebook reverse proxy — §3.14 of the R2 spec.
+"""Verify the notebook reverse proxy contract.
 
 Covers:
 - Proxy HTTP/WS: header stripping (cookie/authorization/set-cookie/hop-by-hop)
@@ -8,8 +8,8 @@ Covers:
 - Orchestrator: pod CLI --no-token, no SP_ACCESS_TOKEN, fail-fast upstream mode
 - Upstream mode: pod_ip_internal used (not NodePort)
 
-Proxy auth itself (Clerk JWT / local) is covered end-to-end by the live
-run_notebook test; the removed unit cases tested the retired cookie/_init model.
+The live run_notebook test verifies proxy authentication with Clerk JWT and
+local credentials.
 """
 
 from __future__ import annotations
@@ -25,8 +25,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from cryptography.fernet import Fernet
 
-
-# ─── Helpers ─────────────────────────────────────────────────────────────────
+# Helper functions.
 
 
 def _patch_encryption_key(monkeypatch):
@@ -44,12 +43,15 @@ def _make_session_row(
     user_id: str = "user-1",
     status: str = "running",
     pod_ip_internal: str = "10.42.0.5",
-    access_token: str = "secret-token-abc",
+    access_token_enc: bytes | None = None,
 ):
-    """Build a fake GatewayNotebookSession-like object."""
+    """Build a GatewayNotebookSession test double.
+
+    ``access_token_enc`` stores the encrypted access token.
+    """
     from gateway.db.models import GatewayNotebookSession
 
-    row = GatewayNotebookSession(
+    return GatewayNotebookSession(
         id=session_id,
         org_id=org_id,
         user_id=user_id,
@@ -58,15 +60,14 @@ def _make_session_row(
         pod_name="nb-test",
         pod_ip="k3s:30042",
         pod_ip_internal=pod_ip_internal,
-        access_token=access_token,
+        access_token_enc=access_token_enc,
         status=status,
         last_ping=time.time(),
         created_at=time.time(),
     )
-    return row
 
 
-# ─── Cookie helpers ───────────────────────────────────────────────────────────
+# Cookie helper functions.
 
 
 class TestSessionIdPattern:
@@ -110,7 +111,7 @@ class TestSessionIdPattern:
         assert SESSION_ID_PATTERN.match("") is None
 
 
-# ─── HTTP header stripping ────────────────────────────────────────────────────
+# Verify HTTP header filtering.
 
 
 class TestHeaderStripping:
@@ -147,7 +148,7 @@ class TestHeaderStripping:
         assert HOP_BY_HOP_HEADERS.issubset(INBOUND_STRIP_HEADERS)
 
 
-# ─── Store: NotebookSessionInternal ──────────────────────────────────────────
+# Verify NotebookSessionInternal storage.
 
 
 class TestNotebookSessionInternal:
@@ -160,8 +161,7 @@ class TestNotebookSessionInternal:
         from gateway.store.crypto import _encrypt
         from gateway.store.notebook_sessions import get_session_internal
 
-        row = _make_session_row(access_token=None)
-        row.access_token_enc = _encrypt("secret-token-abc")
+        row = _make_session_row(access_token_enc=_encrypt("secret-token-abc"))
         mock_session = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = row
@@ -176,14 +176,21 @@ class TestNotebookSessionInternal:
         mock_session.commit.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_get_session_internal_migrates_legacy_plaintext_token(self, monkeypatch):
+    async def test_get_session_internal_without_ciphertext_returns_no_token(self, monkeypatch):
+        """Verify that missing ciphertext produces no access token.
+
+        A null ``access_token_enc`` value produces ``access_token=None`` and no
+        database write.
+        """
         _patch_encryption_key(monkeypatch)
 
-        from gateway.store.crypto import _decrypt_with_migration
+        from gateway.db.models import GatewayNotebookSession
         from gateway.store.notebook_sessions import get_session_internal
 
-        row = _make_session_row(access_token="legacy-token")
-        assert row.access_token_enc is None
+        # The model does not contain a plaintext access token column.
+        assert not hasattr(GatewayNotebookSession, "access_token")
+
+        row = _make_session_row(access_token_enc=None)
         mock_session = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = row
@@ -194,21 +201,19 @@ class TestNotebookSessionInternal:
         )
 
         assert result is not None
-        assert result.access_token == "legacy-token"
-        assert row.access_token is None
-        assert row.access_token_enc is not None
-        assert b"legacy-token" not in row.access_token_enc
-        token, needs_migration = _decrypt_with_migration(row.access_token_enc)
-        assert token == "legacy-token"
-        assert needs_migration is False
-        mock_session.commit.assert_awaited_once()
+        assert result.access_token is None
+        assert row.access_token_enc is None
+        mock_session.commit.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_to_info_hides_access_token(self):
-        from gateway.db.models import GatewayNotebookSession
+    async def test_to_info_hides_access_token(self, monkeypatch):
+        """The FE-facing view exposes no token even when the row holds one."""
+        _patch_encryption_key(monkeypatch)
+
+        from gateway.store.crypto import _encrypt
         from gateway.store.notebook_sessions import get_session_by_id
 
-        row = _make_session_row()
+        row = _make_session_row(access_token_enc=_encrypt("secret-token-abc"))
         mock_session = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = row
@@ -234,7 +239,7 @@ class TestNotebookSessionInternal:
             mock_session, session_id="test-sess-123", org_id="org-1"
         )
         assert result is not None
-        # Tokenless proxy path — the browser authenticates with its Clerk JWT.
+# The browser uses its Clerk JWT to authenticate the tokenless proxy path.
         assert result.notebook_url == "/notebook/test-sess-123/"
 
     @pytest.mark.asyncio
@@ -252,7 +257,7 @@ class TestNotebookSessionInternal:
         assert result is None
 
 
-# ─── Orchestrator: pod CLI ────────────────────────────────────────────────────
+# Verify the orchestrator pod command.
 
 
 def _manifest(**overrides):
@@ -374,7 +379,7 @@ class TestNetworkPolicyUnchanged:
         assert captured["skip_network_policy"] is False
 
 
-# ─── Invalid upstream mode ────────────────────────────────────────────────────
+# Verify invalid upstream modes.
 
 
 class TestInvalidUpstreamMode:
@@ -411,7 +416,7 @@ class TestInvalidUpstreamMode:
         assert mod._UPSTREAM_MODE == "nodeport"
 
 
-# ─── NotebookProxy HTTP ───────────────────────────────────────────────────────
+# Verify NotebookProxy HTTP behavior.
 
 
 class TestNotebookProxyHTTP:
@@ -588,7 +593,7 @@ class TestNotebookProxyHTTP:
         assert exc_info.value.status_code == 502
 
 
-# ─── Security headers middleware ──────────────────────────────────────────────
+# Verify security header middleware.
 
 
 class TestSecurityHeadersOnProxyPaths:
@@ -614,14 +619,10 @@ class TestSecurityHeadersOnProxyPaths:
             return client.get(path)
 
     def test_proxy_path_omits_xframe_options(self):
-        """Proxy paths deliberately carry NO X-Frame-Options.
+        """Verify that proxy paths contain no X-Frame-Options header.
 
-        Framing on /notebook/* is governed solely by the CSP written by
-        _build_proxy_csp: `frame-ancestors 'self' <SP_ALLOWED_ORIGINS…>`. In
-        cloud the embedding web app is a DIFFERENT origin from the gateway, and
-        X-Frame-Options has no multi-origin form — SAMEORIGIN would contradict
-        the allowlist rather than reinforce it, so it is omitted, not forgotten.
-        The frame-ancestors assertions below are the clickjacking control.
+        The CSP frame-ancestors directive controls framing for notebook paths.
+        X-Frame-Options cannot express the configured cross-origin allowlist.
         """
         resp = self._build_middleware_response("/notebook/abc/index.html")
         assert resp.headers.get("x-frame-options") is None
@@ -655,7 +656,7 @@ class TestSecurityHeadersOnProxyPaths:
         assert resp.headers.get("cache-control") == "no-store"
 
 
-# ─── Notebook URL shape ────────────────────────────────────────────────────────
+# Verify the notebook URL structure.
 
 
 def _arrange_proxy_session(
@@ -730,7 +731,7 @@ class TestProxyUsesInternalIp:
         assert "30" not in result.upstream_base  # NodePort ports are 30000+
 
 
-# ─── Active-org authorization on the proxy ────────────────────────────────────
+# Verify active organization authorization.
 
 
 class TestProxyActiveOrgAuthorization:
@@ -768,7 +769,7 @@ class TestProxyActiveOrgAuthorization:
 
     @pytest.mark.asyncio
     async def test_user_removed_from_owning_org_is_refused(self, monkeypatch):
-        """Membership revoked: the JWT no longer names org A as the active org."""
+        """Verify denial when the JWT does not name organization A as active."""
         from fastapi import HTTPException
 
         from gateway.notebook_proxy.auth import resolve_proxy_session
@@ -798,7 +799,7 @@ class TestProxyActiveOrgAuthorization:
 
     @pytest.mark.asyncio
     async def test_session_without_org_is_refused_in_a_real_org(self, monkeypatch):
-        """A legacy org-less row must not be reachable from a cloud org."""
+        """Verify that a cloud organization cannot access an unscoped session."""
         from fastapi import HTTPException
 
         from gateway.notebook_proxy.auth import resolve_proxy_session
@@ -823,7 +824,7 @@ class TestProxyActiveOrgAuthorization:
 
     @pytest.mark.asyncio
     async def test_missing_upstream_token_is_503(self, monkeypatch):
-        """Pod-token behaviour is preserved: no credential → fail closed, not open."""
+        """Verify that a missing pod credential denies access."""
         from fastapi import HTTPException
 
         from gateway.notebook_proxy.auth import resolve_proxy_session
@@ -834,15 +835,13 @@ class TestProxyActiveOrgAuthorization:
         assert exc_info.value.status_code == 503
 
 
-# ─── H-1/R3: NodePort fully retired — KubernetesOrchestrator only accepts pod_ip ─
+# Verify the pod_ip upstream mode.
 
 
 class TestNodePortServiceGating:
-    """R3: NodePort is fully retired from KubernetesOrchestrator.
+    """Verify that KubernetesOrchestrator accepts only pod_ip mode.
 
-    The constructor now refuses any SP_NOTEBOOK_UPSTREAM_MODE other than pod_ip.
-    Services are never created. ResourceQuota services=0 enforces this at the
-    K8s API layer too.
+    The orchestrator does not create services. ResourceQuota sets services to zero.
     """
 
     @pytest.mark.asyncio
@@ -855,7 +854,6 @@ class TestNodePortServiceGating:
         sys.modules.pop("gateway.orchestrator.kubernetes", None)
 
         import importlib
-
         from unittest.mock import patch
 
         mod = importlib.import_module("gateway.orchestrator.kubernetes")
@@ -892,11 +890,7 @@ class TestNodePortServiceGating:
         core_api.create_namespaced_service.assert_not_called()
 
     def test_nodeport_mode_constructor_raises_runtime_error(self, monkeypatch):
-        """R3: KubernetesOrchestrator constructor raises if SP_NOTEBOOK_UPSTREAM_MODE=nodeport.
-
-        NodePort was retired in R3. The constructor now refuses it immediately
-        rather than failing at create_pod — no dead branches remain in the class.
-        """
+        """Verify that the constructor rejects the nodeport upstream mode."""
         import sys
 
         monkeypatch.setenv("SP_NOTEBOOK_UPSTREAM_MODE", "nodeport")
@@ -910,7 +904,7 @@ class TestNodePortServiceGating:
             mod.KubernetesOrchestrator()
 
     def test_nodeport_mode_in_cloud_constructor_raises(self, monkeypatch):
-        """R3: nodeport mode is rejected at constructor time, regardless of deployment mode."""
+        """Verify constructor rejection of nodeport mode in each deployment mode."""
         import sys
 
         monkeypatch.setenv("SP_NOTEBOOK_UPSTREAM_MODE", "nodeport")
@@ -925,11 +919,11 @@ class TestNodePortServiceGating:
             mod.KubernetesOrchestrator()
 
 
-# ─── M-1: User ownership check on session API endpoints ───────────────────────
+# Verify session ownership in API endpoints.
 
 
 class TestSessionOwnershipCheck:
-    """M-1: Same-org peers cannot access each other's sessions."""
+    """Verify that organization peers cannot access another user's session."""
 
     @pytest.mark.asyncio
     async def test_get_session_by_id_cross_user_raises_404(self, monkeypatch):
@@ -999,7 +993,7 @@ class TestSessionOwnershipCheck:
         store.session = AsyncMock()
         store.org_id = "org-1"
         store.user_id = "user-attacker"
-        response = Response()
+        Response()
 
         with pytest.raises(HTTPException) as exc_info:
             await ns_api_mod.delete_session_by_id("sess-owned", store)
@@ -1075,11 +1069,11 @@ class TestSessionOwnershipCheck:
         assert result.id == "sess-mine"
 
 
-# ─── M-2: resolve_proxy_session accepts HTTPConnection (WS-compatible) ─────────
+# Verify HTTPConnection support in resolve_proxy_session.
 
 
 class TestWsQueryValidation:
-    """M-3: WS query string is validated before forwarding."""
+    """Verify WebSocket query validation before forwarding."""
 
     def test_safe_query_accepted(self):
         """A normal query string passes validation."""
@@ -1107,7 +1101,7 @@ class TestWsQueryValidation:
 
 
 class TestCspPathGateExact:
-    """M-5: Security headers only apply relaxed CSP to exact /notebook/{seg}/... shape."""
+    """Verify relaxed CSP only for the exact notebook path structure."""
 
     def test_notebook_other_prefix_not_exempt(self):
         """A path like /notebook-other/... must NOT get the relaxed proxy CSP."""
@@ -1151,11 +1145,11 @@ class TestCspPathGateExact:
         assert resp.headers.get("x-frame-options") == "DENY"
 
 
-# ─── M-6: Error logs do not leak pod IP ───────────────────────────────────────
+# Verify that error logs exclude pod IP addresses.
 
 
 class TestProxyErrorLogScrubbing:
-    """M-6: Upstream connect errors must not emit warning-level logs with pod IP."""
+    """Verify that upstream connection warnings exclude pod IP addresses."""
 
     @pytest.mark.asyncio
     async def test_connect_error_logged_at_debug_not_warning(self, monkeypatch, caplog):
@@ -1198,11 +1192,11 @@ class TestProxyErrorLogScrubbing:
             assert "10.42.0.5" not in msg, f"Pod IP leaked in warning log: {msg}"
 
 
-# ─── Session ID validation on API endpoints ────────────────────────────────────
+# Verify session identifier validation in API endpoints.
 
 
 class TestSessionIdValidationOnApiEndpoints:
-    """M-4: Session ID charset validation on get/delete/ping endpoints."""
+    """Verify session identifiers on get, delete, and ping endpoints."""
 
     @pytest.mark.asyncio
     async def test_get_session_by_id_invalid_charset_raises_404(self, monkeypatch):
@@ -1253,3 +1247,48 @@ class TestSessionIdValidationOnApiEndpoints:
 
 
 
+
+
+class TestLegacyCollectionPingRemoved:
+    """Verify that the collection ping route rejects POST requests.
+
+    The per-session route requires a session identifier and returns status 404
+    when the caller does not own the session.
+    """
+
+    def _routes(self) -> set[tuple[str, frozenset]]:
+        from gateway.api import notebook_sessions as ns_api_mod
+
+        return {
+            (route.path, frozenset(route.methods))
+            for route in ns_api_mod.router.routes
+        }
+
+    def test_per_session_ping_is_registered(self) -> None:
+        assert (
+            "/api/notebook-sessions/{session_id}/ping",
+            frozenset({"POST"}),
+        ) in self._routes()
+
+    def test_legacy_collection_ping_is_not_registered(self) -> None:
+        paths = {path for path, _ in self._routes()}
+        assert "/api/notebook-sessions/ping" not in paths
+
+    def test_legacy_collection_ping_is_rejected(self) -> None:
+        """Verify that POST to the collection path returns status 405.
+
+        The request does not extend a session lifetime.
+        """
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from gateway.api import notebook_sessions as ns_api_mod
+
+        app = FastAPI()
+        app.include_router(ns_api_mod.router)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        resp = client.post("/api/notebook-sessions/ping")
+
+        assert resp.status_code == 405
+        assert not resp.is_success

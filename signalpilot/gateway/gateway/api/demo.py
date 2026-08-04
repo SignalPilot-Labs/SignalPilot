@@ -1,38 +1,15 @@
-"""Demo connectors — one-click sandbox warehouses for new users.
+"""Provide isolated Xata demo warehouses through the /demo-db page.
 
-Backs the hidden /demo-db page. POST forks a copy-on-write Xata
-branch off a shared demo warehouse and registers it as a normal SignalPilot
-connection, so the user gets an isolated, disposable copy they can freely query
-and rebuild with dbt.
+POST creates a copy-on-write branch and registers a SignalPilot connection.
+Each workspace can have one connection for each demo warehouse.
+Deleting the connection also deletes its Xata branch.
 
-The user journey this serves, end to end:
-    log in → settings/api-keys → /demo-db → "add" on a warehouse
-    → private branch + connection → clone the dbt repo → point an agent at it.
+The gateway stores XATA_KEY as a server-side secret.
+The connection stores ``xata_credential_ref="demo"`` instead of the key.
+The connection pin limits the shared key to one project and one branch.
 
-Rules:
-  - One connection per demo warehouse per workspace: POST returns 409 if the
-    user already cloned that warehouse. Different warehouses are independent.
-  - The connection is tagged DEMO_TAG; deleting it (via the normal
-    DELETE /api/connections/{name} path) also deletes the Xata branch —
-    see prepare_demo_branch_cleanup(), called from connections/crud.py.
-
-Credentials and blast radius:
-  The control-plane key (XATA_KEY — an AWS-Secrets-Manager secret in production)
-  is org-wide, so it is NEVER written into a workspace's connection record. The
-  connection stores `xata_credential_ref="demo"` and the gateway materializes
-  the key from its own environment at use time. The connection is also *pinned*
-  to its project and its one branch, so that shared key cannot be used to reach
-  another project or another user's sandbox. See gateway.connectors.xata_creds.
-
-Configuration (env):
-  XATA_KEY                     control-plane API key (required to enable)
-  SP_DEMO_XATA_ORG             Xata organization id
-  SP_DEMO_CATALOG              JSON array of demo warehouses (see _catalog())
-  SP_DEMO_XATA_API_URL         control-plane URL (default: https://api.xata.tech)
-
-  Legacy single-warehouse fallback, used when SP_DEMO_CATALOG is unset:
-  SP_DEMO_XATA_PROJECT, SP_DEMO_XATA_PARENT_BRANCH, SP_DEMO_XATA_DATABASE,
-  SP_DEMO_CONNECTION_NAME, SP_DEMO_REPO_URL
+SP_DEMO_CATALOG defines the available demo warehouses.
+An empty catalog disables the demo connector.
 """
 
 from __future__ import annotations
@@ -105,10 +82,11 @@ class DemoConnectorCreate(BaseModel):
 
 
 def _catalog() -> list[Demo]:
-    """Parse SP_DEMO_CATALOG, falling back to the legacy single-project vars.
+    """Parse SP_DEMO_CATALOG into the list of demo warehouses.
 
-    SP_DEMO_CATALOG is a JSON array so it survives a single AWS secret /
-    parameter cleanly:
+    An empty value returns no demo warehouses.
+
+    SP_DEMO_CATALOG is a JSON array that fits in one AWS parameter:
 
         [{"slug": "contoso",
           "project": "prj_...",
@@ -116,8 +94,7 @@ def _catalog() -> list[Demo]:
           "description": "experimentation platform warehouse",
           "repo_url": "https://github.com/..."}]
 
-    A malformed entry is skipped with a warning rather than taking the whole
-    demo page down.
+    Skip a malformed entry and log a warning.
     """
     raw = os.getenv("SP_DEMO_CATALOG", "").strip()
     if raw:
@@ -156,23 +133,7 @@ def _catalog() -> list[Demo]:
             )
         return demos
 
-    # Legacy single-warehouse configuration.
-    project = os.getenv("SP_DEMO_XATA_PROJECT", "").strip()
-    if not project:
-        return []
-    name = os.getenv("SP_DEMO_CONNECTION_NAME", "contoso-demo").strip()
-    return [
-        Demo(
-            slug="demo",
-            project=project,
-            title="Demo warehouse",
-            description="",
-            repo_url=os.getenv("SP_DEMO_REPO_URL", "").strip(),
-            parent_branch=os.getenv("SP_DEMO_XATA_PARENT_BRANCH", "main").strip(),
-            database=os.getenv("SP_DEMO_XATA_DATABASE", "xata").strip(),
-            connection_name=name,
-        )
-    ]
+    return []
 
 
 def _demo_config() -> DemoConfig:
@@ -235,7 +196,7 @@ async def create_demo_connector(
     store: StoreD, _role: OrgAdmin, request: Request, body: DemoConnectorCreate
 ):
     """Fork one demo warehouse into a fresh Xata branch and register it as a
-    connection. Once per warehouse per workspace — 409 if already cloned."""
+    connection. Once per warehouse per workspace: 409 if already cloned."""
     cfg = _demo_config()
     if not cfg.enabled:
         raise HTTPException(

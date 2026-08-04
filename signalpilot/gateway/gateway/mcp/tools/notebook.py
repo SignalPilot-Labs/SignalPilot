@@ -1,4 +1,4 @@
-"""MCP tool: run_notebook — execute a notebook in a cloud pod."""
+"""MCP tool: run_notebook: execute a notebook in a cloud pod."""
 
 import logging
 import tempfile
@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 async def run_notebook(
     filename: str,
     code: str,
-    agent_branch: str = "",
 ) -> str:
     """Run a .py notebook in a cloud K8s pod.
 
@@ -26,7 +25,6 @@ async def run_notebook(
     Args:
         filename: Name of the .py file (e.g. "analysis.py")
         code: Full contents of the .py notebook file
-        agent_branch: Deprecated legacy label; ignored for project routing.
     """
     org_id = mcp_org_id_var.get(None) or "local"
     user_id = mcp_user_id_var.get(None) or "local"
@@ -48,7 +46,10 @@ async def run_notebook(
 
     factory = get_session_factory()
     orch = KubernetesOrchestrator()
-    branch_label = agent_branch or "main"
+    # Agent notebooks are not branch-routed: they always run on the workspace's
+    # default branch. (The per-session `branch` field below is still required by
+    # the notebook-session API, which the UI uses for branch-scoped sessions.)
+    branch_label = "main"
 
     async with factory() as session:
         existing = await ns.get_active_session(session, org_id=org_id, user_id=user_id)
@@ -61,7 +62,7 @@ async def run_notebook(
                 session_id = existing.id
 
         if not pod_name:
-            # Create a new session — follows the pattern from notebook_sessions.py
+            # Create a new session: follows the pattern from notebook_sessions.py
             import hashlib
             import os
 
@@ -201,7 +202,7 @@ async def run_notebook(
     except Exception as e:
         logger.warning("Failed to read session JSON: %s", e)
 
-    # 5. Build notebook URL — link to the web app, not the gateway proxy.
+    # 5. Build notebook URL: link to the web app, not the gateway proxy.
     import os
     from urllib.parse import quote
     web_url = os.getenv("SP_WEB_URL", "https://app.signalpilot.ai").rstrip("/")

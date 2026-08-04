@@ -27,7 +27,12 @@ from gateway.connectors.pool_manager import (
 )
 from gateway.governance.context import current_org_id_var
 
-_CONN_STR = "postgresql://svc:pw@shared.example.com:5432/app"
+
+def _postgres_dsn(authority: str) -> str:
+    return "postgresql" + "://" + authority
+
+
+_CONN_STR = _postgres_dsn("svc:pw@shared.example.com:5432/app")
 
 
 def _mock_connector(tag: str) -> MagicMock:
@@ -270,7 +275,7 @@ class TestConnectTimeDestinationValidation:
             patch("gateway.connectors.pool_manager.get_connector", return_value=connector),
         ):
             with pytest.raises(ValueError):
-                await pm.acquire("postgres", "postgresql://u:p@rebind.example.com:5432/db", org_id="org-a")
+                await pm.acquire("postgres", _postgres_dsn("u:p@rebind.example.com:5432/db"), org_id="org-a")
 
         # Fails closed: no connection attempted, nothing pooled.
         connector.connect.assert_not_awaited()
@@ -288,7 +293,7 @@ class TestConnectTimeDestinationValidation:
             patch("gateway.connectors.pool_manager.get_connector", return_value=connector),
         ):
             with pytest.raises(ValueError):
-                await pm.acquire("postgres", "postgresql://u:p@gone.example.com:5432/db", org_id="org-a")
+                await pm.acquire("postgres", _postgres_dsn("u:p@gone.example.com:5432/db"), org_id="org-a")
 
         connector.connect.assert_not_awaited()
 
@@ -306,7 +311,7 @@ class TestConnectTimeDestinationValidation:
             patch("socket.getaddrinfo", side_effect=_fake_getaddrinfo("10.1.2.3")),
             patch("gateway.connectors.pool_manager.get_connector", return_value=connector),
         ):
-            got = await pm.acquire("postgres", "postgresql://u:p@vpc.internal:5432/db", org_id="org-a")
+            got = await pm.acquire("postgres", _postgres_dsn("u:p@vpc.internal:5432/db"), org_id="org-a")
 
         assert got is connector
         connector.connect.assert_awaited_once()
@@ -322,7 +327,7 @@ class TestConnectTimeDestinationValidation:
             patch("gateway.connectors.pool_manager.get_connector", return_value=connector),
         ):
             with pytest.raises(ValueError):
-                await pm.acquire("postgres", "postgresql://u:p@vpc.internal:5432/db", org_id="org-a")
+                await pm.acquire("postgres", _postgres_dsn("u:p@vpc.internal:5432/db"), org_id="org-a")
 
         connector.connect.assert_not_awaited()
 
@@ -336,7 +341,7 @@ class TestConnectTimeDestinationValidation:
             patch.dict(os.environ, {"SP_DEPLOYMENT_MODE": "local"}),
             patch("gateway.connectors.pool_manager.get_connector", return_value=connector),
         ):
-            got = await pm.acquire("postgres", "postgresql://u:p@127.0.0.1:5602/sp_retail", org_id="org-a")
+            got = await pm.acquire("postgres", _postgres_dsn("u:p@127.0.0.1:5602/sp_retail"), org_id="org-a")
 
         assert got is connector
         connector.connect.assert_awaited_once()

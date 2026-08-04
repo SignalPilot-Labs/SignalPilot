@@ -1,4 +1,4 @@
-"""Connection pool manager — reuses connector instances instead of recreating per query.
+"""Connection pool manager: reuses connector instances instead of recreating per query.
 
 Fixes MED-06: Connection pool recreated per query causing resource leaks.
 Now with SSH tunnel support for bastion-host connections and retry logic.
@@ -78,8 +78,8 @@ def _make_pool_key(
     Both scope segments are non-secret: org_id is a tenant identifier and
     credential_identity is a digest supplied by the store (see
     CREDENTIAL_IDENTITY_KEY). Without them, two tenants whose connection strings
-    look identical but whose credential extras differ — service-account JSON, TLS
-    key, SSH tunnel, token — would share one connector.
+    look identical but whose credential extras differ: service-account JSON, TLS
+    key, SSH tunnel, token: would share one connector.
     """
     return _KEY_SCOPE_SEP.join(
         (
@@ -129,7 +129,7 @@ _NON_SECRET_SA_FIELDS = ("client_email", "private_key_id", "project_id")
 def _extras_shape_identity(credential_extras: dict) -> str:
     """Fallback identity for extras that did not come with a store marker.
 
-    Built from field names and identifier values only — never from secret values,
+    Built from field names and identifier values only: never from secret values,
     and never logged. Residual: extras whose sole distinguishing content is an
     opaque token (access_token, motherduck_token) are indistinguishable here, so
     for those the isolation rests on the org segment of the pool key.
@@ -175,7 +175,7 @@ def _safe_pool_key_for_log(key: str) -> str:
 
     Pool keys have the format ``db_type:connection_string`` plus non-secret scope
     segments. If the connection string looks like a URL (contains ``://``), parse
-    it and return only the host and port — never the credentials. Non-URL formats
+    it and return only the host and port: never the credentials. Non-URL formats
     (bare project IDs, file paths) are kept as-is since they do not contain
     embedded passwords.
     """
@@ -191,7 +191,7 @@ def _safe_pool_key_head_for_log(key: str) -> str:
     db_type = key[:colon_idx]
     remainder = key[colon_idx + 1 :]
     if "://" not in remainder:
-        # Non-URL format (BigQuery project ID, DuckDB/SQLite path) — safe to log.
+        # Non-URL format (BigQuery project ID, DuckDB/SQLite path): safe to log.
         return key
     try:
         parsed = urlparse(remainder)
@@ -285,7 +285,7 @@ def _validate_destination(db_type: str, connection_string: str) -> tuple[str, li
     """Re-validate a TCP destination immediately before connecting.
 
     Gating mirrors network.validation.validate_connection_params: only TCP
-    db_types, and only in cloud mode — loopback is unconditionally blocked by the
+    db_types, and only in cloud mode: loopback is unconditionally blocked by the
     resolver, so local deployments pointed at 127.0.0.1 warehouses would otherwise
     stop working. resolve_and_validate honours SP_ALLOW_PRIVATE_CONNECTIONS and
     raises ValueError on a blocked or unresolvable address.
@@ -316,7 +316,7 @@ async def _connect_validated(
     """Connect with the destination validated and the resolver pinned across it.
 
     The validated IPs are deliberately not substituted into the connection string
-    — connecting by IP breaks TLS hostname verification (sslmode=verify-full) and
+: connecting by IP breaks TLS hostname verification (sslmode=verify-full) and
     SNI-based routing. Pinning the resolver instead keeps the hostname in the DSN
     while denying the driver's own lookup any address we did not just validate.
     Drivers that resolve inside a C library (psycopg2/libpq, pymssql/FreeTDS) do
@@ -469,7 +469,7 @@ class PoolManager:
                         return connector
                 except Exception:
                     pass
-                # Stale — close and recreate
+                # Stale: close and recreate
                 try:
                     await connector.close()
                 except Exception:
@@ -490,8 +490,8 @@ class PoolManager:
                 if db_type == "duckdb" and connection_string and not connection_string.startswith("md:"):
                     raise RuntimeError("Only MotherDuck (md:) DuckDB connections are available in cloud mode")
 
-            # Use the registry to get the right connector — it respects
-            # SP_SANDBOX_ENABLED and SP_DISABLE_SANDBOX for file-based DBs.
+            # Use the registry to get the right connector: it respects
+            # SP_SANDBOX_ENABLED for file-based DBs.
             connector = get_connector(db_type)
 
             # Pass credential extras to connector via standardized interface.
@@ -548,7 +548,7 @@ class PoolManager:
                         # Re-resolve and re-check the destination on every attempt:
                         # the address validated when the connection was saved can be
                         # re-pointed at an internal address afterwards. Raises on a
-                        # blocked or unresolvable target — no hostname fallback.
+                        # blocked or unresolvable target: no hostname fallback.
                         await _connect_validated(connector, db_type, connection_string, actual_conn_str)
                     now = time.monotonic()
                     self._pools[key] = (connector, now)
@@ -563,7 +563,7 @@ class PoolManager:
                 except Exception as e:
                     last_error = e
                     if attempt >= max_retries or not self._is_transient(e):
-                        # Non-transient or exhausted retries — fail now
+                        # Non-transient or exhausted retries: fail now
                         if key in self._tunnels:
                             self._tunnels[key].stop()
                             del self._tunnels[key]
@@ -643,7 +643,7 @@ class PoolManager:
     ) -> None:
         """Mark a connector as available (updates last-used time).
 
-        Pass the same credential_extras used to acquire so the pool key matches.
+        Pass the credential_extras from acquisition so the pool key matches.
         """
         _, credential_identity = _pop_credential_identity(credential_extras)
         if org_id is None:
@@ -770,7 +770,7 @@ class PoolManager:
             parts = key.split(":", 1)
             db_type = parts[0] if parts else "unknown"
             pool_info: dict[str, Any] = {
-                # Redact, do not truncate — the password sits well inside the
+                # Redact, do not truncate: the password sits well inside the
                 # first 80 characters of a URL-style pool key.
                 "key": _safe_pool_key_for_log(key),
                 "db_type": db_type,

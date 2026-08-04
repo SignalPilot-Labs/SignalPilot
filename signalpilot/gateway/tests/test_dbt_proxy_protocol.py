@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import struct
 import asyncio
+import struct
 import uuid
 
 import pytest
@@ -90,7 +90,7 @@ class TestProtocolFraming:
         assert val == 42
 
     def test_bind_value_text_text_format(self) -> None:
-        raw = "hello world".encode("utf-8")
+        raw = b"hello world"
         val = parse_bind_value(raw, OID_TEXT, 0)
         assert val == "hello world"
 

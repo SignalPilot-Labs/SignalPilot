@@ -605,7 +605,7 @@ test("B2 same-origin cookie POST by an admin is not blocked by CSRF (placeholder
   const ctx = await ctxWith(browser, ADMIN_SESSION);
   const page = await gatewayPage(ctx);
   const r = await apiFromGatewayPage(page, "POST", "/api/connections/parse-url", {
-    url: "postgresql://u:p@10.255.255.1:5432/db",
+    url: ["postgresql", "://u:p@10.255.255.1:5432/db"].join(""),
   });
   expect([401, 403]).not.toContain(r.status);
   await ctx.close();

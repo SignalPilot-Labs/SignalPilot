@@ -6,7 +6,7 @@ import logging
 import time
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import RedirectResponse
 
 from ..config.github import get_github_settings
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# ─── OAuth Flow ──────────────────────────────────────────────────────────
+# OAuth Flow.
 
 
 def _github_settings_redirect(web_url: str, **params: str) -> RedirectResponse:
@@ -40,7 +40,7 @@ def _github_settings_redirect(web_url: str, **params: str) -> RedirectResponse:
 async def github_install_url(store: StoreD):
     """Return the GitHub App installation URL with HMAC-signed state.
 
-    Authenticated endpoint — org_id comes from the Clerk JWT / API key,
+    Authenticated endpoint: org_id comes from the Clerk JWT / API key,
     not from a spoofable query param. The frontend calls this, gets the URL,
     and redirects the browser.
     """
@@ -52,21 +52,6 @@ async def github_install_url(store: StoreD):
     state = make_state(org_id)
     install_url = f"https://github.com/apps/{settings.sp_github_app_slug}/installations/new?state={state}"
     return {"install_url": install_url}
-
-
-@router.get("/auth/github")
-async def github_oauth_start(request: Request):
-    """Legacy redirect endpoint — used in local mode only."""
-    settings = get_github_settings()
-    if not settings.is_configured:
-        raise HTTPException(status_code=503, detail="GitHub App not configured")
-
-    if is_cloud_mode():
-        raise HTTPException(status_code=400, detail="Use GET /api/github/install-url instead")
-
-    state = make_state("local")
-    install_url = f"https://github.com/apps/{settings.sp_github_app_slug}/installations/new?state={state}"
-    return RedirectResponse(url=install_url, status_code=302)
 
 
 @router.get("/auth/github/callback")
@@ -116,7 +101,7 @@ async def github_oauth_callback(
     # Installation IDs are guessable integers, not authorization proof. Complete
     # the user-authorization leg and require the installation to be accessible
     # to the user who authorized this flow before minting a token for it.
-    # Local mode skips this — there is no tenant boundary to cross.
+    # Local mode skips this: there is no tenant boundary to cross.
     if is_cloud_mode():
         if not code:
             return _github_settings_redirect(settings.sp_web_url, error="oauth_code_missing")
@@ -141,11 +126,9 @@ async def github_oauth_callback(
             )
             return _github_settings_redirect(settings.sp_web_url, error="installation_not_authorized")
 
-        # SP-SEC-005 (permission amplification): being able to SEE an
-        # installation does not mean being able to reach all of its repos. An
-        # unrestricted installation token would hand the org repositories this
-        # user cannot open themselves. Narrow the token to the user∩installation
-        # repository set, and refuse if that set is empty.
+        # Installation visibility does not grant access to every installation repository.
+        # Restrict the token to repositories that the user can access.
+        # Refuse authorization when the intersection is empty.
         try:
             user_repos = await list_user_installation_repositories(user_token, installation_id)
         except Exception as e:
@@ -196,7 +179,7 @@ async def github_oauth_callback(
     return _github_settings_redirect(settings.sp_web_url, installed="true")
 
 
-# ─── Installation CRUD ──────────────────────────────────────────────────
+# Installation CRUD.
 
 
 @router.get(
@@ -222,7 +205,7 @@ async def delete_installation(installation_id: str, store: StoreD):
         raise HTTPException(status_code=404, detail="Installation not found")
 
 
-# ─── Repo Listing ────────────────────────────────────────────────────────
+# Repo Listing.
 
 
 @router.get(
@@ -255,7 +238,7 @@ async def list_repos(installation_id: str, store: StoreD):
     ]
 
 
-# ─── Repo Links ──────────────────────────────────────────────────────────
+# Repo Links.
 
 
 @router.post(
@@ -282,7 +265,7 @@ async def create_repo_link(body: GitHubRepoLinkCreate, store: StoreD):
         raise
 
     # Clone the GitHub repo into the bare repo synchronously before returning.
-    # This must succeed — without it, the bare repo doesn't exist and clone-url is a lie.
+    # This must succeed: without it, the bare repo doesn't exist and clone-url is a lie.
     installation = await gh_store.get_installation(
         store.session, org_id=store.org_id or "local", installation_id=body.installation_id,
     )
@@ -346,7 +329,7 @@ async def delete_repo_link(link_id: str, store: StoreD):
         raise HTTPException(status_code=404, detail="Repo link not found")
 
 
-# ─── Git Credentials ─────────────────────────────────────────────────────
+# Git Credentials.
 
 
 @router.get(
@@ -377,14 +360,14 @@ async def get_git_credentials(project_id: str, store: StoreD):
     )
 
 
-# ─── GitHub Sync ─────────────────────────────────────────────────────
+# GitHub Sync.
 
 
 @router.post("/api/github/sync/{project_id}", dependencies=[RequireScope("write")])
 async def sync_with_github(project_id: str, store: StoreD):
     """Bidirectional sync: fetch from GitHub, push local changes back.
 
-    GitHub wins on conflicts — local branches are force-updated to match.
+    GitHub wins on conflicts: local branches are force-updated to match.
     Agent branches (signalpilot-agent/*) are never synced.
     If push can't fast-forward, creates a PR branch on GitHub.
     """

@@ -1,4 +1,4 @@
-"""Spider2 SQL benchmark runner — handles spider2-snowflake and spider2-lite suites.
+"""Run the Spider2 Snowflake and Spider2 Lite SQL benchmark suites.
 
 Mirrors the structure of runners/direct.py but without dbt dependencies.
 The agent writes its result as result.csv and result.sql in the workdir.
@@ -121,45 +121,34 @@ def _get_max_turns(backend: DBBackend, task: dict, default: int) -> int:
 
     Only applies when the user has not passed an explicit --max-turns value
     (i.e., when default is used as the sentinel). The mapping is intentionally
-    hardcoded from empirical timeout data — not a heuristic.
+    The mapping uses measured timeout data.
     """
     db_id = task.get("db_id") or task.get("db", "")
     return _LARGE_DB_MAX_TURNS.get(db_id, default)
 
 
-def _determine_backend(suite: BenchmarkSuite, task: dict, config: SuiteConfig) -> DBBackend:
-    """Determine the DB backend for a task."""
+def _determine_backend(suite: BenchmarkSuite, task: dict) -> DBBackend:
+    """Determine the DB backend for a task from its required `type` field."""
     if suite == BenchmarkSuite.SNOWFLAKE:
         return DBBackend.SNOWFLAKE
 
-    # If the task has an explicit type field, use it
     task_type = task.get("type")
-    if task_type:
-        mapping: dict[str, DBBackend] = {
-            "sqlite": DBBackend.SQLITE,
-            "snowflake": DBBackend.SNOWFLAKE,
-            "bigquery": DBBackend.BIGQUERY,
-        }
-        backend = mapping.get(task_type)
-        if backend is None:
-            raise ValueError(f"Unknown task type '{task_type}' — expected sqlite/snowflake/bigquery")
-        return backend
-
-    # Infer from which resource/databases/<type>/ directory contains the db name
-    db_name = task.get("db", "")
-    resource_dir = config.data_dir / "resource" / "databases"
-    for db_type, backend in [
-        ("snowflake", DBBackend.SNOWFLAKE),
-        ("bigquery", DBBackend.BIGQUERY),
-        ("sqlite", DBBackend.SQLITE),
-    ]:
-        type_dir = resource_dir / db_type
-        if type_dir.exists() and (type_dir / db_name).exists():
-            return backend
-
-    # Default to sqlite for backwards compat
-    log(f"Could not infer backend for db='{db_name}', defaulting to sqlite", "WARN")
-    return DBBackend.SQLITE
+    if not task_type:
+        raise ValueError(
+            f"Task '{task.get('instance_id', '<unknown>')}' is missing the required "
+            "'type' field — set it to one of sqlite/snowflake/bigquery. "
+            "Inferring the backend from the resource/databases/<type>/ layout is no "
+            "longer supported."
+        )
+    mapping: dict[str, DBBackend] = {
+        "sqlite": DBBackend.SQLITE,
+        "snowflake": DBBackend.SNOWFLAKE,
+        "bigquery": DBBackend.BIGQUERY,
+    }
+    backend = mapping.get(task_type)
+    if backend is None:
+        raise ValueError(f"Unknown task type '{task_type}' — expected sqlite/snowflake/bigquery")
+    return backend
 
 
 def _register_connection(
@@ -346,7 +335,7 @@ async def execute_sql_task(
         return False, {"success": False, "messages": [], "tool_calls": [], "turns": 0, "elapsed": 0.0, "cost_usd": None, "usage": None, "started_at": ""}
     log(f"Task loaded in {time.monotonic()-t0:.2f}s")
 
-    backend = _determine_backend(suite, task, config)
+    backend = _determine_backend(suite, task)
     log(f"DB backend: {backend.value}")
 
     resolved_max_turns: int = (
@@ -494,10 +483,10 @@ def main(suite: BenchmarkSuite) -> None:
     log_separator(f"{suite.value} Direct Benchmark: {instance_id}")
     log(f"Model:     {model}")
 
-    # ── Load suite config ──────────────────────────────────────────────────────
+    # Load the suite configuration.
     config = get_suite_config(suite)
 
-    # ── Load task ──────────────────────────────────────────────────────────────
+    # Load the task.
     t0 = time.monotonic()
     task = load_task_for_suite(instance_id, config)
     instruction: str = task.get("instruction") or task.get("question", "")
@@ -507,11 +496,11 @@ def main(suite: BenchmarkSuite) -> None:
     log(f"Task loaded in {time.monotonic()-t0:.2f}s")
     log(f"Instruction: {instruction}")
 
-    # ── Determine DB backend ───────────────────────────────────────────────────
-    backend = _determine_backend(suite, task, config)
+    # Determine the database backend.
+    backend = _determine_backend(suite, task)
     log(f"DB backend: {backend.value}")
 
-    # ── Resolve max_turns (after task loaded so db_id is available) ───────────
+    # Resolve max_turns after loading the task.
     if user_max_turns is not None:
         max_turns: int = user_max_turns
         log(f"Max turns: {max_turns} (user-specified)")
@@ -522,7 +511,7 @@ def main(suite: BenchmarkSuite) -> None:
     work_dir = config.work_dir / instance_id
 
     if not args.skip_agent:
-        # ── Prepare workdir ────────────────────────────────────────────────────
+        # Prepare the working directory.
         t0 = time.monotonic()
         log_separator("Step 1: Prepare SQL workdir")
         workdir_skill_names = _get_skill_names(suite, backend)
@@ -531,13 +520,13 @@ def main(suite: BenchmarkSuite) -> None:
         )
         log(f"Workdir ready in {time.monotonic()-t0:.2f}s")
 
-        # ── Write CLAUDE.md ────────────────────────────────────────────────────
+        # Write CLAUDE.md.
         t0 = time.monotonic()
         log_separator("Step 2: Write CLAUDE.md")
         write_sql_claude_md(work_dir, instance_id, instruction, backend, connection_name=instance_id)
         log(f"CLAUDE.md written in {time.monotonic()-t0:.2f}s")
 
-        # ── Register DB connection ─────────────────────────────────────────────
+        # Register the database connection.
         t0 = time.monotonic()
         log_separator("Step 3: Register DB connection")
         conn_ok = _register_connection(instance_id, backend, task, work_dir, config)
@@ -545,7 +534,7 @@ def main(suite: BenchmarkSuite) -> None:
             log(f"Connection registration failed for '{instance_id}' ({backend.value})", "WARN")
         log(f"Connection registration in {time.monotonic()-t0:.2f}s")
 
-        # ── Run agent ──────────────────────────────────────────────────────────
+        # Run the agent.
         t0 = time.monotonic()
         log_separator("Step 4: Run Claude SQL agent")
         try:
@@ -565,7 +554,7 @@ def main(suite: BenchmarkSuite) -> None:
         elapsed = time.monotonic() - t0
         log(f"Agent finished in {elapsed:.1f}s — {'success' if agent_ok else 'failed/partial'}")
 
-        # ── Fail fast if result.csv is missing ────────────────────────────────
+        # Stop when result.csv is missing.
         result_csv = work_dir / "result.csv"
         if not result_csv.exists():
             log(
@@ -578,11 +567,11 @@ def main(suite: BenchmarkSuite) -> None:
                 log(f"Cleaned up connection '{instance_id}'")
             sys.exit(1)
 
-        # ── Delete connection (cleanup, prevent cross-task leakage) ───────────
+        # Delete the connection to prevent cross-task access.
         if delete_local_connection(instance_id):
             log(f"Released MCP connection '{instance_id}' before evaluation")
 
-    # ── Evaluate ───────────────────────────────────────────────────────────────
+    # Evaluate the result.
     t0 = time.monotonic()
     log_separator("Step 5: Evaluate against gold standard")
 

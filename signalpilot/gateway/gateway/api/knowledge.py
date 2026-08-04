@@ -19,6 +19,7 @@ from ..models.knowledge import (
     RetrievalStats,
 )
 from ..security.scope_guard import RequireScope
+from .eval_runs import maybe_autorun_after_knowledge_change
 from ..store.knowledge import (
     KnowledgeDuplicate,
     KnowledgeNotFound,
@@ -124,9 +125,11 @@ async def get_knowledge_doc(doc_id: uuid.UUID, store: StoreD):
 async def create_knowledge_doc(payload: KnowledgeDocCreate, store: StoreD):
     """Create or update a knowledge doc (admin only). Upserts by unique key."""
     try:
-        return await store.upsert_knowledge_doc(payload, user_id=store.user_id)
+        doc = await store.upsert_knowledge_doc(payload, user_id=store.user_id)
     except (KnowledgeSizeExceeded, KnowledgeOrgQuotaExceeded, KnowledgeDuplicate) as exc:
         raise _map_knowledge_exc(exc) from exc
+    await maybe_autorun_after_knowledge_change(store, doc)
+    return doc
 
 
 @router.put(
@@ -158,9 +161,11 @@ async def archive_knowledge_doc(doc_id: uuid.UUID, store: StoreD):
 async def approve_knowledge_doc(doc_id: uuid.UUID, store: StoreD):
     """Approve a pending knowledge doc (admin only). Flips status from pending to active."""
     try:
-        return await store.approve_knowledge_doc(str(doc_id), user_id=store.user_id)
+        doc = await store.approve_knowledge_doc(str(doc_id), user_id=store.user_id)
     except (KnowledgeNotFound, KnowledgeStateConflict) as exc:
         raise _map_knowledge_exc(exc) from exc
+    await maybe_autorun_after_knowledge_change(store, doc)
+    return doc
 
 
 @router.get(

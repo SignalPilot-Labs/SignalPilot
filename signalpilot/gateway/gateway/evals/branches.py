@@ -136,9 +136,15 @@ class XataBranchProvider:
         )
 
     async def aclose(self) -> None:
+        # XataControlClient exposes its teardown as __aexit__, not aclose;
+        # accept either so a stubbed control object in tests also closes.
         close = getattr(self._control, "aclose", None)
-        if close:
+        if close is not None:
             await close()
+            return
+        aexit = getattr(self._control, "__aexit__", None)
+        if aexit is not None:
+            await aexit(None, None, None)
 
 
 # Local Postgres.

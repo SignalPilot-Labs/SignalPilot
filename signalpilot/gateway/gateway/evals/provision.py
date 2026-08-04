@@ -50,6 +50,11 @@ async def resolve_branch_provider(
                     bearer_token=str(resolved.get("xata_api_key", "")),
                 )
             )
+            # XataControlClient only builds its httpx client in __aenter__, and
+            # a run holds the provider across many awaits rather than one
+            # `async with` block — so open it here and let the provider's
+            # aclose() (called in the run's finally) close it.
+            await control.__aenter__()
             return XataBranchProvider(
                 control,
                 project_id=str(resolved["xata_project"]),

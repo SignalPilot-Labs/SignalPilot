@@ -144,3 +144,55 @@ class TestPostgresRoleIsolation:
         assert "NOT datistemplate" in isolation_sql
         assert any("DROP ROLE IF EXISTS" in call.args[0] for call in admin.execute.await_args_list)
         admin.close.assert_awaited_once()
+
+
+class TestXataProviderLifecycle:
+    """The Xata control client is context-manager-only: it builds its httpx
+    client in __aenter__ and raises "client not opened" otherwise. A run holds
+    the provider across many awaits rather than one `async with`, so the
+    provider must be handed an already-open client and must close it. This
+    shipped broken because every other test used a fake or the Postgres
+    provider — the first real Xata run failed on it.
+    """
+
+    def test_resolve_opens_the_control_client(self) -> None:
+        import inspect
+
+        from gateway.evals import provision
+
+        src = inspect.getsource(provision.resolve_branch_provider)
+        assert "__aenter__" in src, (
+            "resolve_branch_provider must open the Xata control client; "
+            "XataControlClient._request raises unless __aenter__ ran"
+        )
+
+    async def test_aclose_closes_a_context_manager_only_client(self) -> None:
+        from gateway.evals.branches import XataBranchProvider
+
+        class ContextManagerOnlyControl:
+            def __init__(self) -> None:
+                self.exited = False
+
+            async def __aexit__(self, *a: object) -> None:
+                self.exited = True
+
+        control = ContextManagerOnlyControl()
+        await XataBranchProvider(control, project_id="p", parent_branch="main").aclose()
+        assert control.exited, "provider must close a client that only exposes __aexit__"
+
+    async def test_aclose_prefers_aclose_when_present(self) -> None:
+        from gateway.evals.branches import XataBranchProvider
+
+        class BothControl:
+            def __init__(self) -> None:
+                self.closed = False
+
+            async def aclose(self) -> None:
+                self.closed = True
+
+            async def __aexit__(self, *a: object) -> None:
+                raise AssertionError("should not use __aexit__ when aclose exists")
+
+        control = BothControl()
+        await XataBranchProvider(control, project_id="p", parent_branch="main").aclose()
+        assert control.closed

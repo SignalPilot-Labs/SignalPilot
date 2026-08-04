@@ -47,6 +47,9 @@ PLATFORM="${PLATFORM:-linux/amd64}"
 
 GATEWAY_DEPLOY_SCRIPT="${GATEWAY_DEPLOY_SCRIPT:-${ROOT_DIR}/../deploy-gateway-eks.sh}"
 GATEWAY_IMAGE="${GATEWAY_IMAGE:-signalpilot-gateway}"
+GATEWAY_CHAT_WORKER_IMAGE="${GATEWAY_CHAT_WORKER_IMAGE:-${GATEWAY_IMAGE}}"
+GATEWAY_CHAT_WORKER_COMMAND="${GATEWAY_CHAT_WORKER_COMMAND:-signalpilot-chat-worker}"
+GATEWAY_CHAT_WORKER_CONTAINER="${GATEWAY_CHAT_WORKER_CONTAINER:-gateway-chat-worker}"
 NOTEBOOK_NAMESPACE_PREFIX="${SP_NOTEBOOK_NAMESPACE_PREFIX:-sp-nb}"
 GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-signalpilot}"
 GATEWAY_DEPLOYMENT="${GATEWAY_DEPLOYMENT:-signalpilot-gateway}"
@@ -64,6 +67,13 @@ if [[ "${SKIP_GATEWAY_IMAGE_BUILD:-0}" != "1" ]]; then
 else
   log "Skipping gateway image build because SKIP_GATEWAY_IMAGE_BUILD=1"
 fi
+
+[[ "${GATEWAY_CHAT_WORKER_IMAGE}" == "${GATEWAY_IMAGE}" ]] \
+  || die "gateway and chat worker must use the same image: ${GATEWAY_IMAGE}"
+
+log "Verifying chat worker entrypoint in gateway image: ${GATEWAY_CHAT_WORKER_COMMAND}"
+run docker run --rm --entrypoint sh "$GATEWAY_IMAGE" \
+  -c "command -v '${GATEWAY_CHAT_WORKER_COMMAND}' >/dev/null"
 
 log "Verifying ECR repository exists: ${NOTEBOOK_ECR_REPO} in ${AWS_REGION}"
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
@@ -131,10 +141,21 @@ GATEWAY_DEPLOY_FILE="$(basename "$GATEWAY_DEPLOY_SCRIPT")"
   cd "$GATEWAY_DEPLOY_DIR"
   run env \
     GATEWAY_IMAGE="$GATEWAY_IMAGE" \
+    GATEWAY_CHAT_WORKER_IMAGE="$GATEWAY_CHAT_WORKER_IMAGE" \
+    GATEWAY_CHAT_WORKER_COMMAND="$GATEWAY_CHAT_WORKER_COMMAND" \
+    GATEWAY_CHAT_WORKER_CONTAINER="$GATEWAY_CHAT_WORKER_CONTAINER" \
     NOTEBOOK_IMAGE="$SP_NOTEBOOK_IMAGE" \
     SP_NOTEBOOK_IMAGE="$SP_NOTEBOOK_IMAGE" \
     bash "./$GATEWAY_DEPLOY_FILE"
 )
+
+if [[ "${DRY_RUN:-0}" == "1" ]]; then
+  log "DRY_RUN=1: would verify chat worker container: ${GATEWAY_CHAT_WORKER_CONTAINER}"
+elif [[ "$(docker inspect --format '{{.State.Running}}' "$GATEWAY_CHAT_WORKER_CONTAINER" 2>/dev/null || true)" != "true" ]]; then
+  die "chat worker container is not running after deploy: ${GATEWAY_CHAT_WORKER_CONTAINER}"
+else
+  log "Chat worker container is running: ${GATEWAY_CHAT_WORKER_CONTAINER}"
+fi
 
 if [[ "${SKIP_GATEWAY_ROLLOUT_WAIT:-0}" != "1" ]]; then
   if [[ "${DRY_RUN:-0}" == "1" ]]; then

@@ -25,6 +25,7 @@ services:
   # ─── Gateway: switch to K8s pod orchestration ──────────────────
   gateway:
     network_mode: "service:k3s"
+    networks: !reset []
     ports: !reset []
     environment:
       SP_NOTEBOOK_DIRECT_URL: ""

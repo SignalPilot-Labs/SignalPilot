@@ -78,6 +78,19 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
+      label: 'Evals',
+      collapsed: false,
+      items: [
+        'evals/overview',
+        'evals/quickstart',
+        'evals/eval-repo',
+        'evals/write-tasks',
+        'evals/running',
+        'evals/deploying',
+      ],
+    },
+    {
+      type: 'category',
       label: 'Reference',
       collapsed: true,
       items: [

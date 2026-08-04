@@ -1,0 +1,263 @@
+---
+sidebar_position: 6
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
+# Deploying the harness
+
+Who does what:
+
+- **On SignalPilot Cloud**, the harness is already deployed. Evals are opt-in per
+  workspace — ask us to enable yours, then everything you need is on the Evals
+  page. Skip to [Running evals on Cloud](#running-evals-on-cloud).
+- **Self-hosting?** You supply the runner image, the evidence bucket, an agent
+  credential, and — for write tasks — a branch provider. That is the rest of this
+  page.
+
+## What a run needs
+
+| Requirement | Why |
+|---|---|
+| Runner image with the Claude CLI | Executes each task. `psql`, `git`, and `curl` must be present for setup scripts and project delivery. |
+| Agent credential | `SP_EVAL_CLAUDE_TOKEN` (OAuth) or `SP_EVAL_ANTHROPIC_KEY`. |
+| Evidence bucket (S3 or MinIO) | Transcripts, logs, captures. A run refuses to start without one. |
+| An execution backend | Docker Engine locally; Kubernetes in cloud mode. |
+| A pinned warehouse connection | Chosen per workspace on the Evals page. |
+| A branch provider *(write tasks only)* | Xata connection, or Postgres admin DSN + parent database. |
+
+## Turning it on
+
+The feature is off until `SP_EVAL_RUNNER_IMAGE` is set. Minimum viable
+self-hosted configuration:
+
+<MiniCopyBlock
+  label=".env — minimum eval configuration"
+  plain
+  code={`SP_EVAL_RUNNER_IMAGE=your-registry/sp-eval-runner:1.4.0\nSP_EVAL_CLAUDE_TOKEN=...            # or SP_EVAL_ANTHROPIC_KEY\nSP_EVAL_S3_BUCKET=sp-eval-evidence\nSP_EVAL_S3_ENDPOINT=http://minio:9000\nSP_EVAL_S3_ACCESS_KEY=...\nSP_EVAL_S3_SECRET_KEY=...\nSP_EVAL_MCP_URL=http://gateway:3300/mcp`}
+/>
+
+Add a branch provider if the set has write tasks:
+
+<MiniCopyBlock
+  label=".env — local Postgres branch provider"
+  plain
+  code={`SP_EVAL_PG_ADMIN_DSN=postgresql://warehouse:5432/postgres\nSP_EVAL_PG_PARENT_DB=northwind`}
+/>
+
+Branches are forked with `CREATE DATABASE <branch> TEMPLATE <parent>`, so the
+parent must have no other active sessions at fork time.
+
+## Building a runner image
+
+<MiniCopyBlock
+  label="Dockerfile.eval-runner"
+  plain
+  code={`FROM node:22-slim\nRUN apt-get update && apt-get install -y --no-install-recommends \\\n      git ca-certificates curl postgresql-client && \\\n    rm -rf /var/lib/apt/lists/* && \\\n    npm install -g @anthropic-ai/claude-code\nRUN useradd -m -u 10002 evalrunner\nUSER evalrunner\nWORKDIR /work\nCMD ["claude", "--version"]`}
+/>
+
+`postgresql-client` is not optional if any task ships a setup script: those
+scripts exist to mutate the branch, and without `psql` every one of them dies
+after the branch has already been forked. Use `SP_EVAL_SETUP_IMAGE` if you would
+rather keep script tooling in a separate image.
+
+## Local (Docker) mode
+
+Eval containers run on the host Docker daemon:
+
+- `SP_EVAL_DOCKER_SOCKET` — socket mounted into the gateway (default
+  `/var/run/docker.sock`).
+- `SP_EVAL_DOCKER_NETWORK` — network the containers join. It must be able to
+  reach the gateway at `SP_EVAL_MCP_URL`.
+- `SP_EVAL_PROJECTS_DIR` — root under which local-path eval sets may live
+  (mounted read-only). Paths outside it are refused.
+- `SP_EVAL_PROJECTS_HOST_DIR` — the same directory as the **host** sees it.
+  Required for local-path eval sets, because Docker binds resolve on the host,
+  not inside the gateway container.
+
+Local mode also accepts a filesystem path as the eval repo — useful while
+authoring a set. Cloud mode does not.
+
+## Cloud (Kubernetes) mode
+
+When `SP_DEPLOYMENT_MODE=cloud`, the Docker path is unreachable by construction:
+the backend selector raises rather than falling back, so a misconfigured cluster
+can never hand eval workloads the host daemon. Each task becomes a short-lived
+pod in the org's namespace, and the harness enforces:
+
+- **Digest-pinned images.** `SP_EVAL_RUNNER_IMAGE` and `SP_EVAL_SETUP_IMAGE` must
+  end in `@sha256:<64 hex>`. A floating tag would let what runs in the sandbox
+  change without the configuration changing. Look one up with
+  `crane digest <image>` or `docker buildx imagetools inspect <image>`.
+- **Mandatory NetworkPolicy.** If policy enforcement is disabled for eval
+  namespaces the backend refuses to start pods, rather than running untrusted
+  workloads with open egress.
+- **No service-account token** is mounted, and secrets ride an owner-referenced
+  Kubernetes `Secret` rather than the pod spec — `kubectl describe pod` and pod
+  events show nothing sensitive. The Secret is garbage-collected with the pod.
+- **Per-org namespaces**, sized by the pod resource variables below and bounded
+  by the namespace quota and LimitRange.
+
+Pod sizing (`SP_EVAL_CPU_*`, `SP_EVAL_MEMORY_*`, `SP_EVAL_EPHEMERAL_*`) mirrors
+notebook pods, which share the same node group. Both limit-to-request ratios are
+4 because that is the namespace `maxLimitRequestRatio`: raising a limit without
+raising its request in step gets the pod rejected at creation.
+
+## Running evals on Cloud
+
+Nothing to deploy. What you control:
+
+1. **Enablement.** Evals are allow-listed per workspace, and every eval route
+   additionally requires platform-staff access. If the page reports evals are not
+   enabled for your workspace, that is what it means.
+2. **The eval repo.** Cloud mode accepts `https://github.com/…` only — no other
+   host, no local paths, no SSH URLs. The same rule applies to the manifest's
+   `project_repo`.
+3. **Private repos.** Connect GitHub from **Settings → GitHub** and install the
+   app on the repositories you want to use. The gateway then clones them with a
+   short-lived installation token scoped to your organization; a repository that
+   your installation does not cover is refused, not silently attempted. Public
+   repos need no setup. The credentialed URL never leaves the gateway — sandboxes
+   receive a presigned tarball instead of a git credential.
+4. **The pinned connection.** Add the warehouse under **Connections**, then pin
+   it on the Evals page. Read-only credentials are correct unless you run write
+   tasks; write tasks need a connection whose provider can fork branches.
+5. **Notification emails**, on the same form.
+
+## Environment variables
+
+Every variable the eval harness reads. See
+[Configuration](../setup/configuration.md) for the rest of the gateway.
+
+### Core
+
+| Variable | Default | Description |
+|---|---|---|
+| `SP_EVAL_RUNNER_IMAGE` | — | Image with the Claude CLI. **Empty disables the feature.** Must be digest-pinned in cloud mode. |
+| `SP_EVAL_SETUP_IMAGE` | runner image | Image for setup/teardown script containers. Digest-pinned in cloud mode. |
+| `SP_EVAL_MCP_URL` | `http://gateway:3300/mcp` | MCP endpoint the sandboxes call back on. |
+| `SP_EVAL_CLAUDE_TOKEN` | — | `CLAUDE_CODE_OAUTH_TOKEN` passed to task containers. |
+| `SP_EVAL_ANTHROPIC_KEY` | — | Alternative: `ANTHROPIC_API_KEY` for task containers. |
+| `SP_EVAL_ALLOWED_ORGS` | `""` | Comma-separated org ids allowed to use evals. **Empty denies everyone in cloud mode** and allows the single local tenant in local mode. |
+| `SP_EVAL_TIMEOUT_SECONDS` | `600` | Per-task agent container timeout. |
+| `SP_EVAL_PROJECT_ENV` | `""` | Extra `KEY=VALUE` entries (newline- or comma-separated) injected into every task container — e.g. read-only warehouse credentials a `profiles.yml` reads via `env_var`. Gateway-controlled variables always win. |
+
+### Execution — local Docker
+
+| Variable | Default | Description |
+|---|---|---|
+| `SP_EVAL_DOCKER_SOCKET` | `/var/run/docker.sock` | Docker Engine socket mounted into the gateway. |
+| `SP_EVAL_DOCKER_NETWORK` | `signalpilot_eval_runtime` | Network eval containers join; must reach the gateway. |
+| `SP_EVAL_PROJECTS_DIR` | `/eval-projects` | Root for local-path eval sets, mounted read-only. |
+| `SP_EVAL_PROJECTS_HOST_DIR` | — | Host path of the above; required to bind-mount local eval repos into script containers. |
+| `SP_EVAL_SETUP_HOST_ROOT` | — | Host root for manifest-declared setup mounts. |
+
+### Execution — cloud Kubernetes
+
+| Variable | Default | Description |
+|---|---|---|
+| `SP_EVAL_K8S_NAMESPACE_PREFIX` | `sp-nb` | Namespace prefix for eval pods. Defaults to the notebook tenant prefix so eval pods inherit the org namespace's RoleBinding, NetworkPolicies, quota, and LimitRange. Changing it requires widening the matching admission policy in the same deploy. |
+| `SP_EVAL_CPU_REQUEST` / `SP_EVAL_CPU_LIMIT` | `250m` / `1` | Pod CPU. |
+| `SP_EVAL_MEMORY_REQUEST` / `SP_EVAL_MEMORY_LIMIT` | `128Mi` / `512Mi` | Pod memory. |
+| `SP_EVAL_EPHEMERAL_REQUEST` / `SP_EVAL_EPHEMERAL_LIMIT` | `256Mi` / `4Gi` | Pod scratch space. |
+
+### Evidence store
+
+| Variable | Default | Description |
+|---|---|---|
+| `SP_EVAL_S3_BUCKET` | — | Bucket for transcripts, setup logs, captures, exports. **Empty blocks every run.** |
+| `SP_EVAL_S3_ENDPOINT` | — | S3 endpoint. Set for MinIO; leave unset for AWS S3. |
+| `SP_EVAL_S3_RUNNER_ENDPOINT` | — | Optional GET-only endpoint embedded in URLs handed to sandboxes, while the gateway keeps using the private endpoint. |
+| `SP_EVAL_S3_REGION` | `us-east-1` | Region. |
+| `SP_EVAL_S3_ACCESS_KEY` / `SP_EVAL_S3_SECRET_KEY` | — | Dedicated credentials, deliberately separate from BYOK or warehouse credentials. |
+
+### Branch provider
+
+| Variable | Default | Description |
+|---|---|---|
+| `SP_EVAL_PG_ADMIN_DSN` | — | Admin DSN used to fork branch databases when the pinned connection is not a Xata connection. |
+| `SP_EVAL_PG_PARENT_DB` | — | Parent database each branch is templated from. |
+
+Xata-backed sets need no variables: the project, branch, and control-plane
+credentials come from the pinned connection's stored extras.
+
+### Limits and quotas
+
+| Variable | Default | Description |
+|---|---|---|
+| `SP_EVAL_MAX_PARALLEL_TASKS` | `4` | Tasks in flight within a run. Bounds node capacity and model spend. |
+| `SP_EVAL_MAX_BRANCHES` | `50` | Ceiling on live eval branches, enforced before each fork. |
+| `SP_EVAL_BRANCH_STORAGE_DELTA_BYTES` | `5368709120` (5 GiB) | How far a branch may outgrow its parent before the task fails. |
+| `SP_EVAL_ARTIFACT_BYTES_PER_RUN` | `1073741824` (1 GiB) | Artifact budget per run; captures past it are marked truncated. |
+| `SP_EVAL_CAPTURE_FULL_MAX_BYTES` | `268435456` (256 MiB) | Ceiling for a `full` capture. Over it, the capture is rejected rather than silently truncated. |
+| `SP_EVAL_SETUP_TIMEOUT_SECONDS` | `1800` | Default setup/teardown timeout; a manifest may lower it. |
+
+### Regression notifications
+
+| Variable | Default | Description |
+|---|---|---|
+| `SP_EVAL_REGRESSION_DROP_PCT` | `10.0` | Points below the trailing median that count as a regression. |
+| `SP_EVAL_SMTP_HOST` | `""` | SMTP host. Empty selects SES in the configured region. |
+| `SP_EVAL_SMTP_PORT` | `1025` | SMTP port. |
+| `SP_EVAL_NOTIFY_FROM` | `evals@signalpilot.dev` | From address on regression email. |
+
+### Eval-set uploads
+
+Optional intake path for customers mailing in an eval set as a zip
+(`/evals/upload`).
+
+| Variable | Default | Description |
+|---|---|---|
+| `SP_EVAL_UPLOADS_BUCKET` | — | Bucket for uploaded archives. Empty disables the page's backend. |
+| `SP_EVAL_UPLOADS_MAX_MB` | `8192` | Upload ceiling. |
+| `SP_EVAL_UPLOADS_S3_ENDPOINT` | — | S3 endpoint for uploads. |
+| `SP_EVAL_UPLOADS_S3_PUBLIC_ENDPOINT` | — | Endpoint the browser uses for multipart PUTs. |
+| `SP_EVAL_UPLOADS_S3_REGION` | — | Region. |
+| `SP_EVAL_UPLOADS_S3_ACCESS_KEY` / `…_SECRET_KEY` | — | Upload credentials. |
+| `SP_EVAL_UPLOADS_NOTIFY_EMAIL` | — | Where upload notifications go. |
+| `SP_EVAL_UPLOADS_NOTIFY_FROM` | `eval-uploads@signalpilot.dev` | From address. |
+| `SP_EVAL_UPLOADS_SMTP_HOST` / `…_SMTP_PORT` | `""` / `1025` | SMTP for upload notifications. |
+
+### Related gateway variables
+
+| Variable | Relevance |
+|---|---|
+| `SP_DEPLOYMENT_MODE` | `cloud` selects the Kubernetes backend, requires digest-pinned images, and restricts repos to GitHub HTTPS. |
+| `SP_ADMIN_USER_IDS` | Only these users pass the platform-staff check on eval routes. |
+| `SP_GITHUB_APP_*` | Needed to clone private eval or project repositories. |
+
+## Isolation and data handling
+
+Worth knowing before you point this at production data:
+
+- **Per-task credentials.** Each task container gets its own API key, bound
+  server-side to that run, task, connection, and knowledge overlay, and expiring
+  after 3 hours. The agent cannot widen its own scope with headers — the binding
+  is read from the stored key, never from the request. Keys are revoked when the
+  task ends and when the run ends.
+- **Read-only by default.** Governed MCP blocks DDL/DML at parse time. Write
+  access exists only as a branch DSN, only for write tasks, only on a disposable
+  branch.
+- **Redaction.** Transcripts and script logs are scrubbed of the secrets the
+  harness injected before they are stored.
+- **The project tarball is deleted** once every task has fetched it, and is
+  excluded from run exports.
+- **Retention** prunes artifacts to the last 10 runs and transcripts to the last
+  100 runs per workspace; accuracy history is kept.
+
+## Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| `runner disabled — SP_EVAL_RUNNER_IMAGE unset on gateway` | The feature is off. |
+| `Eval evidence bucket is not configured (SP_EVAL_S3_BUCKET)` | No evidence store. |
+| `An eval connection pin is required` / `does not exist in this workspace` | Set **Connection** on the Evals page to a real connection name. |
+| `Evals are not enabled for this workspace` | The org is not in `SP_EVAL_ALLOWED_ORGS`. |
+| `Platform staff access required` | The caller is not in `SP_ADMIN_USER_IDS`. |
+| `only https://github.com/ repositories are allowed` | Cloud mode; use a GitHub HTTPS URL. |
+| `local paths must live under /eval-projects` | Move the set under `SP_EVAL_PROJECTS_DIR`. |
+| `no branch provider: pin a Xata connection …` | The set has write tasks but no provider is configured. |
+| `warehouse does not match the eval set's build fingerprint` | Rebuild the warehouse, or clear `build_fingerprint` in the manifest. |
+| `psql: not found` in a setup log | The setup image lacks `postgresql-client`. |
+| Every write task is `SETUP_FAILED` | Read the setup log in the evidence store — it is stored even when the agent never ran. |
+| `Too many eval runs in flight` | Two runs already active on the gateway. |

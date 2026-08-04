@@ -1,0 +1,134 @@
+---
+sidebar_position: 5
+---
+
+# Running and reading results
+
+## Triggering a run
+
+| Trigger | How | Notes |
+|---------|-----|-------|
+| **Manual** | **Run suite** on the Evals page | Grades the whole set against the live knowledge base. |
+| **Knowledge change** | Enable *Autorun whenever a knowledge base entry is added* | Fires when an entry is approved or added. Repeated additions coalesce into one run every 2 minutes. Pending entries do not trigger it. |
+| **Evaluate change** | From the Knowledge page, on a proposed entry | Runs the set with that entry overlaid on top of the live knowledge base, so you see its effect before approving. |
+| **API** | `POST /api/evals/runs` | Optional `doc_ids` (overlay) and `task_ids` (subset). |
+
+Two runs per gateway may be in flight; a third gets `409 Too many eval runs in
+flight`. Inside a run, `SP_EVAL_MAX_PARALLEL_TASKS` tasks execute concurrently.
+
+A run refuses to start, with a specific message, when: the runner image is unset,
+the evidence bucket is unconfigured, no eval repo is set, the pinned connection is
+missing or unknown, or the warehouse does not match the set's build fingerprint.
+
+## Watching it
+
+While a run is live the page shows each active task and the phase it is in —
+`provisioning`, `setup`, `agent`, `grading`, `capture`, `teardown` — plus the
+sandbox backing it. The sandbox panel streams container logs; run-level progress
+is also available at `GET /api/evals/runs/{run_id}/progress` (done, total, active
+tasks, elapsed seconds).
+
+If a gateway replica dies mid-run, the run's lease expires and startup recovery
+marks it failed rather than leaving it "running" forever.
+
+## Reading the result
+
+![A completed run with per-task verdicts](./images/evals-run-detail.png)
+
+The header carries the run id, status, trigger, the eval set ref
+(`name@commit`), and the build fingerprint of the warehouse it graded against —
+enough to reproduce it exactly.
+
+Each row is one task: class, verdict, and each named check with a pass mark.
+Write tasks show their structural checks (`exists`, `row_count`, `grain`,
+`columns`) instead of a number. Expand a row for the agent's full turn-by-turn
+transcript — every tool call, every query, and the final answer.
+
+### Coverage
+
+`MODEL COVERAGE` is the share of the dbt project's models the run touched, split
+by layer (`staging` / `intermediate` / `marts`). It is the union of:
+
+- **Declared** coverage — the `covers` lists of the tasks that actually ran, and
+- **Observed** coverage — tables the agent really read, recovered from the audit
+  trail via the run/task binding on each task's API key.
+
+Coverage answers "what parts of the project is this eval set blind to?" The
+denominator comes from the `project_repo` checkout (its `target/manifest.json` if
+present, otherwise the `models/` tree), so coverage only appears for sets that
+declare a project.
+
+### Evidence
+
+Everything durable lands in the evidence store, under the run:
+
+| Artifact | What it is |
+|---|---|
+| Transcript | The agent's full stream for the task, secrets redacted. |
+| Setup / teardown logs | stdout+stderr of each script container. |
+| Captures | Fingerprint JSON, and DuckDB samples or full tables for write tasks. |
+| `run.json` | Run row, task rows, verdicts, checks, coverage. |
+
+**Export zip** (`GET /api/evals/runs/{run_id}/export`) bundles all of it. The dbt
+project tarball is deliberately excluded — it is a transport detail, not
+evidence — and the archive stops at 256 MB with a `TRUNCATED.txt` marker,
+pointing at the per-artifact endpoint for the rest.
+
+Retention, applied after every run and by a periodic sweep:
+
+- **Artifacts:** last 10 runs per org.
+- **Transcripts:** last 100 runs per org.
+- **Accuracy history:** never pruned.
+
+Export anything you need to keep past those windows.
+
+## Accuracy over time
+
+Every finished run appends a permanent record: accuracy, coverage, eval set ref,
+build fingerprint, trigger, and the knowledge-base doc ids that were live. The
+Evals page charts it, colour-coded by trigger, with regressions marked.
+
+`GET /api/evals/accuracy` returns the same history plus detected regressions.
+
+## Regression alerts
+
+After each run the harness compares its accuracy to the **trailing median of
+comparable runs** — same eval set ref, same build fingerprint. If the drop
+exceeds `SP_EVAL_REGRESSION_DROP_PCT` (default 10 points), it records a
+regression and emails everyone in **Notify emails**.
+
+The email is careful about causality:
+
+- If exactly one knowledge entry was added and nothing else changed, it says the
+  regression was **caused by** that entry.
+- If several things changed — entries added *and* removed, or the model, prompt
+  preamble, connection, or task cap changed — it says the regression
+  **coincided with** them and lists all of them.
+- If the run has no build fingerprint, nothing is recorded at all: without one,
+  an agent regression is indistinguishable from a warehouse that changed
+  underneath you.
+
+Each alert also lists the tasks that were not `CORRECT`, so the first thing you
+read is which questions broke.
+
+## API surface
+
+All routes are under `/api`, and all require the caller to be platform staff and
+the org to be allow-listed.
+
+| Route | Scope | Purpose |
+|---|---|---|
+| `GET /evals/availability` | `read` | Whether evals are enabled for the caller. |
+| `GET /evals/config` · `PUT /evals/config` | `read` · `admin` | Read and write the eval configuration. |
+| `GET /evals/tasks` | `read` | Parsed manifest for the configured set. |
+| `POST /evals/runs` | `admin` | Start a run. |
+| `GET /evals/runs` · `GET /evals/runs/{id}` | `read` | Run list and detail. |
+| `GET /evals/runs/{id}/progress` | `read` | Live progress. |
+| `GET /evals/runs/{id}/artifacts` · `…/{task}/{file}` | `query` | Evidence listing and download. |
+| `GET /evals/runs/{id}/export` | `query` | Whole-run zip. |
+| `GET /evals/accuracy` | `read` | Accuracy history and regressions. |
+| `GET /evals/sandboxes` · `…/{name}/logs/stream` | `read` | Live sandboxes and log stream. |
+
+The three tiers are deliberate: `read` sees status and configuration, `query`
+sees evidence (which can contain warehouse data), and `admin` spends money or
+changes what runs.

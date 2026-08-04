@@ -1,0 +1,208 @@
+---
+sidebar_position: 3
+---
+
+# Eval repo format
+
+An eval set is a git repository with an `eval.json` at its root. Everything else
+is optional and referenced from there.
+
+Working example: **[SignalPilot-Labs/eval-demo-repo](https://github.com/SignalPilot-Labs/eval-demo-repo)**
+
+## Layout
+
+```
+eval.json                     # required — metadata + tasks
+prompts/<task-id>.txt         # the question, in plain language
+docs/<task-id>.md             # writeup rendered in the task panel
+tasks/<task-id>/setup.sh      # per-task setup (write tasks only)
+tasks/<task-id>/teardown.sh   # per-task teardown (write tasks only)
+CLAUDE.md                     # instructions handed to the graded agent
+```
+
+Every path in the manifest is repo-relative. Absolute paths, `..` segments, and
+symlinks are rejected — the loader will not read outside the repo.
+
+## Top level
+
+```json
+{
+  "name": "northwind",
+  "description": "Northwind RCM warehouse — 10 silent data-quality defects + controls.",
+  "project_repo": "https://github.com/acme/northwind-dbt",
+  "build_fingerprint": "",
+  "defaults": { "tolerance": 0.15, "class": "read" },
+  "setup": { "timeout_seconds": 900, "env_file": "" },
+  "tasks": [ ... ]
+}
+```
+
+| Key | Required | Meaning |
+|-----|----------|---------|
+| `name` | no | Display name. Defaults to the repo directory name. |
+| `description` | no | Shown under the set name. |
+| `tasks` | **yes** | The task list. An empty list is an error. |
+| `project_repo` | no | dbt project the warehouse was built from. Cloned gateway-side and shipped to each sandbox as a tarball. Also the source for coverage denominators. |
+| `build_fingerprint` | no | Pin the set to one warehouse build — see below. |
+| `defaults.tolerance` | no | Relative tolerance for checks that do not set their own. Default `0.15`. |
+| `defaults.class` | no | `read` or `write`, applied to tasks that omit `class`. Default `read`. |
+| `setup.timeout_seconds` | no | Timeout for every setup/teardown container. Defaults to the gateway's `SP_EVAL_SETUP_TIMEOUT_SECONDS` (1800). |
+| `setup.env_file` | no | Repo-relative file of `KEY=VALUE` lines injected into setup/teardown containers. No other keys are allowed under `setup`. |
+
+### Build fingerprint
+
+`build_fingerprint` is a digest of the warehouse's schema and row counts. When
+set, a run computes the same digest and **refuses to start** if it differs:
+
+> warehouse does not match the eval set's build fingerprint (expected `fp-…`,
+> found `fp-…`) — rebuild the warehouse or update the eval set. Running anyway
+> would grade against golds computed for a different build.
+
+Use it when your gold numbers were derived from one specific build. Leave it
+empty for sets that should track a warehouse as it evolves. The digest covers
+every base table's column names, types, nullability, ordinal positions, and exact
+row counts.
+
+## Tasks
+
+```json
+{
+  "id": "summit_charges",
+  "class": "read",
+  "kind": "query",
+  "title": "Summit Ortho — total billed charges (USD) across all claims",
+  "why": "fan-out",
+  "prompt": "prompts/summit_charges.txt",
+  "doc": "docs/summit_charges.md",
+  "covers": ["marts.fct_summit__claims", "marts.fct_org_claims"],
+  "gt": "12557516113",
+  "checks": [{ "name": "answer", "value": 12557516113, "tolerance": 0.15 }]
+}
+```
+
+| Field | Required | Meaning |
+|-------|----------|---------|
+| `id` | **yes** | Unique, stable. Used for file naming, evidence keys, and run filters. |
+| `class` | no | `read` or `write`. Defaults to `defaults.class`. |
+| `kind` | no | Free-form label shown as a chip (`query`, `build`, `control`). Default `query`. |
+| `title` | no | Display title. Defaults to the id. |
+| `why` | no | One-line note on what the task probes. Shown in the UI. |
+| `prompt` | no | Path to the prompt file. Defaults to `prompts/<id>.txt`. Missing file is an error. |
+| `prompt_text` | no | Inline prompt. Takes precedence over `prompt`. |
+| `doc` | no | Path to a Markdown writeup. Defaults to `docs/<id>.md`; silently absent if missing. |
+| `gt` | no | Gold value as a string. If `checks` is omitted and `gt` parses as a number, one check is derived from it. |
+| `checks` | no | Numeric checks — see below. |
+| `grade` | no | Grading strategy. Default `{"kind": "checks"}`. |
+| `covers` | no | Models this task is intended to exercise. Feeds declared coverage. |
+| `builds` | no | Models the agent must build. Write tasks only in practice. |
+| `capture` | no | Table evidence to record. Write tasks only. |
+| `setup` / `teardown` | no | Repo-relative scripts. **Write tasks only** — read tasks share a branch nothing may mutate. |
+
+### Checks
+
+```json
+"checks": [
+  { "name": "total_charges", "value": 12557516113, "tolerance": 0.15 },
+  { "name": "claim_count",   "value": 360618,      "tolerance": 0 }
+]
+```
+
+Grading extracts every number from the agent's final answer — including forms
+like `$12.5B`, `1,234,567`, and `3.4 million` — and a check passes if **any**
+extracted number is within its relative tolerance. All checks pass →
+`CORRECT`; some → `PARTIAL`; none → `OFF`; no numbers at all → `UNKNOWN`.
+
+Two consequences worth designing around:
+
+- **Tolerance is relative.** `0.15` means ±15%. Use `0` for counts that must be
+  exact.
+- **A chatty answer offers more numbers.** If a wrong answer would plausibly
+  contain the right number in passing, tighten the prompt ("reply with only the
+  number") via the prompt file or the config's prompt preamble.
+
+### Grading strategies
+
+```json
+"grade": { "kind": "checks" }
+```
+
+The default. Grades the numbers in the answer, as above.
+
+```json
+"grade": {
+  "kind": "model_rebuilt",
+  "model": "marts.fct_org_charges_by_client",
+  "expect": {
+    "row_count": 9,
+    "row_count_tolerance": 0,
+    "grain": ["client_id"],
+    "columns": ["client_id", "claim_count", "total_charge_usd"]
+  }
+}
+```
+
+Grades the **table on the branch** instead of the prose. Requires
+`class: write`. Existence is always checked; `row_count` (with
+`row_count_tolerance`, default `0.01`), `grain` (`count(*)` must equal
+`count(distinct grain…)`), and `columns` are checked when present. Every
+expectation must hold for `CORRECT`; any failure is `OFF`.
+
+If `builds` is omitted on a `model_rebuilt` task, it defaults to `[grade.model]`.
+
+### Captures
+
+```json
+"capture": {
+  "tables": ["marts.fct_org_charges_by_client"],
+  "mode": "fingerprint+sample",
+  "sample_rows": 1000
+}
+```
+
+What to record from the branch before it is destroyed. Write tasks only.
+
+| Mode | What is stored |
+|------|----------------|
+| `fingerprint` | Table statistics and a grain check, as JSON. The default. |
+| `fingerprint+sample` | The above, plus a bounded deterministic sample as DuckDB. |
+| `full` | The complete table as DuckDB. Rejected if it exceeds `SP_EVAL_CAPTURE_FULL_MAX_BYTES`. |
+
+`tables` defaults to `builds`. `sample_rows` defaults to 10,000 and is capped at
+50,000. Write tasks that declare `builds` but no `capture` get a `fingerprint`
+capture automatically.
+
+## CLAUDE.md
+
+If the repo root has a `CLAUDE.md`, it is written into the sandbox working
+directory **after** the dbt project is unpacked — so the eval set's instructions
+win over the project's own. This is where you put the standing rules you want
+every graded agent to follow (verify grain before trusting a mart, re-derive
+from raw sources, always include the number in the reply).
+
+## Validating your set
+
+The manifest loader fails loudly and specifically. Common messages:
+
+| Message | Fix |
+|---------|-----|
+| `no eval.json at the repo root` | The manifest must be at the root of the repo. |
+| `eval.json has no tasks[] (found legacy 'questions' …)` | Rename `questions` to `tasks`. |
+| `task X: prompt file missing: prompts/X.txt` | Add the file, or set `prompt` / `prompt_text`. |
+| `task X: setup/teardown scripts are only valid on write tasks` | Set `"class": "write"`, or drop the script. |
+| `task X: capture is only valid on write tasks` | Same. |
+| `task X: model_rebuilt grading requires class: write` | Same. |
+| `duplicate task id: X` | Ids must be unique. |
+| `unsupported setup keys: …` | Only `env_file` and `timeout_seconds` are allowed under `setup`. |
+| `path escapes the eval repo` / `symlinked paths are not allowed` | Use plain repo-relative paths. |
+
+The fastest check is to save the repo URL on the Evals page: the task list is
+parsed from a fresh clone, and any manifest error surfaces there before you spend
+a run. The gateway caches a fetched set for 5 minutes, so allow for that when
+iterating.
+
+## Keep the answer key out of the sandbox
+
+`eval.json` contains the gold values. Do not add the eval repo to the dbt project
+the agent receives, and do not check it out into the warehouse under test. The
+harness never ships the eval repo to a task container — only the prompt, the
+optional `CLAUDE.md`, and the dbt project tarball.

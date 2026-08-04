@@ -13,10 +13,12 @@
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import useSWR, { mutate } from "swr";
 import {
   BookOpen,
+  BarChart3,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -30,6 +32,7 @@ import {
   Save,
   Search,
   Settings2,
+  Square,
   TrendingUp,
   X,
   XCircle,
@@ -44,6 +47,7 @@ import {
   YAxis,
 } from "recharts";
 import {
+  cancelEvalRun,
   downloadEvalArtifact,
   downloadEvalRunExport,
   getEvalAccuracy,
@@ -68,6 +72,7 @@ import { PageHeader } from "~/components/ui/page-header";
 import { useToast } from "~/components/ui/toast";
 import { Md, fmtNum } from "./_components/Markdown";
 import { RunProgressBar, SandboxPanel } from "./_components/SandboxPanel";
+import { ControlDeck } from "./_components/ControlDeck";
 import { TranscriptSlideOver } from "./_components/TranscriptView";
 import "./evals.css";
 
@@ -81,6 +86,7 @@ const VERDICT_STYLE: Record<string, { color: string; label: string }> = {
   UNGRADED: { color: "var(--color-text-dim)", label: "ungraded" },
   ERROR: { color: "#e5484d", label: "run error" },
   SETUP_FAILED: { color: "#e5484d", label: "setup failed" },
+  CANCELLED: { color: "var(--color-text-dim)", label: "cancelled" },
 };
 
 function VerdictBadge({ verdict }: { verdict: string | null }) {
@@ -97,8 +103,9 @@ function StatusDot({ status }: { status: string }) {
   const color =
     status === "completed" ? "var(--color-success)"
     : status === "failed" ? "#e5484d"
+    : status === "cancelled" ? "var(--color-text-dim)"
     : "var(--color-warning, #f5a623)";
-  const live = status === "running" || status === "preparing";
+  const live = status === "running" || status === "preparing" || status === "cancelling";
   return (
     <span className="inline-flex items-center gap-1.5 text-[11px] uppercase tracking-[0.12em]" style={{ color }}>
       <span className={`w-1.5 h-1.5 rounded-full ${live ? "animate-pulse" : ""}`} style={{ background: color }} />
@@ -925,10 +932,11 @@ function CoveragePanel({ coverage }: { coverage: EvalCoverage }) {
 function RunDetail({ runId }: { runId: string }) {
   const { toast } = useToast();
   const [exporting, setExporting] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const { data: run } = useSWR(`eval-run-${runId}`, () => getEvalRun(runId), {
-    refreshInterval: (latest) => (latest && (latest.status === "running" || latest.status === "preparing") ? 3000 : 0),
+    refreshInterval: (latest) => (latest && (latest.status === "running" || latest.status === "preparing" || latest.status === "cancelling") ? 2000 : 0),
   });
-  const live = run?.status === "running" || run?.status === "preparing";
+  const live = run?.status === "running" || run?.status === "preparing" || run?.status === "cancelling";
   const { data: progress } = useSWR(
     live ? `eval-run-progress-${runId}` : null,
     () => getEvalRunProgress(runId),
@@ -944,6 +952,19 @@ function RunDetail({ runId }: { runId: string }) {
       toast(`export failed: ${err instanceof Error ? err.message : "unknown"}`, "error");
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function stopRun() {
+    setStopping(true);
+    try {
+      await cancelEvalRun(runId);
+      await Promise.all([mutate("eval-runs"), mutate(`eval-run-${runId}`)]);
+      toast("eval cancellation requested", "success");
+    } catch (err) {
+      toast(`could not stop run: ${err instanceof Error ? err.message : "unknown"}`, "error");
+    } finally {
+      setStopping(false);
     }
   }
 
@@ -977,6 +998,16 @@ function RunDetail({ runId }: { runId: string }) {
           </p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
+          {live && (
+            <button
+              onClick={stopRun}
+              disabled={stopping || run.status === "cancelling"}
+              className="ev-stop-command"
+            >
+              {stopping || run.status === "cancelling" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Square className="w-3 h-3" fill="currentColor" />}
+              {run.status === "cancelling" ? "Stopping" : "Stop run"}
+            </button>
+          )}
           {run.status === "completed" && (
             <div className="flex items-center gap-3 text-sm">
               {allPass ? <CheckCircle2 className="w-4 h-4 text-[var(--color-success)]" /> : <XCircle className="w-4 h-4 text-[#e5484d]" />}
@@ -1380,6 +1411,7 @@ function EvalsPageInner() {
   const searchParams = useSearchParams();
   const [selectedRun, setSelectedRun] = useState<string | null>(() => searchParams.get("run"));
   const [detailTask, setDetailTask] = useState<EvalTask | null>(null);
+  const [configOpen, setConfigOpen] = useState(false);
 
   // An unentitled workspace can call only the availability route.
   // Delay all other requests until the availability response confirms access.
@@ -1394,9 +1426,10 @@ function EvalsPageInner() {
   const tasks = evalSet?.tasks;
   const { data: runsData } = useSWR(enabled ? "eval-runs" : null, listEvalRuns, {
     refreshInterval: (latest) =>
-      latest?.runs?.some((r: EvalRun) => r.status === "running" || r.status === "preparing") ? 4000 : 15000,
+      latest?.runs?.some((r: EvalRun) => r.status === "running" || r.status === "preparing" || r.status === "cancelling") ? 2500 : 15000,
   });
   const runs = runsData?.runs ?? [];
+  const activeRun = runs.find((run) => run.status === "running" || run.status === "preparing" || run.status === "cancelling");
 
   const header = (
     <PageHeader
@@ -1428,7 +1461,21 @@ function EvalsPageInner() {
       {header}
 
       <div className="space-y-6">
-        <Hero evalSet={evalSet} repoUrl={cfg?.repo_url ?? ""} model={cfg?.model ?? "sonnet"} runnerEnabled={cfg?.enabled ?? true} cfgLoaded={!!cfg} />
+        <ControlDeck
+          evalSet={evalSet}
+          repoUrl={cfg?.repo_url ?? ""}
+          model={cfg?.model ?? "sonnet"}
+          runnerEnabled={cfg?.enabled ?? true}
+          activeRun={activeRun}
+          onStarted={setSelectedRun}
+          onConfigure={() => setConfigOpen((open) => !open)}
+        />
+
+        {(configOpen || (!!cfg && !cfg.repo_url)) && (
+          <div className="ev-card px-6 pb-6">
+            <ConfigForm onSaved={() => setConfigOpen(false)} />
+          </div>
+        )}
 
         {tasksError && cfg?.repo_url && (
           <p className="text-sm text-[var(--color-text-dim)]">
@@ -1443,8 +1490,6 @@ function EvalsPageInner() {
         {selectedRun && <RunDetail runId={selectedRun} />}
 
         <SandboxPanel />
-
-        <AccuracySection />
 
         <RunsList runs={runs} selectedRun={selectedRun} onSelect={setSelectedRun} />
       </div>

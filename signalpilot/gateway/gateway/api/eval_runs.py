@@ -374,6 +374,35 @@ async def get_eval_run(store: StoreD, run_id: str):
     return run
 
 
+@router.post("/evals/runs/{run_id}/cancel", dependencies=EVAL_EXECUTE_GUARDS)
+async def cancel_eval_run(store: StoreD, run_id: str):
+    """Request cancellation and return the persisted run state."""
+    from ..store import evals as evals_store
+
+    run_id = _safe_id(run_id)
+    run = await store.get_eval_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run["status"] == "cancelled":
+        return run
+    if run["status"] not in ("preparing", "running", "cancelling"):
+        raise HTTPException(status_code=409, detail="Only an active eval run can be cancelled")
+
+    await evals_store.update_run(
+        store.session,
+        org_id=store.org_id,
+        run_id=run_id,
+        status="cancelling",
+    )
+    task = _active_tasks.get(run_id)
+    if task is not None and not task.done():
+        task.cancel()
+    else:
+        await runner.mark_run_cancelled(store.org_id, run_id)
+        await runner.revoke_run_keys(store.org_id, run_id)
+    return await store.get_eval_run(run_id)
+
+
 @router.get(
     "/evals/runs/{run_id}/tasks/{task_id}/setup/{phase}/log",
     response_class=PlainTextResponse,
@@ -471,6 +500,7 @@ async def get_eval_accuracy(store: StoreD, limit: int = Query(200, ge=1, le=1000
     return {
         "history": await store.list_eval_accuracy(limit=limit),
         "regressions": await store.list_eval_regressions(),
+        "task_performance": await store.list_eval_task_performance(),
     }
 
 

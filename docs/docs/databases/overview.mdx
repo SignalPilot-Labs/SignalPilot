@@ -4,7 +4,7 @@ sidebar_position: 1
 
 # Databases
 
-SignalPilot ships 11 database connectors. Each maps to a `db_type` value used in connection config, runs through the same SQL governance layer (DDL/DML blocking, LIMIT injection, dangerous-function denylist, PII-redacted audit logs), and is grouped into a capability tier.
+SignalPilot ships 12 database connectors. Each maps to a `db_type` value used in connection config, runs through the same SQL governance layer (DDL/DML blocking, LIMIT injection, dangerous-function denylist, PII-redacted audit logs), and is grouped into a capability tier.
 
 ## All connectors
 
@@ -21,6 +21,7 @@ SignalPilot ships 11 database connectors. Each maps to a `db_type` value used in
 | Trino | `trino` | Cloud + Local | 2 | [Trino](/docs/databases/trino) |
 | DuckDB | `duckdb` | Local (+ MotherDuck) | 3 | [DuckDB](/docs/databases/duckdb) |
 | SQLite | `sqlite` | Local | 3 | [SQLite](/docs/databases/sqlite) |
+| Xata | `xata` | Cloud + Local | 1 | Postgres-compatible; adds copy-on-write branches (see the [branch tools](/docs/reference/tools-overview#branch-workflow--xata-6-tools)) |
 
 ## Tiers
 

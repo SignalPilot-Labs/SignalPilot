@@ -79,6 +79,11 @@ eval repo (git)            your warehouse
 
 Accuracy is `CORRECT / (total − UNGRADED)`.
 
+One subtlety: a container that hits its timeout is only `ERROR` if it produced
+**no** answer. If a truncated transcript still contains a number, that number is
+graded like any other — so a task can time out and still score `CORRECT`. Check
+task durations against `SP_EVAL_TIMEOUT_SECONDS` when a result looks surprising.
+
 ## Read tasks and write tasks
 
 |  | Read task | Write task |

@@ -106,9 +106,11 @@ Details that matter:
   runner image ships `psql`, `git`, and `curl`.
 - **A non-zero setup exit is `SETUP_FAILED`** — the agent never runs, and the
   setup log is stored as evidence.
-- **Teardown always runs if setup ran**, pass or fail. The branch is destroyed
-  immediately afterwards, so teardown is for releasing warehouse-side resources
-  and for leaving a trace in the log — not for cleaning up data.
+- **Teardown runs if — and only if — a setup script ran**, pass or fail. A task
+  that declares `teardown` without `setup` is accepted by the manifest and its
+  teardown never executes. The branch is destroyed immediately afterwards, so
+  teardown is for releasing warehouse-side resources and for leaving a trace in
+  the log, not for cleaning up data.
 - **Timeout:** `setup.timeout_seconds` in the manifest, else
   `SP_EVAL_SETUP_TIMEOUT_SECONDS`.
 

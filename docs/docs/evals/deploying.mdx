@@ -45,8 +45,37 @@ Add a branch provider if the set has write tasks:
   code={`SP_EVAL_PG_ADMIN_DSN=postgresql://warehouse:5432/postgres\nSP_EVAL_PG_PARENT_DB=northwind`}
 />
 
-Branches are forked with `CREATE DATABASE <branch> TEMPLATE <parent>`, so the
-parent must have no other active sessions at fork time.
+The local provider has two hard prerequisites. Read both before pointing it at a
+database you care about.
+
+:::danger Forking terminates every session on the parent database
+Branches are forked with `CREATE DATABASE <branch> TEMPLATE <parent>`, which
+Postgres refuses while the template has sessions. The provider responds by
+running `pg_terminate_backend` against **every** connection to the parent
+database — including connections that have nothing to do with evals — and
+retrying, up to six times. Point `SP_EVAL_PG_PARENT_DB` at a database whose
+connections are expendable, and do not share that server with anything
+production.
+:::
+
+The second prerequisite is that `PUBLIC` must not hold `CONNECT` on the other
+databases of that server. Each task gets a fresh least-privilege role, and the
+provider checks what that role can still reach; if it can reach anything besides
+its own branch, it aborts with:
+
+> Postgres eval isolation is not configured: PUBLIC CONNECT lets the task role
+> reach `<databases>`. Revoke PUBLIC CONNECT on every non-eval non-template
+> database before enabling the local branch provider.
+
+<MiniCopyBlock
+  label="revoke PUBLIC CONNECT on a database"
+  plain
+  code={`REVOKE CONNECT ON DATABASE some_other_db FROM PUBLIC;`}
+/>
+
+The reaper that cleans up abandoned branches matches `eval-*` databases across
+the whole server, not per organization. A dedicated Postgres server for eval
+branches is the configuration this was designed for.
 
 ## Building a runner image
 
@@ -78,6 +107,12 @@ Eval containers run on the host Docker daemon:
 Local mode also accepts a filesystem path as the eval repo — useful while
 authoring a set. Cloud mode does not.
 
+Container sizing in local mode is fixed and does **not** read the pod-sizing
+variables (those are cloud-only): the agent container gets 2 GiB and 2 CPUs, a
+setup or teardown container gets 4 GiB and 4 CPUs, and `/work`, `/tmp` and
+`/repo` are 512 MB tmpfs mounts. The dbt project tarball unpacks into that 512 MB
+`/work` — a very large project is the one thing likely to hit it.
+
 ## Cloud (Kubernetes) mode
 
 When `SP_DEPLOYMENT_MODE=cloud`, the Docker path is unreachable by construction:
@@ -89,9 +124,10 @@ pod in the org's namespace, and the harness enforces:
   end in `@sha256:<64 hex>`. A floating tag would let what runs in the sandbox
   change without the configuration changing. Look one up with
   `crane digest <image>` or `docker buildx imagetools inspect <image>`.
-- **Mandatory NetworkPolicy.** If policy enforcement is disabled for eval
-  namespaces the backend refuses to start pods, rather than running untrusted
-  workloads with open egress.
+- **Mandatory NetworkPolicy.** Setting `SP_NOTEBOOK_NETWORK_POLICY=false`
+  disables policy enforcement for tenant namespaces — and the eval backend then
+  refuses to start pods at all, rather than running untrusted workloads with open
+  egress. If evals fail immediately in cloud mode, check that variable first.
 - **No service-account token** is mounted, and secrets ride an owner-referenced
   Kubernetes `Secret` rather than the pod spec — `kubectl describe pod` and pod
   events show nothing sensitive. The Secret is garbage-collected with the pod.
@@ -136,11 +172,11 @@ Every variable the eval harness reads. See
 | `SP_EVAL_RUNNER_IMAGE` | — | Image with the Claude CLI. **Empty disables the feature.** Must be digest-pinned in cloud mode. |
 | `SP_EVAL_SETUP_IMAGE` | runner image | Image for setup/teardown script containers. Digest-pinned in cloud mode. |
 | `SP_EVAL_MCP_URL` | `http://gateway:3300/mcp` | MCP endpoint the sandboxes call back on. |
-| `SP_EVAL_CLAUDE_TOKEN` | — | `CLAUDE_CODE_OAUTH_TOKEN` passed to task containers. |
+| `SP_EVAL_CLAUDE_TOKEN` | — | `CLAUDE_CODE_OAUTH_TOKEN` passed to task containers. Falls back to `CLAUDE_KEY_1` if unset. |
 | `SP_EVAL_ANTHROPIC_KEY` | — | Alternative: `ANTHROPIC_API_KEY` for task containers. |
 | `SP_EVAL_ALLOWED_ORGS` | `""` | Comma-separated org ids allowed to use evals. **Empty denies everyone in cloud mode** and allows the single local tenant in local mode. |
 | `SP_EVAL_TIMEOUT_SECONDS` | `600` | Per-task agent container timeout. |
-| `SP_EVAL_PROJECT_ENV` | `""` | Extra `KEY=VALUE` entries (newline- or comma-separated) injected into every task container — e.g. read-only warehouse credentials a `profiles.yml` reads via `env_var`. Gateway-controlled variables always win. |
+| `SP_EVAL_PROJECT_ENV` | `""` | Extra `KEY=VALUE` entries (newline- or comma-separated) injected into **agent** containers — e.g. read-only warehouse credentials a `profiles.yml` reads via `env_var`. Gateway-controlled variables always win. Setup and teardown containers do *not* receive these; give those what they need through the manifest's `setup.env_file`. |
 
 ### Execution — local Docker
 
@@ -150,7 +186,7 @@ Every variable the eval harness reads. See
 | `SP_EVAL_DOCKER_NETWORK` | `signalpilot_eval_runtime` | Network eval containers join; must reach the gateway. |
 | `SP_EVAL_PROJECTS_DIR` | `/eval-projects` | Root for local-path eval sets, mounted read-only. |
 | `SP_EVAL_PROJECTS_HOST_DIR` | — | Host path of the above; required to bind-mount local eval repos into script containers. |
-| `SP_EVAL_SETUP_HOST_ROOT` | — | Host root for manifest-declared setup mounts. |
+| `SP_EVAL_SETUP_HOST_ROOT` | — | Declared but not currently used by any code path. Leave unset. |
 
 ### Execution — cloud Kubernetes
 
@@ -189,7 +225,7 @@ credentials come from the pinned connection's stored extras.
 | `SP_EVAL_MAX_BRANCHES` | `50` | Ceiling on live eval branches, enforced before each fork. |
 | `SP_EVAL_BRANCH_STORAGE_DELTA_BYTES` | `5368709120` (5 GiB) | How far a branch may outgrow its parent before the task fails. |
 | `SP_EVAL_ARTIFACT_BYTES_PER_RUN` | `1073741824` (1 GiB) | Artifact budget per run; captures past it are marked truncated. |
-| `SP_EVAL_CAPTURE_FULL_MAX_BYTES` | `268435456` (256 MiB) | Ceiling for a `full` capture. Over it, the capture is rejected rather than silently truncated. |
+| `SP_EVAL_CAPTURE_FULL_MAX_BYTES` | `268435456` (256 MiB) | Estimated-size ceiling for a `full` capture; over it the capture is refused up front. Note a separate hard ceiling of 128 MiB applies to any single capture file, so a value above that leaves a band where captures truncate instead of being refused. |
 | `SP_EVAL_SETUP_TIMEOUT_SECONDS` | `1800` | Default setup/teardown timeout; a manifest may lower it. |
 
 ### Regression notifications
@@ -238,8 +274,10 @@ Worth knowing before you point this at production data:
 - **Read-only by default.** Governed MCP blocks DDL/DML at parse time. Write
   access exists only as a branch DSN, only for write tasks, only on a disposable
   branch.
-- **Redaction.** Transcripts and script logs are scrubbed of the secrets the
-  harness injected before they are stored.
+- **Redaction.** Transcripts and script logs are scrubbed before storage: the
+  exact secrets the harness injected, DSN user-info, auth headers, and long
+  base64-looking blobs. It is a heuristic, not a guarantee — a secret the harness
+  never knew about (one your setup script prints, say) can survive it.
 - **The project tarball is deleted** once every task has fetched it, and is
   excluded from run exports.
 - **Retention** prunes artifacts to the last 10 runs and transcripts to the last

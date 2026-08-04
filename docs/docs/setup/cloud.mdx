@@ -50,7 +50,7 @@ for yours. After that:
 1. Add the warehouse under **Connections**.
 2. Open **Evals → Configure**, set the eval repo (a `https://github.com/…` URL)
    and pin the connection.
-3. **Run suite**, and read the per-task verdicts, transcripts, and coverage.
+3. **Run all evals**, and read the per-task verdicts, transcripts, and coverage.
 
 Start from the public example set,
 [SignalPilot-Labs/eval-demo-repo](https://github.com/SignalPilot-Labs/eval-demo-repo),
@@ -60,12 +60,37 @@ then see the [eval quickstart](/docs/evals/quickstart).
 
 | Feature | Self-host | Cloud |
 |---------|-----------|-------|
+| Plan-enforced quotas | None | Yes — see below |
 | SSO (Clerk) | No | Yes |
 | Multi-tenant isolation | Manual | Automatic |
 | Managed history & dashboards | No | Yes |
 | Sandboxed eval runs (Kubernetes) | Bring your own Docker or cluster | Managed |
 | Encrypted credential storage | Local SQLite | Managed |
 | SLA / enterprise support | Community | Available |
+
+## Plan limits
+
+Cloud enforces per-plan quotas server-side. Exceeding the daily query cap
+returns `429` from `query_database`, and gated features are refused rather than
+degraded.
+
+| Limit | Free | Pro | Team | Enterprise |
+|---|---|---|---|---|
+| Connections | 2 | 10 | 100 | 100 |
+| Org members | 1 | 3 | 15 | 100 |
+| API keys | 1 | 10 | 100 | 100 |
+| Governed queries / day | 200 | 5,000 | 25,000 | 100,000 |
+| Audit retention (days) | 7 | 90 | 365 | 365 |
+| Knowledge storage | 50 MB | 250 MB | 1 GB | 5 GB |
+| Knowledge history versions | 5 | 5 | 25 | 50 |
+| Full PII redaction | — | Yes | Yes | Yes |
+| Budget controls | — | Yes | Yes | Yes |
+| Projects & notebooks | — | Yes | Yes | Yes |
+| Audit export | — | — | Yes | Yes |
+| BYOK encryption | — | — | Yes | Yes |
+| SSO (SAML/OIDC) | — | — | Yes | Yes |
+
+Self-hosted deployments enforce none of this.
 
 ## Plugin with cloud
 

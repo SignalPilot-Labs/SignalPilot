@@ -94,7 +94,7 @@ row counts.
 | `checks` | no | Numeric checks — see below. |
 | `grade` | no | Grading strategy. Default `{"kind": "checks"}`. |
 | `covers` | no | Models this task is intended to exercise. Feeds declared coverage. |
-| `builds` | no | Models the agent must build. Write tasks only in practice. |
+| `builds` | no | Models the agent must build. Also feeds declared coverage. Accepted on read tasks, but only meaningful on write tasks. |
 | `capture` | no | Table evidence to record. Write tasks only. |
 | `setup` / `teardown` | no | Repo-relative scripts. **Write tasks only** — read tasks share a branch nothing may mutate. |
 
@@ -112,13 +112,18 @@ like `$12.5B`, `1,234,567`, and `3.4 million` — and a check passes if **any**
 extracted number is within its relative tolerance. All checks pass →
 `CORRECT`; some → `PARTIAL`; none → `OFF`; no numbers at all → `UNKNOWN`.
 
-Two consequences worth designing around:
+Three consequences worth designing around:
 
 - **Tolerance is relative.** `0.15` means ±15%. Use `0` for counts that must be
   exact.
 - **A chatty answer offers more numbers.** If a wrong answer would plausibly
   contain the right number in passing, tighten the prompt ("reply with only the
   number") via the prompt file or the config's prompt preamble.
+- **`gt` is only a shorthand for simple numbers.** Deriving a check from `gt`
+  strips `,` and `$` and then parses a float. `"12.5B"`, `"1.2e9"`, and
+  `"about 42"` produce *no* check and no manifest error — the task grades
+  `UNGRADED`. Write `checks` explicitly whenever the gold value is not a plain
+  number.
 
 ### Grading strategies
 
@@ -149,6 +154,13 @@ expectation must hold for `CORRECT`; any failure is `OFF`.
 
 If `builds` is omitted on a `model_rebuilt` task, it defaults to `[grade.model]`.
 
+:::caution `expect` keys are not validated
+Unrecognised keys inside `expect` are ignored silently. Write `rowcount` instead
+of `row_count` and the task grades on table existence alone — and passes. Pair
+every rebuild task with a negative control (see
+[Write tasks](./write-tasks.mdx#grading-a-rebuild)) so a vacuous pass is visible.
+:::
+
 ### Captures
 
 ```json
@@ -165,11 +177,24 @@ What to record from the branch before it is destroyed. Write tasks only.
 |------|----------------|
 | `fingerprint` | Table statistics and a grain check, as JSON. The default. |
 | `fingerprint+sample` | The above, plus a bounded deterministic sample as DuckDB. |
-| `full` | The complete table as DuckDB. Rejected if it exceeds `SP_EVAL_CAPTURE_FULL_MAX_BYTES`. |
+| `full` | The complete table as DuckDB. Refused up front if the estimate exceeds `SP_EVAL_CAPTURE_FULL_MAX_BYTES`. |
 
-`tables` defaults to `builds`. `sample_rows` defaults to 10,000 and is capped at
-50,000. Write tasks that declare `builds` but no `capture` get a `fingerprint`
-capture automatically.
+`tables` defaults to `builds`. Write tasks that declare `builds` but no `capture`
+get a `fingerprint` capture automatically.
+
+Three limits are worth knowing before you rely on a capture as evidence:
+
+- **`sample_rows` is clamped at capture time, not at load time.** The manifest
+  accepts any positive integer; anything above 50,000 is silently reduced and
+  reported as `sample_clamped` in the capture summary.
+- **No capture file may exceed 128 MiB**, whatever `SP_EVAL_CAPTURE_FULL_MAX_BYTES`
+  says. A capture that hits the file ceiling (or exhausts the run's artifact
+  budget) degrades to fingerprint-only and is marked truncated. With the stock
+  256 MiB setting, a table between 128 and 256 MiB passes the up-front refusal
+  and then truncates — set `SP_EVAL_CAPTURE_FULL_MAX_BYTES` to 128 MiB or lower
+  if you want the refusal to be the thing that happens.
+- **Samples are stringly typed.** Every column is cast to `VARCHAR` in the DuckDB
+  dump, so a sample tells you values, not types.
 
 ## CLAUDE.md
 
@@ -197,12 +222,22 @@ The manifest loader fails loudly and specifically. Common messages:
 
 The fastest check is to save the repo URL on the Evals page: the task list is
 parsed from a fresh clone, and any manifest error surfaces there before you spend
-a run. The gateway caches a fetched set for 5 minutes, so allow for that when
-iterating.
+a run.
+
+The gateway caches a fetched git repo for 5 minutes, keyed by workspace and URL,
+so a commit you just pushed can stay invisible on the page for that long. A run
+always re-clones, so a run is never stale. Local-path eval sets are never cached
+— which is the reason to use one while authoring.
 
 ## Keep the answer key out of the sandbox
 
 `eval.json` contains the gold values. Do not add the eval repo to the dbt project
-the agent receives, and do not check it out into the warehouse under test. The
-harness never ships the eval repo to a task container — only the prompt, the
-optional `CLAUDE.md`, and the dbt project tarball.
+the agent receives, and do not check it out into the warehouse under test.
+
+The **agent** container never receives the eval repo — only the prompt, the
+optional `CLAUDE.md`, and the dbt project tarball. **Setup and teardown
+containers do**: the harness clones the repo (or bind-mounts it read-only) at
+`/repo` so your script can run from it, which means `eval.json` is on disk in
+those containers. That is fine — they run before and after the agent, not
+alongside it — but do not have a setup script copy anything from `/repo` into
+the warehouse or into the project tree.

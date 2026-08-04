@@ -156,6 +156,6 @@ full list.
 **Knobs that are not env-driven:**
 
 - **LIMIT injection default** — `query_database` accepts a `row_limit` parameter (default `1000`, max `10000`). There is no global env override; callers control the per-call limit.
-- **Budget caps** — set per session via the `start_session`/`check_budget` MCP tools. There is no global default budget env var.
+- **Budget caps** — registered per session through the gateway's budget API (`/api/budget`); the `check_budget` MCP tool reports remaining spend. There is no global default budget env var.
 - **Audit log** — always enabled; every query is logged. There is no env toggle.
 - **PII redaction in audit** — always active; SQL string literals are replaced with `<REDACTED>` in audit records.

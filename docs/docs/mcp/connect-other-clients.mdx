@@ -42,7 +42,7 @@ Add to `.cursor/mcp.json` in your project root:
 
 ## Codex
 
-Codex has a dedicated SignalPilot plugin that provides the same surface as Claude Code — 40 MCP tools, 23 skills, and 2 agents (`verifier`, `value-verifier`). Use that instead of raw MCP config:
+Codex has a dedicated SignalPilot plugin that provides the same surface as Claude Code — 54 MCP tools, 23 skills, and 2 agents (`verifier`, `value-verifier`). Use that instead of raw MCP config:
 
 <MiniCopyBlock
   label="install the codex plugin"
@@ -67,7 +67,7 @@ Any client implementing [MCP streamable-http transport](https://spec.modelcontex
 - **Cloud endpoint**: `https://gateway.signalpilot.ai/mcp`
 - **Auth header**: `Authorization: Bearer YOUR_API_KEY`
 
-The gateway returns standard MCP responses. All 32 tools are callable — governance runs on the server side regardless of which client you use.
+The gateway returns standard MCP responses. All 54 tools are callable — governance runs on the server side regardless of which client you use.
 
 ## Bearer token auth
 

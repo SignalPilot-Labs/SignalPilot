@@ -152,9 +152,21 @@ export function ControlDeck({
             <span className="label">{live ? "current phase" : "model"}</span>
             <strong>{live ? phase : model}</strong>
           </div>
-          <div className="ev-progress-dial" style={{ "--progress": `${percent * 3.6}deg` } as CSSProperties}>
-            <span>{live ? `${percent}%` : "GO"}</span>
-          </div>
+          {live ? (
+            <div className="ev-progress-dial" style={{ "--progress": `${percent * 3.6}deg` } as CSSProperties}>
+              <span>{percent}%</span>
+            </div>
+          ) : (
+            <button
+              onClick={runSuite}
+              disabled={!runnerEnabled || !repoUrl || starting}
+              className="ev-progress-dial ev-progress-launch"
+              aria-label="Run the full evaluation suite"
+              title="Run the full evaluation suite"
+            >
+              <span>{starting ? "..." : "RUN"}</span>
+            </button>
+          )}
         </div>
       </div>
 

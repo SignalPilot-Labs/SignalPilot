@@ -1,0 +1,155 @@
+---
+sidebar_position: 4
+---
+
+# Write tasks and warehouse branches
+
+A read task asks the agent a question. A write task asks it to *do* something to
+the warehouse — rebuild a dropped mart, backfill a table, fix a broken model —
+and grades the object it produced.
+
+That is only safe because each write task gets its own disposable copy of the
+warehouse.
+
+## Lifecycle
+
+```
+fork branch → create scoped connection → setup.sh → agent → grade → capture → teardown.sh
+                                                                                    │
+                                     connection deleted + branch destroyed ◄─────────┘
+```
+
+The branch and the temporary connection are deleted in a `finally` — they go away
+whether the task passed, failed, timed out, or crashed. A background reaper
+cleans up anything an interrupted run left behind.
+
+## Branch providers
+
+The provider is chosen from the **pinned connection**, not from a separate
+setting.
+
+| Pinned connection | Provider | How a branch is made |
+|---|---|---|
+| Xata (has `xata_project` + `branch` in its extras) | `XataBranchProvider` | Copy-on-write branch of the pinned branch, through the Xata control plane. |
+| Anything else | `PostgresBranchProvider` | `CREATE DATABASE … TEMPLATE <parent>` on `SP_EVAL_PG_ADMIN_DSN` / `SP_EVAL_PG_PARENT_DB`. |
+
+If neither is available, a run containing write tasks fails fast with a
+user-facing message rather than silently running them against the shared
+warehouse. A run with only read tasks proceeds without a provider.
+
+Two quotas apply before every fork:
+
+- `SP_EVAL_MAX_BRANCHES` — ceiling on live eval branches (default 50).
+- `SP_EVAL_BRANCH_STORAGE_DELTA_BYTES` — how much a branch may grow beyond its
+  parent (default 5 GiB). A runaway build fails the task instead of the cluster.
+
+## What the agent gets
+
+Governed MCP tools stay **read-only** even in a write task — DDL and DML are
+blocked at parse time. Writes go through a second channel: the branch DSN in
+`SP_WAREHOUSE_DSN`.
+
+Every write task's prompt is therefore prefixed with a note telling the agent
+that the branch exists and how to reach it:
+
+```
+[WRITE TASK — you have a private, disposable copy of the warehouse]
+…
+The governed MCP tools stay read-only, so use them to INSPECT. To WRITE
+(CREATE/DROP/INSERT), use the branch credential in the environment variable
+SP_WAREHOUSE_DSN with psql, which is installed:
+
+    psql "$SP_WAREHOUSE_DSN" -v ON_ERROR_STOP=1 -c "CREATE TABLE ... AS SELECT ..."
+```
+
+Without it an agent reads the model, tries to build it through MCP, is refused,
+and concludes the task is impossible. The note is added by the harness — you do
+not put it in your prompt.
+
+The task also gets a temporary gateway connection pinned to its branch, so
+governed reads (`query_database`, `analyze_grain`, …) see the branch, not the
+shared warehouse.
+
+## Setup and teardown scripts
+
+```json
+{
+  "id": "rebuild_org_charges_by_client",
+  "class": "write",
+  "setup": "tasks/rebuild_org_charges_by_client/setup.sh",
+  "teardown": "tasks/rebuild_org_charges_by_client/teardown.sh"
+}
+```
+
+Each script runs in its own container, **against the task's branch**, before and
+after the agent:
+
+```sh
+#!/bin/sh
+# tasks/rebuild_org_charges_by_client/setup.sh
+set -e
+psql "$SP_WAREHOUSE_DSN" -v ON_ERROR_STOP=1 \
+  -c 'DROP TABLE IF EXISTS marts.fct_org_charges_by_client'
+echo "setup($1): dropped marts.fct_org_charges_by_client on this branch"
+```
+
+Details that matter:
+
+- **Argument `$1` is the task id.** Useful for logging when one script serves
+  several tasks.
+- **`.sh` runs with `sh`, `.py` runs with `python3`.** Anything else is run
+  with `sh`.
+- **Environment:** `SP_WAREHOUSE_DSN` (branch-scoped), `SP_EVAL_TASK`,
+  `SP_EVAL_PHASE` (`setup` or `teardown`), `SP_EVAL_REPO_URL`, plus any
+  `KEY=VALUE` lines from the manifest's `setup.env_file`.
+- **Image:** `SP_EVAL_SETUP_IMAGE`, falling back to the runner image. The stock
+  runner image ships `psql`, `git`, and `curl`.
+- **A non-zero setup exit is `SETUP_FAILED`** — the agent never runs, and the
+  setup log is stored as evidence.
+- **Teardown runs if — and only if — a setup script ran**, pass or fail. A task
+  that declares `teardown` without `setup` is accepted by the manifest and its
+  teardown never executes. The branch is destroyed immediately afterwards, so
+  teardown is for releasing warehouse-side resources and for leaving a trace in
+  the log, not for cleaning up data.
+- **Timeout:** `setup.timeout_seconds` in the manifest, else
+  `SP_EVAL_SETUP_TIMEOUT_SECONDS`.
+
+## Grading a rebuild
+
+```json
+"grade": {
+  "kind": "model_rebuilt",
+  "model": "marts.fct_org_charges_by_client",
+  "expect": {
+    "row_count": 9,
+    "row_count_tolerance": 0,
+    "grain": ["client_id"],
+    "columns": ["client_id", "claim_count", "total_charge_usd", "total_paid_usd", "collection_rate"]
+  }
+}
+```
+
+The grader queries the branch directly:
+
+| Expectation | Check |
+|---|---|
+| (always) | The table exists. |
+| `row_count` | Within `row_count_tolerance` (relative, default `0.01`). |
+| `grain` | `count(*) == count(distinct grain…)` — the rebuilt table is at the grain you asked for, not fanned out. |
+| `columns` | Every named column is present. |
+
+Any failure is `OFF`; a query error is `ERROR`.
+
+:::tip Always ship a negative control
+Add a task whose setup drops the mart and whose prompt tells the agent **not** to
+rebuild it, expecting `OFF`. Without it, a `model_rebuilt` grade that silently
+passes on a missing table looks exactly like success. The demo set's
+`rebuild_skipped_control` exists for this.
+:::
+
+## Cost and concurrency
+
+Write tasks are the expensive kind: a branch fork, up to three containers
+(setup, agent, teardown), and a capture. `SP_EVAL_MAX_PARALLEL_TASKS` (default 4)
+bounds how many tasks of any class are in flight, and forks are serialized behind
+a lock so concurrent tasks cannot all slip past the branch ceiling at once.

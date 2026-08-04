@@ -1,0 +1,47 @@
+---
+sidebar_position: 9
+---
+
+# Integrations
+
+**Integrations** connects SignalPilot to the places your team already works, and
+holds the workspace-level model credential.
+
+## Anthropic API key
+
+The workspace's Anthropic credential, used by server-side agent features
+(analysis delivery, Slack replies, and other gateway-driven agent runs). Save,
+rotate, or remove it here. It is stored encrypted like any other secret.
+
+Agent sessions you drive from Claude Code use *your* Claude Code credentials, not
+this one — this key is for work the gateway initiates on its own.
+
+## Slack
+
+Connect a Slack workspace so people can ask questions where they already talk.
+
+1. **Connect Slack** starts the OAuth flow.
+2. Approve the requested scopes: read app mentions and channel/group/DM history,
+   post messages, upload files, and add reactions.
+3. Back in SignalPilot, **provision** the installation and pick the **default
+   project** its requests should run against.
+
+Each installation shows a status (`connected`, `disconnected`, or an error
+state) and can be deleted, which revokes SignalPilot's side of the OAuth grant.
+
+Requests from Slack execute through the same governed path as everything else and
+appear in [Chats](/docs/product/activity#chats) and the
+[audit log](/docs/product/audit).
+
+Self-hosting requires a Slack app of your own: set the client id, client secret,
+signing secret, and redirect URI in the gateway environment.
+
+## Notion
+
+Search Notion for context, and publish reports back to a destination page. This
+one has its own page with the full setup: [Notion](/docs/connect-notion).
+
+## GitHub
+
+Repository access for dbt projects and private eval sets — see
+[GitHub](/docs/settings/github).

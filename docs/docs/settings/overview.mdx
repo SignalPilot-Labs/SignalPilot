@@ -1,0 +1,79 @@
+---
+sidebar_position: 1
+---
+
+# Settings
+
+Where each setting lives, and which ones matter.
+
+:::note Finding Settings on Cloud
+In local mode the sidebar has a **Settings** section. In cloud mode `/settings`
+is not in the sidebar — reach it from your user menu in the bottom-left instead.
+:::
+
+## Gateway and governance defaults
+
+*Local / self-hosted deployments.* Sets the gateway the web app talks to and the
+default guardrails applied when a caller does not specify their own:
+
+| Setting | Meaning |
+|---------|---------|
+| **Gateway API key** | The key the browser uses against the gateway. |
+| **Default row limit** | LIMIT injected into `SELECT` when the caller sets none. |
+| **Max rows per query** | Hard ceiling; a caller asking for more is capped. |
+| **Default timeout** | Seconds before a query is abandoned. |
+| **Default budget (USD)** | Starting spend cap for a session. |
+| **Sandbox manager token** | Bearer token for a remote sandbox manager. |
+
+Blocked tables and PII column rules are per connection rather than global — see
+[Schema explorer](/docs/product/schema-explorer#annotations-blocking-tables-and-marking-columns).
+
+## API keys
+
+Create, view and delete workspace API keys. A key is shown once, at creation —
+the gateway stores only a SHA-256 hash. Scopes are chosen at creation time and
+default to `read` + `query`.
+
+See [Authentication](/docs/mcp/auth) for the scope table and header formats.
+
+## MCP connect
+
+Generates ready-to-paste MCP client configuration for the gateway you are signed
+in to, with the right URL and an `X-API-Key` header. Faster and less error-prone
+than typing the config by hand; the equivalent CLI one-liners are in
+[Connect Claude Code](/docs/mcp/connect-claude-code).
+
+## GitHub
+
+Install the SignalPilot GitHub App, see which installations and repositories the
+workspace can reach, and link a repository to a project. Required for private
+dbt-project repos and private eval sets — see [GitHub](/docs/settings/github).
+
+## Team
+
+*Cloud.* Members, roles and invitations, plus:
+
+- **Email domains** — verify a domain you own, then choose how people from it
+  join: automatic invitation, automatic suggestion, or neither.
+- **SSO (SAML/OIDC)** — Team and Enterprise plans. The ACS URL and metadata your
+  IdP needs are shown here.
+- **Danger zone** — delete a domain, or delete the team.
+
+## Billing and usage
+
+**Billing** manages the plan; **Usage** shows API request volume against your
+rate limits, a per-key breakdown, and analytics over time. Plan quotas are listed
+under [plan limits](/docs/setup/cloud#plan-limits).
+
+## Account security
+
+Per-user, not per-workspace:
+
+- **Authenticator app (TOTP)** — enable, disable, with QR enrollment.
+- **Backup codes** — generate and regenerate.
+- **Active sessions** — see them, and revoke the ones you do not recognise.
+
+## BYOK encryption
+
+Bring your own key for credential encryption at rest — see
+[BYOK](/docs/settings/byok).

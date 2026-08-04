@@ -153,7 +153,7 @@ In cloud mode, cloud warehouse connection parameters are validated against an al
 - `*.databricks.com` / `*.azuredatabricks.net`
 - `bigquery.googleapis.com`
 
-Self-hosted deployments can extend this list via `SP_SSRF_ALLOW_LIST`.
+Self-hosted deployments where the warehouse sits on a private network can allow RFC1918 targets with `SP_ALLOW_PRIVATE_CONNECTIONS=true` (loopback and link-local stay blocked).
 
 ## Connection health
 

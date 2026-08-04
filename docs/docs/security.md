@@ -85,7 +85,7 @@ Eval containers execute model-authored commands and hold the task's source check
 ## Audit
 
 - **Every query logged** with timestamp, org, user, connection, and SQL
-- **PII redaction**: SQL string literals replaced with `'***'` in audit logs
+- **PII redaction**: SQL string literals replaced with `<REDACTED>` in audit logs
 - **Query cost estimation** before execution
 
 ## Encryption
@@ -94,9 +94,10 @@ Eval containers execute model-authored commands and hold the task's source check
 
 ## Rate limiting
 
-- 60 requests/min/IP on auth endpoints (brute-force protection)
-- 120 MCP tool calls/min/API key
-- 300 MCP tool calls/min/org (cloud)
+- 100 requests/min/IP on auth endpoints (brute-force protection); 60 *failed* authentications/min/IP
+- 1000 MCP tool calls/min/API key (`SP_PER_KEY_RPM`)
+- 5000 MCP tool calls/min/org, cloud mode (`SP_PER_ORG_RPM`)
+- 10000 requests/min/IP general, 1000/min on expensive endpoints
 
 ## Tenant isolation
 

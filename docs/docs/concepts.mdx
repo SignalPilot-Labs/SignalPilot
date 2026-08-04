@@ -18,7 +18,7 @@ SignalPilot sits between your AI agent and your databases. Every query passes th
 
 ### Gateway
 
-The FastAPI backend that exposes the 32 MCP tools over `streamable-http`. It handles auth, rate limiting, SQL governance, query execution, and audit logging. All governance logic lives here — the AI agent never touches the database directly.
+The FastAPI backend that exposes the 54 MCP tools over `streamable-http`. It handles auth, rate limiting, SQL governance, query execution, and audit logging. All governance logic lives here — the AI agent never touches the database directly.
 
 ### MCP server
 
@@ -26,7 +26,7 @@ SignalPilot implements the [Model Context Protocol](https://spec.modelcontextpro
 
 ### Plugin
 
-The [SignalPilot Claude Code plugin](https://github.com/SignalPilot-Labs/signalpilot-plugin) adds 9 battle-tested skills and a verifier agent on top of the 32 MCP tools. Skills are markdown files that load into Claude Code's context automatically based on relevance — they guide Claude's behavior without you writing prompt instructions.
+The [SignalPilot Claude Code plugin](https://github.com/SignalPilot-Labs/signalpilot-plugin) adds 23 skills and two verifier agents on top of the 54 MCP tools. Skills are markdown files that load into Claude Code's context automatically based on relevance — they guide Claude's behavior without you writing prompt instructions.
 
 ### Skill
 

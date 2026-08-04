@@ -8,7 +8,7 @@ from ..models.workspace import ChatTraceEventCreate, ChatTraceThreadUpsert
 from ..security.scope_guard import RequireScope
 from .deps import StoreD
 
-router = APIRouter(prefix="/api/chat/traces")
+router = APIRouter(prefix="/api/notebook-chat/traces")
 
 
 @router.post("/threads", dependencies=[RequireScope("write")])

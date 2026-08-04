@@ -10,8 +10,10 @@ import uuid
 from gateway.mcp.context import (
     _require_mcp_scope,
     _store_session,
+    mcp_allowed_connection_var,
     mcp_audit_id_var,
     mcp_client_ip_var,
+    mcp_execution_identity_var,
     mcp_org_id_var,
     mcp_user_agent_var,
 )
@@ -45,6 +47,7 @@ MCP_TOOL_SCOPES: dict[str, str] = {
     "manage_dashboard": "admin",
     "list_semantic_metrics": "query",
     "verify_metric_conformance": "query",
+    "plan_query": "query",
     "query_database": "query",
     "check_budget": "read",
     "explain_query": "query",
@@ -102,6 +105,7 @@ EVAL_ALLOWED_MCP_TOOLS: frozenset[str] = frozenset(
         "verify_model_values",
         "list_semantic_metrics",
         "verify_metric_conformance",
+        "plan_query",
         "query_database",
         "check_budget",
         "explain_query",
@@ -124,6 +128,46 @@ EVAL_ALLOWED_MCP_TOOLS: frozenset[str] = frozenset(
     }
 )
 
+STANDALONE_CHAT_TOOL_ALLOWLIST = frozenset(
+    {
+        "check_budget",
+        "connector_capabilities",
+        "debug_cte_query",
+        "describe_table",
+        "estimate_query_cost",
+        "explain_query",
+        "explore_column",
+        "explore_columns",
+        "explore_table",
+        "find_join_path",
+        "get_date_boundaries",
+        "get_relationships",
+        "list_database_connections",
+        "list_semantic_metrics",
+        "list_tables",
+        "plan_query",
+        "query_database",
+        "schema_ddl",
+        "schema_link",
+        "schema_overview",
+        "schema_statistics",
+        "validate_sql",
+        "verify_metric_conformance",
+    }
+)
+
+
+def standalone_chat_tool_denial(tool_name: str, connection_name: str | None) -> str | None:
+    """Return a public denial for capabilities unavailable to standalone chat."""
+    execution_identity = mcp_execution_identity_var.get(None)
+    if not execution_identity or not execution_identity.startswith("chat:"):
+        return None
+    if tool_name not in STANDALONE_CHAT_TOOL_ALLOWLIST:
+        return "Error: this tool is unavailable in standalone data chat"
+    allowed_connection = mcp_allowed_connection_var.get(None)
+    if connection_name and allowed_connection and connection_name != allowed_connection:
+        return "Error: connection is outside this chat's allowed scope"
+    return None
 
 async def _audit_tool_call(
     tool_name: str,
@@ -205,7 +249,13 @@ def _audited_tool(fn):
                 result = f"Error: MCP tool {tool_name!r} has no scope policy"
             else:
                 scope_error = _require_mcp_scope(required_scope)
-                result = scope_error if scope_error else await fn(*args, **kwargs)
+                denial = standalone_chat_tool_denial(tool_name, conn)
+                if scope_error:
+                    result = scope_error
+                elif denial:
+                    result = denial
+                else:
+                    result = await fn(*args, **kwargs)
             duration_ms = (time.time() - t0) * 1000
             # Detect blocked queries from return value
             result_str = str(result) if result else ""

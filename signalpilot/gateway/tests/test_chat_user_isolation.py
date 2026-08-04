@@ -152,17 +152,17 @@ class TestChatAPIUserIsolation:
             app.dependency_overrides.pop(get_db, None)
 
     def test_get_conversation_endpoint_returns_404_for_peer_conv_id(self, client_a):
-        """GET /api/chat/conversations/{id} returns 404 when conv not found."""
+        """Notebook-chat GET returns 404 when the conversation is not found."""
         # The mock returns None for get_conversation, so any ID is 404.
-        response = client_a.get("/api/chat/conversations/nonexistent-id")
+        response = client_a.get("/api/notebook-chat/conversations/nonexistent-id")
         assert response.status_code == 404
         # Response body must not leak sensitive content.
         assert "nonexistent-id" not in response.text or "not found" in response.text.lower()
 
     def test_post_message_endpoint_returns_404_for_peer_conv_id(self, client_a):
-        """POST /api/chat/conversations/{id}/messages returns 404 when conv not found."""
+        """Notebook-chat POST returns 404 when the conversation is not found."""
         response = client_a.post(
-            "/api/chat/conversations/nonexistent-id/messages",
+            "/api/notebook-chat/conversations/nonexistent-id/messages",
             json={"role": "user", "content": "hi"},
         )
         assert response.status_code == 404

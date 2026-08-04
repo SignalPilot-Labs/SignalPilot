@@ -13,6 +13,7 @@ Two separate findings live in pool_manager.acquire:
 
 from __future__ import annotations
 
+import asyncio
 import os
 import socket
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -82,7 +83,9 @@ class TestPoolTenantIsolation:
 
         with patch("gateway.connectors.pool_manager.get_connector", return_value=a):
             first = await pm.acquire("postgres", _CONN_STR, credential_extras=_extras("cred-a"), org_id="org-a")
+            await pm.release("postgres", _CONN_STR, credential_extras=_extras("cred-a"), org_id="org-a")
             second = await pm.acquire("postgres", _CONN_STR, credential_extras=_extras("cred-a"), org_id="org-a")
+            await pm.release("postgres", _CONN_STR, credential_extras=_extras("cred-a"), org_id="org-a")
 
         assert first is second
         assert pm.pool_count == 1
@@ -119,7 +122,13 @@ class TestPoolTenantIsolation:
             got_a = await pm.acquire(
                 "postgres", _CONN_STR, credential_extras=_extras("cred-a", access_token="token-a"), org_id="org-a"
             )
+            await pm.release(
+                "postgres", _CONN_STR, credential_extras=_extras("cred-a", access_token="token-a"), org_id="org-a"
+            )
             got_b = await pm.acquire(
+                "postgres", _CONN_STR, credential_extras=_extras("cred-b", access_token="token-b"), org_id="org-b"
+            )
+            await pm.release(
                 "postgres", _CONN_STR, credential_extras=_extras("cred-b", access_token="token-b"), org_id="org-b"
             )
 
@@ -250,6 +259,88 @@ class TestPoolTenantIsolation:
         assert "pw" not in rendered.split("org=")[0]
         assert "shared.example.com:5432" in rendered
         assert "org=org-a" in rendered
+
+
+class TestPoolExecutionIsolation:
+    @pytest.mark.asyncio
+    async def test_same_pool_key_is_exclusively_checked_out(self):
+        """A second request cannot observe or overwrite active query state."""
+        pm = PoolManager()
+        connector = _mock_connector("shared")
+        first_started = asyncio.Event()
+        first_cancelled = asyncio.Event()
+        second_started = asyncio.Event()
+        cancelled_executions: list[str] = []
+        connector._active_execution = None
+        connector._last_execution = None
+
+        async def execute(execution: str):
+            assert connector._active_execution is None
+            connector._active_execution = execution
+            if execution == "user-a":
+                first_started.set()
+                await first_cancelled.wait()
+            else:
+                second_started.set()
+            connector._last_execution = execution
+            connector._active_execution = None
+            return [{"execution": execution}]
+
+        async def cancel_current_query():
+            execution = connector._active_execution
+            if execution is None:
+                return False
+            cancelled_executions.append(execution)
+            if execution == "user-a":
+                first_cancelled.set()
+            return True
+
+        connector.execute = AsyncMock(side_effect=execute)
+        connector.cancel_current_query = AsyncMock(side_effect=cancel_current_query)
+        connector.get_last_query_id = MagicMock(side_effect=lambda: connector._last_execution)
+
+        async def run(execution: str) -> str:
+            async with pm.connection(
+                "postgres",
+                _CONN_STR,
+                credential_extras=_extras("shared-cred"),
+                connection_name="shared-warehouse",
+            ) as checked_out:
+                await checked_out.execute(execution)
+                return checked_out.get_last_query_id()
+
+        with patch("gateway.connectors.pool_manager.get_connector", return_value=connector):
+            user_a = asyncio.create_task(run("user-a"))
+            await asyncio.wait_for(first_started.wait(), timeout=1)
+
+            user_b = asyncio.create_task(run("user-b"))
+            await asyncio.sleep(0)
+            assert not second_started.is_set()
+
+            assert await connector.cancel_current_query() is True
+            query_ids = await asyncio.gather(user_a, user_b)
+
+        assert cancelled_executions == ["user-a"]
+        assert query_ids == ["user-a", "user-b"]
+
+    @pytest.mark.asyncio
+    async def test_failed_acquisition_releases_the_checkout(self):
+        """Connection failures must not permanently block the pool key."""
+        pm = PoolManager()
+        failed = _mock_connector("failed")
+        failed.connect = AsyncMock(side_effect=RuntimeError("authentication failed"))
+        healthy = _mock_connector("healthy")
+
+        with patch("gateway.connectors.pool_manager.get_connector", side_effect=[failed, healthy]):
+            with pytest.raises(RuntimeError, match="authentication failed"):
+                await pm.acquire("postgres", _CONN_STR, org_id="org-a")
+            connector = await asyncio.wait_for(
+                pm.acquire("postgres", _CONN_STR, org_id="org-a"),
+                timeout=1,
+            )
+            await pm.release("postgres", _CONN_STR, org_id="org-a")
+
+        assert connector is healthy
 
 
 # ─── Connect-time destination revalidation ────────────────────────────────────

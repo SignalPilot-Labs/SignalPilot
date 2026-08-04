@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from typing import Any
 
 from ..base import BaseConnector
@@ -40,9 +41,7 @@ class PostgresConnector(BaseConnector):
             if isinstance(schemas, str):
                 schemas = [s.strip() for s in schemas.split(",") if s.strip()]
             # keep only safe identifiers (defensive: these are interpolated)
-            self._schema_allowlist = [
-                s for s in schemas if s.replace("_", "").isalnum()
-            ]
+            self._schema_allowlist = [s for s in schemas if s.replace("_", "").isalnum()]
         if extras.get("pool_min_size"):
             self._pool_min_size = max(1, min(extras["pool_min_size"], 20))
         if extras.get("pool_max_size"):
@@ -161,14 +160,52 @@ class PostgresConnector(BaseConnector):
         if self._pool is None:
             raise RuntimeError("Not connected")
         async with self._pool.acquire() as conn:
-            # Set statement timeout on the DB side (Feature #8)
-            # This cancels the query on the server, not just the client
-            if timeout:
-                await conn.execute(f"SET LOCAL statement_timeout = {timeout * 1000}")
-            # Wrap in read-only transaction (defense in depth)
-            async with conn.transaction(readonly=True):
-                rows = await conn.fetch(sql, *(params or []), timeout=timeout)
-                return [dict(r) for r in rows]
+            self._active_backend_pid = await conn.fetchval("SELECT pg_backend_pid()")
+            self._last_backend_pid = self._active_backend_pid
+            try:
+                # Wrap in read-only transaction (defense in depth) and set the
+                # server-side timeout inside that transaction.
+                async with conn.transaction(readonly=True):
+                    if timeout:
+                        await conn.execute(f"SET LOCAL statement_timeout = {timeout * 1000}")
+                    rows = await conn.fetch(sql, *(params or []), timeout=timeout)
+                    return [dict(r) for r in rows]
+            finally:
+                self._active_backend_pid = None
+
+    async def cancel_current_query(self) -> bool:
+        if self._pool is None or not getattr(self, "_active_backend_pid", None):
+            return False
+        async with self._pool.acquire() as connection:
+            return bool(
+                await connection.fetchval("SELECT pg_cancel_backend($1)", self._active_backend_pid)
+            )
+
+    async def stream_batches(
+        self,
+        sql: str,
+        *,
+        batch_size: int = 10_000,
+        timeout: int | None = None,
+    ) -> AsyncIterator[list[dict[str, Any]]]:
+        if self._pool is None:
+            raise RuntimeError("Not connected")
+        async with self._pool.acquire() as conn:
+            self._active_backend_pid = await conn.fetchval("SELECT pg_backend_pid()")
+            self._last_backend_pid = self._active_backend_pid
+            try:
+                async with conn.transaction(readonly=True):
+                    if timeout:
+                        await conn.execute(f"SET LOCAL statement_timeout = {timeout * 1000}")
+                    cursor = conn.cursor(sql, prefetch=batch_size, timeout=timeout)
+                    while records := await cursor.fetch(batch_size):
+                        yield [dict(record) for record in records]
+            finally:
+                self._active_backend_pid = None
+
+    def get_last_query_id(self) -> str | None:
+        pid = getattr(self, "_last_backend_pid", None)
+        return str(pid) if pid else None
 
     async def _get_schema_impl(self) -> dict[str, Any]:
         if self._pool is None:
@@ -192,8 +229,8 @@ class PostgresConnector(BaseConnector):
         #     has_table_privilege (which is false for column-only grants and would
         #     wrongly hide the whole table).
         # Optional schema allowlist (extras["schemas"]) narrows the scan further.
-        schema_filter = ""        # for queries aliased as n.nspname
-        schema_filter_sn = ""     # for queries using the `schemaname` column
+        schema_filter = ""  # for queries aliased as n.nspname
+        schema_filter_sn = ""  # for queries using the `schemaname` column
         if self._schema_allowlist:
             quoted = ", ".join(f"'{s}'" for s in self._schema_allowlist)
             schema_filter = f"AND n.nspname IN ({quoted})"

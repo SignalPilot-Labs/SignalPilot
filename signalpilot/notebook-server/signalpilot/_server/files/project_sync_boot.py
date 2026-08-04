@@ -5,11 +5,13 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from pathlib import Path
 
 from signalpilot._server.auth.session_token import load_session_jwt
 from signalpilot._server.files.project_sync import (
     _validate_branch,
     _validate_project_id,
+    checkout_frozen_commit as _checkout_frozen_commit,
     sync_down,
 )
 
@@ -45,6 +47,9 @@ def main() -> int:
     result = sync_down(project_id, branch)
     if result.get("error"):
         _log.error("sync_down failed: %s", result["error"])
+        return 1
+    commit_sha = os.environ.get("SP_PROJECT_COMMIT_SHA", "").strip()
+    if commit_sha and not _checkout_frozen_commit(Path(str(result["local_dir"])), commit_sha):
         return 1
     _log.info("workspace ready at %s", result.get("local_dir"))
     return 0

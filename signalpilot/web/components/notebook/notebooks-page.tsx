@@ -28,6 +28,7 @@ import {
   type NotebookConfig,
 } from "~/components/notebook/notebook-context";
 import { NotebooksProjectsPaywall } from "~/components/billing/notebooks-projects-paywall";
+import { buildProjectEditorHref } from "~/lib/project-editor-link";
 import { useSubscription } from "~/lib/subscription-context";
 
 const PAID_TIERS = ["pro", "team", "enterprise", "unlimited"];
@@ -401,7 +402,7 @@ export default function NotebooksPage() {
     const headers: Record<string, string> = {};
     if (token) headers.Authorization = `Bearer ${token}`;
 
-    return fetch(`${GATEWAY_URL}/api/chat/traces/threads`, {
+    return fetch(`${GATEWAY_URL}/api/notebook-chat/traces/threads`, {
       headers,
     });
   }
@@ -748,8 +749,24 @@ export default function NotebooksPage() {
     }, 60_000);
   }
 
-  async function handleShare() {
-    const url = window.location.href;
+  async function handleShare(config: NotebookConfig) {
+    const projectId = urlProject || config.project;
+    const branch = urlProject ? activeBranch : config.branch;
+    const file = urlFile || config.file;
+    let url = window.location.href;
+
+    if (projectId && branch && file) {
+      try {
+        url = new URL(
+          buildProjectEditorHref({ project: projectId, branch, file }),
+          window.location.origin,
+        ).toString();
+      } catch {
+        toast("Cannot share a file outside this project", "error");
+        return;
+      }
+    }
+
     try {
       await navigator.clipboard.writeText(url);
       setCopied(true);
@@ -810,7 +827,6 @@ export default function NotebooksPage() {
       effectiveNotebookConfig.sessionId,
       effectiveNotebookConfig.project ?? "",
       effectiveNotebookConfig.branch ?? "",
-      effectiveNotebookConfig.file ?? "",
       effectiveNotebookConfig.kernelSessionId ?? "",
     ].join(":");
     return (
@@ -819,7 +835,7 @@ export default function NotebooksPage() {
           right={
             <>
               <button
-                onClick={handleShare}
+                onClick={() => handleShare(effectiveNotebookConfig)}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-muted-foreground border border-border hover:border-muted-foreground hover:text-foreground transition-all tracking-wider uppercase"
               >
                 {copied ? <Check className="w-3 h-3" /> : <Share2 className="w-3 h-3" />}
@@ -830,9 +846,11 @@ export default function NotebooksPage() {
                   href={notebookPopoutHref(effectiveNotebookConfig)}
                   target="_blank"
                   rel="noopener noreferrer"
+                  title="Open notebook full screen"
+                  aria-label="Open notebook full screen"
                   className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-muted-foreground border border-border hover:border-muted-foreground hover:text-foreground transition-all tracking-wider uppercase"
                 >
-                  <ExternalLink className="w-3 h-3" /> external
+                  <ExternalLink className="w-3 h-3" /> full screen
                 </a>
               )}
               <button

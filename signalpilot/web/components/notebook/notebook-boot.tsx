@@ -19,7 +19,6 @@ const PHASE_LABELS: Record<string, string> = {
   health: "starting runtime...",
   notion: "loading trail...",
   syncing: "syncing project files...",
-  sessions: "connecting kernel...",
   ready: "loading notebook...",
   editor: "loading editor...",
 };
@@ -85,9 +84,19 @@ export default function NotebookBoot({
       const next = new URL(href, window.location.origin);
       const current = new URL(window.location.href);
       const sameProject = next.searchParams.get("project") === current.searchParams.get("project");
+      const sameBranch =
+        (next.searchParams.get("branch") || "main") ===
+        (current.searchParams.get("branch") || "main");
+      const sameSurface = next.pathname === current.pathname;
       const newFile = next.searchParams.get("file");
 
-      if (newFile && newFile !== "__new__project" && sameProject) {
+      if (
+        newFile &&
+        newFile !== "__new__project" &&
+        sameProject &&
+        sameBranch &&
+        sameSurface
+      ) {
         spaNavigate(href);
       } else {
         router.push(href);
@@ -103,7 +112,10 @@ export default function NotebookBoot({
     bootRuntime(config, handlePhase, hostNavigate, controller.signal)
       .then((result) => {
         clientRef.current = result.client;
-        staticDataRef.current = result.staticData ?? { filename: config.file };
+        staticDataRef.current = result.staticData ?? {
+          filename: config.file,
+          rawFallback: false,
+        };
         setReady(true);
         handlePhase("editor");
         onReadyRef.current?.();
@@ -138,7 +150,6 @@ export default function NotebookBoot({
     config.getToken,
     config.gatewayUrl,
     config.notebookProxyUrl,
-    config.file,
     config.project,
     config.branch,
     hostNavigate,
@@ -176,7 +187,7 @@ export default function NotebookBoot({
   const isGeneratedAnalysisTrail = isGeneratedAnalysisTrailNotebook({
     project: config.project,
     branch: config.branch,
-    file: config.file,
+    file: staticData.filename,
   });
 
   return (
@@ -190,6 +201,7 @@ export default function NotebookBoot({
           initialCode: staticData.code,
           session: staticData.session,
           notebook: staticData.notebook,
+          rawFallback: staticData.rawFallback,
           configOverrides: isGeneratedAnalysisTrail
             ? ANALYSIS_TRAIL_CONFIG_OVERRIDES
             : undefined,

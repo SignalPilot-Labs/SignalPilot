@@ -1,7 +1,7 @@
 import { atom, useAtomValue } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 import { init } from "@paralleldrive/cuid2";
-import { classifyFile } from "./active-file";
+import type { FileKind } from "./active-file";
 import { isNotionTrailParams, notionRequestIdFromSessionId } from "./notion/trail";
 import type { SessionId } from "./kernel/session";
 import { store } from "./state/jotai";
@@ -22,7 +22,7 @@ export interface FileTab {
   /** Absolute file path — IMMUTABLE after creation */
   path: string;
   /** File type */
-  type: "raw" | "notebook";
+  type: FileKind;
   /** Session ID for notebook tabs — IMMUTABLE after creation */
   sessionId: SessionId | null;
   /** Short display name */
@@ -97,27 +97,21 @@ function getNotionSessionIdForPath(path: string): SessionId | null {
  * Open a file in a tab. If the file is already open, activate that tab.
  * Otherwise create a new tab.
  */
-export function openFileInTab(path: string, forceRaw?: boolean): FileTab {
+export function openFileInTab(path: string, kind: FileKind): FileTab {
   const tabs = store.get(openTabsAtom);
   const notionSessionId = getNotionSessionIdForPath(path);
 
   // Check if already open
   const existing = tabs.find((t) => t.path === path);
   if (existing) {
-    const expectedType = forceRaw ? "raw" : classifyFile(path);
-    const correctType = expectedType === "unknown" ? "raw" : expectedType;
-    // Fix stale tab type (e.g. notebook stored as raw or vice versa)
-    if (forceRaw && existing.type === "notebook") {
-      const fixed: FileTab = { ...existing, type: "raw", sessionId: null };
-      store.set(openTabsAtom, tabs.map((t) => (t.id === existing.id ? fixed : t)));
-      store.set(activeTabIdAtom, fixed.id);
-      return fixed;
-    }
-    if (!forceRaw && existing.type === "raw" && correctType === "notebook") {
+    if (existing.type !== kind) {
       const fixed: FileTab = {
         ...existing,
-        type: "notebook",
-        sessionId: notionSessionId ?? (`s_${createSessionId()}` as SessionId),
+        type: kind,
+        sessionId:
+          kind === "notebook"
+            ? (notionSessionId ?? (`s_${createSessionId()}` as SessionId))
+            : null,
       };
       store.set(openTabsAtom, tabs.map((t) => (t.id === existing.id ? fixed : t)));
       store.set(activeTabIdAtom, fixed.id);
@@ -134,16 +128,14 @@ export function openFileInTab(path: string, forceRaw?: boolean): FileTab {
   }
 
   // Create new tab
-  const type = forceRaw ? "raw" : classifyFile(path);
-  const fileType = type === "unknown" ? "raw" : type;
   const name = path.split(/[/\\]/).pop() || "Untitled";
 
   const tab: FileTab = {
     id: createTabId(),
     path,
-    type: fileType,
+    type: kind,
     sessionId:
-      fileType === "notebook"
+      kind === "notebook"
         ? (notionSessionId ?? (`s_${createSessionId()}` as SessionId))
         : null,
     name,
@@ -152,6 +144,44 @@ export function openFileInTab(path: string, forceRaw?: boolean): FileTab {
   store.set(openTabsAtom, [...tabs, tab]);
   store.set(activeTabIdAtom, tab.id);
   return tab;
+}
+
+export async function normalizePersistedTabs(
+  resolveKind: (path: string) => Promise<FileKind>,
+): Promise<void> {
+  const originalTabs = store.get(openTabsAtom);
+  const resolvedKinds = new Map<string, FileKind>();
+
+  await Promise.all(
+    originalTabs.map(async (tab) => {
+      try {
+        resolvedKinds.set(tab.path, await resolveKind(tab.path));
+      } catch {
+        // A persisted tab may belong to a different project or deleted file.
+      }
+    }),
+  );
+
+  const currentTabs = store.get(openTabsAtom);
+  let changed = false;
+  const normalizedTabs = currentTabs.map((tab) => {
+    const kind = resolvedKinds.get(tab.path);
+    if (!kind || kind === tab.type) {
+      return tab;
+    }
+    changed = true;
+    return {
+      ...tab,
+      type: kind,
+      sessionId:
+        kind === "notebook"
+          ? (`s_${createSessionId()}` as SessionId)
+          : null,
+    };
+  });
+  if (changed) {
+    store.set(openTabsAtom, normalizedTabs);
+  }
 }
 
 /**

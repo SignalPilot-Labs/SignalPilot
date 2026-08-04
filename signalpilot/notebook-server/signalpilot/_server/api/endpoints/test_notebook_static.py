@@ -52,6 +52,7 @@ _NOTEBOOK_CONTENT = textwrap.dedent(
 def _write_notebook(tmp_path: Path, filename: str = "notebook.py") -> Path:
     """Write a minimal valid notebook file and return its Path."""
     nb = tmp_path / filename
+    nb.parent.mkdir(parents=True, exist_ok=True)
     nb.write_text(_NOTEBOOK_CONTENT, encoding="utf-8")
     return nb
 
@@ -111,7 +112,13 @@ def test_happy_path_with_session(tmp_path: Path) -> None:
 
     result = _build_static_payload(nb, str(tmp_path))
 
-    assert set(result.keys()) == {"code", "session", "notebook", "filename"}
+    assert set(result.keys()) == {
+        "code",
+        "session",
+        "notebook",
+        "filename",
+        "rawFallback",
+    }
     assert result["code"] == _NOTEBOOK_CONTENT
     # filename must be relative to the workspace directory, not absolute
     assert result["filename"] == "notebook.py"
@@ -119,6 +126,7 @@ def test_happy_path_with_session(tmp_path: Path) -> None:
     assert result["session"]["version"] == "1"
     assert isinstance(result["notebook"], dict)
     assert result["notebook"]["version"] == "1"
+    assert result["rawFallback"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +144,85 @@ def test_missing_session_returns_none(tmp_path: Path) -> None:
     assert result["session"] is None
     assert result["notebook"]["version"] == "1"
     assert isinstance(result["notebook"]["cells"], list)
+    assert result["rawFallback"] is False
+
+
+def test_normal_python_module_returns_raw_with_original_contents(
+    tmp_path: Path,
+) -> None:
+    contents = "import os\n\n\ndef project_root() -> str:\n    return os.getcwd()\n"
+    module = tmp_path / "helpers.py"
+    module.write_text(contents, encoding="utf-8")
+
+    result = _build_static_payload(module, str(tmp_path))
+
+    assert result == {
+        "code": contents,
+        "session": None,
+        "notebook": None,
+        "filename": "helpers.py",
+        "rawFallback": True,
+    }
+
+
+def test_syntactically_invalid_python_returns_raw_with_original_contents(
+    tmp_path: Path,
+) -> None:
+    contents = "def broken(:\n    return 1\n"
+    module = tmp_path / "broken.py"
+    module.write_text(contents, encoding="utf-8")
+
+    result = _build_static_payload(module, str(tmp_path))
+
+    assert result == {
+        "code": contents,
+        "session": None,
+        "notebook": None,
+        "filename": "broken.py",
+        "rawFallback": True,
+    }
+
+
+def test_empty_python_returns_raw(tmp_path: Path) -> None:
+    module = tmp_path / "empty.py"
+    module.write_text("", encoding="utf-8")
+
+    result = _build_static_payload(module, str(tmp_path))
+
+    assert result == {
+        "code": "",
+        "session": None,
+        "notebook": None,
+        "filename": "empty.py",
+        "rawFallback": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("filename", "contents"),
+    [
+        ("query.sql", "select 1;\n"),
+        ("schema.yml", "version: 2\n"),
+        ("README.md", "# Project notes\n"),
+    ],
+)
+def test_raw_text_files_return_raw(
+    tmp_path: Path,
+    filename: str,
+    contents: str,
+) -> None:
+    raw_file = tmp_path / filename
+    raw_file.write_text(contents, encoding="utf-8")
+
+    result = _build_static_payload(raw_file, str(tmp_path))
+
+    assert result == {
+        "code": contents,
+        "session": None,
+        "notebook": None,
+        "filename": filename,
+        "rawFallback": True,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +278,18 @@ def test_path_traversal_rejected(tmp_path: Path) -> None:
         _resolve_and_validate("../../etc/passwd", str(tmp_path))
 
     assert getattr(exc_info.value, "status_code", None) in (400, 403)
+
+
+def test_absolute_path_outside_workspace_rejected(tmp_path: Path) -> None:
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+
+    from signalpilot._utils.http import HTTPException as SpHTTPException
+
+    outside = tmp_path.parent / "outside.py"
+    with pytest.raises((SpHTTPException, StarletteHTTPException)) as exc_info:
+        _resolve_and_validate(str(outside), str(tmp_path))
+
+    assert getattr(exc_info.value, "status_code", None) == 403
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +353,15 @@ def test_should_send_code_gate_denies_run_mode(tmp_path: Path) -> None:
         resp = client.get(f"/notebook/static?file={nb.name}")
 
     assert resp.status_code == 403
+
+
+def test_static_route_precedes_broad_api_mount() -> None:
+    """The specific static route must not be shadowed by the /api mount."""
+    from signalpilot._server.api.router import build_routes
+
+    paths = [getattr(route, "path", None) for route in build_routes()]
+
+    assert paths.index("/api/notebook") < paths.index("/api")
 
 
 # ---------------------------------------------------------------------------
@@ -374,3 +482,20 @@ def test_schema_shape_contract(tmp_path: Path) -> None:
     _assert_session_schema(session)
     for cell in session["cells"]:
         assert isinstance(cell, dict), "session.cells[i] must be a dict"
+
+
+def test_generated_analysis_notebook_retains_static_snapshots(
+    tmp_path: Path,
+) -> None:
+    notebook = _write_notebook(
+        tmp_path,
+        "notebooks/notion/generated-analysis.py",
+    )
+    _write_valid_session(notebook)
+
+    result = _build_static_payload(notebook, str(tmp_path))
+
+    assert result["filename"] == "notebooks/notion/generated-analysis.py"
+    assert result["rawFallback"] is False
+    assert result["notebook"]["cells"]
+    assert result["session"]["cells"]

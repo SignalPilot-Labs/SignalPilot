@@ -7,6 +7,7 @@ Tier 1 connector matching HEX's Snowflake integration.
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from typing import Any
 
 from ..base import BaseConnector
@@ -247,17 +248,67 @@ class SnowflakeConnector(BaseConnector):
 
         def _run():
             cursor = self._conn.cursor(snowflake.connector.DictCursor)
+            self._active_cursor = cursor
             if effective_timeout:
                 cursor.execute(f"ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = {effective_timeout}")
             cursor.execute(sql, params or ())
             rows = cursor.fetchall()
+            self._last_query_id = cursor.sfqid
             cursor.close()
+            self._active_cursor = None
             return list(rows) if rows else []
 
         try:
             return await self._run_in_thread(_run, effective_timeout, label="Snowflake")
         except snowflake.connector.Error as e:
             raise RuntimeError(f"Snowflake query error: {e}") from e
+
+    async def cancel_current_query(self) -> bool:
+        cursor = getattr(self, "_active_cursor", None)
+        if cursor is None:
+            return False
+        await self._run_in_thread(cursor.cancel, 10, label="Snowflake cancellation")
+        return True
+
+    async def stream_batches(
+        self,
+        sql: str,
+        *,
+        batch_size: int = 10_000,
+        timeout: int | None = None,
+    ) -> AsyncIterator[list[dict[str, Any]]]:
+        if self._conn is None:
+            raise RuntimeError("Not connected")
+        effective_timeout = timeout or self._network_timeout
+        cursor = self._conn.cursor(snowflake.connector.DictCursor)
+        self._active_cursor = cursor
+        try:
+            if effective_timeout:
+                await self._run_in_thread(
+                    lambda: cursor.execute(
+                        f"ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = {effective_timeout}"
+                    ),
+                    effective_timeout,
+                    label="Snowflake",
+                )
+            await self._run_in_thread(
+                lambda: cursor.execute(sql),
+                effective_timeout,
+                label="Snowflake",
+            )
+            self._last_query_id = cursor.sfqid
+            while rows := await self._run_in_thread(
+                lambda: cursor.fetchmany(batch_size),
+                effective_timeout,
+                label="Snowflake",
+            ):
+                yield list(rows)
+        finally:
+            await self._run_in_thread(cursor.close, 10, label="Snowflake")
+            self._active_cursor = None
+
+    def get_last_query_id(self) -> str | None:
+        return getattr(self, "_last_query_id", None)
 
     async def _get_schema_impl(self) -> dict[str, Any]:
         import time as _time
@@ -358,8 +409,11 @@ class SnowflakeConnector(BaseConnector):
             # Submit all five concurrently, then collect each.
             submitted: dict[str, Any] = {}
             for label, q in (
-                ("columns", col_sql), ("tables", rc_sql), ("fk", fk_sql),
-                ("pk", pk_sql), ("cluster", cluster_sql),
+                ("columns", col_sql),
+                ("tables", rc_sql),
+                ("fk", fk_sql),
+                ("pk", pk_sql),
+                ("cluster", cluster_sql),
             ):
                 try:
                     cu = self._conn.cursor(snowflake.connector.DictCursor)
@@ -387,8 +441,11 @@ class SnowflakeConnector(BaseConnector):
                         logger.info("metadata collect failed (%s): %s", label, e)
                         res[label] = []
             return (
-                res.get("columns", []), res.get("tables", []), res.get("fk", []),
-                res.get("pk", []), res.get("cluster", []),
+                res.get("columns", []),
+                res.get("tables", []),
+                res.get("fk", []),
+                res.get("pk", []),
+                res.get("cluster", []),
             )
 
         t0 = _time.monotonic()
@@ -472,9 +529,7 @@ class SnowflakeConnector(BaseConnector):
             )
 
         # Enrich with primary key info from SHOW PRIMARY KEYS (lowercase column names)
-        pk_set = {
-            (r.get("schema_name"), r.get("table_name"), r.get("column_name")) for r in pk_rows
-        }
+        pk_set = {(r.get("schema_name"), r.get("table_name"), r.get("column_name")) for r in pk_rows}
         for table_data in schema.values():
             for col in table_data["columns"]:
                 if (table_data["schema"], table_data["name"], col["name"]) in pk_set:

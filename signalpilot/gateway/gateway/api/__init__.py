@@ -38,6 +38,7 @@ from .schema_watches import router as schema_watches_router
 from .security import router as security_router
 from .settings import router as settings_router
 from .slack import router as slack_router
+from .standalone_chat import router as standalone_chat_router
 from .uploads import router as uploads_router
 from .user_secrets import router as user_secrets_router
 from .workspace_projects import router as workspace_projects_router
@@ -73,6 +74,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(org_secrets_router)
     app.include_router(slack_router)
     app.include_router(workspace_projects_router)
+    app.include_router(standalone_chat_router)
     app.include_router(chat_router)
     app.include_router(chat_traces_router)
     app.include_router(agent_runs_router)

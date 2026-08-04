@@ -58,6 +58,9 @@ from signalpilot._server.api.endpoints.project_sync import (
 )
 from signalpilot._server.api.endpoints.secrets import router as secrets_router
 from signalpilot._server.api.endpoints.sql import router as sql_router
+from signalpilot._server.api.endpoints.standalone_chat import (
+    router as standalone_chat_router,
+)
 from signalpilot._server.api.endpoints.terminal import (
     router as terminal_router,
 )
@@ -117,6 +120,11 @@ def build_routes(base_url: str = "") -> list[BaseRoute]:
         prefix="/api/notion-analysis",
         name="notion_analysis",
     )
+    app_router.include_router(
+        standalone_chat_router,
+        prefix="/api/standalone-chat",
+        name="standalone_chat",
+    )
     app_router.include_router(home_router, prefix="/api/home", name="home")
     app_router.include_router(login_router, prefix="/auth", name="auth")
     app_router.include_router(
@@ -129,13 +137,13 @@ def build_routes(base_url: str = "") -> list[BaseRoute]:
         packages_router, prefix="/api/packages", name="packages"
     )
     app_router.include_router(lsp_router, prefix="/api/lsp", name="lsp")
-    app_router.include_router(health_router, prefix="/api", name="health")
-    app_router.include_router(root_health_router, name="root_health")
     app_router.include_router(
         notebook_static_router,
         prefix="/api/notebook",
         name="notebook_static",
     )
+    app_router.include_router(health_router, prefix="/api", name="health")
+    app_router.include_router(root_health_router, name="root_health")
     # mount_config_router MUST be last — its /api prefix would shadow
     # more-specific /api/* mounts if placed earlier
     app_router.include_router(

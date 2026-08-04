@@ -218,6 +218,44 @@ class TestNotebookJWTVerifierDispatch:
         assert request.state.auth["session_id"] == "sess-xyz"
 
     @pytest.mark.asyncio
+    async def test_notebook_session_jwt_retains_run_scope_in_local_mode(self, monkeypatch):
+        _patch_jwt_secret(monkeypatch)
+
+        import gateway.auth.user as user_mod
+
+        monkeypatch.setattr(user_mod, "is_cloud_mode", lambda: False)
+        token = mint_session_jwt(
+            user_id="local",
+            org_id="local",
+            session_id="sess-local",
+            project_id="project-a",
+            branch="main",
+            connection_name="warehouse",
+            commit_sha="a" * 40,
+            capabilities=["query:read"],
+            execution_identity="chat:run-a",
+            scopes=["read", "query", "execute"],
+            ttl=60,
+        )
+        request = MagicMock()
+        request.state = MagicMock()
+        request.state.auth = None
+        request.headers = {"authorization": f"Bearer {token}"}
+        request.cookies = {}
+
+        user_id = await user_mod.resolve_user_id(request)
+
+        assert user_id == "local"
+        assert request.state._jwt_claims["execution_identity"] == "chat:run-a"
+        assert request.state._jwt_claims["project_id"] == "project-a"
+
+        # A second dependency resolution must not collapse the verified claims
+        # to only the synthetic local user and organization.
+        assert await user_mod.resolve_user_id(request) == "local"
+        assert request.state._jwt_claims["execution_identity"] == "chat:run-a"
+        assert request.state._jwt_claims["commit_sha"] == "a" * 40
+
+    @pytest.mark.asyncio
     async def test_clerk_shaped_jwt_not_routed_to_notebook_verifier(self, monkeypatch):
         """A Clerk-shaped JWT (different iss) is NOT sent to notebook-session verifier."""
         _patch_jwt_secret(monkeypatch)
@@ -535,6 +573,84 @@ class TestPodSpecEnv:
         env_by_name = {e["name"]: e["value"] for e in manifest["spec"]["containers"][0]["env"]}
         assert env_by_name["SP_SESSION_JWT"] == "my.jwt.value"
         assert env_by_name["SP_SESSION_ID"] == "sess-xyz"
+
+
+class TestProjectAuthorizationBeforeProvisioning:
+    """Project-backed sessions resolve the project in the caller's org first."""
+
+    @pytest.mark.asyncio
+    async def test_missing_or_cross_org_project_returns_404_before_provisioning(
+        self, monkeypatch
+    ):
+        from gateway.api import notebook_sessions as ns_api
+        from gateway.models.notebook_sessions import NotebookSessionCreate
+
+        store = _make_mock_store(org_id="org-b", user_id="user-b")
+        store.get_workspace_project.return_value = None
+        ensure_session = AsyncMock()
+        monkeypatch.setattr(
+            ns_api.session_service,
+            "ensure_notebook_session",
+            ensure_session,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await ns_api.create_session(
+                NotebookSessionCreate(project_id="project-from-org-a", branch="main"),
+                store,
+                _make_mock_response(),
+            )
+
+        assert exc_info.value.status_code == 404
+        store.get_workspace_project.assert_awaited_once_with("project-from-org-a")
+        ensure_session.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_same_org_project_is_resolved_before_recipient_session(
+        self, monkeypatch
+    ):
+        from gateway.api import notebook_sessions as ns_api
+        from gateway.models.notebook_sessions import (
+            NotebookSessionCreate,
+            NotebookSessionInfo,
+        )
+
+        store = _make_mock_store(org_id="org-1", user_id="recipient-user")
+        store.get_workspace_project.return_value = MagicMock(id="project-1")
+        recipient_session = NotebookSessionInfo(
+            id="recipient-session",
+            org_id="org-1",
+            user_id="recipient-user",
+            project_id="project-1",
+            branch="feature/share",
+            status="running",
+        )
+        ensure_session = AsyncMock(return_value=recipient_session)
+        monkeypatch.setattr(
+            ns_api.session_service,
+            "ensure_notebook_session",
+            ensure_session,
+        )
+
+        result = await ns_api.create_session(
+            NotebookSessionCreate(
+                project_id="project-1",
+                branch="feature/share",
+            ),
+            store,
+            _make_mock_response(),
+        )
+
+        assert result == recipient_session
+        store.get_workspace_project.assert_awaited_once_with("project-1")
+        ensure_session.assert_awaited_once_with(
+            store.session,
+            org_id="org-1",
+            user_id="recipient-user",
+            project_id="project-1",
+            branch="feature/share",
+            get_orchestrator=ns_api._get_orchestrator,
+        )
 
 
 class TestSessionReuse:

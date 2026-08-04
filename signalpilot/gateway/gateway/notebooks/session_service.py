@@ -308,6 +308,18 @@ async def ensure_notebook_session(
         pod_name=pod,
     )
 
+    # create_session only returns the FE-facing view (access_token=None by design);
+    # the plaintext per-pod notebook token has to come off the internal read path.
+    internal = await ns.get_session_internal(session, session_id=session_info.id, org_id=org_id)
+    notebook_token = internal.access_token if internal else None
+    if not notebook_token:
+        await _mark_session_status_best_effort(
+            session, session_id=session_info.id, org_id=org_id, status="error"
+        )
+        raise NotebookSessionError(
+            "Refusing to start a notebook pod without a notebook auth token"
+        )
+
     if project_id:
         try:
             from gateway.git.sync import sync_project_with_github
@@ -351,7 +363,7 @@ async def ensure_notebook_session(
                 gateway_url=k8s_settings.sp_public_gateway_url,
                 session_jwt_secret_name=f"sp-jwt-{pod}",
                 session_id=session_info.id,
-                access_token=session_info.access_token,
+                access_token=notebook_token,
                 extra_env=pod_extra_env,
             )
 
@@ -360,6 +372,7 @@ async def ensure_notebook_session(
             namespace=namespace,
             pod_name=pod,
             session_jwt=session_jwt,
+            notebook_token=notebook_token,
             create_pod_fn=_create_pod_fn,
         )
         logger.info("Waiting for notebook pod %s to be running...", pod)

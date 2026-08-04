@@ -65,7 +65,7 @@ import type { ConnectionInfo, ConnectionHealthStats, DBType, SSHTunnelConfig, SS
 import { useConnections, useConnectionsHealth, usePlan, invalidateConnections, invalidateHealth } from "~/lib/hooks/use-gateway-data";
 import { PageLoader } from "~/components/ui/page-loader";
 import { EmptyDatabase, EmptyState } from "~/components/ui/empty-states";
-import { PageHeader, TerminalBar } from "~/components/ui/page-header";
+import { CONNECTIONS_TABS, PageHeader, TerminalBar } from "~/components/ui/page-header";
 import { StatusDot, MiniBar, Sparkline } from "~/components/ui/data-viz";
 import { Tooltip } from "~/components/ui/tooltip";
 import { useToast } from "~/components/ui/toast";
@@ -125,7 +125,7 @@ function LocalDBFilePicker({ value, onChange, pattern = "*.duckdb", placeholder 
   return (
     <div className="col-span-2">
       {/* Selected file display + browse button */}
-      <label htmlFor={id} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">database file</label>
+      <label htmlFor={id} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">database file</label>
       <div className="flex gap-2">
         <input
           id={id}
@@ -136,27 +136,27 @@ function LocalDBFilePicker({ value, onChange, pattern = "*.duckdb", placeholder 
           placeholder={placeholder}
           aria-invalid={error ? "true" : undefined}
           aria-describedby={error && id ? `${id}-error` : undefined}
-          className={`flex-1 px-2.5 py-1.5 bg-[var(--color-bg-code)] border text-[13px] text-[var(--color-text)] font-mono tracking-wide focus:outline-none${error ? " border-[var(--color-error)]/60 focus:border-[var(--color-error)]" : " border-[var(--color-border)] focus:border-[var(--color-text-dim)]"}`}
+          className={`flex-1 px-2.5 py-1.5 bg-[var(--color-bg-code)] border rounded-[10px] text-[13px] text-[var(--color-text)] font-mono focus:outline-none${error ? " border-[var(--color-error)]/60 focus:border-[var(--color-error)]" : " border-[var(--color-border)] focus:border-[var(--color-text-dim)]"}`}
         />
         <button
           type="button"
           onClick={openBrowser}
-          className="px-3 py-1.5 text-[12px] tracking-wider border border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-text)] hover:text-[var(--color-text)] transition-all flex items-center gap-1.5"
+          className="px-3 py-1.5 text-[12px] border border-[var(--color-border)] rounded-[10px] text-[var(--color-text-dim)] hover:border-[var(--color-text)] hover:text-[var(--color-text)] transition-colors duration-150 flex items-center gap-1.5"
         >
           <HardDrive size={13} />
           browse
         </button>
       </div>
-      {error && id && <p id={`${id}-error`} role="alert" className="text-[11px] text-[var(--color-error)] mt-1 tracking-wider">{error}</p>}
+      {error && id && <p id={`${id}-error`} role="alert" className="text-[11px] text-[var(--color-error)] mt-1">{error}</p>}
       {!error && (
-        <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider">
+        <p className="text-[11px] text-[var(--color-text-dim)] mt-1">
           {hint}
         </p>
       )}
 
       {/* File browser modal */}
       {browsing && (
-        <div className="mt-2 border border-[var(--color-border)] bg-[var(--color-bg-code)]">
+        <div className="mt-2 border border-[var(--color-border)] rounded-[10px] bg-[var(--color-bg-code)] overflow-hidden">
           {/* Header */}
           <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg)]/30">
             <button
@@ -173,7 +173,7 @@ function LocalDBFilePicker({ value, onChange, pattern = "*.duckdb", placeholder 
             <button
               type="button"
               onClick={() => setBrowsing(false)}
-              className="text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] tracking-wider"
+              className="text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
             >
               close
             </button>
@@ -188,11 +188,11 @@ function LocalDBFilePicker({ value, onChange, pattern = "*.duckdb", placeholder 
             )}
 
             {browseError && (
-              <div className="px-3 py-2 text-[11px] text-red-400 tracking-wider">{browseError}</div>
+              <div className="px-3 py-2 text-[11px] text-red-400">{browseError}</div>
             )}
 
             {!loading && !browseError && files.length === 0 && directories.length === 0 && (
-              <div className="px-3 py-4 text-[11px] text-[var(--color-text-dim)] tracking-wider text-center">
+              <div className="px-3 py-4 text-[11px] text-[var(--color-text-dim)] text-center">
                 no matching files found in this directory
               </div>
             )}
@@ -205,7 +205,7 @@ function LocalDBFilePicker({ value, onChange, pattern = "*.duckdb", placeholder 
                 className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-[var(--color-bg)]/50 transition-colors border-b border-[var(--color-border)]/30"
               >
                 <Folder size={14} className="text-[var(--color-text-dim)] flex-shrink-0" />
-                <span className="text-[12px] text-[var(--color-text-muted)] tracking-wider truncate">{dir.name}/</span>
+                <span className="text-[12px] text-[var(--color-text-muted)] truncate">{dir.name}/</span>
               </button>
             ))}
 
@@ -217,10 +217,10 @@ function LocalDBFilePicker({ value, onChange, pattern = "*.duckdb", placeholder 
                 className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-[var(--color-accent)]/10 transition-colors border-b border-[var(--color-border)]/30 group"
               >
                 <FileText size={14} className="text-[var(--color-accent)] flex-shrink-0" />
-                <span className="text-[12px] text-[var(--color-text)] tracking-wider truncate flex-1 group-hover:text-[var(--color-accent)]">
+                <span className="text-[12px] text-[var(--color-text)] truncate flex-1 group-hover:text-[var(--color-accent)]">
                   {file.name}
                 </span>
-                <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider flex-shrink-0">
+                <span className="text-[10px] text-[var(--color-text-dim)] flex-shrink-0">
                   {formatSize(file.size_bytes)}
                 </span>
               </button>
@@ -633,7 +633,7 @@ function FormInput({
   const isSecret = type === "password";
   return (
     <div className={className}>
-      <label htmlFor={id} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">
+      <label htmlFor={id} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">
         {label}{required && <span className="text-[var(--color-error)] ml-0.5">*</span>}
       </label>
       <div className="relative">
@@ -646,7 +646,7 @@ function FormInput({
           onChange={(e) => onChange(e.target.value)}
           aria-invalid={error ? "true" : undefined}
           aria-describedby={error && id ? `${id}-error` : undefined}
-          className={`w-full px-3 py-2 ${isSecret ? "pr-9" : ""} bg-[var(--color-bg-input)] border text-xs focus:outline-none tracking-wide ${
+          className={`w-full px-3 py-2 ${isSecret ? "pr-9" : ""} bg-[var(--color-bg-input)] border rounded-[10px] text-xs focus:outline-none ${
             error ? "border-[var(--color-error)]/60 focus:border-[var(--color-error)]" : "border-[var(--color-border)] focus:border-[var(--color-text-dim)]"
           }`}
         />
@@ -661,9 +661,9 @@ function FormInput({
           </button>
         )}
       </div>
-      {error && id && <p id={`${id}-error`} role="alert" className="text-[11px] text-[var(--color-error)] mt-1 tracking-wider">{error}</p>}
-      {error && !id && <p className="text-[11px] text-[var(--color-error)] mt-1 tracking-wider">{error}</p>}
-      {hint && !error && <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">{hint}</p>}
+      {error && id && <p id={`${id}-error`} role="alert" className="text-[11px] text-[var(--color-error)] mt-1">{error}</p>}
+      {error && !id && <p className="text-[11px] text-[var(--color-error)] mt-1">{error}</p>}
+      {hint && !error && <p className="text-[11px] text-[var(--color-text-dim)] mt-1 opacity-60">{hint}</p>}
     </div>
   );
 }
@@ -678,7 +678,7 @@ function FormTextArea({
 }) {
   return (
     <div className={className}>
-      <label htmlFor={id} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">{label}</label>
+      <label htmlFor={id} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">{label}</label>
       <textarea
         id={id}
         ref={inputRef}
@@ -688,13 +688,13 @@ function FormTextArea({
         rows={rows}
         aria-invalid={error ? "true" : undefined}
         aria-describedby={error && id ? `${id}-error` : undefined}
-        className={`w-full px-3 py-2 bg-[var(--color-bg-input)] border text-xs focus:outline-none tracking-wide font-mono resize-y ${
+        className={`w-full px-3 py-2 bg-[var(--color-bg-input)] border rounded-[10px] text-xs focus:outline-none font-mono resize-y ${
           error ? "border-[var(--color-error)]/60 focus:border-[var(--color-error)]" : "border-[var(--color-border)] focus:border-[var(--color-text-dim)]"
         }`}
       />
-      {error && id && <p id={`${id}-error`} role="alert" className="text-[11px] text-[var(--color-error)] mt-1 tracking-wider">{error}</p>}
-      {error && !id && <p className="text-[11px] text-[var(--color-error)] mt-1 tracking-wider">{error}</p>}
-      {hint && !error && <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">{hint}</p>}
+      {error && id && <p id={`${id}-error`} role="alert" className="text-[11px] text-[var(--color-error)] mt-1">{error}</p>}
+      {error && !id && <p className="text-[11px] text-[var(--color-error)] mt-1">{error}</p>}
+      {hint && !error && <p className="text-[11px] text-[var(--color-text-dim)] mt-1 opacity-60">{hint}</p>}
     </div>
   );
 }
@@ -1430,9 +1430,9 @@ function ConnectionFieldsForm({
           {...fieldProps("connection_string", formErrors, fieldRefs)}
         />
         {hasValidUrl && (
-          <div className="col-span-2 -mt-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed">
+          <div className="col-span-2 -mt-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px]">
             <div className="flex items-center justify-between">
-              <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">parsed components:</span>
+              <span className="text-[11px] text-[var(--color-text-dim)]">parsed components:</span>
               <button
                 type="button"
                 onClick={() => {
@@ -1444,20 +1444,20 @@ function ConnectionFieldsForm({
                     ...(parsed as Partial<FormState>),
                   });
                 }}
-                className="text-[11px] tracking-wider text-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors"
+                className="text-[11px] text-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors"
               >
                 switch to fields &rarr;
               </button>
             </div>
             <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-1">
-              {parsed.host && <span className="text-[11px] tracking-wider"><span className="text-[var(--color-text-dim)]">host:</span> <span className="text-[var(--color-text)]">{parsed.host}</span></span>}
-              {parsed.port && <span className="text-[11px] tracking-wider"><span className="text-[var(--color-text-dim)]">port:</span> <span className="text-[var(--color-text)]">{parsed.port}</span></span>}
-              {parsed.database && <span className="text-[11px] tracking-wider"><span className="text-[var(--color-text-dim)]">db:</span> <span className="text-[var(--color-text)]">{parsed.database}</span></span>}
-              {parsed.username && <span className="text-[11px] tracking-wider"><span className="text-[var(--color-text-dim)]">user:</span> <span className="text-[var(--color-text)]">{parsed.username}</span></span>}
-              {parsed.account && <span className="text-[11px] tracking-wider"><span className="text-[var(--color-text-dim)]">account:</span> <span className="text-[var(--color-text)]">{parsed.account}</span></span>}
-              {parsed.warehouse && <span className="text-[11px] tracking-wider"><span className="text-[var(--color-text-dim)]">warehouse:</span> <span className="text-[var(--color-text)]">{parsed.warehouse}</span></span>}
-              {parsed.catalog && <span className="text-[11px] tracking-wider"><span className="text-[var(--color-text-dim)]">catalog:</span> <span className="text-[var(--color-text)]">{parsed.catalog}</span></span>}
-              {parsed.password && <span className="text-[11px] tracking-wider text-[var(--color-success)]">password: ****</span>}
+              {parsed.host && <span className="text-[11px]"><span className="text-[var(--color-text-dim)]">host:</span> <span className="text-[var(--color-text)]">{parsed.host}</span></span>}
+              {parsed.port && <span className="text-[11px]"><span className="text-[var(--color-text-dim)]">port:</span> <span className="text-[var(--color-text)]">{parsed.port}</span></span>}
+              {parsed.database && <span className="text-[11px]"><span className="text-[var(--color-text-dim)]">db:</span> <span className="text-[var(--color-text)]">{parsed.database}</span></span>}
+              {parsed.username && <span className="text-[11px]"><span className="text-[var(--color-text-dim)]">user:</span> <span className="text-[var(--color-text)]">{parsed.username}</span></span>}
+              {parsed.account && <span className="text-[11px]"><span className="text-[var(--color-text-dim)]">account:</span> <span className="text-[var(--color-text)]">{parsed.account}</span></span>}
+              {parsed.warehouse && <span className="text-[11px]"><span className="text-[var(--color-text-dim)]">warehouse:</span> <span className="text-[var(--color-text)]">{parsed.warehouse}</span></span>}
+              {parsed.catalog && <span className="text-[11px]"><span className="text-[var(--color-text-dim)]">catalog:</span> <span className="text-[var(--color-text)]">{parsed.catalog}</span></span>}
+              {parsed.password && <span className="text-[11px] text-[var(--color-success)]">password: ****</span>}
             </div>
           </div>
         )}
@@ -1472,7 +1472,7 @@ function ConnectionFieldsForm({
         <FormInput label="account identifier" value={form.account} onChange={field("account", (v) => setForm({ ...form, account: v }))} placeholder="org-account" hint="e.g., xy12345.us-east-1" required {...fieldProps("account", formErrors, fieldRefs)} />
         <FormInput label="username" value={form.username} onChange={field("username", (v) => setForm({ ...form, username: v }))} placeholder="ANALYTICS_USER" required {...fieldProps("username", formErrors, fieldRefs)} />
         <div className="col-span-2 mb-1">
-          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">authentication method</label>
+          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">authentication method</label>
           <div className="flex flex-wrap gap-2">
             {([
               ["password", "password"],
@@ -1486,7 +1486,7 @@ function ConnectionFieldsForm({
                 key={method}
                 type="button"
                 onClick={() => setForm({ ...form, snowflake_auth_method: method })}
-                className={`px-2.5 py-1 text-[12px] tracking-wider border transition-all ${
+                className={`px-2.5 py-1 text-[12px] border rounded-[6px] transition-colors duration-150 ${
                   form.snowflake_auth_method === method
                     ? "border-[var(--color-text)] text-[var(--color-text)]"
                     : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
@@ -1500,7 +1500,7 @@ function ConnectionFieldsForm({
         {form.snowflake_auth_method === "password" ? (
           <>
             <FormInput label="password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} type="password" required className="col-span-2" />
-            <div className="col-span-2 px-3 py-2 border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/5 text-[11px] text-[var(--color-warning)] tracking-wider">
+            <div className="col-span-2 px-3 py-2 border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/5 rounded-[10px] text-[11px] text-[var(--color-warning)]">
               <AlertTriangle className="w-3 h-3 inline mr-1" strokeWidth={1.5} />
               snowflake is enforcing mandatory MFA for all accounts. password-only connections will stop working. switch to <button type="button" onClick={() => setForm({ ...form, snowflake_auth_method: "key_pair" })} className="underline hover:text-[var(--color-text)]">key pair</button> or <button type="button" onClick={() => setForm({ ...form, snowflake_auth_method: "oauth" })} className="underline hover:text-[var(--color-text)]">OAuth</button> authentication.
             </div>
@@ -1522,7 +1522,7 @@ function ConnectionFieldsForm({
         ) : form.snowflake_auth_method === "oauth" ? (
           <>
             <FormInput label="OAuth access token" value={form.sf_oauth_token} onChange={(v) => setForm({ ...form, sf_oauth_token: v })} type="password" required className="col-span-2" hint="from your identity provider (Okta, Azure AD, etc.)" {...fieldProps("sf_oauth_token", formErrors, fieldRefs)} />
-            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
               <div><span className="text-[var(--color-text-muted)]">setup:</span> Create a Snowflake security integration (CREATE SECURITY INTEGRATION ... TYPE = EXTERNAL_OAUTH) and configure your IdP to issue tokens.</div>
               <div><span className="text-[var(--color-text-muted)]">local dev:</span> Use Snowflake&apos;s built-in SNOWFLAKE$LOCAL_APPLICATION integration for quick setup without admin involvement.</div>
             </div>
@@ -1540,7 +1540,7 @@ function ConnectionFieldsForm({
           <>
             <FormInput label="Okta URL" value={form.sf_okta_url} onChange={field("sf_okta_url", (v) => setForm({ ...form, sf_okta_url: v }))} placeholder="https://your-org.okta.com" required className="col-span-2" hint="your Okta organization URL — sent as the Snowflake authenticator" {...fieldProps("sf_okta_url", formErrors, fieldRefs)} />
             <FormInput label="password" value={form.password} onChange={field("password", (v) => setForm({ ...form, password: v }))} type="password" required className="col-span-2" {...fieldProps("password", formErrors, fieldRefs)} />
-            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
               <div><span className="text-[var(--color-text-muted)]">native SSO:</span> Snowflake authenticates directly against Okta using your Okta username and password. Requires Snowflake to be federated with this Okta org.</div>
             </div>
           </>
@@ -1553,7 +1553,7 @@ function ConnectionFieldsForm({
           <button
             type="button"
             onClick={() => setShowSnowflakeAdvanced(!showSnowflakeAdvanced)}
-            className="flex items-center gap-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider mb-2"
+            className="flex items-center gap-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors mb-2"
           >
             {showSnowflakeAdvanced ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
             advanced — host override
@@ -1575,14 +1575,14 @@ function ConnectionFieldsForm({
                 {...fieldProps("snowflake_host", formErrors, fieldRefs)}
               />
               <div className="col-span-2">
-                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">protocol</label>
+                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">protocol</label>
                 <div className="flex gap-2">
                   {(["https", "http"] as const).map((proto) => (
                     <button
                       key={proto}
                       type="button"
                       onClick={() => setForm({ ...form, snowflake_protocol: proto })}
-                      className={`px-2.5 py-1 text-[12px] tracking-wider border transition-all ${
+                      className={`px-2.5 py-1 text-[12px] border rounded-[6px] transition-colors duration-150 ${
                         form.snowflake_protocol === proto
                           ? "border-[var(--color-text)] text-[var(--color-text)]"
                           : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
@@ -1592,12 +1592,12 @@ function ConnectionFieldsForm({
                     </button>
                   ))}
                 </div>
-                <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">defaults to https — leave host override blank unless you need a non-standard endpoint</p>
+                <p className="text-[11px] text-[var(--color-text-dim)] mt-1 opacity-60">defaults to https — leave host override blank unless you need a non-standard endpoint</p>
               </div>
             </div>
           )}
         </div>
-        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
           <div><span className="text-[var(--color-text-muted)]">network policy:</span> Add this server&apos;s IP to ALLOWED_IP_LIST. Snowflake Admin → Security → Network Policies.</div>
           <div><span className="text-[var(--color-text-muted)]">private link:</span> For AWS PrivateLink or Azure Private Link, use the private account URL (e.g., org-account.privatelink.snowflakecomputing.com).</div>
           <div><span className="text-[var(--color-text-muted)]">vpn:</span> If your Snowflake is behind a VPN, ensure SignalPilot has network access to the Snowflake endpoint.</div>
@@ -1616,7 +1616,7 @@ function ConnectionFieldsForm({
         <FormInput label="project" value={form.xata_project} onChange={field("xata_project", (v) => setForm({ ...form, xata_project: v }))} placeholder="prj_037kol78gl76p88o6fngc8s1jk" hint="Xata project id" required {...fieldProps("xata_project", formErrors, fieldRefs)} />
         <FormInput label="branch" value={form.branch} onChange={(v) => setForm({ ...form, branch: v })} placeholder="main" hint="optional — defaults to main" />
         <FormInput label="database" value={form.xata_database} onChange={(v) => setForm({ ...form, xata_database: v })} placeholder="xata" hint="optional — defaults to xata" />
-        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
           <div><Lock className="w-3 h-3 inline mr-1 -mt-0.5" strokeWidth={1.5} /><span className="text-[var(--color-text-muted)]">security:</span> the API key is stored encrypted; the agent only ever receives a governed per-branch endpoint, never the raw URL or key.</div>
         </div>
 
@@ -1625,7 +1625,7 @@ function ConnectionFieldsForm({
           <button
             type="button"
             onClick={() => setShowXataAdvanced(!showXataAdvanced)}
-            className="flex items-center gap-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider mb-2"
+            className="flex items-center gap-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors mb-2"
           >
             {showXataAdvanced ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
             advanced — control plane (optional)
@@ -1652,14 +1652,14 @@ function ConnectionFieldsForm({
 
         {/* Auth method selector */}
         <div className="col-span-2 mb-1">
-          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">authentication method</label>
+          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">authentication method</label>
           <div className="flex gap-2">
             {bqAuthMethods.map((method) => (
               <button
                 key={method}
                 type="button"
                 onClick={() => setForm({ ...form, bq_auth_method: method })}
-                className={`px-2.5 py-1 text-[12px] tracking-wider border transition-all ${
+                className={`px-2.5 py-1 text-[12px] border rounded-[6px] transition-colors duration-150 ${
                   form.bq_auth_method === method
                     ? "border-[var(--color-text)] text-[var(--color-text)]"
                     : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
@@ -1687,14 +1687,14 @@ function ConnectionFieldsForm({
         {form.bq_auth_method === "oauth" && (
           <>
             <FormInput label="OAuth access token" value={form.bq_oauth_token} onChange={(v) => setForm({ ...form, bq_oauth_token: v })} type="password" required className="col-span-2" hint="from Google Cloud OAuth flow or gcloud auth print-access-token" {...fieldProps("bq_oauth_token", formErrors, fieldRefs)} />
-            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
               <div><span className="text-[var(--color-text-muted)]">setup:</span> Create an OAuth client in GCP Console → APIs & Services → Credentials → OAuth 2.0 Client ID.</div>
               <div><span className="text-[var(--color-text-muted)]">scopes:</span> Token must include https://www.googleapis.com/auth/bigquery scope.</div>
             </div>
           </>
         )}
         {form.bq_auth_method === "adc" && (
-          <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+          <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
             <div><span className="text-[var(--color-text-muted)]">setup:</span> Run <code className="bg-[var(--color-bg-hover)] px-1">gcloud auth application-default login</code> on the server, or set GOOGLE_APPLICATION_CREDENTIALS env var.</div>
             <div><span className="text-[var(--color-text-muted)]">gke:</span> On GKE, workload identity is used automatically. Ensure the KSA is bound to a GCP SA with BigQuery roles.</div>
           </div>
@@ -1724,7 +1724,7 @@ function ConnectionFieldsForm({
           placeholder="10737418240"
           hint="safety limit — query fails if scan exceeds this (10GB = 10737418240)"
         />
-        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
           <div><span className="text-[var(--color-text-muted)]">cost control:</span> Set max bytes billed to prevent runaway costs. 2026 pricing: $6.25/TB on-demand (first 1TB free).</div>
           <div><span className="text-[var(--color-text-muted)]">vpc:</span> For VPC Service Controls, ensure the service account has access from SignalPilot&apos;s network perimeter.</div>
         </div>
@@ -1740,14 +1740,14 @@ function ConnectionFieldsForm({
         <FormInput label="http path" value={form.http_path} onChange={field("http_path", (v) => setForm({ ...form, http_path: v }))} placeholder="/sql/1.0/warehouses/abc123" hint="SQL warehouse or cluster HTTP path" required {...fieldProps("http_path", formErrors, fieldRefs)} />
         {/* Auth method selector */}
         <div className="col-span-2 mb-1">
-          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">authentication method</label>
+          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">authentication method</label>
           <div className="flex flex-wrap gap-2">
             {(["pat", "oauth_m2m", "oauth_u2m"] as const).map((method) => (
               <button
                 key={method}
                 type="button"
                 onClick={() => setForm({ ...form, databricks_auth_method: method })}
-                className={`px-2.5 py-1 text-[12px] tracking-wider border transition-all ${
+                className={`px-2.5 py-1 text-[12px] border rounded-[6px] transition-colors duration-150 ${
                   form.databricks_auth_method === method
                     ? "border-[var(--color-text)] text-[var(--color-text)]"
                     : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
@@ -1761,16 +1761,16 @@ function ConnectionFieldsForm({
         {form.databricks_auth_method === "pat" ? (
           <FormInput label="access token" value={form.access_token} onChange={field("access_token", (v) => setForm({ ...form, access_token: v }))} type="password" hint="personal access token (PAT)" required className="col-span-2" {...fieldProps("access_token", formErrors, fieldRefs)} />
         ) : form.databricks_auth_method === "oauth_m2m" ? (
-          <div className="col-span-2 grid grid-cols-2 gap-3 p-3 border border-amber-500/20 bg-amber-500/5">
+          <div className="col-span-2 grid grid-cols-2 gap-3 p-3 border border-amber-500/20 bg-amber-500/5 rounded-[10px]">
             <FormInput label="client ID" value={form.dbx_oauth_client_id} onChange={field("dbx_oauth_client_id", (v) => setForm({ ...form, dbx_oauth_client_id: v }))} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" hint="service principal application (client) ID" required {...fieldProps("dbx_oauth_client_id", formErrors, fieldRefs)} />
             <FormInput label="client secret" value={form.dbx_oauth_client_secret} onChange={field("dbx_oauth_client_secret", (v) => setForm({ ...form, dbx_oauth_client_secret: v }))} type="password" hint="service principal client secret" required {...fieldProps("dbx_oauth_client_secret", formErrors, fieldRefs)} />
-            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
               <div><span className="text-[var(--color-text-muted)]">setup:</span> Account Console → User Management → Service Principals → Add. Grant CAN USE on the SQL Warehouse and data access on Unity Catalog.</div>
               <div><span className="text-[var(--color-text-muted)]">recommended:</span> OAuth M2M is the production-grade auth method. PATs are workspace-scoped and expire.</div>
             </div>
           </div>
         ) : (
-          <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+          <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
             <div><span className="text-[var(--color-text-muted)]">browser auth:</span> OAuth U2M opens a browser window for authentication. Best for interactive development — the token is automatically refreshed.</div>
             <div><span className="text-[var(--color-text-muted)]">setup:</span> Ensure your Databricks workspace has OAuth configured (Admin Console → App Connections) and your user has access to the SQL Warehouse.</div>
             <div><span className="text-[var(--color-text-muted)]">note:</span> OAuth U2M requires the server to have browser access. For headless/server environments, use OAuth M2M instead.</div>
@@ -1778,7 +1778,7 @@ function ConnectionFieldsForm({
         )}
         <FormInput label="catalog" value={form.catalog} onChange={(v) => setForm({ ...form, catalog: v })} placeholder="main" hint="optional — Unity Catalog name" />
         <FormInput label="schema" value={form.schema_name} onChange={(v) => setForm({ ...form, schema_name: v })} placeholder="default" hint="optional — default schema" />
-        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
           <div><span className="text-[var(--color-text-muted)]">private link:</span> For AWS PrivateLink or Azure Private Link, use the private workspace URL (e.g., adb-xxx.x.azuredatabricks.net).</div>
           <div><span className="text-[var(--color-text-muted)]">unity catalog:</span> If enabled, PKs, FKs, and constraints will be automatically extracted for join discovery.</div>
           <div><span className="text-[var(--color-text-muted)]">ip access list:</span> Add this server&apos;s IP to the workspace IP Access List (Workspace Settings → Security → IP Access Lists).</div>
@@ -1801,7 +1801,7 @@ function ConnectionFieldsForm({
 
         {/* Auth method selector */}
         <div className="col-span-2 mb-1">
-          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">authentication method</label>
+          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">authentication method</label>
           <div className="flex flex-wrap gap-2">
             {trinoAuthMethods.map((method) => (
               <button
@@ -1816,7 +1816,7 @@ function ConnectionFieldsForm({
                   }
                   setForm({ ...form, ...updates } as FormState);
                 }}
-                className={`px-2.5 py-1 text-[12px] tracking-wider border transition-all ${
+                className={`px-2.5 py-1 text-[12px] border rounded-[6px] transition-colors duration-150 ${
                   form.trino_auth_method === method
                     ? "border-[var(--color-text)] text-[var(--color-text)]"
                     : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
@@ -1859,7 +1859,7 @@ function ConnectionFieldsForm({
         {form.trino_auth_method === "kerberos" && (
           <>
             <FormInput label="service name" value={form.trino_krb_service_name} onChange={(v) => setForm({ ...form, trino_krb_service_name: v })} placeholder="trino" hint="Kerberos service principal name" className="col-span-2" />
-            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
               <div><span className="text-[var(--color-text-muted)]">setup:</span> Configure krb5.conf and kinit before connecting. The server must have a valid Kerberos ticket.</div>
               <div><span className="text-[var(--color-text-muted)]">keytab:</span> For unattended access, configure a keytab file in /etc/krb5.keytab or via KRB5_KTNAME.</div>
             </div>
@@ -1871,19 +1871,19 @@ function ConnectionFieldsForm({
           <button
             type="button"
             onClick={() => setForm({ ...form, trino_https: !form.trino_https, port: !form.trino_https ? "443" : "8080" })}
-            className="flex items-center gap-2 text-[12px] tracking-wider transition-colors"
+            className="flex items-center gap-2 text-[12px] transition-colors"
           >
-            <div className={`w-3 h-3 border flex items-center justify-center transition-colors ${form.trino_https ? "border-emerald-500 bg-emerald-500/20" : "border-[var(--color-border)]"}`}>
+            <div className={`w-3 h-3 border rounded-[3px] flex items-center justify-center transition-colors ${form.trino_https ? "border-emerald-500 bg-emerald-500/20" : "border-[var(--color-border)]"}`}>
               {form.trino_https && <div className="w-1.5 h-1.5 bg-emerald-400" />}
             </div>
             <span className={form.trino_https ? "text-[var(--color-text)]" : "text-[var(--color-text-dim)]"}>use HTTPS</span>
             {form.trino_https && <Lock className="w-3 h-3 text-emerald-400" strokeWidth={1.5} />}
           </button>
-          <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60 ml-5">
+          <p className="text-[11px] text-[var(--color-text-dim)] mt-1 opacity-60 ml-5">
             {form.trino_https ? "encrypted connection — required for Starburst Galaxy and password auth" : "plain HTTP — for local/development clusters only"}
           </p>
         </div>
-        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider">
+        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)]">
           <span className="text-[var(--color-text-muted)]">note:</span> Trino supports federated queries across multiple catalogs (Hive, Iceberg, MySQL, PostgreSQL, etc.). Each catalog maps to a data source configured in Trino.
         </div>
       </>
@@ -1896,7 +1896,7 @@ function ConnectionFieldsForm({
     return (
       <>
         <div className="col-span-2 mb-1">
-          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">mode</label>
+          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">mode</label>
           <div className="flex gap-2">
             {([
               { key: "local", label: "local file" },
@@ -1909,7 +1909,7 @@ function ConnectionFieldsForm({
                   if (key === "memory") setForm({ ...form, database: ":memory:" });
                   else setForm({ ...form, database: form.database === ":memory:" ? "" : form.database });
                 }}
-                className={`px-2.5 py-1 text-[12px] tracking-wider border transition-all ${
+                className={`px-2.5 py-1 text-[12px] border rounded-[6px] transition-colors duration-150 ${
                   sqliteMode === key
                     ? "border-[var(--color-text)] text-[var(--color-text)]"
                     : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
@@ -1935,7 +1935,7 @@ function ConnectionFieldsForm({
         )}
 
         {sqliteMode === "memory" && (
-          <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider">
+          <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)]">
             <span className="text-[var(--color-text-muted)]">note:</span> in-memory databases are ephemeral — data is lost when the gateway restarts.
           </div>
         )}
@@ -1948,7 +1948,7 @@ function ConnectionFieldsForm({
     return (
       <>
         <div className="col-span-2 mb-1">
-          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">mode</label>
+          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">mode</label>
           <div className="flex gap-2">
             {([
               { key: "local", label: "local file" },
@@ -1965,7 +1965,7 @@ function ConnectionFieldsForm({
                   else updates.database = form.database === ":memory:" || form.database.startsWith("md:") ? "" : form.database;
                   setForm({ ...form, ...updates });
                 }}
-                className={`px-2.5 py-1 text-[12px] tracking-wider border transition-all ${
+                className={`px-2.5 py-1 text-[12px] border rounded-[6px] transition-colors duration-150 ${
                   form.duckdb_mode === key
                     ? "border-[var(--color-text)] text-[var(--color-text)]"
                     : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
@@ -2014,7 +2014,7 @@ function ConnectionFieldsForm({
         )}
 
         {form.duckdb_mode === "memory" && (
-          <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider">
+          <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)]">
             <span className="text-[var(--color-text-muted)]">note:</span> in-memory databases are ephemeral — data is lost when the gateway restarts. Use MotherDuck for persistent cloud-hosted DuckDB.
           </div>
         )}
@@ -2029,14 +2029,14 @@ function ConnectionFieldsForm({
     return (
       <>
         <div className="col-span-2 mb-1">
-          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">protocol</label>
+          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">protocol</label>
           <div className="flex gap-2">
             {(["native", "http"] as const).map((proto) => (
               <button
                 key={proto}
                 type="button"
                 onClick={() => setForm({ ...form, ch_protocol: proto, port: proto === "http" ? httpPort : nativePort })}
-                className={`px-2.5 py-1 text-[12px] tracking-wider border transition-all ${
+                className={`px-2.5 py-1 text-[12px] border rounded-[6px] transition-colors duration-150 ${
                   form.ch_protocol === proto
                     ? "border-[var(--color-text)] text-[var(--color-text)]"
                     : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
@@ -2046,7 +2046,7 @@ function ConnectionFieldsForm({
               </button>
             ))}
           </div>
-          <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">
+          <p className="text-[11px] text-[var(--color-text-dim)] mt-1 opacity-60">
             {form.ch_protocol === "http"
               ? "HTTP protocol — better compatibility with ClickHouse Cloud and load balancers"
               : "native protocol — fastest performance, direct binary protocol"}
@@ -2079,7 +2079,7 @@ function ConnectionFieldsForm({
           <button
             type="button"
             onClick={() => setForm({ ...form, azure_ad_auth: !form.azure_ad_auth })}
-            className={`flex items-center gap-2 px-2.5 py-1.5 text-[12px] tracking-wider border transition-all ${
+            className={`flex items-center gap-2 px-2.5 py-1.5 text-[12px] border rounded-[6px] transition-colors duration-150 ${
               form.azure_ad_auth
                 ? "border-blue-500/50 text-blue-400 bg-blue-500/10"
                 : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
@@ -2091,17 +2091,17 @@ function ConnectionFieldsForm({
           </button>
         </div>
         {form.azure_ad_auth && (
-          <div className="col-span-2 grid grid-cols-2 gap-3 p-3 border border-blue-500/20 bg-blue-500/5">
+          <div className="col-span-2 grid grid-cols-2 gap-3 p-3 border border-blue-500/20 bg-blue-500/5 rounded-[10px]">
             <FormInput label="tenant ID" value={form.azure_tenant_id} onChange={(v) => setForm({ ...form, azure_tenant_id: v })} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" hint="Azure AD directory (tenant) ID" required {...fieldProps("azure_tenant_id", formErrors, fieldRefs)} />
             <FormInput label="client ID" value={form.azure_client_id} onChange={(v) => setForm({ ...form, azure_client_id: v })} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" hint="App registration (client) ID" required {...fieldProps("azure_client_id", formErrors, fieldRefs)} />
             <FormInput label="client secret" value={form.azure_client_secret} onChange={(v) => setForm({ ...form, azure_client_secret: v })} type="password" hint="Service principal client secret" required className="col-span-2" {...fieldProps("azure_client_secret", formErrors, fieldRefs)} />
-            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
               <div><span className="text-[var(--color-text-muted)]">setup:</span> Azure Portal → App Registrations → New → Add API Permission for Azure SQL Database. Create a contained DB user: CREATE USER [app-name] FROM EXTERNAL PROVIDER.</div>
               <div><span className="text-[var(--color-text-muted)]">managed identity:</span> For Azure VMs/containers, leave client secret empty to use system-assigned managed identity (coming soon).</div>
             </div>
           </div>
         )}
-        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
           <div><span className="text-[var(--color-text-muted)]">azure sql:</span> Use &lt;server&gt;.database.windows.net as host. Ensure firewall rule allows this server&apos;s IP.</div>
           <div><span className="text-[var(--color-text-muted)]">named instances:</span> Include instance in host: host\SQLEXPRESS. Or use port directly (SQL Browser resolves instances to ports).</div>
           <div><span className="text-[var(--color-text-muted)]">on-prem:</span> For SQL Server behind a firewall, use the SSH tunnel option in Advanced settings.</div>
@@ -2128,7 +2128,7 @@ function ConnectionFieldsForm({
           <button
             type="button"
             onClick={() => setForm({ ...form, iam_auth: !form.iam_auth })}
-            className={`flex items-center gap-2 px-2.5 py-1.5 text-[12px] tracking-wider border transition-all ${
+            className={`flex items-center gap-2 px-2.5 py-1.5 text-[12px] border rounded-[6px] transition-colors duration-150 ${
               form.iam_auth
                 ? "border-amber-500/50 text-amber-400 bg-amber-500/10"
                 : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
@@ -2140,20 +2140,20 @@ function ConnectionFieldsForm({
           </button>
         </div>
         {form.iam_auth && (
-          <div className="col-span-2 grid grid-cols-2 gap-3 p-3 border border-amber-500/20 bg-amber-500/5">
+          <div className="col-span-2 grid grid-cols-2 gap-3 p-3 border border-amber-500/20 bg-amber-500/5 rounded-[10px]">
             <FormInput label="username" value={form.username} onChange={field("username", (v) => setForm({ ...form, username: v }))} placeholder="awsuser" hint="Redshift DB user to get temporary credentials for" required {...fieldProps("username", formErrors, fieldRefs)} />
             <FormInput label="AWS region" value={form.aws_region} onChange={(v) => setForm({ ...form, aws_region: v })} placeholder="us-east-1" hint="Redshift cluster region" />
             <FormInput label="cluster ID" value={form.redshift_cluster_id} onChange={(v) => setForm({ ...form, redshift_cluster_id: v })} placeholder="my-redshift-cluster" hint="provisioned cluster ID (auto-detected from endpoint if blank)" />
             <FormInput label="workgroup" value={form.redshift_workgroup} onChange={(v) => setForm({ ...form, redshift_workgroup: v })} placeholder="default" hint="for Redshift Serverless only" />
             <FormInput label="AWS access key ID" value={form.aws_access_key_id} onChange={(v) => setForm({ ...form, aws_access_key_id: v })} placeholder="AKIA..." hint="leave empty to use instance profile / env credentials" />
             <FormInput label="AWS secret access key" value={form.aws_secret_access_key} onChange={(v) => setForm({ ...form, aws_secret_access_key: v })} type="password" hint="leave empty to use instance profile / env credentials" />
-            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
               <div><span className="text-[var(--color-text-muted)]">setup:</span> IAM user/role needs redshift:GetClusterCredentials (provisioned) or redshift-serverless:GetCredentials (serverless).</div>
               <div><span className="text-[var(--color-text-muted)]">credentials:</span> Leave access key fields empty to use EC2 instance profile, ECS task role, or AWS_* env vars.</div>
             </div>
           </div>
         )}
-        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
           <div><span className="text-[var(--color-text-muted)]">access:</span> Ensure this server&apos;s IP is allowed in the Redshift security group. For VPC clusters, use SSH tunnel or VPC peering.</div>
           <div><span className="text-[var(--color-text-muted)]">serverless:</span> Use workgroup endpoint: &lt;workgroup-name&gt;.&lt;account-id&gt;.&lt;region&gt;.redshift-serverless.amazonaws.com</div>
         </div>
@@ -2181,7 +2181,7 @@ function ConnectionFieldsForm({
         <button
           type="button"
           onClick={() => setForm({ ...form, iam_auth: !form.iam_auth })}
-          className={`flex items-center gap-2 px-2.5 py-1 text-[12px] tracking-wider border transition-all ${
+          className={`flex items-center gap-2 px-2.5 py-1 text-[12px] border rounded-[6px] transition-colors duration-150 ${
             form.iam_auth
               ? "border-[var(--color-text)] text-[var(--color-text)]"
               : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
@@ -2195,14 +2195,14 @@ function ConnectionFieldsForm({
           <FormInput label="AWS region" value={form.aws_region} onChange={(v) => setForm({ ...form, aws_region: v })} placeholder="us-east-1" hint="RDS instance region" />
           <FormInput label="AWS access key ID" value={form.aws_access_key_id} onChange={(v) => setForm({ ...form, aws_access_key_id: v })} placeholder="AKIA..." hint="leave empty to use instance profile / env credentials" />
           <FormInput label="AWS secret access key" value={form.aws_secret_access_key} onChange={(v) => setForm({ ...form, aws_secret_access_key: v })} type="password" hint="leave empty to use instance profile / env credentials" />
-          <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+          <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
             <div><span className="text-[var(--color-text-muted)]">setup:</span> DB user must have rds_iam role (PostgreSQL) or be created with AWSAuthenticationPlugin (MySQL). SSL is auto-enabled.</div>
             <div><span className="text-[var(--color-text-muted)]">credentials:</span> Leave access key fields empty to use EC2 instance profile, ECS task role, or AWS_* env vars.</div>
           </div>
         </>
       )}
       {/* Connection guidance (HEX pattern — contextual setup instructions) */}
-      <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider space-y-1">
+      <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
         {form.db_type === "postgres" ? (
           <>
             <div><span className="text-[var(--color-text-muted)]">rds:</span> Use endpoint from RDS Console → Connectivity. Ensure security group allows this server&apos;s IP on port 5432.</div>
@@ -2238,7 +2238,7 @@ function SSLSection({ form, setForm, formErrors, fieldRefs }: {
       <button
         type="button"
         onClick={() => setForm({ ...form, ssl_enabled: !form.ssl_enabled })}
-        className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+        className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
       >
         <Lock className="w-3 h-3" strokeWidth={1.5} />
         <span>ssl / tls</span>
@@ -2248,11 +2248,11 @@ function SSLSection({ form, setForm, formErrors, fieldRefs }: {
       {form.ssl_enabled && (
         <div className="grid grid-cols-2 gap-4 mt-3 animate-fade-in">
           <div>
-            <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">ssl mode</label>
+            <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">ssl mode</label>
             <select
               value={form.ssl_mode}
               onChange={(e) => setForm({ ...form, ssl_mode: e.target.value })}
-              className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
+              className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
             >
               <option value="require">require — encrypt, skip cert verification</option>
               <option value="verify-ca">verify-ca — encrypt + verify CA</option>
@@ -2261,7 +2261,7 @@ function SSLSection({ form, setForm, formErrors, fieldRefs }: {
               <option value="allow">allow — no encryption preference</option>
               <option value="disable">disable — no encryption</option>
             </select>
-            <p className="text-[10px] text-[var(--color-text-dim)] tracking-wider mt-1 opacity-60">
+            <p className="text-[10px] text-[var(--color-text-dim)] mt-1 opacity-60">
               {form.ssl_mode === "require" && "encrypts traffic but does not verify the server certificate. good for cloud databases with trusted networks."}
               {form.ssl_mode === "verify-ca" && "verifies the server cert is signed by a trusted CA. requires CA certificate below."}
               {form.ssl_mode === "verify-full" && "strongest security: verifies CA + server hostname matches the cert. recommended for production."}
@@ -2303,7 +2303,7 @@ function SSHSection({
       <button
         type="button"
         onClick={() => setForm({ ...form, ssh_enabled: !form.ssh_enabled })}
-        className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
+        className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
       >
         <Server className="w-3 h-3" strokeWidth={1.5} />
         <span>ssh tunnel</span>
@@ -2316,11 +2316,11 @@ function SSHSection({
           <FormInput label="ssh port" value={form.ssh_port} onChange={(v) => { setForm({ ...form, ssh_port: v }); clearServerError("ssh_port"); }} placeholder="22" {...fieldProps("ssh_port", formErrors, fieldRefs)} />
           <FormInput label="ssh username" value={form.ssh_username} onChange={(v) => { setForm({ ...form, ssh_username: v }); clearServerError("ssh_username"); }} placeholder="ubuntu" required {...fieldProps("ssh_username", formErrors, fieldRefs)} />
           <div>
-            <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">auth method</label>
+            <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">auth method</label>
             <select
               value={form.ssh_auth_method}
               onChange={(e) => setForm({ ...form, ssh_auth_method: e.target.value })}
-              className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
+              className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
             >
               <option value="password">password</option>
               <option value="key">private key</option>
@@ -2337,8 +2337,8 @@ function SSHSection({
             </>
           )}
           {form.ssh_auth_method === "agent" && (
-            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed">
-              <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
+            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px]">
+              <p className="text-[11px] text-[var(--color-text-dim)]">
                 uses the ssh-agent running on the signalpilot server. ensure <code className="text-[var(--color-text-muted)]">SSH_AUTH_SOCK</code> is set and your key is loaded with <code className="text-[var(--color-text-muted)]">ssh-add</code>.
               </p>
             </div>
@@ -2348,7 +2348,7 @@ function SSHSection({
             <button
               type="button"
               onClick={() => setForm({ ...form, ssh_proxy_enabled: !form.ssh_proxy_enabled })}
-              className="flex items-center gap-2 text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider mb-2"
+              className="flex items-center gap-2 text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors mb-2"
             >
               {form.ssh_proxy_enabled ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
               <span>http proxy for ssh</span>
@@ -2358,15 +2358,15 @@ function SSHSection({
               <div className="grid grid-cols-2 gap-3 animate-fade-in">
                 <FormInput label="proxy host" value={form.ssh_proxy_host} onChange={(v) => setForm({ ...form, ssh_proxy_host: v })} placeholder="proxy.corp.example.com" hint="HTTP CONNECT proxy (e.g. Squid)" required />
                 <FormInput label="proxy port" value={form.ssh_proxy_port} onChange={(v) => setForm({ ...form, ssh_proxy_port: v })} placeholder="3128" hint="default: 3128 (Squid)" />
-                <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider">
+                <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)]">
                   routes ssh through an http connect proxy. use this when your vpc or corporate network blocks direct ssh connections to the bastion host. requires <code className="text-[var(--color-text-muted)]">socat</code> on the signalpilot server.
                 </div>
               </div>
             )}
           </div>
 
-          <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed">
-            <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
+          <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px]">
+            <p className="text-[11px] text-[var(--color-text-dim)]">
               signalpilot creates an on-demand ssh tunnel to your database through this bastion host.
               {serverIp ? (
                 <> whitelist <code className="text-[var(--color-text-muted)]">{serverIp}/32</code> on your bastion.</>
@@ -3005,26 +3005,27 @@ export default function ConnectionsPage() {
       <PageHeader
         title="connections"
         subtitle="databases"
+        tabs={CONNECTIONS_TABS}
         description="manage database connections for governed ai access"
         actions={
           <div className="flex items-center gap-2">
             <button
               onClick={handleExport}
-              className="flex items-center gap-1.5 px-3 py-2 border border-[var(--color-border)] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-all tracking-wider"
+              className="flex items-center gap-1.5 px-3 py-2 border border-[var(--color-border)] rounded-[10px] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-colors duration-150"
               title="Export connections"
             >
               <Download className="w-3 h-3" /> export
             </button>
             <button
               onClick={() => importFileRef.current?.click()}
-              className="flex items-center gap-1.5 px-3 py-2 border border-[var(--color-border)] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-all tracking-wider"
+              className="flex items-center gap-1.5 px-3 py-2 border border-[var(--color-border)] rounded-[10px] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-colors duration-150"
               title="Import connections from JSON"
             >
               <Upload className="w-3 h-3" /> import
             </button>
             <button
               onClick={() => setShowForm(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90"
+              className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium rounded-[10px] transition-opacity duration-150 hover:opacity-90"
             >
               <Plus className="w-3.5 h-3.5" /> add connection
             </button>
@@ -3052,7 +3053,7 @@ export default function ConnectionsPage() {
       </TerminalBar>
 
       {/* ─── Security Banner ─── */}
-      <div className="mb-4 border border-emerald-500/20 bg-emerald-500/5">
+      <div className="mb-4 border border-emerald-500/20 bg-emerald-500/5 rounded-[10px]">
         <button
           type="button"
           onClick={() => setSecurityBannerExpanded(!securityBannerExpanded)}
@@ -3061,7 +3062,7 @@ export default function ConnectionsPage() {
           aria-controls="security-banner-details"
         >
           <Shield className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" strokeWidth={1.5} />
-          <span className="flex-1 text-[11px] text-emerald-400/90 tracking-wider leading-relaxed">
+          <span className="flex-1 text-[11px] text-emerald-400/90 leading-relaxed">
             All database credentials are encrypted at rest using AES-128 with HMAC-SHA256 authentication. Passwords and secrets never leave this server unencrypted.
           </span>
           {securityBannerExpanded
@@ -3083,7 +3084,7 @@ export default function ConnectionsPage() {
                 "Credentials are only decrypted in-memory when establishing database connections",
                 "Audit logging tracks all credential access",
               ].map((item, i) => (
-                <li key={i} className="flex items-start gap-2 text-[11px] text-emerald-400/70 tracking-wider">
+                <li key={i} className="flex items-start gap-2 text-[11px] text-emerald-400/70">
                   <Lock className="w-2.5 h-2.5 mt-0.5 flex-shrink-0 text-emerald-500/50" strokeWidth={1.5} />
                   {item}
                 </li>
@@ -3095,15 +3096,15 @@ export default function ConnectionsPage() {
 
       {/* ─── Create Connection Form ─── */}
       {showForm && (
-        <div className="mb-6 border border-[var(--color-border)] bg-[var(--color-bg-card)] animate-scale-in overflow-hidden">
+        <div className="mb-6 border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] animate-scale-in overflow-hidden">
           <div className="px-6 py-3 border-b border-[var(--color-border)] flex items-center justify-between">
             <div className="flex items-center gap-2">
               <DbTypeIcon type={form.db_type} />
-              <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+              <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
                 {editingConnection ? `edit ${editingConnection}` : `new ${DB_CONFIGS[form.db_type].label} connection`}
               </span>
             </div>
-            <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider opacity-50">
+            <span className="text-[11px] text-[var(--color-text-dim)] opacity-50">
               {DB_CONFIGS[form.db_type].description}
             </span>
           </div>
@@ -3111,7 +3112,7 @@ export default function ConnectionsPage() {
           <div className="p-6">
             {/* DB Type Selector — visual grid */}
             <div className="mb-5">
-              <label className="block text-[12px] text-[var(--color-text-dim)] mb-2 tracking-wider">database type</label>
+              <label className="block text-[12px] text-[var(--color-text-dim)] mb-2">database type</label>
               <div className="flex flex-wrap gap-1.5">
                 {DB_TYPE_ORDER.filter((t) => !IS_CLOUD_MODE || t !== "sqlite").map((dbType) => {
                   const cfg = DB_CONFIGS[dbType];
@@ -3120,7 +3121,7 @@ export default function ConnectionsPage() {
                     <button
                       key={dbType}
                       onClick={() => handleDbTypeChange(dbType)}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 text-[12px] tracking-wider border transition-all ${
+                      className={`flex items-center gap-1.5 px-3 py-1.5 text-[12px] border rounded-[6px] transition-colors duration-150 ${
                         isSelected
                           ? "border-[var(--color-text)] text-[var(--color-text)] bg-[var(--color-text)]/5"
                           : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)]"
@@ -3140,7 +3141,7 @@ export default function ConnectionsPage() {
             {/* Quick-start presets (HEX pattern) — only show for new connections */}
             {!editingConnection && (
               <div className="mb-4">
-                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider opacity-60">quick start</label>
+                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 opacity-60">quick start</label>
                 <div className="flex flex-wrap gap-1.5">
                   {[...CONNECTION_PRESETS].sort((a, b) => {
                     // Prioritize presets matching current db_type
@@ -3155,7 +3156,7 @@ export default function ConnectionsPage() {
                         const updates = { ...defaultForm, ...preset.defaults, db_type: preset.db_type, port: preset.defaults.port || String(DB_CONFIGS[preset.db_type].defaultPort) };
                         setForm({ ...form, ...updates } as FormState);
                       }}
-                      className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] tracking-wider border border-dashed border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-all"
+                      className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] border border-dashed border-[var(--color-border)] rounded-[6px] text-[var(--color-text-dim)] hover:border-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors duration-150"
                     >
                       <span>{preset.icon}</span>
                       {preset.label}
@@ -3169,8 +3170,8 @@ export default function ConnectionsPage() {
             <div className="grid grid-cols-2 gap-4 mb-4">
               {editingConnection ? (
                 <div>
-                  <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">connection name</label>
-                  <div className="px-3 py-2 bg-[var(--color-bg-hover)] border border-[var(--color-border)] text-xs text-[var(--color-text-dim)] tracking-wide">{editingConnection}</div>
+                  <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">connection name</label>
+                  <div className="px-3 py-2 bg-[var(--color-bg-hover)] border border-[var(--color-border)] rounded-[10px] text-xs text-[var(--color-text-dim)] font-mono">{editingConnection}</div>
                 </div>
               ) : (
                 <FormInput label="connection name" value={form.name} onChange={(v) => { setForm({ ...form, name: v }); setServerFieldErrors((prev) => { if (!("name" in prev)) return prev; const { name: _, ...rest } = prev; return rest; }); }} placeholder="prod-analytics" hint="alphanumeric, dashes, underscores" required {...fieldProps("name", formErrors, fieldRefs)} />
@@ -3180,10 +3181,10 @@ export default function ConnectionsPage() {
 
             {/* Tags */}
             <div className="mb-4">
-              <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">tags</label>
+              <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">tags</label>
               <div className="flex flex-wrap items-center gap-1.5">
                 {form.tags.map((tag) => (
-                  <span key={tag} className="flex items-center gap-1 px-2 py-0.5 text-[11px] bg-[var(--color-bg-hover)] border border-[var(--color-border)] text-[var(--color-text-dim)] tracking-wider">
+                  <span key={tag} className="flex items-center gap-1 px-2 py-0.5 text-[11px] bg-[var(--color-bg-hover)] border border-[var(--color-border)] rounded-[6px] text-[var(--color-text-dim)]">
                     {tag}
                     <button type="button" onClick={() => setForm({ ...form, tags: form.tags.filter(t => t !== tag) })} className="text-[var(--color-text-dim)] hover:text-[var(--color-error)] ml-0.5">&times;</button>
                   </span>
@@ -3204,16 +3205,16 @@ export default function ConnectionsPage() {
                     }
                   }}
                   placeholder={form.tags.length === 0 ? "prod, analytics, team-data..." : "add tag..."}
-                  className="flex-1 min-w-[100px] px-2 py-1 text-[12px] bg-transparent border-none outline-none text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] tracking-wider"
+                  className="flex-1 min-w-[100px] px-2 py-1 text-[12px] bg-transparent border-none outline-none text-[var(--color-text)] placeholder:text-[var(--color-text-dim)]"
                 />
               </div>
-              <p className="text-[11px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">press enter or comma to add — organize connections by environment, team, or purpose</p>
+              <p className="text-[11px] text-[var(--color-text-dim)] mt-1 opacity-60">press enter or comma to add — organize connections by environment, team, or purpose</p>
             </div>
 
             {/* Connection mode toggle (fields vs URL) — bidirectional sync */}
             {config.connectionModes.length > 1 && (
               <div className="flex items-center gap-3 mb-4">
-                <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">connect via:</span>
+                <span className="text-[12px] text-[var(--color-text-dim)]">connect via:</span>
                 {config.connectionModes.map((mode) => (
                   <button
                     key={mode}
@@ -3229,7 +3230,7 @@ export default function ConnectionsPage() {
                         setForm({ ...form, connectionMode: "fields", ...parsed });
                       }
                     }}
-                    className={`flex items-center gap-1.5 px-2.5 py-1 text-[12px] tracking-wider border transition-all ${
+                    className={`flex items-center gap-1.5 px-2.5 py-1 text-[12px] border rounded-[6px] transition-colors duration-150 ${
                       form.connectionMode === mode
                         ? "border-[var(--color-text)] text-[var(--color-text)]"
                         : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
@@ -3249,10 +3250,10 @@ export default function ConnectionsPage() {
 
             {/* Connection string preview with copy button */}
             {form.connectionMode !== "url" && (
-              <div className="mb-4 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed">
+              <div className="mb-4 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px]">
                 <div className="flex items-center gap-2">
                   <Link2 className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-                  <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">connection preview</span>
+                  <span className="text-[11px] text-[var(--color-text-dim)]">connection preview</span>
                   <div className="flex-1" />
                   <button
                     type="button"
@@ -3260,12 +3261,12 @@ export default function ConnectionsPage() {
                       const fullUrl = buildConnectionPreview({ ...form, connectionMode: "fields" }).replace(":****@", `:${form.password || ""}@`);
                       navigator.clipboard.writeText(fullUrl).then(() => toast("Connection URL copied", "info"));
                     }}
-                    className="text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] tracking-wider transition-colors"
+                    className="text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
                   >
                     copy url
                   </button>
                 </div>
-                <code className="text-[12px] text-[var(--color-text-muted)] tracking-wide break-all">{buildConnectionPreview(form)}</code>
+                <code className="text-[12px] text-[var(--color-text-muted)] font-mono break-all">{buildConnectionPreview(form)}</code>
               </div>
             )}
 
@@ -3274,7 +3275,7 @@ export default function ConnectionsPage() {
               <button
                 type="button"
                 onClick={() => setShowAdvanced(!showAdvanced)}
-                className="flex items-center gap-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider mb-2"
+                className="flex items-center gap-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors mb-2"
               >
                 {showAdvanced ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                 advanced options
@@ -3300,7 +3301,7 @@ export default function ConnectionsPage() {
                             key={tab}
                             type="button"
                             onClick={() => setAdvancedTab(tab)}
-                            className={`flex items-center gap-1.5 px-3 py-2 text-[12px] tracking-wider border-b-2 transition-all ${
+                            className={`flex items-center gap-1.5 px-3 py-2 text-[12px] border-b-2 transition-colors duration-150 ${
                               advancedTab === tab
                                 ? "border-[var(--color-text)] text-[var(--color-text)]"
                                 : "border-transparent text-[var(--color-text-dim)] hover:text-[var(--color-text-muted)]"
@@ -3321,22 +3322,22 @@ export default function ConnectionsPage() {
                     <SSHSection form={form} setForm={setForm} serverIp={serverIp} formErrors={formErrors} fieldRefs={fieldRefs} clearServerError={(key) => setServerFieldErrors((prev) => { if (!(key in prev)) return prev; const { [key]: _, ...rest } = prev; return rest; })} />
                     {/* Connection Scope + Read-only (HEX pattern) */}
                     <div className="border-t border-[var(--color-border)] pt-4 mt-4">
-                      <div className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] tracking-wider mb-3">
+                      <div className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] mb-3">
                         <Settings2 className="w-3 h-3" strokeWidth={1.5} />
                         <span>access controls</span>
                       </div>
                       <div className="grid grid-cols-2 gap-4">
                         <div>
-                          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">connection scope</label>
+                          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">connection scope</label>
                           <select
                             value={form.scope}
                             onChange={(e) => setForm({ ...form, scope: e.target.value as "workspace" | "project" })}
-                            className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
+                            className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
                           >
                             <option value="workspace">workspace — all projects</option>
                             <option value="project">project — current only</option>
                           </select>
-                          <p className="text-[10px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">
+                          <p className="text-[10px] text-[var(--color-text-dim)] mt-1 opacity-60">
                             workspace connections are shared across all projects
                           </p>
                         </div>
@@ -3348,11 +3349,11 @@ export default function ConnectionsPage() {
                               onChange={(e) => setForm({ ...form, read_only: e.target.checked })}
                               className="accent-[var(--color-text)]"
                             />
-                            <span className="text-[12px] text-[var(--color-text-muted)] tracking-wider">
+                            <span className="text-[12px] text-[var(--color-text-muted)]">
                               read-only mode
                             </span>
                           </label>
-                          <p className="text-[10px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60 ml-5">
+                          <p className="text-[10px] text-[var(--color-text-dim)] mt-1 opacity-60 ml-5">
                             only SELECT queries allowed (recommended)
                           </p>
                         </div>
@@ -3361,29 +3362,29 @@ export default function ConnectionsPage() {
 
                     {/* IP Allowlist Info */}
                     <div className="border-t border-[var(--color-border)] pt-4 mt-4">
-                      <div className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] tracking-wider mb-2">
+                      <div className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] mb-2">
                         <Shield className="w-3 h-3" strokeWidth={1.5} />
                         <span>ip allowlisting</span>
                       </div>
-                      <div className="px-3 py-2.5 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed">
-                        <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider mb-1.5">
+                      <div className="px-3 py-2.5 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px]">
+                        <p className="text-[11px] text-[var(--color-text-dim)] mb-1.5">
                           if your database requires ip allowlisting, add this signalpilot server ip to your firewall rules:
                         </p>
                         <div className="flex flex-wrap gap-2">
-                          <code className="text-[12px] text-[var(--color-text)] bg-[var(--color-bg-hover)] px-2 py-0.5 tracking-wider font-mono">
+                          <code className="text-[12px] text-[var(--color-text)] bg-[var(--color-bg-hover)] px-2 py-0.5 font-mono">
                             {serverIp ? `${serverIp}/32` : "detecting..."}
                           </code>
                           {serverIp && (
                             <button
                               type="button"
                               onClick={() => { navigator.clipboard.writeText(serverIp); toast("IP copied to clipboard", "success"); }}
-                              className="text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] tracking-wider transition-colors"
+                              className="text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
                             >
                               <Copy className="w-3 h-3 inline" /> copy
                             </button>
                           )}
                         </div>
-                        <p className="text-[10px] text-[var(--color-text-dim)] tracking-wider mt-1.5 opacity-60">
+                        <p className="text-[10px] text-[var(--color-text-dim)] mt-1.5 opacity-60">
                           {serverIp ? "add this ip to your database firewall, security group, or network policy." : "fetching server ip..."}
                         </p>
                       </div>
@@ -3396,7 +3397,7 @@ export default function ConnectionsPage() {
                       <div className="animate-fade-in">
                         {/* Connection Timeouts */}
                         <div>
-                          <div className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] tracking-wider mb-3">
+                          <div className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] mb-3">
                             <Clock className="w-3 h-3" strokeWidth={1.5} />
                             <span>timeouts & keepalive</span>
                           </div>
@@ -3404,33 +3405,33 @@ export default function ConnectionsPage() {
                             <div>
                               {(() => { const { id: ctId, inputRef: ctRef, error: ctError } = fieldProps("connection_timeout", formErrors, fieldRefs); return (
                               <>
-                              <label htmlFor={ctId} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">connection timeout</label>
+                              <label htmlFor={ctId} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">connection timeout</label>
                               <div className="flex items-center gap-1.5">
-                                <input type="number" min="1" max="300" id={ctId} ref={ctRef as React.Ref<HTMLInputElement>} aria-invalid={ctError ? "true" : undefined} aria-describedby={ctError ? `${ctId}-error` : undefined} value={form.connection_timeout} onChange={(e) => setForm({ ...form, connection_timeout: e.target.value })} className={`w-20 px-3 py-2 bg-[var(--color-bg-input)] border text-xs focus:outline-none tabular-nums${ctError ? " border-[var(--color-error)]/60 focus:border-[var(--color-error)]" : " border-[var(--color-border)] focus:border-[var(--color-text-dim)]"}`} />
-                                <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">sec</span>
+                                <input type="number" min="1" max="300" id={ctId} ref={ctRef as React.Ref<HTMLInputElement>} aria-invalid={ctError ? "true" : undefined} aria-describedby={ctError ? `${ctId}-error` : undefined} value={form.connection_timeout} onChange={(e) => setForm({ ...form, connection_timeout: e.target.value })} className={`w-20 px-3 py-2 bg-[var(--color-bg-input)] border rounded-[10px] text-xs focus:outline-none font-mono tabular-nums${ctError ? " border-[var(--color-error)]/60 focus:border-[var(--color-error)]" : " border-[var(--color-border)] focus:border-[var(--color-text-dim)]"}`} />
+                                <span className="text-[11px] text-[var(--color-text-dim)]">sec</span>
                               </div>
-                              {ctError && <p id={`${ctId}-error`} role="alert" className="text-[11px] text-[var(--color-error)] mt-1 tracking-wider">{ctError}</p>}
-                              <p className="text-[10px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">max time to establish connection</p>
+                              {ctError && <p id={`${ctId}-error`} role="alert" className="text-[11px] text-[var(--color-error)] mt-1">{ctError}</p>}
+                              <p className="text-[10px] text-[var(--color-text-dim)] mt-1 opacity-60">max time to establish connection</p>
                               </>
                               ); })()}
                             </div>
                             <div>
                               {(() => { const { id: qtId, inputRef: qtRef, error: qtError } = fieldProps("query_timeout", formErrors, fieldRefs); return (
                               <>
-                              <label htmlFor={qtId} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">query timeout</label>
+                              <label htmlFor={qtId} className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">query timeout</label>
                               <div className="flex items-center gap-1.5">
-                                <input type="number" min="1" max="3600" id={qtId} ref={qtRef as React.Ref<HTMLInputElement>} aria-invalid={qtError ? "true" : undefined} aria-describedby={qtError ? `${qtId}-error` : undefined} value={form.query_timeout} onChange={(e) => setForm({ ...form, query_timeout: e.target.value })} className={`w-20 px-3 py-2 bg-[var(--color-bg-input)] border text-xs focus:outline-none tabular-nums${qtError ? " border-[var(--color-error)]/60 focus:border-[var(--color-error)]" : " border-[var(--color-border)] focus:border-[var(--color-text-dim)]"}`} />
-                                <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">sec</span>
+                                <input type="number" min="1" max="3600" id={qtId} ref={qtRef as React.Ref<HTMLInputElement>} aria-invalid={qtError ? "true" : undefined} aria-describedby={qtError ? `${qtId}-error` : undefined} value={form.query_timeout} onChange={(e) => setForm({ ...form, query_timeout: e.target.value })} className={`w-20 px-3 py-2 bg-[var(--color-bg-input)] border rounded-[10px] text-xs focus:outline-none font-mono tabular-nums${qtError ? " border-[var(--color-error)]/60 focus:border-[var(--color-error)]" : " border-[var(--color-border)] focus:border-[var(--color-text-dim)]"}`} />
+                                <span className="text-[11px] text-[var(--color-text-dim)]">sec</span>
                               </div>
-                              {qtError && <p id={`${qtId}-error`} role="alert" className="text-[11px] text-[var(--color-error)] mt-1 tracking-wider">{qtError}</p>}
-                              <p className="text-[10px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">max query execution time</p>
+                              {qtError && <p id={`${qtId}-error`} role="alert" className="text-[11px] text-[var(--color-error)] mt-1">{qtError}</p>}
+                              <p className="text-[10px] text-[var(--color-text-dim)] mt-1 opacity-60">max query execution time</p>
                               </>
                               ); })()}
                             </div>
                             <div>
-                              <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">keepalive interval</label>
+                              <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">keepalive interval</label>
                               <div className="flex items-center gap-1.5">
-                                <select value={form.keepalive_interval} onChange={(e) => setForm({ ...form, keepalive_interval: e.target.value })} className="bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text)] text-[12px] px-2 py-2 tracking-wider">
+                                <select value={form.keepalive_interval} onChange={(e) => setForm({ ...form, keepalive_interval: e.target.value })} className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-[10px] text-[var(--color-text)] text-[12px] px-2 py-2">
                                   <option value="0">disabled</option>
                                   <option value="30">30 sec</option>
                                   <option value="60">1 min</option>
@@ -3438,27 +3439,27 @@ export default function ConnectionsPage() {
                                   <option value="300">5 min</option>
                                 </select>
                               </div>
-                              <p className="text-[10px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">ping to prevent idle disconnect</p>
+                              <p className="text-[10px] text-[var(--color-text-dim)] mt-1 opacity-60">ping to prevent idle disconnect</p>
                             </div>
                           </div>
                           {/* Pool sizing — only for pool-capable connectors */}
                           {(form.db_type === "postgres") && (
                             <div className="grid grid-cols-2 gap-4 mt-3 pt-3 border-t border-[var(--color-border)]/50">
                               <div>
-                                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">pool min size</label>
+                                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">pool min size</label>
                                 <div className="flex items-center gap-1.5">
-                                  <input type="number" min="1" max="20" value={form.pool_min_size} onChange={(e) => setForm({ ...form, pool_min_size: e.target.value })} className="w-20 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tabular-nums" />
-                                  <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">conns</span>
+                                  <input type="number" min="1" max="20" value={form.pool_min_size} onChange={(e) => setForm({ ...form, pool_min_size: e.target.value })} className="w-20 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] text-xs focus:outline-none focus:border-[var(--color-text-dim)] font-mono tabular-nums" />
+                                  <span className="text-[11px] text-[var(--color-text-dim)]">conns</span>
                                 </div>
-                                <p className="text-[10px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">minimum idle connections</p>
+                                <p className="text-[10px] text-[var(--color-text-dim)] mt-1 opacity-60">minimum idle connections</p>
                               </div>
                               <div>
-                                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider">pool max size</label>
+                                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">pool max size</label>
                                 <div className="flex items-center gap-1.5">
-                                  <input type="number" min="1" max="50" value={form.pool_max_size} onChange={(e) => setForm({ ...form, pool_max_size: e.target.value })} className="w-20 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tabular-nums" />
-                                  <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">conns</span>
+                                  <input type="number" min="1" max="50" value={form.pool_max_size} onChange={(e) => setForm({ ...form, pool_max_size: e.target.value })} className="w-20 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] text-xs focus:outline-none focus:border-[var(--color-text-dim)] font-mono tabular-nums" />
+                                  <span className="text-[11px] text-[var(--color-text-dim)]">conns</span>
                                 </div>
-                                <p className="text-[10px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">max concurrent connections</p>
+                                <p className="text-[10px] text-[var(--color-text-dim)] mt-1 opacity-60">max concurrent connections</p>
                               </div>
                             </div>
                           )}
@@ -3471,45 +3472,45 @@ export default function ConnectionsPage() {
                       <div className="animate-fade-in">
                         {/* Schema Filtering */}
                         <div>
-                          <div className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] tracking-wider mb-2">
+                          <div className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] mb-2">
                             <Filter className="w-3 h-3" strokeWidth={1.5} />
                             <span>schema filtering</span>
                           </div>
-                          <div className="text-[10px] text-[var(--color-text-dim)] tracking-wider mb-3 opacity-60">
+                          <div className="text-[10px] text-[var(--color-text-dim)] mb-3 opacity-60">
                             filter which schemas are visible to the ai agent. excludes staging, dev, and raw schemas to improve accuracy.
                           </div>
                           <div className="space-y-3">
                             <div>
-                              <label className="block text-[11px] text-[var(--color-text-muted)] tracking-wider mb-1">
+                              <label className="block text-[11px] text-[var(--color-text-muted)] mb-1">
                                 include schemas <span className="opacity-50">(comma-separated, empty = all)</span>
                               </label>
-                              <input type="text" placeholder="public, analytics, production" value={form.schema_filter_include} onChange={(e) => setForm({ ...form, schema_filter_include: e.target.value })} className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text)] text-[12px] px-3 py-2 tracking-wider placeholder:text-[var(--color-text-dim)]" />
+                              <input type="text" placeholder="public, analytics, production" value={form.schema_filter_include} onChange={(e) => setForm({ ...form, schema_filter_include: e.target.value })} className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] rounded-[10px] text-[var(--color-text)] text-[12px] px-3 py-2 placeholder:text-[var(--color-text-dim)]" />
                             </div>
                             <div>
-                              <label className="block text-[11px] text-[var(--color-text-muted)] tracking-wider mb-1">
+                              <label className="block text-[11px] text-[var(--color-text-muted)] mb-1">
                                 exclude schemas <span className="opacity-50">(comma-separated, glob patterns supported)</span>
                               </label>
-                              <input type="text" placeholder="staging*, dev*, raw, tmp*, _dbt_*" value={form.schema_filter_exclude} onChange={(e) => setForm({ ...form, schema_filter_exclude: e.target.value })} className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text)] text-[12px] px-3 py-2 tracking-wider placeholder:text-[var(--color-text-dim)]" />
+                              <input type="text" placeholder="staging*, dev*, raw, tmp*, _dbt_*" value={form.schema_filter_exclude} onChange={(e) => setForm({ ...form, schema_filter_exclude: e.target.value })} className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] rounded-[10px] text-[var(--color-text)] text-[12px] px-3 py-2 placeholder:text-[var(--color-text-dim)]" />
                             </div>
                           </div>
                         </div>
 
                         {/* Scheduled Schema Refresh */}
                         <div className="border-t border-[var(--color-border)] pt-4 mt-4">
-                          <div className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] tracking-wider mb-2">
+                          <div className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] mb-2">
                             <RefreshCw className="w-3 h-3" strokeWidth={1.5} />
                             <span>scheduled schema refresh</span>
                           </div>
                           <div className="flex items-center gap-3 mb-2">
                             <label className="flex items-center gap-2 cursor-pointer">
                               <input type="checkbox" checked={form.schema_refresh_enabled} onChange={(e) => setForm({ ...form, schema_refresh_enabled: e.target.checked })} className="accent-[var(--color-text)]" />
-                              <span className="text-[12px] text-[var(--color-text-muted)] tracking-wider">auto-refresh schema metadata</span>
+                              <span className="text-[12px] text-[var(--color-text-muted)]">auto-refresh schema metadata</span>
                             </label>
                           </div>
                           {form.schema_refresh_enabled && (
                             <div className="flex items-center gap-2 animate-fade-in">
-                              <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">every</span>
-                              <select value={form.schema_refresh_interval} onChange={(e) => setForm({ ...form, schema_refresh_interval: e.target.value })} className="bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text)] text-[12px] px-2 py-1 tracking-wider">
+                              <span className="text-[11px] text-[var(--color-text-dim)]">every</span>
+                              <select value={form.schema_refresh_interval} onChange={(e) => setForm({ ...form, schema_refresh_interval: e.target.value })} className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-[10px] text-[var(--color-text)] text-[12px] px-2 py-1">
                                 <option value="60">1 min</option>
                                 <option value="300">5 min</option>
                                 <option value="900">15 min</option>
@@ -3519,7 +3520,7 @@ export default function ConnectionsPage() {
                                 <option value="43200">12 hours</option>
                                 <option value="86400">24 hours</option>
                               </select>
-                              <span className="text-[10px] text-[var(--color-text-dim)] tracking-wider opacity-60">keeps ai agent schema knowledge current</span>
+                              <span className="text-[10px] text-[var(--color-text-dim)] opacity-60">keeps ai agent schema knowledge current</span>
                             </div>
                           )}
                         </div>
@@ -3531,21 +3532,21 @@ export default function ConnectionsPage() {
 
             {/* Pre-test result display */}
             {preTestResult && (
-              <div className={`mt-4 p-3 border ${preTestResult.status === "healthy" ? "border-emerald-500/30 bg-emerald-500/5" : "border-red-500/30 bg-red-500/5"}`}>
+              <div className={`mt-4 p-3 border rounded-[10px] ${preTestResult.status === "healthy" ? "border-emerald-500/30 bg-emerald-500/5" : "border-red-500/30 bg-red-500/5"}`}>
                 <div className="flex items-center gap-2 mb-2">
                   {preTestResult.status === "healthy" ? (
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
                   ) : (
                     <XCircle className="w-3.5 h-3.5 text-red-400" />
                   )}
-                  <span className={`text-[12px] tracking-wider font-medium ${preTestResult.status === "healthy" ? "text-emerald-400" : "text-red-400"}`}>
+                  <span className={`text-[12px] font-medium ${preTestResult.status === "healthy" ? "text-emerald-400" : "text-red-400"}`}>
                     {preTestResult.message}
                   </span>
                 </div>
                 {preTestResult.phases?.length > 0 && (
                   <div className="space-y-1 ml-5">
                     {preTestResult.phases.map((phase, i) => (
-                      <div key={i} className="flex items-center gap-2 text-[11px] tracking-wider">
+                      <div key={i} className="flex items-center gap-2 text-[11px]">
                         <span className={phase.status === "ok" ? "text-emerald-400" : phase.status === "error" ? "text-red-400" : "text-amber-400"}>
                           {phase.status === "ok" ? "pass" : phase.status === "error" ? "fail" : phase.status}
                         </span>
@@ -3559,7 +3560,7 @@ export default function ConnectionsPage() {
                     {preTestResult.phases.some(p => p.hint) && (
                       <div className="mt-1.5 pl-2 border-l border-amber-500/30">
                         {preTestResult.phases.filter(p => p.hint).map((p, i) => (
-                          <div key={i} className="text-[11px] text-amber-400/80 tracking-wider">
+                          <div key={i} className="text-[11px] text-amber-400/80">
                             hint: {p.hint}
                           </div>
                         ))}
@@ -3597,9 +3598,9 @@ export default function ConnectionsPage() {
               return (
                 <div className="mt-4 space-y-1.5">
                   {warnings.map((w, i) => (
-                    <div key={i} className="flex items-start gap-2 px-3 py-2 border border-amber-500/20 bg-amber-500/5">
+                    <div key={i} className="flex items-start gap-2 px-3 py-2 border border-amber-500/20 bg-amber-500/5 rounded-[10px]">
                       <AlertTriangle className="w-3 h-3 text-amber-400 flex-shrink-0 mt-0.5" strokeWidth={1.5} />
-                      <span className="text-[11px] text-amber-400/80 tracking-wider">{w}</span>
+                      <span className="text-[11px] text-amber-400/80">{w}</span>
                     </div>
                   ))}
                 </div>
@@ -3608,22 +3609,22 @@ export default function ConnectionsPage() {
 
             {/* Action buttons */}
             <div className="flex items-center gap-3 mt-5 pt-4 border-t border-[var(--color-border)]">
-              <button onClick={handleCreate} disabled={saving || preTesting || hasFormErrors} className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30">
+              <button onClick={handleCreate} disabled={saving || preTesting || hasFormErrors} className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium rounded-[10px] transition-opacity duration-150 hover:opacity-90 disabled:opacity-30">
                 {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                 {editingConnection ? "update connection" : "save connection"}
               </button>
-              <button onClick={handlePreTest} disabled={saving || preTesting || hasFormErrors} className="flex items-center gap-2 px-4 py-2 border border-emerald-500/30 text-xs text-emerald-400 hover:bg-emerald-500/10 hover:border-emerald-500/50 transition-all tracking-wider disabled:opacity-40 disabled:cursor-not-allowed">
+              <button onClick={handlePreTest} disabled={saving || preTesting || hasFormErrors} className="flex items-center gap-2 px-4 py-2 border border-emerald-500/30 rounded-[10px] text-xs text-emerald-400 hover:bg-emerald-500/10 hover:border-emerald-500/50 transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed">
                 {preTesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <TestTube className="w-3.5 h-3.5" strokeWidth={1.5} />}
                 test connection
               </button>
-              <button onClick={handleSaveAndTest} disabled={saving || preTesting || hasFormErrors} className="flex items-center gap-2 px-4 py-2 border border-[var(--color-border)] text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-all tracking-wider disabled:opacity-40 disabled:cursor-not-allowed">
+              <button onClick={handleSaveAndTest} disabled={saving || preTesting || hasFormErrors} className="flex items-center gap-2 px-4 py-2 border border-[var(--color-border)] rounded-[10px] text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed">
                 {editingConnection ? "update & test" : "save & test"}
               </button>
-              <button onClick={() => { setShowForm(false); setEditingConnection(null); setForm({ ...defaultForm }); setServerFieldErrors({}); setShowAdvanced(false); setPreTestResult(null); }} className="px-4 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+              <button onClick={() => { setShowForm(false); setEditingConnection(null); setForm({ ...defaultForm }); setServerFieldErrors({}); setShowAdvanced(false); setPreTestResult(null); }} className="px-4 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors">
                 cancel
               </button>
               {editingConnection && (
-                <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider opacity-60 ml-auto">
+                <span className="text-[11px] text-[var(--color-text-dim)] opacity-60 ml-auto">
                   leave password blank to keep existing credentials
                 </span>
               )}
@@ -3641,7 +3642,7 @@ export default function ConnectionsPage() {
           action={
             <button
               onClick={() => setShowForm(true)}
-              className="flex items-center gap-2 px-4 py-2 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider"
+              className="flex items-center gap-2 px-4 py-2 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-colors duration-150"
             >
               <Plus className="w-3.5 h-3.5" /> add first connection
             </button>
@@ -3655,12 +3656,12 @@ export default function ConnectionsPage() {
             if (allTags.length === 0) return null;
             return (
               <div className="flex items-center gap-2 mb-2">
-                <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">filter:</span>
+                <span className="text-[11px] text-[var(--color-text-dim)]">filter:</span>
                 {allTags.map((tag) => (
                   <button
                     key={tag}
                     onClick={() => setFilterTag(filterTag === tag ? null : tag)}
-                    className={`px-2 py-0.5 text-[11px] tracking-wider border transition-all ${
+                    className={`px-2 py-0.5 text-[11px] border rounded-[6px] transition-colors duration-150 ${
                       filterTag === tag
                         ? "border-blue-500 text-blue-400 bg-blue-500/10"
                         : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-blue-500/50 hover:text-blue-400"
@@ -3670,7 +3671,7 @@ export default function ConnectionsPage() {
                   </button>
                 ))}
                 {filterTag && (
-                  <button onClick={() => setFilterTag(null)} className="text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] tracking-wider ml-1">clear</button>
+                  <button onClick={() => setFilterTag(null)} className="text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] ml-1">clear</button>
                 )}
               </div>
             );
@@ -3699,7 +3700,7 @@ export default function ConnectionsPage() {
             }
 
             return (
-              <div key={conn.id} className="bg-[var(--color-bg-card)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-all card-accent-top">
+              <div key={conn.id} className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-[14px] hover:border-[var(--color-border-hover)] transition-colors duration-150 card-accent-top">
                 <div className="flex items-center gap-4 p-4">
                   {/* Status indicator */}
                   <div className="flex-shrink-0">
@@ -3719,40 +3720,40 @@ export default function ConnectionsPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-[var(--color-text)]">{conn.name}</span>
-                      <span className="flex items-center gap-1 text-[11px] px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-dim)] tracking-wider">
+                      <span className="flex items-center gap-1 text-[11px] px-1.5 py-0.5 border border-[var(--color-border)] rounded-[6px] text-[var(--color-text-dim)]">
                         <DbTypeIcon type={conn.db_type} />
                         {dbTypeLabels[conn.db_type] || conn.db_type}
                       </span>
                       <Tooltip content={`Tier ${CONNECTOR_TIERS[conn.db_type as DBType]?.tier || 3}: ${CONNECTOR_TIERS[conn.db_type as DBType]?.tier === 1 ? "Full support" : CONNECTOR_TIERS[conn.db_type as DBType]?.tier === 2 ? "Stable" : "Basic"}`} position="top">
-                        <span className={`text-[11px] px-1 py-0.5 border tracking-wider cursor-default ${CONNECTOR_TIERS[conn.db_type as DBType]?.color || "text-zinc-400 border-zinc-500/30"}`}>
+                        <span className={`text-[11px] px-1 py-0.5 border rounded-[6px] cursor-default ${CONNECTOR_TIERS[conn.db_type as DBType]?.color || "text-zinc-400 border-zinc-500/30"}`}>
                           {CONNECTOR_TIERS[conn.db_type as DBType]?.label || "T3"}
                         </span>
                       </Tooltip>
                       <Tooltip content="Credentials encrypted at rest with AES-128 + HMAC-SHA256" position="top">
-                        <span className="flex items-center gap-1 text-[11px] px-1 py-0.5 border border-emerald-500/30 text-emerald-400/80 tracking-wider cursor-default">
+                        <span className="flex items-center gap-1 text-[11px] px-1 py-0.5 border border-emerald-500/30 rounded-[6px] text-emerald-400/80 cursor-default">
                           <Lock className="w-2.5 h-2.5" strokeWidth={1.5} />
                           encrypted
                         </span>
                       </Tooltip>
                       {(conn as any).byok_key_alias && (
                         <Tooltip content={`Credentials encrypted with your key: ${(conn as any).byok_key_alias}`} position="top">
-                          <span className="flex items-center gap-1 text-[11px] px-1 py-0.5 border border-purple-500/30 text-purple-400/80 tracking-wider cursor-default">
+                          <span className="flex items-center gap-1 text-[11px] px-1 py-0.5 border border-purple-500/30 rounded-[6px] text-purple-400/80 cursor-default">
                             <Shield className="w-2.5 h-2.5" strokeWidth={1.5} />
                             byok
                           </span>
                         </Tooltip>
                       )}
                       {conn.ssl && (
-                        <span className="text-[11px] px-1 py-0.5 border border-[var(--color-success)]/30 text-[var(--color-success)] tracking-wider">ssl</span>
+                        <span className="text-[11px] px-1 py-0.5 border border-[var(--color-success)]/30 rounded-[6px] text-[var(--color-success)]">ssl</span>
                       )}
                       {conn.ssh_tunnel?.enabled && (
-                        <span className="text-[11px] px-1 py-0.5 border border-purple-500/30 text-purple-400 tracking-wider">ssh</span>
+                        <span className="text-[11px] px-1 py-0.5 border border-purple-500/30 rounded-[6px] text-purple-400">ssh</span>
                       )}
                       {conn.tags?.map((tag) => (
-                        <span key={tag} className="text-[11px] px-1 py-0.5 border border-blue-500/30 text-blue-400 tracking-wider">{tag}</span>
+                        <span key={tag} className="text-[11px] px-1 py-0.5 border border-blue-500/30 rounded-[6px] text-blue-400">{tag}</span>
                       ))}
                       {health && (
-                        <span className={`text-[12px] tracking-wider ${
+                        <span className={`text-[12px] ${
                           health.status === "healthy" ? "text-[var(--color-success)]" :
                           health.status === "warning" ? "text-[var(--color-warning)]" :
                           "text-[var(--color-error)]"
@@ -3761,8 +3762,8 @@ export default function ConnectionsPage() {
                         </span>
                       )}
                     </div>
-                    <div className="text-[12px] text-[var(--color-text-dim)] mt-0.5 tracking-wider">
-                      {displayStr}
+                    <div className="text-[12px] text-[var(--color-text-dim)] mt-0.5">
+                      <span className="font-mono">{displayStr}</span>
                       {conn.description && <span className="ml-2 text-[var(--color-text-dim)]">— {conn.description}</span>}
                       {conn.last_used && (
                         <span className="ml-2 text-[var(--color-text-dim)] opacity-60" title={new Date(conn.last_used * 1000).toLocaleString()}>
@@ -3777,7 +3778,7 @@ export default function ConnectionsPage() {
                       )}
                     </div>
                     {health && health.sample_count > 0 && (
-                      <div className="flex items-center gap-4 mt-1.5 text-[11px] text-[var(--color-text-dim)] tracking-wider">
+                      <div className="flex items-center gap-4 mt-1.5 text-[11px] text-[var(--color-text-dim)]">
                         <span className="flex items-center gap-1">
                           <Activity className="w-2.5 h-2.5" strokeWidth={1.5} />
                           {health.sample_count} queries
@@ -3790,7 +3791,7 @@ export default function ConnectionsPage() {
                         )}
                         {health.latency_p50_ms != null && (
                           <Tooltip content={`p50: ${health.latency_p50_ms.toFixed(1)}ms${health.latency_p95_ms ? ` · p95: ${health.latency_p95_ms.toFixed(1)}ms` : ""}`} position="top">
-                            <span className="flex items-center gap-1.5 tabular-nums cursor-default">
+                            <span className="flex items-center gap-1.5 font-mono tabular-nums cursor-default">
                               <Clock className="w-2.5 h-2.5" strokeWidth={1.5} />
                               <MiniBar
                                 value={health.latency_p50_ms}
@@ -3810,7 +3811,7 @@ export default function ConnectionsPage() {
                           </Tooltip>
                         )}
                         {health.latency_p95_ms != null && (
-                          <span className="flex items-center gap-1 tabular-nums">
+                          <span className="flex items-center gap-1 font-mono tabular-nums">
                             p95: {health.latency_p95_ms.toFixed(0)}ms
                           </span>
                         )}
@@ -3834,7 +3835,7 @@ export default function ConnectionsPage() {
                   {/* Test result — compact summary + expandable detail */}
                   {testResult[conn.name] && (
                     <div className="flex flex-col gap-0.5">
-                      <span className={`flex items-center gap-1.5 text-[12px] tracking-wider ${
+                      <span className={`flex items-center gap-1.5 text-[12px] ${
                         testResult[conn.name].status === "healthy" ? "text-[var(--color-success)]"
                         : testResult[conn.name].status === "warning" ? "text-[var(--color-warning)]"
                         : "text-[var(--color-error)]"
@@ -3855,7 +3856,7 @@ export default function ConnectionsPage() {
                                 : "text-[var(--color-error)]";
                               return (
                                 <Tooltip key={i} content={p.message || phaseLabel} position="top">
-                                  <span className={`${statusColor} cursor-default tabular-nums`}>
+                                  <span className={`${statusColor} cursor-default font-mono tabular-nums`}>
                                     {phaseLabel}{statusIcon}
                                     {p.duration_ms ? ` ${p.duration_ms}ms` : ""}
                                   </span>
@@ -3863,7 +3864,7 @@ export default function ConnectionsPage() {
                               );
                             })}
                             {testResult[conn.name].total_duration_ms != null && (
-                              <span className="text-[11px] text-[var(--color-text-dim)] tabular-nums">
+                              <span className="text-[11px] text-[var(--color-text-dim)] font-mono tabular-nums">
                                 total: {testResult[conn.name].total_duration_ms}ms
                               </span>
                             )}
@@ -3880,7 +3881,7 @@ export default function ConnectionsPage() {
                   {/* Diagnostic results */}
                   {diagResults[conn.name] && (
                     <div className="flex flex-col gap-0.5">
-                      <span className="flex items-center gap-2 text-[12px] tracking-wider">
+                      <span className="flex items-center gap-2 text-[12px]">
                         {diagResults[conn.name].diagnostics.map((d, i) => {
                           const statusColor = d.status === "ok" ? "text-[var(--color-success)]"
                             : d.status === "warning" ? "text-[var(--color-warning)]"
@@ -3888,7 +3889,7 @@ export default function ConnectionsPage() {
                           const icon = d.status === "ok" ? "\u2713" : d.status === "warning" ? "!" : "\u2717";
                           return (
                             <Tooltip key={i} content={d.hint || d.message} position="top">
-                              <span className={`${statusColor} cursor-default tabular-nums`}>
+                              <span className={`${statusColor} cursor-default font-mono tabular-nums`}>
                                 {d.check}{icon} {d.duration_ms}ms
                               </span>
                             </Tooltip>
@@ -3901,45 +3902,45 @@ export default function ConnectionsPage() {
                   {/* Action buttons */}
                   <div className="flex items-center gap-1">
                     <button onClick={(e) => { e.stopPropagation(); handleToggleSchema(conn.name); }}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] rounded-[6px] transition-colors duration-150">
                       {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                       <Table2 className="w-3 h-3" strokeWidth={1.5} /> schema
                     </button>
                     <button onClick={(e) => { e.stopPropagation(); handleScanPII(conn.name); }} disabled={piiLoading === conn.name}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider"
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] rounded-[6px] transition-colors duration-150"
                       title={piiConfig[conn.name]?.enabled ? "PII redaction active — click to re-scan" : "Scan for PII columns"}
                     >
                       {piiLoading === conn.name ? <Loader2 className="w-3 h-3 animate-spin" /> : <Shield className={`w-3 h-3 ${piiConfig[conn.name]?.enabled ? "text-emerald-400" : ""}`} strokeWidth={1.5} />}
                       pii
                       {piiConfig[conn.name]?.enabled && (
-                        <span className="ml-1 px-1 py-0.5 border border-emerald-500/30 text-emerald-400 text-[11px]">on</span>
+                        <span className="ml-1 px-1 py-0.5 border border-emerald-500/30 rounded-[6px] text-emerald-400 text-[11px]">on</span>
                       )}
                       {!piiConfig[conn.name]?.enabled && piiData[conn.name] && piiData[conn.name].tables_with_pii > 0 && (
-                        <span className="ml-1 px-1 py-0.5 border badge-warning text-[11px] tabular-nums">
+                        <span className="ml-1 px-1 py-0.5 border badge-warning rounded-[6px] text-[11px] font-mono tabular-nums">
                           {piiData[conn.name].tables_with_pii}
                         </span>
                       )}
                     </button>
                     <button onClick={() => handleTest(conn.name)} disabled={testing === conn.name}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] rounded-[6px] transition-colors duration-150">
                       {testing === conn.name ? <Loader2 className="w-3 h-3 animate-spin" /> : <TestTube className="w-3 h-3" strokeWidth={1.5} />}
                       test
                     </button>
                     <button onClick={() => handleDiagnose(conn.name)} disabled={diagnosing === conn.name}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] rounded-[6px] transition-colors duration-150">
                       {diagnosing === conn.name ? <Loader2 className="w-3 h-3 animate-spin" /> : <Activity className="w-3 h-3" strokeWidth={1.5} />}
                       diagnose
                     </button>
                     <button onClick={(e) => { e.stopPropagation(); handleEditConnection(conn); }}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] rounded-[6px] transition-colors duration-150">
                       <Pencil className="w-3 h-3" strokeWidth={1.5} /> edit
                     </button>
                     <button onClick={(e) => { e.stopPropagation(); handleClone(conn.name); }}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all tracking-wider">
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] rounded-[6px] transition-colors duration-150">
                       <Copy className="w-3 h-3" strokeWidth={1.5} /> clone
                     </button>
                     <button onClick={() => handleDelete(conn.name)}
-                      className="p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-error)] hover:bg-[var(--color-error)]/5 transition-all">
+                      className="p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-error)] hover:bg-[var(--color-error)]/5 rounded-[6px] transition-colors duration-150">
                       <Trash2 className="w-3 h-3" />
                     </button>
                   </div>
@@ -3949,13 +3950,13 @@ export default function ConnectionsPage() {
                 {isExpanded && (
                   <div className="border-t border-[var(--color-border)] px-4 py-4 animate-fade-in">
                     {schemaLoading === conn.name ? (
-                      <div className="flex items-center gap-2 py-4 justify-center text-xs text-[var(--color-text-dim)] tracking-wider">
+                      <div className="flex items-center gap-2 py-4 justify-center text-xs text-[var(--color-text-dim)]">
                         <Loader2 className="w-3.5 h-3.5 animate-spin" /> loading schema...
                       </div>
                     ) : tables && Object.keys(tables).length > 0 ? (
                       <div className="space-y-2">
                         <div className="flex items-center gap-3 mb-3">
-                          <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
+                          <p className="text-[12px] text-[var(--color-text-dim)]">
                             {schemaSearchResults[conn.name]
                               ? `${schemaSearchResults[conn.name].result_count} / ${schemaSearchResults[conn.name].total_tables} tables`
                               : `${Object.keys(tables).length} tables`}
@@ -3966,8 +3967,8 @@ export default function ConnectionsPage() {
                             const totalIdxs = Object.values(displayTables).reduce((sum: number, t: any) => sum + (t.indexes?.length || 0), 0);
                             return (
                               <>
-                                {totalFKs > 0 && <span className="text-[11px] text-purple-400 tracking-wider">{totalFKs} FKs</span>}
-                                {totalIdxs > 0 && <span className="text-[11px] text-blue-400 tracking-wider">{totalIdxs} indexes</span>}
+                                {totalFKs > 0 && <span className="text-[11px] text-purple-400">{totalFKs} FKs</span>}
+                                {totalIdxs > 0 && <span className="text-[11px] text-blue-400">{totalIdxs} indexes</span>}
                               </>
                             );
                           })()}
@@ -3981,7 +3982,7 @@ export default function ConnectionsPage() {
                               </Tooltip>
                               {schemaRefreshStatus[conn.name].last_schema_refresh && (
                                 <Tooltip content={`Last refresh: ${new Date(schemaRefreshStatus[conn.name].last_schema_refresh! * 1000).toLocaleString()}`} position="top">
-                                  <span className="text-[10px] text-[var(--color-text-dim)] opacity-60 tracking-wider cursor-default flex items-center gap-0.5">
+                                  <span className="text-[10px] text-[var(--color-text-dim)] opacity-60 cursor-default flex items-center gap-0.5">
                                     <Clock className="w-2 h-2" strokeWidth={1.5} />
                                     {(() => {
                                       const diff = Math.floor(Date.now() / 1000 - schemaRefreshStatus[conn.name].last_schema_refresh!);
@@ -3998,7 +3999,7 @@ export default function ConnectionsPage() {
                           {/* Schema diff indicators */}
                           {schemaDiff[conn.name] && schemaDiff[conn.name]?.has_changes && (
                             <Tooltip content={`Changes: +${(schemaDiff[conn.name] as any).added_tables?.length || 0} added, -${(schemaDiff[conn.name] as any).removed_tables?.length || 0} removed, ~${(schemaDiff[conn.name] as any).modified_tables?.length || 0} modified`} position="top">
-                              <span className="text-[10px] px-1 py-0.5 border border-[var(--color-warning)]/30 text-[var(--color-warning)] tracking-wider cursor-default">
+                              <span className="text-[10px] px-1 py-0.5 border border-[var(--color-warning)]/30 rounded-[6px] text-[var(--color-warning)] cursor-default">
                                 schema changed
                               </span>
                             </Tooltip>
@@ -4019,7 +4020,7 @@ export default function ConnectionsPage() {
                                 toast(`Schema filter: ${nextMode === "endorsed_only" ? "endorsed only" : "all tables"}`, "success");
                               } catch { toast("Failed to update endorsements", "error"); }
                             }}
-                            className={`px-2 py-0.5 text-[11px] border tracking-wider transition-all ${
+                            className={`px-2 py-0.5 text-[11px] border rounded-[6px] transition-colors duration-150 ${
                               endorsements[conn.name]?.mode === "endorsed_only"
                                 ? "border-[var(--color-success)]/30 text-[var(--color-success)] bg-[var(--color-success)]/5"
                                 : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
@@ -4051,7 +4052,7 @@ export default function ConnectionsPage() {
                               finally { setSchemaLoading(null); }
                             }}
                             disabled={schemaLoading === conn.name}
-                            className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-all tracking-wider"
+                            className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] border border-[var(--color-border)] rounded-[6px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-colors duration-150"
                             title="Re-introspect schema from database"
                           >
                             <RefreshCw className={`w-2.5 h-2.5 ${schemaLoading === conn.name ? "animate-spin" : ""}`} strokeWidth={1.5} />
@@ -4061,7 +4062,7 @@ export default function ConnectionsPage() {
                             onClick={async () => {
                               await handleGenerateSemantic(conn.name);
                             }}
-                            className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-all tracking-wider"
+                            className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] border border-[var(--color-border)] rounded-[6px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-colors duration-150"
                             title="Generate semantic model with auto-detected joins and business glossary"
                           >
                             <Star className="w-2.5 h-2.5" strokeWidth={1.5} />
@@ -4074,7 +4075,7 @@ export default function ConnectionsPage() {
                               placeholder="search tables & columns..."
                               value={schemaSearch[conn.name] || ""}
                               onChange={(e) => handleSchemaSearch(conn.name, e.target.value)}
-                              className="w-48 pl-7 pr-2 py-1 text-[12px] bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] focus:border-[var(--color-border-hover)] focus:outline-none tracking-wider"
+                              className="w-48 pl-7 pr-2 py-1 text-[12px] bg-[var(--color-bg)] border border-[var(--color-border)] rounded-[10px] text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] focus:border-[var(--color-border-hover)] focus:outline-none"
                             />
                             {schemaSearchLoading === conn.name && (
                               <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-[var(--color-text-dim)]" />
@@ -4087,17 +4088,17 @@ export default function ConnectionsPage() {
                               <div className="flex items-center gap-2 mb-2">
                                 <Table2 className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
                                 <span className="text-[12px] text-[var(--color-text-muted)]">{t.schema}.{t.name}</span>
-                                <span className="text-[11px] text-[var(--color-text-dim)] tabular-nums tracking-wider">{t.columns?.length || 0} cols</span>
+                                <span className="text-[11px] text-[var(--color-text-dim)] font-mono tabular-nums">{t.columns?.length || 0} cols</span>
                                 {t.type === "view" && (
-                                  <span className="text-[11px] text-cyan-400 tracking-wider">view</span>
+                                  <span className="text-[11px] text-cyan-400">view</span>
                                 )}
                                 {t.row_count > 0 && (
-                                  <span className="text-[11px] text-[var(--color-text-dim)] tabular-nums tracking-wider">
+                                  <span className="text-[11px] text-[var(--color-text-dim)] font-mono tabular-nums">
                                     ~{t.row_count >= 1000000 ? `${(t.row_count / 1000000).toFixed(1)}M` : t.row_count >= 1000 ? `${(t.row_count / 1000).toFixed(1)}K` : t.row_count} rows
                                   </span>
                                 )}
                                 {t._relevance_score && (
-                                  <span className="text-[11px] text-[var(--color-success)] tabular-nums tracking-wider">
+                                  <span className="text-[11px] text-[var(--color-success)] font-mono tabular-nums">
                                     score: {t._relevance_score}
                                   </span>
                                 )}
@@ -4123,7 +4124,7 @@ export default function ConnectionsPage() {
                                       setEndorsements(prev => ({ ...prev, [conn.name]: updated }));
                                     } catch {}
                                   }}
-                                  className={`p-0.5 transition-all ${
+                                  className={`p-0.5 transition-colors duration-150 ${
                                     endorsements[conn.name]?.endorsed?.includes(key)
                                       ? "text-[var(--color-success)]"
                                       : "text-[var(--color-text-dim)] opacity-30 hover:opacity-60"
@@ -4149,7 +4150,7 @@ export default function ConnectionsPage() {
                                       setEndorsements(prev => ({ ...prev, [conn.name]: updated }));
                                     } catch {}
                                   }}
-                                  className={`p-0.5 transition-all ${
+                                  className={`p-0.5 transition-colors duration-150 ${
                                     endorsements[conn.name]?.hidden?.includes(key)
                                       ? "text-[var(--color-error)]"
                                       : "text-[var(--color-text-dim)] opacity-30 hover:opacity-60"
@@ -4160,13 +4161,13 @@ export default function ConnectionsPage() {
                                 </button>
                               </div>
                               {t.description && (
-                                <p className="text-[10px] text-[var(--color-text-dim)] tracking-wider opacity-70 mb-1.5 italic">{t.description}</p>
+                                <p className="text-[10px] text-[var(--color-text-dim)] opacity-70 mb-1.5 italic">{t.description}</p>
                               )}
                               <div className="space-y-0.5">
                                 {(t.columns || []).slice(0, 8).map((col: any) => {
                                   const isMatched = t._matched_columns?.includes(col.name);
                                   return (
-                                  <div key={col.name} className="flex items-center gap-2 text-[11px] tracking-wider">
+                                  <div key={col.name} className="flex items-center gap-2 text-[11px]">
                                     <span className={col.primary_key ? "text-[var(--color-warning)]" : isMatched ? "text-[var(--color-success)]" : "text-[var(--color-text-dim)]"}>
                                       {col.name}
                                     </span>
@@ -4178,14 +4179,14 @@ export default function ConnectionsPage() {
                                   );
                                 })}
                                 {t.columns.length > 8 && (
-                                  <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider">+ {t.columns.length - 8} more</p>
+                                  <p className="text-[11px] text-[var(--color-text-dim)]">+ {t.columns.length - 8} more</p>
                                 )}
                               </div>
                               {/* Foreign keys */}
                               {t.foreign_keys?.length > 0 && (
                                 <div className="mt-2 pt-1.5 border-t border-[var(--color-border)]">
                                   {t.foreign_keys.map((fk: any, i: number) => (
-                                    <div key={i} className="text-[10px] text-purple-400/80 tracking-wider">
+                                    <div key={i} className="text-[10px] text-purple-400/80">
                                       {fk.column} → {fk.references_table}.{fk.references_column}
                                     </div>
                                   ))}
@@ -4209,7 +4210,7 @@ export default function ConnectionsPage() {
                                     finally { setExploringTable(null); }
                                   }}
                                   disabled={exploringTable === `${conn.name}:${key}`}
-                                  className="text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] tracking-wider transition-colors"
+                                  className="text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
                                 >
                                   {exploringTable === `${conn.name}:${key}` ? (
                                     <><Loader2 className="w-2.5 h-2.5 inline animate-spin mr-0.5" /> exploring...</>
@@ -4222,7 +4223,7 @@ export default function ConnectionsPage() {
                                 {exploredData[`${conn.name}:${key}`] && (
                                   <div className="mt-1.5 space-y-1 animate-fade-in">
                                     {exploredData[`${conn.name}:${key}`].columns.slice(0, 10).map((ec: any) => (
-                                      <div key={ec.name} className="text-[10px] tracking-wider">
+                                      <div key={ec.name} className="text-[10px]">
                                         <span className="text-[var(--color-text-muted)]">{ec.name}</span>
                                         {ec.value_stats && (
                                           <span className="text-[var(--color-text-dim)] ml-1.5">
@@ -4245,7 +4246,7 @@ export default function ConnectionsPage() {
                         </div>
                       </div>
                     ) : (
-                      <p className="text-[12px] text-[var(--color-text-dim)] py-4 text-center tracking-wider">
+                      <p className="text-[12px] text-[var(--color-text-dim)] py-4 text-center">
                         no schema available. test the connection first.
                       </p>
                     )}
@@ -4258,13 +4259,13 @@ export default function ConnectionsPage() {
                     <div className="flex items-center justify-between mb-3">
                       <div className="flex items-center gap-2">
                         <Shield className={`w-3.5 h-3.5 ${piiConfig[conn.name]?.enabled ? "text-emerald-400" : "text-[var(--color-warning)]"}`} strokeWidth={1.5} />
-                        <span className="text-[12px] text-[var(--color-text-muted)] tracking-wider">
+                        <span className="text-[12px] text-[var(--color-text-muted)]">
                           pii redaction — {Object.keys(piiConfig[conn.name]?.rules || {}).length} columns
                         </span>
                       </div>
                       <button
                         onClick={() => handleTogglePII(conn.name)}
-                        className={`px-2.5 py-1 text-[11px] tracking-wider border transition-all ${
+                        className={`px-2.5 py-1 text-[11px] border rounded-[6px] transition-colors duration-150 ${
                           piiConfig[conn.name]?.enabled
                             ? "border-emerald-500/40 text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20"
                             : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-text)] hover:text-[var(--color-text)]"
@@ -4276,7 +4277,7 @@ export default function ConnectionsPage() {
                     {piiConfig[conn.name]?.rules && Object.keys(piiConfig[conn.name].rules).length > 0 && (
                       <div className="flex flex-wrap gap-2 mb-2">
                         {Object.entries(piiConfig[conn.name].rules).map(([col, rule]) => (
-                          <span key={col} className={`text-[11px] px-1.5 py-0.5 border tracking-wider uppercase ${
+                          <span key={col} className={`text-[11px] px-1.5 py-0.5 border rounded-[6px] tracking-wider uppercase ${
                             rule === "hide" ? "badge-warning" :
                             rule === "hash" ? "border-purple-500/30 text-purple-400" :
                             "badge-warning"
@@ -4289,11 +4290,11 @@ export default function ConnectionsPage() {
                     {piiData[conn.name] && Object.keys(piiData[conn.name].detections).length > 0 && (
                       <div className="space-y-2">
                         {Object.entries(piiData[conn.name].detections).map(([table, columns]) => (
-                          <div key={table} className="p-3 border border-[var(--color-warning)]/20 bg-[var(--color-warning)]/5">
-                            <p className="text-[12px] text-[var(--color-text-muted)] mb-1.5 tracking-wider">{table}</p>
+                          <div key={table} className="p-3 border border-[var(--color-warning)]/20 bg-[var(--color-warning)]/5 rounded-[10px]">
+                            <p className="text-[12px] text-[var(--color-text-muted)] mb-1.5">{table}</p>
                             <div className="flex flex-wrap gap-2">
                               {Object.entries(columns).map(([col, rule]) => (
-                                <span key={col} className={`text-[11px] px-1.5 py-0.5 border tracking-wider uppercase ${
+                                <span key={col} className={`text-[11px] px-1.5 py-0.5 border rounded-[6px] tracking-wider uppercase ${
                                   rule === "hide" ? "badge-warning" :
                                   rule === "hash" ? "border-purple-500/30 text-purple-400" :
                                   "badge-warning"
@@ -4306,7 +4307,7 @@ export default function ConnectionsPage() {
                         ))}
                       </div>
                     )}
-                    <p className="text-[11px] text-[var(--color-text-dim)] mt-2 tracking-wider">
+                    <p className="text-[11px] text-[var(--color-text-dim)] mt-2">
                       {piiConfig[conn.name]?.enabled
                         ? "queries will automatically redact flagged columns (hash, mask, or drop)."
                         : "click the toggle to activate automatic pii redaction on query results."}

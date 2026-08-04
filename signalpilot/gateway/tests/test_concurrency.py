@@ -377,7 +377,7 @@ class TestCloneConnectionRace:
         store.create_connection = AsyncMock(side_effect=ValueError("Connection 'clone_name' already exists"))
 
         with pytest.raises(HTTPException) as exc_info:
-            await clone_connection("source_conn", store, new_name="clone_name")
+            await clone_connection(store, "admin", "source_conn", new_name="clone_name")
 
         assert exc_info.value.status_code == 409
         assert "clone_name" in exc_info.value.detail

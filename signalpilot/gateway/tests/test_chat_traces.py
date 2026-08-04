@@ -707,3 +707,47 @@ async def test_slack_progress_reporter_ignores_slack_update_failure() -> None:
 
     slack.update_message.assert_awaited_once()
     assert reporter.previous_status == INITIAL_PROGRESS_TEXT
+
+
+class TestTraceMarkersMetadataOnly:
+    """Verify that the loader reads control markers only from event metadata.
+
+    ``append_events`` applies ``redact_trace_control_markers`` to each event.
+    The function moves markers from visible content to
+    ``metadata["control_markers"]``.
+    """
+
+    _INLINE = 'FINAL_STATEMENT: {"statement":"Revenue increased."}'
+
+    def test_metadata_markers_are_returned(self) -> None:
+        from gateway.trace_markers import iter_trace_marker_payloads
+
+        payloads = iter_trace_marker_payloads(
+            {
+                "control_markers": [
+                    {"marker": "FINAL_STATEMENT", "payload": {"statement": "Revenue increased."}}
+                ]
+            }
+        )
+
+        assert payloads == [("FINAL_STATEMENT", {"statement": "Revenue increased."})]
+
+    def test_inline_marker_content_is_not_parsed(self) -> None:
+        from gateway.trace_markers import iter_trace_marker_payloads
+
+        assert iter_trace_marker_payloads({"content": self._INLINE}) == []
+        assert iter_trace_marker_payloads(None) == []
+        assert iter_trace_marker_payloads({}) == []
+
+    def test_redaction_still_moves_inline_markers_into_metadata(self) -> None:
+        from gateway.trace_markers import (
+            iter_trace_marker_payloads,
+            redact_trace_control_markers,
+        )
+
+        content, metadata = redact_trace_control_markers(f"Answer.\n\n{self._INLINE}")
+
+        assert "FINAL_STATEMENT" not in content
+        assert iter_trace_marker_payloads(metadata) == [
+            ("FINAL_STATEMENT", {"statement": "Revenue increased."})
+        ]

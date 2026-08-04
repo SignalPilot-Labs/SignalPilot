@@ -26,18 +26,18 @@ export function CodeBlock({
   }
 
   return (
-    <div className="border border-[var(--color-border)] bg-[var(--color-bg)] overflow-hidden relative group">
+    <div className="rounded-[10px] border border-[var(--color-border)] bg-[var(--color-bg)] overflow-hidden relative group">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-bg-card)]">
         <div className="flex items-center gap-1.5">
-          <span className="w-2 h-2 bg-[var(--color-text-dim)] opacity-30" />
-          <span className="w-2 h-2 bg-[var(--color-text-dim)] opacity-20" />
-          <span className="w-2 h-2 bg-[var(--color-text-dim)] opacity-10" />
+          <span className="w-2 h-2 rounded-full bg-[var(--color-text-dim)] opacity-30" />
+          <span className="w-2 h-2 rounded-full bg-[var(--color-text-dim)] opacity-20" />
+          <span className="w-2 h-2 rounded-full bg-[var(--color-text-dim)] opacity-10" />
         </div>
-        <span className="text-[11px] text-[var(--color-text-dim)] tracking-[0.15em] uppercase">{language}</span>
+        <span className="text-[11px] text-[var(--color-text-dim)] tracking-[0.08em] uppercase">{language}</span>
         <button
           onClick={handleCopy}
-          className="opacity-0 group-hover:opacity-100 transition-opacity text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] tracking-wider flex items-center gap-1"
+          className="opacity-0 group-hover:opacity-100 transition-opacity text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] flex items-center gap-1"
         >
           {copied ? (
             <>
@@ -64,13 +64,13 @@ export function CodeBlock({
           {showLineNumbers && (
             <div className="flex-shrink-0 py-3 pl-3 pr-0 select-none border-r border-[var(--color-border)]">
               {lines.map((_, i) => (
-                <div key={i} className="text-[12px] text-[var(--color-text-dim)] text-right pr-3 leading-[1.65rem] tabular-nums opacity-40">
+                <div key={i} className="text-[12px] font-mono text-[var(--color-text-dim)] text-right pr-3 leading-[1.65rem] tabular-nums opacity-40">
                   {i + 1}
                 </div>
               ))}
             </div>
           )}
-          <pre className="flex-1 p-3 text-[13px] text-[var(--color-text-muted)] leading-[1.65rem] tracking-wide overflow-x-auto">
+          <pre className="flex-1 p-3 text-[13px] font-mono text-[var(--color-text-muted)] leading-[1.65rem] overflow-x-auto">
             <code>{code}</code>
           </pre>
         </div>

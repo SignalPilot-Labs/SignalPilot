@@ -1,6 +1,6 @@
 """Entry point with suite routing for Spider2 benchmark runners.
 
-Kept so that existing invocations still work:
+Usage:
     python -m benchmark.run_direct chinook001
     python benchmark/run_direct.py chinook001
     python -m benchmark.run_direct --suite spider2-snowflake sf_tpch001

@@ -1,4 +1,4 @@
-"""Connector registry — maps DBType to connector class."""
+"""Connector registry: maps DBType to connector class."""
 
 from __future__ import annotations
 
@@ -20,12 +20,11 @@ from .drivers.trino import TrinoConnector
 from .drivers.xata import XataConnector
 
 # Use sandboxed connectors only when running inside Docker with the sandbox service.
-# SP_SANDBOX_ENABLED=false (or unset) skips sandboxing so file-based DBs open directly.
-# SP_DISABLE_SANDBOX=1 is also supported as a legacy/benchmark override.
+# SP_SANDBOX_ENABLED is the only switch: false (or unset) skips sandboxing so
+# file-based DBs open directly.
 _is_local = os.environ.get("SP_DEPLOYMENT_MODE", "local") != "cloud"
 _sandbox_enabled = os.environ.get("SP_SANDBOX_ENABLED", "false").lower() == "true"
-_sandbox_disabled = os.environ.get("SP_DISABLE_SANDBOX", "") == "1"
-if _is_local and _sandbox_enabled and not _sandbox_disabled:
+if _is_local and _sandbox_enabled:
     from .drivers.sandboxed_duckdb import SandboxedDuckDBConnector
     from .drivers.sandboxed_sqlite import SandboxedSQLiteConnector
 

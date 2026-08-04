@@ -8,7 +8,7 @@ from gateway.errors.mcp import sanitize_proxy_response
 from gateway.mcp.audit import audited_tool
 from gateway.mcp.context import _gateway_url, _gw_headers
 from gateway.mcp.server import mcp
-from gateway.mcp.validation import _CONN_NAME_RE
+from gateway.mcp.validation import _validate_connection_name
 
 
 @audited_tool(mcp)
@@ -29,8 +29,8 @@ async def find_join_path(connection_name: str, from_table: str, to_table: str, m
         to_table: Target table (e.g., 'public.products')
         max_hops: Maximum FK hops to search (1-6, default 4)
     """
-    if not _CONN_NAME_RE.match(connection_name):
-        return "Error: Invalid connection name"
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
 
     async with httpx.AsyncClient(base_url=_gateway_url(), timeout=30) as client:
         resp = await client.get(
@@ -70,8 +70,8 @@ async def get_relationships(connection_name: str, format: str = "compact") -> st
         connection_name: Name of the database connection
         format: Output format — 'compact' (arrows), 'graph' (adjacency list)
     """
-    if not _CONN_NAME_RE.match(connection_name):
-        return "Error: Invalid connection name"
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
 
     async with httpx.AsyncClient(base_url=_gateway_url(), timeout=30) as client:
         resp = await client.get(

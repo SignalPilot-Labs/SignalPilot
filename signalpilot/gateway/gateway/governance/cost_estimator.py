@@ -316,24 +316,40 @@ class CostEstimator:
 
     @staticmethod
     async def estimate_databricks(connector: BaseConnector, sql: str) -> CostEstimate:
-        """Estimate Databricks query cost using EXPLAIN FORMATTED.
+        """Estimate Databricks query cost via EXPLAIN COST (fallback: EXPLAIN FORMATTED).
 
         Parses row estimates from the physical plan output.
         """
         try:
-            # EXPLAIN FORMATTED gives structured plan info on Databricks SQL
-            explain_sql = f"EXPLAIN FORMATTED {sql}"
-            rows = await connector.execute(explain_sql)
+            # EXPLAIN COST includes Statistics(sizeInBytes=..., rowCount=...) on
+            # Databricks SQL; EXPLAIN FORMATTED is the fallback for runtimes
+            # that reject COST.
+            rows = None
+            last_exc: Exception | None = None
+            for explain_kw in ("EXPLAIN COST", "EXPLAIN FORMATTED"):
+                try:
+                    rows = await connector.execute(f"{explain_kw} {sql}")
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    continue
+            if rows is None:
+                return CostEstimate(warning=f"Cost estimation failed: {last_exc}")
             plan_text = "\n".join(str(list(r.values())) for r in rows) if rows else ""
 
             estimated_rows = 0
             if plan_text:
                 import re
 
-                # Look for 'Statistics(sizeInBytes=X, rowCount=Y)' in plan
-                row_match = re.search(r"rowCount=(\d+)", plan_text)
+                # 'Statistics(sizeInBytes=X, rowCount=Y)' — Spark prints
+                # rowCount in scientific notation past 3 sig figs (5.43E+3),
+                # so a \d+ match would truncate to the leading digits.
+                row_match = re.search(r"rowCount=([\d.]+(?:[Ee][+\-]?\d+)?)", plan_text)
                 if row_match:
-                    estimated_rows = int(row_match.group(1))
+                    try:
+                        estimated_rows = int(float(row_match.group(1)))
+                    except ValueError:
+                        estimated_rows = 0
                 # Also try 'numOutputRows=X'
                 if estimated_rows == 0:
                     output_match = re.search(r"numOutputRows[=:]?\s*(\d+)", plan_text)

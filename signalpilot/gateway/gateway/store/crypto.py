@@ -2,13 +2,12 @@
 
 F-20: MultiFernet rotation support. SP_ENCRYPTION_KEY_OLD (comma-separated)
 holds previous keys. Primary key (SP_ENCRYPTION_KEY) is always first in the
-MultiFernet list — index 0 is the encrypt key.
+MultiFernet list: index 0 is the encrypt key.
 """
 
 from __future__ import annotations
 
 import base64
-import hashlib
 import logging
 import os
 import secrets
@@ -25,7 +24,7 @@ class CredentialEncryptionError(Exception):
     """Raised when credential encryption or decryption fails in a non-recoverable way."""
 
 
-# Module-level key cache — populated on first call, reused thereafter.
+# Module-level key cache: populated on first call, reused thereafter.
 # Avoids re-running PBKDF2 (≈200 ms) on every encrypt/decrypt call.
 _CACHED_MULTIFERNET: object | None = None  # type: MultiFernet | None
 
@@ -55,31 +54,6 @@ def _derive_key_pbkdf2(passphrase: str) -> bytes:
     )
     raw_key = kdf.derive(passphrase.encode())
     return base64.urlsafe_b64encode(raw_key)
-
-
-def _derive_key_legacy_sha256(passphrase: str) -> bytes:
-    """Legacy (insecure) key derivation via SHA-256. Used only for migration fallback."""
-    digest = hashlib.sha256(passphrase.encode()).digest()
-    return base64.urlsafe_b64encode(digest)
-
-
-def _derive_key_legacy_cloud_salt(passphrase: str) -> bytes:
-    """Legacy cloud-mode derivation with deterministic salt. Migration fallback only.
-
-    This used a salt derived from the passphrase itself, which defeats the
-    purpose of salting. Kept only to decrypt rows encrypted before the fix.
-    """
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-
-    deterministic_salt = hashlib.sha256(b"signalpilot-cloud-salt:" + passphrase.encode()).digest()[:16]
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=_constants.PBKDF2_KEY_LENGTH,
-        salt=deterministic_salt,
-        iterations=_constants.PBKDF2_ITERATIONS,
-    )
-    return base64.urlsafe_b64encode(kdf.derive(passphrase.encode()))
 
 
 def _resolve_key_bytes(key_str: str) -> bytes:
@@ -126,7 +100,7 @@ def _resolve_key_bytes(key_str: str) -> bytes:
 def _get_encryption_key() -> bytes:
     """Return the primary Fernet key bytes (for invariant checks and health check).
 
-    Does NOT use the MultiFernet cache — always returns the primary key directly.
+    Does NOT use the MultiFernet cache: always returns the primary key directly.
     This function is the single source of truth for the primary-first invariant.
     """
     from cryptography.fernet import Fernet
@@ -178,7 +152,7 @@ def _get_old_encryption_keys() -> list[bytes]:
 def _get_multifernet() -> object:  # -> MultiFernet
     """Return the cached MultiFernet instance.
 
-    Primary key is ALWAYS first (index 0) — MultiFernet encrypts with the first
+    Primary key is ALWAYS first (index 0): MultiFernet encrypts with the first
     key in the list. Old keys follow for decryption fallback only.
     """
     global _CACHED_MULTIFERNET
@@ -224,30 +198,25 @@ def _decrypted_with_primary(token: bytes) -> str | None:
 
 
 def _decrypt_with_migration(encrypted: bytes) -> tuple[str, bool]:
-    """Decrypt ciphertext, falling back to legacy key derivation if needed.
+    """Decrypt ciphertext, following the key-rotation chain.
 
-    Tier 1: MultiFernet (primary + old keys) — handles both current and rotation ciphertexts.
-    Tier 2: Legacy cloud-mode deterministic salt fallback.
-    Tier 3: Legacy SHA-256 fallback (only if SP_ALLOW_LEGACY_CRYPTO=true).
+    MultiFernet accepts the primary key and SP_ENCRYPTION_KEY_OLD.
+    Rewrite ciphertext with the primary key after decryption uses the secondary rotation key.
+    Re-encrypt ciphertext from unsupported key derivations before key retirement.
 
     Returns:
         (plaintext, needs_migration) where needs_migration is True when the
         ciphertext was NOT encrypted with the current primary key.
     """
-    from cryptography.fernet import InvalidToken
-
-    key_str = os.getenv("SP_ENCRYPTION_KEY")
-
-    # Tier 1: MultiFernet attempt (primary + all old keys).
-    # First check if primary alone decrypts (no migration needed).
+    # The primary key alone first: if it decrypts, nothing needs rewriting.
     primary_result = _decrypted_with_primary(encrypted)
     if primary_result is not None:
         return primary_result, False
 
-    # Primary didn't decrypt — try full MultiFernet (old keys).
+    # The caller rewrites ciphertext after SP_ENCRYPTION_KEY_OLD decrypts it.
     try:
         plaintext = _decrypt(encrypted)
-        # MultiFernet succeeded but primary failed → encrypted with an old key.
+    # A successful MultiFernet result after primary failure identifies the secondary rotation key.
         logger.warning(
             "Credential decrypted with an old key (MultiFernet fallback). "
             "Row will be re-encrypted with the primary key."
@@ -256,58 +225,13 @@ def _decrypt_with_migration(encrypted: bytes) -> tuple[str, bool]:
     except Exception:
         pass
 
-    # Only attempt legacy fallback when env var is a passphrase (not a raw Fernet key).
-    if key_str:
-        from cryptography.fernet import Fernet
-
-        try:
-            Fernet(key_str.encode())
-            # key_str is a valid raw Fernet key — no legacy path makes sense.
-            raise CredentialEncryptionError("Credential decryption failed; token is invalid.")
-        except CredentialEncryptionError:
-            raise
-        except Exception:
-            pass  # key_str is a passphrase; try legacy derivation.
-
-        # Tier 2: Legacy cloud-mode derivation (deterministic salt from passphrase).
-        legacy_cloud_key = _derive_key_legacy_cloud_salt(key_str)
-        try:
-            from cryptography.fernet import Fernet as _Fernet
-            f_cloud = _Fernet(legacy_cloud_key)
-            plaintext = f_cloud.decrypt(encrypted).decode()
-            logger.warning(
-                "Credential decrypted with legacy cloud-mode deterministic salt. "
-                "This is deprecated — row will be re-encrypted with proper salt."
-            )
-            return plaintext, True
-        except InvalidToken:
-            pass
-
-        # Tier 3: Legacy SHA-256 derivation (no KDF at all).
-        if _constants._ALLOW_LEGACY_CRYPTO:
-            legacy_key = _derive_key_legacy_sha256(key_str)
-            try:
-                from cryptography.fernet import Fernet as _Fernet2
-                f_legacy = _Fernet2(legacy_key)
-                plaintext = f_legacy.decrypt(encrypted).decode()
-                logger.warning(
-                    "Credential decrypted with DEPRECATED legacy SHA-256 key derivation. "
-                    "Re-encrypt credentials to remove this dependency. "
-                    "Set SP_ALLOW_LEGACY_CRYPTO=false after migration."
-                )
-                return plaintext, True  # needs_migration=True
-            except InvalidToken:
-                pass
-        else:
-            logger.debug("Legacy SHA-256 crypto disabled (SP_ALLOW_LEGACY_CRYPTO=false)")
-
     raise CredentialEncryptionError("Credential decryption failed; token is invalid.")
 
 
 def _validate_encryption_health() -> bool:
     """Verify that the current encryption key can round-trip encrypt/decrypt.
 
-    F-20 C2: Also asserts the primary-first invariant — the fresh ciphertext
+    F-20 C2: Also asserts the primary-first invariant: the fresh ciphertext
     MUST be decryptable by Fernet(primary) directly (not via MultiFernet). Any
     regression that places an old key at index 0 in _get_multifernet() will fail
     this check at startup.

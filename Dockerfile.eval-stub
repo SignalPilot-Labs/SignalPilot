@@ -1,0 +1,23 @@
+# This image provides a simulated Claude CLI for end-to-end tests.
+# The CLI accepts the production arguments.
+# The CLI processes [[e2e:...]] directives.
+# The directives make MCP calls.
+# The directives run psql against the task branch.
+# The tests do not consume model tokens.
+#
+# Build this image with the following command:
+# docker build -f Dockerfile.eval-stub -t sp-eval-stub:latest .
+FROM node:22-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git ca-certificates curl postgresql-client && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY scripts/eval-stub/claude.js /usr/local/bin/claude
+RUN chmod +x /usr/local/bin/claude
+
+RUN useradd -m -u 10002 evalrunner
+USER evalrunner
+WORKDIR /work
+
+CMD ["claude", "--version"]

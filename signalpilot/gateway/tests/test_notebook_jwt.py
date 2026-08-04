@@ -25,13 +25,13 @@ def _patch_secret(monkeypatch):
 
 def _mint(monkeypatch, **overrides):
     _patch_secret(monkeypatch)
-    defaults = dict(
-        user_id="user-1",
-        org_id="org-1",
-        session_id="sess-1",
-        branch="main",
-        ttl=3600,
-    )
+    defaults = {
+        "user_id": "user-1",
+        "org_id": "org-1",
+        "session_id": "sess-1",
+        "branch": "main",
+        "ttl": 3600,
+    }
     defaults.update(overrides)
     return mint_session_jwt(**defaults)
 
@@ -114,7 +114,7 @@ class TestVerifyRejectsInvalidTokens:
         sig = parts[2]
         # Change first char of signature
         flipped = ("A" if sig[0] != "A" else "B") + sig[1:]
-        tampered = ".".join(parts[:2] + [flipped])
+        tampered = ".".join([*parts[:2], flipped])
         with pytest.raises(NotebookSessionJWTError):
             verify_session_jwt(tampered)
 

@@ -44,6 +44,10 @@ async def list_api_keys(
             expires_at=r.expires_at,
             user_id=r.user_id,
             org_id=r.org_id,
+            eval_run_id=r.eval_run_id,
+            eval_task_id=r.eval_task_id,
+            eval_connection=r.eval_connection,
+            eval_doc_ids=r.eval_doc_ids,
         )
         for r in result.scalars()
     ]
@@ -57,12 +61,15 @@ async def create_api_key(
     name: str,
     scopes: list[str],
     expires_at: str | None = None,
+    eval_binding: dict | None = None,
 ) -> tuple[ApiKeyRecord, str]:
     # In cloud mode, refuse to mint keys without a real org_id.
     if is_cloud_mode() and (not org_id or org_id == "local"):
         raise ValueError(
             "Cannot create API key in cloud mode without a valid org_id. org_id must not be None, empty, or 'local'."
         )
+    if eval_binding and eval_binding.get("run_id") and not eval_binding.get("connection"):
+        raise ValueError("Eval-bound API keys require a non-empty connection pin")
     raw_key = "sp_" + secrets.token_hex(16)
     key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
     key_id = str(uuid.uuid4())
@@ -78,6 +85,10 @@ async def create_api_key(
         scopes=scopes,
         created_at=now,
         expires_at=expires_at,
+        eval_run_id=(eval_binding or {}).get('run_id'),
+        eval_task_id=(eval_binding or {}).get('task_id'),
+        eval_connection=(eval_binding or {}).get('connection'),
+        eval_doc_ids=(eval_binding or {}).get('doc_ids'),
     )
     session.add(db_key)
     await session.commit()
@@ -93,6 +104,10 @@ async def create_api_key(
         expires_at=expires_at,
         user_id=user_id,
         org_id=org_id,
+        eval_run_id=db_key.eval_run_id,
+        eval_task_id=db_key.eval_task_id,
+        eval_connection=db_key.eval_connection,
+        eval_doc_ids=db_key.eval_doc_ids,
     )
     return record, raw_key
 
@@ -121,7 +136,7 @@ async def validate_stored_api_key(
     """Validate an API key by its raw token and return the matching record.
 
     TRUST BOUNDARY NOTE: This function searches cross-tenant by design.
-    The key hash is the sole lookup mechanism — there is no org_id filter
+    The key hash is the sole lookup mechanism: there is no org_id filter
     because the caller does not yet know which org the key belongs to.
     The ``org_id`` on the matched key becomes the authoritative tenant
     context for the rest of the request.  In cloud mode we reject keys
@@ -129,7 +144,7 @@ async def validate_stored_api_key(
     cross-tenant access to shared namespaces.
     """
     key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
-    # Search all keys (not org-scoped — validation doesn't know org yet)
+    # Search all keys (not org-scoped: validation doesn't know org yet)
     result = await session.execute(select(GatewayApiKey).where(GatewayApiKey.key_hash == key_hash))
     row = result.scalar_one_or_none()
     if not row:
@@ -150,7 +165,7 @@ async def validate_stored_api_key(
             if expiry <= datetime.now(UTC):
                 return None
         except (ValueError, TypeError):
-            return None  # Corrupt expiry data → treat as expired (fail closed)
+            return None  # Treat corrupt expiry data as expired and fail closed.
     row.last_used_at = datetime.now(UTC).isoformat()
     await session.commit()
     return ApiKeyRecord(
@@ -164,4 +179,8 @@ async def validate_stored_api_key(
         expires_at=row.expires_at,
         user_id=row.user_id,
         org_id=row.org_id,
+        eval_run_id=row.eval_run_id,
+        eval_task_id=row.eval_task_id,
+        eval_connection=row.eval_connection,
+        eval_doc_ids=row.eval_doc_ids,
     )

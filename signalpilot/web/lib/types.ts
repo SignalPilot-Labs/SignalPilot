@@ -43,9 +43,10 @@ export interface KnowledgeDoc {
   org_id: string;
   scope: "org" | "project" | "connection";
   scope_ref: string | null;
-  category: "understanding" | "conventions" | "decisions" | "domain-rules" | "debugging" | "quirks";
+  category: "context" | "decisions" | "rules" | "troubleshooting";
   title: string;
   body: string | null;
+  excerpt?: string | null;
   status: "active" | "pending" | "archived";
   bytes: number;
   view_count: number;
@@ -73,6 +74,21 @@ export interface KnowledgeUsage {
   active_bytes: number;
   storage_limit_bytes: number;
   storage_limit_mb: number;
+}
+
+export interface RetrievalDocStats {
+  doc_id: string;
+  total: number;
+  by_source: Record<string, number>;
+  last_retrieved_at: number | null;
+  series: number[]; // oldest → newest buckets
+}
+
+export interface RetrievalStats {
+  since_days: number;
+  bucket_days: number;
+  generated_at: number;
+  docs: RetrievalDocStats[];
 }
 
 export interface ReportSummary {
@@ -175,6 +191,31 @@ export interface ConnectionInfo {
   // Schema filtering
   schema_filter_include: string[] | null;
   schema_filter_exclude: string[] | null;
+}
+
+/** One shared demo warehouse, plus whether this workspace has cloned it. */
+export interface DemoWarehouse {
+  slug: string;
+  title: string;
+  description: string;
+  repo_url: string | null;
+  parent_branch: string;
+  exists: boolean;
+  branch: string | null;
+  connection_name: string;
+}
+
+export interface DemoConnectorStatus {
+  enabled: boolean;
+  demos: DemoWarehouse[];
+}
+
+export interface DemoConnectorCreated {
+  connection: ConnectionInfo;
+  demo: string;
+  title: string;
+  branch: string;
+  repo_url: string | null;
 }
 
 export interface ProjectInfo {

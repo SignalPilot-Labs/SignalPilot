@@ -1,5 +1,5 @@
 """
-PII column tagging and result redaction — Features #14-15 from the feature table.
+PII column tagging and result redaction: Features #14-15 from the feature table.
 
 PII rules are defined in schema annotations (YAML sidecar files).
 The redactor processes query results before they're returned to the agent.
@@ -13,7 +13,7 @@ from enum import Enum
 from typing import Any
 
 
-class PIIRule(str, Enum):  # noqa: UP042 — (str,Enum) keeps str(X.A)=='X.A'; StrEnum returns 'A' and breaks f-string/log output
+class PIIRule(str, Enum):  # noqa: UP042  # (str,Enum) keeps str(X.A)=='X.A'; StrEnum returns 'A' and breaks f-string/log output
     """Redaction strategy for PII columns."""
 
     hash = "hash"  # SHA-256 hash of the value
@@ -45,12 +45,19 @@ class PIIRedactor:
     _last_redacted: list[str] = field(default_factory=list)
 
     def add_rule(self, column: str, rule: PIIRule | str) -> None:
-        """Register a PII rule for a column name."""
+        """Register a PII rule for a column name.
+
+        Raise ValueError for a value other than hash, mask, or hide.
+        Reject "drop" instead of changing it to another redaction strategy.
+        """
         if isinstance(rule, str):
-            # Backward compat: treat legacy "drop" as "hide"
-            if rule == "drop":
-                rule = "hide"
-            rule = PIIRule(rule)
+            try:
+                rule = PIIRule(rule)
+            except ValueError:
+                raise ValueError(
+                    f"Invalid PII rule '{rule}' for column '{column}'. "
+                    f"Valid values: {', '.join(r.value for r in PIIRule)}."
+                ) from None
         self._rules[column.lower()] = rule
 
     def add_rules_from_annotations(self, annotations: dict[str, Any]) -> None:
@@ -63,11 +70,13 @@ class PIIRedactor:
                     "columns": {
                         "email": {"pii": "hash"},
                         "ssn": {"pii": "mask"},
-                        "phone": {"pii": "drop"}
+                        "phone": {"pii": "hide"}
                     }
                 }
             }
         }
+
+        Raise ValueError for an unknown rule value. See add_rule.
         """
         tables = annotations.get("tables", {})
         for _table_name, table_config in tables.items():
@@ -75,11 +84,7 @@ class PIIRedactor:
             for col_name, col_config in columns.items():
                 pii_rule = col_config.get("pii")
                 if pii_rule:
-                    # Backward compat: treat legacy "drop" as "hide"
-                    if pii_rule == "drop":
-                        pii_rule = "hide"
-                    if pii_rule in PIIRule.__members__:
-                        self._rules[col_name.lower()] = PIIRule(pii_rule)
+                    self.add_rule(col_name, pii_rule)
 
     def redact_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Apply PII redaction to a list of result rows.
@@ -129,7 +134,7 @@ class PIIRedactor:
         return bool(self._rules)
 
 
-# ─── Auto-Detection ─────────────────────────────────────────────────────────
+# Auto-Detection.
 
 # Column name patterns that commonly contain PII
 _PII_PATTERNS: dict[str, PIIRule] = {
@@ -178,7 +183,7 @@ def detect_pii_columns(column_names: list[str]) -> dict[str, PIIRule]:
     """Auto-detect likely PII columns based on naming patterns.
 
     Returns a dict of column_name -> suggested PIIRule for columns
-    whose names match known PII patterns. This is a heuristic —
+    whose names match known PII patterns. This is a heuristic:
     results should be reviewed by a human and saved to schema.yml.
     """
     detected: dict[str, PIIRule] = {}

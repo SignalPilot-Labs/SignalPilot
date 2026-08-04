@@ -535,7 +535,7 @@ async def provision_notion_oauth_installation(
     )
 
 
-@router.delete("/oauth/{installation_id}", status_code=204, dependencies=[RequireScope("write")])
+@router.delete("/oauth/{installation_id}", status_code=204, response_model=None, dependencies=[RequireScope("write")])
 async def delete_notion_oauth_installation(
     installation_id: str,
     store: StoreD,
@@ -588,7 +588,7 @@ async def update_notion_integration(
     return result
 
 
-@router.delete("/{name}", status_code=204, dependencies=[RequireScope("write")])
+@router.delete("/{name}", status_code=204, response_model=None, dependencies=[RequireScope("write")])
 async def delete_notion_integration(name: str, store: StoreD, _role: OrgAdmin) -> None:
     """Delete a Notion integration."""
     if not await store.delete_notion_integration(name):

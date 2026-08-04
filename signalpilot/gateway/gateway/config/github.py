@@ -26,7 +26,17 @@ class GitHubAppSettings(_GatewaySettingsBase):
 
     @property
     def is_configured(self) -> bool:
-        return bool(self.sp_github_app_id and self.sp_github_app_client_id and self.sp_github_app_private_key)
+        if not (self.sp_github_app_id and self.sp_github_app_client_id and self.sp_github_app_private_key):
+            return False
+        # Cloud mode completes GitHub's user-authorization leg to bind an
+        # installation to the caller, which needs the client secret. Local mode
+        # has no tenant boundary to cross and never exchanges the code, so the
+        # secret stays optional there.
+        from ..runtime.mode import is_cloud_mode
+
+        if is_cloud_mode() and not self.sp_github_app_client_secret:
+            return False
+        return True
 
 
 @lru_cache(maxsize=1)

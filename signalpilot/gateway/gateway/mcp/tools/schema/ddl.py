@@ -6,7 +6,7 @@ from gateway.errors.mcp import sanitize_proxy_response
 from gateway.mcp.audit import audited_tool
 from gateway.mcp.context import _gateway_url, _gw_headers, _require_mcp_admin_scope
 from gateway.mcp.server import mcp
-from gateway.mcp.validation import _CONN_NAME_RE
+from gateway.mcp.validation import _validate_connection_name
 
 
 async def _no_xata_db_msg() -> str | None:
@@ -123,8 +123,8 @@ async def schema_diff(connection_name: str) -> str:
     Returns added/removed/modified tables and columns. Use this after DDL changes
     or migrations to verify what changed and update your understanding of the schema.
     """
-    if not _CONN_NAME_RE.match(connection_name):
-        return "Error: Invalid connection name"
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
 
     gw = _gateway_url()
     async with httpx.AsyncClient(timeout=60) as client:
@@ -184,8 +184,9 @@ async def schema_diff_branches(base_connection: str, compare_connection: str) ->
         base_connection: The base/production branch connection name.
         compare_connection: The feature/upstream branch connection name.
     """
-    if not _CONN_NAME_RE.match(base_connection) or not _CONN_NAME_RE.match(compare_connection):
-        return "Error: Invalid connection name"
+    if err := (_validate_connection_name(base_connection)
+               or _validate_connection_name(compare_connection)):
+        return f"Error: {err}"
 
     gw = _gateway_url()
     async with httpx.AsyncClient(timeout=120) as client:
@@ -245,8 +246,8 @@ async def xata_branch_diff(
     no_xata = await _no_xata_db_msg()
     if no_xata:
         return no_xata
-    if not _CONN_NAME_RE.match(connection_name):
-        return "Error: Invalid connection name"
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
 
     gw = _gateway_url()
     async with httpx.AsyncClient(timeout=120) as client:
@@ -299,8 +300,8 @@ async def xata_list_branches(connection_name: str, project: str) -> str:
     no_xata = await _no_xata_db_msg()
     if no_xata:
         return no_xata
-    if not _CONN_NAME_RE.match(connection_name):
-        return "Error: Invalid connection name"
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
 
     gw = _gateway_url()
     async with httpx.AsyncClient(timeout=60) as client:
@@ -341,8 +342,8 @@ async def create_xata_branch(
     no_xata = await _no_xata_db_msg()
     if no_xata:
         return no_xata
-    if not _CONN_NAME_RE.match(connection_name):
-        return "Error: Invalid connection name"
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
 
     gw = _gateway_url()
     base = f"{gw}/api/connections/{connection_name}/xata/projects/{project}/branches"
@@ -381,8 +382,8 @@ async def delete_xata_branch(connection_name: str, project: str, branch_name: st
     no_xata = await _no_xata_db_msg()
     if no_xata:
         return no_xata
-    if not _CONN_NAME_RE.match(connection_name):
-        return "Error: Invalid connection name"
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
 
     gw = _gateway_url()
     async with httpx.AsyncClient(timeout=60) as client:
@@ -426,8 +427,8 @@ async def get_dbt_profile(
     no_xata = await _no_xata_db_msg()
     if no_xata:
         return no_xata
-    if not _CONN_NAME_RE.match(connection_name):
-        return "Error: Invalid connection name"
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
 
     tgt = target or branch
     base = (_os.environ.get("SP_PUBLIC_URL") or _gateway_url()).rstrip("/")
@@ -478,8 +479,8 @@ async def schema_ddl(connection_name: str, max_tables: int = 50, compress: bool 
         compress: Enable ReFoRCE-style table grouping for large schemas (groups similar-prefix
                   tables, shows one DDL per group with member list — saves 30-50% tokens)
     """
-    if not _CONN_NAME_RE.match(connection_name):
-        return "Error: Invalid connection name"
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
 
     gw = _gateway_url()
     async with httpx.AsyncClient(timeout=60) as client:
@@ -520,8 +521,8 @@ async def schema_link(connection_name: str, question: str, format: str = "ddl", 
         format: Output format — "ddl" (default, best for SQL gen), "compact", or "json"
         max_tables: Maximum tables to include (default 20)
     """
-    if not _CONN_NAME_RE.match(connection_name):
-        return "Error: Invalid connection name"
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
 
     gw = _gateway_url()
     async with httpx.AsyncClient(timeout=60) as client:

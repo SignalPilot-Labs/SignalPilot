@@ -6,17 +6,15 @@ import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
 
 # Authentication
 
-## Local self-hosted (no auth required by default)
+## Local self-hosted
 
-A local Docker Compose deployment has no auth enforced by default — the gateway trusts all requests from localhost. This is intentional for fast local development.
-
-To enable API key enforcement locally, set `SP_REQUIRE_API_KEY=true` in your `.env`.
+A local Docker Compose deployment accepts REST requests from localhost without a key. MCP starts without authentication only while no stored API key exists; creating the first key makes MCP authentication mandatory.
 
 ## API keys
 
 API keys are the primary auth mechanism for both self-hosted and cloud deployments.
 
-**Format**: `sk_` prefix followed by a random string. Keys are stored hashed (AES-GCM encrypted secret) in the gateway's database.
+**Format**: `sp_` prefix followed by 32 hexadecimal characters. The gateway stores a one-way SHA-256 hash and shows the raw key only at creation.
 
 **Create a key** via the web UI at `http://localhost:3200` → Settings → API Keys, or via the REST API:
 
@@ -27,7 +25,7 @@ API keys are the primary auth mechanism for both self-hosted and cloud deploymen
 
 **Use the key** as a bearer token:
 
-<MiniCopyBlock label="bearer token" plain code="Authorization: Bearer sk_your_key_here" />
+<MiniCopyBlock label="bearer token" plain code="Authorization: Bearer sp_your_key_here" />
 
 ## Bearer token header
 
@@ -35,13 +33,13 @@ Pass the API key in every MCP request:
 
 <MiniCopyBlock
   label="claude code"
-  code={`claude mcp add --transport http signalpilot http://localhost:3300/mcp \\\n  --header "Authorization: Bearer sk_your_key_here"`}
+  code={`claude mcp add --transport http signalpilot http://localhost:3300/mcp \\\n  --header "Authorization: Bearer sp_your_key_here"`}
 />
 
 <MiniCopyBlock
   label="json config"
   plain
-  code={`{\n  "headers": {\n    "Authorization": "Bearer sk_your_key_here"\n  }\n}`}
+  code={`{\n  "headers": {\n    "Authorization": "Bearer sp_your_key_here"\n  }\n}`}
 />
 
 ## Clerk JWT (cloud mode)

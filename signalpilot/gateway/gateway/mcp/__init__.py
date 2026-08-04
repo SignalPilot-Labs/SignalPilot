@@ -1,4 +1,4 @@
-"""gateway.mcp — FastMCP package for SignalPilot.
+"""gateway.mcp: FastMCP package for SignalPilot.
 
 Import order matters: server must be first (creates mcp instance),
 then context, validation, helpers, audit, and finally tools (which
@@ -7,7 +7,7 @@ register tool functions via @audited_tool(mcp) at decorator time).
 
 from __future__ import annotations
 
-# Named re-exports — must come AFTER the submodule-import block above so
+# Named re-exports: must come AFTER the submodule-import block above so
 # all @audited_tool(mcp) decorators have already run.
 from gateway.db.engine import get_session_factory
 from gateway.mcp import (
@@ -15,7 +15,7 @@ from gateway.mcp import (
     context,  # noqa: F401
     helpers,  # noqa: F401
     server,  # noqa: F401
-    tools,  # noqa: F401 — triggers all @audited_tool(mcp) registrations
+    tools,  # noqa: F401  # triggers all @audited_tool(mcp) registrations
     validation,  # noqa: F401
 )
 from gateway.mcp.context import (
@@ -26,6 +26,10 @@ from gateway.mcp.context import (
     _store_session,
     mcp_audit_id_var,
     mcp_client_ip_var,
+    mcp_eval_connection_var,
+    mcp_eval_doc_ids_var,
+    mcp_eval_run_var,
+    mcp_eval_task_var,
     mcp_org_id_var,
     mcp_raw_key_var,
     mcp_scopes_var,
@@ -88,6 +92,10 @@ __all__ = [
     "mcp_audit_id_var",
     "mcp_client_ip_var",
     "mcp_user_agent_var",
+    "mcp_eval_connection_var",
+    "mcp_eval_doc_ids_var",
+    "mcp_eval_run_var",
+    "mcp_eval_task_var",
     # Session helper
     "_store_session",
     # Validation helper used by tests

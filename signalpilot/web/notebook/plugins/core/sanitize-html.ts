@@ -46,7 +46,11 @@ export function sanitizeHtml(html: string) {
     FORCE_BODY: true,
     CUSTOM_ELEMENT_HANDLING: {
       tagNameCheck: /^(sp-[A-Za-z][\w-]*|iconify-icon)$/,
-      attributeNameCheck: /^[A-Za-z][\w-]*$/,
+      // DOMPurify does NOT apply its own event-handler filtering to
+      // attributes it accepts via `attributeNameCheck`, so `on*` must be
+      // excluded here: `<sp-foo onclick="...">` in notebook output would
+      // otherwise survive sanitization and fire in the browser.
+      attributeNameCheck: /^(?!on)[A-Za-z][\w-]*$/i,
     },
     // This flag means we should sanitize such that is it safe for XML,
     // but this is only used for HTML content.

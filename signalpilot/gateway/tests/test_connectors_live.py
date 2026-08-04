@@ -13,7 +13,7 @@ import asyncio
 
 import pytest
 
-# ── PostgreSQL ──────────────────────────────────────────────────────────────
+# Verify PostgreSQL connector behavior.
 
 
 class TestPostgresConnector:
@@ -70,7 +70,7 @@ class TestPostgresConnector:
         await connector.close()
 
 
-# ── MySQL ───────────────────────────────────────────────────────────────────
+# Verify MySQL connector behavior.
 
 
 class TestMySQLConnector:
@@ -118,7 +118,7 @@ class TestMySQLConnector:
         await connector.close()
 
 
-# ── ClickHouse ──────────────────────────────────────────────────────────────
+# Verify ClickHouse connector behavior.
 
 
 class TestClickHouseConnector:
@@ -161,7 +161,7 @@ class TestClickHouseConnector:
         await connector.close()
 
 
-# ── DuckDB ──────────────────────────────────────────────────────────────────
+# Verify DuckDB connector behavior.
 
 
 class TestDuckDBConnector:
@@ -196,7 +196,7 @@ class TestDuckDBConnector:
         await connector.close()
 
 
-# ── SQLite ──────────────────────────────────────────────────────────────────
+# Verify SQLite connector behavior.
 
 
 class TestSQLiteConnector:
@@ -231,7 +231,7 @@ class TestSQLiteConnector:
         await connector.close()
 
 
-# ── Registry ────────────────────────────────────────────────────────────────
+# Verify registry.
 
 
 class TestConnectorRegistry:
@@ -263,7 +263,7 @@ class TestConnectorRegistry:
             get_connector("invalid_db")
 
 
-# ── Connection String Builder ───────────────────────────────────────────────
+# Verify connection String Builder.
 
 
 class TestConnectionStringBuilder:
@@ -366,7 +366,7 @@ class TestConnectionStringBuilder:
         assert "5439" in result
 
 
-# ── SSH Tunnel Module ──────────────────────────────────────────────────────
+# Verify SSH Tunnel Module.
 
 
 class TestSSHTunnel:
@@ -390,7 +390,7 @@ class TestSSHTunnel:
             tunnel.start("remote-host", 5432)
 
 
-# ── Pool Manager SSH Helpers ──────────────────────────────────────────────
+# Define PoolManager SSH helper functions.
 
 
 class TestPoolManagerHelpers:
@@ -429,7 +429,7 @@ class TestPoolManagerHelpers:
         assert "127.0.0.1:54321" in result
 
 
-# ── Schema Compression ────────────────────────────────────────────────────
+# Verify schema Compression.
 
 
 class TestSchemaCompression:
@@ -515,7 +515,7 @@ class TestSchemaCompression:
         assert compressed["public.users"]["ddl"].count("UNIQUE") == 1
 
 
-# ── Connection Validation ──────────────────────────────────────────────────
+# Verify connection Validation.
 
 
 class TestConnectionValidation:
@@ -590,22 +590,29 @@ class TestConnectionValidation:
         assert any("username" in e.lower() for e in errors)
 
 
-# ── Snowflake URL Parsing ──────────────────────────────────────────────────
+# Verify snowflake URL Parsing.
 
 
 class TestSnowflakeURLParsing:
-    def test_pipe_delimited_format(self):
+    def test_pipe_delimited_format_is_rejected(self):
+        """Verify that the Snowflake parser rejects a pipe-delimited DSN."""
+        import pytest
+
         from gateway.connectors.drivers.snowflake import SnowflakeConnector
 
         c = SnowflakeConnector()
-        params = c._parse_connection("snowflake://acct|user|pass|db|wh|schema|role")
-        assert params["account"] == "acct"
-        assert params["user"] == "user"
-        assert params["password"] == "pass"
-        assert params["database"] == "db"
-        assert params["warehouse"] == "wh"
-        assert params["schema"] == "schema"
-        assert params["role"] == "role"
+        with pytest.raises(ValueError, match="no longer supported"):
+            c._parse_connection("snowflake://acct|user|pass|db|wh|schema|role")
+
+    @pytest.mark.asyncio
+    async def test_legacy_auth_method_extra_is_rejected(self):
+        """Verify that the Snowflake parser rejects the auth_method parameter."""
+        from gateway.connectors.drivers.snowflake import SnowflakeConnector
+
+        c = SnowflakeConnector()
+        c.set_credential_extras({"auth_method": "oauth", "account": "acct"})
+        with pytest.raises(RuntimeError, match="authenticator"):
+            await c.connect("acct")
 
     def test_standard_url_format(self):
         from gateway.connectors.drivers.snowflake import SnowflakeConnector
@@ -628,7 +635,7 @@ class TestSnowflakeURLParsing:
         assert params["account"] == "xy12345"
 
 
-# ── Postgres Enhanced Schema ───────────────────────────────────────────────
+# Verify postgres Enhanced Schema.
 
 
 class TestPostgresEnhancedSchema:
@@ -682,7 +689,7 @@ class TestPostgresEnhancedSchema:
         await c.close()
 
 
-# ── DuckDB Sample Values ──────────────────────────────────────────────────
+# Verify duckDB Sample Values.
 
 
 class TestDuckDBSampleValues:
@@ -701,7 +708,7 @@ class TestDuckDBSampleValues:
         await c.close()
 
 
-# ── SQLite Sample Values ──────────────────────────────────────────────────
+# Verify SQLite Sample Values.
 
 
 class TestSQLiteSampleValues:
@@ -720,7 +727,7 @@ class TestSQLiteSampleValues:
         await c.close()
 
 
-# ── Schema Cache Diff ──────────────────────────────────────────────────
+# Verify schema Cache Diff.
 
 
 class TestSchemaCacheDiff:
@@ -797,7 +804,7 @@ class TestSchemaCacheDiff:
         assert diff is None
 
 
-# ── Connection Update Store ──────────────────────────────────────────────
+# Verify connection Update Store.
 
 
 class TestConnectionUpdate:
@@ -820,7 +827,7 @@ class TestConnectionUpdate:
         assert data == {"description": "Updated description"}
 
 
-# ── Pool Manager Close Pool ──────────────────────────────────────────────
+# Verify pool Manager Close Pool.
 
 
 class TestPoolManagerClosePool:
@@ -879,7 +886,7 @@ class TestPoolManagerContextManager:
         await pm.close_all()
 
 
-# ── Table Grouping ──────────────────────────────────────────────────
+# Verify table Grouping.
 
 
 class TestTableGrouping:
@@ -934,7 +941,7 @@ class TestTableGrouping:
         assert "public.settings" in groups["_other"]
 
 
-# ── ClickHouse URL Parsing ──────────────────────────────────────────────
+# Verify clickHouse URL Parsing.
 
 
 class TestClickHouseURLParsing:
@@ -1071,7 +1078,7 @@ class TestSchemaSearch:
     def test_column_name_match(self):
         schema = self._build_test_schema()
         results = self._score_tables(schema, "email")
-        # customers has "email" column — exact match
+        # customers has "email" column. exact match
         customer_results = [r for r in results if r[1] == "public.customers"]
         assert len(customer_results) == 1
         assert customer_results[0][0] >= 4.0  # exact column match
@@ -1099,18 +1106,18 @@ class TestSchemaSearch:
 class TestDatabricksURLParsing:
     """Test Databricks connection string parsing."""
 
-    def test_pipe_delimited_format(self):
+    def test_pipe_delimited_format_is_rejected(self):
+        """Verify that the Databricks parser rejects a pipe-delimited DSN."""
+        import pytest
+
         from gateway.connectors.drivers.databricks import DatabricksConnector
 
         c = DatabricksConnector()
-        params = c._parse_connection(
-            "databricks://my-workspace.cloud.databricks.com|/sql/1.0/warehouses/abc123|dapi_token|my_catalog|my_schema"
-        )
-        assert params["host"] == "my-workspace.cloud.databricks.com"
-        assert params["http_path"] == "/sql/1.0/warehouses/abc123"
-        assert params["access_token"] == "dapi_token"
-        assert params["catalog"] == "my_catalog"
-        assert params["schema"] == "my_schema"
+        with pytest.raises(ValueError, match="no longer supported"):
+            c._parse_connection(
+                "databricks://my-workspace.cloud.databricks.com|/sql/1.0/warehouses/abc123"
+                "|dapi_token|my_catalog|my_schema"
+            )
 
     def test_url_format(self):
         from gateway.connectors.drivers.databricks import DatabricksConnector
@@ -1207,7 +1214,7 @@ class TestPostgresSSLConfig:
         try:
             c._build_ssl_context()
         except ssl.SSLError:
-            # Expected — test cert is not valid, but context was created
+            # Expected. test cert is not valid, but context was created
             pass
         # Should have created at least one temp file for CA cert
         assert len(c._temp_files) >= 1
@@ -1518,14 +1525,14 @@ class TestLevenshteinDistance:
     def test_common_hallucination(self):
         from gateway.main import _levenshtein
 
-        # "customer_name" vs "first_name" — very different, should have high distance
+        # "customer_name" vs "first_name". very different, should have high distance
         dist = _levenshtein("customer_name", "first_name")
         assert dist > 5
 
     def test_typo_correction(self):
         from gateway.main import _levenshtein
 
-        # "frist_name" vs "first_name" — single transposition
+        # "frist_name" vs "first_name". single transposition
         dist = _levenshtein("frist_name", "first_name")
         assert dist <= 2
 
@@ -1537,7 +1544,7 @@ class TestLevenshteinDistance:
         assert _levenshtein("", "") == 0
 
 
-# ── Connection Tags (Round 6) ──────────────────────────────────────────────
+# Verify connection Tags.
 
 
 class TestConnectionTags:
@@ -1580,7 +1587,7 @@ class TestConnectionTags:
         assert info.tags == []
 
 
-# ── Snowflake Key-Pair Auth (Round 6) ─────────────────────────────────────
+# Verify snowflake Key-Pair Auth.
 
 
 class TestSnowflakeKeyPairAuth:
@@ -1632,7 +1639,7 @@ class TestSnowflakeKeyPairAuth:
         assert connector._credential_extras["private_key"] == "---KEY---"
 
 
-# ── ClickHouse HTTP Fallback (Round 6) ────────────────────────────────────
+# Verify clickHouse HTTP Fallback.
 
 
 class TestClickHouseHTTPFallback:
@@ -1641,7 +1648,7 @@ class TestClickHouseHTTPFallback:
     def test_has_http_import(self):
         from gateway.connectors.drivers.clickhouse import HAS_CLICKHOUSE_HTTP
 
-        # Should be True or False — just verify the flag exists
+        # Should be True or False. just verify the flag exists
         assert isinstance(HAS_CLICKHOUSE_HTTP, bool)
 
     def test_has_native_import(self):
@@ -1692,7 +1699,7 @@ class TestClickHouseHTTPFallback:
         assert params.get("use_http") is None
 
 
-# ── Parallel Schema Fetching (Round 6) ────────────────────────────────────
+# Verify parallel Schema Fetching.
 
 
 class TestParallelSchemaFetching:
@@ -1726,7 +1733,7 @@ class TestParallelSchemaFetching:
         assert "_fetch_all" in source  # Sequential wrapper
 
 
-# ── Scheduled Schema Refresh (Round 7) ─────────────────────────────────────
+# Verify scheduled Schema Refresh.
 
 
 class TestScheduledSchemaRefresh:
@@ -1792,7 +1799,7 @@ class TestScheduledSchemaRefresh:
             ConnectionCreate(name="test", db_type="postgres", host="localhost", schema_refresh_interval=100000)
 
 
-# ── Schema Cache Sample Values (Round 7) ───────────────────────────────────
+# Verify schema Cache Sample Values.
 
 
 class TestSchemaCacheSampleValues:
@@ -1837,7 +1844,7 @@ class TestSchemaCacheSampleValues:
         assert cache.get_sample_values("conn1", "t1") is not None
 
 
-# ── Cost Estimator Improvements (Round 7) ──────────────────────────────────
+# Verify cost Estimator behavior.
 
 
 class TestCostEstimatorImprovements:
@@ -1891,7 +1898,7 @@ class TestCostEstimatorImprovements:
             assert db_type in source
 
 
-# ── Schema Filtering (Round 7) ────────────────────────────────────────────
+# Verify schema Filtering.
 
 
 class TestSchemaFiltering:
@@ -1930,7 +1937,7 @@ class TestSchemaFiltering:
         assert callable(get_cached_sample_values)
 
 
-# ── Connection String Builder (Round 7) ────────────────────────────────────
+# Verify connection String Builder.
 
 
 class TestConnectionStringBuilder:
@@ -2088,7 +2095,7 @@ class TestConnectionStringBuilder:
         assert url == ":memory:"
 
 
-# ── DuckDB Schema Improvements (Round 7) ──────────────────────────────────
+# Verify duckDB Schema behavior.
 
 
 class TestDuckDBSchemaImprovements:
@@ -2132,7 +2139,7 @@ class TestDuckDBSchemaImprovements:
         await conn.close()
 
 
-# ── SQLite Foreign Keys (Round 7) ─────────────────────────────────────────
+# Verify SQLite Foreign Keys.
 
 
 class TestSQLiteForeignKeys:
@@ -2148,7 +2155,7 @@ class TestSQLiteForeignKeys:
         assert "PRAGMA foreign_keys" in source
 
 
-# ── MCP list_tables Tool (Round 7) ────────────────────────────────────────
+# Verify MCP list_tables Tool.
 
 
 class TestMCPListTables:
@@ -2171,11 +2178,11 @@ class TestMCPListTables:
         assert "foreign_keys" in source
 
 
-# ── Schema Relationships Endpoint (Round 8) ─────────────────────────────────
+# Verify schema Relationships Endpoint.
 
 
 class TestSchemaRelationships:
-    """Tests for the /schema/relationships endpoint — ERD summary for AI agents."""
+    """Tests for the /schema/relationships endpoint. ERD summary for AI agents."""
 
     def test_relationships_endpoint_exists(self):
         """Schema relationships endpoint is registered."""
@@ -2287,11 +2294,11 @@ class TestSchemaRelationships:
         assert len(routes) > 0
 
 
-# ── Join Path Discovery (Round 8) ──────────────────────────────────────────
+# Verify join Path Discovery.
 
 
 class TestJoinPathDiscovery:
-    """Tests for the /schema/join-paths endpoint — multi-hop FK traversal."""
+    """Tests for the /schema/join-paths endpoint. multi-hop FK traversal."""
 
     def test_join_paths_endpoint_exists(self):
         """Join paths endpoint is registered."""
@@ -2359,7 +2366,7 @@ class TestJoinPathDiscovery:
             assert result["hops"] == 0
 
 
-# ── Connection Test Phase 3: Schema Access (Round 8) ───────────────────────
+# Verify connection Test Phase 3: Schema Access.
 
 
 class TestConnectionTestPhase3:
@@ -2385,7 +2392,7 @@ class TestConnectionTestPhase3:
         assert "schema_cache.put" in source
 
 
-# ── MCP join/relationship tools (Round 8) ──────────────────────────────────
+# Verify MCP join/relationship tools.
 
 
 class TestMCPJoinTools:
@@ -2419,11 +2426,11 @@ class TestMCPJoinTools:
         assert "graph" in source
 
 
-# ── Table Exploration (ReFoRCE pattern, Round 8) ──────────────────────────
+# Verify table Exploration.
 
 
 class TestExploreTable:
-    """Tests for /schema/explore-table — iterative column exploration."""
+    """Tests for /schema/explore-table. iterative column exploration."""
 
     def test_explore_table_endpoint_exists(self):
         from gateway.main import app
@@ -2447,7 +2454,7 @@ class TestExploreTable:
         assert callable(explore_table)
 
 
-# ── Enhanced Error Messages (Round 8) ──────────────────────────────────────
+# Verify enhanced Error Messages.
 
 
 class TestEnhancedErrors:
@@ -2486,7 +2493,7 @@ class TestEnhancedErrors:
         assert "CA certificate" in msg
 
 
-# ── Schema Overview (Round 8) ──────────────────────────────────────────────
+# Verify schema Overview.
 
 
 class TestSchemaOverview:
@@ -2504,7 +2511,7 @@ class TestSchemaOverview:
         assert callable(schema_overview)
 
 
-# ── URL Validation (Round 8) ──────────────────────────────────────────────
+# Verify URL Validation.
 
 
 class TestURLValidation:
@@ -2558,7 +2565,7 @@ class TestURLValidation:
         assert any("password" in w.lower() for w in result.get("warnings", []))
 
 
-# ── Connector Tier Classification ──────────────────────────────────────────
+# Verify connector Tier Classification.
 
 
 class TestConnectorTierClassification:
@@ -2636,7 +2643,7 @@ class TestConnectorTierClassification:
                 assert enabled >= 8, f"Tier 1 {db_type} should have 8+ features"
 
 
-# ── Schema Diff ────────────────────────────────────────────────────────────
+# Verify schema Diff.
 
 
 class TestSchemaDiff:
@@ -2712,7 +2719,7 @@ class TestSchemaDiff:
         assert "email" in diff["modified_tables"][0]["added_columns"]
 
 
-# ── Schema DDL Endpoint ────────────────────────────────────────────────────
+# Verify schema DDL Endpoint.
 
 
 class TestSchemaDDL:
@@ -2724,7 +2731,7 @@ class TestSchemaDDL:
 
         from gateway.main import get_schema_ddl
 
-        # This test requires a running connection — skip if gateway not available
+        # This test requires a running connection. skip if gateway not available
         try:
             result = asyncio.get_event_loop().run_until_complete(get_schema_ddl("enterprise-pg"))
             assert result["format"] == "ddl"
@@ -2779,7 +2786,7 @@ class TestSchemaDDL:
         assert sorted_keys[2] == "public.products"
 
 
-# ── MCP Capabilities and Diff Tools ───────────────────────────────────────
+# Verify MCP Capabilities and Diff Tools.
 
 
 class TestMCPCapabilitiesTools:
@@ -2828,7 +2835,7 @@ class TestMCPCapabilitiesTools:
         assert "query_history" in tools
 
 
-# ── Query Error Hints ──────────────────────────────────────────────────────
+# Verify query Error Hints.
 
 
 class TestQueryErrorHints:
@@ -2890,7 +2897,7 @@ class TestQueryErrorHints:
         assert hint is None
 
 
-# ── Schema Linking ──────────────────────────────────────────────────────────
+# Verify schema Linking.
 
 
 class TestSchemaLinking:
@@ -3025,7 +3032,7 @@ class TestSchemaLinking:
     def test_fk_expansion(self):
         """FK-connected tables should be included for join path completeness."""
         schema = self._make_schema()
-        # Suppose orders was matched — customers should be added via FK
+        # Suppose orders was matched. customers should be added via FK
         linked_keys = {"public.orders"}
         fk_additions = set()
 
@@ -3058,7 +3065,7 @@ class TestSchemaLinking:
         assert "public.order_items" in linked_keys
 
     def test_singular_plural_matching(self):
-        """'order' should match 'orders' table (singular → plural)."""
+        """Verify that the singular name order matches the plural table orders."""
         import re
 
         schema = self._make_schema()
@@ -3085,7 +3092,7 @@ class TestSchemaLinking:
         assert scores["public.orders"] > 0, "'order' should match 'orders' via singular/plural"
 
 
-# ── MSSQL Connector ────────────────────────────────────────────────────────
+# Verify MSSQL Connector.
 
 
 class TestMSSQLConnector:
@@ -3271,7 +3278,7 @@ class TestMSSQLCostEstimation:
         assert result.warning is not None
 
 
-# ── BaseConnector sample UNION ALL helpers ─────────────────────────────────
+# Define BaseConnector sample UNION ALL helper functions.
 
 
 class TestBaseConnectorSampleHelpers:

@@ -1,6 +1,6 @@
 """In-process socket tests for DbtProxySession.
 
-Uses asyncio.start_server on 127.0.0.1:0 (OS-assigned port) — no real Postgres.
+Uses asyncio.start_server on 127.0.0.1:0 (OS-assigned port). no real Postgres.
 Fakes are injected via constructor; no monkeypatching.
 """
 
@@ -58,8 +58,8 @@ def _claims(run_id: uuid.UUID, connector: str = "my_conn") -> RunTokenClaims:
 class TestDbtProxySession:
     async def test_auth_happy_path(self) -> None:
         """Verify that a good token produces AuthOk + ReadyForQuery."""
-        from gateway.dbt_proxy.tokens import RunTokenStore
         from gateway.dbt_proxy.auth import handle_startup
+        from gateway.dbt_proxy.tokens import RunTokenStore
 
         secret = "test-secret"
         token_store = RunTokenStore(secret)
@@ -89,16 +89,16 @@ class TestDbtProxySession:
         claims = await handle_startup(reader, writer, token_store)
         assert claims.run_id == run_id
         combined = b"".join(buf)
-        # AuthenticationCleartextPassword → type R
+        # AuthenticationCleartextPassword has message type R.
         assert b"R" in combined
         # AuthOk must be present
         assert combined.count(b"R") >= 2
 
     async def test_auth_fail_sends_error_and_closes(self) -> None:
-        """Wrong token → ErrorResponse with SQLSTATE 28P01."""
-        from gateway.dbt_proxy.tokens import RunTokenStore
+        """Verify that an incorrect token returns SQLSTATE 28P01."""
         from gateway.dbt_proxy.auth import handle_startup
         from gateway.dbt_proxy.errors import AuthFailed
+        from gateway.dbt_proxy.tokens import RunTokenStore
 
         secret = "test-secret"
         token_store = RunTokenStore(secret)
@@ -137,9 +137,9 @@ class TestDbtProxySession:
         assert closed[0] is True
 
     async def test_simple_query_select_forwarded(self) -> None:
-        """SimpleQuery SELECT → RowDescription/DataRow/CommandComplete sent."""
-        from gateway.dbt_proxy.session import DbtProxySession
+        """Verify protocol responses for a SimpleQuery SELECT request."""
         from gateway.dbt_proxy.forwarder import QueryResult
+        from gateway.dbt_proxy.session import DbtProxySession
 
         run_id = uuid.uuid4()
         claims = _claims(run_id)
@@ -196,9 +196,9 @@ class TestDbtProxySession:
         assert b"Z" in combined
 
     async def test_non_postgres_connector_returns_sqlstate_0a000(self) -> None:
-        """NonPostgresConnector → ErrorResponse SQLSTATE 0A000."""
-        from gateway.dbt_proxy.session import DbtProxySession
+        """Verify that NonPostgresConnector returns SQLSTATE 0A000."""
         from gateway.dbt_proxy.errors import NonPostgresConnector
+        from gateway.dbt_proxy.session import DbtProxySession
 
         run_id = uuid.uuid4()
         claims = _claims(run_id, connector="my_bigquery_conn")
@@ -239,7 +239,7 @@ class TestDbtProxySession:
         assert b"0A000" in combined
 
     async def test_governance_blocked_sends_error_no_exec(self) -> None:
-        """Governance-blocked DDL → ErrorResponse written, forwarder not called."""
+        """Verify that blocked DDL returns an error without calling the forwarder."""
         from gateway.dbt_proxy.session import DbtProxySession
 
         run_id = uuid.uuid4()
@@ -266,15 +266,15 @@ class TestDbtProxySession:
 
         writer = FakeWriter()
 
-        import gateway.dbt_proxy.session as session_mod
         import gateway.dbt_proxy.forwarder as forwarder_mod
+        import gateway.dbt_proxy.session as session_mod
         original_execute = session_mod.execute_query
 
         async def _fake_execute(c, s, *, store):
             # The governance check in execute_query raises ValueError for blocked statements
             # and writes the audit row; we re-raise it here to simulate that flow
-            from gateway.engine.dbt_validation import validate_dbt_statement
             from gateway.dbt_proxy.audit import record as audit_record
+            from gateway.engine.dbt_validation import validate_dbt_statement
 
             validation = validate_dbt_statement(s, claims=c)
             if validation.blocked:

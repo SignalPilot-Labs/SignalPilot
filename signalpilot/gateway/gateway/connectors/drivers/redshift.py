@@ -224,7 +224,7 @@ class RedshiftConnector(BaseConnector):
             ) pk ON td.schemaname = pk.table_schema AND td.tablename = pk.table_name AND td."column" = pk.column_name
             LEFT JOIN pg_views v ON td.schemaname = v.schemaname AND td.tablename = v.viewname
             WHERE td.schemaname NOT IN ('pg_catalog', 'information_schema', 'pg_internal')
-            ORDER BY td.schemaname, td.tablename, td.colnum
+            ORDER BY td.schemaname, td.tablename
         """
         # Foreign keys (critical for Spider2.0 join path discovery)
         fk_sql = """
@@ -266,8 +266,7 @@ class RedshiftConnector(BaseConnector):
                 schemaname AS table_schema,
                 tablename AS table_name,
                 attname AS column_name,
-                n_distinct,
-                most_common_vals::text AS common_values
+                n_distinct
             FROM pg_stats
             WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
         """
@@ -305,7 +304,26 @@ class RedshiftConnector(BaseConnector):
                 logger.info("Redshift metadata query failed (%s): %s", label, e)
                 return []
 
+        def _set_search_path():
+            # pg_table_def only returns tables whose schema is on search_path
+            # (Redshift quirk) — put every user schema on it before introspection.
+            try:
+                with self._conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT nspname FROM pg_namespace "
+                        "WHERE nspname NOT IN ('pg_catalog', 'information_schema', 'pg_internal') "
+                        "AND nspname NOT LIKE 'pg_temp%' AND nspname NOT LIKE 'pg_auto%'"
+                    )
+                    schemas = [r[0] for r in cursor.fetchall()]
+                if schemas:
+                    path = ", ".join('"' + s.replace('"', '""') + '"' for s in schemas)
+                    with self._conn.cursor() as cursor:
+                        cursor.execute(f"SET search_path TO {path}")
+            except Exception as e:
+                logger.info("Redshift search_path setup failed: %s", e)
+
         def _fetch_all():
+            _set_search_path()
             return (
                 _fetch(sql, "columns"),
                 _fetch(fk_sql, "foreign_keys"),

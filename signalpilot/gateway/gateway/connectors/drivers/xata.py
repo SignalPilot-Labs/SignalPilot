@@ -49,6 +49,11 @@ class XataConnector(PostgresConnector):
     @staticmethod
     async def _resolve_endpoint(extras: dict) -> str:
         """Resolve a branch (by name) to a Postgres connection string via the API."""
+        from gateway.connectors.xata_creds import resolve_xata_extras
+
+        # Demo connections store a credential *reference*, not the org key — the
+        # secret is materialized here, at use time, and never lives at rest.
+        extras = resolve_xata_extras(extras)
         api_key = extras.get("xata_api_key")
         api_url = extras.get("xata_api_url") or "https://api.xata.tech"
         org = extras.get("xata_organization") or extras.get("xata_org")

@@ -1,0 +1,2 @@
+What is the magic number?
+[[e2e:answer=The magic number is 123]]

@@ -46,9 +46,19 @@ spec:
         deny:
           conditions:
             any:
-              - key: "{{ request.name }}"
-                operator: NotMatch
-                value: "^nb-[0-9a-f]{12}$"
+              # There is NO `Match`/`NotMatch` condition operator in Kyverno. The valid
+              # set is Equals/NotEquals/In/NotIn/AnyIn/AllIn/AnyNotIn/AllNotIn plus the
+              # numeric and Duration comparators. Regex matching is done with the
+              # JMESPath function regex_match(), which returns a boolean.
+              #
+              # This file previously used `operator: NotMatch`, which made the entire
+              # ClusterPolicy invalid: Kyverno's validate-policy webhook rejected the
+              # object, so NEITHER rule below was ever installed and pods/exec was
+              # unrestricted. Verified against live Kyverno 1.18.2 — see
+              # README.md → "Validation findings".
+              - key: "{{ regex_match('^nb-[0-9a-f]{12}$', request.name) }}"
+                operator: Equals
+                value: false
 
     - name: restrict-container
       match:

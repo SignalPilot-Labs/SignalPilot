@@ -1,14 +1,8 @@
-"""Pure-unit tests for Xata field validation, URL-quoting, and related helpers.
+"""Verify Xata field validation, URL quoting, and helper functions.
 
-No DB, no network — all external I/O is mocked.
-Groups:
-  1. SSRF rejection on Create and Update
-  2. Branch regex valid/invalid
-  3. xata_org regex rejection (NEW — Item 2 coverage)
-  4. xata_org URL-quote at the call site (NEW — Item 2 coverage)
-  5. OIDC missing-cred error
-  6. sanitize_db_error strips secrets
-  7. _profile_pg_stats uses positional placeholders
+The tests replace all external input and output with test doubles. They verify
+SSRF rejection, identifier validation, URL quoting, bearer authentication,
+error sanitization, and positional database parameters.
 """
 
 from __future__ import annotations
@@ -24,13 +18,14 @@ from gateway.connectors.xata_control import XataControlClient, XataControlConfig
 from gateway.mcp.tools.model_map import _profile_pg_stats
 from gateway.models import ConnectionCreate, ConnectionUpdate
 
-# ─── Module-level helpers ─────────────────────────────────────────────────────
+# Define module-level helper functions.
 
 _MINIMAL_XATA_CREATE = {
     "name": "t",
     "db_type": "xata",
-    "region": "us-east-1",
-    "database": "mydb",
+    "xata_api_key": "xau_testkey",
+    "xata_organization": "myorg",
+    "xata_project": "prj_abc",
 }
 
 _FAKE_CREDENTIALS_JSON = json.dumps(
@@ -51,7 +46,7 @@ def _make_xata_create(**kwargs) -> dict:
     return {**_MINIMAL_XATA_CREATE, **kwargs}
 
 
-# ─── Group 1: SSRF rejection ──────────────────────────────────────────────────
+# Verify SSRF rejection.
 
 
 class TestSsrfRejection:
@@ -68,25 +63,39 @@ class TestSsrfRejection:
         with pytest.raises(ValidationError):
             ConnectionCreate(**_make_xata_create(xata_api_url=bad_url))
 
-    @pytest.mark.parametrize("bad_url", _PRIVATE_URLS)
-    def test_ssrf_rejected_on_create_xata_token_url(self, bad_url: str) -> None:
-        with pytest.raises(ValidationError):
-            ConnectionCreate(
-                **_make_xata_create(
-                    xata_token_url=bad_url,
-                    xata_client_id="c",
-                    xata_client_secret="s",
-                    xata_username="u",
-                    xata_password="p",
-                )
-            )
+    def test_removed_oidc_fields_rejected_on_create(self) -> None:
+        """Verify that ConnectionCreate rejects self-hosted OIDC fields."""
+        for field in (
+            "xata_token_url",
+            "xata_client_id",
+            "xata_client_secret",
+            "xata_username",
+            "xata_password",
+        ):
+            with pytest.raises(ValidationError, match="no longer accepted"):
+                ConnectionCreate(**_make_xata_create(**{field: "https://sso.example.com/token"}))
+
+    def test_removed_xata_sh_fields_rejected_on_create(self) -> None:
+        """Verify that ConnectionCreate rejects xata.sh endpoint fields."""
+        for field, value in (("workspace", "myworkspace"), ("region", "us-east-1")):
+            with pytest.raises(ValidationError, match="no longer accepted"):
+                ConnectionCreate(**_make_xata_create(**{field: value}))
+
+    def test_removed_xata_fields_rejected_on_update(self) -> None:
+        for field, value in (
+            ("region", "us-east-1"),
+            ("workspace", "myworkspace"),
+            ("xata_token_url", "https://sso.example.com/token"),
+        ):
+            with pytest.raises(ValidationError, match="no longer accepted"):
+                ConnectionUpdate(**{field: value})
 
     def test_ssrf_rejected_on_update_xata_api_url(self) -> None:
         with pytest.raises(ValidationError):
             ConnectionUpdate(xata_api_url="http://127.0.0.1/")
 
 
-# ─── Group 2: Branch regex ────────────────────────────────────────────────────
+# Verify branch regex.
 
 
 class TestBranchRegex:
@@ -110,7 +119,7 @@ class TestBranchRegex:
             ConnectionCreate(**_make_xata_create(branch=branch))
 
 
-# ─── Group 3: xata_org regex ─────────────────────────────────────────────────
+# Verify xata_org regex.
 
 
 class TestXataOrgRegex:
@@ -140,7 +149,7 @@ class TestXataOrgRegex:
             ConnectionUpdate(xata_org="my/org")
 
 
-# ─── Group 4: xata_org URL-quote at the call site ────────────────────────────
+# Verify xata_org URL-quote at the call site.
 
 
 class TestXataOrgUrlQuote:
@@ -186,27 +195,25 @@ class TestXataOrgUrlQuote:
         assert "/organizations/weird%20org/projects" in called_url
 
 
-# ─── Group 5: OIDC missing-cred error ────────────────────────────────────────
+# Verify bearer authentication for the control plane.
 
 
-class TestOidcMissingCredError:
-    @pytest.mark.asyncio
-    async def test_token_raises_when_oidc_creds_missing(self) -> None:
-        """_token raises XataControlError('OIDC credentials missing') when creds absent."""
-        cfg = XataControlConfig(
-            api_url="https://api.xata.io",
-            token_url="https://sso.example.com/token",
-            # no client_id / client_secret / username / password
-        )
+class TestControlPlaneAuthIsBearerOnly:
+    def test_missing_bearer_token_raises(self) -> None:
+        """Verify that the control plane requires a bearer token."""
+        cfg = XataControlConfig(api_url="https://api.xata.io")
         client = XataControlClient(cfg)
-        mock_http = AsyncMock()
-        client._client = mock_http
 
-        with pytest.raises(XataControlError, match="OIDC credentials missing"):
-            await client._token(mock_http)
+        with pytest.raises(XataControlError, match="no bearer_token configured"):
+            client._token()
+
+    def test_oidc_config_fields_are_gone(self) -> None:
+        for field in ("token_url", "client_id", "client_secret", "username", "password"):
+            with pytest.raises(TypeError):
+                XataControlConfig(api_url="https://api.xata.io", **{field: "x"})
 
 
-# ─── Group 6: sanitize_db_error strips secrets ───────────────────────────────
+# Verify sanitize_db_error strips secrets.
 
 
 class TestSanitizeDbError:
@@ -233,7 +240,7 @@ class TestSanitizeDbError:
         assert result
 
 
-# ─── Group 7: _profile_pg_stats uses positional placeholders ─────────────────
+# Verify _profile_pg_stats uses positional placeholders.
 
 
 class TestProfilePgStatsParameterization:

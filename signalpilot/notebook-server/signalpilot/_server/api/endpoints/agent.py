@@ -11,6 +11,7 @@ from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING
 
 import msgspec
+from starlette.authentication import requires
 from starlette.responses import Response, StreamingResponse
 
 from signalpilot import _loggers
@@ -56,6 +57,7 @@ class AgentEventsRequest(msgspec.Struct, rename="camel"):
 
 
 @router.get("/auth-status")
+@requires("edit")
 async def agent_auth_status(*, request: Request) -> Response:
     """Check if AI credentials are configured."""
     import os
@@ -122,6 +124,7 @@ async def agent_auth_status(*, request: Request) -> Response:
 
 
 @router.post("/create")
+@requires("edit")
 async def create_agent(*, request: Request) -> Response:
     """Create a new agent instance."""
     from signalpilot._server.ai.agent_manager import get_agent_manager
@@ -148,6 +151,7 @@ async def create_agent(*, request: Request) -> Response:
 
 
 @router.post("/message")
+@requires("edit")
 async def send_agent_message(*, request: Request) -> StreamingResponse:
     """Send a message to an agent instance. Returns SSE stream."""
     from signalpilot._server.ai.agent_manager import get_agent_manager
@@ -204,6 +208,7 @@ async def send_agent_message(*, request: Request) -> StreamingResponse:
 
 
 @router.post("/stop")
+@requires("edit")
 async def stop_agent_instance(*, request: Request) -> Response:
     """Stop a running agent instance."""
     from signalpilot._server.ai.agent_manager import get_agent_manager
@@ -228,6 +233,7 @@ async def stop_agent_instance(*, request: Request) -> Response:
 
 
 @router.post("/status")
+@requires("edit")
 async def get_agent_status(*, request: Request) -> Response:
     """Get agent instance status."""
     from signalpilot._server.ai.agent_manager import get_agent_manager
@@ -260,6 +266,7 @@ async def get_agent_status(*, request: Request) -> Response:
 
 
 @router.post("/list")
+@requires("edit")
 async def list_agents(*, request: Request) -> Response:
     """List all agent instances."""
     from signalpilot._server.ai.agent_manager import get_agent_manager
@@ -289,6 +296,7 @@ async def list_agents(*, request: Request) -> Response:
 
 
 @router.post("/events")
+@requires("edit")
 async def get_agent_events(*, request: Request) -> Response:
     """Get buffered events for catch-up."""
     from signalpilot._server.ai.agent_manager import get_agent_manager

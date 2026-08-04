@@ -7,12 +7,19 @@ import json
 import os
 import shutil
 import subprocess
+from .version_parse import parse_dbt_version
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from signalpilot import _loggers
+from signalpilot._server.files.path_confinement import (
+    confine,
+    confine_optional,
+    is_confined,
+    workspace_roots,
+)
 
 LOGGER = _loggers.sp_logger()
 
@@ -69,21 +76,23 @@ def find_dbt_executable() -> str | None:
 
 
 def find_dbt_project(start_dir: str | None = None) -> str | None:
-    if start_dir is None:
-        start_dir = os.getcwd()
+    roots = workspace_roots()
+    current = confine(start_dir, label="projectDir") if start_dir else roots[0]
 
-    current = Path(start_dir).resolve()
     for _ in range(10):
         if (current / "dbt_project.yml").exists():
             return str(current)
         parent = current.parent
-        if parent == current:
+        # The walk is upward, so it must stop at the workspace boundary rather
+        # than surfacing a dbt project from an ancestor of the workspace.
+        if parent == current or not is_confined(parent):
             break
         current = parent
     return None
 
 
 def parse_dbt_project_yml(project_dir: str) -> DbtProjectInfo:
+    project_dir = str(confine(project_dir, label="projectDir"))
     project_file = Path(project_dir) / "dbt_project.yml"
     info = DbtProjectInfo(project_dir=project_dir)
 
@@ -126,15 +135,9 @@ def parse_dbt_project_yml(project_dir: str) -> DbtProjectInfo:
                 text=True,
                 timeout=10,
             )
-            for line in result.stdout.splitlines():
-                if "installed" in line.lower() or "core" in line.lower():
-                    parts = line.strip().split()
-                    for part in parts:
-                        if part and part[0].isdigit():
-                            info.dbt_version = part
-                            break
-                    if info.dbt_version:
-                        break
+            parsed = parse_dbt_version(result.stdout)
+            if parsed:
+                info.dbt_version = parsed
         except Exception:
             pass
 
@@ -150,6 +153,13 @@ def run_dbt_command_sync(
     env_vars: dict[str, str] | None = None,
     timeout: int = 300,
 ) -> DbtCommandResult:
+    # dbt executes project-supplied Jinja and run hooks, so the tree it is
+    # pointed at must never be outside the workspace.
+    confined_project = confine_optional(project_dir, label="projectDir")
+    project_dir = str(confined_project) if confined_project else None
+    confined_profiles = confine_optional(profiles_dir, label="profilesDir")
+    profiles_dir = str(confined_profiles) if confined_profiles else None
+
     dbt_exe = find_dbt_executable()
     if not dbt_exe:
         return DbtCommandResult(
@@ -158,7 +168,7 @@ def run_dbt_command_sync(
             success=False,
             exit_code=-1,
             stdout="",
-            stderr="dbt executable not found. Install dbt-core: pip install dbt-core",
+            stderr="dbt executable not found. Install dbt (pip install dbt-core, or the dbt Fusion CLI)",
             duration_ms=0,
             project_dir=project_dir,
         )
@@ -262,10 +272,11 @@ SKIP_DIRS = {
 def discover_dbt_projects(
     root_dir: str | None = None, max_depth: int = 3
 ) -> list[DbtProjectInfo]:
-    if root_dir is None:
-        root_dir = os.getcwd()
-
-    root = Path(root_dir).resolve()
+    root = (
+        confine(root_dir, label="rootDir")
+        if root_dir
+        else workspace_roots()[0]
+    )
     projects: list[DbtProjectInfo] = []
 
     def _walk(current: Path, depth: int) -> None:
@@ -281,8 +292,13 @@ def discover_dbt_projects(
             return
 
         for entry in entries:
-            if entry.is_dir() and entry.name not in SKIP_DIRS:
-                _walk(entry, depth + 1)
+            if entry.name in SKIP_DIRS or not entry.is_dir():
+                continue
+            # is_dir() follows symlinks, so a link inside the workspace could
+            # otherwise walk the descent out of it.
+            if not is_confined(entry):
+                continue
+            _walk(entry, depth + 1)
 
     _walk(root, 0)
     projects.sort(
@@ -299,15 +315,19 @@ def scaffold_dbt_project(
     parent_dir: str | None = None,
     adapter: str = "duckdb",
 ) -> tuple[str, list[str]]:
-    if parent_dir is None:
-        parent_dir = os.getcwd()
+    parent = (
+        confine(parent_dir, label="parentDir")
+        if parent_dir
+        else workspace_roots()[0]
+    )
 
     if project_name == ".":
-        project_dir = Path(parent_dir)
-        safe_name = Path(parent_dir).name.replace("-", "_").replace(" ", "_")
+        project_dir = parent
+        safe_name = parent.name.replace("-", "_").replace(" ", "_")
     else:
-        project_dir = Path(parent_dir) / project_name
-        safe_name = project_name.replace("-", "_").replace(" ", "_")
+        # project_name is a path component, so it can traverse on its own.
+        project_dir = confine(parent / project_name, label="projectName")
+        safe_name = Path(project_name).name.replace("-", "_").replace(" ", "_")
 
     if safe_name and safe_name[0].isdigit():
         safe_name = f"project_{safe_name}"
@@ -787,13 +807,20 @@ def clone_git_repo(
     branch: str | None = None,
     timeout: int = 120,
 ) -> tuple[bool, str, str]:
+    # http(s) only: blocks ext:: (arbitrary command execution), file://,
+    # ssh://, git://, and scp-style URLs.
+    if not git_url.strip().lower().startswith(("http://", "https://")):
+        return False, "", "Only http(s) git URLs are supported."
+
     git_exe = shutil.which("git")
     if not git_exe:
         return False, "", "git executable not found. Install git first."
 
     repo_name = git_url.rstrip("/").split("/")[-1].replace(".git", "")
-    if target_dir is None:
-        target_dir = os.path.join(os.getcwd(), repo_name)
+    if target_dir:
+        target_dir = str(confine(target_dir, label="targetDir"))
+    else:
+        target_dir = str(workspace_roots()[0] / Path(repo_name).name)
 
     cmd = [git_exe, "clone", "--depth", "1"]
     if branch:
@@ -817,7 +844,9 @@ def clone_git_repo(
 
 
 def get_manifest(project_dir: str) -> dict[str, Any] | None:
-    manifest_path = Path(project_dir) / "target" / "manifest.json"
+    manifest_path = (
+        confine(project_dir, label="projectDir") / "target" / "manifest.json"
+    )
     if not manifest_path.exists():
         return None
     try:
@@ -829,7 +858,9 @@ def get_manifest(project_dir: str) -> dict[str, Any] | None:
 
 
 def get_run_results(project_dir: str) -> dict[str, Any] | None:
-    results_path = Path(project_dir) / "target" / "run_results.json"
+    results_path = (
+        confine(project_dir, label="projectDir") / "target" / "run_results.json"
+    )
     if not results_path.exists():
         return None
     try:
@@ -841,7 +872,11 @@ def get_run_results(project_dir: str) -> dict[str, Any] | None:
 
 
 def get_graph_summary(project_dir: str) -> dict[str, Any] | None:
-    graph_path = Path(project_dir) / "target" / "graph_summary.json"
+    graph_path = (
+        confine(project_dir, label="projectDir")
+        / "target"
+        / "graph_summary.json"
+    )
     if not graph_path.exists():
         return None
     try:
@@ -914,10 +949,15 @@ def compile_model(
 
     # Try to read compiled SQL from target/compiled/
     if project_dir:
-        compiled_dir = Path(project_dir) / "target" / "compiled"
+        compiled_dir = (
+            confine(project_dir, label="projectDir") / "target" / "compiled"
+        )
         if compiled_dir.exists():
-            # Search for the compiled file
-            for compiled_file in compiled_dir.rglob(f"{model_name}.sql"):
+            # model_name reaches rglob as a pattern, so a match may still be a
+            # symlink pointing out of the project.
+            for compiled_file in compiled_dir.rglob(f"{Path(model_name).name}.sql"):
+                if not is_confined(compiled_file):
+                    continue
                 try:
                     return True, compiled_file.read_text(encoding="utf-8"), ""
                 except Exception:

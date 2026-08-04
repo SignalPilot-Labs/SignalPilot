@@ -125,12 +125,26 @@ async def test_credentials(_: UserID, request: Request):
             # validated IP directly. This prevents DNS rebinding TOCTOU attacks
             # where the hostname could resolve to a different (internal) IP
             # between the SSRF check and the actual socket connect.
+            # Fail closed: a rejection here is the SSRF decision itself, so falling
+            # back to the raw hostname would turn the denylist into a bypass.
             try:
                 validated_ips = resolve_and_validate(host, int(port), db_type)
-            except ValueError:
-                # If resolve_and_validate fails (e.g. non-TCP type or
-                # cloud mode disabled), fall back to the hostname.
-                validated_ips = [host]
+            except ValueError as exc:
+                logger.warning("Connection test rejected for host %r: %s", host, exc)
+                phases.append(
+                    {
+                        "phase": "network",
+                        "status": "error",
+                        "message": f"Address for {host}:{port} was rejected by network policy",
+                        "duration_ms": round((time.monotonic() - t1) * 1000, 1),
+                    }
+                )
+                return {
+                    "status": "error",
+                    "message": f"Host not permitted: {host}:{port}",
+                    "phases": phases,
+                    "total_duration_ms": round((time.monotonic() - t0) * 1000, 1),
+                }
 
             connect_ip = validated_ips[0]
 
@@ -397,7 +411,7 @@ async def test_connection(name: str, store: StoreD):
                     }
                 )
         finally:
-            await pool_manager.release(info.db_type, conn_str)
+            await pool_manager.release(info.db_type, conn_str, credential_extras=extras)
     except Exception as e:
         phases.append(
             {

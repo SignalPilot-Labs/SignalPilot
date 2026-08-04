@@ -148,6 +148,53 @@ columns. These columns are not in the current YML contract."
 The reader (a future builder agent) decides what to do with the fact.
 You only document what you found.
 
+## Category names — server enum
+
+The gateway's canonical categories are **`context`, `decisions`, `rules`,
+`troubleshooting`** (`gateway/models/knowledge.py`). The six names used above
+(understanding, conventions, decisions, domain-rules, debugging, quirks) are
+legacy and map onto the canonical four on write (understanding→decisions,
+conventions/domain-rules→rules, debugging/quirks→troubleshooting). Prefer the
+canonical four when the server accepts them; if a propose call is rejected for
+an unknown category, retry with the canonical name.
+
+## Body formatting — entries render as markdown
+
+The KB UI renders entry bodies as **markdown**. Plain prose full of SQL
+identifiers breaks the renderer: mid-word underscores italicize across words,
+`__c` suffixes read as bold markers, and bare `||` / `|` characters mangle
+lines. Every body MUST be markdown-safe:
+
+1. Wrap EVERY table, column, model, and identifier in backticks:
+   `days_quoted__c`, `user_pseudo_id || ':' || ga_session_id`.
+2. Wrap SQL fragments and expressions in code spans; multi-line SQL goes in
+   fenced code blocks.
+3. Use bold labels (`**What:**`, `**Why:**`, `**Evidence:**`,
+   `**Alternatives rejected:**`, `**Verification:**`) instead of ALLCAPS
+   prose labels; break list-like prose into bullet or numbered lists.
+4. Never leave `_`, `__`, `|`, `||`, or `*` bare outside a code span.
+   Dollar figures and percentages stay plain text.
+
+## Content bar — what earns a KB entry
+
+Prioritize knowledge a future agent CANNOT easily derive from the code or
+comments:
+
+- **Ground truths**: exact approved totals/counts and the definitions that
+  produce them (e.g. a finance-approved revenue definition with its number).
+- **External/business knowledge**: what a flag means operationally, how the
+  business runs, vocabulary crosswalks between systems.
+- **Mart-specific caveats**: known issues, superseded models, which columns
+  of a mart to trust and which not to.
+- **Decision history**: the decisions made while building each model — what
+  was chosen, alternatives rejected, the verification numbers that settled
+  it, follow-ups deferred — and user corrections, written as dated decision
+  entries ("Dan reviewed the draft and corrected the approach: …").
+
+Plain restatements of what the SQL already shows are low-value; the reader
+can open the model. Facts that live only in data values, in conversations,
+or in verification runs are what the KB is for.
+
 ## Rules
 
 - NEVER write SQL files or run dbt build commands

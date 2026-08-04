@@ -41,6 +41,12 @@ _NOTEBOOK_NODE_LABEL_VALUE = os.getenv("SP_NOTEBOOK_NODE_LABEL_VALUE", "true").s
 # These MUST stay in sync with signalpilot/_server/entrypoint.py _JWT_PATH (F-6).
 SP_SESSION_JWT_MOUNT_DIR = "/var/run/sp/session_jwt"
 SP_SESSION_JWT_MOUNT_FILE = "/var/run/sp/session_jwt/session_jwt"
+# The notebook auth token rides the same Secret -> initContainer -> tmpfs path.
+# Unlike the JWT it is NOT unlinked at boot: `sp edit` reads it via
+# --token-password-file after the entrypoint execvp's, so the file must survive.
+# Passing it as a file (not --token-password) keeps it out of /proc/*/cmdline.
+SP_NOTEBOOK_TOKEN_SECRET_KEY = "notebook_token"
+SP_NOTEBOOK_TOKEN_MOUNT_FILE = "/var/run/sp/session_jwt/notebook_token"
 _K8S_LABEL_INVALID_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
@@ -70,6 +76,29 @@ def _parse_single_kv(selector_str: str) -> dict[str, str]:
     return {k: v}
 
 
+def sandbox_scheduling() -> dict:
+    """runtimeClassName + node pinning for sandboxed workload pods.
+
+    Empty when SP_NOTEBOOK_RUNTIME_CLASS is unset so clusters without gVisor
+    (local/dev) still schedule. Shared by notebook and eval pods — both run
+    untrusted code and belong on the same tainted node group.
+    """
+    if not _NOTEBOOK_RUNTIME_CLASS:
+        return {}
+    return {
+        "runtimeClassName": _NOTEBOOK_RUNTIME_CLASS,
+        "nodeSelector": {_NOTEBOOK_NODE_LABEL_KEY: _NOTEBOOK_NODE_LABEL_VALUE},
+        "tolerations": [
+            {
+                "key": _NOTEBOOK_NODE_LABEL_KEY,
+                "operator": "Equal",
+                "value": _NOTEBOOK_NODE_LABEL_VALUE,
+                "effect": "NoSchedule",
+            }
+        ],
+    }
+
+
 def _pod_manifest(
     *,
     pod_name: str,
@@ -90,20 +119,31 @@ def _pod_manifest(
     F-6: SP_SESSION_JWT is NOT injected via pod env. The per-session Secret named
     session_jwt_secret_name is staged into an emptyDir tmpfs by the jwt-stager
     initContainer; the entrypoint reads and unlinks the file before exec sp edit.
+    The same Secret carries the notebook auth token, staged alongside it and read by
+    `sp edit --token-password-file` (see SP_NOTEBOOK_TOKEN_MOUNT_FILE).
 
     Injects SP_SESSION_ID into the pod env.
-    Does NOT inject SP_API_KEY (replaced by per-session JWT) or SP_ACCESS_TOKEN
-    (removed in R2 — the gateway proxy is the sole auth gate; the pod runs --no-token).
-    --token-password is removed unconditionally; the pod runs --no-token always.
+    Does NOT inject SP_API_KEY (replaced by per-session JWT) or SP_ACCESS_TOKEN — the
+    notebook auth token is delivered as a file, never as pod env.
+
+    access_token is the per-pod notebook auth token. It is REQUIRED: a pod without one
+    would boot with auth disabled, which makes every @requires() decorator on the
+    notebook's own routes inert for anonymous callers. Absent token => ValueError, never
+    a tokenless pod. NetworkPolicy remains a separate, independent boundary.
+
     --base-url /notebook/{session_id} tells the notebook server to emit asset URLs under that prefix.
-    access_token is stored on the DB row as the gateway proxy cookie value but is NOT
-    injected into the pod env or CLI.
 
     R3: Adds pod-level securityContext (non-root, seccomp RuntimeDefault),
     container-level securityContext (readOnlyRootFilesystem, drop ALL caps),
     automountServiceAccountToken: false, emptyDir volumes for writable scratch,
     and env additions for HOME, PYTHONDONTWRITEBYTECODE, SP_LOG_DIR.
     """
+    if not access_token:
+        raise ValueError(
+            f"Refusing to build a notebook pod spec for {pod_name!r} without a "
+            "notebook auth token: the pod would accept unauthenticated callers."
+        )
+
     static_internal_url = os.getenv("SP_GATEWAY_INTERNAL_URL", "")
     gateway_port = os.getenv("SP_PUBLIC_GATEWAY_PORT", "3300")
     env = [
@@ -156,22 +196,7 @@ def _pod_manifest(
             # Run under the sandbox runtime (gVisor/runsc) and pin to the dedicated
             # notebook node group when configured. runtimeClassName is omitted when
             # SP_NOTEBOOK_RUNTIME_CLASS is empty (local/dev clusters without gVisor).
-            **({"runtimeClassName": _NOTEBOOK_RUNTIME_CLASS} if _NOTEBOOK_RUNTIME_CLASS else {}),
-            **(
-                {
-                    "nodeSelector": {_NOTEBOOK_NODE_LABEL_KEY: _NOTEBOOK_NODE_LABEL_VALUE},
-                    "tolerations": [
-                        {
-                            "key": _NOTEBOOK_NODE_LABEL_KEY,
-                            "operator": "Equal",
-                            "value": _NOTEBOOK_NODE_LABEL_VALUE,
-                            "effect": "NoSchedule",
-                        }
-                    ],
-                }
-                if _NOTEBOOK_RUNTIME_CLASS
-                else {}
-            ),
+            **sandbox_scheduling(),
             # Pods must not mount the SA token — no K8s API access from within notebook pods.
             "automountServiceAccountToken": False,
             # Suppress per-Service env var injection (SVC_SERVICE_HOST, SVC_PORT, etc.).
@@ -201,7 +226,9 @@ def _pod_manifest(
                     "command": [
                         "sh", "-c",
                         "cp /var/run/sp/session_jwt-src/session_jwt "
-                        f"{SP_SESSION_JWT_MOUNT_FILE} && chmod 0400 {SP_SESSION_JWT_MOUNT_FILE}",
+                        f"{SP_SESSION_JWT_MOUNT_FILE} && chmod 0400 {SP_SESSION_JWT_MOUNT_FILE} && "
+                        f"cp /var/run/sp/session_jwt-src/{SP_NOTEBOOK_TOKEN_SECRET_KEY} "
+                        f"{SP_NOTEBOOK_TOKEN_MOUNT_FILE} && chmod 0400 {SP_NOTEBOOK_TOKEN_MOUNT_FILE}",
                     ],
                     "securityContext": {
                         "runAsUser": 10001,
@@ -244,7 +271,7 @@ def _pod_manifest(
                         "--host", "0.0.0.0",
                         "--port", "2718",
                         "--headless",
-                        "--no-token",
+                        "--token-password-file", SP_NOTEBOOK_TOKEN_MOUNT_FILE,
                         "--no-skew-protection",
                         "--allow-origins", "http://localhost:3200,http://localhost:3300",
                         "--base-url", f"/notebook/{session_id}",
@@ -312,7 +339,13 @@ def _pod_manifest(
                     "secret": {
                         "secretName": session_jwt_secret_name,
                         "defaultMode": 0o400,
-                        "items": [{"key": "session_jwt", "path": "session_jwt"}],
+                        "items": [
+                            {"key": "session_jwt", "path": "session_jwt"},
+                            {
+                                "key": SP_NOTEBOOK_TOKEN_SECRET_KEY,
+                                "path": SP_NOTEBOOK_TOKEN_SECRET_KEY,
+                            },
+                        ],
                     },
                 },
             ],
@@ -360,6 +393,8 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         self._gateway_port: int | None = None
         self._egress_cidr: str | None = None
         self._gateway_service_account: str | None = None
+        # SP-SEC-009: extra Group subjects for the per-namespace RoleBinding (EC2 path).
+        self._gateway_runtime_groups: tuple[str, ...] = ()
 
     def _load_settings(self) -> None:
         """Load K8s settings on first use. Called from _ensure_client."""
@@ -374,6 +409,9 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         self._gateway_port = settings.sp_public_gateway_port
         self._egress_cidr = settings.sp_notebook_egress_cidr
         self._gateway_service_account = settings.sp_gateway_service_account
+        self._gateway_runtime_groups = tuple(
+            g.strip() for g in settings.sp_gateway_runtime_groups.split(",") if g.strip()
+        )
 
     async def _ensure_client(self) -> None:
         if self._client is not None:
@@ -454,6 +492,7 @@ class KubernetesOrchestrator(NotebookOrchestrator):
             gateway_port=gateway_port,
             egress_cidr=self._egress_cidr,
             gateway_service_account=gateway_service_account,
+            gateway_runtime_groups=self._gateway_runtime_groups,
             skip_network_policy=skip_netpol,
         )
         return ns
@@ -473,6 +512,14 @@ class KubernetesOrchestrator(NotebookOrchestrator):
         access_token: str | None,
         extra_env: dict[str, str] | None = None,
     ) -> PodInfo:
+        # Validated before _delete_pod_and_wait so a missing token cannot tear down a
+        # live pod on its way to failing.
+        if not access_token:
+            raise ValueError(
+                f"Refusing to create notebook pod {pod_name!r} without a notebook "
+                "auth token: the pod would accept unauthenticated callers."
+            )
+
         # ensure_namespace is idempotent — safe even if the caller already called it
         # (the F-6 path does, before staging the Secret).
         ns = await self.ensure_namespace(org_id)

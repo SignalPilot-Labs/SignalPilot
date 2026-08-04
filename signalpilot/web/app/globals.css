@@ -1,33 +1,60 @@
 @import "tailwindcss";
 
+/* Design tokens — aligned with the landing-page system (see UX.md).
+   Warm ink surfaces, translucent borders, mint reserved for live/primary,
+   DM Sans for chrome + JetBrains Mono for evidence (SQL, metrics, ids). */
 @theme {
-  --color-bg: #050505;
-  --color-bg-card: #0a0a0a;
-  --color-bg-hover: #111111;
-  --color-bg-input: #080808;
-  --color-bg-elevated: #0d0d0d;
-  --color-border: #222222;
-  --color-border-hover: #333333;
-  --color-border-active: #444444;
-  --color-text: #eeeeee;
-  --color-text-muted: #999999;
-  --color-text-dim: #666666;
+  --color-bg: #0e0e0f;
+  --color-bg-card: #141416;
+  --color-bg-hover: #1b1b1e;
+  --color-bg-input: #101012;
+  --color-bg-elevated: #18181a;
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-border-hover: rgba(255, 255, 255, 0.16);
+  --color-border-active: rgba(255, 255, 255, 0.28);
+  --color-text: #ededed;
+  --color-text-muted: #9c9c96;
+  --color-text-dim: #6b6b66;
   --color-accent: #ffffff;
-  --color-accent-hover: #cccccc;
+  --color-accent-hover: #d9d9d4;
   --color-success: #00ff88;
   --color-warning: #ffaa00;
   --color-error: #ff4444;
-  --color-sidebar: #030303;
-  --color-glow: rgba(255, 255, 255, 0.03);
-  --font-mono: "SF Mono", "Fira Code", "Cascadia Code", ui-monospace, monospace;
+  --color-sidebar: #0b0b0c;
+  --color-glow: rgba(0, 255, 136, 0.08);
+  --font-sans: var(--font-dm-sans), "DM Sans", -apple-system, "Segoe UI", system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), "JetBrains Mono", "SF Mono", "Cascadia Code", ui-monospace, monospace;
+
+  --radius-ctl: 10px;   /* buttons, inputs */
+  --radius-card: 14px;  /* cards, panels */
+  --radius-lg: 16px;    /* large containers */
 }
 
 body {
   background-color: var(--color-bg);
   color: var(--color-text);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  letter-spacing: -0.005em;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Evidence stays mono: code, metrics, ids, keyboard hints.
+   Layered as base so tracking-* utilities still win when explicitly set. */
+@layer base {
+  code, pre, kbd, samp, .font-mono {
+    font-family: var(--font-mono);
+    letter-spacing: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* ── Cursor — all interactive elements get pointer ── */
@@ -37,10 +64,10 @@ input[type="checkbox"], input[type="radio"], summary {
 }
 
 /* ── Scrollbar ── */
-::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 0; }
-::-webkit-scrollbar-thumb:hover { background: var(--color-border-hover); }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.12); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.22); }
 
 /* ── Terminal styling ── */
 .terminal-container .xterm { padding: 12px; }

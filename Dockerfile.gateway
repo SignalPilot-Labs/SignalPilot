@@ -43,6 +43,11 @@ RUN groupadd -g 10001 appuser && \
 RUN mkdir -p /data /shared /gateway-secrets /repos && \
     chown -R appuser:appuser /data /shared /gateway-secrets /repos
 
+# File-based state (eval configs and runs) lands here. Without this it defaults
+# to $HOME/.signalpilot, and appuser has no home directory in this image, so
+# every write 500s. /data is the one path already created and chowned above.
+ENV SP_DATA_DIR=/data
+
 USER appuser
 
 EXPOSE 3300

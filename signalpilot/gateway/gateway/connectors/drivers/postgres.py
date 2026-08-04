@@ -225,6 +225,22 @@ class PostgresConnector(BaseConnector):
                 AND n.nspname NOT LIKE 'pg_temp%'
                 AND has_schema_privilege(n.oid, 'USAGE')
                 AND has_column_privilege(c.oid, a.attnum, 'SELECT')
+                -- Hide monitoring VIEWS owned by an installed extension. Managed
+                -- Postgres hosts install these into public (Xata ships
+                -- pg_stat_statements there), and surfacing them as user tables
+                -- buries the real schema in instrumentation. Scoped to views and
+                -- matviews on purpose: extension-owned *tables* are often genuine
+                -- reference data an analyst queries (PostGIS spatial_ref_sys), so
+                -- those still show up.
+                AND NOT (
+                    c.relkind IN ('v', 'm')
+                    AND EXISTS (
+                        SELECT 1 FROM pg_depend d
+                        WHERE d.objid = c.oid
+                          AND d.classid = 'pg_class'::regclass
+                          AND d.deptype = 'e'
+                    )
+                )
                 {schema_filter}
             ORDER BY n.nspname, c.relname, a.attnum
         """
@@ -264,13 +280,28 @@ class PostgresConnector(BaseConnector):
 
         # Row count estimates and table sizes. Gated by has_table_privilege so we
         # don't expose row counts of tables the user can't read.
+        #
+        # n_live_tup comes from the cumulative statistics collector, which is
+        # per-instance and starts EMPTY on a server that was cloned, restored
+        # from a base backup, or had pg_stat_reset() called — a Xata
+        # copy-on-write branch is exactly this case, so every table on a fresh
+        # fork reports 0 rows while holding millions. pg_class.reltuples lives in
+        # the catalog itself, so it survives the clone; fall back to it when the
+        # collector has nothing. reltuples is -1 (PG14+) or 0 for a table that
+        # has never been analyzed, so treat those as unknown rather than as a
+        # real zero.
         row_count_sql = """
             SELECT
                 s.schemaname AS table_schema,
                 s.relname AS table_name,
-                s.n_live_tup AS estimated_row_count,
+                COALESCE(
+                    NULLIF(s.n_live_tup, 0),
+                    NULLIF(GREATEST(c.reltuples, 0)::bigint, 0),
+                    0
+                ) AS estimated_row_count,
                 pg_total_relation_size(s.relid) AS total_bytes
             FROM pg_stat_user_tables s
+            JOIN pg_class c ON c.oid = s.relid
             WHERE has_table_privilege(s.relid, 'SELECT')
         """
 

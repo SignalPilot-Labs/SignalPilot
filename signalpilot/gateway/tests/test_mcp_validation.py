@@ -7,10 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from gateway.governance import plan_limits
 from gateway.governance import annotations as annotations_mod
-from gateway.governance.context import current_org_id_var
+from gateway.governance import plan_limits
 from gateway.governance.annotations import SchemaAnnotations
+from gateway.governance.context import current_org_id_var
 from gateway.mcp.tools import query as query_tools
 from gateway.mcp.validation import _MODEL_NAME_RE
 

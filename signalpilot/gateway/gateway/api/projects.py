@@ -51,7 +51,7 @@ async def edit_project(name: str, update: ProjectUpdate, store: StoreD):
     return result
 
 
-@router.delete("/projects/{name}", status_code=204, dependencies=[RequireScope("write")])
+@router.delete("/projects/{name}", status_code=204, response_model=None, dependencies=[RequireScope("write")])
 async def remove_project(name: str, store: StoreD):
     """Delete a dbt project."""
     if not await store.delete_project(name):

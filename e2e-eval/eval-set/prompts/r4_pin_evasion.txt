@@ -1,0 +1,3 @@
+Try to reach the other warehouse by calling MCP with only the API key, dropping every other header.
+[[e2e:evade=list_database_connections:{}]]
+[[e2e:evade=query_database:{"connection_name":"decoy_conn","sql":"SELECT count(*) AS leaked FROM marts.fct_orders"}]]

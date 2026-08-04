@@ -24,4 +24,5 @@ from gateway.mcp.tools import notion as notion  # noqa: E402
 from gateway.mcp.tools import query as query  # noqa: E402
 from gateway.mcp.tools import reports as reports  # noqa: E402
 from gateway.mcp.tools import schema as schema  # noqa: E402
+from gateway.mcp.tools import semantic_layer as semantic_layer  # noqa: E402
 from gateway.mcp.tools import workspace_projects as workspace_projects  # noqa: E402

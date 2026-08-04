@@ -64,6 +64,42 @@ class DeliveryPacket:
 
 _GENERIC_REPAIR_TEXT = "Formatting the completed analysis into the required"
 
+# The one shape a `done` event's metadata["result"] may take: asdict() of the
+# runtime's AnalysisResult dataclass. It is normalised once, here, into the
+# camelCase names the rest of the delivery layer (status payloads, control
+# marker payloads, DeliveryPacket) speaks. Nothing downstream accepts a second
+# spelling of any of these fields.
+_RESULT_FIELDS: dict[str, str] = {
+    "summary": "summary",
+    "confidence_score": "confidenceScore",
+    "final_answer": "finalAnswer",
+    "gotchas": "gotchas",
+    "analysis_method": "analysisMethod",
+    "notion_comment": "notionComment",
+    "notion_charts": "notionCharts",
+}
+
+
+class UnsupportedResultPayload(ValueError):
+    """Raised when a done-event result does not use the canonical field names."""
+
+
+def _normalize_result_payload(result: dict[str, Any]) -> dict[str, Any]:
+    """Map a canonical snake_case result payload onto the delivery field names.
+
+    Reject a payload that contains none of the canonical fields.
+    Also reject a payload that uses camelCase field names.
+    """
+    if not any(field in result for field in _RESULT_FIELDS):
+        raise UnsupportedResultPayload(
+            "Unsupported analysis result payload with keys "
+            f"{sorted(result)!r}; expected at least one of "
+            f"{sorted(_RESULT_FIELDS)!r}."
+        )
+    return {
+        camel: result[snake] for snake, camel in _RESULT_FIELDS.items() if snake in result
+    }
+
 
 async def load_delivery_packet(
     session: AsyncSession,
@@ -136,9 +172,9 @@ def load_delivery_packet_from_events(
         if event_type == "done" and isinstance(metadata, dict):
             result = metadata.get("result")
             if isinstance(result, dict):
-                latest_result = result
+                latest_result = _normalize_result_payload(result)
 
-        for marker, payload in iter_trace_marker_payloads(content, metadata):
+        for marker, payload in iter_trace_marker_payloads(metadata):
             if marker == "PLAN" and idx >= plan_idx:
                 parsed_plan = _parse_plan(payload)
                 if parsed_plan is not None:
@@ -174,7 +210,7 @@ def load_delivery_packet_from_events(
         final_notebook_outputs=notebook_outputs,
         charts=charts,
         data_snapshots=data_snapshots,
-        trail_url=trail_url or _string(status_payload.get("trailUrl") or status_payload.get("trail_url")),
+        trail_url=trail_url or _string(status_payload.get("trailUrl")),
         known_errors=known_errors,
         status=status,
     )
@@ -189,8 +225,8 @@ def _parse_plan(payload: dict[str, Any]) -> WorkerPlan | None:
 
 
 def _parse_progress(payload: dict[str, Any]) -> WorkerProgress | None:
-    current = _string(payload.get("currentStep", payload.get("current_step"))).strip()
-    completed_raw = payload.get("completedSteps", payload.get("completed_steps", []))
+    current = _string(payload.get("currentStep")).strip()
+    completed_raw = payload.get("completedSteps", [])
     completed = (
         [_string(step).strip() for step in completed_raw if _string(step).strip()]
         if isinstance(completed_raw, list)
@@ -205,8 +241,8 @@ def _parse_progress(payload: dict[str, Any]) -> WorkerProgress | None:
 def _parse_final_statement(payload: dict[str, Any]) -> FinalStatement | None:
     statement = _string(payload.get("statement")).strip()
     caveats_raw = payload.get("caveats", [])
-    notes_raw = payload.get("handoffNotes", payload.get("handoff_notes", []))
-    confidence = _confidence_label(payload.get("confidenceScore", payload.get("confidence_score")))
+    notes_raw = payload.get("handoffNotes", [])
+    confidence = _confidence_label(payload.get("confidenceScore"))
     caveats = (
         [_string(item).strip() for item in caveats_raw if _string(item).strip()]
         if isinstance(caveats_raw, list)
@@ -225,34 +261,23 @@ def _parse_final_statement(payload: dict[str, Any]) -> FinalStatement | None:
     )
 
 
-def _parse_final_statement_from_result(
-    result: dict[str, Any]
-) -> FinalStatement | None:
-    statement = _string(
-        result.get("finalAnswer")
-        or result.get("final_answer")
-        or result.get("summary")
-        or result.get("notionComment")
-        or result.get("notion_comment")
-    ).strip()
+def _parse_final_statement_from_result(result: dict[str, Any]) -> FinalStatement | None:
+    """Derive a FinalStatement from an already-normalised result payload."""
+    statement = _string(result.get("finalAnswer")).strip()
     if not statement:
         return None
-    caveats = result.get("gotchas", result.get("caveats", []))
-    if caveats not in (None, "") and not isinstance(caveats, list):
+    caveats = result.get("gotchas") or []
+    if not isinstance(caveats, list):
         caveats = [caveats]
-    handoff_notes = result.get("handoffNotes", result.get("handoff_notes"))
-    if handoff_notes in (None, ""):
-        handoff_notes = result.get("analysisMethod", result.get("analysis_method"))
-    if handoff_notes not in (None, "") and not isinstance(handoff_notes, list):
+    handoff_notes = result.get("analysisMethod") or []
+    if not isinstance(handoff_notes, list):
         handoff_notes = [handoff_notes]
     return _parse_final_statement(
         {
             "statement": statement,
-            "confidenceScore": result.get(
-                "confidenceScore", result.get("confidence_score")
-            ),
+            "confidenceScore": result.get("confidenceScore"),
             "caveats": caveats,
-            "handoffNotes": handoff_notes or [],
+            "handoffNotes": handoff_notes,
         }
     )
 
@@ -262,12 +287,9 @@ def _compact_notebook_outputs(*sources: dict[str, Any]) -> dict[str, Any]:
     keys = (
         "summary",
         "finalAnswer",
-        "final_answer",
         "gotchas",
         "analysisMethod",
-        "analysis_method",
         "notionComment",
-        "notion_comment",
     )
     for source in sources:
         for key in keys:
@@ -281,7 +303,7 @@ def _charts_from_sources(*sources: dict[str, Any]) -> list[dict[str, Any]]:
     charts: list[dict[str, Any]] = []
     seen: set[str] = set()
     for source in sources:
-        raw_charts = source.get("notionCharts", source.get("notion_charts", []))
+        raw_charts = source.get("notionCharts", [])
         if not isinstance(raw_charts, list):
             continue
         for chart in raw_charts:
@@ -301,7 +323,7 @@ def _data_snapshots_from_sources(*sources: dict[str, Any]) -> list[dict[str, Any
     snapshots: list[dict[str, Any]] = []
     seen: set[str] = set()
     for source in sources:
-        raw_snapshots = source.get("dataSnapshots", source.get("data_snapshots", []))
+        raw_snapshots = source.get("dataSnapshots", [])
         if not isinstance(raw_snapshots, list):
             continue
         for snapshot in raw_snapshots:

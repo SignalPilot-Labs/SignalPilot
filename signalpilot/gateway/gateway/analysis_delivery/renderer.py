@@ -112,7 +112,7 @@ def fallback_delivery(packet: DeliveryPacket) -> DeliveryResult:
     notebook_outputs = packet.final_notebook_outputs
     fallback_text_raw = (
         statement
-        or _string(notebook_outputs.get("finalAnswer") or notebook_outputs.get("final_answer"))
+        or _string(notebook_outputs.get("finalAnswer"))
         or _string(notebook_outputs.get("summary"))
         or ("I could not complete the analysis." if packet.status == "failed" else "The analysis completed.")
     )
@@ -123,15 +123,15 @@ def fallback_delivery(packet: DeliveryPacket) -> DeliveryResult:
             gotchas.append(error)
     method = "; ".join(packet.final_statement.handoff_notes) if packet.final_statement else ""
     if not method:
-        method = _string(notebook_outputs.get("analysisMethod") or notebook_outputs.get("analysis_method"))
+        method = _string(notebook_outputs.get("analysisMethod"))
     return DeliveryResult(
         summary=_clip(_string(notebook_outputs.get("summary")) or fallback_text, 500),
         slack_message=fallback_text,
         notion_comment=_clip(
-            _string(notebook_outputs.get("notionComment") or notebook_outputs.get("notion_comment")) or fallback_text,
+            _string(notebook_outputs.get("notionComment")) or fallback_text,
             1200,
         ),
-        final_answer=_string(notebook_outputs.get("finalAnswer") or notebook_outputs.get("final_answer"))
+        final_answer=_string(notebook_outputs.get("finalAnswer"))
         or fallback_text,
         gotchas=gotchas,
         analysis_method=method,

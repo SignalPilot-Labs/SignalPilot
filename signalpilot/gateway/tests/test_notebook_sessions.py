@@ -35,7 +35,7 @@ from gateway.auth.notebook_jwt import (
 
 _TEST_SECRET = "integration-test-secret-32-bytes!!"
 
-# ─── Helpers ──────────────────────────────────────────────────────────────────
+# Helper functions.
 
 
 def _patch_jwt_secret(monkeypatch):
@@ -92,7 +92,7 @@ def _make_clerk_jwt(user_id: str = "clerk-user", org_id: str = "clerk-org") -> s
     return jwt.encode(payload, "clerk-secret", algorithm="HS256")
 
 
-# ─── Store-level test ─────────────────────────────────────────────────────────
+# Verify store behavior.
 
 
 class TestStoreGetSessionByIdCrossOrg:
@@ -127,7 +127,7 @@ class TestStoreGetSessionByIdCrossOrg:
             branch="main",
             pod_name="nb-test",
             pod_ip=None,
-            access_token="token-abc",
+            access_token_enc=None,
             status="running",
             last_ping=time.time(),
             created_at=time.time(),
@@ -170,7 +170,8 @@ class TestStoreNotebookSessionTokenStorage:
 
         assert len(rows) == 1
         row = rows[0]
-        assert row.access_token is None
+        # The model stores only the encrypted access token.
+        assert not hasattr(type(row), "access_token")
         assert row.access_token_enc is not None
         assert b"generated-token" not in row.access_token_enc
         token, needs_migration = _decrypt_with_migration(row.access_token_enc)
@@ -180,7 +181,7 @@ class TestStoreNotebookSessionTokenStorage:
         mock_session.commit.assert_awaited_once()
 
 
-# ─── JWT dispatch tests ───────────────────────────────────────────────────────
+# Verify JWT dispatch.
 
 
 class TestNotebookJWTVerifierDispatch:
@@ -272,7 +273,7 @@ class TestNotebookJWTVerifierDispatch:
         request.headers = {"authorization": f"Bearer {token}"}
         request.cookies = {}
 
-        # Routed to Clerk verifier (which will fail — wrong alg/no JWKS)
+        # The Clerk verifier rejects the algorithm and missing JWKS data.
         with pytest.raises(HTTPException) as exc_info:
             await user_mod.resolve_user_id(request)
         assert exc_info.value.status_code in (401, 500)
@@ -311,7 +312,7 @@ class TestNotebookJWTVerifierDispatch:
         assert len(decode_called) == 0
 
 
-# ─── HTTP integration tests ───────────────────────────────────────────────────
+# Verify HTTP integration.
 
 
 def _make_mock_store(org_id: str = "org-1", user_id: str = "user-1") -> AsyncMock:
@@ -537,7 +538,7 @@ class TestPodSpecEnv:
 
 
 class TestSessionReuse:
-    """Session reuse: alive pod → reuse; dead pod → recreate."""
+    """Verify session reuse for an active pod and recreation for an inactive pod."""
 
     @pytest.mark.asyncio
     async def test_session_reuse_when_pod_alive(self, monkeypatch):
@@ -728,7 +729,7 @@ class TestSessionReuse:
 
 
 class TestR3OrgIdEnforcement:
-    """R3: org_id threading and quota enforcement."""
+    """Verify organization propagation and quota enforcement."""
 
     @pytest.mark.asyncio
     async def test_create_session_empty_org_id_returns_400(self, monkeypatch):
@@ -755,7 +756,7 @@ class TestR3OrgIdEnforcement:
 
     @pytest.mark.asyncio
     async def test_create_session_quota_exhausted_returns_429(self, monkeypatch):
-        """create_pod raises K8s 403 with quota message → API returns 429."""
+        """Verify that a Kubernetes quota denial returns API status 429."""
         _patch_jwt_secret(monkeypatch)
 
         import time
@@ -779,7 +780,7 @@ class TestR3OrgIdEnforcement:
         )
 
         mock_orch = AsyncMock()
-        # R5: _is_quota_exceeded_error uses exc.status + exc.body, not str(exc).
+        # _is_quota_exceeded_error reads structured status and body fields.
         _E = type("ApiException", (Exception,), {})
         _quota_exc = _E("Forbidden")
         _quota_exc.status = 403  # type: ignore[attr-defined]
@@ -1106,7 +1107,7 @@ class TestOptionBEntrypoint:
 
 
 class TestIsQuotaExceededErrorClassification:
-    """R5: _is_quota_exceeded_error must use exc.status, not str(exc)."""
+    """Verify that _is_quota_exceeded_error reads the structured status field."""
 
     def test_returns_true_for_403_with_exceeded_quota_body(self):
         from gateway.api.notebook_sessions import _is_quota_exceeded_error
@@ -1133,7 +1134,7 @@ class TestIsQuotaExceededErrorClassification:
         assert _is_quota_exceeded_error(exc) is False
 
     def test_returns_false_for_plain_exception_with_403_in_message(self):
-        """Proves we no longer grep — '403' in the message text must not count."""
+        """Verify that message text alone does not identify a quota error."""
         from gateway.api.notebook_sessions import _is_quota_exceeded_error
 
         assert _is_quota_exceeded_error(Exception("403 exceeded quota forbidden")) is False

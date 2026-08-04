@@ -114,7 +114,7 @@ async def query_database(req: DirectQueryRequest, store: StoreD, request: Reques
             detail = {"error": sanitized, "hint": hint} if hint else sanitized
             raise HTTPException(status_code=500, detail=detail)
     finally:
-        await pool_manager.release(info.db_type, conn_str)
+        await pool_manager.release(info.db_type, conn_str, credential_extras=extras)
 
     elapsed_ms = (time.monotonic() - start) * 1000
     health_monitor.record(req.connection_name, elapsed_ms, True, db_type=info.db_type)

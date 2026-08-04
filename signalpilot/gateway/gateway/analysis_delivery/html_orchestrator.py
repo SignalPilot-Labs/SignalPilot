@@ -1195,7 +1195,7 @@ def _html_model_payload(packet: DeliveryPacket) -> dict[str, Any]:
     return {
         "userRequest": packet.user_request,
         "answer": statement
-        or _string(outputs.get("finalAnswer") or outputs.get("final_answer"))
+        or _string(outputs.get("finalAnswer"))
         or _string(outputs.get("summary")),
         "summary": _string(outputs.get("summary")),
         "dataSnapshots": packet.data_snapshots,

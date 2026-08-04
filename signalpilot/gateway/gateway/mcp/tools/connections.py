@@ -5,10 +5,16 @@ import httpx
 from gateway.errors.mcp import sanitize_proxy_response
 from gateway.governance.context import current_org_id_var
 from gateway.mcp.audit import audited_tool
-from gateway.mcp.context import _gateway_url, _gw_headers, _store_session, mcp_org_id_var
+from gateway.mcp.context import (
+    _gateway_url,
+    _gw_headers,
+    _store_session,
+    mcp_eval_connection_var,
+    mcp_org_id_var,
+)
 from gateway.mcp.helpers import _format_health_stats
 from gateway.mcp.server import mcp
-from gateway.mcp.validation import _CONN_NAME_RE
+from gateway.mcp.validation import _validate_connection_name
 
 
 @audited_tool(mcp)
@@ -21,6 +27,14 @@ async def list_database_connections() -> str:
     """
     async with _store_session() as store:
         connections = await store.list_connections()
+
+    # Eval runs see exactly one connection. Listing the others would tell the
+    # agent a second copy of this warehouse exists, which is the thing the pin
+    # is there to hide.
+    pinned = mcp_eval_connection_var.get(None)
+    if pinned:
+        connections = [c for c in connections if c.name == pinned]
+
     if not connections:
         return "No database connections configured. Add one via the SignalPilot UI at http://localhost:3200/connections"
 
@@ -51,13 +65,20 @@ async def connection_health(connection_name: str = "") -> str:
     org_id = mcp_org_id_var.get(None) or "local"
     token = current_org_id_var.set(org_id)
     try:
+        pinned = mcp_eval_connection_var.get(None)
         if connection_name:
+            if err := _validate_connection_name(connection_name):
+                return f"Error: {err}"
             stats = health_monitor.connection_stats(connection_name)
             if not stats:
                 return f"No health data for '{connection_name}'. Run some queries first."
             return _format_health_stats(stats)
 
         all_stats = health_monitor.all_stats()
+        # Called bare, this enumerates every connection in the workspace — which
+        # under an eval pin would name the good copy the pin exists to hide.
+        if pinned:
+            all_stats = [s for s in all_stats if getattr(s, "connection_name", None) == pinned]
         if not all_stats:
             return "No health data yet. Run some queries to start collecting metrics."
 
@@ -85,8 +106,8 @@ async def connector_capabilities(connection_name: str = "") -> str:
     gw = _gateway_url()
     async with httpx.AsyncClient(timeout=15) as client:
         if connection_name:
-            if not _CONN_NAME_RE.match(connection_name):
-                return "Error: Invalid connection name"
+            if err := _validate_connection_name(connection_name):
+                return f"Error: {err}"
             r = await client.get(f"{gw}/api/connections/{connection_name}/capabilities", headers=_gw_headers())
         else:
             r = await client.get(f"{gw}/api/connectors/capabilities", headers=_gw_headers())

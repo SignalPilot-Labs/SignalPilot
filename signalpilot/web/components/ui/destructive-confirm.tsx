@@ -41,7 +41,7 @@ export function DestructiveConfirmDialog({
       onClick={onCancel}
     >
       <div
-        className="w-[440px] bg-[var(--color-bg-card)] border border-[var(--color-border)] shadow-2xl animate-scale-in"
+        className="w-[440px] rounded-[14px] overflow-hidden bg-[var(--color-bg-card)] border border-[var(--color-border)] shadow-2xl animate-scale-in"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -51,7 +51,7 @@ export function DestructiveConfirmDialog({
             <line x1="7" y1="5" x2="7" y2="9" stroke="var(--color-error)" strokeWidth="1.5" strokeLinecap="round" />
             <circle cx="7" cy="11" r="0.75" fill="var(--color-error)" />
           </svg>
-          <span className="text-[12px] text-[var(--color-error)] uppercase tracking-[0.15em] font-medium">
+          <span className="text-[11px] text-[var(--color-error)] uppercase tracking-[0.08em] font-medium">
             destructive action
           </span>
         </div>
@@ -73,13 +73,13 @@ export function DestructiveConfirmDialog({
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-[var(--color-border)]">
               <button
                 onClick={onCancel}
-                className="px-4 py-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider uppercase"
+                className="px-4 py-2 rounded-[10px] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors duration-150"
               >
                 cancel
               </button>
               <button
                 onClick={() => setStep(1)}
-                className="px-4 py-2 text-[12px] text-[var(--color-text)] border border-[var(--color-border)] hover:border-[var(--color-error)] hover:text-[var(--color-error)] transition-all tracking-wider uppercase"
+                className="px-4 py-2 rounded-[10px] text-[12px] text-[var(--color-text)] border border-[var(--color-border)] hover:border-[var(--color-error)] hover:text-[var(--color-error)] transition-colors duration-150"
               >
                 I understand, continue
               </button>
@@ -91,7 +91,7 @@ export function DestructiveConfirmDialog({
         {step === 1 && (
           <div className="px-5 py-5">
             <p className="text-xs text-[var(--color-text-dim)] mb-3 leading-relaxed">
-              Type <code className="px-1.5 py-0.5 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-[var(--color-error)] font-mono text-[11px]">{confirmPhrase}</code> to confirm:
+              Type <code className="px-1.5 py-0.5 rounded-[6px] bg-[var(--color-bg-input)] border border-[var(--color-border)] text-[var(--color-error)] font-mono text-[11px]">{confirmPhrase}</code> to confirm:
             </p>
             <input
               ref={inputRef}
@@ -100,21 +100,21 @@ export function DestructiveConfirmDialog({
               onChange={(e) => setTyped(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && typedMatches && !confirming) onConfirm(); }}
               placeholder={confirmPhrase}
-              className="w-full px-3 py-2.5 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs font-mono focus:outline-none focus:border-[var(--color-error)] tracking-wide mb-4"
+              className="w-full px-3 py-2.5 rounded-[10px] bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs font-mono focus:outline-none focus:border-[var(--color-error)] mb-4"
               autoComplete="off"
               spellCheck={false}
             />
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-[var(--color-border)]">
               <button
                 onClick={onCancel}
-                className="px-4 py-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider uppercase"
+                className="px-4 py-2 rounded-[10px] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors duration-150"
               >
                 cancel
               </button>
               <button
                 onClick={onConfirm}
                 disabled={!typedMatches || confirming}
-                className="px-4 py-2 text-[12px] font-medium tracking-wider uppercase transition-all bg-[var(--color-error)] text-white hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed"
+                className="px-4 py-2 rounded-[10px] text-[12px] font-medium transition-opacity duration-150 bg-[var(--color-error)] text-white hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 {confirming ? "deleting..." : "permanently delete"}
               </button>

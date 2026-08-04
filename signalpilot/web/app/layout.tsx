@@ -1,5 +1,14 @@
 import type { Metadata } from "next";
+import { DM_Sans, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+
+const dmSans = DM_Sans({ subsets: ["latin"], variable: "--font-dm-sans", display: "swap" });
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-jetbrains-mono",
+  display: "swap",
+});
+const fontVars = `${dmSans.variable} ${jetbrainsMono.variable}`;
 
 import Sidebar from "~/components/layout/sidebar";
 
@@ -69,7 +78,7 @@ export default async function RootLayout({
     const { ClerkProvider } = await import("@clerk/nextjs");
     return (
       <html lang="en" className="dark">
-        <body className="antialiased bg-noise">
+        <body className={`antialiased bg-noise ${fontVars}`}>
           <ClerkProvider
             signInUrl="/sign-in"
             signUpUrl="/sign-up"
@@ -87,7 +96,7 @@ export default async function RootLayout({
 
   return (
     <html lang="en" className="dark">
-      <body className="antialiased bg-noise">{content}</body>
+      <body className={`antialiased bg-noise ${fontVars}`}>{content}</body>
     </html>
   );
 }

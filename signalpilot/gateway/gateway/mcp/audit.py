@@ -8,6 +8,7 @@ import time
 import uuid
 
 from gateway.mcp.context import (
+    _require_mcp_scope,
     _store_session,
     mcp_audit_id_var,
     mcp_client_ip_var,
@@ -17,6 +18,111 @@ from gateway.mcp.context import (
 from gateway.models import AuditEntry
 
 _mcp_logger = _logging.getLogger("gateway.mcp_audit")
+
+# Every registered MCP tool has one flat API-key scope. Keeping the policy at
+# the registration boundary makes a newly added tool fail closed until its
+# capability is reviewed and classified here.
+MCP_TOOL_SCOPES: dict[str, str] = {
+    "list_database_connections": "read",
+    "connection_health": "query",
+    "connector_capabilities": "read",
+    "get_knowledge": "read",
+    "search_knowledge": "read",
+    "read_knowledge": "read",
+    "propose_knowledge": "admin",
+    "archive_knowledge": "admin",
+    "map_columns": "query",
+    "analyze_project_db": "query",
+    "dbt_error_parser": "read",
+    "generate_sql_skeleton": "read",
+    "check_model_schema": "query",
+    "analyze_grain": "query",
+    "validate_model_output": "query",
+    "audit_model_sources": "query",
+    "compare_join_types": "query",
+    "verify_model_values": "query",
+    "manage_report": "admin",
+    "manage_dashboard": "admin",
+    "list_semantic_metrics": "query",
+    "verify_metric_conformance": "query",
+    "query_database": "query",
+    "check_budget": "read",
+    "explain_query": "query",
+    "validate_sql": "query",
+    "query_history": "read",
+    "estimate_query_cost": "query",
+    "debug_cte_query": "query",
+    "list_notion_integrations": "read",
+    "notion_search": "read",
+    "notion_fetch_page": "read",
+    "notion_create_page": "write",
+    "list_workspace_projects": "read",
+    "run_notebook": "execute",
+    "describe_table": "query",
+    "list_tables": "query",
+    "get_date_boundaries": "query",
+    "schema_diff": "query",
+    "schema_diff_branches": "query",
+    "xata_branch_diff": "admin",
+    "xata_list_branches": "query",
+    "create_xata_branch": "admin",
+    "delete_xata_branch": "admin",
+    "get_dbt_profile": "admin",
+    "schema_ddl": "query",
+    "schema_link": "query",
+    "explore_columns": "query",
+    "explore_column": "query",
+    "explore_table": "query",
+    "schema_statistics": "query",
+    "find_join_path": "query",
+    "get_relationships": "query",
+    "schema_overview": "query",
+}
+
+# Eval credentials may use governed database and knowledge workflows only.
+# Workspace integrations and project/notebook surfaces are unrelated tenant
+# data even when their ordinary scope happens to be "read".
+EVAL_ALLOWED_MCP_TOOLS: frozenset[str] = frozenset(
+    {
+        "list_database_connections",
+        "connection_health",
+        "connector_capabilities",
+        "get_knowledge",
+        "search_knowledge",
+        "read_knowledge",
+        "map_columns",
+        "analyze_project_db",
+        "dbt_error_parser",
+        "generate_sql_skeleton",
+        "check_model_schema",
+        "analyze_grain",
+        "validate_model_output",
+        "audit_model_sources",
+        "compare_join_types",
+        "verify_model_values",
+        "list_semantic_metrics",
+        "verify_metric_conformance",
+        "query_database",
+        "check_budget",
+        "explain_query",
+        "validate_sql",
+        "estimate_query_cost",
+        "debug_cte_query",
+        "describe_table",
+        "list_tables",
+        "get_date_boundaries",
+        "schema_diff",
+        "schema_ddl",
+        "schema_link",
+        "explore_columns",
+        "explore_column",
+        "explore_table",
+        "schema_statistics",
+        "find_join_path",
+        "get_relationships",
+        "schema_overview",
+    }
+)
 
 
 async def _audit_tool_call(
@@ -41,6 +147,17 @@ async def _audit_tool_call(
     client_ip = mcp_client_ip_var.get(None)
     user_agent = mcp_user_agent_var.get(None)
 
+    metadata: dict = {"args": {k: str(v)[:200] for k, v in args.items()} if args else {}}
+    # Eval attribution (observed coverage): which run/task issued this call.
+    from .context import mcp_eval_run_var, mcp_eval_task_var
+
+    eval_run = mcp_eval_run_var.get(None)
+    if eval_run:
+        metadata["eval_run"] = eval_run
+        eval_task = mcp_eval_task_var.get(None)
+        if eval_task:
+            metadata["eval_task"] = eval_task
+
     try:
         async with _store_session() as store:
             await store.append_audit(
@@ -56,7 +173,7 @@ async def _audit_tool_call(
                     block_reason=error,
                     duration_ms=duration_ms,
                     agent_id=tool_name,
-                    metadata={"args": {k: str(v)[:200] for k, v in args.items()} if args else {}},
+                    metadata=metadata,
                     client_ip=client_ip,
                     user_agent=user_agent,
                 )
@@ -79,11 +196,20 @@ def _audited_tool(fn):
         conn = kwargs.get("connection_name") or (args[0] if args and isinstance(args[0], str) else None)
         sql_arg = kwargs.get("sql")
         try:
-            result = await fn(*args, **kwargs)
+            from gateway.mcp.context import mcp_eval_run_var
+
+            required_scope = MCP_TOOL_SCOPES.get(tool_name)
+            if mcp_eval_run_var.get(None) and tool_name not in EVAL_ALLOWED_MCP_TOOLS:
+                result = f"Error: eval credentials may not call MCP tool {tool_name!r}"
+            elif required_scope is None:
+                result = f"Error: MCP tool {tool_name!r} has no scope policy"
+            else:
+                scope_error = _require_mcp_scope(required_scope)
+                result = scope_error if scope_error else await fn(*args, **kwargs)
             duration_ms = (time.time() - t0) * 1000
             # Detect blocked queries from return value
             result_str = str(result) if result else ""
-            is_blocked = result_str.startswith("Query blocked:")
+            is_blocked = result_str.startswith(("Query blocked:", "Error:"))
             import asyncio
 
             asyncio.create_task(

@@ -5,7 +5,8 @@ routes.py constructs upstream_base from the session row and delegates here.
 
 HTTP forwarding:
 - Streams response via httpx.AsyncClient.stream(); no aread(); no Content-Length override.
-- Strips outbound Cookie, Authorization, Host, and hop-by-hop headers.
+- Strips outbound Cookie, Authorization, Host, and hop-by-hop headers, then re-sets
+  Authorization to the pod's own auth token (order matters — see _build_outbound_headers).
 - Strips upstream Set-Cookie so the notebook server's session cookie does not leak to the gateway origin.
 - Per-chunk asyncio.wait_for idle watchdog (30 s) — NOT a total deadline.
 
@@ -40,22 +41,39 @@ from .constants import (
 logger = logging.getLogger(__name__)
 
 
-def _build_outbound_headers(request: Request) -> dict[str, str]:
-    """Build headers for the upstream HTTP request, stripping forbidden headers."""
-    return {
+def _build_outbound_headers(
+    request: Request, upstream_token: str | None
+) -> dict[str, str]:
+    """Build headers for the upstream HTTP request, stripping forbidden headers.
+
+    upstream_token is applied after the strip — "authorization" is in
+    OUTBOUND_STRIP_HEADERS, so setting it first would drop it.
+    """
+    headers = {
         k: v
         for k, v in request.headers.items()
         if k.lower() not in OUTBOUND_STRIP_HEADERS
     }
+    if upstream_token:
+        headers["authorization"] = f"Bearer {upstream_token}"
+    return headers
 
 
-def _build_outbound_ws_headers(ws: WebSocket) -> list[tuple[str, str]]:
-    """Build headers for the upstream WS handshake, stripping forbidden headers."""
-    return [
+def _build_outbound_ws_headers(
+    ws: WebSocket, upstream_token: str | None
+) -> list[tuple[str, str]]:
+    """Build headers for the upstream WS handshake, stripping forbidden headers.
+
+    Same ordering constraint as _build_outbound_headers.
+    """
+    headers = [
         (k, v)
         for k, v in ws.headers.items()
         if k.lower() not in OUTBOUND_STRIP_HEADERS
     ]
+    if upstream_token:
+        headers.append(("authorization", f"Bearer {upstream_token}"))
+    return headers
 
 
 def _build_inbound_headers(upstream_headers: httpx.Headers) -> dict[str, str]:
@@ -72,11 +90,22 @@ class NotebookProxy:
 
     upstream_base: in-cluster base URL of the pod (e.g. http://10.42.0.5:2718).
     Always passed in from the session row — never derived from request headers.
+
+    upstream_token: the notebook server's own auth token for that pod. Presented as
+    Authorization: Bearer on both the HTTP and WS upstream paths, and never echoed
+    back to the client (responses carry no Authorization; Set-Cookie is stripped).
     """
 
-    def __init__(self, upstream_base: str, *, http_client: httpx.AsyncClient) -> None:
+    def __init__(
+        self,
+        upstream_base: str,
+        *,
+        http_client: httpx.AsyncClient,
+        upstream_token: str | None = None,
+    ) -> None:
         self._upstream_base = upstream_base.rstrip("/")
         self._http_client = http_client
+        self._upstream_token = upstream_token
 
     async def forward_http(self, request: Request, upstream_path: str) -> StreamingResponse:
         """Stream an HTTP request to the upstream pod and return the response.
@@ -90,7 +119,7 @@ class NotebookProxy:
         if request.url.query:
             url = f"{url}?{request.url.query}"
 
-        outbound_headers = _build_outbound_headers(request)
+        outbound_headers = _build_outbound_headers(request, self._upstream_token)
         body = await request.body()
 
         try:
@@ -173,7 +202,7 @@ class NotebookProxy:
         - Close codes propagate verbatim; no synthetic 1000.
         - asyncio.TaskGroup: cancellation of either pump tears down both.
         """
-        outbound_headers = _build_outbound_ws_headers(ws)
+        outbound_headers = _build_outbound_ws_headers(ws, self._upstream_token)
         logger.info("WS PROXY connecting to upstream: %s", upstream_url)
 
         try:

@@ -87,6 +87,8 @@ test_cloud_notebook.py
 *.png
 !signalpilot/web/public/**/*.png
 !signalpilot/web/app/**/*.png
+!docs/docs/**/*.png
+!docs/static/img/**/*.png
 handoff*.md
 agent-notebooks.md
 blog-post.md

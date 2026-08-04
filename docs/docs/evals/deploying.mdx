@@ -42,7 +42,7 @@ Add a branch provider if the set has write tasks:
 <MiniCopyBlock
   label=".env — local Postgres branch provider"
   plain
-  code={`SP_EVAL_PG_ADMIN_DSN=postgresql://warehouse:5432/postgres\nSP_EVAL_PG_PARENT_DB=northwind`}
+  code={`SP_EVAL_PG_ADMIN_DSN=postgresql://<host>:5432/postgres\nSP_EVAL_PG_PARENT_DB=northwind`}
 />
 
 The local provider has two hard prerequisites. Read both before pointing it at a

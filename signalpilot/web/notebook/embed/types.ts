@@ -62,6 +62,8 @@ export interface SignalpilotMountConfig {
   session?: unknown; // NotebookSessionV1 | null at runtime; mountOptionsSchema revalidates
   /** Pre-fetched notebook snapshot (structural metadata). Threaded into mountOptionsSchema.notebook. */
   notebook?: unknown; // NotebookV1 | null at runtime; mountOptionsSchema revalidates
+  /** True when the server classified the active file as raw text. */
+  rawFallback?: boolean;
   /**
    * Validated by the existing `parseUserConfig` in mount.tsx.
    * Accepts the raw userConfig object; unknown shape is intentional here.

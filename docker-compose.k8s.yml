@@ -25,6 +25,7 @@ services:
   # ─── Gateway: switch to K8s pod orchestration ──────────────────
   gateway:
     network_mode: "service:k3s"
+    networks: !reset []
     ports: !reset []
     environment:
       SP_NOTEBOOK_DIRECT_URL: ""
@@ -38,11 +39,33 @@ services:
       - signalpilot-gateway-secrets:/gateway-secrets
       - signalpilot-repos:/repos
       - k3s-config:/k3s:ro
-    depends_on:
+    depends_on: !override
       db:
         condition: service_healthy
       sandbox:
         condition: service_healthy
+      k3s:
+        condition: service_started
+
+  gateway-chat-worker:
+    network_mode: "service:k3s"
+    environment:
+      SP_NOTEBOOK_DIRECT_URL: ""
+      SP_NOTEBOOK_UPSTREAM_MODE: pod_ip
+      SP_PUBLIC_GATEWAY_URL: http://127.0.0.1:3300
+      SP_K8S_HOST: https://127.0.0.1:6443
+      SP_K8S_NAMESPACE: default
+      KUBECONFIG: /k3s/k3s.yaml
+    volumes:
+      - signalpilot-data:/data
+      - signalpilot-gateway-secrets:/gateway-secrets
+      - signalpilot-repos:/repos:ro
+      - k3s-config:/k3s:ro
+    depends_on: !override
+      db:
+        condition: service_healthy
+      gateway:
+        condition: service_started
       k3s:
         condition: service_started
 

@@ -37,11 +37,19 @@ async def get_store(
 ) -> Store:
     """FastAPI dependency: yields a Store scoped to the current org."""
     auth = getattr(request.state, "auth", None) or {}
+    claims = getattr(request.state, "_jwt_claims", {}) or {}
+    execution_identity = claims.get("execution_identity")
+    allowed_connection_name = (
+        claims.get("connection_name")
+        if isinstance(execution_identity, str) and execution_identity.startswith("chat:")
+        else None
+    )
     return Store(
         db,
         org_id=org_id,
         user_id=user_id,
         eval_connection=auth.get("eval_connection"),
+        allowed_connection_name=allowed_connection_name,
     )
 
 

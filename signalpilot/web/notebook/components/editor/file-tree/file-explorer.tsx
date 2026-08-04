@@ -2,7 +2,6 @@ import { useAtom, useAtomValue } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 import { spApiUrl } from "@/core/network/api";
 import { classifyFile } from "@/core/active-file";
-import { openFileInTab } from "@/core/file-tabs";
 import {
   ArrowLeftIcon,
   BetweenHorizontalStartIcon,
@@ -290,12 +289,8 @@ export const FileExplorer: React.FC<{
             }
             if (!first.data.isDirectory) {
               const fileType = classifyFile(first.data.name);
-              if (fileType === "raw" || fileType === "notebook") {
-                const tab = openFileInTab(first.data.path);
-                if (tab.type === "notebook") {
-                  // Navigate to the notebook's dedicated session
-                  openNotebook(first.data.path);
-                }
+              if (fileType === "raw" || fileType === "ambiguous") {
+                openNotebook(first.data.path);
               } else {
                 setOpenFile(first.data);
               }

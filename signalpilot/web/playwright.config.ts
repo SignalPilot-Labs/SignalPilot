@@ -2,12 +2,13 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
+  snapshotPathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}{ext}",
   timeout: 60_000,
   retries: 0,
   workers: 1,
   fullyParallel: false,
   use: {
-    baseURL: "http://localhost:3200",
+    baseURL: process.env.PLAYWRIGHT_BASE_URL || "http://localhost:3200",
     headless: true,
     screenshot: "only-on-failure",
     trace: "on-first-retry",

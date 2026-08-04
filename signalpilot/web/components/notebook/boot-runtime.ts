@@ -1,10 +1,9 @@
 import { createSignalpilotClient } from "@/embed/createSignalpilotClient";
 import type { SignalpilotClient } from "@/embed/types";
 import { Logger } from "@/utils/Logger";
-import { isGeneratedAnalysisTrailNotebook } from "./analysis-trails";
 import type { NotebookConfig } from "./notebook-context";
 
-export type BootPhase = "health" | "notion" | "syncing" | "sessions" | "ready";
+export type BootPhase = "health" | "notion" | "syncing" | "ready";
 
 export class NotebookBootUserError extends Error {
   constructor(message: string) {
@@ -18,6 +17,7 @@ export interface NotebookStaticData {
   code?: string;
   session?: unknown;
   notebook?: unknown;
+  rawFallback?: boolean;
   /** Gateway auth token resolved at boot (Clerk JWT in cloud, "" in local).
    * Handed to the editor so its own gateway /api calls authenticate. */
   gatewayToken?: string;
@@ -96,10 +96,11 @@ async function rehydrateNotionTrail(
 }
 
 /**
- * Pure async boot sequence: health → optional project sync → takeover → client creation.
+ * Pure async boot sequence: health → optional project sync → client creation.
  *
  * Extracted from NotebookBoot so the component is thin and this logic
- * is testable without React.
+ * is testable without React. Boot never takes over an existing kernel:
+ * multiple tabs and user-owned runtimes must not disconnect one another.
  */
 export async function bootRuntime(
   config: NotebookConfig,
@@ -241,40 +242,7 @@ export async function bootRuntime(
   }
   if (signal.aborted) throw new Error("Boot cancelled");
 
-  // ── Phase 3: Take over stale sessions ─────────────────────────
-  if (!isNotionTrail) {
-    onPhase("sessions");
-    try {
-      const sessResp = await fetch(`${runtimeUrl}/api/sessions`, { headers, signal });
-      if (sessResp.ok) {
-        const sessions = (await sessResp.json()) as Record<string, { filename?: string | null }>;
-        let existingSessionId: string | undefined;
-        if (config.file) {
-          for (const [sid, info] of Object.entries(sessions)) {
-            if (info.filename && info.filename.endsWith(config.file)) {
-              existingSessionId = sid;
-              break;
-            }
-          }
-        }
-        if (existingSessionId || Object.keys(sessions).length > 0) {
-          const { takeoverKernel } = await import("@/core/kernel/takeover");
-          await takeoverKernel(runtimeUrl, headers).catch((err) => {
-            Logger.warn("Session takeover failed (non-fatal):", err);
-          });
-        }
-        if (existingSessionId) {
-          const { setSessionId } = await import("@/core/kernel/session");
-          setSessionId(existingSessionId as any);
-        }
-      }
-    } catch (err) {
-      if (!signal.aborted) Logger.warn("Session check failed:", err);
-    }
-  }
-  if (signal.aborted) throw new Error("Boot cancelled");
-
-  // ── Phase 4: Create client ────────────────────────────────────
+  // ── Phase 3: Create client ────────────────────────────────────
   const client = createSignalpilotClient({
     runtimeConfig: {
       url: runtimeUrl,
@@ -288,36 +256,33 @@ export async function bootRuntime(
     navigate,
   });
 
-  // ── Phase 5: Fetch notebook static data (file content + session) ──
-  const staticData: NotebookStaticData = { filename: config.file, gatewayToken: bootToken ?? "" };
-  const isGeneratedAnalysisTrail = isGeneratedAnalysisTrailNotebook({
-    project: config.project,
-    branch: config.branch,
-    file: config.file,
-  });
+  // ── Phase 4: Fetch notebook static data (file content + session) ──
+  const staticData: NotebookStaticData = {
+    filename: config.file,
+    gatewayToken: bootToken ?? "",
+    rawFallback: false,
+  };
 
-  if (config.file) {
+  if (config.file && !config.file.startsWith("__new__")) {
     try {
-      if (isGeneratedAnalysisTrail) {
-        const staticResp = await fetch(
-          `${runtimeUrl}/api/notebook/static?file=${encodeURIComponent(config.file)}`,
-          { headers, signal },
-        );
-        if (staticResp.ok) {
-          const payload = (await staticResp.json()) as {
-            code?: string;
-            filename?: string;
-            session?: unknown;
-            notebook?: unknown;
-          };
-          staticData.code = payload.code;
-          staticData.filename = payload.filename || config.file;
-          staticData.session = payload.session;
-          staticData.notebook = payload.notebook;
-        }
-      }
-
-      if (!staticData.code) {
+      const staticResp = await fetch(
+        `${runtimeUrl}/api/notebook/static?file=${encodeURIComponent(config.file)}`,
+        { headers, signal },
+      );
+      if (staticResp.ok) {
+        const payload = (await staticResp.json()) as {
+          code?: string;
+          filename?: string;
+          session?: unknown;
+          notebook?: unknown;
+          rawFallback?: boolean;
+        };
+        staticData.code = payload.code;
+        staticData.filename = payload.filename || config.file;
+        staticData.session = payload.session;
+        staticData.notebook = payload.notebook;
+        staticData.rawFallback = payload.rawFallback ?? false;
+      } else {
         const detailsResp = await fetch(`${runtimeUrl}/api/files/file_details`, {
           method: "POST",
           headers,
@@ -326,9 +291,8 @@ export async function bootRuntime(
         });
         if (detailsResp.ok) {
           const details = (await detailsResp.json()) as { contents?: string };
-          if (details.contents) {
-            staticData.code = details.contents;
-          }
+          staticData.code = details.contents ?? "";
+          staticData.rawFallback = true;
         }
       }
     } catch (err) {

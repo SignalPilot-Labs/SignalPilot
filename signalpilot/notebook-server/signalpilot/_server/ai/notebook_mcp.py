@@ -15,7 +15,7 @@ import ast
 import json
 import uuid
 from dataclasses import asdict, is_dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlunsplit
 
 from signalpilot import _loggers
@@ -30,6 +30,12 @@ from signalpilot._messaging.notebook.changes import (
 from signalpilot._messaging.notification import (
     NotebookDocumentTransactionNotification,
 )
+from signalpilot._server.ai.chat_runtime_output import (
+    authorize_chat_runtime_session,
+    compact_chat_runtime_output,
+    notebook_server_headers,
+    redact_chat_runtime_text,
+)
 from signalpilot._server.ai.tools.base import ToolBase, ToolContext
 from signalpilot._server.ai.tools.exceptions import ToolExecutionError
 from signalpilot._server.ai.tools.registry import (
@@ -37,6 +43,9 @@ from signalpilot._server.ai.tools.registry import (
 )
 from signalpilot._types.ids import CellId_t
 from signalpilot._utils.dataclass_to_openapi import PythonTypeToOpenAPI
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 LOGGER = _loggers.sp_logger()
 
@@ -84,15 +93,18 @@ def _local_server_url(context: ToolContext, path: str = "") -> str:
 
 
 def _server_headers(context: ToolContext, session_id: str) -> dict[str, str]:
-    token = str(context.session_manager.skew_protection_token)
-    return {
-        "Content-Type": "application/json",
-        "Sp-Server-Token": token,
-        "Sp-Session-Id": str(session_id),
-    }
+    return notebook_server_headers(
+        auth_token=str(context.session_manager.auth_token),
+        server_token=str(context.session_manager.skew_protection_token),
+        session_id=str(session_id),
+    )
 
 
-def build_notebook_mcp_server(context: ToolContext) -> Any:
+def build_notebook_mcp_server(
+    context: ToolContext,
+    *,
+    session_authorizer: Callable[[str], bool] | None = None,
+) -> Any:
     """
     Build an in-process MCP server with all notebook tools.
 
@@ -275,6 +287,7 @@ def build_notebook_mcp_server(context: ToolContext) -> Any:
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+        authorize_chat_runtime_session(name, arguments, session_authorizer)
         if name in tool_instances:
             return await _invoke_backend_tool(tool_instances, name, arguments)
 
@@ -587,7 +600,13 @@ def _handle_run_cells(
             if output:
                 mimetype = getattr(output, "mimetype", "")
                 data = getattr(output, "data", "")
-                if isinstance(data, str) and len(data) > 2000:
+                if getattr(session, "_signalpilot_chat_runtime", False):
+                    data = compact_chat_runtime_output(
+                        data,
+                        mimetype=str(mimetype),
+                        redactions=getattr(session, "_signalpilot_chat_redactions", ()),
+                    )
+                elif isinstance(data, str) and len(data) > 2000:
                     data = data[:2000] + "... (truncated)"
                 result["output"] = {"mimetype": str(mimetype), "data": str(data)}
 
@@ -599,7 +618,13 @@ def _handle_run_cells(
                     channel = getattr(item, "channel", "")
                     text = getattr(item, "data", "") or getattr(item, "text", "")
                     if text:
-                        console_items.append({"channel": str(channel), "text": str(text)[:1000]})
+                        rendered = str(text)
+                        if getattr(session, "_signalpilot_chat_runtime", False):
+                            rendered = redact_chat_runtime_text(
+                                rendered,
+                                getattr(session, "_signalpilot_chat_redactions", ()),
+                            )
+                        console_items.append({"channel": str(channel), "text": rendered[:1000]})
                 if console_items:
                     result["console"] = console_items
 
@@ -609,7 +634,13 @@ def _handle_run_cells(
                 error_list = []
                 for err in errors:
                     msg = getattr(err, "msg", "") or str(err)
-                    error_list.append(str(msg)[:500])
+                    rendered = str(msg)
+                    if getattr(session, "_signalpilot_chat_runtime", False):
+                        rendered = redact_chat_runtime_text(
+                            rendered,
+                            getattr(session, "_signalpilot_chat_redactions", ()),
+                        )
+                    error_list.append(rendered[:500])
                 result["errors"] = error_list
 
         cell_results.append(result)
@@ -764,6 +795,16 @@ async def _invoke_backend_tool(
     from mcp.types import TextContent
 
     t = tool_instances[name]
+    runtime_redactions: tuple[str, ...] = ()
+    chat_runtime = False
+    session_id = str(arguments.get("session_id") or "")
+    if session_id:
+        try:
+            session = t.context.get_session(session_id)
+            chat_runtime = bool(getattr(session, "_signalpilot_chat_runtime", False))
+            runtime_redactions = tuple(getattr(session, "_signalpilot_chat_redactions", ()) or ())
+        except Exception:
+            pass
 
     try:
         result = await t(arguments)
@@ -773,14 +814,26 @@ async def _invoke_backend_tool(
             text = json.dumps(result, default=str)
         else:
             text = str(result)
+        if chat_runtime:
+            text = compact_chat_runtime_output(
+                text,
+                mimetype="application/json",
+                redactions=runtime_redactions,
+            )
         return [TextContent(type="text", text=text)]
     except ToolExecutionError as e:
+        error_text = f"Error: {e.message}\nSuggested fix: {e.suggested_fix or 'N/A'}"
         return [
             TextContent(
                 type="text",
-                text=f"Error: {e.message}\nSuggested fix: {e.suggested_fix or 'N/A'}",
+                text=redact_chat_runtime_text(error_text, runtime_redactions),
             )
         ]
     except Exception as e:
         LOGGER.error(f"Tool {name} failed: {e}")
-        return [TextContent(type="text", text=f"Error: {e}")]
+        return [
+            TextContent(
+                type="text",
+                text=redact_chat_runtime_text(f"Error: {e}", runtime_redactions),
+            )
+        ]

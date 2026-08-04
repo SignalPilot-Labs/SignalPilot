@@ -65,7 +65,6 @@ import { useRuntimeManager } from "../runtime/config";
 import { notionRequestIdFromSessionId } from "../notion/trail";
 import { SECRETS_REGISTRY } from "../secrets/request-registry";
 import { isStaticNotebook } from "../static/static-state";
-import { rawFallbackAtom } from "../meta/state";
 import {
   DownloadStorage,
   ListStorageEntries,
@@ -181,6 +180,7 @@ export function useSpKernelConnection(opts: {
   sessionId: SessionId;
   autoInstantiate: boolean;
   setCells: (cells: CellData[], layout: LayoutState) => void;
+  static: boolean;
 }) {
   // Track whether we want to try reconnecting.
   const shouldTryReconnecting = useRef<boolean>(true);
@@ -483,8 +483,6 @@ export function useSpKernelConnection(opts: {
     ws.reconnect();
   };
 
-  const isRawFallback = useAtomValue(rawFallbackAtom);
-
   // Memoize the in-flight getWsURL() promise so that both the `url` and
   // `protocols` factories (awaited in parallel by wrappedUrlFactory in
   // useWebSocket.tsx) share a SINGLE token-resolution per connection attempt.
@@ -511,7 +509,7 @@ export function useSpKernelConnection(opts: {
   };
 
   const ws = useConnectionTransport({
-    static: isStaticNotebook() || isRawFallback,
+    static: isStaticNotebook() || opts.static,
     /**
      * Unique URL for this session.
      */
@@ -545,7 +543,6 @@ export function useSpKernelConnection(opts: {
      * Wait to connect. Gates on:
      * 1. Runtime health check (pod is up and responding)
      * 2. Project sync completion (files are on the pod)
-     * 3. Stale session cleanup (prevents SP_ALREADY_CONNECTED)
      *
      * All downstream connections (terminal, LSP) also wait for the
      * kernel to be OPEN, so this single gate protects everything.
@@ -592,36 +589,6 @@ export function useSpKernelConnection(opts: {
       });
       if (decision.kind === "terminal" && decision.closeTransport) {
         const reason = e.reason ?? "";
-
-        // Auto-takeover: when the pod says a session is already connected
-        // (e.g. stale session from Strict Mode remount, page refresh, or
-        // another tab), call /kernel/takeover to reclaim the kernel and retry.
-        if (
-          reason === "SP_ALREADY_CONNECTED" &&
-          retryCount.current < MAX_TERMINAL_RETRIES
-        ) {
-          retryCount.current += 1;
-          setConnection({ state: WebSocketState.CONNECTING });
-          const searchParams = new URL(window.location.href).searchParams;
-          const takeoverUrl = runtimeManager
-            .formatHttpURL("/api/kernel/takeover", searchParams)
-            .toString();
-          runtimeManager.headers().then((hdrs) =>
-            fetch(takeoverUrl, {
-              method: "POST",
-              headers: { "Content-Type": "application/json", ...hdrs },
-              body: "{}",
-            })
-          ).then(() => {
-              resetSessionForRetry();
-              setTimeout(() => ws.reconnect(), 300);
-            })
-            .catch(() => {
-              resetSessionForRetry();
-              setTimeout(() => ws.reconnect(), 500);
-            });
-          return;
-        }
 
         if (
           TERMINAL_RETRYABLE.has(reason) &&

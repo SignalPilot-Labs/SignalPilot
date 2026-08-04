@@ -383,6 +383,11 @@ class PoolManager:
         self._tunnels: dict[str, SSHTunnel] = {}  # key -> active tunnel
         self._keepalive_intervals: dict[str, int] = {}  # key -> interval seconds
         self._last_keepalive: dict[str, float] = {}  # key -> last keepalive time
+        # A connector carries execution-local driver state such as an active
+        # cursor/backend PID/job and the most recent query stats. Lease each pool
+        # key exclusively so two requests can never race on that shared state.
+        self._checkout_locks: dict[str, asyncio.Lock] = {}
+        self._checkout_owners: dict[str, asyncio.Task[Any] | None] = {}
         self._idle_timeout = idle_timeout_sec
         self._lock = asyncio.Lock()
         self._keepalive_task: asyncio.Task | None = None
@@ -435,7 +440,44 @@ class PoolManager:
         max_retries: int = 3,
         org_id: str | None = None,
     ) -> BaseConnector:
-        """Get or create a connected connector for the given connection.
+        """Exclusively check out a connected connector for this pool key.
+
+        The caller must pair every successful acquisition with ``release()``.
+        Concurrent callers for the same org and credential identity wait for the
+        current lease instead of sharing mutable connector execution state.
+        """
+        _, credential_identity = _pop_credential_identity(credential_extras)
+        if org_id is None:
+            org_id = _current_org_id()
+        key = _make_pool_key(db_type, connection_string, org_id, credential_identity)
+
+        # setdefault is synchronous, so competing event-loop tasks cannot create
+        # different locks for the same key between lookup and insertion.
+        checkout_lock = self._checkout_locks.setdefault(key, asyncio.Lock())
+        await checkout_lock.acquire()
+        self._checkout_owners[key] = asyncio.current_task()
+        try:
+            return await self._acquire_connector(
+                db_type,
+                connection_string,
+                credential_extras=credential_extras,
+                max_retries=max_retries,
+                org_id=org_id,
+            )
+        except BaseException:
+            self._checkout_owners.pop(key, None)
+            checkout_lock.release()
+            raise
+
+    async def _acquire_connector(
+        self,
+        db_type: str,
+        connection_string: str,
+        credential_extras: dict | None = None,
+        max_retries: int = 3,
+        org_id: str | None = None,
+    ) -> BaseConnector:
+        """Get or create the connector after its pool key is checked out.
 
         Retries transient failures (network timeouts, connection refused) with
         exponential backoff + jitter. Auth/config errors fail immediately.
@@ -606,6 +648,10 @@ class PoolManager:
                         self._keepalive_intervals.pop(key, None)
                         self._last_keepalive.pop(key, None)
                         continue
+                    if key in self._checkout_owners:
+                        # Never ping a connector while a request owns its cursor,
+                        # backend PID, cancellation handle, or result metadata.
+                        continue
                     interval = self._keepalive_intervals[key]
                     last = self._last_keepalive.get(key, 0)
                     if now - last < interval:
@@ -641,7 +687,7 @@ class PoolManager:
         credential_extras: dict | None = None,
         org_id: str | None = None,
     ) -> None:
-        """Mark a connector as available (updates last-used time).
+        """Return an exclusively checked-out connector to the pool.
 
         Pass the credential_extras from acquisition so the pool key matches.
         """
@@ -649,10 +695,22 @@ class PoolManager:
         if org_id is None:
             org_id = _current_org_id()
         key = _make_pool_key(db_type, connection_string, org_id, credential_identity)
+        checkout_lock = self._checkout_locks.get(key)
+        owner = self._checkout_owners.get(key)
+        current_task = asyncio.current_task()
+        if checkout_lock is None or owner is not current_task:
+            if owner is not None:
+                logger.warning(
+                    "Ignored connector release from a task that does not own %s",
+                    _safe_pool_key_for_log(key),
+                )
+            return
         async with self._lock:
             if key in self._pools:
                 connector, _ = self._pools[key]
                 self._pools[key] = (connector, time.monotonic())
+        self._checkout_owners.pop(key, None)
+        checkout_lock.release()
 
     @contextlib.asynccontextmanager
     async def connection(
@@ -671,21 +729,36 @@ class PoolManager:
             async with pool_manager.connection("postgres", conn_str, connection_name="mydb") as connector:
                 rows = await connector.execute(sql)
         """
-        connector = await self.acquire(db_type, connection_string, credential_extras=credential_extras)
-        if connection_name:
-            connector._audit_connection_name = connection_name
+        org_id = _current_org_id()
+        connector = await self.acquire(
+            db_type,
+            connection_string,
+            credential_extras=credential_extras,
+            org_id=org_id,
+        )
         try:
+            if connection_name:
+                connector._audit_connection_name = connection_name
             yield connector
         finally:
             connector._audit_connection_name = None
-            await self.release(db_type, connection_string, credential_extras=credential_extras)
+            await self.release(
+                db_type,
+                connection_string,
+                credential_extras=credential_extras,
+                org_id=org_id,
+            )
 
     async def cleanup_idle(self) -> int:
         """Close connectors that have been idle longer than timeout. Returns count closed."""
         now = time.monotonic()
         closed = 0
         async with self._lock:
-            stale_keys = [k for k, (_, last_used) in self._pools.items() if now - last_used > self._idle_timeout]
+            stale_keys = [
+                k
+                for k, (_, last_used) in self._pools.items()
+                if k not in self._checkout_owners and now - last_used > self._idle_timeout
+            ]
             for key in stale_keys:
                 connector, _ = self._pools.pop(key)
                 try:
@@ -776,6 +849,7 @@ class PoolManager:
                 "db_type": db_type,
                 "idle_seconds": round(now - last_used, 1),
                 "connector_type": type(connector).__name__,
+                "checked_out": key in self._checkout_owners,
             }
             if key in self._keepalive_intervals:
                 pool_info["keepalive_interval"] = self._keepalive_intervals[key]

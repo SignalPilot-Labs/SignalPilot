@@ -36,11 +36,16 @@ from signalpilot._server.api.endpoints.ws.ws_kernel_ready import (
 from signalpilot._server.api.endpoints.ws.ws_message_loop import (
     WebSocketMessageLoop,
 )
-from signalpilot._server.api.endpoints.ws.ws_rtc_handler import RTCWebSocketHandler
+from signalpilot._server.api.endpoints.ws.ws_rtc_handler import (
+    RTCWebSocketHandler,
+)
 from signalpilot._server.api.endpoints.ws.ws_session_connector import (
     SessionConnector,
 )
 from signalpilot._server.codes import WebSocketCodes
+from signalpilot._server.concurrent_sessions import (
+    should_reject_edit_connection,
+)
 from signalpilot._server.router import APIRouter
 from signalpilot._server.rtc.doc import LoroDocManager
 from signalpilot._server.session_manager import SessionManager
@@ -462,14 +467,19 @@ class WebSocketHandler(SessionConsumer):
     def _can_connect(self) -> bool:
         """Check if this connection is allowed.
 
-        Only one frontend can be connected at a time in edit mode,
-        if RTC is not enabled.
+        Edit mode allows one frontend per file by default. Local direct-mode
+        development may opt into distinct concurrent kernel sessions because
+        every browser/account is intentionally routed through one server.
         """
         if (
             self.manager.mode == SessionMode.EDIT
-            and self.manager.any_clients_connected(self.params.file_key)
-            and not self.params.kiosk
-            and not self.params.rtc_enabled
+            and should_reject_edit_connection(
+                has_connected_client=self.manager.any_clients_connected(
+                    self.params.file_key,
+                ),
+                kiosk=self.params.kiosk,
+                rtc_enabled=self.params.rtc_enabled,
+            )
         ):
             LOGGER.debug(
                 "Refusing connection; a frontend is already connected."

@@ -229,6 +229,13 @@ async def ensure_notebook_session(
     branch: str,
     credential_user_id: str | None = None,
     extra_env: dict[str, str] | None = None,
+    token_project_id: str | None = None,
+    token_branch: str | None = None,
+    token_connection_name: str | None = None,
+    token_commit_sha: str | None = None,
+    token_capabilities: list[str] | None = None,
+    token_execution_identity: str | None = None,
+    token_scopes: list[str] | None = None,
     get_orchestrator: OrchestratorFactory | None = None,
 ) -> NotebookSessionInfo:
     """Create or reuse a running notebook session for one org/user/project/branch."""
@@ -340,8 +347,13 @@ async def ensure_notebook_session(
         user_id=credential_user_id or user_id,
         org_id=org_id,
         session_id=session_info.id,
-        project_id=project_id,
-        branch=branch,
+        project_id=token_project_id if token_project_id is not None else project_id,
+        branch=token_branch or branch,
+        connection_name=token_connection_name,
+        commit_sha=token_commit_sha,
+        capabilities=token_capabilities,
+        execution_identity=token_execution_identity,
+        scopes=token_scopes,
         ttl=k8s_settings.sp_session_jwt_ttl_seconds,
     )
 
@@ -466,4 +478,51 @@ async def ensure_analysis_notebook_session(
             runtime_session_id,
             session_info.id,
         )
+    return await runtime_for_session(session, session_info)
+
+
+async def ensure_standalone_chat_notebook_session(
+    session: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    run_id: str,
+    project_id: str,
+    branch: str,
+    connection_name: str,
+    commit_sha: str,
+) -> NotebookRuntime:
+    """Start an isolated, frozen-project runtime for one durable chat run."""
+    execution_identity = f"chat:{run_id}"
+    session_info = await ensure_notebook_session(
+        session,
+        org_id=org_id,
+        user_id=execution_identity,
+        project_id=project_id,
+        branch=branch,
+        credential_user_id=user_id,
+        extra_env={
+            "SP_CHAT_RUN_ID": run_id,
+            "SP_CHAT_PROJECT_ID": project_id,
+            "SP_CHAT_BRANCH": branch,
+            "SP_CHAT_CONNECTION_NAME": connection_name,
+            "SP_CHAT_COMMIT_SHA": commit_sha,
+            "SP_PROJECT_COMMIT_SHA": commit_sha,
+            "SP_PROJECT_READ_ONLY": "1",
+        },
+        token_project_id=project_id,
+        token_branch=branch,
+        token_connection_name=connection_name,
+        token_commit_sha=commit_sha,
+        token_capabilities=[
+            "artifact:publish",
+            "dbt:read",
+            "notebook:analysis",
+            "query:read",
+            "schema:read",
+            "runtime:publish",
+        ],
+        token_execution_identity=execution_identity,
+        token_scopes=["read", "query", "execute"],
+    )
     return await runtime_for_session(session, session_info)

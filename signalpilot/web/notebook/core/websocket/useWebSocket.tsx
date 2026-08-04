@@ -1,5 +1,5 @@
 import ReconnectingWebSocket, { type UrlProvider } from "partysocket/ws";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo } from "react";
 import { Logger } from "@/utils/Logger";
 import { BasicTransport } from "./transports/basic";
 import type { IConnectionTransport } from "./transports/transport";
@@ -98,15 +98,16 @@ function createConnectionTransport(
 export function useConnectionTransport(options: UseConnectionTransportOptions) {
   const { onOpen, onMessage, onClose, onError, waitToConnect } = options;
 
-  const transportRef = useRef<IConnectionTransport>(
-    createConnectionTransport(options),
+  const socket = useMemo(
+    () => createConnectionTransport(options),
+    // File navigation only needs to replace the transport when crossing the
+    // raw/notebook boundary. URL and auth factories resolve current state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [options.static],
   );
 
   useEffect(() => {
     let cancelled = false;
-
-    const socket = createConnectionTransport(options);
-    transportRef.current = socket;
 
     socket.addEventListener("open", onOpen);
     socket.addEventListener("close", onClose);
@@ -137,7 +138,7 @@ export function useConnectionTransport(options: UseConnectionTransportOptions) {
       socket.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [socket]);
 
-  return transportRef.current;
+  return socket;
 }

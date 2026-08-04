@@ -58,26 +58,12 @@ class SessionConnector:
         if self.params.kiosk:
             return self._connect_kiosk()
 
-        # 2. If raw file, convert to __new__ key so we get an empty session
-        raw_extensions = {".sql", ".yml", ".yaml", ".toml", ".txt", ".csv", ".json"}
-        from pathlib import Path as _Path
-        file_ext = _Path(self.params.file_key).suffix.lower() if self.params.file_key else ""
-        if file_ext in raw_extensions:
-            from signalpilot._server.workspace import NEW_FILE
-            self.params = ConnectionParams(
-                session_id=self.params.session_id,
-                file_key=f"{NEW_FILE}raw",
-                kiosk=self.params.kiosk,
-                auto_instantiate=self.params.auto_instantiate,
-                rtc_enabled=self.params.rtc_enabled,
-            )
-
-        # 3. Reconnect to existing session with same ID
+        # 2. Reconnect to existing session with same ID
         existing_by_id = self.manager.get_session(self.params.session_id)
         if existing_by_id is not None:
             return self._reconnect_session(existing_by_id)
 
-        # 4. Connect to existing session (RTC mode)
+        # 3. Connect to existing session (RTC mode)
         existing_by_file = self.manager.get_session_by_file_key(
             self.params.file_key
         )

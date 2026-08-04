@@ -18,6 +18,7 @@ import {
 import { Label } from "../../components/ui/label";
 import { useEvent } from "../../hooks/useEvent";
 import { Logger } from "../../utils/Logger";
+import { invalidateFileKind } from "../active-file";
 import { getCellConfigs, getNotebook, useNotebook } from "../cells/cells";
 import { notebookCells } from "../cells/utils";
 import { formatAll } from "../codemirror/format";
@@ -168,6 +169,7 @@ export function useSaveNotebook() {
         persist: true,
       });
       console.log("[SAVE] sendSave complete");
+      invalidateFileKind(filename);
 
       setLastSavedNotebook({
         names: cellNames,

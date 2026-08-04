@@ -1,9 +1,37 @@
 """Connection object — user-facing interface to a SignalPilot data connection."""
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any
 
 from signalpilot._sdk._client import GatewayClient
+
+
+@dataclass(frozen=True)
+class QueryPlan:
+    id: str
+    sql_hash: str
+    estimated_scan_rows: int | None
+    estimated_scan_bytes: int | None
+    estimated_output_rows: int | None
+    estimated_output_bytes: int | None
+    estimated_cost_usd: float
+    estimate_quality: str
+    route: str
+    route_reason: str
+    approval_required: bool
+    expires_at: str
+
+
+@dataclass(frozen=True)
+class DatasetRef:
+    id: str
+    schema: tuple[dict[str, Any], ...]
+    row_count: int
+    byte_size: int
+    completeness: str
+    expires_at: str
+    _client: GatewayClient = field(repr=False, compare=False)
 
 
 class Connection:
@@ -14,15 +42,82 @@ class Connection:
         self._client = client
 
     def query(self, sql: str, row_limit: int = 1000) -> list[dict[str, Any]]:
-        """Execute a governed SQL query. Returns list of row dicts."""
-        data = self._client.post("/api/query", {
-            "connection_name": self._name,
-            "sql": sql,
-            "row_limit": row_limit,
-        })
-        return data.get("rows", [])
+        """Execute a governed SQL query. Compatibility wrapper returning rows."""
+        return self.query_result(sql, row_limit).get("rows", [])
 
-    def tables(self, filter: str | None = None) -> list[dict[str, Any]]:
+    def plan(
+        self,
+        sql: str,
+        *,
+        purpose: str,
+        execution_need: str = "sql",
+        row_level_analysis_justified: bool = False,
+    ) -> QueryPlan:
+        """Create an expiring SQL- and runtime-bound route decision."""
+        data = self._client.post(
+            "/api/query/plan",
+            {
+                "connection_name": self._name,
+                "sql": sql,
+                "purpose": purpose,
+                "execution_need": execution_need,
+                "row_level_analysis_justified": row_level_analysis_justified,
+            },
+        )
+        return QueryPlan(
+            id=str(data["plan_id"]),
+            sql_hash=str(data["sql_hash"]),
+            estimated_scan_rows=data.get("estimated_scan_rows"),
+            estimated_scan_bytes=data.get("estimated_scan_bytes"),
+            estimated_output_rows=data.get("estimated_output_rows"),
+            estimated_output_bytes=data.get("estimated_output_bytes"),
+            estimated_cost_usd=float(data.get("estimated_cost_usd") or 0),
+            estimate_quality=str(data["estimate_quality"]),
+            route=str(data["route"]),
+            route_reason=str(data["route_reason"]),
+            approval_required=bool(data.get("approval_required")),
+            expires_at=str(data["expires_at"]),
+        )
+
+    def query_result(
+        self,
+        sql: str,
+        row_limit: int = 100_000,
+        *,
+        plan_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Return rows plus durable result ID, schema, cost, and completeness."""
+        data = self._client.post(
+            "/api/query",
+            {
+                "connection_name": self._name,
+                "sql": sql,
+                "row_limit": row_limit,
+                "plan_id": plan_id,
+            },
+            headers={"X-SP-Query-Path": "sdk"},
+        )
+        return data
+
+    def query_dataset(self, sql: str, *, plan_id: str) -> DatasetRef:
+        """Stream a dataset_ref plan into a private, expiring Parquet object."""
+        data = self._client.post(
+            "/api/query/datasets",
+            {"connection_name": self._name, "sql": sql, "plan_id": plan_id},
+            timeout=3600,
+            headers={"X-SP-Query-Path": "sdk"},
+        )
+        return DatasetRef(
+            id=str(data["dataset_id"]),
+            schema=tuple(data.get("schema") or ()),
+            row_count=int(data["row_count"]),
+            byte_size=int(data["byte_size"]),
+            completeness=str(data["completeness"]),
+            expires_at=str(data["expires_at"]),
+            _client=self._client,
+        )
+
+    def tables(self, filter: str | None = None) -> list[dict[str, Any]]:  # noqa: A002
         """List tables in this connection."""
         params: dict[str, Any] = {}
         if filter:

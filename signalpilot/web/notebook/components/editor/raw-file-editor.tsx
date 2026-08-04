@@ -27,6 +27,7 @@ import { cn } from "@/utils/cn";
 import { darkTheme } from "@/core/codemirror/theme/dark";
 import { lightTheme } from "@/core/codemirror/theme/light";
 import { getApiHeaders } from "@/core/network/api-headers";
+import { invalidateFileKind } from "@/core/active-file";
 import { filenameAtom } from "@/core/saving/file-state";
 import { useTheme } from "@/theme/useTheme";
 import { LazyAnyLanguageCodeMirror } from "@/plugins/impl/code/LazyAnyLanguageCodeMirror";
@@ -205,6 +206,7 @@ export const RawFileEditor: React.FC<RawFileEditorProps> = ({ filePath }) => {
     try {
       const success = await saveFileContents(currentFile, currentValue);
       if (success) {
+        invalidateFileKind(currentFile);
         setSavedValue(currentValue);
         toast({ title: "Saved", description: currentFile.split(/[/\\]/).pop() });
       }
@@ -325,7 +327,10 @@ export const RawFileEditor: React.FC<RawFileEditorProps> = ({ filePath }) => {
   // dbt model file → full IDE experience
   if (isModel && modelName) {
     return (
-      <div className="flex flex-col h-full w-full overflow-hidden">
+      <div
+        className="flex flex-col h-full w-full overflow-hidden"
+        data-testid="raw-file-editor"
+      >
         <div className="flex items-center px-4 py-4 border-b border-border shrink-0">
           <div className="flex items-center gap-3">
             {projectName && (
@@ -389,7 +394,10 @@ export const RawFileEditor: React.FC<RawFileEditorProps> = ({ filePath }) => {
   const isMarkdown = language === "markdown" && ext === ".md";
 
   return (
-    <div className="flex flex-col h-full w-full overflow-hidden">
+    <div
+      className="flex flex-col h-full w-full overflow-hidden"
+      data-testid="raw-file-editor"
+    >
       <div className="flex items-center justify-between px-4 py-4 border-b border-border shrink-0">
         <div className="flex items-center gap-3">
           {projectName && (

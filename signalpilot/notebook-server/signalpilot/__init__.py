@@ -29,6 +29,9 @@ __all__ = [  # noqa: RUF022
     "init",
     "connections",
     "connect",
+    "open_dataset",
+    "publish_artifact",
+    "publish_result",
     # Agent SDK
     "agent",
     # Other namespaces
@@ -155,6 +158,13 @@ from signalpilot._runtime.threads import Thread, current_thread
 from signalpilot._save.save import cache, lru_cache, persistent_cache
 from signalpilot._server.asgi import create_asgi_app
 from signalpilot._client.agent import agent
-from signalpilot._sdk import connect, connections, init
+from signalpilot._sdk import (
+    connect,
+    connections,
+    init,
+    open_dataset,
+    publish_artifact,
+    publish_result,
+)
 from signalpilot._sql.sql import sql
 from signalpilot._version import __version__

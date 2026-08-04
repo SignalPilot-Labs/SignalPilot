@@ -1,0 +1,132 @@
+---
+sidebar_position: 3.5
+---
+
+# Operations
+
+What a self-hosted deployment needs after it is running: what to back up, what
+happens on upgrade, what grows without bound, and what the background loops are
+doing.
+
+Cloud customers can skip this page — it is all managed.
+
+## Back this up
+
+Losing any of these costs you data. Losing the first two costs you data you
+cannot reconstruct.
+
+| What | Where | If you lose it |
+|------|-------|----------------|
+| **Encryption salt** | `SP_DATA_DIR/.encryption_salt` | **Every stored credential becomes undecryptable.** The salt derives the key from your passphrase; a new random salt derives a different key. |
+| **`SP_ENCRYPTION_KEY`** (and any `SP_ENCRYPTION_KEY_OLD`) | Your secret store | Same as above. Keep retired keys until you have confirmed every credential is re-encrypted. |
+| **PostgreSQL database** | `DATABASE_URL` | Connections, knowledge base, audit log, eval history, projects — everything. |
+| **Session JWT secret** | `SP_SESSION_JWT_SECRET`, or the gateway-private secrets volume in local mode | Live notebook and sandbox sessions are invalidated. |
+| **Repositories** | `SP_REPOS_DIR` | Uncommitted workspace state. |
+| **Eval evidence bucket** | `SP_EVAL_S3_BUCKET` | Transcripts and captures beyond the retention window. |
+
+:::danger Test the restore
+An encryption salt backed up but never restored is a backup you do not have.
+Restore into a scratch environment and confirm a connection still works before
+you need it for real.
+:::
+
+## Schema changes on upgrade
+
+There is no Alembic and no migration command. At boot the gateway runs
+`create_all` to add missing tables, then a series of idempotent `_ensure_*` steps
+that add columns, backfill defaults, and create indexes that `create_all` cannot
+express.
+
+What this means in practice:
+
+- **Upgrades are forward-only.** There is no down-migration. Roll back by
+  restoring the database, not by starting an older image against a newer schema.
+- **Some steps are destructive by design.** They deduplicate rows and drop
+  columns that must not survive (a plaintext notebook token, for example, which
+  also force-stops live notebook sessions).
+- **Take a backup before upgrading.** The one manual migration in the codebase
+  says so in its own header, and gates cloud `/health` behind a `503` until it has
+  run.
+
+## Retention and growth
+
+Some things are pruned automatically. The important one is not.
+
+| Data | Retention |
+|------|-----------|
+| Knowledge retrieval events | 90 days |
+| Connection-health events | 7 days |
+| Eval artifacts | Last 10 runs per workspace |
+| Eval transcripts | Last 100 runs per workspace |
+| Eval accuracy history | Never pruned (small) |
+| Idle notebook sessions | Reaped after `SP_NOTEBOOK_IDLE_TIMEOUT` (2 h) |
+| **Audit log** | **Never pruned** |
+| **Chat traces, analysis trails** | **Never pruned** |
+
+`audit_retention_days` in the plan table is a *cloud plan* attribute; it does not
+prune a self-hosted `gateway_audit_logs`. Schedule your own deletion to match
+your policy, and keep an export first if you need the history:
+
+```sql
+-- keep 400 days
+DELETE FROM gateway_audit_logs
+WHERE timestamp < EXTRACT(EPOCH FROM now() - INTERVAL '400 days');
+```
+
+## Background loops
+
+Each gateway process runs about a dozen `asyncio` loops. There is **no leader
+election** — every replica runs all of them. Two are worth knowing about before
+you scale out:
+
+- **Health ping** opens a real connection to every connection in every workspace
+  every 30 seconds. With many workspaces and a small database pool this is real
+  load; it is also what makes the health page useful.
+- **Eval reaper** deletes `eval-*` branch databases whose run lease has expired,
+  matching across the whole server rather than per workspace. Give eval branches
+  a dedicated Postgres server — see
+  [Deploying the eval harness](/docs/evals/deploying).
+
+Others sweep pools, refresh schemas, prune knowledge retrievals, run schema
+watches, reap notebooks, and enforce eval retention.
+
+## Health and metrics
+
+- **`GET /health`** returns `{"status":"healthy"}` and checks nothing — not the
+  database, not the pools. It is a liveness probe, not a readiness probe. There
+  is no `/readyz` or `/livez`.
+- **`GET /api/metrics`** is an authenticated **SSE stream**, not a Prometheus
+  endpoint, capped at 20 concurrent streams. Scrape-based monitoring needs an
+  adapter.
+
+For readiness, probe something that actually exercises the database — a cheap
+authenticated route such as `GET /api/connections` — rather than `/health`.
+
+## Fixed ceilings
+
+Not configurable, worth knowing:
+
+| Limit | Value |
+|-------|-------|
+| Request body | 2 MiB |
+| Concurrent eval runs | 2 per gateway **process** |
+| Eval export archive | 256 MB, assembled in memory |
+| Report HTML | 5 MB |
+| Audit export rows | `SP_MAX_EXPORT_ROWS`, default 50,000 |
+| Open eval-set uploads | 3 per user |
+| Concurrent sandboxes | 10 |
+| Concurrent metrics streams | 20 |
+
+## Compose stack hygiene
+
+The bundled `docker-compose.yml` is a development stack. Before exposing it
+anywhere:
+
+- **Replace `SP_ENCRYPTION_KEY`.** The committed value is public.
+- **Replace the database password.** `changeme_dev_only` is not a joke setup;
+  it is the literal default.
+- Decide which services you actually need — the stack also starts MinIO, Mailpit,
+  a sandbox, a notebook server, and an object proxy.
+
+See [Self-hosting in production](/docs/setup/self-hosting-production) for the
+hardened path.

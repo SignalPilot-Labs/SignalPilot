@@ -1,0 +1,45 @@
+---
+sidebar_position: 8
+---
+
+# Demo warehouse
+
+**Try SignalPilot** (`/demo-db`) gives you a real warehouse and a real dbt project
+in about a minute, without touching your own data. It is the fastest way to see
+what the agent does before pointing it at anything that matters.
+
+## What it sets up
+
+1. **Add a demo warehouse** — forks a private branch of a seeded Postgres
+   warehouse for you and registers it as a connection. It is your branch: build
+   on it, break it, drop it.
+2. **Clone the demo dbt project** — the project the warehouse was built from, so
+   the agent has model code to read, not just tables.
+3. **Connect your agent via MCP** — shows the MCP URL and key to paste into
+   Claude Code or another client.
+
+**Remove demo connection** cleans up when you are done.
+
+## The suggested workflows
+
+The page ships four prompts worth running in order, because each one shows a
+different part of the system:
+
+- **Build the warehouse on your branch** — the agent runs a dbt build against
+  your own branch, so you see governed writes happening somewhere disposable.
+- **Build the revenue-cycle marts on your branch** — a larger build, exercising
+  the [8-step dbt workflow](/docs/workflows/dbt-build) and the verifier agents.
+- **Investigate a number before you report it** — the interesting one. The demo
+  data contains defects that look plausible, so this shows the difference between
+  an agent that trusts a mart and one that checks its grain.
+- **Load the knowledge base, then use it** — populate the
+  [knowledge base](/docs/product/knowledge-base) and watch the next answer change.
+
+## After the demo
+
+The same shape works on your warehouse: add a connection, import your dbt
+project, then let the agent work. Two things worth doing early:
+
+- Write your first knowledge entries about the traps in *your* data.
+- Set up an [eval set](/docs/evals/quickstart) with a handful of questions whose
+  answers you already know, so improvements are measurable rather than felt.

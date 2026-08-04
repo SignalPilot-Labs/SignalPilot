@@ -43,10 +43,19 @@ async def resolve_branch_provider(
             from gateway.connectors.xata_creds import resolve_xata_extras
 
             resolved = resolve_xata_extras(extras)
+            # Connection extras use xata_organization / xata_database — the
+            # names the connection model persists. Reading xata_org silently
+            # produced an empty org and a 404 on every control-plane call.
+            org = str(resolved.get("xata_organization") or "").strip()
+            if not org:
+                raise ProvisioningError(
+                    f"connection {conn_name!r} has no xata_organization in its extras — "
+                    "recreate the connection so the control plane can be addressed"
+                )
             control = XataControlClient(
                 XataControlConfig(
                     api_url=str(resolved.get("xata_api_url", "https://api.xata.tech")),
-                    org=str(resolved.get("xata_org", "")),
+                    org=org,
                     bearer_token=str(resolved.get("xata_api_key", "")),
                 )
             )
@@ -59,7 +68,7 @@ async def resolve_branch_provider(
                 control,
                 project_id=str(resolved["xata_project"]),
                 parent_branch=str(resolved["branch"]),
-                database=str(resolved.get("database", "xata") or "xata"),
+                database=str(resolved.get("xata_database") or "xata"),
             )
 
     if settings.pg_admin_dsn and settings.pg_parent_db:

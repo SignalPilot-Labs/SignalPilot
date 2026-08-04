@@ -134,3 +134,41 @@ class TestCloudMode:
 
     def test_empty_string_is_refused(self, cloud_mode, settings) -> None:
         _refused("", settings)
+
+
+class TestXataExtrasKeyNames:
+    """resolve_branch_provider must read the key names the connection model
+    actually persists. Reading xata_org/database instead of
+    xata_organization/xata_database produced an empty org and a 404 on every
+    control-plane call — silently, because the empty string is falsy but not
+    an error until the URL is built.
+    """
+
+    async def test_missing_organization_is_refused_not_silently_empty(self, tmp_path) -> None:
+        from gateway.config.evals import get_eval_run_settings
+        from gateway.evals.provision import ProvisioningError, resolve_branch_provider
+
+        class Store:
+            org_id = "org-1"
+
+            async def get_credential_extras(self, name: str) -> dict:
+                # A Xata connection with the pin but no organization.
+                return {"xata_project": "prj_x", "branch": "main"}
+
+        get_eval_run_settings.cache_clear()
+        try:
+            settings = get_eval_run_settings()
+            with pytest.raises(ProvisioningError) as exc:
+                await resolve_branch_provider(Store(), {"connection": "c"}, settings)
+            assert "xata_organization" in str(exc.value)
+        finally:
+            get_eval_run_settings.cache_clear()
+
+    def test_reads_the_persisted_key_names(self) -> None:
+        import inspect
+
+        from gateway.evals import provision
+
+        src = inspect.getsource(provision.resolve_branch_provider)
+        assert "xata_organization" in src
+        assert "xata_database" in src

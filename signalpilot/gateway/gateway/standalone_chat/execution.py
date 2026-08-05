@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -36,6 +37,13 @@ def _join_base_path(base: str, path: str) -> str:
     return f"{base.rstrip('/')}/{path.lstrip('/')}"
 
 
+@dataclass(frozen=True)
+class PreparedExecution:
+    url: str
+    headers: dict[str, str]
+    payload: dict[str, Any]
+
+
 async def ensure_execution_runtime(
     db: AsyncSession,
     *,
@@ -65,7 +73,7 @@ async def ensure_execution_runtime(
     return runtime
 
 
-async def stream_execution(
+async def prepare_execution(
     db: AsyncSession,
     *,
     run: GatewayChatRun,
@@ -76,7 +84,7 @@ async def stream_execution(
     prompt: str,
     messages: list[dict[str, str]],
     warm_context: dict[str, Any],
-) -> AsyncGenerator[dict[str, Any], None]:
+) -> PreparedExecution:
     runtime = await ensure_execution_runtime(
         db,
         run=run,
@@ -93,9 +101,7 @@ async def stream_execution(
     runtime_auth: dict[str, str] | None = None
     if anthropic_api_key:
         runtime_auth = {"type": "api_key", "token": anthropic_api_key}
-    elif oauth_token := (
-        os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or os.getenv("OAUTH_TOKEN")
-    ):
+    elif oauth_token := (os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or os.getenv("OAUTH_TOKEN")):
         runtime_auth = {"type": "oauth", "token": oauth_token}
     elif server_api_key := os.getenv("ANTHROPIC_API_KEY"):
         runtime_auth = {"type": "api_key", "token": server_api_key}
@@ -152,14 +158,22 @@ async def stream_execution(
         "X-Gateway-Connection-Name": connection_name,
         "X-Gateway-Commit-Sha": commit_sha,
     }
+    return PreparedExecution(
+        url=_join_base_path(runtime.internal_base_url, "/api/standalone-chat/execute"),
+        headers=headers,
+        payload=payload,
+    )
+
+
+async def stream_execution(execution: PreparedExecution) -> AsyncGenerator[dict[str, Any], None]:
     timeout = httpx.Timeout(connect=30.0, read=None, write=30.0, pool=30.0)
     async with (
         httpx.AsyncClient(timeout=timeout) as client,
         client.stream(
             "POST",
-            _join_base_path(runtime.internal_base_url, "/api/standalone-chat/execute"),
-            headers=headers,
-            json=payload,
+            execution.url,
+            headers=execution.headers,
+            json=execution.payload,
         ) as response,
     ):
         response.raise_for_status()
@@ -289,9 +303,7 @@ async def cleanup_expired_runtime_objects(db: AsyncSession) -> int:
     cleaned = 0
     expired = list(
         (
-            await db.execute(
-                select(GatewayRuntimeDataset).where(GatewayRuntimeDataset.expires_at <= now).limit(100)
-            )
+            await db.execute(select(GatewayRuntimeDataset).where(GatewayRuntimeDataset.expires_at <= now).limit(100))
         ).scalars()
     )
     for dataset in expired:

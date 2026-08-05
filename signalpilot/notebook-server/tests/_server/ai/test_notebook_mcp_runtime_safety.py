@@ -155,6 +155,14 @@ async def test_duplicate_definition_is_an_mcp_error_before_document_mutation(
     assert response.root.isError is True
     assert session.document.transactions == []
     assert '"type": "MultipleDefinitionError"' in response.root.content[0].text
+    assert session._signalpilot_notebook_failures[-1]["error"] == {
+        "cell_ids": ["a", "b"],
+        "message": session._signalpilot_notebook_failures[-1]["error"][
+            "message"
+        ],
+        "type": "MultipleDefinitionError",
+        "variable": "df",
+    }
 
 
 def test_delete_then_add_removes_the_old_kernel_definition_before_running(

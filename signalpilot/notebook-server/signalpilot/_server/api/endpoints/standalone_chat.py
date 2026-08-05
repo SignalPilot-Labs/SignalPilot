@@ -87,6 +87,9 @@ Rules:
 - Call plan_query before every execution. Obey its route exactly.
 - Use query_database with the returned plan_id only when the plan route is mcp.
 - If the route is notebook_sdk or dataset_ref, call start_analysis_notebook with that plan_id, then use only the seeded notebook and the plan-bound SDK.
+- The analysis notebook is a marimo reactive notebook, not a Jupyter notebook. Before editing it, inspect the current cell map. Every non-private top-level name may be defined by exactly one live cell across the entire notebook. Imports, assignments, function and class names, and top-level loop targets all define names.
+- Define shared imports and reusable DataFrames once, then reference them from downstream cells. Prefix disposable cell-local names with one underscore (for example `_fig`, `_ax`, `_i`, `_row`, or `_segment`), or place scratch work inside a uniquely named function. Never repeat public helper names across cells.
+- If edit_notebook returns MultipleDefinitionError, use its variable and cell_ids to update, rename, or delete the conflicting definitions in one atomic edit batch. Do not add a replacement definition in a separate transaction while the old defining cell remains live.
 - Never edit, remove, or redefine the seeded hidden context/import cell or the seeded SDK setup cell. They already run `sp.init(...)` and define the plan-bound `db = sp.connect(...)` connection. `sp.init()` returns None, and there is no `signalpilot.db` export.
 - For notebook_sdk, first define `plan_id` from the exact ID returned by plan_query, then execute the exact planned SQL with `source = db.query_result(sql, plan_id=plan_id)` and build the in-kernel DataFrame from `source["rows"]`; retain `source["result_id"]` for publication. There is no `db.read_plan` method.
 - If the route is aggregate_required, rewrite the work as a bounded warehouse aggregate. If it is refuse, stop.
@@ -295,10 +298,40 @@ def _is_error_output(output: Any) -> bool:
     return getattr(channel, "value", channel) == "sp-error"
 
 
+def _safe_notebook_error(error: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": str(error.get("type") or "NotebookValidationError")[:100],
+        "variable": str(error.get("variable") or "")[:100] or None,
+        "cell_ids": [
+            str(value)[:100] for value in error.get("cell_ids") or []
+        ][:20],
+    }
+
+
+def _with_recorded_notebook_errors(
+    session: Any, failure: dict[str, Any]
+) -> dict[str, Any]:
+    errors: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    recorded = getattr(session, "_signalpilot_notebook_failures", ())
+    candidates = [
+        *(item.get("error") or {} for item in recorded),
+        failure.get("error") or {},
+    ]
+    for candidate in candidates:
+        safe = _safe_notebook_error(candidate)
+        key = json.dumps(safe, sort_keys=True)
+        if key in seen:
+            continue
+        seen.add(key)
+        errors.append(safe)
+    return {**failure, "errors": errors[-20:]}
+
+
 def _notebook_failure(app: Any, session_id: str) -> dict[str, Any] | None:
     session = _analysis_session(app, session_id)
     if getattr(session, "_signalpilot_notebook_dirty", False):
-        return dict(
+        failure = dict(
             getattr(session, "_signalpilot_last_notebook_failure", None)
             or {
                 "error": {
@@ -308,27 +341,34 @@ def _notebook_failure(app: Any, session_id: str) -> dict[str, Any] | None:
                 }
             }
         )
+        return _with_recorded_notebook_errors(session, failure)
 
     for cell in session.app_file_manager.app.cell_manager.cell_data():
         cell_id = cell.cell_id
         notification = session.session_view.cell_notifications.get(cell_id)
         if notification is None:
-            return {
-                "error": {
-                    "type": "UnknownStateError",
-                    "variable": None,
-                    "cell_ids": [str(cell_id)],
-                }
-            }
+            return _with_recorded_notebook_errors(
+                session,
+                {
+                    "error": {
+                        "type": "UnknownStateError",
+                        "variable": None,
+                        "cell_ids": [str(cell_id)],
+                    }
+                },
+            )
         status = str(getattr(notification, "status", "") or "")
         if status != "idle":
-            return {
-                "error": {
-                    "type": "UnknownStateError",
-                    "variable": None,
-                    "cell_ids": [str(cell_id)],
-                }
-            }
+            return _with_recorded_notebook_errors(
+                session,
+                {
+                    "error": {
+                        "type": "UnknownStateError",
+                        "variable": None,
+                        "cell_ids": [str(cell_id)],
+                    }
+                },
+            )
         output = getattr(notification, "output", None)
         if _is_error_output(output):
             raw_errors = getattr(output, "data", None)
@@ -350,15 +390,18 @@ def _notebook_failure(app: Any, session_id: str) -> dict[str, Any] | None:
             variable = getattr(error, "name", None)
             if variable is None and edge_variables:
                 variable = sorted(edge_variables)[0]
-            return {
-                "error": {
-                    "type": type(error).__name__
-                    if error
-                    else "CellExecutionError",
-                    "variable": variable,
-                    "cell_ids": sorted(involved),
-                }
-            }
+            return _with_recorded_notebook_errors(
+                session,
+                {
+                    "error": {
+                        "type": type(error).__name__
+                        if error
+                        else "CellExecutionError",
+                        "variable": variable,
+                        "cell_ids": sorted(involved),
+                    }
+                },
+            )
     return None
 
 
@@ -367,21 +410,16 @@ def _notebook_has_errors(app: Any, session_id: str) -> bool:
 
 
 def _recovery_context(failure: dict[str, Any]) -> str:
-    error = failure.get("error") or {}
-    safe = {
-        "error_type": str(error.get("type") or "NotebookValidationError")[
-            :100
-        ],
-        "variable": str(error.get("variable") or "")[:100] or None,
-        "cell_ids": [
-            str(value)[:100] for value in error.get("cell_ids") or []
-        ][:20],
-    }
+    raw_errors = failure.get("errors") or [failure.get("error") or {}]
+    safe_errors = [_safe_notebook_error(error) for error in raw_errors][:20]
     return (
         "The first notebook attempt was rejected and its notebook and artifacts "
         "were discarded. Start the newly seeded notebook, execute the evidence "
         "again, validate every requested cell, and answer only from this clean "
-        f"attempt. Recovery reason: {json.dumps(safe, sort_keys=True)}"
+        "attempt. Treat every listed graph error as an explicit instruction not "
+        "to recreate those duplicate globals; use unique public names, private "
+        "underscore-prefixed scratch names, or uniquely named functions. "
+        f"Recovery errors: {json.dumps(safe_errors, sort_keys=True)}"
     )
 
 
@@ -881,6 +919,13 @@ async def execute(*, request: Request) -> StreamingResponse:
                                 "cell_ids": [],
                             }
                         }
+                    if notebook_failure is not None:
+                        notebook_failure = _with_recorded_notebook_errors(
+                            _analysis_session(
+                                request.app, lifecycle.session_id
+                            ),
+                            notebook_failure,
+                        )
                 elif recovery_failure is not None:
                     notebook_failure = {
                         "error": {

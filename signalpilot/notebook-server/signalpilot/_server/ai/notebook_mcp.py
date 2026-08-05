@@ -139,6 +139,9 @@ def _record_notebook_failure(
     dirty: bool,
 ) -> None:
     session._signalpilot_last_notebook_failure = payload
+    recorded = list(getattr(session, "_signalpilot_notebook_failures", ()))
+    recorded.append(payload)
+    session._signalpilot_notebook_failures = recorded[-20:]
     if dirty:
         session._signalpilot_notebook_dirty = True
     error = payload.get("error") or {}
@@ -261,6 +264,10 @@ def build_notebook_mcp_server(
             description=(
                 "Edit cells in a notebook. Supports adding, updating, and deleting cells. "
                 "Each edit needs a session_id (from get_active_notebooks or the system prompt). "
+                "This is a marimo notebook: every non-private top-level name, including imports "
+                "and loop targets, may be defined by only one live cell. Inspect the current cell "
+                "map first; use underscore-prefixed names for disposable cell-local variables, "
+                "and delete or update old definitions in the same atomic edit batch. "
                 "Operations: update_cell (modify existing cell code), "
                 "add_cell (add a new cell with generated ID), "
                 "delete_cell (remove a cell). "

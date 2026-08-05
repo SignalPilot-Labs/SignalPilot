@@ -176,6 +176,53 @@ def test_terminal_validation_ignores_deleted_cell_notifications(
     assert standalone_chat._notebook_failure(object(), "session-a") is None
 
 
+def test_recovery_context_keeps_prior_graph_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _runtime_session()
+    session._signalpilot_notebook_failures = [
+        {
+            "error": {
+                "type": "MultipleDefinitionError",
+                "variable": "segment",
+                "cell_ids": ["summary", "chart"],
+            }
+        }
+    ]
+    session.session_view.cell_notifications[
+        "current"
+    ].output = SimpleNamespace(
+        channel=SimpleNamespace(value="sp-error"),
+        data=[SimpleNamespace()],
+    )
+    monkeypatch.setattr(
+        standalone_chat,
+        "_analysis_session",
+        lambda _app, _session_id: session,
+    )
+
+    failure = standalone_chat._notebook_failure(object(), "session-a")
+
+    assert failure is not None
+    assert failure["errors"] == [
+        {
+            "type": "MultipleDefinitionError",
+            "variable": "segment",
+            "cell_ids": ["summary", "chart"],
+        },
+        {
+            "type": "SimpleNamespace",
+            "variable": None,
+            "cell_ids": ["current"],
+        },
+    ]
+    recovery = standalone_chat._recovery_context(failure)
+    assert "MultipleDefinitionError" in recovery
+    assert '"variable": "segment"' in recovery
+    assert '"summary"' in recovery
+    assert "underscore-prefixed scratch names" in recovery
+
+
 @pytest.mark.asyncio
 async def test_execute_materializes_the_frozen_project_before_starting_the_agent(
     tmp_path: Path,
@@ -281,6 +328,23 @@ async def test_dirty_notebook_is_reset_and_only_clean_retry_answer_is_emitted(
         lifecycle = lifecycles[-1]
         lifecycle.session_id = f"kernel-{attempt}"
         sessions[lifecycle.session_id] = _runtime_session(dirty=attempt == 1)
+        if attempt == 1:
+            sessions[lifecycle.session_id]._signalpilot_notebook_failures = [
+                {
+                    "error": {
+                        "type": "MultipleDefinitionError",
+                        "variable": "segment",
+                        "cell_ids": ["summary", "chart"],
+                    }
+                },
+                {
+                    "error": {
+                        "type": "SpExceptionRaisedError",
+                        "variable": None,
+                        "cell_ids": ["output"],
+                    }
+                },
+            ]
         await event_sinks[-1]("notebook_started", {})
         if attempt == 1:
             collectors[-1].artifacts.append({"filename": "rejected.csv"})
@@ -292,6 +356,9 @@ async def test_dirty_notebook_is_reset_and_only_clean_retry_answer_is_emitted(
             encoding="utf-8"
         )
         assert "notebook_recovery" in prompt
+        assert "MultipleDefinitionError" in prompt
+        assert '"variable": "segment"' in prompt
+        assert "SpExceptionRaisedError" in prompt
         collectors[-1].artifacts.append({"filename": "accepted.csv"})
         yield AgentEvent(
             type="tool_use",

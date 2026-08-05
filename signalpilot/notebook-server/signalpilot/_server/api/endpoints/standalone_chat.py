@@ -202,7 +202,10 @@ def _scoped_gateway_mcp_config(
 
 def _scratch_directory(run_id: str) -> Path:
     root = Path(
-        os.getenv("SP_CHAT_SCRATCH_ROOT", "/tmp/signalpilot-chat-runs")
+        os.getenv(
+            "SP_CHAT_SCRATCH_ROOT",
+            "/tmp/signalpilot-chat-runs",  # nosec B108 - container-local scratch
+        )
     ).resolve()
     scratch = (root / run_id).resolve()
     if root not in scratch.parents:

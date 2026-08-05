@@ -69,6 +69,7 @@ import {
   applyStandaloneChatEvent,
   assembleStandaloneRunText,
   containsStandaloneSubmission,
+  hideSupersededStandaloneFailures,
   isStandaloneRunReconciled,
   standaloneMessageKey,
   upsertStandaloneConversation,
@@ -1210,7 +1211,9 @@ export function StandaloneDataChat({
   }, [conversationId, currentRunId, streamStatus, mutateDetail, mutateHistory]);
 
   const uiMessages = useMemo<UiMessage[]>(() => {
-    const messages: UiMessage[] = [...(detail?.messages ?? [])];
+    const messages: UiMessage[] = hideSupersededStandaloneFailures(
+      detail?.messages ?? [],
+    );
     if (currentRun) {
       const runMessages = messages.filter(
         (message) => message.metadata.run_id === currentRun.id,

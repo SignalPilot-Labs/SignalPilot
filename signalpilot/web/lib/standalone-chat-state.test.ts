@@ -5,6 +5,7 @@ import {
   applyStandaloneChatEvent,
   assembleStandaloneRunText,
   containsStandaloneSubmission,
+  hideSupersededStandaloneFailures,
   isStandaloneRunReconciled,
   standaloneMessageKey,
   upsertStandaloneConversation,
@@ -124,6 +125,78 @@ describe("standalone chat state", () => {
         submission,
       ),
     ).toBe(true);
+  });
+
+  it("hides failed attempts after a retry for the same user turn completes", () => {
+    const detail = detailFixture();
+    detail.messages = [
+      {
+        id: "user-1",
+        role: "user",
+        content: "Analyze margins",
+        sequence: 1,
+        created_at: 100,
+        metadata: {},
+      },
+      {
+        id: "failed-1",
+        role: "assistant",
+        content: "Analysis failed",
+        sequence: 2,
+        created_at: 101,
+        metadata: { run_id: "run-1", status: "failed" },
+      },
+      {
+        id: "failed-2",
+        role: "assistant",
+        content: "Analysis failed again",
+        sequence: 3,
+        created_at: 102,
+        metadata: { run_id: "run-2", status: "failed" },
+      },
+      {
+        id: "completed-1",
+        role: "assistant",
+        content: "Margins completed",
+        sequence: 4,
+        created_at: 103,
+        metadata: { run_id: "run-3", status: "completed" },
+      },
+    ];
+
+    expect(
+      hideSupersededStandaloneFailures(detail.messages).map(
+        (message) => message.id,
+      ),
+    ).toEqual(["user-1", "completed-1"]);
+  });
+
+  it("keeps the latest failed attempt visible when no retry succeeds", () => {
+    const detail = detailFixture();
+    detail.messages = [
+      {
+        id: "user-1",
+        role: "user",
+        content: "Analyze margins",
+        sequence: 1,
+        created_at: 100,
+        metadata: {},
+      },
+      {
+        id: "failed-1",
+        role: "assistant",
+        content: "Analysis failed",
+        sequence: 2,
+        created_at: 101,
+        metadata: { run_id: "run-1", status: "failed" },
+      },
+    ];
+
+    expect(
+      hideSupersededStandaloneFailures(detail.messages).map(
+        (message) => message.id,
+      ),
+    ).toEqual(["user-1", "failed-1"]);
   });
 
   it("keeps streamed events in conversation state and applies terminal status immediately", () => {

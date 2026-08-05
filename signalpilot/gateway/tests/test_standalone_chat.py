@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -913,6 +915,35 @@ async def test_event_ordering_redaction_and_replay(db_session):
 
 
 @pytest.mark.asyncio
+async def test_event_ordering_refreshes_a_stale_locked_run(db_session):
+    _, run = await _conversation_and_run(db_session)
+    factory = async_sessionmaker(
+        db_session.bind,
+        expire_on_commit=False,
+        class_=AsyncSession,
+    )
+    async with factory() as stale_session:
+        stale_run = await stale_session.get(GatewayChatRun, run.id)
+        assert stale_run is not None
+        assert stale_run.last_event_sequence == 0
+
+        first = await chat_store.append_event(
+            db_session,
+            run_id=run.id,
+            event_type="tool_completed",
+            payload={"error": False},
+        )
+        second = await chat_store.append_event(
+            stale_session,
+            run_id=run.id,
+            event_type="artifact_created",
+            payload={"artifact_id": "artifact-a"},
+        )
+
+    assert (first.sequence, second.sequence) == (1, 2)
+
+
+@pytest.mark.asyncio
 async def test_claim_completion_and_final_message_are_idempotent(db_session):
     conversation_id, run = await _conversation_and_run(db_session)
     claimed = await chat_store.claim_runs(
@@ -996,7 +1027,10 @@ async def test_expired_lease_is_reclaimed(db_session):
 
 
 @pytest.mark.asyncio
-async def test_cancelled_and_failed_runs_leave_inspectable_status_messages(db_session):
+async def test_cancelled_and_failed_runs_leave_inspectable_status_messages(
+    db_session,
+    monkeypatch: pytest.MonkeyPatch,
+):
     conversation_id, queued_run = await _conversation_and_run(db_session)
     cancelled = await chat_store.request_cancellation(
         db_session,
@@ -1035,6 +1069,29 @@ async def test_cancelled_and_failed_runs_leave_inspectable_status_messages(db_se
         limit=1,
         lease_seconds=45,
     )
+    failed_artifact = await chat_store.persist_artifact(
+        db_session,
+        run=failed_run,
+        payload={
+            "kind": "table",
+            "filename": "unvalidated.csv",
+            "mime_type": "text/csv",
+            "snapshot": {
+                "columns": [{"name": "value"}],
+                "rows": [{"value": 1}],
+            },
+        },
+    )
+    failed_artifact.storage_kind = "object"
+    failed_artifact.object_key = "artifacts/unvalidated.csv"
+    failed_artifact.source_object_key = "artifact-sources/unvalidated.csv"
+    await db_session.commit()
+    delete_object = AsyncMock()
+    monkeypatch.setattr(
+        chat_store,
+        "chat_object_storage",
+        lambda: SimpleNamespace(delete=delete_object),
+    )
     assert await chat_store.fail_run(
         db_session,
         run_id=failed_run.id,
@@ -1050,6 +1107,12 @@ async def test_cancelled_and_failed_runs_leave_inspectable_status_messages(db_se
     )
     assert detail is not None
     assert detail.messages[-1].metadata["status"] == "failed"
+    assert all(artifact.id != failed_artifact.id for artifact in detail.artifacts)
+    assert await db_session.get(GatewayChatArtifact, failed_artifact.id) is None
+    assert [call.args[0] for call in delete_object.await_args_list] == [
+        "artifacts/unvalidated.csv",
+        "artifact-sources/unvalidated.csv",
+    ]
     failed_events = await chat_store.list_run_events(
         db_session,
         org_id="org-a",

@@ -359,6 +359,12 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                             starts_new_text_block = False
                     elif event_type == "text":
                         final_text = content
+                    elif event_type == "progress":
+                        await _append(
+                            run_id,
+                            "progress",
+                            {"label": content or "Analysis is continuing"},
+                        )
                     elif event_type == "tool_use":
                         starts_new_text_block = bool(streamed_text)
                         tool_name = str(event.get("tool_name") or "analysis tool")

@@ -11,7 +11,7 @@ from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1194,7 +1194,14 @@ async def append_event(
     event_type: str,
     payload: dict[str, Any],
 ) -> GatewayChatRunEvent:
-    run = (await db.execute(select(GatewayChatRun).where(GatewayChatRun.id == run_id).with_for_update())).scalar_one()
+    run = (
+        await db.execute(
+            select(GatewayChatRun)
+            .where(GatewayChatRun.id == run_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
     event = _stage_run_event(
         db,
         run=run,
@@ -1916,7 +1923,25 @@ async def fail_run(
         payload={"status": target},
     )
     await _retain_runtime_datasets_after_terminal_run(db, run=run)
+    artifact_object_keys = list(
+        (
+            await db.execute(
+                select(
+                    GatewayChatArtifact.object_key,
+                    GatewayChatArtifact.source_object_key,
+                ).where(GatewayChatArtifact.run_id == run.id)
+            )
+        ).all()
+    )
+    await db.execute(delete(GatewayChatArtifact).where(GatewayChatArtifact.run_id == run.id))
     await db.commit()
+    if artifact_object_keys:
+        storage = chat_object_storage()
+        for object_key, source_object_key in artifact_object_keys:
+            for key in (object_key, source_object_key):
+                if key:
+                    with suppress(Exception):
+                        await storage.delete(key)
     return True
 
 

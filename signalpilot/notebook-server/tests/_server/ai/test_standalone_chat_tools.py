@@ -432,6 +432,14 @@ def test_agent_contract_excludes_mutating_and_external_tools():
     assert "Do not catch or suppress publication exceptions" in STANDALONE_SYSTEM_PROMPT
     assert "Never edit, remove, or redefine the seeded" in STANDALONE_SYSTEM_PROMPT
     assert "sp.init()` returns None" in STANDALONE_SYSTEM_PROMPT
+    assert "marimo reactive notebook, not a Jupyter notebook" in STANDALONE_SYSTEM_PROMPT
+    assert "top-level loop targets all define names" in STANDALONE_SYSTEM_PROMPT
+    assert "Prefix disposable cell-local names with one underscore" in STANDALONE_SYSTEM_PROMPT
+    assert "must never be referenced from another cell" in STANDALONE_SYSTEM_PROMPT
+    assert "If you change the SQL, call plan_query again" in STANDALONE_SYSTEM_PROMPT
+    assert "including as a fallback during recovery" in STANDALONE_SYSTEM_PROMPT
+    assert "same unchanged notebook code hash" in STANDALONE_SYSTEM_PROMPT
+    assert "MultipleDefinitionError" in STANDALONE_SYSTEM_PROMPT
     assert all(
         "notion" not in tool.lower() for tool in STANDALONE_ALLOWED_TOOLS
     )

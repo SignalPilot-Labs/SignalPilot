@@ -267,7 +267,8 @@ def build_notebook_mcp_server(
                 "This is a marimo notebook: every non-private top-level name, including imports "
                 "and loop targets, may be defined by only one live cell. Inspect the current cell "
                 "map first; use underscore-prefixed names for disposable cell-local variables, "
-                "and delete or update old definitions in the same atomic edit batch. "
+                "never reference those private names from another cell, and delete or update old "
+                "definitions in the same atomic edit batch. "
                 "Operations: update_cell (modify existing cell code), "
                 "add_cell (add a new cell with generated ID), "
                 "delete_cell (remove a cell). "
@@ -880,6 +881,8 @@ def _handle_run_cells(
     try:
         import requests as _requests
 
+        from signalpilot._messaging.cell_output import CellOutput
+
         hdrs = _server_headers(context, str(session_id))
 
         instantiate_response = _requests.post(
@@ -892,6 +895,18 @@ def _handle_run_cells(
             raise RuntimeError(
                 f"Kernel instantiate returned HTTP {instantiate_response.status_code}"
             )
+
+        # A successful no-output execution broadcasts CellOutput.empty(). The
+        # session-view merge intentionally treats an omitted output as
+        # unchanged, and older runtimes also retained an explicit empty output
+        # over a previous error. Clear the cached output before queueing so the
+        # notification for this execution cannot inherit a stale exception.
+        # The timestamp remains unchanged, so polling still requires a fresh
+        # terminal notification from the kernel.
+        for cell_id in run_ids:
+            notification = session.session_view.cell_notifications.get(cell_id)
+            if notification is not None:
+                notification.output = CellOutput.empty()
 
         resp = _requests.post(
             _local_server_url(context, "/api/kernel/run"),

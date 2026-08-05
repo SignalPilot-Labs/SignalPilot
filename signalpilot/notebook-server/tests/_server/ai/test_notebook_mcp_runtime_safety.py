@@ -472,3 +472,43 @@ def test_run_cells_returns_a_structured_success(
         "status": "completed",
         "timed_out": False,
     }
+
+
+def test_run_cells_clears_a_stale_error_before_a_successful_rerun(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _session([("cell", "answer = 1")])
+    notification = SimpleNamespace(
+        timestamp=1.0,
+        status="idle",
+        output=SimpleNamespace(
+            channel=SimpleNamespace(value="sp-error"),
+            mimetype="application/vnd.sp+error",
+            data=[SpExceptionRaisedError()],
+        ),
+        console=[],
+    )
+    session.session_view.cell_notifications[CellId_t("cell")] = notification
+
+    def post(url: str, **_kwargs: Any) -> Any:
+        if url.endswith("/run"):
+            # A successful no-output execution updates the cell lifecycle, but
+            # the session-view merge used to retain its previous error output.
+            notification.timestamp = 2.0
+            notification.status = "idle"
+        return SimpleNamespace(status_code=200)
+
+    import requests
+
+    monkeypatch.setattr(requests, "post", post)
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+
+    result = _handle_run_cells(
+        _Context(session),
+        {"session_id": "session-a", "cell_ids": ["cell"]},
+    )
+    payload = json.loads(result[0].text)
+
+    assert payload["status"] == "completed"
+    assert payload["has_errors"] is False
+    assert payload["failed_cell_ids"] == []

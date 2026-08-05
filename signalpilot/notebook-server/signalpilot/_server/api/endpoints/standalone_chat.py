@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import html as html_lib
 import json
 import os
 import re
@@ -18,6 +19,9 @@ from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse, StreamingResponse
 
 from signalpilot import _loggers
+from signalpilot._server.ai.chat_runtime_output import (
+    compact_chat_runtime_output,
+)
 from signalpilot._server.ai.claude_agent import (
     clear_chat_session,
     run_notebook_agent,
@@ -88,15 +92,15 @@ Rules:
 - Use query_database with the returned plan_id only when the plan route is mcp.
 - If the route is notebook_sdk or dataset_ref, call start_analysis_notebook with that plan_id, then use only the seeded notebook and the plan-bound SDK.
 - The analysis notebook is a marimo reactive notebook, not a Jupyter notebook. Before editing it, inspect the current cell map. Every non-private top-level name may be defined by exactly one live cell across the entire notebook. Imports, assignments, function and class names, and top-level loop targets all define names.
-- Define shared imports and reusable DataFrames once, then reference them from downstream cells. Prefix disposable cell-local names with one underscore (for example `_fig`, `_ax`, `_i`, `_row`, or `_segment`), or place scratch work inside a uniquely named function. Never repeat public helper names across cells.
+- Define shared imports and reusable DataFrames once, then reference them from downstream cells. Prefix disposable cell-local names with one underscore (for example `_fig`, `_ax`, `_i`, `_row`, or `_segment`), or place scratch work inside a uniquely named function. Underscore-prefixed names are cell-local and must never be referenced from another cell; any cross-cell value needs one unique public name. Never repeat public helper names across cells.
 - If edit_notebook returns MultipleDefinitionError, use its variable and cell_ids to update, rename, or delete the conflicting definitions in one atomic edit batch. Do not add a replacement definition in a separate transaction while the old defining cell remains live.
 - Never edit, remove, or redefine the seeded hidden context/import cell or the seeded SDK setup cell. They already run `sp.init(...)` and define the plan-bound `db = sp.connect(...)` connection. `sp.init()` returns None, and there is no `signalpilot.db` export.
-- For notebook_sdk, first define `plan_id` from the exact ID returned by plan_query, then execute the exact planned SQL with `source = db.query_result(sql, plan_id=plan_id)` and build the in-kernel DataFrame from `source["rows"]`; retain `source["result_id"]` for publication. There is no `db.read_plan` method.
+- For notebook_sdk, first define `plan_id` from the exact ID returned by plan_query, then execute the exact planned SQL with `source = db.query_result(sql, plan_id=plan_id)` and build the in-kernel DataFrame from `source["rows"]`; retain `source["result_id"]` for publication. A plan ID authorizes only its exact planned SQL and execution scope. If you change the SQL, call plan_query again and use its new plan ID. There is no `db.read_plan` method.
 - If the route is aggregate_required, rewrite the work as a bounded warehouse aggregate. If it is refuse, stop.
-- Never copy MCP previews into notebook DataFrames. MCP previews are model context, not a data transport.
+- Never copy MCP previews into notebook DataFrames, including as a fallback during recovery. MCP previews are model context, not a data transport.
 - Keep complete bounded DataFrames inside the kernel. Notebook cells may display only schema, completeness, statistics, checks, and a small preview.
 - Publish derived rows from the kernel with exactly `derived = sp.publish_result(dataframe, name="...", source_result_ids=[source["result_id"]], completeness="complete" | "truncated" | "unknown", reconciliation="...")`. The SDK computes the notebook code hash; do not pass `result=`, `code_hash=`, or `metadata=`.
-- Publish a runtime file with exactly `artifact = sp.publish_artifact(path, kind="table" | "chart" | "report", result_id=derived.id, assumptions=[...], exclusions=[...], caveats=[...])`. Create chart PNGs and other artifacts only under `SP_CHAT_SCRATCH_DIRECTORY`.
+- Publish a runtime file with exactly `artifact = sp.publish_artifact(path, kind="table" | "chart" | "report", result_id=derived.id, assumptions=[...], exclusions=[...], caveats=[...])`. Create chart PNGs and other artifacts only under `SP_CHAT_SCRATCH_DIRECTORY`. Finalize every notebook cell before executing publication: the result and artifact must be published from the same unchanged notebook code hash. Do not edit the notebook between `sp.publish_result` and `sp.publish_artifact`; after any edit, publish both again from the final notebook version.
 - PublishedResult exposes only `id`, `name`, `row_count`, `byte_size`, and `completeness`. PublishedArtifact exposes only `id`, `filename`, `kind`, and `byte_size`.
 - Do not catch or suppress publication exceptions. A failed `sp.publish_result` or `sp.publish_artifact` means the analysis is incomplete and must not be reported as successful.
 - Ask for clarification only when exploration leaves a material ambiguity that would change the answer. If needed, return exactly `CLARIFICATION_REQUESTED: <one conversational question>`.
@@ -418,7 +422,11 @@ def _recovery_context(failure: dict[str, Any]) -> str:
         "again, validate every requested cell, and answer only from this clean "
         "attempt. Treat every listed graph error as an explicit instruction not "
         "to recreate those duplicate globals; use unique public names, private "
-        "underscore-prefixed scratch names, or uniquely named functions. "
+        "underscore-prefixed scratch names, or uniquely named functions. Private "
+        "underscore-prefixed names are cell-local and cannot be read from another "
+        "cell. A governed plan ID can be reused only with its exact original SQL; "
+        "changed SQL requires a new plan_query result. Never replace SDK query "
+        "evidence with copied MCP preview rows. "
         f"Recovery errors: {json.dumps(safe_errors, sort_keys=True)}"
     )
 
@@ -460,17 +468,33 @@ async def _archive_analysis_notebook(
         raise RuntimeError(
             "Refusing to archive notebook source containing a runtime token"
         )
-    html, _ = Exporter().export_as_html(
-        app=session.app_file_manager.app,
-        filename="analysis.py",
-        session_view=session.session_view,
-        display_config=session.config_manager.get_config()["display"],
-        request=ExportAsHTMLRequest(
-            download=False,
-            files=[],
-            include_code=False,
-        ),
-    )
+    try:
+        html, _ = Exporter().export_as_html(
+            app=session.app_file_manager.app,
+            filename="analysis.py",
+            session_view=session.session_view,
+            display_config=session.config_manager.get_config()["display"],
+            request=ExportAsHTMLRequest(
+                download=False,
+                files=[],
+                include_code=False,
+            ),
+        )
+    except FileNotFoundError:
+        # The slim runtime image intentionally omits the notebook frontend
+        # bundle. Preserve the validated evidence in a bounded, code-free HTML
+        # archive instead of rejecting an otherwise clean analysis.
+        LOGGER.warning(
+            "Notebook frontend assets unavailable; using safe archive fallback "
+            "run_id=%s session_id=%s",
+            run_id,
+            session_id,
+        )
+        html = _fallback_archive_html(
+            session,
+            run_id=run_id,
+            redactions=(scoped_token,),
+        )
     cells = []
     for cell in session.app_file_manager.app.cell_manager.cell_data():
         notification = session.session_view.cell_notifications.get(
@@ -509,6 +533,51 @@ async def _archive_analysis_notebook(
         )
     response.raise_for_status()
     return str(response.json()["archive_id"])
+
+
+def _fallback_archive_html(
+    session: Any,
+    *,
+    run_id: str,
+    redactions: tuple[str, ...],
+) -> str:
+    """Render validated cell outputs without notebook code or active markup."""
+    sections: list[str] = []
+    for index, cell in enumerate(
+        session.app_file_manager.app.cell_manager.cell_data(), start=1
+    ):
+        notification = session.session_view.cell_notifications.get(
+            cell.cell_id
+        )
+        status = str(getattr(notification, "status", "unknown") or "unknown")
+        output = getattr(notification, "output", None)
+        mimetype = str(getattr(output, "mimetype", "") or "")
+        rendered_output = "No displayed output."
+        if output is not None:
+            rendered_output = compact_chat_runtime_output(
+                getattr(output, "data", ""),
+                mimetype=mimetype,
+                redactions=redactions,
+            )
+        sections.append(
+            "<section>"
+            f"<h2>Cell {index}</h2>"
+            f"<p>Status: {html_lib.escape(status)}</p>"
+            f"<p>Output type: {html_lib.escape(mimetype or 'none')}</p>"
+            f"<pre>{html_lib.escape(rendered_output)}</pre>"
+            "</section>"
+        )
+    return (
+        '<!doctype html><html><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        "<title>Validated analysis notebook</title>"
+        "<style>body{font-family:system-ui,sans-serif;max-width:960px;margin:40px auto;"
+        "padding:0 20px;background:#141416;color:#ededed}section{border:1px solid #333;"
+        "border-radius:8px;padding:16px;margin:16px 0}pre{white-space:pre-wrap;"
+        "overflow-wrap:anywhere;background:#1d1d20;padding:12px;border-radius:6px}</style>"
+        "</head><body><h1>Validated analysis notebook</h1>"
+        f"<p>Run {html_lib.escape(run_id)}</p>{''.join(sections)}</body></html>"
+    )
 
 
 def _close_analysis_kernel(app: Any, session_id: str) -> bool:

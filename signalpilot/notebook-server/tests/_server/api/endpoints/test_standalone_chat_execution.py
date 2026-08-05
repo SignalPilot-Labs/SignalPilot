@@ -4,9 +4,10 @@ import base64
 import json
 import stat
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Self
 
 import httpx
 import pytest
@@ -221,6 +222,100 @@ def test_recovery_context_keeps_prior_graph_errors(
     assert '"variable": "segment"' in recovery
     assert '"summary"' in recovery
     assert "underscore-prefixed scratch names" in recovery
+    assert "cell-local and cannot be read from another cell" in recovery
+    assert "changed SQL requires a new plan_query result" in recovery
+    assert "Never replace SDK query evidence" in recovery
+
+
+@pytest.mark.asyncio
+async def test_archive_uses_a_safe_fallback_without_frontend_assets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scoped_token = "runtime-secret-token"
+    cell_id = "cell-a"
+    app = SimpleNamespace(
+        to_py=lambda: "answer = 1",
+        cell_manager=SimpleNamespace(
+            cell_data=lambda: [
+                SimpleNamespace(cell_id=cell_id, code="answer = 1")
+            ]
+        ),
+    )
+    session = SimpleNamespace(
+        app_file_manager=SimpleNamespace(app=app),
+        config_manager=SimpleNamespace(get_config=lambda: {"display": {}}),
+        session_view=SimpleNamespace(
+            cell_notifications={
+                cell_id: SimpleNamespace(
+                    status="idle",
+                    output=SimpleNamespace(
+                        mimetype="text/html",
+                        data=f"<script>{scoped_token}</script><b>safe result</b>",
+                    ),
+                )
+            }
+        ),
+    )
+    captured: dict[str, Any] = {}
+
+    class MissingAssetsExporter:
+        def export_as_html(self, **_kwargs: Any) -> tuple[str, str]:
+            raise FileNotFoundError("frontend index missing")
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, str]:
+            return {"archive_id": "archive-fallback"}
+
+    class FakeClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def post(self, _url: str, **kwargs: Any) -> FakeResponse:
+            captured.update(kwargs["json"])
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        standalone_chat,
+        "_analysis_session",
+        lambda _app, _session_id: session,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "signalpilot._server.export.exporter",
+        SimpleNamespace(Exporter=MissingAssetsExporter),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "signalpilot._server.models.export",
+        SimpleNamespace(ExportAsHTMLRequest=lambda **kwargs: kwargs),
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+
+    archive_id = await standalone_chat._archive_analysis_notebook(
+        app=object(),
+        session_id="session-a",
+        run_id="run-fallback",
+        gateway_api_url="http://gateway:3300",
+        scoped_token=scoped_token,
+    )
+    archived_html = base64.b64decode(captured["html_base64"]).decode()
+    archived_source = base64.b64decode(captured["source_base64"]).decode()
+
+    assert archive_id == "archive-fallback"
+    assert "Validated analysis notebook" in archived_html
+    assert "&lt;script&gt;[REDACTED]&lt;/script&gt;" in archived_html
+    assert scoped_token not in archived_html
+    assert "answer = 1" not in archived_html
+    assert archived_source == "answer = 1"
 
 
 @pytest.mark.asyncio

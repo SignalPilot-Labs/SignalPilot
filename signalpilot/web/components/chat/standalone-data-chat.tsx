@@ -74,6 +74,7 @@ import {
   upsertStandaloneConversation,
   type OptimisticUserMessage,
 } from "~/lib/standalone-chat-state";
+import { projectSettingsHref } from "~/lib/project-settings-route";
 
 type UiMessage = StandaloneChatMessage & {
   runId?: string;
@@ -1774,7 +1775,7 @@ export function StandaloneDataChat({
                 <ReadinessNotice
                   message={unreadyMessage}
                   showSetup={showSetupCta}
-                  onSetup={() => router.push("/projects")}
+                  onSetup={() => router.push(projectSettingsHref(selectedProjectId))}
                 />
               </div>
             )}
@@ -1804,7 +1805,9 @@ export function StandaloneDataChat({
                     <ReadinessNotice
                       message={unreadyMessage}
                       showSetup={showSetupCta}
-                      onSetup={() => router.push("/projects")}
+                      onSetup={() =>
+                        router.push(projectSettingsHref(selectedProjectId))
+                      }
                     />
                   ) : starters.length === 4 ? (
                     <StarterQuestions

@@ -443,7 +443,7 @@ def _run_restricted_python(source: str, data: Any) -> dict[str, Any]:
     }
     # The parsed tree is bounded and rejects imports, dunder access, dynamic
     # execution, file access, and other unsafe calls before this point.
-    exec(  # nosec B102
+    exec(  # nosec B102  # nosemgrep: python.lang.security.audit.exec-detected.exec-detected
         compile(tree, "<standalone-chat-scratch>", "exec"),
         namespace,
         namespace,

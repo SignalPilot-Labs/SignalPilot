@@ -503,7 +503,10 @@ async def _ensure_hybrid_chat_runtime_schema(engine) -> None:
         "ALTER TABLE gateway_governed_query_executions ADD COLUMN IF NOT EXISTS execution_ms DOUBLE PRECISION",
         "ALTER TABLE gateway_query_proposals ADD COLUMN IF NOT EXISTS plan_id VARCHAR",
         "ALTER TABLE gateway_chat_runs ADD COLUMN IF NOT EXISTS runtime_archive_id VARCHAR",
-        "UPDATE gateway_structured_query_results SET preview_rows_json = rows_json WHERE preview_rows_json = '[]'::jsonb",
+        # Existing databases can have this column as JSON while deployments
+        # that received the additive migration have JSONB. Compare through an
+        # explicit cast so startup remains idempotent for both histories.
+        "UPDATE gateway_structured_query_results SET preview_rows_json = rows_json WHERE preview_rows_json::jsonb = '[]'::jsonb",
     )
     async with engine.begin() as conn:
         for statement in statements:

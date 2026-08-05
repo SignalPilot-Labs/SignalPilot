@@ -9,13 +9,14 @@ so every connected browser sees real-time updates.
 Multi-notebook: every mutating tool accepts a session_id parameter.
 Use get_active_notebooks to discover available sessions.
 """
+
 from __future__ import annotations
 
 import ast
 import json
 import uuid
 from dataclasses import asdict, is_dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 from urllib.parse import urlunsplit
 
 from signalpilot import _loggers
@@ -36,18 +37,132 @@ from signalpilot._server.ai.chat_runtime_output import (
     notebook_server_headers,
     redact_chat_runtime_text,
 )
-from signalpilot._server.ai.tools.base import ToolBase, ToolContext
 from signalpilot._server.ai.tools.exceptions import ToolExecutionError
-from signalpilot._server.ai.tools.registry import (
-    SUPPORTED_BACKEND_AND_MCP_TOOLS,
-)
 from signalpilot._types.ids import CellId_t
 from signalpilot._utils.dataclass_to_openapi import PythonTypeToOpenAPI
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from signalpilot._server.ai.tools.base import ToolBase, ToolContext
+
 LOGGER = _loggers.sp_logger()
+
+
+class NotebookToolError(ValueError):
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.payload = payload
+        super().__init__(json.dumps(payload, default=str, sort_keys=True))
+
+
+def _graph_error_payload(
+    *,
+    error_type: str,
+    cell_ids: list[str],
+    variable: str | None = None,
+    message: str | None = None,
+) -> dict[str, Any]:
+    error: dict[str, Any] = {
+        "type": error_type,
+        "variable": variable,
+        "cell_ids": sorted(set(cell_ids)),
+    }
+    if message:
+        error["message"] = message[:500]
+    return {"status": "rejected", "has_errors": True, "error": error}
+
+
+def _validate_candidate_graph(cells: list[tuple[CellId_t, str]]) -> None:
+    import linecache
+
+    from signalpilot._ast.compiler import compile_cell, get_filename
+    from signalpilot._lint.validate_graph import check_for_errors
+    from signalpilot._runtime.dataflow import DirectedGraph
+
+    filenames = {get_filename(cell_id) for cell_id, _code in cells}
+    previous_cache = {
+        filename: linecache.cache.get(filename) for filename in filenames
+    }
+    try:
+        graph = DirectedGraph()
+        for cell_id, code in cells:
+            try:
+                graph.register_cell(
+                    cell_id, compile_cell(code, cell_id=cell_id)
+                )
+            except SyntaxError as exc:
+                raise NotebookToolError(
+                    _graph_error_payload(
+                        error_type="SyntaxError",
+                        cell_ids=[str(cell_id)],
+                        message=exc.msg,
+                    )
+                ) from exc
+
+        graph_errors = check_for_errors(graph)
+        for cell_id in sorted(graph_errors, key=str):
+            for error in graph_errors[cell_id]:
+                error_type = type(error).__name__
+                variable = str(getattr(error, "name", "") or "") or None
+                involved = {str(cell_id)}
+                involved.update(
+                    str(value) for value in getattr(error, "cells", ())
+                )
+                edge_variables: set[str] = set()
+                for source, variables, target in getattr(
+                    error, "edges_with_vars", ()
+                ):
+                    involved.update((str(source), str(target)))
+                    edge_variables.update(str(value) for value in variables)
+                if variable is None and edge_variables:
+                    variable = sorted(edge_variables)[0]
+                raise NotebookToolError(
+                    _graph_error_payload(
+                        error_type=error_type,
+                        variable=variable,
+                        cell_ids=sorted(involved),
+                        message=error.describe(),
+                    )
+                )
+    finally:
+        for filename, cached in previous_cache.items():
+            if cached is None:
+                linecache.cache.pop(filename, None)
+            else:
+                linecache.cache[filename] = cached
+
+
+def _record_notebook_failure(
+    session: Any,
+    payload: dict[str, Any],
+    *,
+    dirty: bool,
+) -> None:
+    session._signalpilot_last_notebook_failure = payload
+    if dirty:
+        session._signalpilot_notebook_dirty = True
+    error = payload.get("error") or {}
+    LOGGER.error(
+        "Notebook operation failed run_id=%s session_id=%s attempt=%s "
+        "error_type=%s variable=%s cell_ids=%s dirty=%s",
+        getattr(session, "_signalpilot_chat_run_id", ""),
+        getattr(session, "_signalpilot_chat_session_id", ""),
+        getattr(session, "_signalpilot_chat_attempt", ""),
+        error.get("type"),
+        error.get("variable"),
+        error.get("cell_ids"),
+        dirty,
+    )
+
+
+def _raise_notebook_failure(
+    session: Any,
+    payload: dict[str, Any],
+    *,
+    dirty: bool,
+) -> NoReturn:
+    _record_notebook_failure(session, payload, dirty=dirty)
+    raise NotebookToolError(payload)
 
 
 def _is_markdown_call(value: ast.AST) -> bool:
@@ -55,7 +170,10 @@ def _is_markdown_call(value: ast.AST) -> bool:
         return False
     func = value.func
     if isinstance(func, ast.Attribute) and func.attr == "md":
-        return isinstance(func.value, ast.Name) and func.value.id in {"sp", "mo"}
+        return isinstance(func.value, ast.Name) and func.value.id in {
+            "sp",
+            "mo",
+        }
     return False
 
 
@@ -114,6 +232,10 @@ def build_notebook_mcp_server(
     from mcp.server import Server
     from mcp.types import TextContent, Tool
 
+    from signalpilot._server.ai.tools.registry import (
+        SUPPORTED_BACKEND_AND_MCP_TOOLS,
+    )
+
     server = Server("signalpilot-notebook", version="1.0.0")
 
     tool_instances: dict[str, ToolBase[Any, Any]] = {}
@@ -158,7 +280,11 @@ def build_notebook_mcp_server(
                             "properties": {
                                 "type": {
                                     "type": "string",
-                                    "enum": ["update_cell", "add_cell", "delete_cell"],
+                                    "enum": [
+                                        "update_cell",
+                                        "add_cell",
+                                        "delete_cell",
+                                    ],
                                 },
                                 "cell_id": {
                                     "type": "string",
@@ -286,7 +412,9 @@ def build_notebook_mcp_server(
         return tool_definitions
 
     @server.call_tool()
-    async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+    async def call_tool(
+        name: str, arguments: dict[str, Any]
+    ) -> list[TextContent]:
         authorize_chat_runtime_session(name, arguments, session_authorizer)
         if name in tool_instances:
             return await _invoke_backend_tool(tool_instances, name, arguments)
@@ -342,135 +470,285 @@ def _handle_save_data_snapshot(
 def _handle_edit_notebook(
     context: ToolContext, arguments: dict[str, Any]
 ) -> list[Any]:
-    """Edit notebook cells via Document Transaction system.
-
-    Uses session.document.apply() + session.notify() to update both
-    the backend document model and all connected frontends in real-time.
-    """
+    """Apply a graph-safe notebook edit transaction."""
     from mcp.types import TextContent
 
     session_id = arguments.get("session_id", "")
     edits = arguments.get("edits", [])
 
     if not session_id:
-        return [TextContent(type="text", text="Error: session_id is required. Call get_active_notebooks first.")]
+        raise NotebookToolError(
+            _graph_error_payload(
+                error_type="InvalidRequest",
+                cell_ids=[],
+                message="session_id is required",
+            )
+        )
     if not edits:
-        return [TextContent(type="text", text="Error: edits list is empty")]
+        raise NotebookToolError(
+            _graph_error_payload(
+                error_type="InvalidRequest",
+                cell_ids=[],
+                message="edits list is empty",
+            )
+        )
 
     try:
         session = context.get_session(session_id)
     except ToolExecutionError as e:
-        return [TextContent(type="text", text=f"Error: {e.message}")]
+        raise NotebookToolError(
+            _graph_error_payload(
+                error_type="SessionNotFound",
+                cell_ids=[],
+                message=e.message,
+            )
+        ) from e
 
     cell_manager = session.app_file_manager.app.cell_manager
     existing_cells = list(cell_manager.cell_data())
     existing_ids = {str(cd.cell_id) for cd in existing_cells}
     existing_by_id = {str(cd.cell_id): cd for cd in existing_cells}
+    candidate_codes = {str(cd.cell_id): cd.code for cd in existing_cells}
+    candidate_order = [str(cd.cell_id) for cd in existing_cells]
     last_cell_id = str(existing_cells[-1].cell_id) if existing_cells else None
 
-    LOGGER.info(f"[edit_notebook] session={session_id}, cells={sorted(existing_ids)}, edits={len(edits)}")
+    LOGGER.info(
+        "[edit_notebook] session=%s cells=%s edits=%s",
+        session_id,
+        sorted(existing_ids),
+        len(edits),
+    )
 
-    # Build document changes and track results
-    doc_changes = []
-    results = []
+    doc_changes: list[Any] = []
+    results: list[dict[str, Any]] = []
+    delete_ids: list[CellId_t] = []
     execute_ids: list[CellId_t] = []
     execute_codes: list[str] = []
+    touched_ids: set[str] = set()
 
     for edit in edits:
         op = edit.get("type", "")
-        cell_id = edit.get("cell_id", "")
-        code = edit.get("code", "")
+        cell_id = str(edit.get("cell_id") or "")
+        code = edit.get("code")
 
         if op == "add_cell":
+            if not isinstance(code, str):
+                _raise_notebook_failure(
+                    session,
+                    _graph_error_payload(
+                        error_type="InvalidRequest",
+                        cell_ids=[],
+                        message="code is required for add_cell",
+                    ),
+                    dirty=False,
+                )
             new_id = CellId_t(str(uuid.uuid4()).replace("-", "")[:8])
             hide_code = _is_markdown_only_cell(code)
-            doc_changes.append(CreateCell(
-                cell_id=new_id,
-                code=code,
-                name="_",
-                config=CellConfig(hide_code=hide_code),
-                after=CellId_t(last_cell_id) if last_cell_id else None,
-            ))
+            doc_changes.append(
+                CreateCell(
+                    cell_id=new_id,
+                    code=code,
+                    name="_",
+                    config=CellConfig(hide_code=hide_code),
+                    after=CellId_t(last_cell_id) if last_cell_id else None,
+                )
+            )
             execute_ids.append(new_id)
             execute_codes.append(code)
             last_cell_id = str(new_id)
-            results.append({"op": "add_cell", "cell_id": str(new_id), "status": "ok", "hide_code": hide_code})
+            candidate_codes[str(new_id)] = code
+            candidate_order.append(str(new_id))
+            results.append(
+                {
+                    "op": "add_cell",
+                    "cell_id": str(new_id),
+                    "status": "ok",
+                    "hide_code": hide_code,
+                }
+            )
 
         elif op == "update_cell":
             if not cell_id or cell_id not in existing_ids:
-                results.append({"op": op, "cell_id": cell_id,
-                                "error": f"cell_id not found. Available: {sorted(existing_ids)}"})
-                continue
+                _raise_notebook_failure(
+                    session,
+                    _graph_error_payload(
+                        error_type="CellNotFound",
+                        cell_ids=[cell_id] if cell_id else [],
+                        message=f"Available cells: {sorted(existing_ids)}",
+                    ),
+                    dirty=False,
+                )
+            if cell_id in touched_ids:
+                _raise_notebook_failure(
+                    session,
+                    _graph_error_payload(
+                        error_type="DuplicateEdit",
+                        cell_ids=[cell_id],
+                        message="A cell may be updated or deleted only once per batch",
+                    ),
+                    dirty=False,
+                )
+            if not isinstance(code, str):
+                _raise_notebook_failure(
+                    session,
+                    _graph_error_payload(
+                        error_type="InvalidRequest",
+                        cell_ids=[cell_id],
+                        message="code is required for update_cell",
+                    ),
+                    dirty=False,
+                )
+            touched_ids.add(cell_id)
             doc_changes.append(SetCode(cell_id=CellId_t(cell_id), code=code))
             if _is_markdown_only_cell(code):
                 existing = existing_by_id[cell_id]
                 if not existing.config.hide_code:
-                    doc_changes.append(SetConfig(
-                        cell_id=CellId_t(cell_id),
-                        column=existing.config.column,
-                        disabled=existing.config.disabled,
-                        hide_code=True,
-                    ))
+                    doc_changes.append(
+                        SetConfig(
+                            cell_id=CellId_t(cell_id),
+                            column=existing.config.column,
+                            disabled=existing.config.disabled,
+                            hide_code=True,
+                        )
+                    )
             execute_ids.append(CellId_t(cell_id))
             execute_codes.append(code)
-            results.append({"op": "update_cell", "cell_id": cell_id, "status": "ok", "hide_code": _is_markdown_only_cell(code)})
+            candidate_codes[cell_id] = code
+            results.append(
+                {
+                    "op": "update_cell",
+                    "cell_id": cell_id,
+                    "status": "ok",
+                    "hide_code": _is_markdown_only_cell(code),
+                }
+            )
 
         elif op == "delete_cell":
             if not cell_id or cell_id not in existing_ids:
-                results.append({"op": op, "cell_id": cell_id,
-                                "error": f"cell_id not found. Available: {sorted(existing_ids)}"})
-                continue
+                _raise_notebook_failure(
+                    session,
+                    _graph_error_payload(
+                        error_type="CellNotFound",
+                        cell_ids=[cell_id] if cell_id else [],
+                        message=f"Available cells: {sorted(existing_ids)}",
+                    ),
+                    dirty=False,
+                )
+            if cell_id in touched_ids:
+                _raise_notebook_failure(
+                    session,
+                    _graph_error_payload(
+                        error_type="DuplicateEdit",
+                        cell_ids=[cell_id],
+                        message="A cell may be updated or deleted only once per batch",
+                    ),
+                    dirty=False,
+                )
+            touched_ids.add(cell_id)
             doc_changes.append(DeleteCell(cell_id=CellId_t(cell_id)))
+            delete_ids.append(CellId_t(cell_id))
             existing_ids.discard(cell_id)
-            results.append({"op": "delete_cell", "cell_id": cell_id, "status": "ok"})
+            candidate_codes.pop(cell_id)
+            candidate_order.remove(cell_id)
+            results.append(
+                {"op": "delete_cell", "cell_id": cell_id, "status": "ok"}
+            )
 
         else:
-            results.append({"op": op, "error": f"Unknown operation: {op}"})
+            _raise_notebook_failure(
+                session,
+                _graph_error_payload(
+                    error_type="InvalidRequest",
+                    cell_ids=[cell_id] if cell_id else [],
+                    message=f"Unknown operation: {op}",
+                ),
+                dirty=False,
+            )
 
-    if not doc_changes:
-        return [TextContent(type="text", text=json.dumps({"edits": results}, default=str))]
+    try:
+        _validate_candidate_graph(
+            [
+                (CellId_t(cell_id), candidate_codes[cell_id])
+                for cell_id in candidate_order
+            ]
+        )
+    except NotebookToolError as exc:
+        _record_notebook_failure(session, exc.payload, dirty=False)
+        raise
 
-    # 1. Apply document transaction — updates backend document model
     try:
         transaction = Transaction(changes=tuple(doc_changes), source="kernel")
         applied = session.document.apply(transaction)
-        LOGGER.info(f"[edit_notebook] Transaction applied: {len(doc_changes)} changes, version={applied.version}")
+        LOGGER.info(
+            "[edit_notebook] Transaction applied changes=%s version=%s",
+            len(doc_changes),
+            applied.version,
+        )
     except Exception as e:
-        LOGGER.error(f"[edit_notebook] Transaction failed: {e}")
-        return [TextContent(type="text", text=json.dumps({
-            "error": f"Transaction failed: {e}",
-            "edits": results,
-        }, default=str))]
+        _raise_notebook_failure(
+            session,
+            _graph_error_payload(
+                error_type="DocumentTransactionError",
+                cell_ids=[
+                    str(cell_id) for cell_id in execute_ids + delete_ids
+                ],
+                message=type(e).__name__,
+            ),
+            dirty=False,
+        )
 
-    # 2. Notify ALL WebSocket consumers (from_consumer_id=None = no exclusion)
     try:
         session.notify(
             NotebookDocumentTransactionNotification(transaction=applied),
             from_consumer_id=None,
         )
-        LOGGER.info("[edit_notebook] Notification broadcast to all consumers")
+        LOGGER.info("[edit_notebook] Notification broadcast")
     except Exception as e:
-        LOGGER.error(f"[edit_notebook] Notify failed: {e}")
+        LOGGER.warning("[edit_notebook] Notify failed: %s", type(e).__name__)
 
-    # 3. Execute updated/new cells via HTTP (put_control_request doesn't work from MCP thread)
-    if execute_ids:
-        try:
-            import requests as _requests
+    try:
+        import requests as _requests
 
-            resp = _requests.post(
+        headers = _server_headers(context, str(session_id))
+        for cell_id in delete_ids:
+            response = _requests.post(
+                _local_server_url(context, "/api/kernel/delete"),
+                headers=headers,
+                json={"cellId": str(cell_id)},
+                timeout=15,
+            )
+            if response.status_code != 200:
+                raise RuntimeError(
+                    f"Kernel deletion returned HTTP {response.status_code}"
+                )
+
+        if execute_ids:
+            response = _requests.post(
                 _local_server_url(context, "/api/kernel/run"),
-                headers=_server_headers(context, str(session_id)),
+                headers=headers,
                 json={
                     "cellIds": [str(c) for c in execute_ids],
                     "codes": execute_codes,
                 },
                 timeout=15,
             )
-            LOGGER.info(f"[edit_notebook] Executed {len(execute_ids)} cells via HTTP: {resp.status_code}")
-        except Exception as e:
-            LOGGER.warning(f"[edit_notebook] Execution failed: {e}")
+            if response.status_code != 200:
+                raise RuntimeError(
+                    f"Kernel execution returned HTTP {response.status_code}"
+                )
+    except Exception as exc:
+        _raise_notebook_failure(
+            session,
+            _graph_error_payload(
+                error_type="DocumentKernelSynchronizationError",
+                cell_ids=[
+                    str(cell_id) for cell_id in delete_ids + execute_ids
+                ],
+                message=type(exc).__name__,
+            ),
+            dirty=True,
+        )
 
-    # 4. Auto-save to disk
     try:
         from signalpilot._server.models.models import SaveNotebookRequest
 
@@ -492,25 +770,33 @@ def _handle_edit_notebook(
                 persist=True,
             )
             session.app_file_manager.save(save_req)
-            LOGGER.info(f"[edit_notebook] Saved to {filename}")
+            LOGGER.info("[edit_notebook] Saved to %s", filename)
     except Exception as e:
-        LOGGER.warning(f"[edit_notebook] Auto-save failed: {e}")
+        LOGGER.warning(
+            "[edit_notebook] Auto-save failed: %s", type(e).__name__
+        )
 
-    return [TextContent(type="text", text=json.dumps({
-        "edits": results,
-        "cells_before": len(existing_cells),
-        "changes_applied": len(doc_changes),
-    }, default=str))]
+    return [
+        TextContent(
+            type="text",
+            text=json.dumps(
+                {
+                    "status": "completed",
+                    "has_errors": False,
+                    "edits": results,
+                    "cells_before": len(existing_cells),
+                    "changes_applied": len(doc_changes),
+                },
+                default=str,
+            ),
+        )
+    ]
 
 
 def _handle_run_cells(
     context: ToolContext, arguments: dict[str, Any]
 ) -> list[Any]:
-    """Run cells and wait for completion, returning outputs.
-
-    Blocks until all cells finish executing (idle or error),
-    then returns their outputs and any errors.
-    """
+    """Run cells and report every non-successful terminal state as an error."""
     import time
 
     from mcp.types import TextContent
@@ -520,36 +806,85 @@ def _handle_run_cells(
     timeout_secs = arguments.get("timeout", 120)
 
     if not session_id:
-        return [TextContent(type="text", text="Error: session_id is required")]
+        raise NotebookToolError(
+            _graph_error_payload(
+                error_type="InvalidRequest",
+                cell_ids=[],
+                message="session_id is required",
+            )
+        )
+    try:
+        timeout_secs = max(0.0, min(float(timeout_secs), 600.0))
+    except (TypeError, ValueError) as exc:
+        raise NotebookToolError(
+            _graph_error_payload(
+                error_type="InvalidRequest",
+                cell_ids=[],
+                message="timeout must be a number",
+            )
+        ) from exc
 
     try:
         session = context.get_session(session_id)
     except ToolExecutionError as e:
-        return [TextContent(type="text", text=f"Error: {e.message}")]
+        raise NotebookToolError(
+            _graph_error_payload(
+                error_type="SessionNotFound",
+                cell_ids=[],
+                message=e.message,
+            )
+        ) from e
 
     cell_manager = session.app_file_manager.app.cell_manager
+    cell_data_map = {cd.cell_id: cd for cd in cell_manager.cell_data()}
 
     if cell_ids_raw:
         run_ids = [CellId_t(cid) for cid in cell_ids_raw]
     else:
-        run_ids = [cd.cell_id for cd in cell_manager.cell_data()]
+        run_ids = list(cell_data_map)
 
-    cell_data_map = {cd.cell_id: cd for cd in cell_manager.cell_data()}
-    run_codes = [cell_data_map[cid].code if cid in cell_data_map else "" for cid in run_ids]
+    missing_ids = [
+        str(cell_id) for cell_id in run_ids if cell_id not in cell_data_map
+    ]
+    if missing_ids:
+        _raise_notebook_failure(
+            session,
+            _graph_error_payload(
+                error_type="CellNotFound",
+                cell_ids=missing_ids,
+                message="Requested cells are not present in the notebook",
+            ),
+            dirty=False,
+        )
 
-    # Execute via HTTP API (put_control_request doesn't work from MCP thread)
+    run_codes = [cell_data_map[cid].code for cid in run_ids]
+    baseline_timestamps = {
+        cell_id: float(
+            getattr(
+                session.session_view.cell_notifications.get(cell_id),
+                "timestamp",
+                0.0,
+            )
+            or 0.0
+        )
+        for cell_id in run_ids
+    }
+
     try:
         import requests as _requests
 
         hdrs = _server_headers(context, str(session_id))
 
-        # Ensure kernel is instantiated first
-        _requests.post(
+        instantiate_response = _requests.post(
             _local_server_url(context, "/api/kernel/instantiate"),
             headers=hdrs,
             json={"objectIds": [], "values": [], "autoRun": False},
             timeout=10,
         )
+        if instantiate_response.status_code != 200:
+            raise RuntimeError(
+                f"Kernel instantiate returned HTTP {instantiate_response.status_code}"
+            )
 
         resp = _requests.post(
             _local_server_url(context, "/api/kernel/run"),
@@ -558,101 +893,207 @@ def _handle_run_cells(
             timeout=15,
         )
         if resp.status_code != 200:
-            return [TextContent(type="text", text=f"Error running cells: HTTP {resp.status_code}: {resp.text[:200]}")]
-    except Exception as e:
-        return [TextContent(type="text", text=f"Error queuing cells: {e}")]
+            raise RuntimeError(
+                f"Kernel execution returned HTTP {resp.status_code}"
+            )
+    except Exception as exc:
+        _raise_notebook_failure(
+            session,
+            _graph_error_payload(
+                error_type="KernelQueueError",
+                cell_ids=[str(cell_id) for cell_id in run_ids],
+                message=type(exc).__name__,
+            ),
+            dirty=False,
+        )
 
-    # Poll until all cells are idle/error or timeout
-    run_id_set = {str(cid) for cid in run_ids}
     start = time.monotonic()
+    completed = not run_ids
     while time.monotonic() - start < timeout_secs:
         time.sleep(0.5)
         all_done = True
-        for cid in run_id_set:
-            notif = session.session_view.cell_notifications.get(CellId_t(cid))
-            if notif is None:
+        for cell_id in run_ids:
+            notification = session.session_view.cell_notifications.get(cell_id)
+            if (
+                notification is None
+                or float(getattr(notification, "timestamp", 0.0) or 0.0)
+                <= baseline_timestamps[cell_id]
+            ):
                 all_done = False
                 break
-            status = getattr(notif, "status", None) or getattr(notif, "runtime_state", None)
-            status_str = str(status) if status else ""
-            if "running" in status_str.lower() or "queued" in status_str.lower():
+            status = str(getattr(notification, "status", "") or "")
+            if status in {"running", "queued"}:
                 all_done = False
                 break
         if all_done:
+            completed = True
             break
 
-    # Collect results
-    cell_results = []
-    for cid in run_ids:
-        cid_str = str(cid)
-        notif = session.session_view.cell_notifications.get(cid)
-        result: dict[str, Any] = {"cell_id": cid_str}
+    elapsed = round(time.monotonic() - start, 3)
+    timed_out = not completed
+    cell_results: list[dict[str, Any]] = []
+    failed_cell_ids: list[str] = []
+    failure_errors: list[dict[str, Any]] = []
+    chat_runtime = bool(getattr(session, "_signalpilot_chat_runtime", False))
+    redactions = tuple(
+        getattr(session, "_signalpilot_chat_redactions", ()) or ()
+    )
 
-        if notif is None:
-            result["status"] = "unknown"
-            result["output"] = None
+    for cell_id in run_ids:
+        cell_id_string = str(cell_id)
+        notification = session.session_view.cell_notifications.get(cell_id)
+        result: dict[str, Any] = {
+            "cell_id": cell_id_string,
+            "status": "completed",
+            "runtime_state": "unknown",
+        }
+        error_details: list[dict[str, Any]] = []
+
+        if timed_out:
+            error_details.append(
+                {
+                    "type": "TimeoutError",
+                    "message": "Cell execution did not reach a terminal state",
+                }
+            )
+        elif (
+            notification is None
+            or float(getattr(notification, "timestamp", 0.0) or 0.0)
+            <= baseline_timestamps[cell_id]
+        ):
+            error_details.append(
+                {
+                    "type": "UnknownStateError",
+                    "message": "No current execution state was reported",
+                }
+            )
         else:
-            status = getattr(notif, "status", None) or getattr(notif, "runtime_state", None)
-            result["status"] = str(status) if status else "unknown"
+            runtime_state = str(getattr(notification, "status", "") or "")
+            result["runtime_state"] = runtime_state or "unknown"
+            if runtime_state != "idle":
+                error_details.append(
+                    {
+                        "type": "UnknownStateError",
+                        "message": f"Unexpected terminal state: {runtime_state or 'unknown'}",
+                    }
+                )
 
-            # Get output
-            output = getattr(notif, "output", None)
+            output = getattr(notification, "output", None)
             if output:
                 mimetype = getattr(output, "mimetype", "")
                 data = getattr(output, "data", "")
-                if getattr(session, "_signalpilot_chat_runtime", False):
+                if chat_runtime:
                     data = compact_chat_runtime_output(
                         data,
                         mimetype=str(mimetype),
-                        redactions=getattr(session, "_signalpilot_chat_redactions", ()),
+                        redactions=redactions,
                     )
                 elif isinstance(data, str) and len(data) > 2000:
                     data = data[:2000] + "... (truncated)"
-                result["output"] = {"mimetype": str(mimetype), "data": str(data)}
+                output_channel = getattr(output, "channel", None)
+                if (
+                    getattr(output_channel, "value", output_channel)
+                    == "sp-error"
+                ):
+                    raw_errors = getattr(output, "data", None)
+                    if not isinstance(raw_errors, list):
+                        raw_errors = []
+                    for error in raw_errors:
+                        error_type = type(error).__name__
+                        message = str(
+                            error.describe()
+                            if hasattr(error, "describe")
+                            else getattr(error, "msg", "Cell execution failed")
+                        )
+                        if chat_runtime:
+                            message = redact_chat_runtime_text(
+                                message, redactions
+                            )
+                        detail: dict[str, Any] = {
+                            "type": error_type,
+                            "message": message[:500],
+                        }
+                        if exception_type := getattr(
+                            error, "exception_type", None
+                        ):
+                            detail["exception_type"] = str(exception_type)[
+                                :100
+                            ]
+                        if variable := getattr(error, "name", None):
+                            detail["variable"] = str(variable)[:100]
+                        involved = {
+                            str(value) for value in getattr(error, "cells", ())
+                        }
+                        involved.add(cell_id_string)
+                        for source, _variables, target in getattr(
+                            error, "edges_with_vars", ()
+                        ):
+                            involved.update((str(source), str(target)))
+                        if involved:
+                            detail["cell_ids"] = sorted(involved)
+                        error_details.append(detail)
+                else:
+                    result["output"] = {
+                        "mimetype": str(mimetype),
+                        "data": str(data),
+                    }
 
-            # Get console output
-            console = getattr(notif, "console", None)
+            console = getattr(notification, "console", None)
             if console:
                 console_items = []
                 for item in console:
                     channel = getattr(item, "channel", "")
-                    text = getattr(item, "data", "") or getattr(item, "text", "")
+                    text = getattr(item, "data", "") or getattr(
+                        item, "text", ""
+                    )
                     if text:
                         rendered = str(text)
-                        if getattr(session, "_signalpilot_chat_runtime", False):
+                        if chat_runtime:
                             rendered = redact_chat_runtime_text(
                                 rendered,
-                                getattr(session, "_signalpilot_chat_redactions", ()),
+                                redactions,
                             )
-                        console_items.append({"channel": str(channel), "text": rendered[:1000]})
+                        console_items.append(
+                            {"channel": str(channel), "text": rendered[:1000]}
+                        )
                 if console_items:
                     result["console"] = console_items
 
-            # Get errors
-            errors = getattr(notif, "errors", None) or []
-            if errors:
-                error_list = []
-                for err in errors:
-                    msg = getattr(err, "msg", "") or str(err)
-                    rendered = str(msg)
-                    if getattr(session, "_signalpilot_chat_runtime", False):
-                        rendered = redact_chat_runtime_text(
-                            rendered,
-                            getattr(session, "_signalpilot_chat_redactions", ()),
-                        )
-                    error_list.append(rendered[:500])
-                result["errors"] = error_list
-
+        if error_details:
+            result["status"] = "failed"
+            result["errors"] = error_details
+            failed_cell_ids.append(cell_id_string)
+            failure_errors.extend(error_details)
         cell_results.append(result)
 
-    elapsed = round(time.monotonic() - start, 1)
-    timed_out = elapsed >= timeout_secs
-
-    return [TextContent(type="text", text=json.dumps({
+    payload = {
+        "status": "failed" if failed_cell_ids else "completed",
+        "has_errors": bool(failed_cell_ids),
+        "cell_ids": [str(cell_id) for cell_id in run_ids],
+        "failed_cell_ids": failed_cell_ids,
         "cells": cell_results,
         "elapsed_seconds": elapsed,
         "timed_out": timed_out,
-    }, default=str))]
+    }
+    if failed_cell_ids:
+        first_error = failure_errors[0]
+        failure_payload = {
+            **payload,
+            "error": {
+                "type": first_error["type"],
+                "variable": first_error.get("variable"),
+                "cell_ids": failed_cell_ids,
+                "message": first_error.get("message"),
+            },
+        }
+        _raise_notebook_failure(session, failure_payload, dirty=False)
+
+    return [
+        TextContent(
+            type="text",
+            text=json.dumps(payload, default=str),
+        )
+    ]
 
 
 def _handle_start_notebook_session(
@@ -668,11 +1109,16 @@ def _handle_start_notebook_session(
         return [TextContent(type="text", text="Error: file_path is required")]
 
     import os
+
     if not os.path.isabs(file_path):
         file_path = os.path.abspath(file_path)
 
     if not os.path.exists(file_path):
-        return [TextContent(type="text", text=f"Error: File not found: {file_path}")]
+        return [
+            TextContent(
+                type="text", text=f"Error: File not found: {file_path}"
+            )
+        ]
 
     try:
         sm = context.session_manager
@@ -680,15 +1126,28 @@ def _handle_start_notebook_session(
         # Check if a session already exists for this file
         for sid, sess in sm.sessions.items():
             sess_path = sess.app_file_manager.path
-            if sess_path and os.path.normpath(str(sess_path)) == os.path.normpath(file_path):
-                LOGGER.info(f"[start_session] Existing session {sid} for {file_path}")
-                cell_data = list(sess.app_file_manager.app.cell_manager.cell_data())
-                return [TextContent(type="text", text=json.dumps({
-                    "session_id": str(sid),
-                    "status": "already_running",
-                    "file": file_path,
-                    "cells": len(cell_data),
-                }))]
+            if sess_path and os.path.normpath(
+                str(sess_path)
+            ) == os.path.normpath(file_path):
+                LOGGER.info(
+                    f"[start_session] Existing session {sid} for {file_path}"
+                )
+                cell_data = list(
+                    sess.app_file_manager.app.cell_manager.cell_data()
+                )
+                return [
+                    TextContent(
+                        type="text",
+                        text=json.dumps(
+                            {
+                                "session_id": str(sid),
+                                "status": "already_running",
+                                "file": file_path,
+                                "cells": len(cell_data),
+                            }
+                        ),
+                    )
+                ]
 
         # Create a headless consumer for the session
         from signalpilot._session.consumer import SessionConsumer
@@ -731,7 +1190,9 @@ def _handle_start_notebook_session(
             auto_instantiate=True,
         )
 
-        LOGGER.info(f"[start_session] Created session {new_session_id} for {file_path}")
+        LOGGER.info(
+            f"[start_session] Created session {new_session_id} for {file_path}"
+        )
 
         # Wait for kernel to be ready, then instantiate via HTTP
         import time
@@ -742,9 +1203,11 @@ def _handle_start_notebook_session(
 
         # Wait for kernel process to be alive
         for attempt in range(10):
-            km = getattr(session, '_kernel_manager', None)
+            km = getattr(session, "_kernel_manager", None)
             if km and km.is_alive():
-                LOGGER.info(f"[start_session] Kernel alive after {attempt * 0.5}s")
+                LOGGER.info(
+                    f"[start_session] Kernel alive after {attempt * 0.5}s"
+                )
                 break
             time.sleep(0.5)
         else:
@@ -760,31 +1223,48 @@ def _handle_start_notebook_session(
                     json={"objectIds": [], "values": [], "autoRun": auto_run},
                     timeout=15,
                 )
-                LOGGER.info(f"[start_session] Instantiate attempt {attempt + 1}: HTTP {resp.status_code} {resp.text[:100]}")
+                LOGGER.info(
+                    f"[start_session] Instantiate attempt {attempt + 1}: HTTP {resp.status_code} {resp.text[:100]}"
+                )
                 if resp.status_code == 200:
                     instantiate_ok = True
                     break
             except Exception as e:
-                LOGGER.warning(f"[start_session] Instantiate attempt {attempt + 1} failed: {e}")
+                LOGGER.warning(
+                    f"[start_session] Instantiate attempt {attempt + 1} failed: {e}"
+                )
             time.sleep(1.0)
 
         if not instantiate_ok:
             LOGGER.error("[start_session] All instantiate attempts failed")
 
         cell_data = list(session.app_file_manager.app.cell_manager.cell_data())
-        return [TextContent(type="text", text=json.dumps({
-            "session_id": str(new_session_id),
-            "status": "started",
-            "file": file_path,
-            "cells": len(cell_data),
-            "cell_ids": [str(cd.cell_id) for cd in cell_data],
-            "auto_run": auto_run,
-        }))]
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps(
+                    {
+                        "session_id": str(new_session_id),
+                        "status": "started",
+                        "file": file_path,
+                        "cells": len(cell_data),
+                        "cell_ids": [str(cd.cell_id) for cd in cell_data],
+                        "auto_run": auto_run,
+                    }
+                ),
+            )
+        ]
 
     except Exception as e:
         LOGGER.error(f"[start_session] Failed: {e}")
         import traceback
-        return [TextContent(type="text", text=f"Error starting session: {e}\n{traceback.format_exc()[:500]}")]
+
+        return [
+            TextContent(
+                type="text",
+                text=f"Error starting session: {e}\n{traceback.format_exc()[:500]}",
+            )
+        ]
 
 
 async def _invoke_backend_tool(
@@ -801,8 +1281,12 @@ async def _invoke_backend_tool(
     if session_id:
         try:
             session = t.context.get_session(session_id)
-            chat_runtime = bool(getattr(session, "_signalpilot_chat_runtime", False))
-            runtime_redactions = tuple(getattr(session, "_signalpilot_chat_redactions", ()) or ())
+            chat_runtime = bool(
+                getattr(session, "_signalpilot_chat_runtime", False)
+            )
+            runtime_redactions = tuple(
+                getattr(session, "_signalpilot_chat_redactions", ()) or ()
+            )
         except Exception:
             pass
 
@@ -822,7 +1306,9 @@ async def _invoke_backend_tool(
             )
         return [TextContent(type="text", text=text)]
     except ToolExecutionError as e:
-        error_text = f"Error: {e.message}\nSuggested fix: {e.suggested_fix or 'N/A'}"
+        error_text = (
+            f"Error: {e.message}\nSuggested fix: {e.suggested_fix or 'N/A'}"
+        )
         return [
             TextContent(
                 type="text",
@@ -834,6 +1320,8 @@ async def _invoke_backend_tool(
         return [
             TextContent(
                 type="text",
-                text=redact_chat_runtime_text(f"Error: {e}", runtime_redactions),
+                text=redact_chat_runtime_text(
+                    f"Error: {e}", runtime_redactions
+                ),
             )
         ]

@@ -27,6 +27,7 @@ from gateway.standalone_chat.execution import (
     cleanup_expired_approval_sandboxes,
     cleanup_expired_runtime_objects,
     cleanup_finished_execution,
+    prepare_execution,
     stream_execution,
 )
 from gateway.standalone_chat.projects import project_metadata_context
@@ -327,7 +328,7 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                     )
                     if active_run is None:
                         return
-                    async for event in stream_execution(
+                    execution = await prepare_execution(
                         db,
                         run=active_run,
                         worker_id=worker_id,
@@ -337,97 +338,98 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                         prompt=prompt,
                         messages=messages,
                         warm_context=warm_context,
-                    ):
-                        if stop.is_set():
-                            raise asyncio.CancelledError
-                        event_type = str(event.get("type") or "")
-                        content = str(event.get("content") or "")
-                        if event_type == "text_delta":
-                            streamed_text, emitted_content = _merge_text_delta(
-                                streamed_text,
-                                content,
-                                starts_new_block=starts_new_text_block,
-                            )
-                            if emitted_content:
-                                await _append(
-                                    run_id,
-                                    "text_delta",
-                                    {"delta": emitted_content},
-                                )
-                                starts_new_text_block = False
-                        elif event_type == "text":
-                            final_text = content
-                        elif event_type == "tool_use":
-                            starts_new_text_block = bool(streamed_text)
-                            tool_name = str(event.get("tool_name") or "analysis tool")
-                            tool_input = event.get("tool_input") or {}
-                            tool_call_id = str(event.get("tool_call_id") or "")
-                            if tool_call_id:
-                                tool_names_by_id[tool_call_id] = tool_name
+                    )
+                async for event in stream_execution(execution):
+                    if stop.is_set():
+                        raise asyncio.CancelledError
+                    event_type = str(event.get("type") or "")
+                    content = str(event.get("content") or "")
+                    if event_type == "text_delta":
+                        streamed_text, emitted_content = _merge_text_delta(
+                            streamed_text,
+                            content,
+                            starts_new_block=starts_new_text_block,
+                        )
+                        if emitted_content:
                             await _append(
                                 run_id,
-                                "tool_started",
-                                {"tool": tool_name, "input": tool_input},
+                                "text_delta",
+                                {"delta": emitted_content},
                             )
-                            if tool_name.endswith(("query_database", "explain_query", "validate_sql")):
-                                sql = tool_input.get("sql") if isinstance(tool_input, dict) else None
-                                if sql:
-                                    await _append(run_id, "sql", {"sql": sql})
-                            if any(marker in tool_name for marker in ("schema", "table", "relationship", "metric")):
-                                source_refs = {
-                                    key: value
-                                    for key, value in (tool_input.items() if isinstance(tool_input, dict) else [])
-                                    if key
-                                    in {
-                                        "metric_name",
-                                        "model_name",
-                                        "schema_name",
-                                        "source_name",
-                                        "table_name",
-                                    }
+                            starts_new_text_block = False
+                    elif event_type == "text":
+                        final_text = content
+                    elif event_type == "tool_use":
+                        starts_new_text_block = bool(streamed_text)
+                        tool_name = str(event.get("tool_name") or "analysis tool")
+                        tool_input = event.get("tool_input") or {}
+                        tool_call_id = str(event.get("tool_call_id") or "")
+                        if tool_call_id:
+                            tool_names_by_id[tool_call_id] = tool_name
+                        await _append(
+                            run_id,
+                            "tool_started",
+                            {"tool": tool_name, "input": tool_input},
+                        )
+                        if tool_name.endswith(("query_database", "explain_query", "validate_sql")):
+                            sql = tool_input.get("sql") if isinstance(tool_input, dict) else None
+                            if sql:
+                                await _append(run_id, "sql", {"sql": sql})
+                        if any(marker in tool_name for marker in ("schema", "table", "relationship", "metric")):
+                            source_refs = {
+                                key: value
+                                for key, value in (tool_input.items() if isinstance(tool_input, dict) else [])
+                                if key
+                                in {
+                                    "metric_name",
+                                    "model_name",
+                                    "schema_name",
+                                    "source_name",
+                                    "table_name",
                                 }
-                                await _append(
-                                    run_id,
-                                    "source",
-                                    {"tool": tool_name, **source_refs},
-                                )
-                        elif event_type == "tool_result":
-                            starts_new_text_block = bool(streamed_text)
-                            is_error = bool(event.get("is_error"))
-                            tool_call_id = str(event.get("tool_call_id") or "")
-                            completed_tool = tool_names_by_id.get(tool_call_id, "")
+                            }
                             await _append(
                                 run_id,
-                                "tool_completed",
-                                {
-                                    "tool_call_id": event.get("tool_call_id"),
-                                    "summary": (
-                                        "The governed tool returned an error."
-                                        if is_error
-                                        else "The governed tool completed."
-                                    ),
-                                    "error": is_error,
-                                },
+                                "source",
+                                {"tool": tool_name, **source_refs},
                             )
-                            if not is_error and completed_tool.endswith("start_analysis_notebook"):
-                                await _append(run_id, "notebook_started", {"status": "running"})
-                            if completed_tool.endswith("run_cells"):
-                                await _append(
-                                    run_id,
-                                    "cell_executed",
-                                    {"status": "failed" if is_error else "completed"},
-                                )
-                        elif event_type == "error":
-                            raise RuntimeError(content or "Notebook analysis failed")
-                        elif event_type == "final":
-                            final_text = content or final_text or streamed_text
-                            await _persist_artifacts(
-                                run_id=run_id,
-                                worker_id=worker_id,
-                                artifacts=[item for item in event.get("artifacts") or [] if isinstance(item, dict)],
+                    elif event_type == "tool_result":
+                        starts_new_text_block = bool(streamed_text)
+                        is_error = bool(event.get("is_error"))
+                        tool_call_id = str(event.get("tool_call_id") or "")
+                        completed_tool = tool_names_by_id.get(tool_call_id, "")
+                        await _append(
+                            run_id,
+                            "tool_completed",
+                            {
+                                "tool_call_id": event.get("tool_call_id"),
+                                "summary": (
+                                    "The governed tool returned an error."
+                                    if is_error
+                                    else "The governed tool completed."
+                                ),
+                                "error": is_error,
+                            },
+                        )
+                        if not is_error and completed_tool.endswith("start_analysis_notebook"):
+                            await _append(run_id, "notebook_started", {"status": "running"})
+                        if completed_tool.endswith("run_cells"):
+                            await _append(
+                                run_id,
+                                "cell_executed",
+                                {"status": "failed" if is_error else "completed"},
                             )
-                            if event.get("kernel_stopped"):
-                                await _append(run_id, "kernel_stopped", {"status": "stopped"})
+                    elif event_type == "error":
+                        raise RuntimeError(content or "Notebook analysis failed")
+                    elif event_type == "final":
+                        final_text = content or final_text or streamed_text
+                        await _persist_artifacts(
+                            run_id=run_id,
+                            worker_id=worker_id,
+                            artifacts=[item for item in event.get("artifacts") or [] if isinstance(item, dict)],
+                        )
+                        if event.get("kernel_stopped"):
+                            await _append(run_id, "kernel_stopped", {"status": "stopped"})
                 last_error = None
                 break
             except (httpx.HTTPError, OSError) as exc:
@@ -492,7 +494,12 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                 message="The run was stopped.",
             )
     except Exception as exc:
-        logger.warning("Standalone chat run %s failed: %s", run_id, type(exc).__name__)
+        logger.warning(
+            "Standalone chat run %s failed: %s",
+            run_id,
+            type(exc).__name__,
+            exc_info=True,
+        )
         public_message = "I could not complete this analysis. You can inspect the work and retry."
         with suppress(Exception):
             await _append(

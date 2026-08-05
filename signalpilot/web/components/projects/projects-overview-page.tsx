@@ -15,6 +15,7 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  Settings,
   Trash2,
   X,
   type LucideIcon,
@@ -472,6 +473,9 @@ export default function ProjectsOverviewPage() {
               loading={projectsLoading}
               projectCount={overview.projectCount}
               onProjectClick={openProject}
+              onProjectSettings={(project) =>
+                router.push(`/projects/${encodeURIComponent(project.id)}/settings`)
+              }
               onProjectDeleted={loadOverview}
             />
           </div>
@@ -1011,12 +1015,14 @@ function ProjectGrid({
   loading,
   projectCount,
   onProjectClick,
+  onProjectSettings,
   onProjectDeleted,
 }: {
   projects: WorkspaceProjectInfo[];
   loading: boolean;
   projectCount: number;
   onProjectClick: (project: WorkspaceProjectInfo) => void;
+  onProjectSettings: (project: WorkspaceProjectInfo) => void;
   onProjectDeleted: () => void | Promise<void>;
 }) {
   if (loading && projects.length === 0) {
@@ -1050,6 +1056,7 @@ function ProjectGrid({
           key={project.id}
           project={project}
           onClick={onProjectClick}
+          onSettings={onProjectSettings}
           onDeleted={onProjectDeleted}
         />
       ))}
@@ -1060,10 +1067,12 @@ function ProjectGrid({
 function ProjectCard({
   project,
   onClick,
+  onSettings,
   onDeleted,
 }: {
   project: WorkspaceProjectInfo;
   onClick: (project: WorkspaceProjectInfo) => void;
+  onSettings: (project: WorkspaceProjectInfo) => void;
   onDeleted: () => void | Promise<void>;
 }) {
   const [showDelete, setShowDelete] = useState(false);
@@ -1129,6 +1138,24 @@ function ProjectCard({
             )}
           </div>
         </div>
+        <button
+          type="button"
+          className="absolute right-10 top-2 rounded-md p-1.5 text-[var(--color-text-dim)] opacity-0 transition-opacity hover:bg-muted hover:text-[var(--color-text)] focus-visible:opacity-100 group-hover:opacity-100"
+          onClick={(event) => {
+            event.stopPropagation();
+            onSettings(project);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              event.stopPropagation();
+              onSettings(project);
+            }
+          }}
+          aria-label={`Settings for ${projectName}`}
+        >
+          <Settings className="h-3.5 w-3.5" />
+        </button>
         <button
           type="button"
           className="absolute right-2 top-2 rounded-md p-1.5 text-[var(--color-text-dim)] opacity-0 transition-opacity hover:bg-[var(--color-error)]/10 hover:text-[var(--color-error)] group-hover:opacity-100"

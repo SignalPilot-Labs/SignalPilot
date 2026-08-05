@@ -520,6 +520,30 @@ def _close_analysis_kernel(app: Any, session_id: str) -> bool:
     )
 
 
+def _start_analysis_kernel(app: Any, notebook_path: Path) -> str:
+    from signalpilot._server.ai.notebook_mcp import (
+        _handle_start_notebook_session,
+    )
+    from signalpilot._server.ai.tools.base import ToolContext
+
+    result = _handle_start_notebook_session(
+        ToolContext(app=app),
+        {"file_path": str(notebook_path), "auto_run": True},
+    )
+    if not result:
+        raise RuntimeError("Clean notebook kernel did not start")
+    try:
+        started = json.loads(str(getattr(result[0], "text", "")))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            "Clean notebook kernel returned an invalid response"
+        ) from exc
+    session_id = str(started.get("session_id") or "")
+    if not session_id or str(started.get("status") or "").startswith("error"):
+        raise RuntimeError("Clean notebook kernel did not start")
+    return session_id
+
+
 def _frozen_project_directory(project_id: str) -> Path | None:
     parent = project_sync.PROJECTS_ROOT / project_id
     if not parent.exists():
@@ -733,6 +757,7 @@ async def execute(*, request: Request) -> StreamingResponse:
         try:
             recovery_failure: dict[str, Any] | None = None
             previous_notebook_session_id: str | None = None
+            recovery_plan_id: str | None = None
             for attempt in (1, 2):
                 collector = StandaloneArtifactCollector()
                 lifecycle = StandaloneNotebookLifecycle()
@@ -760,6 +785,52 @@ async def execute(*, request: Request) -> StreamingResponse:
                     )
                     runtime_session._signalpilot_chat_attempt = attempt
 
+                if recovery_failure is not None:
+                    if not recovery_plan_id:
+                        yield (
+                            json.dumps(
+                                {
+                                    "type": "error",
+                                    "content": "The failed notebook did not retain a governed recovery plan.",
+                                    "is_error": True,
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8")
+                        return
+                    try:
+                        lifecycle.session_id = _start_analysis_kernel(
+                            request.app, analysis_notebook_path
+                        )
+                    except Exception:
+                        LOGGER.exception(
+                            "Clean notebook kernel start failed run_id=%s attempt=%s",
+                            run_id,
+                            attempt,
+                        )
+                        yield (
+                            json.dumps(
+                                {
+                                    "type": "error",
+                                    "content": "The failed notebook kernel could not be restarted safely.",
+                                    "is_error": True,
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8")
+                        return
+                    lifecycle.plan_id = recovery_plan_id
+                    clean_session = _analysis_session(
+                        request.app, lifecycle.session_id
+                    )
+                    clean_session._signalpilot_chat_runtime = True
+                    clean_session._signalpilot_chat_redactions = (
+                        scoped_token,
+                    )
+                    await lifecycle_event(
+                        "notebook_started", {"plan_id": recovery_plan_id}
+                    )
+
                 artifact_server = build_standalone_chat_mcp_server(
                     collector,
                     result_loader=load_result,
@@ -779,6 +850,9 @@ async def execute(*, request: Request) -> StreamingResponse:
                     attempt_prompt = (
                         f"{prompt}\n\n<notebook_recovery>\n"
                         f"{_recovery_context(recovery_failure)}\n"
+                        "The clean notebook kernel is already running. Use "
+                        f"session_id `{lifecycle.session_id}` and governed plan_id "
+                        f"`{recovery_plan_id}`; do not create a different session.\n"
                         "</notebook_recovery>"
                     )
 
@@ -945,6 +1019,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                     )
                     if attempt == 1 and lifecycle.session_id:
                         previous_notebook_session_id = lifecycle.session_id
+                        recovery_plan_id = lifecycle.plan_id
                         kernel_closed = _close_analysis_kernel(
                             request.app, lifecycle.session_id
                         )

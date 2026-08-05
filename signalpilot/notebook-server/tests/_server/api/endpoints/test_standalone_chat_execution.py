@@ -312,6 +312,8 @@ async def test_dirty_notebook_is_reset_and_only_clean_retry_answer_is_emitted(
     closed: list[str] = []
     cleared: list[str] = []
     archived: list[str] = []
+    clean_starts: list[Path] = []
+    agent_attempts = 0
 
     async def execution_directory(**_kwargs: Any) -> tuple[Path, bool]:
         return tmp_path, False
@@ -324,11 +326,14 @@ async def test_dirty_notebook_is_reset_and_only_clean_retry_answer_is_emitted(
         return object()
 
     async def run_agent(prompt: str, _session_id: object, **_kwargs: Any):
-        attempt = len(sessions) + 1
+        nonlocal agent_attempts
+        agent_attempts += 1
+        attempt = agent_attempts
         lifecycle = lifecycles[-1]
-        lifecycle.session_id = f"kernel-{attempt}"
-        sessions[lifecycle.session_id] = _runtime_session(dirty=attempt == 1)
         if attempt == 1:
+            lifecycle.session_id = "kernel-1"
+            lifecycle.plan_id = "plan-1"
+            sessions[lifecycle.session_id] = _runtime_session(dirty=True)
             sessions[lifecycle.session_id]._signalpilot_notebook_failures = [
                 {
                     "error": {
@@ -345,6 +350,9 @@ async def test_dirty_notebook_is_reset_and_only_clean_retry_answer_is_emitted(
                     }
                 },
             ]
+        else:
+            assert lifecycle.session_id == "kernel-2"
+            assert lifecycle.plan_id == "plan-1"
         await event_sinks[-1]("notebook_started", {})
         if attempt == 1:
             collectors[-1].artifacts.append({"filename": "rejected.csv"})
@@ -359,6 +367,8 @@ async def test_dirty_notebook_is_reset_and_only_clean_retry_answer_is_emitted(
         assert "MultipleDefinitionError" in prompt
         assert '"variable": "segment"' in prompt
         assert "SpExceptionRaisedError" in prompt
+        assert "session_id `kernel-2`" in prompt
+        assert "plan_id `plan-1`" in prompt
         collectors[-1].artifacts.append({"filename": "accepted.csv"})
         yield AgentEvent(
             type="tool_use",
@@ -394,6 +404,15 @@ async def test_dirty_notebook_is_reset_and_only_clean_retry_answer_is_emitted(
         standalone_chat,
         "_close_analysis_kernel",
         lambda _app, session_id: closed.append(session_id) or True,
+    )
+    monkeypatch.setattr(
+        standalone_chat,
+        "_start_analysis_kernel",
+        lambda _app, notebook_path: (
+            clean_starts.append(notebook_path),
+            sessions.setdefault("kernel-2", _runtime_session()),
+            "kernel-2",
+        )[-1],
     )
     monkeypatch.setattr(standalone_chat, "_archive_analysis_notebook", archive)
     monkeypatch.setattr(
@@ -448,6 +467,7 @@ async def test_dirty_notebook_is_reset_and_only_clean_retry_answer_is_emitted(
     }
     assert "REJECTED LEAK" not in json.dumps(events)
     assert closed == ["kernel-1", "kernel-2"]
+    assert clean_starts == [seeded_paths[0]]
     assert archived == ["kernel-2"]
     assert cleared.count(f"standalone:{run_id}") >= 2
 
@@ -464,6 +484,7 @@ async def test_two_dirty_attempts_emit_one_validation_error_and_no_final(
     lifecycles: list[Any] = []
     event_sinks: list[Any] = []
     archive_calls: list[bool] = []
+    agent_attempts = 0
 
     async def execution_directory(**_kwargs: Any) -> tuple[Path, bool]:
         return tmp_path, False
@@ -474,10 +495,17 @@ async def test_two_dirty_attempts_emit_one_validation_error_and_no_final(
         return object()
 
     async def run_agent(_prompt: str, _session_id: object, **_kwargs: Any):
-        attempt = len(sessions) + 1
+        nonlocal agent_attempts
+        agent_attempts += 1
+        attempt = agent_attempts
         lifecycle = lifecycles[-1]
-        lifecycle.session_id = f"dirty-kernel-{attempt}"
-        sessions[lifecycle.session_id] = _runtime_session(dirty=True)
+        if attempt == 1:
+            lifecycle.session_id = "dirty-kernel-1"
+            lifecycle.plan_id = "plan-dirty"
+            sessions[lifecycle.session_id] = _runtime_session(dirty=True)
+        else:
+            assert lifecycle.session_id == "dirty-kernel-2"
+            assert lifecycle.plan_id == "plan-dirty"
         await event_sinks[-1]("notebook_started", {})
         if attempt == 2:
             yield AgentEvent(
@@ -514,6 +542,16 @@ async def test_two_dirty_attempts_emit_one_validation_error_and_no_final(
         standalone_chat,
         "_close_analysis_kernel",
         lambda _app, _session_id: True,
+    )
+    monkeypatch.setattr(
+        standalone_chat,
+        "_start_analysis_kernel",
+        lambda _app, _notebook_path: (
+            sessions.setdefault(
+                "dirty-kernel-2", _runtime_session(dirty=True)
+            ),
+            "dirty-kernel-2",
+        )[-1],
     )
     monkeypatch.setattr(standalone_chat, "_archive_analysis_notebook", archive)
     monkeypatch.setattr(

@@ -45,8 +45,11 @@ def test_discovery_found_the_expected_surface():
                      "/api/byok/keys"):
         assert expected in paths, f"{expected} missing from discovered admin routes"
     # The staff classification must not go vacuous. that would silently drop the
-    # tenant-escalation assertions below.
-    assert len(STAFF_ROUTES) >= 7, f"only {len(STAFF_ROUTES)} staff-only routes discovered"
+    # tenant-escalation assertions below. The floor was 7 while the eval routes
+    # carried RequirePlatformStaff; they are gated on the org allowlist now, so
+    # the genuine staff-only surface is smaller. This still fails if the
+    # classification collapses to nothing.
+    assert len(STAFF_ROUTES) >= 3, f"only {len(STAFF_ROUTES)} staff-only routes discovered"
 
 
 @pytest.mark.parametrize("route", ADMIN_ROUTES, ids=IDS)

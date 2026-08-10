@@ -73,4 +73,4 @@ The universal `load_extension` / `install_extension` block also applies.
 
 ## Cloud vs local
 
-Supported in both cloud and local (self-hosted) deployments. In cloud mode, the SSRF allow-list applies to connection hostnames; extend it with `SP_SSRF_ALLOW_LIST`.
+Supported in both cloud and local (self-hosted) deployments. In cloud mode, connections to private address ranges are refused; self-hosted deployments can allow them with `SP_ALLOW_PRIVATE_CONNECTIONS=true`.

@@ -4,11 +4,11 @@ sidebar_position: 1
 
 # Tools Reference
 
-All 40 SignalPilot MCP tools across 9 categories. The catalog below groups every tool by category (click a category for full parameter and example documentation). The [Tools by workflow stage](#tools-by-workflow-stage) section then maps the same tools onto the four stages of a governed dbt/SQL run — Scan/Map, Explore/Research, Write, and Verify.
+All 54 SignalPilot MCP tools across 12 categories. The catalog below groups every tool by category (click a category for full parameter and example documentation). The [Tools by workflow stage](#tools-by-workflow-stage) section then maps the same tools onto the four stages of a governed dbt/SQL run — Scan/Map, Explore/Research, Write, and Verify.
 
 ## Tools by workflow stage
 
-The dbt-workflow skill's steps collapse into four stages. Some scan/map and value-check operations run as bundled plugin CLI scripts (`scan_project.py`, `validate_project.py`, `map-columns`, `verify-values`) rather than MCP tools; the tables below list the MCP tools used at each stage by exact name. A tool can appear in more than one stage.
+The dbt-workflow skill's steps collapse into four stages. Some scan/map and value-check operations run as bundled plugin CLI scripts (`scan_project.py`, `validate_project.py`, `verify-values`) rather than MCP tools; the tables below list the MCP tools used at each stage by exact name. A tool can appear in more than one stage.
 
 ### Scan / Map
 
@@ -163,7 +163,7 @@ See [Operational tools](/docs/reference/tools-ops).
 | `list_workspace_projects` | List the dbt/notebook projects in the user's workspace |
 | `run_notebook` | Run a `.py` notebook in a sandboxed cloud pod, return output + view URL |
 
-## Knowledge Base (3 tools)
+## Knowledge Base (5 tools)
 
 See [Operational tools](/docs/reference/tools-ops).
 
@@ -171,9 +171,44 @@ See [Operational tools](/docs/reference/tools-ops).
 |------|-------------|
 | `get_knowledge` | Load baseline docs + task-relevant knowledge entries |
 | `search_knowledge` | Agent-directed search across the knowledge base |
+| `read_knowledge` | Read one knowledge entry in full by ID |
 | `propose_knowledge` | Propose a new knowledge entry, or edit one in place with `overwrite=true` |
 | `archive_knowledge` | Archive (soft-delete) a knowledge entry by ID |
+
+## Reporting (2 tools)
+
+| Tool | Description |
+|------|-------------|
 | `manage_report` | Create or permanently delete a rendered HTML report |
+| `manage_dashboard` | Create or delete a saved dashboard |
+
+## Semantic layer (2 tools)
+
+| Tool | Description |
+|------|-------------|
+| `list_semantic_metrics` | List metrics defined in the project's dbt semantic layer |
+| `verify_metric_conformance` | Check that a model's aggregates conform to the metric definitions |
+
+## Branch workflow — Xata (6 tools)
+
+Branch-per-developer Postgres on Xata: fork a branch, work on it, diff it against
+the parent before merging.
+
+| Tool | Description |
+|------|-------------|
+| `xata_list_branches` | List branches on the connection's Xata project |
+| `create_xata_branch` | Fork a new branch from a parent branch |
+| `delete_xata_branch` | Delete a branch |
+| `xata_branch_diff` | Diff two branches at the Xata control-plane level |
+| `schema_diff_branches` | Compare table and column structure across two branches |
+| `get_dbt_profile` | Emit a `profiles.yml` block for a branch's credentials |
+
+## Model mapping (2 tools)
+
+| Tool | Description |
+|------|-------------|
+| `map_columns` | Map upstream columns against a model's YML contract; labels each column `MAPPED`, `UNMAPPED-INCLUDE`, or `UNMAPPED-EXCLUDE` |
+| `analyze_project_db` | Summarise the database a dbt project builds into |
 
 ## Notion Integration (4 tools)
 

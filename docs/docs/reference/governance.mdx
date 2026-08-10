@@ -50,7 +50,7 @@ Queries containing multiple statements (`;` separator) are rejected. This preven
 
 ## Dangerous function denylist
 
-79+ functions are blocked across 7 SQL dialects. These are functions that can read files, execute OS commands, make network calls, or access sensitive system information.
+118+ functions are blocked across 10 SQL dialects (an unrecognised dialect is checked against the union of all of them). These are functions that can read files, execute OS commands, make network calls, or access sensitive system information.
 
 **Examples by dialect:**
 
@@ -64,11 +64,11 @@ Queries containing multiple statements (`;` separator) are rejected. This preven
 | DuckDB | `read_csv`, `read_parquet`, `read_json`, `httpfs` extension functions |
 | SQLite | N/A (no filesystem functions exposed via MCP) |
 
-The full denylist is maintained in `signalpilot/gateway/engine/` in the gateway source.
+The full denylist is maintained in `signalpilot/gateway/gateway/engine/denylists.py` in the gateway source.
 
 ## Per-session budget cap
 
-Budget caps are set per session via the `start_session` MCP tool. A session without a registered budget has no spending limit.
+Budget caps are registered per session through the gateway's budget API (`/api/budget`); the `check_budget` MCP tool reports remaining spend. A session without a registered budget has no spending limit.
 
 Queries that would exceed the session's budget are rejected before execution. The `check_budget` tool returns the remaining budget.
 

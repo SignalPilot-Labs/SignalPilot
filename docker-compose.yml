@@ -36,6 +36,8 @@ services:
 
   # Gateway API and proxy.
   gateway:
+    # The durable chat worker reuses this exact image with a different command.
+    image: ${GATEWAY_IMAGE:-signalpilot-gateway:latest}
     build:
       context: ./signalpilot/gateway
       dockerfile: ../../Dockerfile.gateway
@@ -78,10 +80,11 @@ services:
       SP_FEATURE_CHAT_RUNTIME_RESULTS: ${SP_FEATURE_CHAT_RUNTIME_RESULTS:-true}
       SP_FEATURE_CHAT_RUNTIME_ARTIFACTS: ${SP_FEATURE_CHAT_RUNTIME_ARTIFACTS:-true}
       SP_FEATURE_CHAT_DATASET_REFS: ${SP_FEATURE_CHAT_DATASET_REFS:-false}
-      SP_CHAT_OBJECTS_BUCKET: sp-chat-runtime
-      SP_CHAT_OBJECTS_S3_ENDPOINT: http://minio:9000
-      SP_CHAT_OBJECTS_S3_ACCESS_KEY: minioadmin
-      SP_CHAT_OBJECTS_S3_SECRET_KEY: minioadmin
+      SP_CHAT_OBJECTS_BUCKET: ${SP_CHAT_OBJECTS_BUCKET:-sp-chat-runtime}
+      SP_CHAT_OBJECTS_S3_ENDPOINT: ${SP_CHAT_OBJECTS_S3_ENDPOINT-http://minio:9000}
+      SP_CHAT_OBJECTS_S3_REGION: ${SP_CHAT_OBJECTS_S3_REGION-}
+      SP_CHAT_OBJECTS_S3_ACCESS_KEY: ${SP_CHAT_OBJECTS_S3_ACCESS_KEY-minioadmin}
+      SP_CHAT_OBJECTS_S3_SECRET_KEY: ${SP_CHAT_OBJECTS_S3_SECRET_KEY-minioadmin}
       SIGNALPILOT_NOTEBOOK_INTERNAL_URL: http://notebook:2718
       SIGNALPILOT_NOTEBOOK_PUBLIC_URL: http://localhost:${SP_WEB_PORT:-3200}/notebook
       SIGNALPILOT_DELIVERY_MODEL: ${SIGNALPILOT_DELIVERY_MODEL:-claude-sonnet-4-5-20250929}
@@ -203,9 +206,8 @@ services:
 
   # ─── Durable standalone-chat worker ───────────────────────────
   gateway-chat-worker:
-    build:
-      context: ./signalpilot/gateway
-      dockerfile: ../../Dockerfile.gateway
+    # Built once by the gateway service; only the process command differs.
+    image: ${GATEWAY_IMAGE:-signalpilot-gateway:latest}
     env_file:
       - path: ./.slack.local.env
         required: false
@@ -224,10 +226,11 @@ services:
       SP_FEATURE_CHAT_RUNTIME_RESULTS: ${SP_FEATURE_CHAT_RUNTIME_RESULTS:-true}
       SP_FEATURE_CHAT_RUNTIME_ARTIFACTS: ${SP_FEATURE_CHAT_RUNTIME_ARTIFACTS:-true}
       SP_FEATURE_CHAT_DATASET_REFS: ${SP_FEATURE_CHAT_DATASET_REFS:-false}
-      SP_CHAT_OBJECTS_BUCKET: sp-chat-runtime
-      SP_CHAT_OBJECTS_S3_ENDPOINT: http://minio:9000
-      SP_CHAT_OBJECTS_S3_ACCESS_KEY: minioadmin
-      SP_CHAT_OBJECTS_S3_SECRET_KEY: minioadmin
+      SP_CHAT_OBJECTS_BUCKET: ${SP_CHAT_OBJECTS_BUCKET:-sp-chat-runtime}
+      SP_CHAT_OBJECTS_S3_ENDPOINT: ${SP_CHAT_OBJECTS_S3_ENDPOINT-http://minio:9000}
+      SP_CHAT_OBJECTS_S3_REGION: ${SP_CHAT_OBJECTS_S3_REGION-}
+      SP_CHAT_OBJECTS_S3_ACCESS_KEY: ${SP_CHAT_OBJECTS_S3_ACCESS_KEY-minioadmin}
+      SP_CHAT_OBJECTS_S3_SECRET_KEY: ${SP_CHAT_OBJECTS_S3_SECRET_KEY-minioadmin}
       CHAT_WORKER_CONCURRENCY: "4"
       SP_NOTEBOOK_DIRECT_URL: http://notebook:2718
       SP_NOTEBOOK_UPSTREAM_MODE: direct

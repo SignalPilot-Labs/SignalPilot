@@ -1,0 +1,67 @@
+---
+sidebar_position: 2
+---
+
+# GitHub
+
+SignalPilot reads repositories through a GitHub App installation rather than a
+personal access token. That means access is granted per repository, is revocable
+from GitHub, and produces short-lived installation tokens the gateway mints on
+demand.
+
+Two things need it:
+
+- **dbt projects** imported into a [project](/docs/product/projects).
+- **Private eval sets** and private `project_repo` values — see
+  [Evals](/docs/evals/deploying#running-evals-on-cloud).
+
+Public repositories need no setup at all.
+
+## Connecting
+
+1. **Settings → GitHub → Connect GitHub.**
+2. Choose the organization or account to install into.
+3. Grant access to **only the repositories SignalPilot should read**. GitHub lets
+   you change this later; the gateway respects it immediately.
+4. You return to the settings page with the installation listed.
+
+You can install into more than one account — each installation appears
+separately, with its repositories underneath.
+
+## Linking a repository to a project
+
+From the installation, pick a repository and link it. That creates (or attaches
+to) a workspace project backed by that repo. **Unlink** detaches it; your GitHub
+repository is not modified.
+
+Sync and fetch actions pull the latest commit into the workspace.
+
+## How credentials are handled
+
+- The gateway exchanges the App's private key for an **installation token** with
+  a short lifetime, scoped to that installation.
+- The token is used gateway-side to clone. It is **never** handed to a sandbox:
+  eval and notebook pods receive a presigned tarball of the checked-out tree, so
+  a compromised sandbox has no path back to your repositories.
+- A repository your installation does not cover is refused with a clear error
+  rather than attempted anonymously.
+
+## Self-hosting
+
+Configure the App with `SP_GITHUB_APP_ID`, `SP_GITHUB_APP_CLIENT_ID`,
+`SP_GITHUB_APP_CLIENT_SECRET`, `SP_GITHUB_APP_PRIVATE_KEY`, and
+`SP_GITHUB_APP_SLUG`, plus `SP_WEB_URL` so the OAuth redirect returns to your web
+app. See [Configuration](/docs/setup/configuration#github-app).
+
+There is also a bot path — `SP_GITHUB_BOT_TOKEN`, `SP_GITHUB_WEBHOOK_SECRET`,
+`SP_GITHUB_BOT_CONNECTION` — used for webhook-driven automation. The webhook
+endpoint refuses requests with `503` until the webhook secret is set.
+
+## Troubleshooting
+
+| Symptom | Cause |
+|---------|-------|
+| No installations listed | The App is not installed, or not on this account. Use **Connect GitHub**. |
+| Repository missing from the list | The installation does not include it. Adjust repository access in GitHub. |
+| `?error=` banner after returning | The OAuth exchange failed — usually `SP_WEB_URL` not matching the App's callback URL. |
+| Eval or project clone refused | The repo is outside the installation, or the URL is not `https://github.com/…`. |

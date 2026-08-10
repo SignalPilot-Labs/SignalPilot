@@ -87,8 +87,8 @@ const config: Config = {
         alt: 'SignalPilot',
         src: 'img/logo-light.svg',
         srcDark: 'img/logo.svg',
-        width: 32,
-        height: 32,
+        width: 26,
+        height: 26,
       },
       items: [
         {
@@ -114,7 +114,7 @@ const config: Config = {
       ],
     },
     footer: {
-      style: 'light',
+      style: 'dark',
       links: [
         {
           title: 'Docs',
@@ -176,7 +176,7 @@ const config: Config = {
     },
     prism: {
       theme: prismThemes.github,
-      darkTheme: prismThemes.dracula,
+      darkTheme: prismThemes.vsDark,
       additionalLanguages: ['bash', 'json', 'sql', 'yaml', 'python', 'toml', 'ini'],
     },
   } satisfies Preset.ThemeConfig,

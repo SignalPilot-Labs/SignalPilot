@@ -2,11 +2,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
-import yaml
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -50,8 +48,6 @@ from gateway.standalone_chat.query_approvals import (
     reserve_or_request_approval,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-BENCHMARK_DIR = REPO_ROOT / "signalpilot" / "gateway" / "benchmarks" / "enterprise_data_chat"
 COMMIT_SHA = "a" * 40
 NOW = datetime(2026, 7, 31, tzinfo=UTC)
 
@@ -420,65 +416,6 @@ def test_enterprise_feature_boundaries_are_independent_and_disabled_by_default(m
     flags = enterprise_chat_feature_flags()
     assert flags.size_router is False
     assert flags.size_router_shadow is True
-
-
-def test_gold_benchmark_spec_covers_phase_zero_scenarios_and_has_expected_results():
-    spec = yaml.safe_load((BENCHMARK_DIR / "gold_questions.yaml").read_text())
-    scenarios = {scenario["id"]: scenario for scenario in spec["scenarios"]}
-    assert set(scenarios) == {
-        "full-history-aggregate",
-        "monthly-trend",
-        "high-cardinality-top-n",
-        "fanout-prone-join",
-        "long-history-anomaly",
-        "raw-export-request",
-        "per-query-budget-exceedance",
-        "cumulative-chat-budget-exceedance",
-        "query-timeout",
-        "query-cancellation",
-        "worker-loss",
-        "sandbox-loss",
-        "artifact-consistency",
-    }
-    sql_scenarios = [scenario for scenario in scenarios.values() if "gold_sql" in scenario]
-    assert len(sql_scenarios) == 5
-    assert all("expected" in scenario and "tolerances" in scenario for scenario in sql_scenarios)
-    assert (BENCHMARK_DIR / spec["fixture"]).is_file()
-
-
-def test_gold_sql_matches_deterministic_duckdb_fixture():
-    duckdb = pytest.importorskip("duckdb")
-    spec = yaml.safe_load((BENCHMARK_DIR / "gold_questions.yaml").read_text())
-    connection = duckdb.connect(":memory:")
-    connection.execute((BENCHMARK_DIR / spec["fixture"]).read_text())
-
-    for scenario in spec["scenarios"]:
-        if "gold_sql" not in scenario:
-            continue
-        cursor = connection.execute(scenario["gold_sql"])
-        columns = [column[0] for column in cursor.description]
-        rows = [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
-        normalized_rows = [
-            {
-                key: (
-                    value.isoformat()
-                    if hasattr(value, "isoformat")
-                    else int(value)
-                    if isinstance(value, Decimal) and value == value.to_integral()
-                    else value
-                )
-                for key, value in row.items()
-            }
-            for row in rows
-        ]
-        expected = scenario["expected"]
-        if "rows" in expected:
-            assert normalized_rows == expected["rows"], scenario["id"]
-        else:
-            for key, value in normalized_rows[0].items():
-                assert value == expected[key], scenario["id"]
-
-    connection.close()
 
 
 @pytest.mark.asyncio

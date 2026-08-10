@@ -121,7 +121,7 @@ Every `query_database` call from any stage follows the same governed path:
 ## Governance rules
 
 - **DDL/DML blocked**: No `CREATE`, `DROP`, `ALTER`, `INSERT`, `UPDATE`, `DELETE`
-- **Dangerous functions blocked**: 79+ functions across 7 SQL dialects (e.g. `pg_read_file`, `LOAD_FILE`, `xp_cmdshell`)
+- **Dangerous functions blocked**: 118+ functions across 10 SQL dialects (e.g. `pg_read_file`, `LOAD_FILE`, `xp_cmdshell`)
 - **LIMIT injection**: Every SELECT gets a configurable max row limit (default: 1000)
 - **INTO clause blocked**: Prevents `SELECT INTO` / `COPY TO` exfiltration
 - **Stacking prevented**: Multi-statement queries are rejected

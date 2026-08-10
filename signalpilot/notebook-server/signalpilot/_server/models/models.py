@@ -31,7 +31,7 @@ from signalpilot._runtime.commands import (
     UpdateUserConfigCommand,
     ValidateSQLCommand,
 )
-from signalpilot._types.ids import CellId_t, UIElementId
+from signalpilot._types.ids import CellId_t, SessionId, UIElementId
 
 
 class ListSecretKeysRequest(ListSecretKeysCommand, tag=False):
@@ -209,6 +209,10 @@ class UpdateUIElementValuesRequest(msgspec.Struct, rename="camel"):
         )
 
 
+class TakeoverRequest(msgspec.Struct, rename="camel"):
+    session_id: SessionId
+
+
 class InstantiateNotebookRequest(UpdateUIElementValuesRequest):
     auto_run: bool = True
     # Optional: cell codes to use instead of the codes from the file.
@@ -325,5 +329,3 @@ class SaveUserConfigurationRequest(msgspec.Struct, rename="camel"):
 
 class StdinRequest(msgspec.Struct, rename="camel"):
     text: str
-
-

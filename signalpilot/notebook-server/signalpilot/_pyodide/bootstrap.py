@@ -31,7 +31,10 @@ if TYPE_CHECKING:
 
     from signalpilot._config.config import SpConfig
     from signalpilot._messaging.types import KernelMessage
-    from signalpilot._pyodide.pyodide_session import PyodideBridge, PyodideSession
+    from signalpilot._pyodide.pyodide_session import (
+        PyodideBridge,
+        PyodideSession,
+    )
 
 
 def instantiate(
@@ -119,6 +122,7 @@ def create_session(
     write_kernel_message(
         serialize_kernel_message(
             KernelReadyNotification(
+                file_key=filename,
                 codes=tuple(app.cell_manager.codes()),
                 names=tuple(app.cell_manager.names()),
                 configs=tuple(app.cell_manager.configs()),
@@ -135,7 +139,10 @@ def create_session(
         ),
     )
 
-    from signalpilot._pyodide.pyodide_session import PyodideBridge, PyodideSession
+    from signalpilot._pyodide.pyodide_session import (
+        PyodideBridge,
+        PyodideSession,
+    )
 
     session = PyodideSession(
         app_file_manager,

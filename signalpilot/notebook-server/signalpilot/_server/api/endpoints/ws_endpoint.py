@@ -4,7 +4,7 @@ import asyncio
 import sys
 from typing import TYPE_CHECKING, Any
 
-from starlette.websockets import WebSocket, WebSocketState
+from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketState
 
 from signalpilot import _loggers
 from signalpilot._cli.upgrade import check_for_updates
@@ -14,6 +14,7 @@ from signalpilot._dependencies.dependencies import DependencyManager
 from signalpilot._messaging.notification import (
     AlertNotification,
     BannerNotification,
+    DataSourceConnectionsNotification,
     KernelStartupErrorNotification,
     NotificationMessage,
     ReconnectedNotification,
@@ -22,6 +23,9 @@ from signalpilot._messaging.serde import serialize_kernel_message
 from signalpilot._messaging.types import KernelMessage
 from signalpilot._plugins.core.web_component import JSONType
 from signalpilot._server.api.deps import AppState
+from signalpilot._server.api.endpoints.ws.ws_connection_policy import (
+    is_exact_session_reattach,
+)
 from signalpilot._server.api.endpoints.ws.ws_connection_validator import (
     ConnectionParams,
     WebSocketConnectionValidator,
@@ -187,6 +191,7 @@ class WebSocketHandler(SessionConsumer):
         # to be sent to the frontend
         self.message_queue: asyncio.Queue[KernelMessage]
         self.ws_future: asyncio.Task[None] | None = None
+        self._gateway_connections_task: asyncio.Task[None] | None = None
         self._consumer_id = ConsumerId(params.session_id)
 
     @property
@@ -432,6 +437,9 @@ class WebSocketHandler(SessionConsumer):
             print(f"[WS START] KernelStartupError: {e}", flush=True)
             await self._close_kernel_startup_error(str(e))
             return
+        except WebSocketDisconnect as e:
+            await self._safe_close(e.code, e.reason or "SP_SESSION_CLOSED")
+            return
         except Exception as e:
             print(f"[WS START] connect FAILED: {type(e).__name__}: {e}", flush=True)
             import traceback
@@ -449,6 +457,10 @@ class WebSocketHandler(SessionConsumer):
         if hasattr(session, "retry_deferred_extensions"):
             session.retry_deferred_extensions()
 
+        self._gateway_connections_task = asyncio.create_task(
+            self._load_gateway_connections(session)
+        )
+
         # Start message loops
         message_loop = WebSocketMessageLoop(
             websocket=self.websocket,
@@ -463,6 +475,40 @@ class WebSocketHandler(SessionConsumer):
             await self.ws_future
         except asyncio.CancelledError:
             LOGGER.debug("Websocket terminated with CancelledError")
+        finally:
+            if (
+                self._gateway_connections_task is not None
+                and not self._gateway_connections_task.done()
+            ):
+                self._gateway_connections_task.cancel()
+
+    async def _load_gateway_connections(self, session: Session) -> None:
+        """Publish gateway connection metadata without delaying kernel startup."""
+        try:
+            from signalpilot._gateway import get_gateway_client
+            from signalpilot._gateway.adapters import (
+                gateway_connections_to_datasources,
+            )
+
+            client = get_gateway_client()
+            if client is None:
+                return
+
+            connections = await asyncio.to_thread(client.list_connections)
+            if not connections:
+                return
+
+            session.notify(
+                DataSourceConnectionsNotification(
+                    connections=gateway_connections_to_datasources(connections)
+                ),
+                from_consumer_id=None,
+            )
+        except Exception:
+            LOGGER.warning(
+                "Failed to load gateway connection metadata",
+                exc_info=True,
+            )
 
     def _can_connect(self) -> bool:
         """Check if this connection is allowed.
@@ -471,6 +517,13 @@ class WebSocketHandler(SessionConsumer):
         development may opt into distinct concurrent kernel sessions because
         every browser/account is intentionally routed through one server.
         """
+        if is_exact_session_reattach(
+            self.manager,
+            self.params.session_id,
+            self.params.file_key,
+        ):
+            return True
+
         if (
             self.manager.mode == SessionMode.EDIT
             and should_reject_edit_connection(

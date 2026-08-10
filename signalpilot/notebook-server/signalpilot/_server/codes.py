@@ -9,3 +9,4 @@ class WebSocketCodes(IntEnum):
     FORBIDDEN = 1008
     UNAUTHORIZED = 3000
     UNEXPECTED_ERROR = 1011
+    TRY_AGAIN_LATER = 1013

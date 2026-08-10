@@ -147,10 +147,8 @@ class SessionView:
         self.cell_notifications: dict[CellId_t, CellNotification] = {}
         # The most recent datasets notification.
         self.datasets = DatasetsNotification(tables=[])
-        # The most recent data-connectors notification — pre-populated from gateway
-        self.data_connectors = DataSourceConnectionsNotification(
-            connections=self._load_gateway_connections()
-        )
+        # The most recent data source connections notification.
+        self.data_connectors = DataSourceConnectionsNotification(connections=[])
         # The most recent external storage namespaces notification
         self.external_storage_namespaces = StorageNamespacesNotification(
             namespaces=[]
@@ -189,34 +187,6 @@ class SessionView:
 
         # Auto-saving
         self.auto_export_state = AutoExportState()
-
-    @staticmethod
-    def _load_gateway_connections() -> list:
-        """Pre-fetch connections from SignalPilot Gateway at session init."""
-        try:
-            from signalpilot._gateway import get_gateway_client
-            from signalpilot._gateway.adapters import gateway_connection_to_datasource
-
-            client = get_gateway_client()
-            if client is None:
-                return []
-
-            connections = client.list_connections()
-            if not connections:
-                return []
-
-            result = []
-            for conn in connections:
-                conn_name = conn.get("name", "")
-                try:
-                    schema_data = client.get_schema(conn_name)
-                    ds = gateway_connection_to_datasource(conn, schema_data)
-                except Exception:
-                    ds = gateway_connection_to_datasource(conn)
-                result.append(ds)
-            return result
-        except Exception:
-            return []
 
     def _add_ui_value(self, name: str, value: Any) -> None:
         self.ui_values[name] = value

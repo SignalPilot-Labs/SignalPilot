@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -16,6 +17,7 @@ from signalpilot._server.api.endpoints.ws.analysis_trails import (
     is_generated_analysis_trail_notebook,
 )
 from signalpilot._server.codes import WebSocketCodes
+from signalpilot._server.files.project_paths import resolve_project_file
 from signalpilot._server.workspace import NEW_FILE, SpFileKey
 from signalpilot._types.ids import SessionId
 
@@ -93,17 +95,37 @@ class WebSocketConnectionValidator:
         project_id = self.app_state.query_params("project")
         branch = self.app_state.query_params("branch") or "main"
         directory = self.app_state.session_manager.workspace.directory
-        if project_id:
-            try:
-                from signalpilot._server.files.project_sync import (
-                    local_project_dir,
-                )
+        if (
+            project_id
+            and file_key
+            and not file_key.startswith(NEW_FILE)
+            and not Path(file_key).is_absolute()
+        ):
+            from signalpilot._server.files.project_sync import (
+                local_project_dir,
+            )
 
-                local_dir = local_project_dir(project_id, branch)
-                if local_dir.exists():
-                    directory = str(local_dir)
-            except Exception:
-                pass
+            # A project-relative request is only answerable once the project is
+            # on disk. Closing with TRY_AGAIN_LATER lets the client retry rather
+            # than silently falling back to the workspace directory, where the
+            # file key would resolve against the wrong tree.
+            local_dir = local_project_dir(project_id, branch)
+            if not local_dir.is_dir():
+                await self.websocket.close(
+                    WebSocketCodes.TRY_AGAIN_LATER,
+                    "SP_PROJECT_NOT_READY",
+                )
+                return None
+            directory = str(local_dir)
+
+            resolved_file = resolve_project_file(local_dir, file_key)
+            if resolved_file is None:
+                await self.websocket.close(
+                    WebSocketCodes.NORMAL_CLOSE,
+                    "SP_FILE_NOT_FOUND",
+                )
+                return None
+            file_key = resolved_file
 
         if not file_key.startswith(NEW_FILE):
             try:

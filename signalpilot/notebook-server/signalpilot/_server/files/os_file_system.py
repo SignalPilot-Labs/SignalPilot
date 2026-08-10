@@ -16,6 +16,7 @@ from signalpilot._server.files.file_system import FileSystem
 from signalpilot._server.models.files import FileDetailsResponse, FileInfo
 from signalpilot._session.notebook.file_manager import AppFileManager
 from signalpilot._utils.files import natural_sort
+from signalpilot._utils.http import HTTPException, HTTPStatus
 
 LOGGER = _loggers.sp_logger()
 
@@ -43,7 +44,31 @@ class OSFileSystem(FileSystem):
     def get_root(self) -> str:
         return self._root or os.getcwd()
 
+    def _resolve_path(self, path: str | Path) -> Path:
+        candidate = Path(path)
+        if self._root is None:
+            return candidate
+
+        try:
+            root = Path(self._root).resolve(strict=False)
+            if not candidate.is_absolute():
+                candidate = root / candidate
+            resolved = candidate.resolve(strict=False)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="Invalid path",
+            ) from exc
+
+        if not resolved.is_relative_to(root):
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="Invalid path: outside the filesystem root",
+            )
+        return resolved
+
     def list_files(self, path: str) -> list[FileInfo]:
+        path = str(self._resolve_path(path))
         files: list[FileInfo] = []
         folders: list[FileInfo] = []
         try:
@@ -80,6 +105,7 @@ class OSFileSystem(FileSystem):
         )
 
     def _get_file_info(self, path: str) -> FileInfo:
+        path = str(self._resolve_path(path))
         stat = os.stat(path)
         is_directory = os.path.isdir(path)
         return FileInfo(
@@ -129,7 +155,7 @@ class OSFileSystem(FileSystem):
         return is_sp_app(path)
 
     def open_file(self, path: str, encoding: str | None = None) -> str | bytes:
-        file_path = Path(path)
+        file_path = self._resolve_path(path)
         try:
             return file_path.read_text(encoding=encoding or "utf-8")
         except UnicodeDecodeError:
@@ -162,7 +188,8 @@ class OSFileSystem(FileSystem):
                 "or refer to a parent directory"
             )
 
-        full_path = Path(path) / name
+        full_path = self._resolve_path(path) / name
+        full_path = self._resolve_path(full_path)
         full_path = _generate_unique_path(full_path)
 
         if file_type == "directory":
@@ -195,6 +222,7 @@ class OSFileSystem(FileSystem):
         ).file
 
     def delete_file_or_directory(self, path: str) -> bool:
+        path = str(self._resolve_path(path))
         if os.path.isdir(path):
             safe_rmtree(path)
         else:
@@ -202,6 +230,8 @@ class OSFileSystem(FileSystem):
         return True
 
     def copy_file_or_directory(self, path: str, new_path: str) -> FileInfo:
+        path = str(self._resolve_path(path))
+        new_path = str(self._resolve_path(new_path))
         new_path = str(_generate_unique_path(new_path))
         if not _is_allowed_paths(path, new_path):
             raise ValueError(f"Cannot copy to {new_path}")
@@ -212,6 +242,8 @@ class OSFileSystem(FileSystem):
         return self.get_details(new_path).file
 
     def move_file_or_directory(self, path: str, new_path: str) -> FileInfo:
+        path = str(self._resolve_path(path))
+        new_path = str(self._resolve_path(new_path))
         if not _is_allowed_paths(path, new_path):
             raise ValueError(f"Cannot rename to {new_path}")
         # Disallow moving to an existing path
@@ -221,9 +253,9 @@ class OSFileSystem(FileSystem):
         return self.get_details(new_path).file
 
     def update_file(self, path: str, contents: str) -> FileInfo:
-        file_path = Path(path)
+        file_path = self._resolve_path(path)
         file_path.write_text(contents, encoding="utf-8")
-        return self.get_details(path, contents=contents).file
+        return self.get_details(str(file_path), contents=contents).file
 
     def search(
         self,
@@ -239,7 +271,9 @@ class OSFileSystem(FileSystem):
         if not query.strip():
             return []
 
-        search_path = path if path is not None else self.get_root()
+        search_path = str(
+            self._resolve_path(path if path is not None else self.get_root())
+        )
         if not os.path.exists(search_path):
             return []
 

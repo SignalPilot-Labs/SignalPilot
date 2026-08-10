@@ -4,14 +4,13 @@ from __future__ import annotations
 from typing import Any
 
 from signalpilot._data.models import (
+    Database,
     DataSourceConnection,
     DataTable,
     DataTableColumn,
     DataType,
-    Database,
     Schema,
 )
-
 
 _TYPE_MAP: dict[str, DataType] = {
     "bigint": "integer",
@@ -147,7 +146,7 @@ def gateway_schema_to_database(
     db_type = connection.get("db_type", schema_response.get("db_type", "unknown"))
     dialect = _DIALECT_MAP.get(db_type, db_type)
     conn_name = connection.get("name", schema_response.get("connection_name", ""))
-    db_name = connection.get("database", conn_name)
+    db_name = connection.get("database") or conn_name
 
     tables_dict = schema_response.get("tables", schema_response)
     if not isinstance(tables_dict, dict):
@@ -217,7 +216,7 @@ def gateway_connection_to_datasource(
     if schema_response:
         databases = [gateway_schema_to_database(schema_response, connection)]
     else:
-        db_name = connection.get("database", conn_name)
+        db_name = connection.get("database") or conn_name
         databases = [
             Database(
                 name=db_name,

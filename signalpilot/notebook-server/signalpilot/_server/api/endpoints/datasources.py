@@ -34,9 +34,12 @@ async def gateway_connections(*, request: Request) -> Response:
     Does NOT require an active notebook session — works at any time.
     Returns the same connection format the kernel broadcasts after first cell run.
     """
+    del request
     try:
         from signalpilot._gateway import get_gateway_client
-        from signalpilot._gateway.adapters import gateway_connection_to_datasource
+        from signalpilot._gateway.adapters import (
+            gateway_connections_to_datasources,
+        )
 
         client = get_gateway_client()
         if client is None:
@@ -46,15 +49,7 @@ async def gateway_connections(*, request: Request) -> Response:
             )
 
         connections = client.list_connections()
-        datasources = []
-        for conn in connections:
-            conn_name = conn.get("name", "")
-            try:
-                schema_data = client.get_schema(conn_name)
-                ds = gateway_connection_to_datasource(conn, schema_data)
-            except Exception:
-                ds = gateway_connection_to_datasource(conn)
-            datasources.append(ds)
+        datasources = gateway_connections_to_datasources(connections)
 
         import msgspec
         return Response(

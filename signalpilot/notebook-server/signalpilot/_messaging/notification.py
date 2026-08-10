@@ -304,6 +304,7 @@ class KernelReadyNotification(Notification, tag="kernel-ready"):
     """
 
     name: ClassVar[str] = "kernel-ready"
+    file_key: str
     cell_ids: tuple[CellId_t, ...]
     codes: tuple[str, ...]
     names: tuple[str, ...]

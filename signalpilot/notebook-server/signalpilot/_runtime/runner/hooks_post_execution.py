@@ -523,7 +523,7 @@ def broadcast_gateway_connections(
     ctx: PostExecutionHookContext,
     run_result: cell_runner.RunResult,
 ) -> None:
-    """Broadcast database connections from SignalPilot Gateway with pre-fetched schemas."""
+    """Broadcast SignalPilot Gateway connection metadata."""
     global _gateway_connections_broadcasted
     if _gateway_connections_broadcasted:
         return
@@ -535,7 +535,9 @@ def broadcast_gateway_connections(
 
     try:
         from signalpilot._gateway import get_gateway_client
-        from signalpilot._gateway.adapters import gateway_connection_to_datasource
+        from signalpilot._gateway.adapters import (
+            gateway_connections_to_datasources,
+        )
 
         client = get_gateway_client()
         if client is None:
@@ -547,24 +549,8 @@ def broadcast_gateway_connections(
             _gateway_connections_broadcasted = True
             return
 
-        datasources = []
-        for conn in connections:
-            conn_name = conn.get("name", "")
-            try:
-                schema_data = client.get_schema(conn_name)
-                ds = gateway_connection_to_datasource(conn, schema_data)
-            except Exception:
-                LOGGER.debug(
-                    "Failed to pre-fetch schema for %s, using empty shell",
-                    conn_name,
-                    exc_info=True,
-                )
-                ds = gateway_connection_to_datasource(conn)
-            datasources.append(ds)
-
-        LOGGER.debug(
-            "Broadcasting %d gateway connections (with schemas)", len(datasources)
-        )
+        datasources = gateway_connections_to_datasources(connections)
+        LOGGER.debug("Broadcasting %d gateway connections", len(datasources))
         broadcast_notification(
             DataSourceConnectionsNotification(connections=datasources)
         )

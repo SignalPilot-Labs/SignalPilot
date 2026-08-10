@@ -58,12 +58,32 @@ class SessionConnector:
         if self.params.kiosk:
             return self._connect_kiosk()
 
-        # 2. Reconnect to existing session with same ID
+        # 2. If raw file, convert to __new__ key so we get an empty session
+        raw_extensions = {".sql", ".yml", ".yaml", ".toml", ".txt", ".csv", ".json"}
+        from pathlib import Path as _Path
+        file_ext = _Path(self.params.file_key).suffix.lower() if self.params.file_key else ""
+        if file_ext in raw_extensions:
+            from signalpilot._server.workspace import NEW_FILE
+            self.params = ConnectionParams(
+                session_id=self.params.session_id,
+                file_key=f"{NEW_FILE}raw",
+                kiosk=self.params.kiosk,
+                auto_instantiate=self.params.auto_instantiate,
+                rtc_enabled=self.params.rtc_enabled,
+            )
+
+        with self.manager.session_connection_lock(self.params.file_key):
+            return self._connect_locked()
+
+    def _connect_locked(self) -> tuple[Session, ConnectionType]:
+        """Select or create a session while holding the file connection lock."""
+
+        # 3. Reconnect to existing session with same ID
         existing_by_id = self.manager.get_session(self.params.session_id)
         if existing_by_id is not None:
             return self._reconnect_session(existing_by_id)
 
-        # 3. Connect to existing session (RTC mode)
+        # 4. Connect to existing session (RTC mode)
         existing_by_file = self.manager.get_session_by_file_key(
             self.params.file_key
         )
@@ -74,14 +94,24 @@ class SessionConnector:
         ):
             return self._connect_rtc_session(existing_by_file)
 
-        # 4. Resume previous session
+        if (
+            existing_by_file is not None
+            and self.manager.mode == SessionMode.EDIT
+            and existing_by_file.connection_state() == ConnectionState.OPEN
+        ):
+            raise WebSocketDisconnect(
+                WebSocketCodes.ALREADY_CONNECTED,
+                "SP_ALREADY_CONNECTED",
+            )
+
+        # 5. Resume previous session
         resumable = self.manager.maybe_resume_session(
             self.params.session_id, self.params.file_key
         )
         if resumable is not None:
             return self._resume_session(resumable)
 
-        # 5. Create new session
+        # 6. Create new session
         print("[CONNECTOR] no existing session found, creating new", flush=True)
         return self._create_new_session()
 
@@ -166,7 +196,7 @@ class SessionConnector:
         print(f"[CONNECTOR] _create_new_session: file_key={self.params.file_key}", flush=True)
 
         query_params = self._extract_query_params()
-        print(f"[CONNECTOR] calling manager.create_session...", flush=True)
+        print("[CONNECTOR] calling manager.create_session...", flush=True)
 
         new_session = self.manager.create_session(
             query_params=query_params.to_dict(),

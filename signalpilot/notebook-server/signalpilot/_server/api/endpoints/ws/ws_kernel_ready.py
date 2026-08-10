@@ -73,6 +73,7 @@ def build_kernel_ready(
         _try_init_rtc_doc(cell_ids, codes, file_key, doc_manager)
 
     return KernelReadyNotification(
+        file_key=str(file_key),
         codes=codes,
         names=names,
         configs=configs,

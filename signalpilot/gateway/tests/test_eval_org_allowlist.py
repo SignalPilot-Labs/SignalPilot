@@ -330,27 +330,33 @@ class TestEmptyAllowlist:
 
 
 class TestAvailabilityEndpoint:
-    def test_non_staff_cannot_probe_it(self) -> None:
+    def test_a_caller_outside_the_allowlist_is_told_so(self) -> None:
         with _client(OTHER_ORG, user_id="some-tenant-user") as client:
             resp = client.get(AVAILABILITY)
-        assert resp.status_code == 403
-        assert resp.json() == {"detail": "Platform staff access required"}
+        assert resp.status_code == 200
+        assert resp.json() == {"enabled": False, "reason": "not_enabled_for_org"}
 
     def test_refusal_leaks_no_org_id_or_allowlist(self) -> None:
         with _client(OTHER_ORG, user_id="some-tenant-user") as client:
             body = client.get(AVAILABILITY).text
             assert ALLOWED_ORG not in body
             assert OTHER_ORG not in body
-            assert set(client.get(AVAILABILITY).json()) == {"detail"}
+            assert set(client.get(AVAILABILITY).json()) == {"enabled", "reason"}
 
-    def test_org_admin_without_staff_membership_is_refused(self) -> None:
-        """An organization role never substitutes for platform staff membership."""
+    def test_any_member_of_an_allowlisted_org_is_enabled(self) -> None:
+        """Membership is the whole boundary; no staff membership is consulted."""
         with _client(ALLOWED_ORG, user_id="tenant-org-admin") as client:
-            assert client.get(AVAILABILITY).status_code == 403
+            assert client.get(AVAILABILITY).json() == {"enabled": True, "reason": "ok"}
 
-    def test_staff_in_an_allowlisted_org_is_enabled(self) -> None:
-        """The probe must agree with EVAL_GUARDS."""
-        with _client(ALLOWED_ORG, user_id=STAFF_USER) as client:
+    def test_availability_matches_the_gates_it_advertises(self) -> None:
+        """The probe must agree with EVAL_GUARDS.
+
+        Regression: the staff gate was dropped from EVAL_GUARDS but left on this
+        probe, so with SP_ADMIN_USER_IDS unset (the cloud default) every caller
+        was told "not_staff" and the page rendered its setup card for an org
+        whose eval routes would in fact have admitted it.
+        """
+        with _client(ALLOWED_ORG, user_id="nobody-special") as client:
             assert client.get(AVAILABILITY).json()["enabled"] is True
             assert client.get("/api/evals/config").status_code != 403
 
@@ -384,21 +390,20 @@ class TestConnectionPinRequired:
         assert "does not exist" in response.json()["detail"]
 
 
-class TestStaffAndOrgAreBothBoundaries:
-    """A caller must be both platform staff and in an allowlisted workspace."""
+class TestTheOrgAllowlistIsTheBoundary:
+    """Workspace membership decides access; staff membership is not consulted."""
 
-    def test_plain_member_of_an_allowlisted_org_is_refused(
+    def test_plain_member_of_an_allowlisted_org_is_admitted(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # No staff membership configured anywhere.
+        # No staff membership configured anywhere, which is the cloud default.
         monkeypatch.delenv("SP_ADMIN_USER_IDS", raising=False)
         get_governance_settings.cache_clear()
         with _client(ALLOWED_ORG, user_id="user_plain_member") as client:
             response = client.get("/api/evals/config")
-        assert response.status_code == 403
-        assert response.json()["detail"] == "Platform staff access required"
+        assert response.status_code != 403
 
-    def test_staff_member_of_another_org_is_still_refused(self) -> None:
+    def test_member_of_another_org_is_still_refused(self) -> None:
         with _client("org_someone_else", user_id=STAFF_USER) as client:
             r = client.get("/api/evals/config")
         assert r.status_code == 403

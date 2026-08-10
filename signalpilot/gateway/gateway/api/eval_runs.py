@@ -23,7 +23,7 @@ from ..config.evals import get_eval_run_settings
 from ..evals import runner, sandboxes
 from ..evals.object_store import EvidenceStoreDisabled, get_object_store
 from ..security.scope_guard import RequireScope
-from .deps import RequirePlatformStaff, StoreD
+from .deps import StoreD
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +50,14 @@ RequireAllowedOrg = Depends(_require_allowed_org)
 # EVIDENCE permits access to transcripts, captures, artifacts, and exports.
 # This evidence can contain warehouse data and agent output.
 # EXECUTE permits operations that incur costs, change configuration, or select a repository.
-EVAL_GUARDS = [RequireScope("read"), RequirePlatformStaff, RequireAllowedOrg]
-EVAL_EVIDENCE_GUARDS = [RequireScope("query"), RequirePlatformStaff, RequireAllowedOrg]
-EVAL_EXECUTE_GUARDS = [RequireScope("admin"), RequirePlatformStaff, RequireAllowedOrg]
+#
+# Org membership is the tenancy boundary; platform staff membership is not
+# consulted. SP_ADMIN_USER_IDS is unset in cloud, so a staff gate here refuses
+# every caller and the page renders its setup card for orgs the allowlist would
+# in fact admit. RequireAllowedOrg is the gate that carries the access decision.
+EVAL_GUARDS = [RequireScope("read"), RequireAllowedOrg]
+EVAL_EVIDENCE_GUARDS = [RequireScope("query"), RequireAllowedOrg]
+EVAL_EXECUTE_GUARDS = [RequireScope("admin"), RequireAllowedOrg]
 
 # In-process registry so a second trigger doesn't stack runs unboundedly.
 _active_tasks: dict[str, asyncio.Task] = {}
@@ -103,11 +108,13 @@ class EvalRunRequest(BaseModel):
     task_ids: list[str] | None = Field(None, max_length=200)
 
 
-@router.get("/evals/availability", dependencies=[RequireScope("read"), RequirePlatformStaff])
+@router.get("/evals/availability", dependencies=[RequireScope("read")])
 async def get_eval_availability(store: StoreD):
     """Return whether the caller can use evaluations.
 
-    This route does not report access for other callers.
+    This route does not report access for other callers. It must agree with
+    EVAL_GUARDS: a probe stricter than the routes tells a caller it is shut out
+    of a feature those routes would have admitted it to.
     """
     if not get_eval_run_settings().org_allowed(store.org_id):
         return {"enabled": False, "reason": "not_enabled_for_org"}

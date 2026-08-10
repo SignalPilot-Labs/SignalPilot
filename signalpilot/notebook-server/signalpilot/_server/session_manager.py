@@ -23,6 +23,7 @@ from signalpilot._server.lsp import LspServer
 from signalpilot._server.recents import RecentFilesManager
 from signalpilot._server.resume_strategies import create_resume_strategy
 from signalpilot._server.session.listeners import RecentsTrackerListener
+from signalpilot._server.session_locks import SessionConnectionLocks
 from signalpilot._server.token_manager import TokenManager
 from signalpilot._server.tokens import AuthToken, SkewProtectionToken
 from signalpilot._server.workspace import (
@@ -51,6 +52,7 @@ from signalpilot._utils.file_watcher import FileWatcherManager
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Coroutine, Mapping
+    from contextlib import AbstractContextManager
 
     from signalpilot._session.notebook import AppFileManager
 
@@ -108,6 +110,7 @@ class SessionManager:
             )
 
         self._repository = SessionRepository()
+        self._session_connection_locks = SessionConnectionLocks()
 
         def _get_code() -> str:
             defaults = AppDefaults.from_config_manager(config_manager)
@@ -165,6 +168,12 @@ class SessionManager:
             self.workspace.register_allowed_path(key)
         return self.workspace.load(key, defaults)
 
+    def session_connection_lock(
+        self, file_key: SpFileKey
+    ) -> AbstractContextManager[None]:
+        """Serialize session selection and creation for one notebook file."""
+        return self._session_connection_locks.hold(file_key)
+
     def create_session(
         self,
         session_id: SessionId,
@@ -179,7 +188,7 @@ class SessionManager:
         # Check if session already exists
         existing = self._repository.get_sync(session_id)
         if existing:
-            print(f"[SESSION MGR] returning existing session", flush=True)
+            print("[SESSION MGR] returning existing session", flush=True)
             return existing
 
         # Get app file manager

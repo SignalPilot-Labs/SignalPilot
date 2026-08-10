@@ -16,7 +16,10 @@ from signalpilot._server.api.endpoints.ws.ws_connection_validator import (
     FILE_QUERY_PARAM_KEY,
 )
 from signalpilot._server.api.endpoints.ws_endpoint import DOC_MANAGER
-from signalpilot._server.api.utils import dispatch_control_request, parse_request
+from signalpilot._server.api.utils import (
+    dispatch_control_request,
+    parse_request,
+)
 from signalpilot._server.models.models import (
     BaseResponse,
     DebugCellRequest,
@@ -26,6 +29,7 @@ from signalpilot._server.models.models import (
     InvokeFunctionRequest,
     ModelRequest,
     SuccessResponse,
+    TakeoverRequest,
     UpdateUIElementValuesRequest,
 )
 from signalpilot._server.router import APIRouter
@@ -500,9 +504,15 @@ async def takeover_endpoint(
           schema:
             type: string
           required: true
+    requestBody:
+        required: true
+        content:
+            application/json:
+                schema:
+                    $ref: "#/components/schemas/TakeoverRequest"
     responses:
         200:
-            description: Successfully closed existing sessions
+            description: Successfully disconnected the target session
             content:
                 application/json:
                     schema:
@@ -510,38 +520,28 @@ async def takeover_endpoint(
                         properties:
                             status:
                                 type: string
+        404:
+            description: Target session not found
     """
     app_state = AppState(request)
 
-    file_key: SpFileKey | None = (
-        app_state.query_params(FILE_QUERY_PARAM_KEY)
-        or app_state.session_manager.workspace.get_unique_file_key()
-    )
-    if file_key is None:
-        LOGGER.error("No file key provided")
+    body = await parse_request(request, cls=TakeoverRequest)
+    existing_session = app_state.session_manager.get_session(body.session_id)
+    if existing_session is None:
         return JSONResponse(
-            status_code=400,
-            content={"error": "Cannot take over session."},
+            status_code=404,
+            content={"error": "Session not found."},
         )
 
-    # Find and close any existing sessions for this file
-    existing_session = app_state.session_manager.get_session_by_file_key(
-        file_key
+    existing_session.notify(
+        AlertNotification(
+            title="Session taken over",
+            description="Another user has taken over this session.",
+            variant="danger",
+        ),
+        from_consumer_id=None,
     )
-    if existing_session is not None:
-        # Send a disconnect message to the client
-        existing_session.notify(
-            AlertNotification(
-                title="Session taken over",
-                description="Another user has taken over this session.",
-                variant="danger",
-            ),
-            from_consumer_id=None,
-        )
-        # Wait 100ms to ensure the client has received the message
-        await asyncio.sleep(0.1)
-        existing_session.disconnect_main_consumer()
-    else:
-        LOGGER.warning("No existing session found for file key %s", file_key)
+    await asyncio.sleep(0.1)
+    existing_session.disconnect_main_consumer()
 
     return JSONResponse(status_code=200, content={"status": "ok"})

@@ -34,6 +34,12 @@ MAX_PYTHON_SOURCE_CHARS = 12_000
 @dataclass
 class StandaloneArtifactCollector:
     artifacts: list[dict[str, Any]] = field(default_factory=list)
+    report_proposal: dict[str, Any] | None = None
+    report_catalog_revision: str | None = None
+    next_report_catalog_cursor: str | None = None
+    report_catalog_scan_complete: bool = False
+    proactive_creation_allowed: bool = False
+    loaded_report_ids: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -52,6 +58,31 @@ def _clean_metadata(arguments: dict[str, Any]) -> dict[str, Any]:
         "provenance": dict(arguments.get("provenance") or {}),
         "parent_artifact_id": arguments.get("parent_artifact_id"),
     }
+
+
+def _collected_artifact_is_complete(artifact: dict[str, Any]) -> bool:
+    payload = (
+        artifact.get("payload")
+        if isinstance(artifact.get("payload"), dict)
+        else {}
+    )
+    if artifact.get("kind") == "report":
+        references = (artifact.get("provenance") or {}).get(
+            "result_references"
+        ) or []
+        return bool(str(payload.get("html") or "").strip()) and all(
+            not isinstance(reference, dict)
+            or reference.get("completeness") == "complete"
+            for reference in references
+        )
+    source = (
+        payload.get("source") if artifact.get("kind") == "chart" else payload
+    )
+    return (
+        isinstance(source, dict)
+        and source.get("truncated") is not True
+        and source.get("completeness") in {None, "complete"}
+    )
 
 
 def _render_chart_png(
@@ -472,6 +503,13 @@ def build_standalone_chat_mcp_server(
     runtime_redactions: tuple[str, ...] = (),
     notebook_starter: Callable[[Any, dict[str, Any]], list[Any]] | None = None,
     notebook_session_resolver: Callable[[str], Any] | None = None,
+    report_catalog_loader: Callable[[str | None], Awaitable[dict[str, Any]]]
+    | None = None,
+    report_context_loader: Callable[[str], Awaitable[dict[str, Any]]]
+    | None = None,
+    published_artifact_checker: Callable[[str, str], Awaitable[dict[str, Any]]]
+    | None = None,
+    attached_report_id: str | None = None,
 ) -> Any:
     """Build the isolated artifact publication server used by one run."""
     from claude_agent_sdk import McpSdkServerConfig
@@ -509,7 +547,10 @@ def build_standalone_chat_mcp_server(
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string", "enum": ["parse", "ls", "compile"]},
+                    "command": {
+                        "type": "string",
+                        "enum": ["parse", "ls", "compile"],
+                    },
                     "select": {"type": ["string", "null"], "maxLength": 500},
                 },
                 "required": ["command"],
@@ -572,10 +613,70 @@ def build_standalone_chat_mcp_server(
                 "properties": {
                     **common_properties,
                     "html": {"type": "string"},
-                    "result_ids": {"type": "array", "items": {"type": "string"}},
-                    "artifact_references": {"type": "array", "items": {"type": "string"}},
+                    "result_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "artifact_references": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
                 },
                 "required": ["filename", "html"],
+            },
+        ),
+        Tool(
+            name="list_saved_report_catalog",
+            description=(
+                "List one 50-report page of compact saved-report semantic cards for this run's owner and project. "
+                "Start without a cursor, then call every returned next_cursor before proposing a new report."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {"cursor": {"type": ["string", "null"]}},
+            },
+        ),
+        Tool(
+            name="load_report_context",
+            description=(
+                "Load prompts, version lineage, output shape, governed SQL purposes, freshness, assumptions, "
+                "and caveats for a report selected from the catalog. Historical SQL is context only."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {"report_id": {"type": "string"}},
+                "required": ["report_id"],
+            },
+        ),
+        Tool(
+            name="propose_report_action",
+            description=(
+                "Store the single report action proposed for this completed run. Use open for exact saved content, "
+                "update for a semantically equivalent report, and create only after scanning every catalog page."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["create", "update", "open"],
+                    },
+                    "artifact_kind": {
+                        "type": "string",
+                        "enum": ["table", "chart", "report"],
+                    },
+                    "artifact_filename": {"type": "string"},
+                    "title": {"type": "string", "maxLength": 200},
+                    "reason": {"type": "string", "maxLength": 2000},
+                    "existing_report_id": {"type": ["string", "null"]},
+                },
+                "required": [
+                    "action",
+                    "artifact_kind",
+                    "artifact_filename",
+                    "title",
+                    "reason",
+                ],
             },
         ),
     ]
@@ -589,6 +690,143 @@ def build_standalone_chat_mcp_server(
         name: str, arguments: dict[str, Any]
     ) -> list[TextContent]:
         try:
+            if name == "list_saved_report_catalog":
+                if report_catalog_loader is None:
+                    raise ValueError("The saved report catalog is unavailable")
+                cursor = str(arguments.get("cursor") or "") or None
+                if cursor is None:
+                    collector.report_catalog_revision = None
+                    collector.next_report_catalog_cursor = None
+                    collector.report_catalog_scan_complete = False
+                    collector.proactive_creation_allowed = False
+                elif cursor != collector.next_report_catalog_cursor:
+                    raise ValueError(
+                        "Scan report catalog pages in the returned order"
+                    )
+                page = await report_catalog_loader(cursor)
+                revision = str(page.get("catalog_revision") or "")
+                if not revision:
+                    raise ValueError(
+                        "The saved report catalog returned no revision"
+                    )
+                if (
+                    collector.report_catalog_revision
+                    and collector.report_catalog_revision != revision
+                ):
+                    raise ValueError(
+                        "The saved report catalog changed; restart the scan"
+                    )
+                collector.report_catalog_revision = revision
+                collector.next_report_catalog_cursor = (
+                    str(page.get("next_cursor") or "") or None
+                )
+                collector.report_catalog_scan_complete = (
+                    collector.next_report_catalog_cursor is None
+                )
+                collector.proactive_creation_allowed = bool(
+                    page.get("proactive_creation_allowed")
+                )
+                return [TextContent(type="text", text=json.dumps(page))]
+            if name == "load_report_context":
+                if report_context_loader is None:
+                    raise ValueError("Saved report context is unavailable")
+                report_id = str(arguments.get("report_id") or "").strip()
+                if not report_id:
+                    raise ValueError("A report_id is required")
+                context = await report_context_loader(report_id)
+                collector.loaded_report_ids.add(report_id)
+                return [TextContent(type="text", text=json.dumps(context))]
+            if name == "propose_report_action":
+                if collector.report_proposal is not None:
+                    raise ValueError(
+                        "Only one report action may be proposed per run"
+                    )
+                action = str(arguments.get("action") or "")
+                artifact_kind = str(arguments.get("artifact_kind") or "")
+                artifact_filename = str(
+                    arguments.get("artifact_filename") or ""
+                ).strip()
+                existing_report_id = (
+                    str(arguments.get("existing_report_id") or "") or None
+                )
+                local_artifact = next(
+                    (
+                        artifact
+                        for artifact in collector.artifacts
+                        if artifact.get("kind") == artifact_kind
+                        and artifact.get("filename") == artifact_filename
+                    ),
+                    None,
+                )
+                published = {
+                    "published": local_artifact is not None,
+                    "complete": bool(
+                        local_artifact
+                        and _collected_artifact_is_complete(local_artifact)
+                    ),
+                }
+                if (
+                    local_artifact is None
+                    and published_artifact_checker is not None
+                ):
+                    published = await published_artifact_checker(
+                        artifact_kind,
+                        artifact_filename,
+                    )
+                if not published.get("published"):
+                    raise ValueError(
+                        "Publish the proposed artifact successfully before proposing a report action"
+                    )
+                if not published.get("complete"):
+                    raise ValueError(
+                        "Incomplete or truncated artifacts cannot become reports"
+                    )
+                if action == "create":
+                    if not collector.report_catalog_scan_complete:
+                        raise ValueError(
+                            "Scan every saved report catalog page before proposing creation"
+                        )
+                    if not collector.proactive_creation_allowed:
+                        raise ValueError(
+                            "Proactive report creation is unavailable for this catalog"
+                        )
+                    if existing_report_id:
+                        raise ValueError(
+                            "A create proposal cannot target an existing report"
+                        )
+                elif action in {"update", "open"}:
+                    if not existing_report_id:
+                        raise ValueError("An existing_report_id is required")
+                    if (
+                        action == "update"
+                        and existing_report_id != attached_report_id
+                        and existing_report_id
+                        not in collector.loaded_report_ids
+                    ):
+                        raise ValueError(
+                            "Load the matched report context before proposing an update"
+                        )
+                else:
+                    raise ValueError("Unsupported report action")
+                collector.report_proposal = {
+                    "action": action,
+                    "artifact_kind": artifact_kind,
+                    "artifact_filename": artifact_filename,
+                    "title": str(arguments.get("title") or "").strip(),
+                    "reason": str(arguments.get("reason") or "").strip(),
+                    "existing_report_id": existing_report_id,
+                    "catalog_revision": collector.report_catalog_revision,
+                    "catalog_scan_complete": collector.report_catalog_scan_complete,
+                    "proactive_creation_allowed": collector.proactive_creation_allowed,
+                    "loaded_report_ids": sorted(collector.loaded_report_ids),
+                    "attached_report_id": attached_report_id,
+                }
+                return [
+                    TextContent(
+                        type="text",
+                        text=json.dumps({"proposed": True, "action": action}),
+                    )
+                ]
             if name == "start_analysis_notebook":
                 plan_id = str(arguments.get("plan_id") or "").strip()
                 if (
@@ -597,11 +835,18 @@ def build_standalone_chat_mcp_server(
                     or notebook_mcp_app is None
                     or analysis_notebook_path is None
                 ):
-                    raise ValueError("The run-bound analysis notebook is unavailable")
+                    raise ValueError(
+                        "The run-bound analysis notebook is unavailable"
+                    )
                 plan = await plan_checker(plan_id)
                 if plan.get("route") not in {"notebook_sdk", "dataset_ref"}:
-                    raise ValueError("The selected plan does not permit a notebook kernel")
-                if notebook_lifecycle is not None and notebook_lifecycle.session_id:
+                    raise ValueError(
+                        "The selected plan does not permit a notebook kernel"
+                    )
+                if (
+                    notebook_lifecycle is not None
+                    and notebook_lifecycle.session_id
+                ):
                     return [
                         TextContent(
                             type="text",
@@ -622,12 +867,18 @@ def build_standalone_chat_mcp_server(
 
                     result = _handle_start_notebook_session(
                         ToolContext(app=notebook_mcp_app),
-                        {"file_path": str(analysis_notebook_path), "auto_run": True},
+                        {
+                            "file_path": str(analysis_notebook_path),
+                            "auto_run": True,
+                        },
                     )
                 else:
                     result = notebook_starter(
                         notebook_mcp_app,
-                        {"file_path": str(analysis_notebook_path), "auto_run": True},
+                        {
+                            "file_path": str(analysis_notebook_path),
+                            "auto_run": True,
+                        },
                     )
                 if not result:
                     raise ValueError("Notebook kernel did not start")
@@ -635,9 +886,13 @@ def build_standalone_chat_mcp_server(
                 try:
                     started = json.loads(raw)
                 except json.JSONDecodeError as exc:
-                    raise ValueError("Notebook kernel returned an invalid response") from exc
+                    raise ValueError(
+                        "Notebook kernel returned an invalid response"
+                    ) from exc
                 session_id = str(started.get("session_id") or "")
-                if not session_id or str(started.get("status") or "").startswith("error"):
+                if not session_id or str(
+                    started.get("status") or ""
+                ).startswith("error"):
                     raise ValueError("Notebook kernel did not start")
                 if notebook_lifecycle is not None:
                     notebook_lifecycle.session_id = session_id
@@ -647,9 +902,13 @@ def build_standalone_chat_mcp_server(
                 else:
                     from signalpilot._server.ai.tools.base import ToolContext
 
-                    runtime_session = ToolContext(app=notebook_mcp_app).get_session(session_id)
+                    runtime_session = ToolContext(
+                        app=notebook_mcp_app
+                    ).get_session(session_id)
                 runtime_session._signalpilot_chat_runtime = True
-                runtime_session._signalpilot_chat_redactions = runtime_redactions
+                runtime_session._signalpilot_chat_redactions = (
+                    runtime_redactions
+                )
                 if event_sink is not None:
                     await event_sink("notebook_started", {"plan_id": plan_id})
                 return [
@@ -670,7 +929,9 @@ def build_standalone_chat_mcp_server(
                     raise ValueError("The frozen dbt project is unavailable")
                 command = str(arguments.get("command") or "")
                 if command not in {"parse", "ls", "compile"}:
-                    raise ValueError("Only dbt parse, ls, and compile are allowed")
+                    raise ValueError(
+                        "Only dbt parse, ls, and compile are allowed"
+                    )
                 target_path = scratch_directory / "dbt-target"
                 target_path.mkdir(parents=True, exist_ok=True)
                 argv = [
@@ -694,18 +955,24 @@ def build_standalone_chat_mcp_server(
                     stderr=asyncio.subprocess.STDOUT,
                 )
                 try:
-                    output, _ = await asyncio.wait_for(process.communicate(), timeout=120)
+                    output, _ = await asyncio.wait_for(
+                        process.communicate(), timeout=120
+                    )
                 except TimeoutError:
                     process.kill()
                     await process.wait()
                     raise ValueError("dbt inspection timed out") from None
                 text_output = output.decode(errors="replace")[-50_000:]
                 if process.returncode != 0:
-                    raise ValueError(f"dbt {command} failed: {text_output[-2_000:]}")
+                    raise ValueError(
+                        f"dbt {command} failed: {text_output[-2_000:]}"
+                    )
                 return [
                     TextContent(
                         type="text",
-                        text=json.dumps({"command": command, "output": text_output}),
+                        text=json.dumps(
+                            {"command": command, "output": text_output}
+                        ),
                     )
                 ]
             if name == "run_scratch_python":
@@ -720,7 +987,9 @@ def build_standalone_chat_mcp_server(
             result_id = str(arguments.get("result_id") or "").strip()
             if name in {"publish_table", "publish_chart"}:
                 if not result_id or result_loader is None:
-                    raise ValueError("A governed structured result ID is required")
+                    raise ValueError(
+                        "A governed structured result ID is required"
+                    )
                 loaded_result = await result_loader(result_id)
                 metadata["provenance"] = {
                     **dict(loaded_result.get("provenance") or {}),
@@ -742,11 +1011,18 @@ def build_standalone_chat_mcp_server(
                         "column_descriptions": dict(
                             arguments.get("column_descriptions") or {}
                         ),
-                        "query_row_count": loaded_result.get("query_row_count"),
-                        "saved_row_count": loaded_result.get("saved_row_count"),
+                        "query_row_count": loaded_result.get(
+                            "query_row_count"
+                        ),
+                        "saved_row_count": loaded_result.get(
+                            "saved_row_count"
+                        ),
                         "completeness": loaded_result.get("completeness"),
-                        "truncation_reason": loaded_result.get("truncation_reason"),
-                        "truncated": loaded_result.get("completeness") != "complete",
+                        "truncation_reason": loaded_result.get(
+                            "truncation_reason"
+                        ),
+                        "truncated": loaded_result.get("completeness")
+                        != "complete",
                     },
                 }
             elif name == "publish_chart":
@@ -783,7 +1059,9 @@ def build_standalone_chat_mcp_server(
                             "rows": rows,
                             "truncated": truncated,
                             "completeness": loaded_result.get("completeness"),
-                            "truncation_reason": loaded_result.get("truncation_reason"),
+                            "truncation_reason": loaded_result.get(
+                                "truncation_reason"
+                            ),
                         },
                         "display": display,
                         "truncated": truncated,
@@ -791,7 +1069,9 @@ def build_standalone_chat_mcp_server(
                     "binary_base64": binary_base64,
                 }
             elif name == "publish_report":
-                result_ids = [str(value) for value in arguments.get("result_ids") or []]
+                result_ids = [
+                    str(value) for value in arguments.get("result_ids") or []
+                ]
                 if result_ids and result_loader is None:
                     raise ValueError("Governed result loading is unavailable")
                 result_refs = []
@@ -808,7 +1088,9 @@ def build_standalone_chat_mcp_server(
                 metadata["provenance"] = {
                     **metadata["provenance"],
                     "result_references": result_refs,
-                    "artifact_references": list(arguments.get("artifact_references") or []),
+                    "artifact_references": list(
+                        arguments.get("artifact_references") or []
+                    ),
                 }
                 artifact = {
                     **metadata,

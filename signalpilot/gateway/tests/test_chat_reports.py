@@ -23,7 +23,9 @@ from gateway.db.models import (
     GatewayChatConversation,
     GatewayChatMessage,
     GatewayChatRun,
+    GatewayQueryPlan,
     GatewayReportRefresh,
+    GatewaySavedReport,
     GatewaySavedReportVersion,
     GatewayWorkspaceProject,
 )
@@ -135,6 +137,46 @@ async def _artifact(
     db.add(artifact)
     await db.commit()
     return artifact
+
+
+async def _attach_messages(
+    db: AsyncSession,
+    artifact: GatewayChatArtifact,
+    *,
+    request: str = "Show quarterly revenue by customer segment",
+    answer: str = "Enterprise customers lead quarterly revenue.",
+) -> GatewayChatMessage:
+    run = await db.get(GatewayChatRun, artifact.run_id)
+    conversation = await db.get(GatewayChatConversation, artifact.conversation_id)
+    assert run is not None and conversation is not None
+    user_message = GatewayChatMessage(
+        id=run.user_message_id,
+        org_id=artifact.org_id,
+        user_id=artifact.user_id,
+        project_id=conversation.project_id,
+        conversation_id=conversation.id,
+        role="user",
+        content=request,
+        sequence=conversation.message_count + 1,
+        created_at=2.0,
+    )
+    assistant_message = GatewayChatMessage(
+        id=f"assistant-{artifact.id}",
+        org_id=artifact.org_id,
+        user_id=artifact.user_id,
+        project_id=conversation.project_id,
+        conversation_id=conversation.id,
+        role="assistant",
+        content=answer,
+        metadata_json={"surface": "standalone", "run_id": run.id, "status": "completed"},
+        sequence=conversation.message_count + 2,
+        created_at=3.0,
+    )
+    artifact.assistant_message_id = assistant_message.id
+    conversation.message_count += 2
+    db.add_all([user_message, assistant_message])
+    await db.commit()
+    return assistant_message
 
 
 @pytest.mark.asyncio
@@ -422,8 +464,9 @@ async def test_refresh_queues_a_plain_agent_request_without_confirmation(
         "title": "Revenue report",
         "kind": "table",
         "source_artifact_id": base.id,
-        "drift": {"explanation": "Refresh requested in the original thread."},
     }
+    assert refresh.original_conversation_id != report.original_conversation_id
+    assert run.conversation_id == refresh.original_conversation_id
 
 
 @pytest.mark.asyncio
@@ -637,7 +680,9 @@ async def test_identical_refresh_is_noop_and_fixed_share_is_remembered_then_revo
 
 
 @pytest.mark.asyncio
-async def test_report_reference_is_owner_thread_and_version_scoped(db_session: AsyncSession) -> None:
+async def test_report_reference_is_owner_project_scoped_and_loads_the_current_version(
+    db_session: AsyncSession,
+) -> None:
     await _seed_project(db_session)
     artifact = await _artifact(db_session, artifact_id="artifact-reference")
     _, report, version = await chat_reports.promote_artifact(
@@ -647,16 +692,22 @@ async def test_report_reference_is_owner_thread_and_version_scoped(db_session: A
         artifact_id=artifact.id,
         title="Reference report",
     )
+    newer_thread = await _artifact(
+        db_session,
+        artifact_id="artifact-newer-thread",
+        conversation_id="conversation-newer-thread",
+        value=200,
+    )
     reference = await chat_reports.verified_report_reference(
         db_session,
         org_id="org-a",
         user_id="user-a",
-        conversation_id=artifact.conversation_id,
+        conversation_id=newer_thread.conversation_id,
         report_id=report.id,
         version_id=version.id,
     )
     assert reference == {
-        "mode": "follow_up",
+        "mode": "attached",
         "report_id": report.id,
         "version_id": version.id,
         "version_ordinal": 1,
@@ -669,12 +720,304 @@ async def test_report_reference_is_owner_thread_and_version_scoped(db_session: A
             db_session,
             org_id="org-a",
             user_id="user-b",
-            conversation_id=artifact.conversation_id,
+            conversation_id=newer_thread.conversation_id,
             report_id=report.id,
             version_id=version.id,
         )
         is None
     )
+
+
+@pytest.mark.asyncio
+async def test_catalog_and_context_are_project_scoped_semantic_packages_without_rows_or_html(
+    db_session: AsyncSession,
+) -> None:
+    await _seed_project(db_session)
+    artifact = await _artifact(db_session, artifact_id="artifact-context")
+    await _attach_messages(db_session, artifact)
+    db_session.add(
+        GatewayQueryPlan(
+            id="plan-context",
+            org_id="org-a",
+            user_id="user-a",
+            conversation_id=artifact.conversation_id,
+            run_id=artifact.run_id,
+            project_id="project-a",
+            commit_sha="a" * 40,
+            branch="main",
+            connection_name="production",
+            purpose="Compare quarterly revenue by customer segment",
+            execution_need="required",
+            normalized_sql="SELECT segment, SUM(revenue) FROM analytics.fct_revenue GROUP BY segment",
+            sql_hash="b" * 64,
+            estimated_cost_usd=0,
+            estimate_quality="exact",
+            route="mcp",
+            route_reason="bounded aggregate",
+            approval_required=False,
+            policy_version="test",
+            policy_hash="c" * 64,
+            shadow=False,
+            expires_at=datetime(2026, 9, 1, tzinfo=UTC),
+        )
+    )
+    await db_session.commit()
+    _, report, version = await chat_reports.promote_artifact(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        artifact_id=artifact.id,
+        title="Quarterly Revenue by Segment",
+    )
+
+    catalog = await chat_reports.list_saved_report_catalog(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        project_id="project-a",
+    )
+    assert catalog.total_reports == 1
+    assert catalog.next_cursor is None
+    assert catalog.proactive_creation_allowed is True
+    assert catalog.items[0].model_dump() == {
+        "report_id": report.id,
+        "title": "Quarterly Revenue by Segment",
+        "artifact_kind": "table",
+        "original_business_request": "Show quarterly revenue by customer segment",
+        "main_output_fields": ["revenue"],
+        "query_purposes": ["Compare quarterly revenue by customer segment"],
+        "referenced_models": ["analytics.fct_revenue"],
+        "assumptions": [],
+        "exclusions": [],
+        "caveats": [],
+        "current_version_id": version.id,
+        "current_version": 1,
+        "freshness_state": "fresh",
+        "freshness_at": datetime(2026, 8, 1, tzinfo=UTC),
+        "updated_at": report.updated_at,
+    }
+    serialized_catalog = catalog.model_dump_json()
+    assert "dataset-only-needle" not in serialized_catalog
+    assert "private rows" not in serialized_catalog
+
+    context = await chat_reports.load_report_context(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        project_id="project-a",
+        report_id=report.id,
+    )
+    assert context is not None
+    assert context.creation.request == "Show quarterly revenue by customer segment"
+    assert context.current.answer == "Enterprise customers lead quarterly revenue."
+    assert context.current_artifact["output_fields"] == ["revenue"]
+    assert context.historical_queries[0].normalized_sql.startswith("SELECT segment")
+    serialized_context = context.model_dump_json()
+    assert "dataset-only-needle" not in serialized_context
+    assert '"rows"' not in serialized_context
+    assert '"html"' not in serialized_context
+    assert (
+        await chat_reports.load_report_context(
+            db_session,
+            org_id="org-a",
+            user_id="user-b",
+            project_id="project-a",
+            report_id=report.id,
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_suggestion_approval_creates_once_and_rejects_a_changed_catalog(
+    db_session: AsyncSession,
+) -> None:
+    await _seed_project(db_session)
+    artifact = await _artifact(db_session, artifact_id="artifact-suggest-create")
+    assistant = await _attach_messages(db_session, artifact)
+    revision, _ = await chat_reports.report_catalog_revision(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        project_id="project-a",
+    )
+    run = await db_session.get(GatewayChatRun, artifact.run_id)
+    assert run is not None
+    suggestion = await chat_reports.validate_report_proposal_for_run(
+        db_session,
+        run=run,
+        proposal={
+            "action": "create",
+            "artifact_kind": "table",
+            "artifact_filename": artifact.filename,
+            "title": "Revenue Overview",
+            "reason": "No report in the complete catalog answers this request.",
+            "catalog_revision": revision,
+            "catalog_scan_complete": True,
+            "proactive_creation_allowed": True,
+        },
+    )
+    assert suggestion is not None and suggestion.action == "create"
+    assistant.metadata_json = {
+        **(assistant.metadata_json or {}),
+        "report_suggestion": suggestion.model_dump(mode="json"),
+    }
+    await db_session.commit()
+
+    approved = await chat_reports.approve_report_suggestion(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        message_id=assistant.id,
+    )
+    assert approved is not None and approved.status == "created"
+    repeated = await chat_reports.approve_report_suggestion(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        message_id=assistant.id,
+    )
+    assert repeated == approved
+    reports = list((await db_session.execute(select(GatewaySavedReport))).scalars())
+    assert len(reports) == 1
+
+    stale_artifact = await _artifact(db_session, artifact_id="artifact-stale-create", value=300)
+    stale_assistant = await _attach_messages(db_session, stale_artifact)
+    stale_run = await db_session.get(GatewayChatRun, stale_artifact.run_id)
+    assert stale_run is not None
+    stale_suggestion = await chat_reports.validate_report_proposal_for_run(
+        db_session,
+        run=stale_run,
+        proposal={
+            "action": "create",
+            "artifact_kind": "table",
+            "artifact_filename": stale_artifact.filename,
+            "title": "Distinct Revenue Detail",
+            "reason": "This uses a distinct business definition.",
+            "catalog_revision": (
+                await chat_reports.report_catalog_revision(
+                    db_session,
+                    org_id="org-a",
+                    user_id="user-a",
+                    project_id="project-a",
+                )
+            )[0],
+            "catalog_scan_complete": True,
+            "proactive_creation_allowed": True,
+        },
+    )
+    assert stale_suggestion is not None
+    stale_assistant.metadata_json = {
+        **(stale_assistant.metadata_json or {}),
+        "report_suggestion": stale_suggestion.model_dump(mode="json"),
+    }
+    await db_session.commit()
+    another = await _artifact(db_session, artifact_id="artifact-catalog-change", value=400)
+    await chat_reports.promote_artifact(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        artifact_id=another.id,
+        title="Catalog changed",
+    )
+    with pytest.raises(chat_reports.ReportCatalogChangedError):
+        await chat_reports.approve_report_suggestion(
+            db_session,
+            org_id="org-a",
+            user_id="user-a",
+            message_id=stale_assistant.id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_semantic_update_can_publish_from_a_newer_thread_and_future_mentions_load_it(
+    db_session: AsyncSession,
+) -> None:
+    await _seed_project(db_session)
+    base = await _artifact(db_session, artifact_id="artifact-semantic-base", value=100)
+    await _attach_messages(db_session, base, request="Revenue for Q1")
+    _, report, version_one = await chat_reports.promote_artifact(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        artifact_id=base.id,
+        title="Quarterly Revenue",
+    )
+    updated = await _artifact(
+        db_session,
+        artifact_id="artifact-semantic-update",
+        conversation_id="newer-data-chat-thread",
+        value=200,
+    )
+    assistant = await _attach_messages(
+        db_session,
+        updated,
+        request="Show the same revenue report for Q2 as a chart-ready table",
+    )
+    run = await db_session.get(GatewayChatRun, updated.run_id)
+    assert run is not None
+    catalog = await chat_reports.list_saved_report_catalog(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        project_id="project-a",
+    )
+    suggestion = await chat_reports.validate_report_proposal_for_run(
+        db_session,
+        run=run,
+        proposal={
+            "action": "update",
+            "artifact_kind": "table",
+            "artifact_filename": updated.filename,
+            "title": report.title,
+            "reason": "The request changes only the period and presentation.",
+            "existing_report_id": report.id,
+            "catalog_revision": catalog.catalog_revision,
+            "catalog_scan_complete": True,
+            "proactive_creation_allowed": True,
+            "loaded_report_ids": [report.id],
+        },
+    )
+    assert suggestion is not None and suggestion.action == "update"
+    assistant.metadata_json = {
+        **(assistant.metadata_json or {}),
+        "report_suggestion": suggestion.model_dump(mode="json"),
+    }
+    await db_session.commit()
+    result = await chat_reports.approve_report_suggestion(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        message_id=assistant.id,
+    )
+    assert result is not None and result.status == "updated"
+    assert result.version_id != version_one.id
+
+    future = await _artifact(
+        db_session,
+        artifact_id="artifact-future-thread",
+        conversation_id="future-data-chat-thread",
+        value=500,
+    )
+    reference = await chat_reports.verified_report_reference(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=future.conversation_id,
+        report_id=report.id,
+        version_id=version_one.id,
+    )
+    assert reference is not None
+    assert reference["version_id"] == result.version_id
+    context = await chat_reports.load_report_context(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        project_id="project-a",
+        report_id=report.id,
+    )
+    assert context is not None
+    assert context.current.source_thread_id == "newer-data-chat-thread"
 
 
 @pytest.mark.asyncio

@@ -620,7 +620,8 @@ function ReportListItem({
 }
 
 type LibrarySelection =
-  { tab: "reports"; id: string } | { tab: "artifacts"; id: string };
+  | { tab: "reports"; id: string }
+  | { tab: "artifacts"; id: string };
 
 function LibraryPreview({
   artifact,
@@ -1342,11 +1343,11 @@ export function SavedChatReportDetail({ reportId }: { reportId: string }) {
           </div>
           <div className="flex flex-wrap gap-2">
             <Link
-              href={`/chats/${data.original_thread_id}?report=${data.id}&version=${data.current_version_id}`}
+              href={`/chats?project=${encodeURIComponent(data.project_id)}&report=${data.id}&version=${data.current_version_id}`}
               className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
             >
               <MessageSquare className="h-3.5 w-3.5" />
-              Follow Up in thread
+              Use in Data Chat
             </Link>
             <button
               type="button"
@@ -1401,7 +1402,7 @@ export function SavedChatReportDetail({ reportId }: { reportId: string }) {
               </span>
               {data.refresh.run_id && (
                 <Link
-                  href={`/chats/${data.original_thread_id}`}
+                  href={`/chats/${data.refresh.conversation_id || data.original_thread_id}`}
                   className="text-xs text-[var(--color-text-muted)] underline"
                 >
                   View live run

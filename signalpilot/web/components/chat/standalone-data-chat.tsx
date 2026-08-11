@@ -37,6 +37,7 @@ import useSWR, { useSWRConfig } from "swr";
 import type { VisualizationSpec } from "vega-embed";
 import {
   archiveStandaloneConversation,
+  approveChatReportSuggestion,
   cancelStandaloneRun,
   clarifyStandaloneRun,
   createStandaloneConversation,
@@ -47,6 +48,7 @@ import {
   getStandaloneChatBootstrap,
   getStandaloneChatProjectReadiness,
   getStandaloneConversation,
+  getSavedChatReport,
   listStandaloneConversations,
   openStandaloneNotebookArchive,
   promoteChatArtifact,
@@ -62,6 +64,8 @@ import {
   type StandaloneChatRunStatus,
   type StandaloneConversation,
   type StandaloneConversationDetail,
+  type ChatReportMention,
+  type ChatReportSuggestion,
 } from "~/lib/api";
 import { StandaloneArtifactContext } from "~/components/chat/standalone-artifact-context";
 import { StandaloneChatComposer } from "~/components/chat/standalone-chat-composer";
@@ -89,6 +93,9 @@ type ChatUiContextValue = {
   artifacts: StandaloneChatArtifact[];
   onStop: (runId: string) => Promise<void>;
   onRetry: (runId: string) => Promise<void>;
+  onApproveReportSuggestion: (
+    messageId: string,
+  ) => Promise<{ report_id: string }>;
 };
 
 const ChatUiContext = createContext<ChatUiContextValue | null>(null);
@@ -660,6 +667,123 @@ export function ArtifactPreview({
   );
 }
 
+function ReportSuggestionCard({
+  messageId,
+  suggestion,
+}: {
+  messageId: string;
+  suggestion: ChatReportSuggestion;
+}) {
+  const router = useRouter();
+  const { toast } = useToast();
+  const { onApproveReportSuggestion } = useChatUi();
+  const [dismissed, setDismissed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [approvedReportId, setApprovedReportId] = useState(
+    suggestion.approval?.report_id ?? null,
+  );
+  if (dismissed) return null;
+  const reportId = approvedReportId || suggestion.report_id;
+  const openOnly = suggestion.action === "open";
+  const label =
+    suggestion.action === "create"
+      ? "Create report"
+      : suggestion.action === "update"
+        ? "Update existing report"
+        : "Open report";
+
+  const approve = async () => {
+    if (busy) return;
+    if (openOnly && reportId) {
+      router.push(`/reports/${reportId}`);
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await onApproveReportSuggestion(messageId);
+      setApprovedReportId(result.report_id);
+      toast(
+        suggestion.action === "create" ? "Report created" : "Report updated",
+        "success",
+      );
+    } catch (error) {
+      toast(
+        error instanceof Error
+          ? error.message
+          : "Could not publish the report action",
+        "error",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="mt-4 rounded-xl border border-[var(--color-success)]/25 bg-[var(--color-bg-card)] p-4">
+      <div className="flex items-start gap-3">
+        <FileChartColumn className="mt-0.5 h-4 w-4 flex-none text-[var(--color-success)]" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm text-[var(--color-text)]">
+            {suggestion.action === "create"
+              ? `Save “${suggestion.title}” as a durable report?`
+              : `Matched “${suggestion.title}”`}
+          </p>
+          <p className="mt-1 text-xs leading-5 text-[var(--color-text-muted)]">
+            {suggestion.reason}
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {approvedReportId ? (
+              <button
+                type="button"
+                onClick={() => router.push(`/reports/${approvedReportId}`)}
+                className="rounded-lg bg-[var(--color-text)] px-3 py-2 text-xs text-[var(--color-bg)]"
+              >
+                Open report
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={busy || (!reportId && openOnly)}
+                onClick={() => void approve()}
+                className="inline-flex items-center gap-2 rounded-lg bg-[var(--color-text)] px-3 py-2 text-xs text-[var(--color-bg)] disabled:opacity-50"
+              >
+                {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {label}
+              </button>
+            )}
+            {!approvedReportId && !openOnly && (
+              <button
+                type="button"
+                onClick={() => setDismissed(true)}
+                className="rounded-lg px-3 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
+              >
+                Not now
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function messageReportSuggestion(
+  metadata: Record<string, unknown>,
+): ChatReportSuggestion | null {
+  const value = metadata.report_suggestion;
+  if (!value || typeof value !== "object") return null;
+  const suggestion = value as Partial<ChatReportSuggestion>;
+  if (
+    !["create", "update", "open"].includes(suggestion.action || "") ||
+    typeof suggestion.artifact_id !== "string" ||
+    typeof suggestion.title !== "string" ||
+    typeof suggestion.reason !== "string"
+  ) {
+    return null;
+  }
+  return suggestion as ChatReportSuggestion;
+}
+
 function AssistantMessage({ message }: { message: UiMessage }) {
   const runId =
     message.runId ??
@@ -682,6 +806,9 @@ function AssistantMessage({ message }: { message: UiMessage }) {
   const running = runStatus === "queued" || runStatus === "running";
   const runtimeArchiveAvailable =
     message.metadata.runtime_archive_available === true;
+  const reportSuggestion = successful
+    ? messageReportSuggestion(message.metadata)
+    : null;
   return (
     <article
       data-chat-message-id={message.id}
@@ -713,6 +840,12 @@ function AssistantMessage({ message }: { message: UiMessage }) {
                 />
               ))}
             </div>
+          )}
+          {reportSuggestion && (
+            <ReportSuggestionCard
+              messageId={message.id}
+              suggestion={reportSuggestion}
+            />
           )}
           {runStatus === "failed" && (
             <p className="mt-3 text-xs text-[var(--color-error)]">
@@ -1169,13 +1302,15 @@ export function StandaloneDataChat({
     },
   );
   const requestedProject = searchParams.get("project");
-  const attachedReportReference = useMemo(() => {
-    const reportId = searchParams.get("report");
-    const versionId = searchParams.get("version");
-    return reportId && versionId
-      ? { report_id: reportId, version_id: versionId }
-      : undefined;
-  }, [searchParams]);
+  const requestedReportId = searchParams.get("report");
+  const [selectedReport, setSelectedReport] =
+    useState<ChatReportMention | null>(null);
+  const attachedReportReference = selectedReport
+    ? {
+        report_id: selectedReport.report_id,
+        version_id: selectedReport.current_version_id,
+      }
+    : undefined;
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     null,
   );
@@ -1212,6 +1347,30 @@ export function StandaloneDataChat({
     setChatBudgetUsd(bootstrap.default_chat_budget_usd);
     selectedInitialized.current = true;
   }, [bootstrap, requestedProject]);
+
+  useEffect(() => {
+    if (!requestedReportId || selectedReport?.report_id === requestedReportId)
+      return;
+    let active = true;
+    void getSavedChatReport(requestedReportId)
+      .then((report) => {
+        if (!active) return;
+        setSelectedProjectId(report.project_id);
+        setSelectedReport({
+          report_id: report.id,
+          title: report.title,
+          kind: report.kind,
+          project_id: report.project_id,
+          current_version_id: report.current_version_id,
+        });
+      })
+      .catch(() => {
+        if (active) toast("The attached report is unavailable", "error");
+      });
+    return () => {
+      active = false;
+    };
+  }, [requestedReportId, selectedReport?.report_id, toast]);
 
   useEffect(() => {
     if (detail?.conversation.project_id) {
@@ -1510,7 +1669,9 @@ export function StandaloneDataChat({
             text,
             perQueryBudgetUsd,
             chatBudgetUsd,
+            attachedReportReference,
           );
+          setSelectedReport(null);
           await mutateCache(
             `standalone-chat-conversation:${created.conversation.id}`,
             created,
@@ -1547,6 +1708,7 @@ export function StandaloneDataChat({
           );
           if (attachedReportReference)
             router.replace(`/chats/${conversationId}`);
+          setSelectedReport(null);
         }
         await mutateDetail(
           (current) =>
@@ -1675,12 +1837,27 @@ export function StandaloneDataChat({
     },
     [mutateDetail, mutateHistory, toast],
   );
+  const onApproveReportSuggestion = useCallback(
+    async (messageId: string) => {
+      const result = await approveChatReportSuggestion(messageId);
+      await mutateDetail();
+      await mutateCache(
+        (key) =>
+          typeof key === "string" &&
+          (key.startsWith("chat-report-library:") ||
+            key.startsWith("saved-chat-report:")),
+      );
+      return { report_id: result.report_id };
+    },
+    [mutateCache, mutateDetail],
+  );
 
   const loadConversation = useCallback(
     (id: string): Promise<StandaloneConversationDetail> => {
       const key = `standalone-chat-conversation:${id}`;
       const cached = cache.get(key) as
-        { data?: StandaloneConversationDetail } | undefined;
+        | { data?: StandaloneConversationDetail }
+        | undefined;
       if (cached?.data) return Promise.resolve(cached.data);
       const existing = conversationPrefetches.current.get(id);
       if (existing) return existing;
@@ -1892,6 +2069,7 @@ export function StandaloneDataChat({
         artifacts: detail?.artifacts ?? [],
         onStop,
         onRetry,
+        onApproveReportSuggestion,
       }}
     >
       <div className="h-screen min-w-[960px] overflow-hidden p-4">
@@ -1956,15 +2134,22 @@ export function StandaloneDataChat({
                 />
               </div>
             )}
-            {conversationId && attachedReportReference && (
+            {selectedReport && (
               <div className="flex-none px-6 pt-4">
                 <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 rounded-xl border border-[var(--color-success)]/25 bg-[var(--color-bg-card)] px-4 py-3 text-xs text-[var(--color-text-muted)]">
                   <span>
-                    A saved report version is attached to your next message.
+                    @{selectedReport.title} is attached to your next message.
                   </span>
                   <button
                     type="button"
-                    onClick={() => router.replace(`/chats/${conversationId}`)}
+                    onClick={() => {
+                      setSelectedReport(null);
+                      router.replace(
+                        conversationId
+                          ? `/chats/${conversationId}`
+                          : `/chats?project=${encodeURIComponent(selectedProjectId || "")}`,
+                      );
+                    }}
                     className="text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
                   >
                     Remove
@@ -2057,6 +2242,7 @@ export function StandaloneDataChat({
                             onChange={(event) => {
                               const projectId = event.target.value;
                               setSelectedProjectId(projectId);
+                              setSelectedReport(null);
                               void setDefaultStandaloneChatProject(projectId);
                               router.replace(
                                 `/chats?project=${encodeURIComponent(projectId)}`,
@@ -2119,6 +2305,9 @@ export function StandaloneDataChat({
                       </div>
                     ) : undefined
                   }
+                  projectId={selectedProjectId}
+                  selectedReport={selectedReport}
+                  onSelectedReportChange={setSelectedReport}
                 />
               </div>
             </div>

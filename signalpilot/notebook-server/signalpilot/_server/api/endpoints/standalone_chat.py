@@ -73,6 +73,9 @@ STANDALONE_ALLOWED_TOOLS = [
     "mcp__standalone-chat__publish_chart",
     "mcp__standalone-chat__publish_report",
     "mcp__standalone-chat__publish_table",
+    "mcp__standalone-chat__list_saved_report_catalog",
+    "mcp__standalone-chat__load_report_context",
+    "mcp__standalone-chat__propose_report_action",
     "mcp__standalone-chat__inspect_dbt",
     "mcp__standalone-chat__start_analysis_notebook",
     "mcp__signalpilot-notebook__edit_notebook",
@@ -109,6 +112,11 @@ Rules:
 - Explicitly disclose incomplete, unknown-completeness, or display-limited results.
 - Use SignalPilot MCP for schema discovery and bounded pre-analysis. MCP row samples are context-limited and must never be treated as a complete dataset.
 - Prefer governed SDK structured-result IDs for substantial analysis and for every published artifact.
+- After publishing a complete artifact that could be durable, scan every page from list_saved_report_catalog before proposing creation. Catalog pages contain semantics, never result rows.
+- Compare reports in this order: exact artifact content, normalized title, then semantic meaning across the complete catalog. Semantic equivalence requires the same business question, project/data domain, core metrics, entity or grain, and compatible dimensions and filters.
+- Treat newer dates or warehouse data, formatting, visualization changes, additional breakdowns, and small wording changes as updates. Treat changed metric definitions, entity or grain, business purpose, governed project, or incompatible populations as distinct reports.
+- Load the matched report with load_report_context before proposing an update, except when the user explicitly attached that report. Historical SQL is context only; plan every new execution normally.
+- Call propose_report_action at most once, only after its complete non-truncated artifact is successfully published. Use open for exact content, update for a semantic match, and create only when the full catalog has no match. Report creation or update always waits for the user's UI approval.
 - The dbt project is frozen at the supplied commit. Inspect it but never run dbt run, build, seed, or snapshot.
 - Never mention or expose confidence scores, hidden reasoning, chain-of-thought, credentials, or implementation internals.
 - Do not suggest follow-up questions.
@@ -803,6 +811,55 @@ async def execute(*, request: Request) -> StreamingResponse:
             raise ValueError("Invalid governed query plan")
         return value
 
+    async def load_report_catalog(cursor: str | None) -> dict[str, Any]:
+        params = {"limit": "50"}
+        if cursor:
+            params["cursor"] = cursor
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{gateway_api_url}/api/chat/runs/{run_id}/report-catalog",
+                params=params,
+                headers={"Authorization": f"Bearer {scoped_token}"},
+            )
+        response.raise_for_status()
+        value = response.json()
+        if not isinstance(value, dict):
+            raise ValueError("Invalid saved report catalog")
+        return value
+
+    async def load_report_context(report_id: str) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{gateway_api_url}/api/chat/runs/{run_id}/report-context/{report_id}",
+                headers={"Authorization": f"Bearer {scoped_token}"},
+            )
+        if response.status_code == 404:
+            raise ValueError("Saved report not found")
+        response.raise_for_status()
+        value = response.json()
+        if not isinstance(value, dict):
+            raise ValueError("Invalid saved report context")
+        return value
+
+    async def check_published_artifact(
+        artifact_kind: str,
+        artifact_filename: str,
+    ) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{gateway_api_url}/api/chat/runs/{run_id}/published-report-artifact",
+                params={
+                    "artifact_kind": artifact_kind,
+                    "artifact_filename": artifact_filename,
+                },
+                headers={"Authorization": f"Bearer {scoped_token}"},
+            )
+        response.raise_for_status()
+        value = response.json()
+        if not isinstance(value, dict):
+            raise ValueError("Invalid published artifact state")
+        return value
+
     auth_config_override = _runtime_auth_override(body)
     session_id = SessionId(f"standalone-{run_id}")
     remove_project_directory = False
@@ -913,6 +970,19 @@ async def execute(*, request: Request) -> StreamingResponse:
                     event_sink=lifecycle_event,
                     notebook_lifecycle=lifecycle,
                     runtime_redactions=(scoped_token,),
+                    report_catalog_loader=load_report_catalog,
+                    report_context_loader=load_report_context,
+                    published_artifact_checker=check_published_artifact,
+                    attached_report_id=str(
+                        (
+                            (body.get("warm_context") or {}).get(
+                                "report_reference"
+                            )
+                            or {}
+                        ).get("report_id")
+                        or ""
+                    )
+                    or None,
                 )
                 attempt_prompt = prompt
                 if recovery_failure is not None:
@@ -1178,6 +1248,10 @@ async def execute(*, request: Request) -> StreamingResponse:
                     "content": accepted_text,
                     "artifacts": collector.artifacts,
                 }
+                if collector.report_proposal is not None:
+                    final_payload["report_proposal"] = (
+                        collector.report_proposal
+                    )
                 if archive_id is not None:
                     final_payload["archive_id"] = archive_id
                     final_payload["kernel_stopped"] = kernel_stopped

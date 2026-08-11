@@ -291,6 +291,8 @@ async def create_conversation_with_run(
     commit_sha: str | None = None,
     per_query_budget_usd: float = 0.25,
     chat_budget_usd: float = 1.0,
+    message_metadata: dict[str, Any] | None = None,
+    commit: bool = True,
 ) -> tuple[GatewayChatConversation, GatewayChatRun]:
     """Atomically create the first conversation, message, and queued run."""
     now = time.time()
@@ -320,7 +322,7 @@ async def create_conversation_with_run(
         conversation_id=conversation.id,
         role="user",
         content=message.strip(),
-        metadata_json={"surface": "standalone"},
+        metadata_json={"surface": "standalone", **(message_metadata or {})},
         sequence=1,
         created_at=now,
     )
@@ -334,6 +336,9 @@ async def create_conversation_with_run(
         status=RunStatus.queued.value,
     )
     db.add_all([conversation, user_message, run])
+    if not commit:
+        await db.flush()
+        return conversation, run
     try:
         await db.commit()
     except Exception:
@@ -1807,6 +1812,7 @@ async def complete_run(
     run_id: str,
     worker_id: str,
     content: str,
+    report_proposal: dict[str, Any] | None = None,
 ) -> GatewayChatMessage | None:
     run = (
         await db.execute(
@@ -1873,6 +1879,19 @@ async def complete_run(
             select(GatewayChatConversation).where(GatewayChatConversation.id == run.conversation_id).with_for_update()
         )
     ).scalar_one()
+    report_suggestion = None
+    if report_proposal:
+        from gateway.store.chat_reports import validate_report_proposal_for_run
+
+        try:
+            validated = await validate_report_proposal_for_run(
+                db,
+                run=run,
+                proposal=report_proposal,
+            )
+            report_suggestion = validated.model_dump(mode="json") if validated else None
+        except (LookupError, RuntimeError, ValueError):
+            report_suggestion = None
     sequence = conversation.message_count + 1
     message = GatewayChatMessage(
         id=str(uuid.uuid4()),
@@ -1887,6 +1906,7 @@ async def complete_run(
             "run_id": run.id,
             "status": "completed",
             "runtime_archive_available": bool(run.runtime_archive_id),
+            **({"report_suggestion": report_suggestion} if report_suggestion else {}),
         },
         idempotency_key=f"chat-run:{run.id}:final",
         sequence=sequence,

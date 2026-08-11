@@ -5,7 +5,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import secrets
+import unicodedata
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -18,7 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.db.models import (
     GatewayChatArtifact,
     GatewayChatConversation,
+    GatewayChatMessage,
     GatewayChatRun,
+    GatewayQueryPlan,
     GatewayReportRefresh,
     GatewayReportShareAccess,
     GatewayReportShareGrant,
@@ -33,13 +37,24 @@ from gateway.models.chat_reports import (
     LibraryCollection,
     LibraryFacets,
     LibraryReport,
+    ReportCatalogCard,
+    ReportCatalogPage,
+    ReportContextMessage,
+    ReportContextPackage,
+    ReportHistoricalQuery,
+    ReportMention,
+    ReportMentionCollection,
     ReportRefreshInfo,
+    ReportSuggestion,
+    ReportSuggestionApprovalResult,
+    ReportVersionTimelineItem,
     SavedReportDetail,
     SavedVersionInfo,
     SharedSavedReport,
     SharedVersionInfo,
 )
 from gateway.standalone_chat.artifacts import table_to_csv
+from gateway.standalone_chat.domain import redact_public_payload
 from gateway.standalone_chat.object_storage import chat_object_storage
 
 
@@ -52,6 +67,10 @@ class ReportNotFoundError(LookupError):
 
 
 class ReportValidationError(ValueError):
+    pass
+
+
+class ReportCatalogChangedError(RuntimeError):
     pass
 
 
@@ -72,6 +91,72 @@ class ReportConflictError(RuntimeError):
 class ExistingContentError(RuntimeError):
     report_id: str
     version_id: str
+
+
+def normalize_report_title(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    return " ".join(re.findall(r"[\w]+", normalized, flags=re.UNICODE))
+
+
+def _artifact_output_fields(artifact: GatewayChatArtifact) -> list[str]:
+    snapshot = artifact.snapshot_json or {}
+    if artifact.kind == "chart":
+        spec = snapshot.get("spec") if isinstance(snapshot.get("spec"), dict) else {}
+        encoding = spec.get("encoding") if isinstance(spec.get("encoding"), dict) else {}
+        fields = [
+            str(value.get("field")) for value in encoding.values() if isinstance(value, dict) and value.get("field")
+        ]
+        if fields:
+            return list(dict.fromkeys(fields))[:50]
+        snapshot = snapshot.get("source") if isinstance(snapshot.get("source"), dict) else snapshot
+    columns = snapshot.get("columns") if isinstance(snapshot, dict) else []
+    return list(
+        dict.fromkeys(
+            str(column.get("name") if isinstance(column, dict) else column) for column in (columns or []) if column
+        )
+    )[:50]
+
+
+def _referenced_models(sql: str) -> list[str]:
+    try:
+        from sqlglot import exp, parse_one
+
+        expression = parse_one(sql)
+        return list(dict.fromkeys(table.sql() for table in expression.find_all(exp.Table) if table.name))[:100]
+    except Exception:
+        return []
+
+
+def _artifact_context_metadata(artifact: GatewayChatArtifact) -> dict[str, Any]:
+    provenance = artifact.provenance_json or {}
+    safe_provenance: dict[str, Any] = {
+        key: provenance[key]
+        for key in (
+            "code_hash",
+            "execution_id",
+            "result_id",
+            "schema_fingerprint",
+        )
+        if isinstance(provenance.get(key), (str, int, float, bool))
+    }
+    for key in ("artifact_references", "source_result_ids"):
+        if isinstance(provenance.get(key), list):
+            safe_provenance[key] = [str(value)[:500] for value in provenance[key][:100]]
+    if isinstance(provenance.get("result_references"), list):
+        safe_provenance["result_references"] = [
+            {key: reference[key] for key in ("result_id", "execution_id", "completeness") if key in reference}
+            for reference in provenance["result_references"][:100]
+            if isinstance(reference, dict)
+        ]
+    return {
+        "artifact_id": artifact.id,
+        "filename": artifact.filename,
+        "kind": artifact.kind,
+        "mime_type": artifact.mime_type,
+        "output_fields": _artifact_output_fields(artifact),
+        "byte_size": artifact.byte_size,
+        "provenance": safe_provenance,
+    }
 
 
 def _download_formats(kind: str) -> list[str]:
@@ -190,6 +275,394 @@ def _decode_cursor(value: str | None) -> tuple[datetime, str] | None:
         return (parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC), str(row_id))
     except Exception as exc:
         raise ReportValidationError("Invalid pagination cursor") from exc
+
+
+def _encode_catalog_cursor(revision: str, offset: int) -> str:
+    payload = json.dumps([revision, offset], separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+
+def _decode_catalog_cursor(value: str | None) -> tuple[str, int]:
+    if not value:
+        return "", 0
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        revision, offset = json.loads(base64.urlsafe_b64decode(padded).decode())
+        if not isinstance(revision, str) or not isinstance(offset, int) or offset < 0:
+            raise ValueError
+        return revision, offset
+    except Exception as exc:
+        raise ReportValidationError("Invalid report catalog cursor") from exc
+
+
+async def report_catalog_revision(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    project_id: str,
+) -> tuple[str, int]:
+    rows = (
+        await db.execute(
+            select(
+                GatewaySavedReport.id,
+                GatewaySavedReport.current_version_id,
+                GatewaySavedReport.revision,
+                GatewaySavedReport.updated_at,
+            )
+            .where(
+                GatewaySavedReport.org_id == org_id,
+                GatewaySavedReport.owner_user_id == user_id,
+                GatewaySavedReport.project_id == project_id,
+            )
+            .order_by(GatewaySavedReport.id)
+        )
+    ).all()
+    canonical = [
+        [report_id, version_id, revision, updated_at.isoformat()]
+        for report_id, version_id, revision, updated_at in rows
+    ]
+    digest = hashlib.sha256(json.dumps(canonical, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+    return digest, len(rows)
+
+
+async def list_report_mentions(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    project_id: str,
+    search: str | None = None,
+    limit: int = 10,
+) -> ReportMentionCollection:
+    conditions = [
+        GatewaySavedReport.org_id == org_id,
+        GatewaySavedReport.owner_user_id == user_id,
+        GatewaySavedReport.project_id == project_id,
+        GatewaySavedReport.current_version_id.is_not(None),
+    ]
+    normalized_search = (search or "").strip().lower()
+    if normalized_search:
+        conditions.append(func.lower(GatewaySavedReport.title).like(f"%{normalized_search}%"))
+    reports = list(
+        (
+            await db.execute(
+                select(GatewaySavedReport)
+                .where(*conditions)
+                .order_by(GatewaySavedReport.updated_at.desc(), GatewaySavedReport.id.desc())
+                .limit(limit)
+            )
+        ).scalars()
+    )
+    return ReportMentionCollection(
+        items=[
+            ReportMention(
+                report_id=report.id,
+                title=report.title,
+                kind=report.kind,
+                project_id=report.project_id,
+                current_version_id=report.current_version_id or "",
+            )
+            for report in reports
+        ]
+    )
+
+
+async def list_saved_report_catalog(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    project_id: str,
+    cursor: str | None = None,
+    limit: int = 50,
+) -> ReportCatalogPage:
+    """Return compact report semantics without rows, HTML, credentials, or traces."""
+    current_revision, total_reports = await report_catalog_revision(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        project_id=project_id,
+    )
+    cursor_revision, offset = _decode_catalog_cursor(cursor)
+    if cursor_revision and cursor_revision != current_revision:
+        raise ReportCatalogChangedError("The report catalog changed during the scan")
+    reports = list(
+        (
+            await db.execute(
+                select(GatewaySavedReport)
+                .where(
+                    GatewaySavedReport.org_id == org_id,
+                    GatewaySavedReport.owner_user_id == user_id,
+                    GatewaySavedReport.project_id == project_id,
+                    GatewaySavedReport.current_version_id.is_not(None),
+                )
+                .order_by(GatewaySavedReport.id)
+                .offset(offset)
+                .limit(limit)
+            )
+        ).scalars()
+    )
+    if not reports:
+        return ReportCatalogPage(
+            items=[],
+            catalog_revision=current_revision,
+            total_reports=total_reports,
+            next_cursor=None,
+            proactive_creation_allowed=total_reports <= 500,
+        )
+
+    report_ids = [report.id for report in reports]
+    current_ids = [report.current_version_id for report in reports if report.current_version_id]
+    version_rows = (
+        await db.execute(
+            select(GatewaySavedReportVersion, GatewayChatArtifact)
+            .join(GatewayChatArtifact, GatewayChatArtifact.id == GatewaySavedReportVersion.source_artifact_id)
+            .where(
+                or_(
+                    GatewaySavedReportVersion.id.in_(current_ids),
+                    and_(
+                        GatewaySavedReportVersion.report_id.in_(report_ids),
+                        GatewaySavedReportVersion.ordinal == 1,
+                    ),
+                )
+            )
+        )
+    ).all()
+    version_by_id = {version.id: (version, artifact) for version, artifact in version_rows}
+    creation_by_report = {
+        version.report_id: (version, artifact) for version, artifact in version_rows if version.ordinal == 1
+    }
+    run_ids = {artifact.run_id for _, artifact in version_rows}
+    runs = {
+        run.id: run
+        for run in (await db.execute(select(GatewayChatRun).where(GatewayChatRun.id.in_(run_ids)))).scalars()
+    }
+    message_ids = {run.user_message_id for run in runs.values()} | {
+        artifact.assistant_message_id for _, artifact in version_rows if artifact.assistant_message_id
+    }
+    messages = {
+        message.id: message
+        for message in (
+            await db.execute(select(GatewayChatMessage).where(GatewayChatMessage.id.in_(message_ids)))
+        ).scalars()
+    }
+    current_run_ids = {
+        version_by_id[report.current_version_id][1].run_id
+        for report in reports
+        if report.current_version_id in version_by_id
+    }
+    plans_by_run: dict[str, list[GatewayQueryPlan]] = {}
+    if current_run_ids:
+        plans = (
+            await db.execute(
+                select(GatewayQueryPlan)
+                .where(GatewayQueryPlan.run_id.in_(current_run_ids), GatewayQueryPlan.shadow.is_(False))
+                .order_by(GatewayQueryPlan.created_at)
+            )
+        ).scalars()
+        for plan in plans:
+            plans_by_run.setdefault(str(plan.run_id), []).append(plan)
+
+    cards: list[ReportCatalogCard] = []
+    for report in reports:
+        current_row = version_by_id.get(report.current_version_id or "")
+        creation_row = creation_by_report.get(report.id)
+        if current_row is None or creation_row is None:
+            continue
+        current_version, current_artifact = current_row
+        _, creation_artifact = creation_row
+        creation_run = runs.get(creation_artifact.run_id)
+        request_message = messages.get(creation_run.user_message_id) if creation_run else None
+        plans = plans_by_run.get(current_artifact.run_id, [])
+        cards.append(
+            ReportCatalogCard(
+                report_id=report.id,
+                title=report.title,
+                artifact_kind=report.kind,
+                original_business_request=(
+                    str(redact_public_payload(request_message.content))[:4_000] if request_message else ""
+                ),
+                main_output_fields=_artifact_output_fields(current_artifact),
+                query_purposes=list(dict.fromkeys(plan.purpose for plan in plans))[:20],
+                referenced_models=list(
+                    dict.fromkeys(model for plan in plans for model in _referenced_models(plan.normalized_sql))
+                )[:100],
+                assumptions=[str(value)[:500] for value in (current_artifact.assumptions or [])[:50]],
+                exclusions=[str(value)[:500] for value in (current_artifact.exclusions or [])[:50]],
+                caveats=[str(value)[:500] for value in (current_artifact.caveats or [])[:50]],
+                current_version_id=current_version.id,
+                current_version=current_version.ordinal,
+                freshness_state=current_version.freshness_state,
+                freshness_at=current_version.freshness_at,
+                updated_at=report.updated_at,
+            )
+        )
+    next_offset = offset + len(reports)
+    return ReportCatalogPage(
+        items=cards,
+        next_cursor=(_encode_catalog_cursor(current_revision, next_offset) if next_offset < total_reports else None),
+        catalog_revision=current_revision,
+        total_reports=total_reports,
+        proactive_creation_allowed=total_reports <= 500,
+    )
+
+
+async def load_report_context(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    project_id: str,
+    report_id: str,
+) -> ReportContextPackage | None:
+    report = (
+        await db.execute(
+            select(GatewaySavedReport).where(
+                GatewaySavedReport.id == report_id,
+                GatewaySavedReport.org_id == org_id,
+                GatewaySavedReport.owner_user_id == user_id,
+                GatewaySavedReport.project_id == project_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if report is None or not report.current_version_id:
+        return None
+    version_rows = (
+        await db.execute(
+            select(GatewaySavedReportVersion, GatewayChatArtifact)
+            .join(GatewayChatArtifact, GatewayChatArtifact.id == GatewaySavedReportVersion.source_artifact_id)
+            .where(
+                GatewaySavedReportVersion.report_id == report.id,
+                GatewaySavedReportVersion.org_id == org_id,
+                GatewaySavedReportVersion.owner_user_id == user_id,
+            )
+            .order_by(GatewaySavedReportVersion.ordinal)
+        )
+    ).all()
+    if not version_rows:
+        return None
+    run_ids = {artifact.run_id for _, artifact in version_rows}
+    runs = {
+        run.id: run
+        for run in (
+            await db.execute(
+                select(GatewayChatRun).where(
+                    GatewayChatRun.id.in_(run_ids),
+                    GatewayChatRun.org_id == org_id,
+                    GatewayChatRun.user_id == user_id,
+                    GatewayChatRun.project_id == project_id,
+                )
+            )
+        ).scalars()
+    }
+    conversations = {
+        conversation.id: conversation
+        for conversation in (
+            await db.execute(
+                select(GatewayChatConversation).where(
+                    GatewayChatConversation.id.in_({run.conversation_id for run in runs.values()}),
+                    GatewayChatConversation.org_id == org_id,
+                    GatewayChatConversation.user_id == user_id,
+                    GatewayChatConversation.project_id == project_id,
+                    GatewayChatConversation.surface == "standalone",
+                )
+            )
+        ).scalars()
+    }
+    message_ids = {run.user_message_id for run in runs.values()} | {
+        artifact.assistant_message_id for _, artifact in version_rows if artifact.assistant_message_id
+    }
+    messages = {
+        message.id: message
+        for message in (
+            await db.execute(
+                select(GatewayChatMessage).where(
+                    GatewayChatMessage.id.in_(message_ids),
+                    GatewayChatMessage.org_id == org_id,
+                    GatewayChatMessage.user_id == user_id,
+                    GatewayChatMessage.project_id == project_id,
+                )
+            )
+        ).scalars()
+    }
+    plans = list(
+        (
+            await db.execute(
+                select(GatewayQueryPlan)
+                .where(
+                    GatewayQueryPlan.run_id.in_(run_ids),
+                    GatewayQueryPlan.org_id == org_id,
+                    GatewayQueryPlan.user_id == user_id,
+                    GatewayQueryPlan.project_id == project_id,
+                    GatewayQueryPlan.shadow.is_(False),
+                )
+                .order_by(GatewayQueryPlan.created_at)
+            )
+        ).scalars()
+    )
+
+    def message_context(version: GatewaySavedReportVersion, artifact: GatewayChatArtifact) -> ReportContextMessage:
+        run = runs.get(artifact.run_id)
+        conversation = conversations.get(run.conversation_id) if run else None
+        request = messages.get(run.user_message_id) if run else None
+        answer = messages.get(artifact.assistant_message_id or "")
+        return ReportContextMessage(
+            request=(str(redact_public_payload(request.content)) if request else ""),
+            answer=(str(redact_public_payload(answer.content)) if answer else ""),
+            source_thread_id=(conversation.id if conversation else artifact.conversation_id),
+            source_run_id=(run.id if run else artifact.run_id),
+        )
+
+    creation_version, creation_artifact = version_rows[0]
+    current_version, current_artifact = next(
+        (row for row in version_rows if row[0].id == report.current_version_id),
+        version_rows[-1],
+    )
+    timeline = []
+    for version, artifact in version_rows:
+        run = runs.get(artifact.run_id)
+        conversation = conversations.get(run.conversation_id) if run else None
+        timeline.append(
+            ReportVersionTimelineItem(
+                version_id=version.id,
+                version=version.ordinal,
+                artifact_id=artifact.id,
+                artifact_kind=artifact.kind,
+                artifact_filename=artifact.filename,
+                source_thread_id=(conversation.id if conversation else artifact.conversation_id),
+                source_thread_title=(conversation.title or "New chat") if conversation else "Archived chat",
+                source_run_id=(run.id if run else artifact.run_id),
+                published_at=version.published_at,
+            )
+        )
+    return ReportContextPackage(
+        report_id=report.id,
+        title=report.title,
+        artifact_kind=report.kind,
+        project_id=report.project_id,
+        current_version_id=current_version.id,
+        current_version=current_version.ordinal,
+        creation=message_context(creation_version, creation_artifact),
+        current=message_context(current_version, current_artifact),
+        version_timeline=timeline,
+        current_artifact=_artifact_context_metadata(current_artifact),
+        historical_queries=[
+            ReportHistoricalQuery(
+                source_run_id=str(plan.run_id or ""),
+                purpose=plan.purpose[:4_000],
+                normalized_sql=str(redact_public_payload(plan.normalized_sql))[:100_000],
+                referenced_models=_referenced_models(plan.normalized_sql),
+            )
+            for plan in plans
+        ],
+        dbt_commit_sha=current_version.dbt_commit_sha,
+        freshness_state=current_version.freshness_state,
+        freshness_at=current_version.freshness_at,
+        assumptions=[str(value)[:500] for value in (current_artifact.assumptions or [])[:100]],
+        exclusions=[str(value)[:500] for value in (current_artifact.exclusions or [])[:100]],
+        caveats=[str(value)[:500] for value in (current_artifact.caveats or [])[:100]],
+    )
 
 
 async def list_library(
@@ -629,6 +1102,156 @@ async def _owned_completed_artifact(
     ).one_or_none()
 
 
+def _artifact_is_complete(artifact: GatewayChatArtifact) -> bool:
+    snapshot = artifact.snapshot_json or {}
+    if artifact.kind == "report":
+        html = str(snapshot.get("html") or "").strip()
+        references = (artifact.provenance_json or {}).get("result_references") or []
+        return bool(html) and all(
+            not isinstance(reference, dict) or reference.get("completeness") == "complete" for reference in references
+        )
+    source = snapshot.get("source") if artifact.kind == "chart" else snapshot
+    if not isinstance(source, dict):
+        return False
+    completeness = source.get("completeness")
+    return source.get("truncated") is not True and completeness in {None, "complete"}
+
+
+async def validate_report_proposal_for_run(
+    db: AsyncSession,
+    *,
+    run: GatewayChatRun,
+    proposal: dict[str, Any] | None,
+) -> ReportSuggestion | None:
+    if not proposal:
+        return None
+    action = str(proposal.get("action") or "")
+    if action not in {"create", "update", "open"}:
+        raise ReportValidationError("Unsupported report proposal action")
+    artifact_kind = str(proposal.get("artifact_kind") or "")
+    artifact_filename = str(proposal.get("artifact_filename") or "").strip()
+    title = " ".join(str(proposal.get("title") or "").split()).strip()
+    reason = " ".join(str(proposal.get("reason") or "").split()).strip()
+    if artifact_kind not in {"table", "chart", "report"} or not artifact_filename:
+        raise ReportValidationError("The proposed artifact is invalid")
+    if not title or len(title) > 200 or not reason or len(reason) > 2_000:
+        raise ReportValidationError("The report proposal title or reason is invalid")
+    artifact = (
+        await db.execute(
+            select(GatewayChatArtifact).where(
+                GatewayChatArtifact.run_id == run.id,
+                GatewayChatArtifact.org_id == run.org_id,
+                GatewayChatArtifact.user_id == run.user_id,
+                GatewayChatArtifact.conversation_id == run.conversation_id,
+                GatewayChatArtifact.kind == artifact_kind,
+                GatewayChatArtifact.filename == artifact_filename,
+            )
+        )
+    ).scalar_one_or_none()
+    if artifact is None:
+        raise ReportValidationError("The proposed artifact was not successfully published")
+    if not _artifact_is_complete(artifact):
+        raise ReportValidationError("Incomplete or truncated artifacts cannot become reports")
+
+    content_hash = await ensure_artifact_hash(db, artifact)
+    exact = (
+        await db.execute(
+            select(GatewaySavedReport, GatewaySavedReportVersion)
+            .join(GatewaySavedReportVersion, GatewaySavedReportVersion.report_id == GatewaySavedReport.id)
+            .where(
+                GatewaySavedReport.org_id == run.org_id,
+                GatewaySavedReport.owner_user_id == run.user_id,
+                GatewaySavedReport.project_id == run.project_id,
+                GatewaySavedReportVersion.kind == artifact.kind,
+                GatewaySavedReportVersion.content_hash == content_hash,
+            )
+            .order_by(GatewaySavedReportVersion.ordinal.desc())
+            .limit(1)
+        )
+    ).one_or_none()
+    if exact is not None:
+        exact_report, _ = exact
+        if not exact_report.current_version_id:
+            raise ReportValidationError("The exact report match has no current version")
+        return ReportSuggestion(
+            action="open",
+            artifact_id=artifact.id,
+            title=exact_report.title,
+            reason="An exact saved version already exists.",
+            report_id=exact_report.id,
+            expected_current_version_id=exact_report.current_version_id,
+            catalog_revision=str(proposal.get("catalog_revision") or "") or None,
+        )
+
+    project_reports = list(
+        (
+            await db.execute(
+                select(GatewaySavedReport).where(
+                    GatewaySavedReport.org_id == run.org_id,
+                    GatewaySavedReport.owner_user_id == run.user_id,
+                    GatewaySavedReport.project_id == run.project_id,
+                )
+            )
+        ).scalars()
+    )
+    normalized_title = normalize_report_title(title)
+    title_match = next(
+        (report for report in project_reports if normalize_report_title(report.title) == normalized_title),
+        None,
+    )
+    existing_report_id = str(proposal.get("existing_report_id") or "") or None
+    loaded_report_ids = {str(value) for value in proposal.get("loaded_report_ids") or []}
+    attached_report_id = str(proposal.get("attached_report_id") or "") or None
+    scan_complete = proposal.get("catalog_scan_complete") is True
+    creation_allowed = proposal.get("proactive_creation_allowed") is True
+    catalog_revision = str(proposal.get("catalog_revision") or "") or None
+
+    if title_match is not None and existing_report_id != title_match.id:
+        raise ReportValidationError("A normalized-title match must be updated instead of created")
+    if action == "create":
+        if existing_report_id:
+            raise ReportValidationError("A create proposal cannot target an existing report")
+        if not scan_complete or not creation_allowed or not catalog_revision:
+            raise ReportValidationError("The complete report catalog must be scanned before creation")
+        current_revision, total_reports = await report_catalog_revision(
+            db,
+            org_id=run.org_id,
+            user_id=run.user_id,
+            project_id=run.project_id,
+        )
+        if total_reports > 500:
+            raise ReportValidationError("Proactive report creation is unavailable above 500 reports")
+        if current_revision != catalog_revision:
+            raise ReportCatalogChangedError("The report catalog changed after the scan")
+        return ReportSuggestion(
+            action="create",
+            artifact_id=artifact.id,
+            title=title,
+            reason=reason,
+            catalog_revision=catalog_revision,
+        )
+
+    if not existing_report_id:
+        raise ReportValidationError("An update or open proposal requires an existing report")
+    report = next((candidate for candidate in project_reports if candidate.id == existing_report_id), None)
+    if report is None or not report.current_version_id:
+        raise ReportNotFoundError("Report not found")
+    if report.kind != artifact.kind:
+        raise ReportValidationError("Report updates must preserve the artifact type")
+    if action == "update" and existing_report_id != attached_report_id:
+        if not scan_complete or existing_report_id not in loaded_report_ids:
+            raise ReportValidationError("The matched report context must be loaded before an update")
+    return ReportSuggestion(
+        action=action,
+        artifact_id=artifact.id,
+        title=report.title,
+        reason=reason,
+        report_id=report.id,
+        expected_current_version_id=report.current_version_id,
+        catalog_revision=catalog_revision,
+    )
+
+
 async def promote_artifact(
     db: AsyncSession, *, org_id: str, user_id: str, artifact_id: str, title: str
 ) -> tuple[str, GatewaySavedReport, GatewaySavedReportVersion]:
@@ -807,6 +1430,235 @@ async def promote_artifact(
     return "created", report, version
 
 
+async def _append_proposed_version(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    report_id: str,
+    artifact_id: str,
+    expected_current_version_id: str,
+) -> tuple[str, GatewaySavedReport, GatewaySavedReportVersion]:
+    report = (
+        await db.execute(
+            select(GatewaySavedReport)
+            .where(
+                GatewaySavedReport.id == report_id,
+                GatewaySavedReport.org_id == org_id,
+                GatewaySavedReport.owner_user_id == user_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if report is None:
+        raise ReportNotFoundError
+    if report.current_version_id != expected_current_version_id:
+        raise ReportConflictError(report.id, report.current_version_id or "")
+    owned = await _owned_completed_artifact(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        artifact_id=artifact_id,
+    )
+    if owned is None:
+        raise ReportNotFoundError
+    artifact, conversation = owned
+    if conversation.project_id != report.project_id:
+        raise ReportValidationError("Report and artifact must belong to the same project")
+    if artifact.kind != report.kind:
+        raise ReportValidationError("Report updates must preserve the artifact type")
+    if not _artifact_is_complete(artifact):
+        raise ReportValidationError("Incomplete or truncated artifacts cannot become reports")
+    content_hash = await ensure_artifact_hash(db, artifact)
+    refresh = (
+        await db.execute(
+            select(GatewayReportRefresh).where(
+                GatewayReportRefresh.report_id == report.id,
+                GatewayReportRefresh.base_version_id == expected_current_version_id,
+                GatewayReportRefresh.run_id == artifact.run_id,
+                GatewayReportRefresh.org_id == org_id,
+                GatewayReportRefresh.owner_user_id == user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    matching = (
+        await db.execute(
+            select(GatewaySavedReportVersion).where(
+                GatewaySavedReportVersion.org_id == org_id,
+                GatewaySavedReportVersion.owner_user_id == user_id,
+                GatewaySavedReportVersion.kind == artifact.kind,
+                GatewaySavedReportVersion.content_hash == content_hash,
+            )
+        )
+    ).scalar_one_or_none()
+    if matching:
+        matching_report = await db.get(GatewaySavedReport, matching.report_id)
+        if matching.report_id != report.id:
+            raise ExistingContentError(matching.report_id, matching.id)
+        if refresh:
+            refresh.status = "current"
+            refresh.updated_at = _now()
+            await db.commit()
+        return "existing", matching_report or report, matching
+    now = _now()
+    provenance = artifact.provenance_json or {}
+    version = GatewaySavedReportVersion(
+        id=str(uuid.uuid4()),
+        report_id=report.id,
+        org_id=org_id,
+        owner_user_id=user_id,
+        ordinal=report.revision + 1,
+        source_artifact_id=artifact.id,
+        kind=artifact.kind,
+        content_hash=content_hash,
+        filename=artifact.filename,
+        freshness_state="fresh" if artifact.freshness_at else "unknown",
+        freshness_at=artifact.freshness_at,
+        freshness_checked_at=now,
+        dbt_commit_sha=str(provenance.get("commit_sha") or conversation.commit_sha or "") or None,
+        schema_fingerprint=str(provenance.get("schema_fingerprint") or "") or None,
+        published_at=now,
+    )
+    db.add(version)
+    report.current_version_id = version.id
+    report.revision += 1
+    report.updated_at = now
+    if refresh:
+        refresh.status = "current"
+        refresh.updated_at = now
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        actual = await db.get(GatewaySavedReport, report.id)
+        matching = (
+            await db.execute(
+                select(GatewaySavedReportVersion).where(
+                    GatewaySavedReportVersion.org_id == org_id,
+                    GatewaySavedReportVersion.owner_user_id == user_id,
+                    GatewaySavedReportVersion.kind == artifact.kind,
+                    GatewaySavedReportVersion.content_hash == content_hash,
+                )
+            )
+        ).scalar_one_or_none()
+        if matching and matching.report_id == report.id and actual:
+            return "existing", actual, matching
+        raise ReportConflictError(report.id, actual.current_version_id if actual else "") from None
+    return "created", report, version
+
+
+async def approve_report_suggestion(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    message_id: str,
+) -> ReportSuggestionApprovalResult | None:
+    message = (
+        await db.execute(
+            select(GatewayChatMessage)
+            .where(
+                GatewayChatMessage.id == message_id,
+                GatewayChatMessage.org_id == org_id,
+                GatewayChatMessage.user_id == user_id,
+                GatewayChatMessage.role == "assistant",
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if message is None:
+        return None
+    metadata = dict(message.metadata_json or {})
+    raw_suggestion = metadata.get("report_suggestion")
+    if not isinstance(raw_suggestion, dict):
+        return None
+    approved = raw_suggestion.get("approval")
+    if isinstance(approved, dict):
+        return ReportSuggestionApprovalResult(
+            status=str(approved.get("status") or "existing"),
+            report_id=str(approved.get("report_id") or ""),
+            version_id=str(approved.get("version_id") or ""),
+        )
+    suggestion = ReportSuggestion.model_validate(raw_suggestion)
+    artifact = (
+        await db.execute(
+            select(GatewayChatArtifact, GatewayChatConversation)
+            .join(GatewayChatConversation, GatewayChatConversation.id == GatewayChatArtifact.conversation_id)
+            .where(
+                GatewayChatArtifact.id == suggestion.artifact_id,
+                GatewayChatArtifact.assistant_message_id == message.id,
+                GatewayChatArtifact.org_id == org_id,
+                GatewayChatArtifact.user_id == user_id,
+                GatewayChatConversation.project_id == message.project_id,
+            )
+        )
+    ).one_or_none()
+    if artifact is None:
+        raise ReportNotFoundError
+    source_artifact, _ = artifact
+
+    if suggestion.action == "create":
+        current_revision, total_reports = await report_catalog_revision(
+            db,
+            org_id=org_id,
+            user_id=user_id,
+            project_id=message.project_id or "",
+        )
+        if total_reports > 500 or current_revision != suggestion.catalog_revision:
+            raise ReportCatalogChangedError("The report catalog changed after the scan")
+        status, report, version = await promote_artifact(
+            db,
+            org_id=org_id,
+            user_id=user_id,
+            artifact_id=source_artifact.id,
+            title=suggestion.title,
+        )
+        if report.project_id != message.project_id:
+            raise ReportValidationError("Exact report content belongs to another project")
+        result_status = "created" if status == "created" else "existing"
+    elif suggestion.action == "update":
+        if not suggestion.report_id or not suggestion.expected_current_version_id:
+            raise ReportValidationError("The update suggestion is incomplete")
+        status, report, version = await _append_proposed_version(
+            db,
+            org_id=org_id,
+            user_id=user_id,
+            report_id=suggestion.report_id,
+            artifact_id=source_artifact.id,
+            expected_current_version_id=suggestion.expected_current_version_id,
+        )
+        result_status = "updated" if status == "created" else "existing"
+    else:
+        report = await db.get(GatewaySavedReport, suggestion.report_id or "")
+        if (
+            report is None
+            or report.org_id != org_id
+            or report.owner_user_id != user_id
+            or report.project_id != message.project_id
+            or not report.current_version_id
+        ):
+            raise ReportNotFoundError
+        version = await db.get(GatewaySavedReportVersion, report.current_version_id)
+        if version is None:
+            raise ReportNotFoundError
+        result_status = "opened"
+
+    approval = {
+        "status": result_status,
+        "report_id": report.id,
+        "version_id": version.id,
+        "approved_at": _now().isoformat(),
+    }
+    raw_suggestion = {**raw_suggestion, "approval": approval}
+    message.metadata_json = {**metadata, "report_suggestion": raw_suggestion}
+    await db.commit()
+    return ReportSuggestionApprovalResult(
+        status=result_status,
+        report_id=report.id,
+        version_id=version.id,
+    )
+
+
 def _version_info(version: GatewaySavedReportVersion, artifact: GatewayChatArtifact) -> SavedVersionInfo:
     return SavedVersionInfo(
         id=version.id,
@@ -907,6 +1759,7 @@ async def get_owned_report_detail(
             explanation=str((latest_refresh.drift_json or {}).get("explanation") or ""),
             checked_at=latest_refresh.created_at,
             run_id=latest_refresh.run_id,
+            conversation_id=latest_refresh.original_conversation_id,
             candidate_artifact_ids=list(latest_refresh.candidate_artifact_ids_json or []),
         )
     return SavedReportDetail(
@@ -937,6 +1790,35 @@ async def verified_report_reference(
     report_id: str,
     version_id: str,
 ) -> dict[str, Any] | None:
+    conversation = (
+        await db.execute(
+            select(GatewayChatConversation).where(
+                GatewayChatConversation.id == conversation_id,
+                GatewayChatConversation.org_id == org_id,
+                GatewayChatConversation.user_id == user_id,
+                GatewayChatConversation.surface == "standalone",
+            )
+        )
+    ).scalar_one_or_none()
+    if conversation is None or not conversation.project_id:
+        return None
+    return await verified_project_report_reference(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        project_id=conversation.project_id,
+        report_id=report_id,
+    )
+
+
+async def verified_project_report_reference(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    project_id: str,
+    report_id: str,
+) -> dict[str, Any] | None:
     row = (
         await db.execute(
             select(GatewaySavedReport, GatewaySavedReportVersion)
@@ -948,8 +1830,8 @@ async def verified_report_reference(
                 GatewaySavedReport.id == report_id,
                 GatewaySavedReport.org_id == org_id,
                 GatewaySavedReport.owner_user_id == user_id,
-                GatewaySavedReport.original_conversation_id == conversation_id,
-                GatewaySavedReportVersion.id == version_id,
+                GatewaySavedReport.project_id == project_id,
+                GatewaySavedReportVersion.id == GatewaySavedReport.current_version_id,
             )
         )
     ).one_or_none()
@@ -957,7 +1839,7 @@ async def verified_report_reference(
         return None
     report, version = row
     return {
-        "mode": "follow_up",
+        "mode": "attached",
         "report_id": report.id,
         "version_id": version.id,
         "version_ordinal": version.ordinal,
@@ -1132,15 +2014,51 @@ async def create_refresh(
     now = _now()
     version = await db.get(GatewaySavedReportVersion, expected_version_id)
     assert version is not None
+    project = await db.get(GatewayWorkspaceProject, report.project_id)
+    source_conversation = await db.get(
+        GatewayChatConversation,
+        report.original_conversation_id,
+    )
+    if project is None or source_conversation is None:
+        raise ReportNotFoundError
+    reference = {
+        "mode": "refresh",
+        "report_id": report.id,
+        "version_id": version.id,
+        "version_ordinal": version.ordinal,
+        "title": report.title,
+        "kind": report.kind,
+        "source_artifact_id": version.source_artifact_id,
+    }
+    prompt = (
+        f'Refresh saved report "{report.title}" using current live warehouse data. '
+        f"Publish a {report.kind} artifact for review."
+    )
+    from gateway.store import standalone_chat as chat_store
+
+    conversation, run = await chat_store.create_conversation_with_run(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        project=project,
+        branch=source_conversation.branch or project.default_branch or "main",
+        message=prompt,
+        commit_sha=source_conversation.commit_sha,
+        per_query_budget_usd=source_conversation.per_query_budget_usd,
+        chat_budget_usd=source_conversation.chat_budget_usd,
+        message_metadata={"report_reference": reference},
+        commit=False,
+    )
     refresh = GatewayReportRefresh(
         id=str(uuid.uuid4()),
         report_id=report.id,
         base_version_id=expected_version_id,
         org_id=org_id,
         owner_user_id=user_id,
-        original_conversation_id=report.original_conversation_id,
+        original_conversation_id=conversation.id,
         drift_state="unknown",
-        drift_json={"explanation": "Refresh requested in the original thread."},
+        drift_json={"explanation": "Refresh requested in a new Data Chat."},
+        run_id=run.id,
         status="refreshing",
         candidate_artifact_ids_json=[],
         created_at=now,
@@ -1148,7 +2066,6 @@ async def create_refresh(
     )
     db.add(refresh)
     await db.commit()
-    await queue_refresh(db, refresh=refresh)
     return refresh
 
 

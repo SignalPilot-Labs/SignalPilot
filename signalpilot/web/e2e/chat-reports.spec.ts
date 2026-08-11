@@ -128,7 +128,133 @@ async function mockReportsApi(
       if (path === "/api/chat/bootstrap") {
         return json(route, {
           enabled: true,
+          projects: [
+            {
+              id: "project-1",
+              name: "revenue",
+              display_name: "Revenue Warehouse",
+              connection_name: "production",
+              default_branch: "main",
+              ready: true,
+              readiness_message: "Ready",
+            },
+          ],
+          selected_project_id: "project-1",
+          is_admin: true,
+          starter_questions: [],
+          default_per_query_budget_usd: 0.25,
+          default_chat_budget_usd: 1,
           enterprise_features: { organization_sharing: true },
+        });
+      }
+      if (path === "/api/chat/projects/project-1/readiness") {
+        return json(route, {
+          project_id: "project-1",
+          ready: true,
+          code: "ready",
+          message: "Ready",
+          setup_cta: false,
+          branch: "main",
+          connection_name: "production",
+          starter_questions: [],
+        });
+      }
+      if (path === "/api/chat/conversations") {
+        return json(route, {
+          conversations: [
+            {
+              id: "conversation-new",
+              project_id: "project-1",
+              project_name: "Revenue Warehouse",
+              branch: "main",
+              title: "Q2 revenue follow-up",
+              status: "active",
+              created_at: 1,
+              updated_at: 2,
+              run_status: "completed",
+              commit_sha: "b".repeat(40),
+              per_query_budget_usd: 0.25,
+              chat_budget_usd: 1,
+              estimated_spend_usd: 0,
+              actual_spend_usd: 0,
+              reserved_spend_usd: 0,
+            },
+          ],
+        });
+      }
+      if (path === "/api/chat/conversations/conversation-new") {
+        return json(route, {
+          conversation: {
+            id: "conversation-new",
+            project_id: "project-1",
+            project_name: "Revenue Warehouse",
+            branch: "main",
+            title: "Q2 revenue follow-up",
+            status: "active",
+            created_at: 1,
+            updated_at: 2,
+            run_status: "completed",
+            commit_sha: "b".repeat(40),
+            per_query_budget_usd: 0.25,
+            chat_budget_usd: 1,
+            estimated_spend_usd: 0,
+            actual_spend_usd: 0,
+            reserved_spend_usd: 0,
+          },
+          messages: [
+            {
+              id: "assistant-1",
+              role: "assistant",
+              content: "Q2 revenue is now available.",
+              sequence: 2,
+              created_at: 2,
+              metadata: {
+                run_id: "run-new",
+                status: "completed",
+                report_suggestion: {
+                  action: "update",
+                  artifact_id: "artifact-new",
+                  title: "Saved revenue",
+                  reason:
+                    "The business question and grain match; only the date range changed.",
+                  report_id: "report-1",
+                  expected_current_version_id: "version-1",
+                  catalog_revision: "revision-1",
+                },
+              },
+            },
+          ],
+          artifacts: [
+            {
+              id: "artifact-new",
+              run_id: "run-new",
+              assistant_message_id: "assistant-1",
+              kind: "table",
+              filename: "revenue-q2.csv",
+              mime_type: "text/csv",
+              snapshot: artifact.snapshot,
+              provenance: null,
+              freshness_at: "2026-08-11T12:00:00Z",
+              assumptions: [],
+              exclusions: [],
+              caveats: [],
+              parent_artifact_id: null,
+              created_at: "2026-08-11T12:00:00Z",
+              download_formats: ["csv"],
+            },
+          ],
+          current_run: null,
+          run_events: [],
+        });
+      }
+      if (
+        path === "/api/chat/report-suggestions/assistant-1/approve" &&
+        method === "POST"
+      ) {
+        return json(route, {
+          status: "updated",
+          report_id: "report-1",
+          version_id: "version-2",
         });
       }
       if (path === "/api/chat/reports" && method === "POST") {
@@ -163,11 +289,11 @@ async function mockReportsApi(
             refresh_id: "refresh-1",
             report_id: "report-1",
             version_id: "version-1",
-            conversation_id: "conversation-1",
+            conversation_id: "conversation-refresh",
             run_id: "run-1",
             status: "refreshing",
             drift_state: "unknown",
-            explanation: "Refresh requested in the original thread.",
+            explanation: "Refresh requested in a new Data Chat.",
             checked_at: "2026-08-10T12:00:00Z",
           },
           201,
@@ -270,6 +396,7 @@ test.describe("Data Chat reports", () => {
       explanation: "No dbt or warehouse schema changes were detected.",
       checked_at: "2026-08-10T12:00:00Z",
       run_id: "run-1",
+      conversation_id: "conversation-refresh",
       candidate_artifact_ids: ["artifact-refresh"],
     });
     const requests: Array<{ method: string; path: string; body: unknown }> = [];
@@ -301,16 +428,14 @@ test.describe("Data Chat reports", () => {
     await page.getByRole("button", { name: "Revoke", exact: true }).click();
     await expect(page.getByText(/reports\/shared\/fixed-token/)).toHaveCount(0);
     await expect(
-      page.getByRole("link", { name: "Follow Up in thread" }),
+      page.getByRole("link", { name: "Use in Data Chat" }),
     ).toHaveAttribute(
       "href",
-      "/chats/conversation-1?report=report-1&version=version-1",
+      "/chats?project=project-1&report=report-1&version=version-1",
     );
   });
 
-  test("sends a refresh request directly to the original thread", async ({
-    page,
-  }) => {
+  test("starts report refresh in a new Data Chat", async ({ page }) => {
     const requests: Array<{ method: string; path: string; body: unknown }> = [];
     await mockReportsApi(page, {
       onRequest: (request) => requests.push(request),
@@ -320,7 +445,7 @@ test.describe("Data Chat reports", () => {
     await page
       .getByRole("button", { name: "Refresh data", exact: true })
       .click();
-    await expect(page).toHaveURL(/\/chats\/conversation-1$/);
+    await expect(page).toHaveURL(/\/chats\/conversation-refresh$/);
     expect(
       requests.filter(
         (request) =>
@@ -331,6 +456,38 @@ test.describe("Data Chat reports", () => {
     expect(requests.some((request) => request.path.includes("/confirm"))).toBe(
       false,
     );
+  });
+
+  test("approves a semantic cross-thread update and reloads the durable report", async ({
+    page,
+  }) => {
+    const requests: Array<{ method: string; path: string; body: unknown }> = [];
+    await mockReportsApi(page, {
+      onRequest: (request) => requests.push(request),
+    });
+    await page.goto("/chats/conversation-new", {
+      waitUntil: "domcontentloaded",
+    });
+
+    await expect(page.getByText("Matched “Saved revenue”")).toBeVisible();
+    await expect(page.getByText(/only the date range changed/)).toBeVisible();
+    await page.getByRole("button", { name: "Update existing report" }).click();
+    await expect(
+      page.getByRole("button", { name: "Open report" }),
+    ).toBeVisible();
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "POST" &&
+          request.path === "/api/chat/report-suggestions/assistant-1/approve",
+      ),
+    ).toBe(true);
+
+    await page.getByRole("button", { name: "Open report" }).click();
+    await expect(page).toHaveURL(/\/reports\/report-1$/);
+    await expect(
+      page.getByRole("heading", { name: "Saved revenue" }),
+    ).toBeVisible();
   });
 
   test("shared recipients see only the pinned view and download action", async ({
@@ -356,6 +513,6 @@ test.describe("Data Chat reports", () => {
     ).toHaveCount(0);
     await expect(page.getByText("Version history")).toHaveCount(0);
     await expect(page.getByText("Original thread")).toHaveCount(0);
-    await expect(page.getByText("Follow Up in thread")).toHaveCount(0);
+    await expect(page.getByText("Use in Data Chat")).toHaveCount(0);
   });
 });

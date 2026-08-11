@@ -6,14 +6,20 @@ from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
+from sqlalchemy import select
 
+from gateway.db.models import GatewayChatArtifact, GatewayChatRun
 from gateway.models.chat_reports import (
     ChatLibraryResponse,
     PromoteArtifactRequest,
     PromotionResult,
     PublishReportVersionRequest,
     RefreshCreateResult,
+    ReportCatalogPage,
+    ReportContextPackage,
+    ReportMentionCollection,
     ReportShareGrantInfo,
+    ReportSuggestionApprovalResult,
     SavedReportDetail,
     SharedSavedReport,
     VersionPublishResult,
@@ -38,6 +44,27 @@ def _require_browser_principal(request: Request) -> None:
     method = auth.get("auth_method")
     if method in {"api_key", "notebook_session"} or claims.get("execution_identity"):
         raise HTTPException(status_code=403, detail="An interactive browser user is required")
+
+
+async def _require_runtime_run(request: Request, store: StoreD, run_id: str):
+    claims = getattr(request.state, "_jwt_claims", None) or {}
+    if claims.get("execution_identity") != f"chat:{run_id}":
+        raise HTTPException(status_code=403, detail="A run-scoped identity is required")
+    run = (
+        await store.session.execute(
+            select(GatewayChatRun).where(
+                GatewayChatRun.id == run_id,
+                GatewayChatRun.org_id == store._require_org_id(),
+                GatewayChatRun.user_id == (store.user_id or "local"),
+                GatewayChatRun.project_id == claims.get("project_id"),
+                GatewayChatRun.status == "running",
+                GatewayChatRun.cancellation_requested_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if run is None:
+        raise HTTPException(status_code=403, detail="Report tool scope mismatch")
+    return run
 
 
 def _require_sharing() -> None:
@@ -93,6 +120,149 @@ async def get_library(
         )
     except report_store.ReportValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get(
+    "/report-mentions",
+    response_model=ReportMentionCollection,
+    dependencies=[RequireScope("read")],
+)
+async def get_report_mentions(
+    store: StoreD,
+    project_id: Annotated[str, Query(min_length=1, max_length=200)],
+    search: Annotated[str | None, Query(max_length=200)] = None,
+    limit: Annotated[int, Query(ge=1, le=20)] = 10,
+):
+    _require_enabled()
+    return await report_store.list_report_mentions(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=store.user_id or "local",
+        project_id=project_id,
+        search=search,
+        limit=limit,
+    )
+
+
+@router.get(
+    "/runs/{run_id}/report-catalog",
+    response_model=ReportCatalogPage,
+    dependencies=[RequireScope("read")],
+)
+async def get_run_report_catalog(
+    run_id: str,
+    store: StoreD,
+    request: Request,
+    cursor: Annotated[str | None, Query(max_length=500)] = None,
+    limit: Annotated[int, Query(ge=50, le=50)] = 50,
+):
+    _require_enabled()
+    run = await _require_runtime_run(request, store, run_id)
+    try:
+        return await report_store.list_saved_report_catalog(
+            store.session,
+            org_id=run.org_id,
+            user_id=run.user_id,
+            project_id=run.project_id,
+            cursor=cursor,
+            limit=limit,
+        )
+    except report_store.ReportCatalogChangedError as exc:
+        raise HTTPException(status_code=409, detail={"code": "report_catalog_changed"}) from exc
+    except report_store.ReportValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get(
+    "/runs/{run_id}/report-context/{report_id}",
+    response_model=ReportContextPackage,
+    dependencies=[RequireScope("read")],
+)
+async def get_run_report_context(
+    run_id: str,
+    report_id: str,
+    store: StoreD,
+    request: Request,
+):
+    _require_enabled()
+    run = await _require_runtime_run(request, store, run_id)
+    context = await report_store.load_report_context(
+        store.session,
+        org_id=run.org_id,
+        user_id=run.user_id,
+        project_id=run.project_id,
+        report_id=report_id,
+    )
+    if context is None:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return context
+
+
+@router.get(
+    "/runs/{run_id}/published-report-artifact",
+    dependencies=[RequireScope("read")],
+)
+async def get_run_published_report_artifact(
+    run_id: str,
+    store: StoreD,
+    request: Request,
+    artifact_kind: Annotated[Literal["table", "chart", "report"], Query()],
+    artifact_filename: Annotated[str, Query(min_length=1, max_length=255)],
+):
+    _require_enabled()
+    run = await _require_runtime_run(request, store, run_id)
+    artifact = (
+        await store.session.execute(
+            select(GatewayChatArtifact).where(
+                GatewayChatArtifact.run_id == run.id,
+                GatewayChatArtifact.org_id == run.org_id,
+                GatewayChatArtifact.user_id == run.user_id,
+                GatewayChatArtifact.kind == artifact_kind,
+                GatewayChatArtifact.filename == artifact_filename,
+            )
+        )
+    ).scalar_one_or_none()
+    return {
+        "published": artifact is not None,
+        "complete": bool(artifact and report_store._artifact_is_complete(artifact)),
+    }
+
+
+@router.post(
+    "/report-suggestions/{message_id}/approve",
+    response_model=ReportSuggestionApprovalResult,
+    dependencies=[RequireScope("write")],
+)
+async def approve_report_suggestion(
+    message_id: str,
+    store: StoreD,
+    request: Request,
+):
+    _require_enabled()
+    _require_browser_principal(request)
+    try:
+        result = await report_store.approve_report_suggestion(
+            store.session,
+            org_id=store._require_org_id(),
+            user_id=store.user_id or "local",
+            message_id=message_id,
+        )
+    except report_store.ReportCatalogChangedError as exc:
+        raise HTTPException(status_code=409, detail={"code": "report_catalog_changed"}) from exc
+    except report_store.ReportConflictError as exc:
+        raise _conflict(exc) from exc
+    except report_store.ExistingContentError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "existing_report_content", "report_id": exc.report_id},
+        ) from exc
+    except report_store.ReportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Report suggestion not found") from exc
+    except report_store.ReportValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="Report suggestion not found")
+    return result
 
 
 @router.post(

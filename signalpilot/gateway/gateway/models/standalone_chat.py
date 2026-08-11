@@ -80,6 +80,7 @@ class StandaloneConversationCreate(StrictChatRequest):
     message: str = Field(..., min_length=1, max_length=50_000)
     per_query_budget_usd: float = Field(default=0.25, ge=0)
     chat_budget_usd: float = Field(default=1.0, ge=0)
+    report_reference: ReportReference | None = None
 
     @field_validator("project_id", "message")
     @classmethod

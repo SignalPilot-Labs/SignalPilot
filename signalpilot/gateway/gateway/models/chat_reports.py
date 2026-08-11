@@ -8,6 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 ArtifactKind = Literal["table", "chart", "report"]
+ReportAction = Literal["create", "update", "open"]
 FreshnessState = Literal["fresh", "changes_detected", "unknown"]
 RefreshState = Literal[
     "refreshing",
@@ -24,6 +25,106 @@ class StrictReportRequest(BaseModel):
 class ReportReference(StrictReportRequest):
     report_id: str = Field(min_length=1, max_length=100)
     version_id: str = Field(min_length=1, max_length=100)
+
+
+class ReportMention(BaseModel):
+    report_id: str
+    title: str
+    kind: ArtifactKind
+    project_id: str
+    current_version_id: str
+
+
+class ReportMentionCollection(BaseModel):
+    items: list[ReportMention] = Field(default_factory=list)
+
+
+class ReportCatalogCard(BaseModel):
+    report_id: str
+    title: str
+    artifact_kind: ArtifactKind
+    original_business_request: str
+    main_output_fields: list[str] = Field(default_factory=list)
+    query_purposes: list[str] = Field(default_factory=list)
+    referenced_models: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    exclusions: list[str] = Field(default_factory=list)
+    caveats: list[str] = Field(default_factory=list)
+    current_version_id: str
+    current_version: int
+    freshness_state: FreshnessState
+    freshness_at: datetime | None = None
+    updated_at: datetime
+
+
+class ReportCatalogPage(BaseModel):
+    items: list[ReportCatalogCard] = Field(default_factory=list)
+    next_cursor: str | None = None
+    catalog_revision: str
+    total_reports: int
+    proactive_creation_allowed: bool
+
+
+class ReportContextMessage(BaseModel):
+    request: str
+    answer: str
+    source_thread_id: str
+    source_run_id: str
+
+
+class ReportVersionTimelineItem(BaseModel):
+    version_id: str
+    version: int
+    artifact_id: str
+    artifact_kind: ArtifactKind
+    artifact_filename: str
+    source_thread_id: str
+    source_thread_title: str
+    source_run_id: str
+    published_at: datetime
+
+
+class ReportHistoricalQuery(BaseModel):
+    source_run_id: str
+    purpose: str
+    normalized_sql: str
+    referenced_models: list[str] = Field(default_factory=list)
+
+
+class ReportContextPackage(BaseModel):
+    report_id: str
+    title: str
+    artifact_kind: ArtifactKind
+    project_id: str
+    current_version_id: str
+    current_version: int
+    creation: ReportContextMessage
+    current: ReportContextMessage
+    version_timeline: list[ReportVersionTimelineItem]
+    current_artifact: dict[str, Any]
+    historical_queries: list[ReportHistoricalQuery]
+    dbt_commit_sha: str | None = None
+    freshness_state: FreshnessState
+    freshness_at: datetime | None = None
+    assumptions: list[str] = Field(default_factory=list)
+    exclusions: list[str] = Field(default_factory=list)
+    caveats: list[str] = Field(default_factory=list)
+
+
+class ReportSuggestion(BaseModel):
+    action: ReportAction
+    artifact_id: str
+    title: str
+    reason: str
+    report_id: str | None = None
+    expected_current_version_id: str | None = None
+    catalog_revision: str | None = None
+
+
+class ReportSuggestionApprovalResult(BaseModel):
+    status: Literal["created", "updated", "existing", "opened"]
+    report_id: str
+    version_id: str
 
 
 class PromoteArtifactRequest(StrictReportRequest):
@@ -128,6 +229,7 @@ class ReportRefreshInfo(BaseModel):
     explanation: str
     checked_at: datetime
     run_id: str | None = None
+    conversation_id: str | None = None
     candidate_artifact_ids: list[str] = Field(default_factory=list)
 
 

@@ -394,6 +394,19 @@ async def create_conversation(body: StandaloneConversationCreate, store: StoreD,
             status_code=409,
             detail=_unready_detail(readiness, admin=_is_admin(role)),
         )
+    report_reference = None
+    if body.report_reference is not None:
+        from gateway.store.chat_reports import verified_project_report_reference
+
+        report_reference = await verified_project_report_reference(
+            store.session,
+            org_id=store._require_org_id(),
+            user_id=store.user_id or "local",
+            project_id=project.id,
+            report_id=body.report_reference.report_id,
+        )
+        if report_reference is None:
+            raise HTTPException(status_code=404, detail="Report reference not found")
     conversation, _ = await chat_store.create_conversation_with_run(
         store.session,
         org_id=store._require_org_id(),
@@ -404,6 +417,7 @@ async def create_conversation(body: StandaloneConversationCreate, store: StoreD,
         commit_sha=branch_head_sha(project.id, readiness.branch),
         per_query_budget_usd=body.per_query_budget_usd,
         chat_budget_usd=body.chat_budget_usd,
+        message_metadata={"report_reference": report_reference} if report_reference else None,
     )
     detail = await chat_store.get_conversation_detail(
         store.session,
@@ -1049,9 +1063,7 @@ async def publish_runtime_archive(body: RuntimeArchiveCreate, store: StoreD, req
     html = html_text.encode("utf-8")
     archive_hashes = tuple(hashlib.sha256(value).hexdigest() for value in (source, html, manifest))
     existing = (
-        await store.session.execute(
-            select(GatewayChatRuntimeArchive).where(GatewayChatRuntimeArchive.run_id == run.id)
-        )
+        await store.session.execute(select(GatewayChatRuntimeArchive).where(GatewayChatRuntimeArchive.run_id == run.id))
     ).scalar_one_or_none()
     if existing is not None:
         if archive_hashes != (existing.source_hash, existing.html_hash, existing.manifest_hash):

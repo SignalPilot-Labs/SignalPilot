@@ -952,6 +952,7 @@ export const createStandaloneConversation = (
   message: string,
   perQueryBudgetUsd = 0.25,
   chatBudgetUsd = 1,
+  reportReference?: { report_id: string; version_id: string },
 ) =>
   request<StandaloneConversationDetail>("/api/chat/conversations", {
     method: "POST",
@@ -960,6 +961,7 @@ export const createStandaloneConversation = (
       message,
       per_query_budget_usd: perQueryBudgetUsd,
       chat_budget_usd: chatBudgetUsd,
+      report_reference: reportReference,
     }),
   });
 export const decideStandaloneQueryProposal = (
@@ -1211,6 +1213,30 @@ async function downloadChatArtifact(
 // Data Chat artifact library and immutable saved reports.
 export type ChatReportFreshness = "fresh" | "changes_detected" | "unknown";
 
+export type ChatReportMention = {
+  report_id: string;
+  title: string;
+  kind: "table" | "chart" | "report";
+  project_id: string;
+  current_version_id: string;
+};
+
+export type ChatReportSuggestion = {
+  action: "create" | "update" | "open";
+  artifact_id: string;
+  title: string;
+  reason: string;
+  report_id: string | null;
+  expected_current_version_id: string | null;
+  catalog_revision: string | null;
+  approval?: {
+    status: "created" | "updated" | "existing" | "opened";
+    report_id: string;
+    version_id: string;
+    approved_at: string;
+  };
+};
+
 export type ChatLibraryArtifactHistoryItem = {
   id: string;
   kind: "table" | "chart" | "report";
@@ -1303,6 +1329,7 @@ export type SavedReportDetail = {
     explanation: string;
     checked_at: string;
     run_id: string | null;
+    conversation_id: string | null;
     candidate_artifact_ids: string[];
   } | null;
 };
@@ -1342,6 +1369,23 @@ export const getChatLibrary = (filters: ChatLibraryFilters = {}) => {
     `/api/chat/library${params.size ? `?${params}` : ""}`,
   );
 };
+
+export const getChatReportMentions = (projectId: string, search = "") => {
+  const params = new URLSearchParams({ project_id: projectId });
+  if (search) params.set("search", search);
+  return request<{ items: ChatReportMention[] }>(
+    `/api/chat/report-mentions?${params}`,
+  );
+};
+
+export const approveChatReportSuggestion = (messageId: string) =>
+  request<{
+    status: "created" | "updated" | "existing" | "opened";
+    report_id: string;
+    version_id: string;
+  }>(`/api/chat/report-suggestions/${encodeURIComponent(messageId)}/approve`, {
+    method: "POST",
+  });
 
 export const promoteChatArtifact = (artifactId: string, title: string) =>
   request<{

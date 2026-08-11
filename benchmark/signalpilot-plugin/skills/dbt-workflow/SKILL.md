@@ -227,7 +227,11 @@ For each model in dependency order:
 
 Do NOT rewrite pre-existing SQL files from scratch. For bug-fix tasks, EDIT the existing SQL minimally - change only the broken expression (e.g., add a CAST, fix an aggregation function). Keep all existing JOINs, CTEs, column aliases, and WHERE clauses intact. Rewriting from scratch drops logic the original author put there (lookup JOINs, filters, aliases) that you may not notice is missing.
 
-After ALL SQL files are written, build ONLY the models you wrote:
+After ALL SQL files are written, run `python3 "${CLAUDE_SKILL_DIR}/inspect_model_state.py" "<project_directory>" <model1> <model2>` because inline overrides and incremental guards can change first-build output.
+Resolve each `FAIL` before building because it marks an unusable model state.
+Review each `REVIEW` or `WARN` against the task, YML, and `dbt_project.yml` because those files establish materialization intent.
+
+Build ONLY the models you wrote:
 `dbt run --select <model1> <model2> <model3>` (NO `+` prefix).
 
 The `+` prefix rebuilds upstream models you did NOT write, destroying

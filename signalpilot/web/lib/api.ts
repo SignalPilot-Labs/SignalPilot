@@ -71,7 +71,7 @@ export function setApiKey(key: string | null) {
 // The following function sends API requests.
 
 async function _getAuthHeader(): Promise<string | null> {
-    // In cloud mode, wait for Clerk initialization and then use the JWT.
+  // In cloud mode, wait for Clerk initialization and then use the JWT.
   if (IS_CLOUD_MODE) {
     if (_clerkReadyPromise && !_clerkGetToken) {
       // Wait up to 10s for Clerk to load — avoids firing unauthenticated requests
@@ -321,18 +321,30 @@ export type EvalCheckResult = {
   tolerance?: number;
   detail?: string;
 };
-export type EvalGradeExpectation = { name: string; value?: number; tolerance?: number };
+export type EvalGradeExpectation = {
+  name: string;
+  value?: number;
+  tolerance?: number;
+};
 export type EvalGrade = {
   kind: "checks" | "model_rebuilt";
   expectations?: EvalGradeExpectation[];
 } & Record<string, unknown>;
-export type EvalCaptureSpec = { tables: string[]; mode: string; sample_rows: number };
+export type EvalCaptureSpec = {
+  tables: string[];
+  mode: string;
+  sample_rows: number;
+};
 export type EvalCaptureResult = {
   row_count?: number;
   grain_unique?: boolean;
   stored?: string[];
 } & Record<string, unknown>;
-export type EvalCoverageLayer = { total?: number; covered?: number; pct?: number | null };
+export type EvalCoverageLayer = {
+  total?: number;
+  covered?: number;
+  pct?: number | null;
+};
 export type EvalCoverage = {
   declared: string[];
   observed: string[];
@@ -349,9 +361,11 @@ export type EvalSandboxRef =
   | string
   | { name?: string; backend?: string; namespace?: string; started_at?: string }
   | null;
-export function evalSandboxName(ref: EvalSandboxRef | undefined): string | null {
+export function evalSandboxName(
+  ref: EvalSandboxRef | undefined,
+): string | null {
   if (!ref) return null;
-  return typeof ref === "string" ? ref : ref.name ?? null;
+  return typeof ref === "string" ? ref : (ref.name ?? null);
 }
 export type EvalRunTask = {
   id: string;
@@ -420,7 +434,8 @@ export type EvalAvailability = {
   enabled: boolean;
   reason: "ok" | "not_enabled_for_org";
 };
-export const getEvalAvailability = () => request<EvalAvailability>("/api/evals/availability");
+export const getEvalAvailability = () =>
+  request<EvalAvailability>("/api/evals/availability");
 
 export const getEvalConfig = () => request<EvalConfig>("/api/evals/config");
 export const putEvalConfig = (
@@ -543,11 +558,15 @@ export type EvalRunProgress = {
   error: string | null;
 };
 
-export const listEvalSandboxes = () => request<EvalSandboxInventory>("/api/evals/sandboxes");
+export const listEvalSandboxes = () =>
+  request<EvalSandboxInventory>("/api/evals/sandboxes");
 export const getEvalSandboxEvents = (name: string) =>
-  request<{ backend: string; supported: boolean; message: string; events: EvalSandboxEvent[] }>(
-    `/api/evals/sandboxes/${encodeURIComponent(name)}/events`,
-  );
+  request<{
+    backend: string;
+    supported: boolean;
+    message: string;
+    events: EvalSandboxEvent[];
+  }>(`/api/evals/sandboxes/${encodeURIComponent(name)}/events`);
 export const getEvalRunProgress = (runId: string) =>
   request<EvalRunProgress>(`/api/evals/runs/${runId}/progress`);
 
@@ -587,7 +606,11 @@ export function subscribeEvalSandboxLogs(
         },
       );
       if (!res.ok || !res.body) {
-        cb({ type: "end", reason: `http-${res.status}`, at: Date.now() / 1000 });
+        cb({
+          type: "end",
+          reason: `http-${res.status}`,
+          at: Date.now() / 1000,
+        });
         return;
       }
       const reader = res.body.getReader();
@@ -601,11 +624,14 @@ export function subscribeEvalSandboxLogs(
         buf = lines.pop() ?? "";
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
-          try { cb(JSON.parse(line.slice(6)) as EvalLogEvent); } catch {}
+          try {
+            cb(JSON.parse(line.slice(6)) as EvalLogEvent);
+          } catch {}
         }
       }
     } catch {
-      if (!aborted) cb({ type: "end", reason: "disconnected", at: Date.now() / 1000 });
+      if (!aborted)
+        cb({ type: "end", reason: "disconnected", at: Date.now() / 1000 });
     }
   })();
 
@@ -615,7 +641,10 @@ export function subscribeEvalSandboxLogs(
   };
 }
 
-export async function getEvalTranscript(runId: string, taskId: string): Promise<string> {
+export async function getEvalTranscript(
+  runId: string,
+  taskId: string,
+): Promise<string> {
   const headers = await getAuthHeaders();
   const res = await fetch(
     `${GATEWAY_URL}/api/evals/runs/${runId}/tasks/${encodeURIComponent(taskId)}/transcript`,
@@ -654,15 +683,22 @@ export type EvalRegression = {
   recipients: string[];
 };
 export const getEvalAccuracy = () =>
-  request<{ history: EvalAccuracyPoint[]; regressions: EvalRegression[] }>("/api/evals/accuracy");
+  request<{ history: EvalAccuracyPoint[]; regressions: EvalRegression[] }>(
+    "/api/evals/accuracy",
+  );
 
 // The following types and functions support run artifacts and exports.
 export type EvalArtifact = { path: string; bytes: number };
 export const listEvalArtifacts = (runId: string) =>
   request<{ artifacts: EvalArtifact[] }>(`/api/evals/runs/${runId}/artifacts`);
-export const evalArtifactUrl = (runId: string, taskId: string, filename: string) =>
+export const evalArtifactUrl = (
+  runId: string,
+  taskId: string,
+  filename: string,
+) =>
   `${GATEWAY_URL}/api/evals/runs/${runId}/artifacts/${encodeURIComponent(taskId)}/${encodeURIComponent(filename)}`;
-export const evalExportUrl = (runId: string) => `${GATEWAY_URL}/api/evals/runs/${runId}/export`;
+export const evalExportUrl = (runId: string) =>
+  `${GATEWAY_URL}/api/evals/runs/${runId}/export`;
 
 /** Fetch the file with authentication and start a browser download. */
 async function downloadAuthed(url: string, filename: string): Promise<void> {
@@ -679,8 +715,11 @@ async function downloadAuthed(url: string, filename: string): Promise<void> {
   a.remove();
   URL.revokeObjectURL(objectUrl);
 }
-export const downloadEvalArtifact = (runId: string, taskId: string, filename: string) =>
-  downloadAuthed(evalArtifactUrl(runId, taskId, filename), filename);
+export const downloadEvalArtifact = (
+  runId: string,
+  taskId: string,
+  filename: string,
+) => downloadAuthed(evalArtifactUrl(runId, taskId, filename), filename);
 export const downloadEvalRunExport = (runId: string) =>
   downloadAuthed(evalExportUrl(runId), `eval-${runId}.zip`);
 
@@ -817,6 +856,10 @@ export type StandaloneChatArtifact = {
   exclusions: string[];
   caveats: string[];
   parent_artifact_id: string | null;
+  saved_report_id?: string | null;
+  saved_report_version_id?: string | null;
+  saved_report_title?: string | null;
+  report_action?: "create" | "update" | "open";
   created_at: string;
   download_formats: string[];
 };
@@ -990,10 +1033,20 @@ export const forkSharedStandaloneConversation = (
       }),
     },
   );
-export const createStandaloneRun = (conversationId: string, message: string) =>
+export const createStandaloneRun = (
+  conversationId: string,
+  message: string,
+  reportReference?: { report_id: string; version_id: string },
+) =>
   request<StandaloneChatRun>(
     `/api/chat/conversations/${encodeURIComponent(conversationId)}/runs`,
-    { method: "POST", body: JSON.stringify({ message }) },
+    {
+      method: "POST",
+      body: JSON.stringify({
+        message,
+        report_reference: reportReference,
+      }),
+    },
   );
 export const cancelStandaloneRun = (runId: string) =>
   request<StandaloneChatRun>(
@@ -1077,6 +1130,20 @@ export async function getStandaloneArtifactObjectUrl(
   return URL.createObjectURL(await response.blob());
 }
 
+export async function getSavedReportVersionObjectUrl(
+  versionId: string,
+  format: string,
+): Promise<string> {
+  const headers = await getAuthHeaders();
+  const response = await fetch(
+    `${GATEWAY_URL}/api/chat/report-versions/${encodeURIComponent(versionId)}/download?format=${encodeURIComponent(format)}`,
+    { headers },
+  );
+  if (!response.ok)
+    throw new Error(`Report preview failed (${response.status})`);
+  return URL.createObjectURL(await response.blob());
+}
+
 export async function openStandaloneNotebookArchive(
   runId: string,
 ): Promise<void> {
@@ -1139,6 +1206,218 @@ async function downloadChatArtifact(
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
+}
+
+// Data Chat artifact library and immutable saved reports.
+export type ChatReportFreshness = "fresh" | "changes_detected" | "unknown";
+
+export type ChatLibraryArtifactHistoryItem = {
+  id: string;
+  kind: "table" | "chart" | "report";
+  filename: string;
+  created_at: string;
+  freshness_state: ChatReportFreshness;
+  freshness_at: string | null;
+  freshness_checked_at: string;
+  saved_report_id: string | null;
+  saved_version_id: string | null;
+  snapshot: Record<string, unknown>;
+  download_formats: string[];
+};
+
+export type ChatLibraryArtifact = ChatLibraryArtifactHistoryItem & {
+  project_id: string | null;
+  project_name: string | null;
+  original_thread_id: string;
+  original_thread_title: string;
+  history: ChatLibraryArtifactHistoryItem[];
+};
+
+export type ChatLibraryReport = {
+  id: string;
+  report_id: string | null;
+  title: string;
+  kind: "table" | "chart" | "report";
+  filename: string;
+  is_shared: boolean;
+  project_id: string | null;
+  project_name: string | null;
+  original_thread_id: string | null;
+  original_thread_title: string | null;
+  version_id: string;
+  version_ordinal: number;
+  freshness_state: ChatReportFreshness;
+  freshness_at: string | null;
+  freshness_checked_at: string;
+  updated_at: string;
+  snapshot: Record<string, unknown>;
+  download_url: string;
+};
+
+export type ChatLibraryResponse = {
+  artifacts: { items: ChatLibraryArtifact[]; next_cursor: string | null };
+  reports: { items: ChatLibraryReport[]; next_cursor: string | null };
+  facets: {
+    artifact_types: string[];
+    projects: Array<{ id: string; name: string }>;
+    original_threads: Array<{ id: string; title: string }>;
+  };
+};
+
+export type SavedReportVersion = {
+  id: string;
+  ordinal: number;
+  kind: "table" | "chart" | "report";
+  filename: string;
+  content_hash: string;
+  freshness_state: ChatReportFreshness;
+  freshness_at: string | null;
+  freshness_checked_at: string;
+  dbt_commit_sha: string | null;
+  schema_fingerprint: string | null;
+  published_at: string;
+  snapshot: Record<string, unknown>;
+  download_url: string;
+};
+
+export type SavedReportDetail = {
+  id: string;
+  title: string;
+  kind: "table" | "chart" | "report";
+  project_id: string;
+  project_name: string | null;
+  original_thread_id: string;
+  original_thread_title: string;
+  current_version_id: string;
+  revision: number;
+  created_at: string;
+  updated_at: string;
+  current_version: SavedReportVersion;
+  versions: SavedReportVersion[];
+  active_share_version_ids: string[];
+  refresh: {
+    id: string;
+    base_version_id: string;
+    status: "refreshing" | "update_available" | "failed" | "current";
+    drift_state: "none" | "drift" | "unknown";
+    explanation: string;
+    checked_at: string;
+    run_id: string | null;
+    candidate_artifact_ids: string[];
+  } | null;
+};
+
+export type SharedSavedReport = {
+  title: string;
+  kind: "table" | "chart" | "report";
+  version: Omit<
+    SavedReportVersion,
+    "content_hash" | "dbt_commit_sha" | "schema_fingerprint"
+  >;
+  shared_at: string;
+};
+
+export type ChatLibraryFilters = {
+  search?: string;
+  kind?: string;
+  project_id?: string;
+  original_thread_id?: string;
+  created_from?: string;
+  created_to?: string;
+  freshness?: string;
+  saved?: string;
+  artifact_cursor?: string;
+  report_cursor?: string;
+  limit?: string;
+};
+
+export const getChatLibrary = (filters: ChatLibraryFilters = {}) => {
+  const params = new URLSearchParams(
+    Object.entries(filters).filter(([, value]) => Boolean(value)) as [
+      string,
+      string,
+    ][],
+  );
+  return request<ChatLibraryResponse>(
+    `/api/chat/library${params.size ? `?${params}` : ""}`,
+  );
+};
+
+export const promoteChatArtifact = (artifactId: string, title: string) =>
+  request<{
+    status: "created" | "existing" | "updated";
+    report_id: string;
+    version_id: string;
+  }>("/api/chat/reports", {
+    method: "POST",
+    body: JSON.stringify({ artifact_id: artifactId, title }),
+  });
+
+export const getSavedChatReport = (reportId: string) =>
+  request<SavedReportDetail>(
+    `/api/chat/reports/${encodeURIComponent(reportId)}`,
+  );
+
+export const publishSavedChatReportVersion = (
+  reportId: string,
+  artifactId: string,
+  expectedCurrentVersionId: string,
+) =>
+  request<{
+    status: "created" | "existing";
+    report_id: string;
+    version_id: string;
+    current_version_id: string;
+  }>(`/api/chat/reports/${encodeURIComponent(reportId)}/versions`, {
+    method: "POST",
+    body: JSON.stringify({
+      artifact_id: artifactId,
+      expected_current_version_id: expectedCurrentVersionId,
+    }),
+  });
+
+export const refreshSavedChatReport = (reportId: string) =>
+  request<{
+    refresh_id: string;
+    report_id: string;
+    version_id: string;
+    conversation_id: string;
+    run_id: string | null;
+    status: string;
+    drift_state: string;
+    explanation: string;
+    checked_at: string;
+  }>(`/api/chat/reports/${encodeURIComponent(reportId)}/refreshes`, {
+    method: "POST",
+  });
+
+export const shareSavedChatReportVersion = (versionId: string) =>
+  request<{ token: string; version_id: string; created_at: string }>(
+    `/api/chat/report-versions/${encodeURIComponent(versionId)}/share`,
+    { method: "POST" },
+  );
+
+export const revokeSavedChatReportVersionShare = (versionId: string) =>
+  request<void>(
+    `/api/chat/report-versions/${encodeURIComponent(versionId)}/share`,
+    { method: "DELETE" },
+  );
+
+export const getSharedSavedChatReport = (token: string) =>
+  request<SharedSavedReport>(
+    `/api/chat/shared-reports/${encodeURIComponent(token)}`,
+  );
+
+export async function downloadSavedReportVersion(
+  versionId: string,
+  format: string,
+  filename: string,
+): Promise<void> {
+  return downloadChatArtifact(
+    `/api/chat/report-versions/${encodeURIComponent(versionId)}/download?format=${encodeURIComponent(format)}`,
+    format,
+    filename,
+  );
 }
 
 // Settings
@@ -1679,9 +1958,12 @@ export const deleteNotebookSession = () =>
   request<void>("/api/notebook-sessions", { method: "DELETE" });
 
 export const pingNotebookSession = (sessionId: string) =>
-  request<void>(`/api/notebook-sessions/${encodeURIComponent(sessionId)}/ping`, {
-    method: "POST",
-  });
+  request<void>(
+    `/api/notebook-sessions/${encodeURIComponent(sessionId)}/ping`,
+    {
+      method: "POST",
+    },
+  );
 
 export type AnalysisTrail = {
   id: string;

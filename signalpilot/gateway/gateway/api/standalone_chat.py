@@ -655,6 +655,20 @@ async def create_run(
             status_code=409,
             detail=_unready_detail(readiness, admin=_is_admin(role)),
         )
+    report_reference = None
+    if body.report_reference is not None:
+        from gateway.store.chat_reports import verified_report_reference
+
+        report_reference = await verified_report_reference(
+            store.session,
+            org_id=store._require_org_id(),
+            user_id=store.user_id or "local",
+            conversation_id=conversation_id,
+            report_id=body.report_reference.report_id,
+            version_id=body.report_reference.version_id,
+        )
+        if report_reference is None:
+            raise HTTPException(status_code=404, detail="Report reference not found")
     try:
         run = await chat_store.create_run(
             store.session,
@@ -662,6 +676,7 @@ async def create_run(
             user_id=store.user_id or "local",
             conversation_id=conversation_id,
             message=body.message,
+            message_metadata={"report_reference": report_reference} if report_reference else None,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1218,13 +1233,17 @@ async def _artifact_download_response(
             raise HTTPException(status_code=500, detail="Artifact failed integrity validation")
         media_type = "text/csv; charset=utf-8"
     elif format == "csv":
-        snapshot = artifact.snapshot_json.get("source") if artifact.kind == "chart" else artifact.snapshot_json
-        if artifact.kind == "chart" and not isinstance(snapshot, dict):
-            snapshot = artifact.snapshot_json
-        if not isinstance(snapshot, dict):
-            raise HTTPException(status_code=422, detail="Artifact has no downloadable source rows")
-        content = table_to_csv(snapshot)
-        media_type = "text/csv; charset=utf-8"
+        if artifact.kind == "table" and artifact.binary_data:
+            content = artifact.binary_data
+            media_type = "text/csv; charset=utf-8"
+        else:
+            snapshot = artifact.snapshot_json.get("source") if artifact.kind == "chart" else artifact.snapshot_json
+            if artifact.kind == "chart" and not isinstance(snapshot, dict):
+                snapshot = artifact.snapshot_json
+            if not isinstance(snapshot, dict):
+                raise HTTPException(status_code=422, detail="Artifact has no downloadable source rows")
+            content = table_to_csv(snapshot)
+            media_type = "text/csv; charset=utf-8"
     elif format == "png":
         if artifact.storage_kind == "object" and artifact.object_key:
             content = await chat_object_storage().get_bytes(

@@ -14,6 +14,7 @@ from .budget import router as budget_router
 from .byok import router as byok_router
 from .cache import router as cache_router
 from .chat import router as chat_router
+from .chat_reports import router as chat_reports_router
 from .chat_traces import router as chat_traces_router
 from .connections import router as connections_router
 from .demo import router as demo_router
@@ -75,6 +76,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(slack_router)
     app.include_router(workspace_projects_router)
     app.include_router(standalone_chat_router)
+    app.include_router(chat_reports_router)
     app.include_router(chat_router)
     app.include_router(chat_traces_router)
     app.include_router(agent_runs_router)

@@ -12,6 +12,7 @@ import {
   MoreHorizontal,
   PanelLeft,
   Play,
+  Save,
   Share2,
   Sparkles,
   Table2,
@@ -48,6 +49,7 @@ import {
   getStandaloneConversation,
   listStandaloneConversations,
   openStandaloneNotebookArchive,
+  promoteChatArtifact,
   renameStandaloneConversation,
   retryStandaloneRun,
   revokeStandaloneConversationShare,
@@ -221,6 +223,10 @@ export type ArtifactPreviewData = Pick<
   | "assumptions"
   | "exclusions"
   | "caveats"
+  | "saved_report_id"
+  | "saved_report_version_id"
+  | "saved_report_title"
+  | "report_action"
   | "created_at"
   | "download_formats"
 >;
@@ -269,13 +275,16 @@ function RuntimeChartPreview({
 function ArtifactDownloads({
   artifact,
   onDownload,
+  canSaveAsReport = false,
 }: {
   artifact: ArtifactPreviewData;
   onDownload: ArtifactDownload;
+  canSaveAsReport?: boolean;
 }) {
   const { toast } = useToast();
   return (
     <div className="flex flex-wrap items-center gap-2">
+      {canSaveAsReport && <SaveArtifactAsReportAction artifact={artifact} />}
       {artifact.download_formats.map((format) => (
         <button
           key={format}
@@ -295,12 +304,148 @@ function ArtifactDownloads({
   );
 }
 
+function SaveArtifactAsReportAction({
+  artifact,
+}: {
+  artifact: ArtifactPreviewData;
+}) {
+  const router = useRouter();
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const isUpdate =
+    artifact.report_action === "update" && Boolean(artifact.saved_report_id);
+
+  if (artifact.report_action === "open" && artifact.saved_report_id) {
+    return (
+      <button
+        type="button"
+        onClick={() => router.push(`/reports/${artifact.saved_report_id}`)}
+        className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--color-text)] px-2 py-1 text-[11px] text-[var(--color-bg)]"
+      >
+        <FileChartColumn className="h-3 w-3" />
+        Open report
+      </button>
+    );
+  }
+
+  const begin = () => {
+    setTitle(
+      isUpdate && artifact.saved_report_title
+        ? artifact.saved_report_title
+        : artifact.filename.replace(/\.[^.]+$/, ""),
+    );
+    setOpen(true);
+  };
+
+  const submit = async () => {
+    const cleanTitle = title.trim();
+    if (!cleanTitle || submitting) return;
+    setSubmitting(true);
+    try {
+      const result = await promoteChatArtifact(artifact.id, cleanTitle);
+      setOpen(false);
+      toast(
+        result.status === "created"
+          ? "Report saved"
+          : result.status === "updated"
+            ? "Report updated"
+            : "Report already up to date",
+        "success",
+      );
+      router.push(`/reports/${result.report_id}`);
+    } catch (error) {
+      toast(
+        error instanceof Error
+          ? error.message
+          : isUpdate
+            ? "Could not update report"
+            : "Could not save report",
+        "error",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={begin}
+        className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--color-text)] px-2 py-1 text-[11px] text-[var(--color-bg)]"
+      >
+        <Save className="h-3 w-3" />
+        {isUpdate ? "Update report" : "Save as report"}
+      </button>
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={`save-report-title-${artifact.id}`}
+            className="w-full max-w-md rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-5 text-left shadow-2xl"
+          >
+            <h2
+              id={`save-report-title-${artifact.id}`}
+              className="text-base text-[var(--color-text)]"
+            >
+              {isUpdate ? "Update report" : "Save as report"}
+            </h2>
+            <p className="mt-1 text-xs text-[var(--color-text-dim)]">
+              {isUpdate
+                ? `This artifact will become a new version of “${title}”.`
+                : "Save this artifact as a report you can refresh and share later."}
+            </p>
+            {!isUpdate && (
+              <label className="mt-4 block text-xs text-[var(--color-text-muted)]">
+                Report title
+                <input
+                  autoFocus
+                  value={title}
+                  onChange={(event) => setTitle(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void submit();
+                  }}
+                  className="mt-2 w-full rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-border-hover)]"
+                />
+              </label>
+            )}
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={() => setOpen(false)}
+                className="rounded-xl px-3 py-2 text-xs text-[var(--color-text-muted)] disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!title.trim() || submitting}
+                onClick={() => void submit()}
+                className="inline-flex items-center gap-2 rounded-xl bg-[var(--color-text)] px-3 py-2 text-xs text-[var(--color-bg)] disabled:opacity-50"
+              >
+                {submitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {isUpdate ? "Update report" : "Save report"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 export function ArtifactPreview({
   artifact,
   onDownload = downloadStandaloneArtifact,
+  canSaveAsReport = false,
 }: {
   artifact: ArtifactPreviewData;
   onDownload?: ArtifactDownload;
+  canSaveAsReport?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const snapshot = artifact.snapshot;
@@ -341,7 +486,11 @@ export function ArtifactPreview({
                 {expanded ? "Collapse" : "Open"}
               </button>
             )}
-            <ArtifactDownloads artifact={artifact} onDownload={onDownload} />
+            <ArtifactDownloads
+              artifact={artifact}
+              onDownload={onDownload}
+              canSaveAsReport={canSaveAsReport}
+            />
           </div>
         </div>
         <div
@@ -425,7 +574,11 @@ export function ArtifactPreview({
               {artifact.filename}
             </span>
           </div>
-          <ArtifactDownloads artifact={artifact} onDownload={onDownload} />
+          <ArtifactDownloads
+            artifact={artifact}
+            onDownload={onDownload}
+            canSaveAsReport={canSaveAsReport}
+          />
         </div>
         <div className="min-h-64 overflow-x-auto p-4">
           {snapshot.runtime_png === true ? (
@@ -475,7 +628,11 @@ export function ArtifactPreview({
             {artifact.filename}
           </span>
         </div>
-        <ArtifactDownloads artifact={artifact} onDownload={onDownload} />
+        <ArtifactDownloads
+          artifact={artifact}
+          onDownload={onDownload}
+          canSaveAsReport={canSaveAsReport}
+        />
       </div>
       {hasRenderableReport ? (
         <iframe
@@ -549,7 +706,11 @@ function AssistantMessage({ message }: { message: UiMessage }) {
           {attachedArtifacts.length > 0 && (
             <div className="mt-5 space-y-4">
               {attachedArtifacts.map((artifact) => (
-                <ArtifactPreview key={artifact.id} artifact={artifact} />
+                <ArtifactPreview
+                  key={artifact.id}
+                  artifact={artifact}
+                  canSaveAsReport={successful}
+                />
               ))}
             </div>
           )}
@@ -1008,6 +1169,13 @@ export function StandaloneDataChat({
     },
   );
   const requestedProject = searchParams.get("project");
+  const attachedReportReference = useMemo(() => {
+    const reportId = searchParams.get("report");
+    const versionId = searchParams.get("version");
+    return reportId && versionId
+      ? { report_id: reportId, version_id: versionId }
+      : undefined;
+  }, [searchParams]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     null,
   );
@@ -1372,7 +1540,13 @@ export function StandaloneDataChat({
         if (currentRun?.status === "waiting_for_user") {
           run = await clarifyStandaloneRun(currentRun.id, text);
         } else {
-          run = await createStandaloneRun(conversationId, text);
+          run = await createStandaloneRun(
+            conversationId,
+            text,
+            attachedReportReference,
+          );
+          if (attachedReportReference)
+            router.replace(`/chats/${conversationId}`);
         }
         await mutateDetail(
           (current) =>
@@ -1456,6 +1630,7 @@ export function StandaloneDataChat({
       selectedProjectId,
       perQueryBudgetUsd,
       chatBudgetUsd,
+      attachedReportReference,
       toast,
     ],
   );
@@ -1775,8 +1950,26 @@ export function StandaloneDataChat({
                 <ReadinessNotice
                   message={unreadyMessage}
                   showSetup={showSetupCta}
-                  onSetup={() => router.push(projectSettingsHref(selectedProjectId))}
+                  onSetup={() =>
+                    router.push(projectSettingsHref(selectedProjectId))
+                  }
                 />
+              </div>
+            )}
+            {conversationId && attachedReportReference && (
+              <div className="flex-none px-6 pt-4">
+                <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 rounded-xl border border-[var(--color-success)]/25 bg-[var(--color-bg-card)] px-4 py-3 text-xs text-[var(--color-text-muted)]">
+                  <span>
+                    A saved report version is attached to your next message.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => router.replace(`/chats/${conversationId}`)}
+                    className="text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
+                  >
+                    Remove
+                  </button>
+                </div>
               </div>
             )}
             <div

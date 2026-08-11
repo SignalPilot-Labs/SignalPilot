@@ -132,6 +132,16 @@ def _warm_context(
         }
         for result in context.get("query_results", [])
     ]
+    report_reference = next(
+        (
+            message.metadata_json.get("report_reference")
+            for message in reversed(context.get("messages", []))
+            if message.role == "user"
+            and isinstance(message.metadata_json, dict)
+            and isinstance(message.metadata_json.get("report_reference"), dict)
+        ),
+        None,
+    )
     return {
         "project": {
             "id": project.id,
@@ -146,6 +156,7 @@ def _warm_context(
         "prior_artifacts": artifact_refs,
         "query_decisions": query_decisions,
         "structured_results": result_refs,
+        "report_reference": report_reference,
         "runtime": {
             "gateway_version": gateway_version,
             "plugin_version": os.getenv("SIGNALPILOT_PLUGIN_VERSION", "deployed"),

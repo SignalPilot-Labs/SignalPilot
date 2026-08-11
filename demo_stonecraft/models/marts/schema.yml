@@ -1,0 +1,52 @@
+version: 2
+
+models:
+  - name: mart_slab_pricing
+    description: >
+      Fair price analysis per slab type. Compares production cost against
+      historical sale prices and competitor pricing to recommend a target price.
+      One row per slab type.
+    config:
+      materialized: table
+    columns:
+      - name: slab_type
+        description: "Slab type code"
+        tests: [unique, not_null]
+      - name: category
+        description: "Product category — standard or reinforced"
+      - name: total_unit_cost
+        description: "Total production cost per unit from staging"
+      - name: avg_sale_price
+        description: "Average historical sale price (excluding test orders)"
+      - name: margin_pct
+        description: "Current gross margin as a percentage"
+      - name: target_margin_pct
+        description: "Target margin percentage for this category"
+      - name: recommended_price
+        description: "Recommended price based on cost and target margin"
+      - name: avg_competitor_price
+        description: "Average competitor price for this slab type"
+      - name: price_vs_market
+        description: "Percentage difference between recommended price and average competitor price"
+
+  - name: mart_customer_mix
+    description: >
+      Revenue breakdown by customer and slab type. Excludes internal
+      test orders. One row per customer-slab_type combination.
+    config:
+      materialized: table
+    columns:
+      - name: customer
+        description: "Customer name"
+        tests: [not_null]
+      - name: slab_type
+        description: "Slab type code"
+        tests: [not_null]
+      - name: total_qty
+        description: "Total units ordered"
+      - name: total_revenue
+        description: "Total revenue (qty * unit_price)"
+      - name: avg_unit_price
+        description: "Average price per unit paid by this customer"
+      - name: order_count
+        description: "Number of orders"

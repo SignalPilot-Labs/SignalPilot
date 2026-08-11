@@ -1,0 +1,23 @@
+version: 2
+
+models:
+  - name: stg_slab_unit_cost
+    description: >
+      Total production cost per slab type, combining material, labor, and
+      energy costs. One row per slab type.
+    config:
+      materialized: table
+    columns:
+      - name: slab_type
+        description: "Slab type code (e.g. STD-4, REINF-6)"
+        tests: [unique, not_null]
+      - name: material_cost
+        description: "Raw material cost per unit before any adjustments"
+      - name: waste_adjusted_material_cost
+        description: "Material cost adjusted for production waste"
+      - name: labor_cost_per_unit
+        description: "Average labor cost per unit produced"
+      - name: energy_cost_per_unit
+        description: "Average energy cost per unit produced"
+      - name: total_unit_cost
+        description: "Total production cost per unit"

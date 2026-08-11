@@ -69,7 +69,7 @@ For the correct upstream candidate:
 If the model matches COUNT(DISTINCT) but the column says "total" and
 COUNT(*) is larger: CHECK 2 = FAIL. The model is under-counting.
 
-If the model matches COUNT(*) on its actual upstream: CHECK 2 = PASS.
+If COUNT(*) matches the actual upstream and no task, YML, alias, or domain rule explicitly requires distinct, CHECK 2 = PASS. Preserve it when an analogous sibling differs only by grouping dimension and uses the same fact rows and filters, because changing the grouping dimension does not redefine a shared metric.
 
 If COUNT(*) equals COUNT(DISTINCT): CHECK 2 = PASS (no ambiguity).
 

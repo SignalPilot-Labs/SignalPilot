@@ -1,4 +1,4 @@
-FROM sp-dbt-signalpilot-opus5-cc21227-ade-broad-fix1:latest
+FROM sp-dbt-signalpilot-opus5-cc21227-ade-broad-fix1-starter:latest
 
 USER root
 

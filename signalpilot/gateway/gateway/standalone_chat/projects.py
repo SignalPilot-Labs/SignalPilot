@@ -23,7 +23,7 @@ from gateway.db.models import (
     GatewayWorkspaceProject,
 )
 from gateway.git.repos import _run_git, branch_head_sha, repo_path
-from gateway.store.user_secrets import get_user_anthropic_key
+from gateway.store import org_secrets as org_secrets_store
 
 
 @dataclass(frozen=True)
@@ -190,7 +190,7 @@ async def evaluate_project_readiness(
         os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
         or os.getenv("OAUTH_TOKEN")
         or os.getenv("ANTHROPIC_API_KEY")
-        or await get_user_anthropic_key(db, org_id, user_id)
+        or await org_secrets_store.resolve_anthropic_key(db, org_id)
     )
     if not has_runtime_credentials:
         return ProjectReadiness(

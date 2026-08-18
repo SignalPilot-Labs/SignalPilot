@@ -30,8 +30,8 @@ from gateway.notebooks.session_service import (
 from gateway.standalone_chat.config import enterprise_chat_feature_flags
 from gateway.standalone_chat.object_storage import chat_object_storage
 from gateway.store import notebook_sessions as notebook_session_store
+from gateway.store import org_secrets as org_secrets_store
 from gateway.store.standalone_chat import set_execution_session
-from gateway.store.user_secrets import get_user_anthropic_key
 
 
 def _join_base_path(base: str, path: str) -> str:
@@ -96,11 +96,7 @@ async def prepare_execution(
     )
     conversation = await db.get(GatewayChatConversation, run.conversation_id)
     is_improvement_run = bool(conversation and getattr(conversation, "origin", "user") == "improvement")
-    anthropic_api_key = await get_user_anthropic_key(
-        db,
-        run.org_id,
-        run.user_id,
-    )
+    anthropic_api_key = await org_secrets_store.resolve_anthropic_key(db, run.org_id)
     runtime_auth: dict[str, str] | None = None
     if is_improvement_run and (improvement_key := os.getenv("SP_IMPROVEMENT_ANTHROPIC_KEY")):
         # Automated improvement runs bill to a dedicated Claude Code OAuth

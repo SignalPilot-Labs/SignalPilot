@@ -37,6 +37,7 @@ from gateway.models.standalone_chat import (
     StandaloneConversationPatch,
     StandaloneRunCreate,
 )
+from gateway.standalone_chat import execution as chat_execution
 from gateway.standalone_chat import projects as chat_projects
 from gateway.standalone_chat.artifacts import (
     normalize_table_snapshot,
@@ -861,6 +862,112 @@ async def test_existing_conversation_readiness_uses_its_frozen_branch(
     )
     assert readiness.ready
     assert readiness.branch == "production-frozen"
+
+
+@pytest.mark.asyncio
+async def test_project_readiness_accepts_org_anthropic_key(db_session, monkeypatch):
+    project = await _project(db_session)
+    db_session.add_all(
+        [
+            GatewayConnection(
+                org_id="org-a",
+                user_id="user-a",
+                name="production",
+                db_type="postgres",
+                status="connected",
+                created_at=1.0,
+                description="",
+                tags=[],
+                schema_filter_include=[],
+                schema_filter_exclude=[],
+            ),
+            GatewayCredential(
+                org_id="org-a",
+                user_id="user-a",
+                connection_name="production",
+                connection_string_enc=b"encrypted",
+            ),
+        ]
+    )
+    await db_session.commit()
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.delenv("OAUTH_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(
+        chat_projects,
+        "_project_tree",
+        lambda *_args: (["dbt_project.yml", "models/orders.sql"], "frozen-head"),
+    )
+    resolve_org_key = AsyncMock(return_value="sk-ant-org")
+    monkeypatch.setattr(
+        chat_projects.org_secrets_store,
+        "resolve_anthropic_key",
+        resolve_org_key,
+    )
+
+    readiness = await evaluate_project_readiness(
+        db_session,
+        org_id="org-a",
+        user_id="user-without-a-key",
+        project=project,
+    )
+
+    assert readiness.ready
+    resolve_org_key.assert_awaited_once_with(db_session, "org-a")
+
+
+@pytest.mark.asyncio
+async def test_execution_uses_org_anthropic_key_as_request_scoped_auth(
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server")
+    monkeypatch.setattr(
+        chat_execution,
+        "ensure_execution_runtime",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                session_id="session-a",
+                internal_base_url="http://notebook.internal",
+            )
+        ),
+    )
+    resolve_org_key = AsyncMock(return_value="sk-ant-org")
+    monkeypatch.setattr(
+        chat_execution.org_secrets_store,
+        "resolve_anthropic_key",
+        resolve_org_key,
+    )
+    monkeypatch.setattr(chat_execution, "mint_session_jwt", lambda **_kwargs: "session-jwt")
+    monkeypatch.setattr(
+        chat_execution,
+        "get_k8s_settings",
+        lambda: SimpleNamespace(sp_session_jwt_ttl_seconds=300),
+    )
+    run = SimpleNamespace(
+        id="run-a",
+        org_id="org-a",
+        user_id="user-without-a-key",
+        project_id="project-a",
+    )
+
+    prepared = await chat_execution.prepare_execution(
+        db_session,
+        run=run,
+        worker_id="worker-a",
+        branch="main",
+        connection_name="production",
+        commit_sha="a" * 40,
+        prompt="Analyze revenue",
+        messages=[],
+        warm_context={},
+    )
+
+    assert prepared.payload["runtime_auth"] == {
+        "type": "api_key",
+        "token": "sk-ant-org",
+    }
+    resolve_org_key.assert_awaited_once_with(db_session, "org-a")
 
 
 @pytest.mark.asyncio

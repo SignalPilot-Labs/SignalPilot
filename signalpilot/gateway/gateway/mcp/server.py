@@ -44,6 +44,16 @@ mcp = FastMCP(
 )
 
 
+def _set_stdio_auth_context() -> None:
+    """Give local stdio sessions the same scopes as local no-key HTTP sessions."""
+    from gateway.mcp.context import mcp_org_id_var, mcp_scopes_var, mcp_user_id_var
+    from gateway.models import VALID_API_KEY_SCOPES
+
+    mcp_org_id_var.set(_os.environ.get("SP_ORG_ID", "local"))
+    mcp_user_id_var.set("local")
+    mcp_scopes_var.set(sorted(VALID_API_KEY_SCOPES))
+
+
 def main():
     """Run the MCP server.
 
@@ -70,10 +80,7 @@ def main():
                 "Refusing to start MCP stdio transport in cloud mode — stdio bypasses MCPAuthMiddleware."
             )
         # stdio mode has no auth middleware — set context vars for local access
-        from gateway.mcp.context import mcp_org_id_var, mcp_user_id_var
-
-        mcp_org_id_var.set(_os.environ.get("SP_ORG_ID", "local"))
-        mcp_user_id_var.set("local")
+        _set_stdio_auth_context()
         mcp.run(transport="stdio")
 
 

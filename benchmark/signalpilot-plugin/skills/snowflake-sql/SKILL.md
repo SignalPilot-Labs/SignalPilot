@@ -16,7 +16,7 @@ SELECT customer_id, order_date, amount
 FROM orders
 QUALIFY ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY order_date DESC) = 1;
 
--- Top 5 products by sales
+-- Top 5 sales ranks including boundary ties
 SELECT product_id, total_sales
 FROM sales_summary
 QUALIFY DENSE_RANK() OVER (ORDER BY total_sales DESC) <= 5;
@@ -109,9 +109,9 @@ SELECT * FROM my_table AT (TIMESTAMP => '2024-01-01'::TIMESTAMP);
 - Prefer `QUALIFY` over subquery wrapping for window filters
 - When accessing VARIANT fields, always cast: `col:field::STRING`
 
-## 9. Benchmark Patterns
+## 9. Dialect Patterns
 
-- **Numeric precision**: Snowflake returns DECIMAL/NUMBER with configurable precision. Do NOT cast to FLOAT unless needed - precision loss fails exact-match evaluation.
+- **Numeric precision**: Snowflake returns DECIMAL/NUMBER with configurable precision. Do NOT cast to FLOAT unless needed - precision loss changes exact numeric results.
 - **IDENTIFIER case**: Snowflake upper-cases identifiers by default. Use double-quotes `"lower_case_col"` when column names are lowercase in source. Always check with `describe_table`.
 - **LISTAGG**: Use `LISTAGG(col, ',') WITHIN GROUP (ORDER BY col)` for string aggregation (not GROUP_CONCAT).
 - **TRY_CAST / TRY_TO_NUMBER**: Use for safe type conversion that returns NULL instead of error.

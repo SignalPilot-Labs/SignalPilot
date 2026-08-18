@@ -170,7 +170,7 @@ SELECT printf('%s-%s', category, subcategory) FROM t;
 - Do NOT use `= NULL` - use `IS NULL`
 - `||` propagates NULL - wrap with `COALESCE` when concatenating nullable columns
 
-## 12. Benchmark Patterns
+## 12. Dialect Patterns
 
 - **Window functions**: SQLite supports ROW_NUMBER, RANK, DENSE_RANK, NTILE, LAG, LEAD since 3.25. No QUALIFY - use subquery wrapping.
 - **HAVING without GROUP BY**: Not valid in SQLite - always pair HAVING with GROUP BY.

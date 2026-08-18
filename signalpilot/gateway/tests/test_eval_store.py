@@ -61,6 +61,8 @@ class TestConfig:
         cfg = await evals_store.get_config(session, org_id=ORG)
         assert cfg == {
             "repo_url": "",
+            "repo_installation_id": None,
+            "repo_id": None,
             "model": "sonnet",
             "max_tasks": 0,
             "prompt_preamble": "",
@@ -86,6 +88,19 @@ class TestConfig:
         assert cfg["notify_emails"] == ["a@example.com", "b@example.com"]
         # Untouched fields keep their defaults.
         assert cfg["model"] == "sonnet"
+
+    async def test_private_repo_binding_roundtrip(self, session) -> None:
+        saved = await evals_store.save_config(
+            session,
+            org_id=ORG,
+            cfg={
+                "repo_url": "https://github.com/acme/private-evals.git",
+                "repo_installation_id": "installation-1",
+                "repo_id": 42,
+            },
+        )
+        assert saved["repo_installation_id"] == "installation-1"
+        assert saved["repo_id"] == 42
 
     async def test_partial_update_keeps_other_fields(self, session) -> None:
         await evals_store.save_config(
@@ -151,6 +166,43 @@ class TestRunsAndTasks:
         assert task["verdict"] == "CORRECT"
         assert task["answer"] == "42"
         assert task["duration_s"] == 1.5
+
+    async def test_cancel_open_tasks_preserves_finished_tasks(self, session) -> None:
+        run_id = await _mk_run(session, 1, status="running")
+        await evals_store.seed_tasks(
+            session,
+            org_id=ORG,
+            run_id=run_id,
+            tasks=[{"task_id": "done"}, {"task_id": "active"}, {"task_id": "queued"}],
+        )
+        await evals_store.update_task(
+            session,
+            org_id=ORG,
+            run_id=run_id,
+            task_id="done",
+            status="done",
+            verdict="CORRECT",
+        )
+        await evals_store.update_task(
+            session,
+            org_id=ORG,
+            run_id=run_id,
+            task_id="active",
+            status="running",
+            sandbox={"name": "sandbox-1"},
+        )
+        await evals_store.cancel_open_tasks(
+            session,
+            org_id=ORG,
+            run_id=run_id,
+            finished_at="2026-01-01T00:00:05+00:00",
+        )
+        tasks = {task["id"]: task for task in await evals_store.get_tasks(session, org_id=ORG, run_id=run_id)}
+        assert tasks["done"]["verdict"] == "CORRECT"
+        assert tasks["active"]["status"] == "cancelled"
+        assert tasks["active"]["verdict"] == "CANCELLED"
+        assert tasks["active"]["sandbox"] is None
+        assert tasks["queued"]["status"] == "cancelled"
 
     async def test_list_runs_newest_first(self, session) -> None:
         for n in (1, 3, 2):
@@ -251,6 +303,42 @@ class TestAccuracyHistory:
         assert [h["run_id"] for h in history] == [_run_id(2), _run_id(1)]
         assert history[0]["accuracy_pct"] == 80.0
         assert await evals_store.list_accuracy(session, org_id=OTHER) == []
+
+    async def test_task_performance_aggregates_recent_runs(self, session) -> None:
+        for number, verdict, duration in ((1, "CORRECT", 10.0), (2, "OFF", 20.0)):
+            run_id = await _mk_run(session, number, status="completed")
+            await evals_store.seed_tasks(
+                session,
+                org_id=ORG,
+                run_id=run_id,
+                tasks=[
+                    {
+                        "task_id": "q1",
+                        "title": "Revenue total",
+                        "task_class": "read",
+                        "covers": ["fct_revenue"],
+                    }
+                ],
+            )
+            await evals_store.update_task(
+                session,
+                org_id=ORG,
+                run_id=run_id,
+                task_id="q1",
+                status="done",
+                verdict=verdict,
+                duration_s=duration,
+            )
+        (performance,) = await evals_store.list_task_performance(session, org_id=ORG)
+        assert performance["task_id"] == "q1"
+        assert performance["attempts"] == 2
+        assert performance["correct"] == 1
+        assert performance["off"] == 1
+        assert performance["pass_rate_pct"] == 50.0
+        assert performance["avg_duration_s"] == 15.0
+        assert performance["last_verdict"] == "OFF"
+        assert performance["covers"] == ["fct_revenue"]
+        assert await evals_store.list_task_performance(session, org_id=OTHER) == []
 
     async def test_trailing_baseline_filters_ref_fingerprint_and_time(self, session) -> None:
         await evals_store.append_accuracy(session, org_id=ORG, entry=self._entry(1, acc=90))

@@ -36,6 +36,10 @@ class GatewaySettings(BaseModel):
     gateway_url: str = Field(default="http://localhost:3300", max_length=2048)
     api_key: str | None = None
 
+    # Automated improvement runs — when true, the scheduler seeds one
+    # system-initiated improvement chat per America/New_York calendar day.
+    improvement_runs_enabled: bool = False
+
     # Knowledge Base — number of edit history versions to keep per doc.
     # None = follow plan default. 0 = unlimited. >= 1 = exact count.
     knowledge_history_versions_override: int | None = None

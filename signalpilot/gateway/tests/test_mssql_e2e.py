@@ -86,9 +86,11 @@ class TestConnectionStringParsing:
         assert p["password"] == "P@ss!word"
 
     def test_defaults_when_omitted(self):
+        # No database in the URL = multi-database mode: the connector signs in
+        # to master and discovers every accessible database.
         p = self._parse("mssql://host")
         assert p["port"] == 1433
-        assert p["database"] == "master"
+        assert p["database"] == ""
 
     def test_named_instance_query_param(self):
         p = self._parse("mssql://sa:pw@host:1433/db?instance=SQLEXPRESS")

@@ -11,7 +11,7 @@ gives the user complete confidence in what was built and why.
 
 ## When to Load
 
-Load this skill ONLY after Step 8 verification is complete and all checks pass.
+Load this skill only after every applicable verifier check is PASS and every inapplicable check is N/A because unresolved FAIL or NEEDS results require more work.
 This is the final step - it documents the work, it does not change any models.
 
 ## Report Structure
@@ -62,9 +62,9 @@ Group by purpose: "Schema Discovery", "Data Profiling", "Verification".
 ### 5. Verifier Reports
 
 Two subsections - Structure Verifier and Value Verifier:
-- Each CHECK result (PASS/FAIL/SKIP) with the exact output
+- Each CHECK result (PASS, historical FAIL, or N/A) with its exact evidence.
 - For any FAIL that was fixed: what changed and why
-- Final state: all checks that passed
+- Final state: no unresolved FAIL or NEEDS.
 
 ### 6. Data Visualizations
 
@@ -97,7 +97,7 @@ dbt test
 - Single self-contained `.html` file - all CSS inline in `<style>` block
 - No external CDN links, no JavaScript libraries
 - Use a clean sans-serif font (`font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`)
-- Color scheme: `#22c55e` for PASS, `#ef4444` for FAIL, `#f59e0b` for WARN, `#6b7280` for SKIP
+- Color scheme: `#22c55e` for PASS, `#ef4444` for FAIL, `#f59e0b` for NEEDS, and `#6b7280` for N/A.
 - Collapsible sections use `<details><summary>` HTML elements
 - Tables use `border-collapse: collapse` with alternating row colors
 - Maximum width 900px, centered

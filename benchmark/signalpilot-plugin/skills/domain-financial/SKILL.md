@@ -32,6 +32,8 @@ P&L transactions before the fiscal year boundary = Retained Earnings. P&L from t
 
 If the YML description specifies this earnings split, implement it exactly as written.
 
+'Current fiscal year' means the fiscal year containing the run date, not the fiscal year of each reporting period, unless the description ties the boundary to the reporting period. On historical data this can leave the current-year component empty - that is correct, not a bug.
+
 ## Double-Entry Ledgers
 
 Every transaction has offsetting debits and credits - when unioning ledger entries, preserve BOTH sides.

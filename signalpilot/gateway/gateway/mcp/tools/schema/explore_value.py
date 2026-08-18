@@ -18,7 +18,7 @@ async def explore_column(
     filter_pattern: str = "",
 ) -> str:
     """
-    Explore distinct values in a specific column — critical for Spider2.0.
+    Explore distinct values in a specific column — useful for predicate and category discovery.
 
     ReFoRCE-style iterative column exploration: probe actual column values
     to resolve ambiguity when the question uses domain terminology not in

@@ -24,6 +24,9 @@ dependencies = [
     "PyJWT>=2.8.0",
     "sqlalchemy[asyncio]>=2.0.0",
     "websockets>=16.0",
+    # IANA timezone data for zoneinfo on platforms without a system tz database
+    # (Windows dev; improvement-run scheduling is America/New_York day-based)
+    "tzdata>=2024.1",
     # Database connectors
     "pymysql>=1.1.0",
     "pymssql>=2.3.0",
@@ -38,6 +41,8 @@ dependencies = [
     # Kubernetes orchestrator (K3s locally, EKS in production)
     # Pinned to >=32,<33 — uses kubernetes_asyncio.stream.WsApiClient (S9).
     "kubernetes-asyncio>=32,<33",
+    # Vercel Sandbox runtime for automated improvement runs
+    "vercel>=0.9.0,<1",
 ]
 
 [project.optional-dependencies]

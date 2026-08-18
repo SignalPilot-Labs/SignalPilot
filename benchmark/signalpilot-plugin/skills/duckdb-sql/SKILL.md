@@ -13,10 +13,11 @@ type: skill
 - **INTERVAL syntax**: `INTERVAL '1' DAY` (quoted), NOT `INTERVAL 1 DAY`
 - **No DATEADD/DATEDIFF**: In standalone queries, use `col + INTERVAL '1' DAY` and `DATE_DIFF('day', start, end)` - DuckDB has no `DATEADD`/`DATEDIFF` function.
 - **SUM(NULL) = NULL**: Not 0. Use `COALESCE(SUM(col), 0)` if 0 is needed.
+- **inf/NaN checks**: use `isinf(col)` and `isnan(col)`, NOT `IS_INF`/`IS_NAN` (those are BigQuery function names).
 - **ROUND precision**: If the YML specifies a decimal type like `decimal(6,2)`,
   cast the FINAL output to match: `CAST(ROUND(AVG(col), 2) AS DECIMAL(6,2))`.
   Do NOT cast the input - cast the result after rounding.
-- **Avoid CURRENT_DATE** in models with historical data - use `(SELECT MAX(date_col) FROM source)` to anchor to the data's actual date range
+- **Avoid CURRENT_DATE for date spines** - when generating or capping a calendar over historical data, use `(SELECT MAX(date_col) FROM source)` to anchor to the data's actual date range
 
 ## Date Parsing
 

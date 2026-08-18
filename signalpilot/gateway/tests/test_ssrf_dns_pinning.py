@@ -306,14 +306,18 @@ class TestSSHBastionValidation:
 
 # ─── Live warehouses ──────────────────────────────────────────────────────────
 
-_PROJECT_ENV_DIR = Path(__file__).resolve().parents[3] / "demo-generator" / "trap-arena" / "projects"
+# Directory of local demo project sets, each holding a <name>/project.env.
+# It lives outside the repo, so the path is supplied by the environment:
+#   SP_TEST_PG_PROJECT_DIR=/path/to/projects
+_project_dir_raw = os.environ.get("SP_TEST_PG_PROJECT_DIR", "").strip()
+_PROJECT_ENV_DIR = Path(_project_dir_raw) if _project_dir_raw else None
 _LIVE_PG_PORTS = range(5602, 5609)
 
 
 def _live_pg_urls() -> list[tuple[str, str]]:
-    """(project, url) for every trap-arena warehouse on 5602-5608. Nothing is printed."""
+    """(project, url) for every local demo warehouse on 5602-5608. Nothing is printed."""
     urls: list[tuple[str, str]] = []
-    if not _PROJECT_ENV_DIR.is_dir():
+    if _PROJECT_ENV_DIR is None or not _PROJECT_ENV_DIR.is_dir():
         return urls
     for path in sorted(_PROJECT_ENV_DIR.glob("*/project.env")):
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -381,7 +385,7 @@ def _mssql_up() -> bool:
 _MSSQL_UP = _mssql_up()
 
 
-@pytest.mark.skipif(not _PG_URLS, reason="no trap-arena Postgres warehouse reachable on 5602-5608")
+@pytest.mark.skipif(not _PG_URLS, reason="no local Postgres warehouse reachable on 5602-5608")
 class TestLivePostgresRegression:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("name,url", _PG_URLS, ids=[n for n, _ in _PG_URLS])

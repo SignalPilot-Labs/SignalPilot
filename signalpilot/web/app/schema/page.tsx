@@ -1,24 +1,46 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Database,
-  Table2,
-  Columns3,
-  Loader2,
+  Braces,
+  Check,
   ChevronRight,
-  ChevronDown,
-  Search,
+  CircleAlert,
+  Columns3,
+  Copy,
+  Database,
+  EyeOff,
+  HardDrive,
+  KeyRound,
+  Link2,
+  Loader2,
   RefreshCw,
-  Key,
-  Shield,
+  Rows3,
+  ScanSearch,
+  Search,
+  ShieldCheck,
+  ShieldOff,
+  Table2,
 } from "lucide-react";
-import { getConnectionSchema, getSchemaRefreshStatus, detectPII, getConnectionSchemaDDL } from "~/lib/api";
+import {
+  detectPII,
+  getConnectionSchema,
+  getConnectionSchemaDDL,
+  getPIIConfig,
+  getSchemaRefreshStatus,
+  setPIIConfig,
+} from "~/lib/api";
 import { useConnection } from "~/lib/connection-context";
 import { EmptyDatabase, EmptyState } from "~/components/ui/empty-states";
-import { PageHeader, TerminalBar } from "~/components/ui/page-header";
-import { StatusDot, StackedBar } from "~/components/ui/data-viz";
-import { Tooltip } from "~/components/ui/tooltip";
+import { useToast } from "~/components/ui/toast";
+import "./schema.css";
+
+interface ColumnStats {
+  distinct_count?: number;
+  distinct_fraction?: number;
+  data_bytes?: number;
+  compressed_bytes?: number;
+}
 
 interface Column {
   name: string;
@@ -26,7 +48,7 @@ interface Column {
   nullable: boolean;
   primary_key?: boolean;
   comment?: string;
-  stats?: { distinct_count?: number; distinct_fraction?: number; data_bytes?: number; compressed_bytes?: number };
+  stats?: ColumnStats;
   encoding?: string;
   dist_key?: boolean;
   sort_key_position?: number;
@@ -60,581 +82,457 @@ interface SchemaData {
   connection_name: string;
   db_type: string;
   table_count: number;
+  total_tables?: number;
   tables: Record<string, TableSchema>;
 }
 
-const typeColorMap: Record<string, string> = {
-  integer: "text-blue-400", bigint: "text-blue-400", smallint: "text-blue-400",
-  int: "text-blue-400", int4: "text-blue-400", int8: "text-blue-400", serial: "text-blue-400",
-  numeric: "text-cyan-400", decimal: "text-cyan-400", real: "text-cyan-400",
-  "double precision": "text-cyan-400", float: "text-cyan-400", float8: "text-cyan-400",
-  text: "text-green-400", varchar: "text-green-400", "character varying": "text-green-400", char: "text-green-400",
-  boolean: "text-yellow-400", bool: "text-yellow-400",
-  timestamp: "text-purple-400", "timestamp with time zone": "text-purple-400",
-  "timestamp without time zone": "text-purple-400", timestamptz: "text-purple-400",
-  date: "text-purple-400", time: "text-purple-400",
-  json: "text-orange-400", jsonb: "text-orange-400",
-  uuid: "text-pink-400",
-};
-
-function getTypeColor(type: string): string {
-  return typeColorMap[type.toLowerCase()] || "text-[var(--color-text-dim)]";
+interface PIIConfig {
+  enabled: boolean;
+  rules: Record<string, string>;
 }
 
-/* The SVG displays the type legend. */
-function TypeLegend() {
-  const types = [
-    { label: "int", color: "text-blue-400" },
-    { label: "float", color: "text-cyan-400" },
-    { label: "text", color: "text-green-400" },
-    { label: "bool", color: "text-yellow-400" },
-    { label: "time", color: "text-purple-400" },
-    { label: "json", color: "text-orange-400" },
-  ];
-  return (
-    <div className="flex items-center gap-3">
-      {types.map(t => (
-        <div key={t.label} className="flex items-center gap-1">
-          <span className={`w-1.5 h-1.5 rounded-full ${t.color.replace("text-", "bg-")}`} />
-          <span className="text-[11px] text-[var(--color-text-dim)]">{t.label}</span>
-        </div>
-      ))}
-    </div>
-  );
+type ViewMode = "columns" | "ddl";
+
+const EMPTY_PII_CONFIG: PIIConfig = { enabled: false, rules: {} };
+
+function formatCount(value: number | undefined): string {
+  if (value == null) return "--";
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return value.toLocaleString();
+}
+
+function formatBytes(table: TableSchema): string {
+  const bytes = table.total_bytes ?? (table.size_mb == null ? undefined : table.size_mb * 1_048_576);
+  if (bytes == null) return "--";
+  if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} GB`;
+  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`;
+  if (bytes >= 1_024) return `${(bytes / 1_024).toFixed(1)} KB`;
+  return `${bytes.toFixed(0)} B`;
+}
+
+function formatCardinality(stats: ColumnStats | undefined): string {
+  if (!stats) return "--";
+  if (stats.distinct_count != null) return formatCount(stats.distinct_count);
+  if (stats.distinct_fraction != null) return `${(stats.distinct_fraction * 100).toFixed(1)}%`;
+  return "--";
+}
+
+function typeFamily(type: string): string {
+  const normalized = type.toLowerCase();
+  if (/int|serial/.test(normalized)) return "integer";
+  if (/numeric|decimal|real|double|float/.test(normalized)) return "number";
+  if (/char|text|string/.test(normalized)) return "text";
+  if (/date|time/.test(normalized)) return "time";
+  if (/bool/.test(normalized)) return "boolean";
+  if (/json|variant|struct|array|map/.test(normalized)) return "structured";
+  return "other";
+}
+
+function findRule(rules: Record<string, string>, column: string): [string, string] | null {
+  const normalized = column.toLowerCase();
+  for (const [key, rule] of Object.entries(rules)) {
+    if (key.toLowerCase() === normalized) return [key, rule];
+  }
+  return null;
+}
+
+function tableIdentity(key: string, table: TableSchema): string {
+  return table.schema ? `${table.schema}.${table.name}` : key;
 }
 
 export default function SchemaExplorerPage() {
   const { connections, selectedConn, setSelectedConn } = useConnection();
+  const { toast } = useToast();
   const [schema, setSchema] = useState<SchemaData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [expandedTables, setExpandedTables] = useState<Set<string>>(new Set());
+  const [selectedTableKey, setSelectedTableKey] = useState("");
   const [search, setSearch] = useState("");
-  const [piiDetections, setPiiDetections] = useState<Record<string, string> | null>(null);
+  const [columnSearch, setColumnSearch] = useState("");
+  const [schemaFilter, setSchemaFilter] = useState("all");
+  const [viewMode, setViewMode] = useState<ViewMode>("columns");
+  const [piiConfig, setPiiConfigState] = useState<PIIConfig>(EMPTY_PII_CONFIG);
+  const [piiDetections, setPiiDetections] = useState<Record<string, Record<string, string>>>({});
   const [scanningPii, setScanningPii] = useState(false);
+  const [savingColumn, setSavingColumn] = useState<string | null>(null);
+  const [savingEnabled, setSavingEnabled] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<number | null>(null);
   const [refreshInterval, setRefreshInterval] = useState<number | null>(null);
-  const [viewMode, setViewMode] = useState<"table" | "ddl">("table");
-  const [ddlContent, setDdlContent] = useState<string>("");
+  const [ddlContent, setDdlContent] = useState("");
   const [ddlLoading, setDdlLoading] = useState(false);
   const [ddlTokens, setDdlTokens] = useState(0);
+  const [copied, setCopied] = useState(false);
 
   const loadSchema = useCallback(async () => {
     if (!selectedConn) return;
     setLoading(true);
     setError(null);
-    setPiiDetections(null);
     try {
-      const data = await getConnectionSchema(selectedConn) as SchemaData;
-      setSchema(data);
-      const keys = Object.keys(data.tables).slice(0, 5);
-      setExpandedTables(new Set(keys));
-  // Fetch the refresh status.
-      getSchemaRefreshStatus(selectedConn).then((status) => {
-        setLastRefresh(status.last_schema_refresh);
-        setRefreshInterval(status.schema_refresh_interval);
-      }).catch(() => {});
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const [schemaData, config] = await Promise.all([
+        getConnectionSchema(selectedConn) as Promise<SchemaData>,
+        getPIIConfig(selectedConn),
+      ]);
+      setSchema(schemaData);
+      setPiiConfigState(config);
+      const keys = Object.keys(schemaData.tables).sort((left, right) => left.localeCompare(right));
+      setSelectedTableKey((current) => current && schemaData.tables[current] ? current : keys[0] ?? "");
+      const status = await getSchemaRefreshStatus(selectedConn).catch(() => null);
+      setLastRefresh(status?.last_schema_refresh ?? null);
+      setRefreshInterval(status?.schema_refresh_interval ?? null);
+    } catch (loadError) {
+      setSchema(null);
+      setError(loadError instanceof Error ? loadError.message : String(loadError));
     } finally {
       setLoading(false);
     }
   }, [selectedConn]);
 
-  const scanPii = useCallback(async () => {
+  const loadDDL = useCallback(async () => {
+    if (!selectedConn || !schema) return;
+    setDdlLoading(true);
+    try {
+      const data = await getConnectionSchemaDDL(selectedConn, Math.min(schema.table_count, 500));
+      setDdlContent(data.ddl);
+      setDdlTokens(data.token_estimate);
+    } catch (ddlError) {
+      setDdlContent("-- DDL unavailable");
+      toast(ddlError instanceof Error ? ddlError.message : "Could not load DDL", "error");
+    } finally {
+      setDdlLoading(false);
+    }
+  }, [schema, selectedConn, toast]);
+
+  useEffect(() => {
+    setSchema(null);
+    setSelectedTableKey("");
+    setSchemaFilter("all");
+    setSearch("");
+    setColumnSearch("");
+    setPiiConfigState(EMPTY_PII_CONFIG);
+    setPiiDetections({});
+    setDdlContent("");
+    setDdlTokens(0);
+    if (selectedConn) void loadSchema();
+  }, [selectedConn, loadSchema]);
+
+  useEffect(() => {
+    if (viewMode === "ddl" && schema && !ddlContent) void loadDDL();
+  }, [ddlContent, loadDDL, schema, viewMode]);
+
+  const tables = useMemo(
+    () => schema ? Object.entries(schema.tables).sort(([, left], [, right]) => {
+      const schemaOrder = (left.schema || "default").localeCompare(right.schema || "default");
+      return schemaOrder || left.name.localeCompare(right.name);
+    }) : [],
+    [schema],
+  );
+
+  const schemaGroups = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const [, table] of tables) {
+      const group = table.schema || "default";
+      counts.set(group, (counts.get(group) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort(([left], [right]) => left.localeCompare(right));
+  }, [tables]);
+
+  const filteredTables = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return tables.filter(([key, table]) => {
+      if (schemaFilter !== "all" && (table.schema || "default") !== schemaFilter) return false;
+      if (!needle) return true;
+      return key.toLowerCase().includes(needle)
+        || table.name.toLowerCase().includes(needle)
+        || table.columns.some((column) => column.name.toLowerCase().includes(needle));
+    });
+  }, [schemaFilter, search, tables]);
+
+  const selectedTable = selectedTableKey ? schema?.tables[selectedTableKey] ?? null : null;
+  const selectedColumns = useMemo(() => {
+    if (!selectedTable) return [];
+    const needle = columnSearch.trim().toLowerCase();
+    return needle
+      ? selectedTable.columns.filter((column) => column.name.toLowerCase().includes(needle) || column.type.toLowerCase().includes(needle))
+      : selectedTable.columns;
+  }, [columnSearch, selectedTable]);
+
+  const totalColumns = useMemo(
+    () => tables.reduce((sum, [, table]) => sum + table.columns.length, 0),
+    [tables],
+  );
+  const protectedColumns = Object.keys(piiConfig.rules).length;
+
+  const suggestionFor = useCallback((table: TableSchema, column: string): string | null => {
+    const tableNames = [table.name, table.schema ? `${table.schema}.${table.name}` : table.name];
+    for (const name of tableNames) {
+      const detections = piiDetections[name];
+      if (!detections) continue;
+      const match = Object.entries(detections).find(([candidate]) => candidate.toLowerCase() === column.toLowerCase());
+      if (match) return match[1];
+    }
+    return null;
+  }, [piiDetections]);
+
+  async function scanPii() {
     if (!selectedConn) return;
     setScanningPii(true);
     try {
       const result = await detectPII(selectedConn);
-      const flat: Record<string, string> = {};
-      for (const [, cols] of Object.entries(result.detections)) {
-        for (const [col, rule] of Object.entries(cols)) {
-          flat[col.toLowerCase()] = rule;
-        }
-      }
-      setPiiDetections(flat);
-    } catch {} finally {
+      setPiiDetections(result.detections);
+      const count = Object.values(result.detections).reduce((sum, columns) => sum + Object.keys(columns).length, 0);
+      toast(count ? `${count} sensitive columns found for review` : "No likely PII columns found", "info");
+    } catch (scanError) {
+      toast(scanError instanceof Error ? scanError.message : "PII scan failed", "error");
+    } finally {
       setScanningPii(false);
     }
-  }, [selectedConn]);
+  }
 
-  const loadDDL = useCallback(async () => {
-    if (!selectedConn) return;
-    setDdlLoading(true);
+  async function toggleColumnProtection(column: Column) {
+    if (!selectedConn || savingColumn) return;
+    const previous = piiConfig;
+    const nextRules = { ...previous.rules };
+    const existing = findRule(nextRules, column.name);
+    if (existing) delete nextRules[existing[0]];
+    if (existing?.[1] !== "hide") nextRules[column.name] = "hide";
+    const next = { enabled: Object.keys(nextRules).length > 0, rules: nextRules };
+    setSavingColumn(column.name);
+    setPiiConfigState(next);
     try {
-      const data = await getConnectionSchemaDDL(selectedConn);
-      setDdlContent(data.ddl);
-      setDdlTokens(data.token_estimate);
-    } catch {
-      setDdlContent("-- Failed to load DDL");
+      const saved = await setPIIConfig(selectedConn, next);
+      setPiiConfigState(saved);
+      toast(existing?.[1] === "hide" ? `${column.name} is no longer hidden` : `${column.name} is hidden in query results`, "success");
+    } catch (saveError) {
+      setPiiConfigState(previous);
+      toast(saveError instanceof Error ? saveError.message : "Could not save PII protection", "error");
     } finally {
-      setDdlLoading(false);
+      setSavingColumn(null);
     }
-  }, [selectedConn]);
+  }
 
-  useEffect(() => {
-    if (!selectedConn) {
-      setSchema(null);
-      setError(null);
-      setExpandedTables(new Set());
-      setPiiDetections(null);
-      setLastRefresh(null);
-      setRefreshInterval(null);
-      setDdlContent("");
-      setDdlTokens(0);
-      setDdlLoading(false);
-      return;
+  async function toggleProtectionEnabled() {
+    if (!selectedConn || savingEnabled) return;
+    const previous = piiConfig;
+    const next = { ...previous, enabled: !previous.enabled };
+    setSavingEnabled(true);
+    setPiiConfigState(next);
+    try {
+      const saved = await setPIIConfig(selectedConn, next);
+      setPiiConfigState(saved);
+      toast(`PII protection ${saved.enabled ? "enabled" : "paused"}`, saved.enabled ? "success" : "info");
+    } catch (saveError) {
+      setPiiConfigState(previous);
+      toast(saveError instanceof Error ? saveError.message : "Could not update PII protection", "error");
+    } finally {
+      setSavingEnabled(false);
     }
-
-    loadSchema();
-    if (viewMode === "ddl") loadDDL();
-  }, [selectedConn, loadSchema, viewMode, loadDDL]);
-
-  function toggleTable(key: string) {
-    setExpandedTables((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
   }
 
-  function expandAll() {
-    if (!schema) return;
-    setExpandedTables(new Set(Object.keys(schema.tables)));
+  async function copyDDL() {
+    if (!ddlContent) return;
+    await navigator.clipboard.writeText(ddlContent);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
   }
-
-  function collapseAll() {
-    setExpandedTables(new Set());
-  }
-
-  const filteredTables = schema
-    ? Object.entries(schema.tables).filter(([key, table]) => {
-        if (!search) return true;
-        const lower = search.toLowerCase();
-        return (
-          key.toLowerCase().includes(lower) ||
-          table.name.toLowerCase().includes(lower) ||
-          table.columns.some((c) => c.name.toLowerCase().includes(lower))
-        );
-      })
-    : [];
 
   return (
-    <div className="p-8 animate-fade-in">
-      <PageHeader
-        title="schema"
-        subtitle="explorer"
-        description="browse tables, columns, and types"
-        actions={
-        <div className="flex items-center gap-3">
-          <select
-            value={selectedConn}
-            onChange={(e) => setSelectedConn(e.target.value)}
-            className="px-3 py-2 rounded-[10px] bg-[var(--color-bg-card)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] min-w-[200px]"
-          >
-            {connections.length === 0 ? (
-              <option value="">no connections</option>
-            ) : (
-              connections.map((c) => (
-                <option key={c.name} value={c.name}>{c.name} ({c.db_type})</option>
-              ))
-            )}
-          </select>
-          <button
-            onClick={loadSchema}
-            disabled={loading}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-[10px] text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors duration-150"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} strokeWidth={1.5} />
-            refresh
+    <main className="schema-page">
+      <header className="schema-titlebar">
+        <div>
+          <span className="schema-eyebrow">Database catalog</span>
+          <h1>Schema</h1>
+          <p>Inspect warehouse structure and govern sensitive result fields.</p>
+        </div>
+        <div className="schema-title-actions">
+          <label className="schema-connection-select">
+            <Database aria-hidden="true" />
+            <select value={selectedConn} onChange={(event) => setSelectedConn(event.target.value)} aria-label="Database connection">
+              {connections.length === 0 && <option value="">No connections</option>}
+              {connections.map((connection) => <option key={connection.name} value={connection.name}>{connection.name} ({connection.db_type})</option>)}
+            </select>
+          </label>
+          <button className="schema-icon-button" type="button" onClick={() => void loadSchema()} disabled={!selectedConn || loading} title="Refresh schema" aria-label="Refresh schema">
+            <RefreshCw className={loading ? "is-spinning" : ""} aria-hidden="true" />
           </button>
         </div>
-        }
-      />
+      </header>
 
-      <TerminalBar
-        path={`schema ${selectedConn || "—"} --introspect`}
-        status={<StatusDot status={schema ? "healthy" : loading ? "unknown" : "error"} size={4} pulse={loading} />}
-      >
-        <div className="flex items-center gap-6 text-xs">
-          <span className="text-[var(--color-text-dim)]">tables: <code className="text-[12px] text-[var(--color-text)]">{schema ? Object.keys(schema.tables).length : "—"}</code></span>
-          <span className="text-[var(--color-text-dim)]">columns: <code className="text-[12px] text-[var(--color-text)]">{schema ? Object.values(schema.tables).reduce((sum, t) => sum + t.columns.length, 0) : "—"}</code></span>
-          <span className="text-[var(--color-text-dim)]">db: <code className="text-[12px] text-[var(--color-text)]">{schema?.db_type || "—"}</code></span>
-          {lastRefresh && (
-            <span className="text-[var(--color-text-dim)]">
-              refreshed: <code className="text-[12px] text-[var(--color-text)]">{new Date(lastRefresh * 1000).toLocaleTimeString()}</code>
-              {refreshInterval && <span className="ml-1 opacity-60">(every {refreshInterval >= 3600 ? `${Math.round(refreshInterval / 3600)}h` : `${Math.round(refreshInterval / 60)}m`})</span>}
-            </span>
-          )}
-        </div>
-      </TerminalBar>
-
-      {/* The following controls provide search, statistics, and the type legend. */}
       {schema && (
-        <div className="space-y-3 mb-4">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 flex-1">
-              <Search className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-              <input
-                type="text"
-                placeholder="search tables and columns..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="flex-1 px-3 py-2 rounded-[10px] bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
-              />
-            </div>
-            <div className="flex items-center gap-3 text-[12px] text-[var(--color-text-dim)] font-mono tabular-nums">
-              <span className="flex items-center gap-1">
-                <Table2 className="w-3 h-3" strokeWidth={1.5} />
-                {schema.table_count} tables
-              </span>
-              <span className="flex items-center gap-1">
-                <Columns3 className="w-3 h-3" strokeWidth={1.5} />
-                {Object.values(schema.tables).reduce((sum, t) => sum + t.columns.length, 0)} cols
-              </span>
-            </div>
-            <div className="flex items-center gap-1">
-        {/* This control selects the view mode. */}
-              <div className="flex items-center rounded-[10px] overflow-hidden border border-[var(--color-border)] mr-2">
-                <button
-                  onClick={() => setViewMode("table")}
-                  className={`px-2 py-1 text-[12px] transition-colors duration-150 ${viewMode === "table" ? "bg-[var(--color-text)]/10 text-[var(--color-text)]" : "text-[var(--color-text-dim)] hover:text-[var(--color-text)]"}`}
-                >
-                  table
-                </button>
-                <button
-                  onClick={() => { setViewMode("ddl"); if (!ddlContent) loadDDL(); }}
-                  className={`px-2 py-1 text-[12px] transition-colors duration-150 ${viewMode === "ddl" ? "bg-[var(--color-text)]/10 text-[var(--color-text)]" : "text-[var(--color-text-dim)] hover:text-[var(--color-text)]"}`}
-                >
-                  DDL
-                </button>
-              </div>
-              <button
-                onClick={scanPii}
-                disabled={scanningPii}
-                className="flex items-center gap-1 px-2 py-1 rounded-[10px] text-[12px] text-[var(--color-warning)] hover:bg-[var(--color-warning)]/5 transition-colors duration-150 disabled:opacity-50"
-              >
-                {scanningPii ? <Loader2 className="w-3 h-3 animate-spin" /> : <Shield className="w-3 h-3" strokeWidth={1.5} />}
-                {piiDetections ? `pii: ${Object.keys(piiDetections).length}` : "scan pii"}
-              </button>
-              {viewMode === "table" && (
-                <>
-                  <button onClick={expandAll} className="px-2 py-1 rounded-[10px] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors duration-150">
-                    expand
-                  </button>
-                  <button onClick={collapseAll} className="px-2 py-1 rounded-[10px] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors duration-150">
-                    collapse
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-          <TypeLegend />
-
-          {/* This bar shows the column type distribution. */}
-          {(() => {
-            const allCols = Object.values(schema.tables).flatMap(t => t.columns);
-            const typeCounts: Record<string, number> = {};
-            for (const col of allCols) {
-              const baseType = col.type.toLowerCase().replace(/\(.*\)/, "").trim();
-              const category =
-                /^(int|bigint|smallint|serial|int[248])$/.test(baseType) ? "int" :
-                /^(numeric|decimal|real|double|float|float[48])/.test(baseType) ? "float" :
-                /^(text|varchar|char)/.test(baseType) ? "text" :
-                /^(bool)/.test(baseType) ? "bool" :
-                /^(timestamp|date|time)/.test(baseType) ? "time" :
-                /^(json)/.test(baseType) ? "json" :
-                /^(uuid)/.test(baseType) ? "uuid" :
-                "other";
-              typeCounts[category] = (typeCounts[category] || 0) + 1;
-            }
-            const segments = [
-              { value: typeCounts.int || 0, color: "#60a5fa", label: `int: ${typeCounts.int || 0}` },
-              { value: typeCounts.float || 0, color: "#22d3ee", label: `float: ${typeCounts.float || 0}` },
-              { value: typeCounts.text || 0, color: "#4ade80", label: `text: ${typeCounts.text || 0}` },
-              { value: typeCounts.bool || 0, color: "#facc15", label: `bool: ${typeCounts.bool || 0}` },
-              { value: typeCounts.time || 0, color: "#a78bfa", label: `time: ${typeCounts.time || 0}` },
-              { value: typeCounts.json || 0, color: "#fb923c", label: `json: ${typeCounts.json || 0}` },
-              { value: (typeCounts.uuid || 0) + (typeCounts.other || 0), color: "#94a3b8", label: `other: ${(typeCounts.uuid || 0) + (typeCounts.other || 0)}` },
-            ].filter(s => s.value > 0);
-            if (segments.length === 0) return null;
-            return (
-              <Tooltip content={segments.map(s => s.label).join(" · ")} position="bottom">
-                <div className="cursor-default">
-                  <StackedBar segments={segments} width={400} height={4} />
-                </div>
-              </Tooltip>
-            );
-          })()}
-        </div>
+        <section className="schema-statusbar" aria-label="Schema summary">
+          <span><i className="schema-live-dot" /> {selectedConn}</span>
+          <span><strong>{schema.table_count.toLocaleString()}</strong> tables</span>
+          <span><strong>{totalColumns.toLocaleString()}</strong> columns</span>
+          <span><strong>{schemaGroups.length.toLocaleString()}</strong> schemas</span>
+          <span><strong>{protectedColumns.toLocaleString()}</strong> protected</span>
+          <span className="schema-statusbar-tail">{schema.db_type}{lastRefresh ? ` / refreshed ${new Date(lastRefresh * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}{refreshInterval ? ` / every ${refreshInterval >= 3600 ? `${Math.round(refreshInterval / 3600)}h` : `${Math.round(refreshInterval / 60)}m`}` : ""}</span>
+        </section>
       )}
 
-      {/* The following code displays an error. */}
-      {error && (
-        <div className="mb-4 p-4 rounded-[14px] border border-[var(--color-error)]/30 bg-[var(--color-error)]/5 animate-fade-in">
-          <p className="text-xs text-[var(--color-error)]">{error}</p>
-        </div>
-      )}
+      {error && <div className="schema-error"><CircleAlert aria-hidden="true" /><span>{error}</span></div>}
 
-      {/* The following code displays the loading state. */}
       {loading && !schema && (
-        <div className="flex flex-col items-center justify-center py-24">
-          <Loader2 className="w-5 h-5 animate-spin text-[var(--color-text-dim)] mb-3" />
-          <p className="text-xs text-[var(--color-text-dim)]">loading schema...</p>
-        </div>
+        <div className="schema-loading"><Loader2 className="is-spinning" aria-hidden="true" /><span>Loading schema</span></div>
       )}
 
-      {/* The following code displays the empty state. */}
       {!loading && !schema && !error && (
-        <EmptyState
-          icon={EmptyDatabase}
-          title="select a connection to explore"
-          description="choose a database connection above to browse its schema"
-        />
+        <EmptyState icon={EmptyDatabase} title="Select a connection" description="Choose a database connection to inspect its schema." />
       )}
 
-      {/* The following code displays the DDL view. */}
-      {schema && viewMode === "ddl" && (
-        <div className="rounded-[14px] overflow-hidden bg-[var(--color-bg-card)] border border-[var(--color-border)] animate-fade-in">
-          <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)]">
-            <span className="text-[12px] text-[var(--color-text-dim)]">create table ddl</span>
-            <div className="flex items-center gap-3 text-[11px] text-[var(--color-text-dim)]">
-              {ddlTokens > 0 && <span className="font-mono tabular-nums">~{ddlTokens.toLocaleString()} tokens</span>}
-              <button
-                onClick={() => navigator.clipboard.writeText(ddlContent)}
-                className="hover:text-[var(--color-text)] transition-colors duration-150"
-              >
-                copy
-              </button>
+      {schema && (
+        <section className="schema-workbench">
+          <aside className="schema-object-browser">
+            <div className="schema-pane-heading"><div><span>Objects</span><strong>{filteredTables.length.toLocaleString()}</strong></div></div>
+            <label className="schema-search">
+              <Search aria-hidden="true" />
+              <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Find tables or columns" aria-label="Find tables or columns" />
+            </label>
+            <div className="schema-filter-strip" role="tablist" aria-label="Filter by schema">
+              <button type="button" className={schemaFilter === "all" ? "is-active" : ""} onClick={() => setSchemaFilter("all")}>All <span>{tables.length}</span></button>
+              {schemaGroups.map(([group, count]) => (
+                <button key={group} type="button" className={schemaFilter === group ? "is-active" : ""} onClick={() => setSchemaFilter(group)}>{group} <span>{count}</span></button>
+              ))}
             </div>
-          </div>
-          {ddlLoading ? (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)]" />
-            </div>
-          ) : (
-            <pre className="px-4 py-3 text-[13px] text-[var(--color-text-muted)] overflow-x-auto font-mono leading-relaxed max-h-[600px] overflow-y-auto whitespace-pre">
-              {ddlContent || "-- No DDL available"}
-            </pre>
-          )}
-        </div>
-      )}
-
-      {/* The following code displays the schema tree. */}
-      {schema && viewMode === "table" && (
-        <div className="space-y-px stagger-fade-in">
-          {filteredTables.length === 0 ? (
-            <div className="text-center py-12 text-xs text-[var(--color-text-dim)]">
-              no tables matching &ldquo;{search}&rdquo;
-            </div>
-          ) : (
-            filteredTables.map(([key, table]) => {
-              const expanded = expandedTables.has(key);
-              return (
-                <div key={key} className="rounded-[14px] bg-[var(--color-bg-card)] border border-[var(--color-border)] overflow-hidden card-accent-top">
-                  <button
-                    onClick={() => toggleTable(key)}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--color-bg-hover)] transition-colors text-left group"
-                  >
-                    {expanded ? (
-                      <ChevronDown className="w-3 h-3 text-[var(--color-text-dim)]" />
-                    ) : (
-                      <ChevronRight className="w-3 h-3 text-[var(--color-text-dim)]" />
-                    )}
-            {/* The SVG displays a table icon for the tree. */}
-                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="flex-shrink-0">
-                      <rect x="1" y="1" width="12" height="12" stroke="var(--color-text-muted)" strokeWidth="1" fill="none" rx="0" />
-                      <line x1="1" y1="5" x2="13" y2="5" stroke="var(--color-text-dim)" strokeWidth="0.5" />
-                      <line x1="5" y1="1" x2="5" y2="13" stroke="var(--color-text-dim)" strokeWidth="0.5" />
-                    </svg>
-                    <span className="text-xs font-mono text-[var(--color-text-muted)] group-hover:text-[var(--color-text)] transition-colors">{table.name}</span>
-                    <span className="text-[12px] font-mono text-[var(--color-text-dim)]">{table.schema}</span>
-                    {(table.foreign_keys?.length ?? 0) > 0 && (
-                      <span className="text-[11px] px-1 py-0.5 rounded-[6px] border border-blue-500/20 text-blue-400 font-mono tabular-nums">
-                        {table.foreign_keys!.length} FK{table.foreign_keys!.length > 1 ? "s" : ""}
-                      </span>
-                    )}
-                    {table.description && (
-                      <span className="text-[11px] text-[var(--color-text-dim)] italic truncate max-w-[200px]">
-                        {table.description}
-                      </span>
-                    )}
-                    {table.engine && (
-                      <span className="text-[11px] px-1 py-0.5 rounded-[6px] border border-[var(--color-border)] text-[var(--color-text-dim)] font-mono">
-                        {table.engine}
-                      </span>
-                    )}
-                    {table.diststyle && (
-                      <span className="text-[11px] px-1 py-0.5 rounded-[6px] border border-orange-500/20 text-orange-400 font-mono">
-                        DIST:{table.diststyle}
-                      </span>
-                    )}
-                    {table.sortkey && (
-                      <span className="text-[11px] px-1 py-0.5 rounded-[6px] border border-amber-500/20 text-amber-400 font-mono">
-                        SORT:{table.sortkey}
-                      </span>
-                    )}
-                    {table.clustering_key && (
-                      <span className="text-[11px] px-1 py-0.5 rounded-[6px] border border-cyan-500/20 text-cyan-400 font-mono">
-                        CLUSTER:{table.clustering_key}
-                      </span>
-                    )}
-                    {table.sorting_key && (
-                      <span className="text-[11px] px-1 py-0.5 rounded-[6px] border border-violet-500/20 text-violet-400 font-mono">
-                        ORDER:{table.sorting_key}
-                      </span>
-                    )}
-                    <span className="ml-auto flex items-center gap-3 text-[12px] text-[var(--color-text-dim)] font-mono tabular-nums">
-                      {table.row_count != null && table.row_count > 0 && (
-                        <span className="opacity-60">
-                          {table.row_count >= 1_000_000
-                            ? `${(table.row_count / 1_000_000).toFixed(1)}M`
-                            : table.row_count >= 1_000
-                              ? `${(table.row_count / 1_000).toFixed(0)}K`
-                              : table.row_count} rows
-                        </span>
-                      )}
-                      {table.size_mb != null && table.size_mb > 0 && (
-                        <span className="opacity-60">
-                          {table.size_mb >= 1024
-                            ? `${(table.size_mb / 1024).toFixed(1)}GB`
-                            : `${table.size_mb.toFixed(0)}MB`}
-                        </span>
-                      )}
-                      {!table.size_mb && table.total_bytes != null && table.total_bytes > 0 && (
-                        <span className="opacity-60">
-                          {table.total_bytes >= 1_073_741_824
-                            ? `${(table.total_bytes / 1_073_741_824).toFixed(1)}GB`
-                            : table.total_bytes >= 1_048_576
-                              ? `${(table.total_bytes / 1_048_576).toFixed(0)}MB`
-                              : `${(table.total_bytes / 1024).toFixed(0)}KB`}
-                        </span>
-                      )}
-                      {table.columns.length} cols
-                    </span>
+            <nav className="schema-table-list" aria-label="Database tables">
+              {filteredTables.length === 0 && <div className="schema-no-results">No matching tables</div>}
+              {filteredTables.map(([key, table]) => {
+                const active = selectedTableKey === key;
+                const hiddenCount = table.columns.filter((column) => findRule(piiConfig.rules, column.name)?.[1] === "hide").length;
+                return (
+                  <button key={key} type="button" className={`schema-table-item${active ? " is-active" : ""}`} onClick={() => { setSelectedTableKey(key); setColumnSearch(""); setViewMode("columns"); }}>
+                    <Table2 aria-hidden="true" />
+                    <span><strong>{table.name}</strong><small>{table.schema || "default"}</small></span>
+                    <em>{table.columns.length}</em>
+                    {hiddenCount > 0 && <EyeOff aria-label={`${hiddenCount} protected columns`} />}
+                    <ChevronRight aria-hidden="true" />
                   </button>
+                );
+              })}
+            </nav>
+          </aside>
 
-                  {expanded && (
-                    <div className="border-t border-[var(--color-border)]">
-                      <table className="w-full text-[13px] font-mono">
-                        <thead>
-                          <tr className="border-b border-[var(--color-border)]/50">
-                            <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)] w-8">#</th>
-                            <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)]">column</th>
-                            <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)]">type</th>
-                            <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)] w-24">nullable</th>
-                            <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)]">references</th>
-                            {table.columns.some(c => c.stats) && (
-                              <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)] w-24">cardinality</th>
-                            )}
-                            {table.columns.some(c => c.comment) && (
-                              <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)]">comment</th>
-                            )}
-                            {piiDetections && (
-                              <th className="text-left px-4 py-2 text-[11px] text-[var(--color-text-dim)] w-20">pii</th>
-                            )}
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-[var(--color-border)]/20">
-                          {table.columns.map((col, i) => (
-                            <tr key={col.name} className="table-row-hover">
-                              <td className="px-4 py-1.5 text-[var(--color-text-dim)] tabular-nums">{i + 1}</td>
-                              <td className="px-4 py-1.5">
-                                <span className="flex items-center gap-2">
-                                  {col.primary_key && <Key className="w-2.5 h-2.5 text-[var(--color-warning)]" />}
-                                  <span className="text-[var(--color-text-muted)]">{col.name}</span>
-                                  {col.dist_key && (
-                                    <span className="text-[10px] px-1 py-0.5 rounded-[6px] border border-orange-500/30 text-orange-400 leading-none">DK</span>
-                                  )}
-                                  {col.sort_key_position != null && col.sort_key_position > 0 && (
-                                    <span className="text-[10px] px-1 py-0.5 rounded-[6px] border border-amber-500/30 text-amber-400 leading-none">SK{col.sort_key_position}</span>
-                                  )}
-                                  {col.low_cardinality && (
-                                    <span className="text-[10px] px-1 py-0.5 rounded-[6px] border border-teal-500/30 text-teal-400 leading-none">LC</span>
-                                  )}
-                                </span>
-                              </td>
-                              <td className="px-4 py-1.5">
-                                <span className={`${getTypeColor(col.type)} flex items-center gap-1.5`}>
-                                  <span className={`w-1 h-1 rounded-full ${getTypeColor(col.type).replace("text-", "bg-")}`} />
-                                  {col.type}
-                                  {col.encoding && col.encoding !== "none" && (
-                                    <span className="text-[10px] text-[var(--color-text-dim)] opacity-60">{col.encoding}</span>
-                                  )}
-                                </span>
-                              </td>
-                              <td className="px-4 py-1.5">
-                                {col.nullable ? (
-                                  <span className="text-[var(--color-text-dim)]">nullable</span>
-                                ) : (
-                                  <span className="text-[var(--color-warning)]">NOT NULL</span>
-                                )}
-                              </td>
-                              <td className="px-4 py-1.5">
-                                {(() => {
-                                  const fk = table.foreign_keys?.find(f => f.column === col.name);
-                                  if (fk) {
-                                    return (
-                                      <span className="text-[11px] text-blue-400">
-                                        → {fk.references_table}.{fk.references_column}
-                                      </span>
-                                    );
-                                  }
-                                  return null;
-                                })()}
-                              </td>
-                              {table.columns.some(c => c.stats) && (
-                                <td className="px-4 py-1.5">
-                                  {col.stats && (
-                                    <span className="text-[11px] text-[var(--color-text-dim)] tabular-nums">
-                                      {col.stats.distinct_count != null
-                                        ? col.stats.distinct_count >= 1000
-                                          ? `${(col.stats.distinct_count / 1000).toFixed(0)}K`
-                                          : col.stats.distinct_count
-                                        : col.stats.distinct_fraction != null
-                                          ? `${(col.stats.distinct_fraction * 100).toFixed(0)}%`
-                                          : ""}
-                                    </span>
-                                  )}
-                                </td>
-                              )}
-                              {table.columns.some(c => c.comment) && (
-                                <td className="px-4 py-1.5">
-                                  {col.comment && (
-                                    <span className="text-[11px] text-[var(--color-text-dim)] italic">
-                                      {col.comment.length > 60 ? col.comment.slice(0, 60) + "..." : col.comment}
-                                    </span>
-                                  )}
-                                </td>
-                              )}
-                              {piiDetections && (
-                                <td className="px-4 py-1.5">
-                                  {piiDetections[col.name.toLowerCase()] && (
-                                    <span className={`text-[11px] px-1.5 py-0.5 rounded-[6px] border tracking-wider uppercase ${
-                                      piiDetections[col.name.toLowerCase()] === "hide"
-                                        ? "badge-error"
-                                        : piiDetections[col.name.toLowerCase()] === "hash"
-                                          ? "border-purple-500/30 text-purple-400"
-                                          : "badge-warning"
-                                    }`}>
-                                      {piiDetections[col.name.toLowerCase()]}
-                                    </span>
-                                  )}
-                                </td>
-                              )}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+          <section className="schema-detail-pane">
+            {selectedTable ? (
+              <>
+                <header className="schema-table-header">
+                  <div className="schema-table-identity">
+                    <span>{selectedTable.schema || "default"}</span>
+                    <h2>{selectedTable.name}</h2>
+                    {selectedTable.description && <p>{selectedTable.description}</p>}
+                  </div>
+                  <div className="schema-table-metrics">
+                    <div><Rows3 aria-hidden="true" /><span>Rows</span><strong>{formatCount(selectedTable.row_count)}</strong></div>
+                    <div><Columns3 aria-hidden="true" /><span>Columns</span><strong>{selectedTable.columns.length}</strong></div>
+                    <div><Link2 aria-hidden="true" /><span>Relations</span><strong>{selectedTable.foreign_keys?.length ?? 0}</strong></div>
+                    <div><HardDrive aria-hidden="true" /><span>Storage</span><strong>{formatBytes(selectedTable)}</strong></div>
+                  </div>
+                </header>
+
+                <div className="schema-detail-toolbar">
+                  <div className="schema-view-tabs" role="tablist" aria-label="Schema view">
+                    <button type="button" role="tab" aria-selected={viewMode === "columns"} className={viewMode === "columns" ? "is-active" : ""} onClick={() => setViewMode("columns")}><Columns3 aria-hidden="true" /> Columns</button>
+                    <button type="button" role="tab" aria-selected={viewMode === "ddl"} className={viewMode === "ddl" ? "is-active" : ""} onClick={() => setViewMode("ddl")}><Braces aria-hidden="true" /> DDL</button>
+                  </div>
+                  {viewMode === "columns" ? (
+                    <label className="schema-column-search"><Search aria-hidden="true" /><input value={columnSearch} onChange={(event) => setColumnSearch(event.target.value)} placeholder="Filter columns" aria-label="Filter columns" /></label>
+                  ) : (
+                    <button type="button" className="schema-copy-button" onClick={() => void copyDDL()} disabled={!ddlContent}><span>{ddlTokens ? `~${ddlTokens.toLocaleString()} tokens` : ""}</span>{copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{copied ? "Copied" : "Copy"}</button>
                   )}
                 </div>
-              );
-            })
-          )}
-        </div>
+
+                {viewMode === "columns" ? (
+                  <div className="schema-columns-scroll">
+                    <table className="schema-columns-table">
+                      <thead><tr><th>Column</th><th>Type</th><th>Null</th><th>Cardinality</th><th>Reference</th><th>Protection</th></tr></thead>
+                      <tbody>
+                        {selectedColumns.map((column) => {
+                          const currentRule = findRule(piiConfig.rules, column.name)?.[1] ?? null;
+                          const suggestion = suggestionFor(selectedTable, column.name);
+                          const foreignKey = selectedTable.foreign_keys?.find((key) => key.column === column.name);
+                          const saving = savingColumn?.toLowerCase() === column.name.toLowerCase();
+                          return (
+                            <tr
+                              key={column.name}
+                              className={`${currentRule === "hide" && piiConfig.enabled ? "is-protected" : ""}${saving ? " is-saving" : ""}`}
+                              onClick={() => void toggleColumnProtection(column)}
+                              onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void toggleColumnProtection(column); } }}
+                              tabIndex={0}
+                              role="button"
+                              aria-label={`${currentRule === "hide" ? "Remove protection from" : "Hide"} ${column.name}`}
+                            >
+                              <td><span className="schema-column-name">{column.primary_key && <KeyRound aria-label="Primary key" />}{column.name}</span>{column.comment && <small>{column.comment}</small>}</td>
+                              <td><span className="schema-type" data-family={typeFamily(column.type)}><i />{column.type}</span>{column.encoding && column.encoding !== "none" && <small>{column.encoding}</small>}</td>
+                              <td>{column.nullable ? <span className="schema-muted">Yes</span> : <strong>No</strong>}</td>
+                              <td className="schema-mono">{formatCardinality(column.stats)}</td>
+                              <td>{foreignKey ? <span className="schema-reference">{foreignKey.references_schema ? `${foreignKey.references_schema}.` : ""}{foreignKey.references_table}.{foreignKey.references_column}</span> : <span className="schema-muted">--</span>}</td>
+                              <td>
+                                {saving ? <span className="schema-protection is-saving"><Loader2 className="is-spinning" /> Saving</span>
+                                  : currentRule ? <span className={`schema-protection is-${currentRule}`}>{currentRule === "hide" ? <EyeOff /> : <ShieldCheck />}{currentRule === "hide" ? (piiConfig.enabled ? "Hidden" : "Paused") : currentRule}</span>
+                                    : suggestion ? <span className="schema-protection is-suggested"><ScanSearch /> Suggested</span>
+                                      : <span className="schema-protection"><ShieldOff /> None</span>}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                    {selectedColumns.length === 0 && <div className="schema-no-results">No matching columns</div>}
+                  </div>
+                ) : (
+                  <div className="schema-ddl">
+                    {ddlLoading ? <div className="schema-loading"><Loader2 className="is-spinning" /><span>Loading DDL</span></div> : <pre>{ddlContent || "-- No DDL available"}</pre>}
+                  </div>
+                )}
+              </>
+            ) : <div className="schema-no-selection"><Table2 /><span>Select a table</span></div>}
+          </section>
+
+          <aside className="schema-governance-pane">
+            <div className="schema-pane-heading"><div><span>Governance</span><strong>{protectedColumns}</strong></div></div>
+            <section className="schema-protection-summary">
+              <div className={piiConfig.enabled ? "is-enabled" : ""}><ShieldCheck aria-hidden="true" /><span><strong>Result protection</strong><small>{piiConfig.enabled ? "Active" : "Paused"}</small></span></div>
+              <button type="button" className={`schema-switch${piiConfig.enabled ? " is-on" : ""}`} onClick={() => void toggleProtectionEnabled()} disabled={savingEnabled} role="switch" aria-checked={piiConfig.enabled} aria-label="Toggle PII result protection"><i /></button>
+            </section>
+            <dl className="schema-governance-stats">
+              <div><dt>Hidden fields</dt><dd>{Object.values(piiConfig.rules).filter((rule) => rule === "hide").length}</dd></div>
+              <div><dt>Other rules</dt><dd>{Object.values(piiConfig.rules).filter((rule) => rule !== "hide").length}</dd></div>
+              <div><dt>Suggestions</dt><dd>{Object.values(piiDetections).reduce((sum, columns) => sum + Object.keys(columns).length, 0)}</dd></div>
+            </dl>
+            <button type="button" className="schema-scan-button" onClick={() => void scanPii()} disabled={scanningPii}>
+              {scanningPii ? <Loader2 className="is-spinning" aria-hidden="true" /> : <ScanSearch aria-hidden="true" />}
+              Scan for sensitive fields
+            </button>
+            <section className="schema-rule-list">
+              <header><span>Saved rules</span><small>{piiConfig.enabled ? "Enforced" : "Not enforced"}</small></header>
+              {Object.keys(piiConfig.rules).length === 0 ? (
+                <div className="schema-empty-rules"><ShieldOff aria-hidden="true" /><span>No protected fields</span></div>
+              ) : (
+                Object.entries(piiConfig.rules).sort(([left], [right]) => left.localeCompare(right)).map(([column, rule]) => (
+                  <button key={column} type="button" onClick={() => {
+                    const tableWithColumn = tables.find(([, table]) => table.columns.some((candidate) => candidate.name.toLowerCase() === column.toLowerCase()));
+                    if (tableWithColumn) { setSelectedTableKey(tableWithColumn[0]); setViewMode("columns"); setColumnSearch(column); }
+                  }}>
+                    <span><strong>{column}</strong><small>query result field</small></span><em className={`is-${rule}`}>{rule}</em>
+                  </button>
+                ))
+              )}
+            </section>
+            {selectedTable && (
+              <section className="schema-table-properties">
+                <header>Table properties</header>
+                <dl>
+                  <div><dt>Identity</dt><dd>{tableIdentity(selectedTableKey, selectedTable)}</dd></div>
+                  {selectedTable.engine && <div><dt>Engine</dt><dd>{selectedTable.engine}</dd></div>}
+                  {selectedTable.diststyle && <div><dt>Distribution</dt><dd>{selectedTable.diststyle}</dd></div>}
+                  {(selectedTable.sortkey || selectedTable.sorting_key) && <div><dt>Sort key</dt><dd>{selectedTable.sortkey || selectedTable.sorting_key}</dd></div>}
+                  {selectedTable.clustering_key && <div><dt>Cluster key</dt><dd>{selectedTable.clustering_key}</dd></div>}
+                </dl>
+              </section>
+            )}
+          </aside>
+        </section>
       )}
-    </div>
+    </main>
   );
 }

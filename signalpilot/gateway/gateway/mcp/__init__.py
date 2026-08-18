@@ -80,6 +80,11 @@ from gateway.mcp.tools.schema import (
     schema_overview,
     schema_statistics,
 )
+from gateway.mcp.tools.sandbox_vm import (
+    sandbox_exec,
+    sandbox_read_file,
+    sandbox_write_file,
+)
 from gateway.mcp.tools.workspace_projects import list_workspace_projects
 from gateway.mcp.validation import _quote_table
 from gateway.store import Store
@@ -141,6 +146,9 @@ __all__ = [
     "audit_model_sources",
     "compare_join_types",
     "list_workspace_projects",
+    "sandbox_exec",
+    "sandbox_write_file",
+    "sandbox_read_file",
     # Internal context helpers
     "_gateway_url",
     "_gw_headers",

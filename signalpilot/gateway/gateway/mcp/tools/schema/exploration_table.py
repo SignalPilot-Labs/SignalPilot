@@ -15,7 +15,7 @@ async def explore_table(connection_name: str, table_name: str) -> str:
     Deep-dive a specific table — get full column details, types, FK refs, and sample values.
 
     Use this after list_tables to investigate tables relevant to the user's question.
-    This follows the ReFoRCE iterative column exploration pattern (Spider2.0 SOTA).
+    This performs iterative column exploration.
 
     Args:
         connection_name: Name of the database connection

@@ -17,7 +17,7 @@ async def find_join_path(connection_name: str, from_table: str, to_table: str, m
     Find join paths between two tables for accurate multi-table SQL generation.
 
     Returns the exact join columns at each hop, enabling correct JOIN construction
-    without hallucinating join conditions. Essential for Spider2.0-style queries.
+    without hallucinating join conditions. Useful for multi-table queries.
 
     Includes both explicit FK relationships AND inferred joins from column naming
     conventions (e.g., customer_id → customers.id), making this work even on

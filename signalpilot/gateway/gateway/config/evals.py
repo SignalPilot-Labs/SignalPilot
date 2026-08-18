@@ -52,7 +52,7 @@ class EvalRunSettings(_GatewaySettingsBase):
     docker_network: str = Field("signalpilot_eval_runtime", alias="SP_EVAL_DOCKER_NETWORK")
     mcp_url: str = Field("http://gateway:3300/mcp", alias="SP_EVAL_MCP_URL")
     claude_token_raw: str = Field("", alias="SP_EVAL_CLAUDE_TOKEN")
-    # Fallback used by the local trap-arena harness (benchmark/.env).
+    # Fallback used by the local eval harness (benchmark/.env).
     claude_key_1: str = Field("", alias="CLAUDE_KEY_1")
     anthropic_key: str = Field("", alias="SP_EVAL_ANTHROPIC_KEY")
     # KEY=VALUE lines merged into every question container (see project_env).

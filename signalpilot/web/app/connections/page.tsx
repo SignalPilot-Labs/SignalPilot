@@ -65,12 +65,14 @@ import type { ConnectionInfo, ConnectionHealthStats, DBType, SSHTunnelConfig, SS
 import { useConnections, useConnectionsHealth, usePlan, invalidateConnections, invalidateHealth } from "~/lib/hooks/use-gateway-data";
 import { PageLoader } from "~/components/ui/page-loader";
 import { EmptyDatabase, EmptyState } from "~/components/ui/empty-states";
-import { CONNECTIONS_TABS, PageHeader, TerminalBar } from "~/components/ui/page-header";
+import { CONNECTIONS_TABS, PageHeader } from "~/components/ui/page-header";
 import { StatusDot, MiniBar, Sparkline } from "~/components/ui/data-viz";
 import { Tooltip } from "~/components/ui/tooltip";
 import { useToast } from "~/components/ui/toast";
 import { ConfirmDialog } from "~/components/ui/confirm-dialog";
 import { useConnection } from "~/lib/connection-context";
+import { ConnectionSchemaBrowser, type ConnectionSchemaTable } from "./connection-schema-browser";
+import "./connections.css";
 
 const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 
@@ -408,100 +410,76 @@ const CATEGORY_LABELS: Record<string, string> = {
   embedded: "embedded databases",
 };
 
-/* ── Connection presets (HEX quick-start pattern) ── */
-interface ConnectionPreset {
+/* ── Connection variants: step 2 of the picker (database type → variant) ──
+   Each database type lists where/how it is hosted. "Default" is a plain
+   self-managed instance; the others prefill SSL, auth method, ports, and
+   connector modes for that hosting flavor. */
+interface ConnectionVariant {
+  key: string;
   label: string;
-  db_type: DBType;
-  icon: string;
+  hint: string;
   defaults: Partial<FormState>;
 }
 
-const CONNECTION_PRESETS: ConnectionPreset[] = [
-  {
-    label: "AWS RDS PostgreSQL",
-    db_type: "postgres",
-    icon: "🐘",
-    defaults: { port: "5432", ssl_enabled: true, ssl_mode: "require", description: "AWS RDS PostgreSQL instance" },
-  },
-  {
-    label: "AWS RDS MySQL",
-    db_type: "mysql",
-    icon: "🐬",
-    defaults: { port: "3306", ssl_enabled: true, ssl_mode: "require", description: "AWS RDS MySQL instance" },
-  },
-  {
-    label: "Azure SQL Database",
-    db_type: "mssql",
-    icon: "🔷",
-    defaults: { port: "1433", ssl_enabled: true, azure_ad_auth: true, description: "Azure SQL with Entra ID auth" },
-  },
-  {
-    label: "Snowflake (Key Pair)",
-    db_type: "snowflake",
-    icon: "❄️",
-    defaults: { snowflake_auth_method: "key_pair", description: "Snowflake with RSA key-pair auth" },
-  },
-  {
-    label: "BigQuery (Service Account)",
-    db_type: "bigquery",
-    icon: "📊",
-    defaults: { bq_auth_method: "service_account", description: "Google BigQuery with service account" },
-  },
-  {
-    label: "Databricks (OAuth)",
-    db_type: "databricks",
-    icon: "🧱",
-    defaults: { databricks_auth_method: "oauth_m2m", description: "Databricks with OAuth M2M service principal" },
-  },
-  {
-    label: "Starburst Galaxy (Trino)",
-    db_type: "trino",
-    icon: "⭐",
-    defaults: { trino_https: true, port: "443", trino_auth_method: "password", description: "Starburst Galaxy / Trino HTTPS" },
-  },
-  {
-    label: "ClickHouse Cloud",
-    db_type: "clickhouse",
-    icon: "⚡",
-    defaults: { ch_protocol: "http", ssl_enabled: true, port: "8443", description: "ClickHouse Cloud (HTTPS)" },
-  },
-  {
-    label: "Amazon Redshift",
-    db_type: "redshift",
-    icon: "🔴",
-    defaults: { port: "5439", ssl_enabled: true, ssl_mode: "require", description: "Amazon Redshift cluster" },
-  },
-  {
-    label: "Redshift Serverless",
-    db_type: "redshift",
-    icon: "🟠",
-    defaults: { port: "5439", ssl_enabled: true, ssl_mode: "require", iam_auth: true, description: "Redshift Serverless with IAM auth" },
-  },
-  {
-    label: "GCP Cloud SQL (PG)",
-    db_type: "postgres",
-    icon: "☁️",
-    defaults: { port: "5432", ssl_enabled: true, ssl_mode: "verify-ca", description: "GCP Cloud SQL for PostgreSQL" },
-  },
-  {
-    label: "MotherDuck",
-    db_type: "duckdb",
-    icon: "🦆",
-    defaults: { database: "md:", duckdb_mode: "motherduck", description: "MotherDuck cloud DuckDB" },
-  },
-  {
-    label: "Xata Postgres",
-    db_type: "xata",
-    icon: "🦋",
-    defaults: { branch: "main", xata_database: "xata", xata_api_url: "https://api.xata.tech", description: "Xata Postgres project" },
-  },
-  {
-    label: "SSH Tunnel (any DB)",
-    db_type: "postgres",
-    icon: "🔒",
-    defaults: { ssh_enabled: true, ssh_port: "22", description: "Database behind SSH bastion" },
-  },
-];
+const DEFAULT_VARIANT: ConnectionVariant = {
+  key: "default",
+  label: "Default",
+  hint: "standard self-managed instance",
+  defaults: {},
+};
+
+const DB_VARIANTS: Record<DBType, ConnectionVariant[]> = {
+  postgres: [
+    { key: "default", label: "Default", hint: "self-managed or docker PostgreSQL", defaults: {} },
+    { key: "aws-rds", label: "AWS RDS / Aurora", hint: "SSL required by default on RDS", defaults: { ssl_enabled: true, ssl_mode: "require", description: "AWS RDS PostgreSQL instance" } },
+    { key: "gcp-cloudsql", label: "GCP Cloud SQL", hint: "verifies the Cloud SQL server certificate", defaults: { ssl_enabled: true, ssl_mode: "verify-ca", description: "GCP Cloud SQL for PostgreSQL" } },
+    { key: "supabase", label: "Supabase", hint: "Project Settings → Database → Connection string (pooler port 6543 for serverless)", defaults: { ssl_enabled: true, ssl_mode: "require", description: "Supabase Postgres" } },
+    { key: "ssh", label: "Behind SSH bastion", hint: "tunnels through a jump host — fill SSH settings under Advanced", defaults: { ssh_enabled: true, ssh_port: "22", description: "Database behind SSH bastion" } },
+  ],
+  mysql: [
+    { key: "default", label: "Default", hint: "self-managed or docker MySQL", defaults: {} },
+    { key: "aws-rds", label: "AWS RDS / Aurora", hint: "SSL required by default on RDS", defaults: { ssl_enabled: true, ssl_mode: "require", description: "AWS RDS MySQL instance" } },
+  ],
+  mssql: [
+    { key: "default", label: "Single database", hint: "connects to one named database on the server", defaults: {} },
+    { key: "multi-db", label: "All databases", hint: "leave database empty — discovers every accessible database on the server as database.schema.table", defaults: { database: "", description: "SQL Server — all databases in one connection" } },
+    { key: "aws-rds", label: "AWS RDS SQL Server", hint: "all databases in one connection, SSL on — RDS system databases are filtered out automatically", defaults: { ssl_enabled: true, database: "", description: "AWS RDS SQL Server — all databases in one connection" } },
+    { key: "azure-sql", label: "Azure SQL", hint: "Entra ID (Azure AD) service-principal auth — host is <server>.database.windows.net", defaults: { ssl_enabled: true, azure_ad_auth: true, description: "Azure SQL with Entra ID auth" } },
+  ],
+  redshift: [
+    { key: "default", label: "Provisioned cluster", hint: "classic Redshift cluster with database credentials", defaults: { ssl_enabled: true, ssl_mode: "require", description: "Amazon Redshift cluster" } },
+    { key: "serverless", label: "Serverless (IAM)", hint: "Redshift Serverless workgroup with IAM auth", defaults: { ssl_enabled: true, ssl_mode: "require", iam_auth: true, description: "Redshift Serverless with IAM auth" } },
+  ],
+  snowflake: [
+    { key: "default", label: "Password", hint: "username + password auth", defaults: {} },
+    { key: "key-pair", label: "Key pair", hint: "RSA key-pair auth for service accounts", defaults: { snowflake_auth_method: "key_pair", description: "Snowflake with RSA key-pair auth" } },
+  ],
+  bigquery: [
+    { key: "default", label: "Service account", hint: "paste the service-account JSON key", defaults: { bq_auth_method: "service_account", description: "Google BigQuery with service account" } },
+  ],
+  clickhouse: [
+    { key: "default", label: "Self-hosted", hint: "native protocol on port 9000", defaults: {} },
+    { key: "cloud", label: "ClickHouse Cloud", hint: "HTTPS on port 8443", defaults: { ch_protocol: "http", ssl_enabled: true, port: "8443", description: "ClickHouse Cloud (HTTPS)" } },
+  ],
+  databricks: [
+    { key: "default", label: "Access token", hint: "personal access token auth", defaults: {} },
+    { key: "oauth", label: "OAuth M2M", hint: "OAuth machine-to-machine service principal", defaults: { databricks_auth_method: "oauth_m2m", description: "Databricks with OAuth M2M service principal" } },
+  ],
+  trino: [
+    { key: "default", label: "Self-hosted", hint: "plain HTTP on port 8080", defaults: {} },
+    { key: "starburst", label: "Starburst Galaxy", hint: "HTTPS on port 443 with password auth", defaults: { trino_https: true, port: "443", trino_auth_method: "password", description: "Starburst Galaxy / Trino HTTPS" } },
+  ],
+  duckdb: [
+    { key: "default", label: "Local file", hint: "path to a .duckdb file on the gateway host", defaults: {} },
+    { key: "motherduck", label: "MotherDuck", hint: "cloud-hosted DuckDB (md: database)", defaults: { database: "md:", duckdb_mode: "motherduck", description: "MotherDuck cloud DuckDB" } },
+  ],
+  sqlite: [
+    { key: "default", label: "Local file", hint: "path to a .sqlite file on the gateway host", defaults: {} },
+  ],
+  xata: [
+    { key: "default", label: "Default", hint: "Xata Postgres project with instant branches", defaults: { branch: "main", xata_database: "xata", xata_api_url: "https://api.xata.tech", description: "Xata Postgres project" } },
+  ],
+};
 
 const dbTypeLabels: Record<string, string> = Object.fromEntries(
   Object.entries(DB_CONFIGS).map(([k, v]) => [k, v.shortLabel])
@@ -899,7 +877,7 @@ function buildConnectionPreview(form: FormState): string {
     case "databricks":
       return `databricks://****@${form.host || "host"}/${form.http_path || "sql/..."}${form.catalog ? `?catalog=${form.catalog}` : ""}`;
     case "mssql":
-      return `mssql://${form.username || "sa"}:****@${form.host || "host"}:${form.port || "1433"}/${form.database || "master"}`;
+      return `mssql://${form.username || "sa"}:****@${form.host || "host"}:${form.port || "1433"}/${form.database || ""}`;
     case "trino": {
       const trinoScheme = form.trino_https ? "trino+https" : "trino";
       const trinoPort = form.port || (form.trino_https ? "443" : "8080");
@@ -1028,8 +1006,10 @@ function validateForm(form: FormState): Record<string, string> {
     if (!form.database.trim()) errors.database = "database file path is required";
   }
 
-  // Gap 1+2: database required for standard relational connectors
-  if (["postgres", "mysql", "mssql", "clickhouse", "redshift"].includes(form.db_type) && !form.connection_string) {
+  // Gap 1+2: database required for standard relational connectors.
+  // mssql is exempt: an empty database means multi-database mode — the
+  // connector discovers every accessible database on the server.
+  if (["postgres", "mysql", "clickhouse", "redshift"].includes(form.db_type) && !form.connection_string) {
     if (!form.database.trim()) errors.database = "database is required";
   }
 
@@ -2067,7 +2047,7 @@ function ConnectionFieldsForm({
       <>
         <FormInput label="host" value={form.host} onChange={field("host", (v) => setForm({ ...form, host: v }))} placeholder="sqlserver.example.com" hint="hostname or IP — for named instances: host\\INSTANCE" required {...fieldProps("host", formErrors, fieldRefs)} />
         <FormInput label="port" value={form.port} onChange={field("port", (v) => setForm({ ...form, port: v }))} placeholder="1433" hint="default 1433 — Azure SQL uses 1433" {...fieldProps("port", formErrors, fieldRefs)} />
-        <FormInput label="database" value={form.database} onChange={field("database", (v) => setForm({ ...form, database: v }))} placeholder="master" required {...fieldProps("database", formErrors, fieldRefs)} />
+        <FormInput label="database" value={form.database} onChange={field("database", (v) => setForm({ ...form, database: v }))} placeholder="all databases" hint="leave empty to expose every accessible database on the server (multi-database mode)" {...fieldProps("database", formErrors, fieldRefs)} />
         {!form.azure_ad_auth && (
           <>
             <FormInput label="username" value={form.username} onChange={field("username", (v) => setForm({ ...form, username: v }))} placeholder="sa" hint="SQL Server login" required {...fieldProps("username", formErrors, fieldRefs)} />
@@ -2102,6 +2082,7 @@ function ConnectionFieldsForm({
           </div>
         )}
         <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
+          <div><span className="text-[var(--color-text-muted)]">multi-database:</span> Leave database empty to map every accessible database on the server (incl. AWS RDS) through one connection — tables appear as database.schema.table.</div>
           <div><span className="text-[var(--color-text-muted)]">azure sql:</span> Use &lt;server&gt;.database.windows.net as host. Ensure firewall rule allows this server&apos;s IP.</div>
           <div><span className="text-[var(--color-text-muted)]">named instances:</span> Include instance in host: host\SQLEXPRESS. Or use port directly (SQL Browser resolves instances to ports).</div>
           <div><span className="text-[var(--color-text-muted)]">on-prem:</span> For SQL Server behind a firewall, use the SSH tunnel option in Advanced settings.</div>
@@ -2408,15 +2389,18 @@ export default function ConnectionsPage() {
   const [piiData, setPiiData] = useState<Record<string, { tables_scanned: number; tables_with_pii: number; detections: Record<string, Record<string, string>> }>>({});
   const [piiLoading, setPiiLoading] = useState<string | null>(null);
   const [piiConfig, setPiiConfig] = useState<Record<string, { enabled: boolean; rules: Record<string, string> }>>({});
+  const [expandedPiiConn, setExpandedPiiConn] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [schemaSearch, setSchemaSearch] = useState<Record<string, string>>({});
   const [schemaSearchResults, setSchemaSearchResults] = useState<Record<string, { result_count: number; total_tables: number; tables: Record<string, any> }>>({});
   const [schemaSearchLoading, setSchemaSearchLoading] = useState<string | null>(null);
   const [endorsements, setEndorsements] = useState<Record<string, { endorsed: string[]; hidden: string[]; mode: "all" | "endorsed_only" }>>({});
   const [form, setForm] = useState<FormState>({ ...defaultForm });
+  const [selectedVariant, setSelectedVariant] = useState<string>("default");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [advancedTab, setAdvancedTab] = useState<"security" | "performance" | "schema">("security");
   const [filterTag, setFilterTag] = useState<string | null>(null);
+  const [connectionSearch, setConnectionSearch] = useState("");
   const importFileRef = useRef<HTMLInputElement>(null);
   const [serverIp, setServerIp] = useState<string | null>(null);
   const [diagnosing, setDiagnosing] = useState<string | null>(null);
@@ -2451,6 +2435,7 @@ export default function ConnectionsPage() {
       if ((conn as any).pii_enabled || (conn as any).pii_rules) {
         setPiiConfig((prev) => ({ ...prev, [conn.name]: { enabled: (conn as any).pii_enabled || false, rules: (conn as any).pii_rules || {} } }));
       }
+      if (conn.db_type === "xata") continue;
       getConnectionHealthHistory(conn.name, 3600, 120).then((res) => {
         const latencies = res.buckets
           .map((b) => b.avg_latency_ms)
@@ -2473,13 +2458,40 @@ export default function ConnectionsPage() {
     const config = DB_CONFIGS[newType];
     // Switching db_type invalidates connector-specific server errors (e.g. catalog for trino)
     setServerFieldErrors({});
+    // Step 2 resets to the first variant of the new type; its defaults apply immediately
+    const firstVariant = DB_VARIANTS[newType]?.[0] ?? DEFAULT_VARIANT;
+    setSelectedVariant(firstVariant.key);
     setForm({
-      ...form,
+      ...defaultForm,
+      name: form.name,
+      tags: form.tags,
+      tagInput: form.tagInput,
       db_type: newType,
-      port: String(config.defaultPort || ""),
       connectionMode: config.connectionModes[0],
       host: config.fields.includes("host") ? form.host || "localhost" : "",
-    });
+      port: String(config.defaultPort || ""),
+      ...firstVariant.defaults,
+    } as FormState);
+  }
+
+  function handleVariantChange(variant: ConnectionVariant) {
+    const config = DB_CONFIGS[form.db_type];
+    setSelectedVariant(variant.key);
+    setServerFieldErrors({});
+    // Re-derive the form from clean defaults so options from the previous
+    // variant (e.g. azure_ad_auth, iam_auth) never leak into this one.
+    // Name, tags, and host survive — they are the user's own input.
+    setForm({
+      ...defaultForm,
+      name: form.name,
+      tags: form.tags,
+      tagInput: form.tagInput,
+      db_type: form.db_type,
+      connectionMode: config.connectionModes[0],
+      host: config.fields.includes("host") ? form.host || "localhost" : "",
+      port: String(config.defaultPort || ""),
+      ...variant.defaults,
+    } as FormState);
   }
 
   async function handleCreate() {
@@ -2505,6 +2517,7 @@ export default function ConnectionsPage() {
       setShowForm(false);
       setEditingConnection(null);
       setForm({ ...defaultForm });
+      setSelectedVariant("default");
       setServerFieldErrors({});
       setShowAdvanced(false);
       refresh();
@@ -2672,6 +2685,7 @@ export default function ConnectionsPage() {
       setShowForm(false);
       setEditingConnection(null);
       setForm({ ...defaultForm });
+      setSelectedVariant("default");
       setServerFieldErrors({});
       setShowAdvanced(false);
       refresh();
@@ -2888,6 +2902,47 @@ export default function ConnectionsPage() {
       .catch(() => {});
   }
 
+  async function reloadConnectionSchema(name: string) {
+    const data = await getConnectionSchema(name);
+    setSchemaData((prev) => ({ ...prev, [name]: { tables: data.tables } }));
+  }
+
+  async function handleRefreshSchema(name: string) {
+    setSchemaLoading(name);
+    try {
+      await refreshConnectionSchema(name);
+      await reloadConnectionSchema(name);
+      const [status, diff] = await Promise.all([
+        getSchemaRefreshStatus(name).catch(() => null),
+        getConnectionSchemaDiff(name).catch(() => null),
+      ]);
+      if (status) setSchemaRefreshStatus((prev) => ({ ...prev, [name]: status }));
+      setSchemaDiff((prev) => ({ ...prev, [name]: diff?.diff ? diff.diff as any : null }));
+      toast(`${name}: schema refreshed`, "success");
+    } catch {
+      toast(`${name}: refresh failed`, "error");
+    } finally {
+      setSchemaLoading(null);
+    }
+  }
+
+  async function handleExploreTable(name: string, tableKey: string) {
+    const exploreKey = `${name}:${tableKey}`;
+    if (exploredData[exploreKey]) {
+      setExploredData((prev) => { const next = { ...prev }; delete next[exploreKey]; return next; });
+      return;
+    }
+    setExploringTable(exploreKey);
+    try {
+      const data = await exploreColumns(name, tableKey);
+      setExploredData((prev) => ({ ...prev, [exploreKey]: data }));
+    } catch {
+      toast("Column exploration failed", "error");
+    } finally {
+      setExploringTable(null);
+    }
+  }
+
   async function handleScanPII(name: string) {
     setPiiLoading(name);
     try {
@@ -2994,7 +3049,7 @@ export default function ConnectionsPage() {
   if (connectionsLoading) return <PageLoader label="loading connections" />;
 
   return (
-    <div className="p-8 animate-fade-in">
+    <div className="connections-page animate-fade-in">
       <input
         ref={importFileRef}
         type="file"
@@ -3003,10 +3058,10 @@ export default function ConnectionsPage() {
         onChange={handleImportFile}
       />
       <PageHeader
-        title="connections"
-        subtitle="databases"
+        title="Connections"
+        subtitle="Data access"
         tabs={CONNECTIONS_TABS}
-        description="manage database connections for governed ai access"
+        description="Manage governed warehouse access, health, schema visibility, and credential controls."
         actions={
           <div className="flex items-center gap-2">
             <button
@@ -3014,90 +3069,42 @@ export default function ConnectionsPage() {
               className="flex items-center gap-1.5 px-3 py-2 border border-[var(--color-border)] rounded-[10px] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-colors duration-150"
               title="Export connections"
             >
-              <Download className="w-3 h-3" /> export
+              <Download className="w-3 h-3" /> Export
             </button>
             <button
               onClick={() => importFileRef.current?.click()}
               className="flex items-center gap-1.5 px-3 py-2 border border-[var(--color-border)] rounded-[10px] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-colors duration-150"
               title="Import connections from JSON"
             >
-              <Upload className="w-3 h-3" /> import
+              <Upload className="w-3 h-3" /> Import
             </button>
             <button
               onClick={() => setShowForm(true)}
               className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium rounded-[10px] transition-opacity duration-150 hover:opacity-90"
             >
-              <Plus className="w-3.5 h-3.5" /> add connection
+              <Plus className="w-3.5 h-3.5" /> Add connection
             </button>
           </div>
         }
       />
 
-      <TerminalBar
-        path="connections --list"
-        status={<StatusDot status={connections.length > 0 ? "healthy" : "unknown"} size={4} />}
-      >
-        <div className="flex items-center gap-6 text-xs">
-          <span className="text-[var(--color-text-dim)]">
-            connections:{" "}
-            <code className={`text-[12px] ${planData && planData.limits.connections !== "unlimited" && connections.length >= (planData.limits.connections as number) ? "text-[var(--color-error)]" : "text-[var(--color-text)]"}`}>
-              {connections.length}/{planData?.limits.connections === "unlimited" ? "∞" : (planData?.limits.connections ?? "—")}
-            </code>
-          </span>
-          {planData && (
-            <span className="text-[var(--color-text-dim)]">
-              plan: <code className="text-[12px] text-[var(--color-text)]">{planData.tier}</code>
-            </span>
-          )}
+      <section className="connections-overview" aria-label="Connection overview">
+        <div><span>Connections</span><strong>{connections.length}/{planData?.limits.connections === "unlimited" ? "unlimited" : (planData?.limits.connections ?? "--")}</strong><small>{planData?.tier ?? "local"} plan</small></div>
+        <div><span>Healthy</span><strong>{connections.filter((connection) => healthData[connection.name]?.status === "healthy").length}</strong><small>{connections.filter((connection) => !healthData[connection.name] || healthData[connection.name]?.status === "unknown").length} awaiting samples</small></div>
+        <div><span>Needs attention</span><strong>{connections.filter((connection) => ["warning", "degraded", "unhealthy"].includes(healthData[connection.name]?.status ?? "")).length}</strong><small>Health and connectivity</small></div>
+        <div><span>PII protection</span><strong>{Object.values(piiConfig).filter((config) => config.enabled).length}</strong><small>Active connections</small></div>
+        <div className="connections-security">
+          <Shield aria-hidden="true" />
+          <div><strong>Credential custody active</strong><small>Encrypted storage, scoped access, audited use</small></div>
+          <button type="button" onClick={() => setSecurityBannerExpanded(!securityBannerExpanded)} aria-expanded={securityBannerExpanded} aria-label="Show credential security details">{securityBannerExpanded ? <ChevronDown /> : <ChevronRight />}</button>
         </div>
-      </TerminalBar>
-
-      {/* ─── Security Banner ─── */}
-      <div className="mb-4 border border-emerald-500/20 bg-emerald-500/5 rounded-[10px]">
-        <button
-          type="button"
-          onClick={() => setSecurityBannerExpanded(!securityBannerExpanded)}
-          className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-emerald-500/5 transition-colors"
-          aria-expanded={securityBannerExpanded}
-          aria-controls="security-banner-details"
-        >
-          <Shield className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" strokeWidth={1.5} />
-          <span className="flex-1 text-[11px] text-emerald-400/90 leading-relaxed">
-            All database credentials are encrypted at rest using AES-128 with HMAC-SHA256 authentication. Passwords and secrets never leave this server unencrypted.
-          </span>
-          {securityBannerExpanded
-            ? <ChevronDown className="w-3 h-3 text-emerald-500/60 flex-shrink-0" />
-            : <ChevronRight className="w-3 h-3 text-emerald-500/60 flex-shrink-0" />}
-        </button>
-        {securityBannerExpanded && (
-          <div
-            id="security-banner-details"
-            role="region"
-            aria-label="Security details"
-            className="px-4 pb-3 border-t border-emerald-500/10 animate-fade-in"
-          >
-            <ul className="mt-2.5 space-y-1.5">
-              {[
-                "Credentials are encrypted before storage using Fernet symmetric encryption",
-                "Encryption keys are derived using PBKDF2 with 600,000 iterations",
-                "Connection strings, passwords, API keys, and private keys are all encrypted",
-                "Credentials are only decrypted in-memory when establishing database connections",
-                "Audit logging tracks all credential access",
-              ].map((item, i) => (
-                <li key={i} className="flex items-start gap-2 text-[11px] text-emerald-400/70">
-                  <Lock className="w-2.5 h-2.5 mt-0.5 flex-shrink-0 text-emerald-500/50" strokeWidth={1.5} />
-                  {item}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </div>
+        {securityBannerExpanded && <div className="connections-security-details"><span>Encrypted before persistence</span><span>PBKDF2 key derivation</span><span>Secrets decrypted in memory only</span><span>Connection access is audited</span><span>Passwords are never returned</span></div>}
+      </section>
 
       {/* ─── Create Connection Form ─── */}
       {showForm && (
-        <div className="mb-6 border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] animate-scale-in overflow-hidden">
-          <div className="px-6 py-3 border-b border-[var(--color-border)] flex items-center justify-between">
+        <div className="connection-form-shell animate-scale-in">
+          <header>
             <div className="flex items-center gap-2">
               <DbTypeIcon type={form.db_type} />
               <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
@@ -3107,12 +3114,14 @@ export default function ConnectionsPage() {
             <span className="text-[11px] text-[var(--color-text-dim)] opacity-50">
               {DB_CONFIGS[form.db_type].description}
             </span>
-          </div>
+          </header>
 
-          <div className="p-6">
-            {/* DB Type Selector — visual grid */}
+          <div className="connection-form-body">
+            {/* Step 1: database type */}
             <div className="mb-5">
-              <label className="block text-[12px] text-[var(--color-text-dim)] mb-2">database type</label>
+              <label className="block text-[12px] text-[var(--color-text-dim)] mb-2">
+                {editingConnection ? "database type" : <><span className="font-medium text-[var(--color-text)]">1.</span> select a database</>}
+              </label>
               <div className="flex flex-wrap gap-1.5">
                 {DB_TYPE_ORDER.filter((t) => !IS_CLOUD_MODE || t !== "sqlite").map((dbType) => {
                   const cfg = DB_CONFIGS[dbType];
@@ -3138,33 +3147,38 @@ export default function ConnectionsPage() {
               </div>
             </div>
 
-            {/* Quick-start presets (HEX pattern) — only show for new connections */}
-            {!editingConnection && (
-              <div className="mb-4">
-                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 opacity-60">quick start</label>
-                <div className="flex flex-wrap gap-1.5">
-                  {[...CONNECTION_PRESETS].sort((a, b) => {
-                    // Prioritize presets matching current db_type
-                    const aMatch = a.db_type === form.db_type ? 0 : 1;
-                    const bMatch = b.db_type === form.db_type ? 0 : 1;
-                    return aMatch - bMatch;
-                  }).slice(0, 8).map((preset) => (
-                    <button
-                      key={preset.label}
-                      type="button"
-                      onClick={() => {
-                        const updates = { ...defaultForm, ...preset.defaults, db_type: preset.db_type, port: preset.defaults.port || String(DB_CONFIGS[preset.db_type].defaultPort) };
-                        setForm({ ...form, ...updates } as FormState);
-                      }}
-                      className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] border border-dashed border-[var(--color-border)] rounded-[6px] text-[var(--color-text-dim)] hover:border-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors duration-150"
-                    >
-                      <span>{preset.icon}</span>
-                      {preset.label}
-                    </button>
-                  ))}
+            {/* Step 2: variant of the selected database type — only for new connections */}
+            {!editingConnection && (() => {
+              const variants = DB_VARIANTS[form.db_type] ?? [DEFAULT_VARIANT];
+              const active = variants.find((v) => v.key === selectedVariant) ?? variants[0];
+              return (
+                <div className="mb-5">
+                  <label className="block text-[12px] text-[var(--color-text-dim)] mb-2">
+                    <span className="font-medium text-[var(--color-text)]">2.</span> where is your {DB_CONFIGS[form.db_type].label} running?
+                  </label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {variants.map((variant) => {
+                      const isSelected = variant.key === active.key;
+                      return (
+                        <button
+                          key={variant.key}
+                          type="button"
+                          onClick={() => handleVariantChange(variant)}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 text-[12px] border rounded-[6px] transition-colors duration-150 ${
+                            isSelected
+                              ? "border-[var(--color-text)] text-[var(--color-text)] bg-[var(--color-text)]/5"
+                              : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)]"
+                          }`}
+                        >
+                          {variant.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[11px] text-[var(--color-text-dim)] mt-1.5 opacity-70">{active.hint}</p>
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* Name + Description */}
             <div className="grid grid-cols-2 gap-4 mb-4">
@@ -3649,34 +3663,25 @@ export default function ConnectionsPage() {
           }
         />
       ) : (
-        <div className="space-y-2">
-          {/* Tag filter bar */}
-          {(() => {
-            const allTags = [...new Set(connections.flatMap(c => c.tags || []))].sort();
-            if (allTags.length === 0) return null;
-            return (
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-[11px] text-[var(--color-text-dim)]">filter:</span>
-                {allTags.map((tag) => (
-                  <button
-                    key={tag}
-                    onClick={() => setFilterTag(filterTag === tag ? null : tag)}
-                    className={`px-2 py-0.5 text-[11px] border rounded-[6px] transition-colors duration-150 ${
-                      filterTag === tag
-                        ? "border-blue-500 text-blue-400 bg-blue-500/10"
-                        : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-blue-500/50 hover:text-blue-400"
-                    }`}
-                  >
-                    {tag}
-                  </button>
-                ))}
-                {filterTag && (
-                  <button onClick={() => setFilterTag(null)} className="text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] ml-1">clear</button>
-                )}
-              </div>
-            );
-          })()}
-          {connections.filter(c => !filterTag || (c.tags || []).includes(filterTag)).map((conn) => {
+        <div className="connection-list">
+          <div className="connections-toolbar">
+            <label className="connections-search"><Search aria-hidden="true" /><input value={connectionSearch} onChange={(event) => setConnectionSearch(event.target.value)} placeholder="Find a connection" aria-label="Find a connection" /></label>
+            {(() => {
+              const allTags = [...new Set(connections.flatMap((connection) => connection.tags || []))].sort();
+              if (allTags.length === 0) return null;
+              return <div className="connections-tags"><span>Tags</span>{allTags.map((tag) => <button key={tag} type="button" className={filterTag === tag ? "is-active" : ""} onClick={() => setFilterTag(filterTag === tag ? null : tag)}>{tag}</button>)}{filterTag && <button type="button" onClick={() => setFilterTag(null)}>Clear</button>}</div>;
+            })()}
+          </div>
+          {connections.filter((connection) => {
+            if (filterTag && !(connection.tags || []).includes(filterTag)) return false;
+            const needle = connectionSearch.trim().toLowerCase();
+            if (!needle) return true;
+            return connection.name.toLowerCase().includes(needle)
+              || connection.db_type.toLowerCase().includes(needle)
+              || (connection.description || "").toLowerCase().includes(needle)
+              || (connection.host || "").toLowerCase().includes(needle)
+              || (connection.tags || []).some((tag) => tag.toLowerCase().includes(needle));
+          }).map((conn) => {
             const health = healthData[conn.name];
             const isExpanded = expandedConn === conn.name;
             const tables = schemaData[conn.name]?.tables;
@@ -3700,8 +3705,8 @@ export default function ConnectionsPage() {
             }
 
             return (
-              <div key={conn.id} className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-[14px] hover:border-[var(--color-border-hover)] transition-colors duration-150 card-accent-top">
-                <div className="flex items-center gap-4 p-4">
+              <div key={conn.id} className={`connection-card${isExpanded ? " is-expanded" : ""}`}>
+                <div className="connection-card-row">
                   {/* Status indicator */}
                   <div className="flex-shrink-0">
                     <StatusDot
@@ -3717,7 +3722,7 @@ export default function ConnectionsPage() {
                   </div>
 
                   {/* Connection info */}
-                  <div className="flex-1 min-w-0">
+                  <div className="connection-card-info">
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-[var(--color-text)]">{conn.name}</span>
                       <span className="flex items-center gap-1 text-[11px] px-1.5 py-0.5 border border-[var(--color-border)] rounded-[6px] text-[var(--color-text-dim)]">
@@ -3756,13 +3761,13 @@ export default function ConnectionsPage() {
                         <span className={`text-[12px] ${
                           health.status === "healthy" ? "text-[var(--color-success)]" :
                           health.status === "warning" ? "text-[var(--color-warning)]" :
-                          "text-[var(--color-error)]"
+                          health.status === "degraded" || health.status === "unhealthy" ? "text-[var(--color-error)]" : "text-[var(--color-text-dim)]"
                         }`}>
                           {health.status}
                         </span>
                       )}
                     </div>
-                    <div className="text-[12px] text-[var(--color-text-dim)] mt-0.5">
+                    <div className="connection-card-endpoint">
                       <span className="font-mono">{displayStr}</span>
                       {conn.description && <span className="ml-2 text-[var(--color-text-dim)]">— {conn.description}</span>}
                       {conn.last_used && (
@@ -3778,7 +3783,7 @@ export default function ConnectionsPage() {
                       )}
                     </div>
                     {health && health.sample_count > 0 && (
-                      <div className="flex items-center gap-4 mt-1.5 text-[11px] text-[var(--color-text-dim)]">
+                      <div className="connection-card-health">
                         <span className="flex items-center gap-1">
                           <Activity className="w-2.5 h-2.5" strokeWidth={1.5} />
                           {health.sample_count} queries
@@ -3834,7 +3839,7 @@ export default function ConnectionsPage() {
 
                   {/* Test result — compact summary + expandable detail */}
                   {testResult[conn.name] && (
-                    <div className="flex flex-col gap-0.5">
+                    <div className="connection-card-result flex flex-col gap-0.5">
                       <span className={`flex items-center gap-1.5 text-[12px] ${
                         testResult[conn.name].status === "healthy" ? "text-[var(--color-success)]"
                         : testResult[conn.name].status === "warning" ? "text-[var(--color-warning)]"
@@ -3880,7 +3885,7 @@ export default function ConnectionsPage() {
 
                   {/* Diagnostic results */}
                   {diagResults[conn.name] && (
-                    <div className="flex flex-col gap-0.5">
+                    <div className="connection-card-result flex flex-col gap-0.5">
                       <span className="flex items-center gap-2 text-[12px]">
                         {diagResults[conn.name].diagnostics.map((d, i) => {
                           const statusColor = d.status === "ok" ? "text-[var(--color-success)]"
@@ -3900,14 +3905,14 @@ export default function ConnectionsPage() {
                   )}
 
                   {/* Action buttons */}
-                  <div className="flex items-center gap-1">
+                  <div className="connection-card-actions">
                     <button onClick={(e) => { e.stopPropagation(); handleToggleSchema(conn.name); }}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] rounded-[6px] transition-colors duration-150">
+                      className="is-primary">
                       {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                       <Table2 className="w-3 h-3" strokeWidth={1.5} /> schema
                     </button>
-                    <button onClick={(e) => { e.stopPropagation(); handleScanPII(conn.name); }} disabled={piiLoading === conn.name}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] rounded-[6px] transition-colors duration-150"
+                    <button onClick={(e) => { e.stopPropagation(); const opening = expandedPiiConn !== conn.name; setExpandedPiiConn(opening ? conn.name : null); if (opening) void handleScanPII(conn.name); }} disabled={piiLoading === conn.name}
+                      className=""
                       title={piiConfig[conn.name]?.enabled ? "PII redaction active — click to re-scan" : "Scan for PII columns"}
                     >
                       {piiLoading === conn.name ? <Loader2 className="w-3 h-3 animate-spin" /> : <Shield className={`w-3 h-3 ${piiConfig[conn.name]?.enabled ? "text-emerald-400" : ""}`} strokeWidth={1.5} />}
@@ -3922,340 +3927,62 @@ export default function ConnectionsPage() {
                       )}
                     </button>
                     <button onClick={() => handleTest(conn.name)} disabled={testing === conn.name}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] rounded-[6px] transition-colors duration-150">
+                      className="is-primary">
                       {testing === conn.name ? <Loader2 className="w-3 h-3 animate-spin" /> : <TestTube className="w-3 h-3" strokeWidth={1.5} />}
                       test
                     </button>
                     <button onClick={() => handleDiagnose(conn.name)} disabled={diagnosing === conn.name}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] rounded-[6px] transition-colors duration-150">
+                      className="">
                       {diagnosing === conn.name ? <Loader2 className="w-3 h-3 animate-spin" /> : <Activity className="w-3 h-3" strokeWidth={1.5} />}
                       diagnose
                     </button>
                     <button onClick={(e) => { e.stopPropagation(); handleEditConnection(conn); }}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] rounded-[6px] transition-colors duration-150">
-                      <Pencil className="w-3 h-3" strokeWidth={1.5} /> edit
+                      className="" title="Edit connection" aria-label={`Edit ${conn.name}`}>
+                      <Pencil className="w-3 h-3" strokeWidth={1.5} />
                     </button>
                     <button onClick={(e) => { e.stopPropagation(); handleClone(conn.name); }}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] rounded-[6px] transition-colors duration-150">
-                      <Copy className="w-3 h-3" strokeWidth={1.5} /> clone
+                      className="" title="Clone connection" aria-label={`Clone ${conn.name}`}>
+                      <Copy className="w-3 h-3" strokeWidth={1.5} />
                     </button>
                     <button onClick={() => handleDelete(conn.name)}
-                      className="p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-error)] hover:bg-[var(--color-error)]/5 rounded-[6px] transition-colors duration-150">
+                      className="is-danger" title="Delete connection" aria-label={`Delete ${conn.name}`}>
                       <Trash2 className="w-3 h-3" />
                     </button>
                   </div>
                 </div>
 
-                {/* Inline schema browser */}
                 {isExpanded && (
-                  <div className="border-t border-[var(--color-border)] px-4 py-4 animate-fade-in">
-                    {schemaLoading === conn.name ? (
-                      <div className="flex items-center gap-2 py-4 justify-center text-xs text-[var(--color-text-dim)]">
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> loading schema...
-                      </div>
-                    ) : tables && Object.keys(tables).length > 0 ? (
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-3 mb-3">
-                          <p className="text-[12px] text-[var(--color-text-dim)]">
-                            {schemaSearchResults[conn.name]
-                              ? `${schemaSearchResults[conn.name].result_count} / ${schemaSearchResults[conn.name].total_tables} tables`
-                              : `${Object.keys(tables).length} tables`}
-                          </p>
-                          {(() => {
-                            const displayTables = schemaSearchResults[conn.name]?.tables || tables;
-                            const totalFKs = Object.values(displayTables).reduce((sum: number, t: any) => sum + (t.foreign_keys?.length || 0), 0);
-                            const totalIdxs = Object.values(displayTables).reduce((sum: number, t: any) => sum + (t.indexes?.length || 0), 0);
-                            return (
-                              <>
-                                {totalFKs > 0 && <span className="text-[11px] text-purple-400">{totalFKs} FKs</span>}
-                                {totalIdxs > 0 && <span className="text-[11px] text-blue-400">{totalIdxs} indexes</span>}
-                              </>
-                            );
-                          })()}
-                          {/* Schema fingerprint & refresh status */}
-                          {schemaRefreshStatus[conn.name] && (
-                            <>
-                              <Tooltip content={`Structural fingerprint: ${schemaRefreshStatus[conn.name].fingerprint || "n/a"}`} position="top">
-                                <span className="text-[10px] text-[var(--color-text-dim)] opacity-60 tracking-widest font-mono cursor-default">
-                                  #{(schemaRefreshStatus[conn.name].fingerprint || "").slice(0, 8)}
-                                </span>
-                              </Tooltip>
-                              {schemaRefreshStatus[conn.name].last_schema_refresh && (
-                                <Tooltip content={`Last refresh: ${new Date(schemaRefreshStatus[conn.name].last_schema_refresh! * 1000).toLocaleString()}`} position="top">
-                                  <span className="text-[10px] text-[var(--color-text-dim)] opacity-60 cursor-default flex items-center gap-0.5">
-                                    <Clock className="w-2 h-2" strokeWidth={1.5} />
-                                    {(() => {
-                                      const diff = Math.floor(Date.now() / 1000 - schemaRefreshStatus[conn.name].last_schema_refresh!);
-                                      if (diff < 60) return "just now";
-                                      if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-                                      if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-                                      return `${Math.floor(diff / 86400)}d ago`;
-                                    })()}
-                                  </span>
-                                </Tooltip>
-                              )}
-                            </>
-                          )}
-                          {/* Schema diff indicators */}
-                          {schemaDiff[conn.name] && schemaDiff[conn.name]?.has_changes && (
-                            <Tooltip content={`Changes: +${(schemaDiff[conn.name] as any).added_tables?.length || 0} added, -${(schemaDiff[conn.name] as any).removed_tables?.length || 0} removed, ~${(schemaDiff[conn.name] as any).modified_tables?.length || 0} modified`} position="top">
-                              <span className="text-[10px] px-1 py-0.5 border border-[var(--color-warning)]/30 rounded-[6px] text-[var(--color-warning)] cursor-default">
-                                schema changed
-                              </span>
-                            </Tooltip>
-                          )}
-                          <div className="flex-1" />
-                          {/* Endorsement mode toggle */}
-                          <button
-                            onClick={async () => {
-                              const current = endorsements[conn.name] || { endorsed: [], hidden: [], mode: "all" as const };
-                              const nextMode = current.mode === "all" ? "endorsed_only" as const : "all" as const;
-                              const updated = { ...current, mode: nextMode };
-                              try {
-                                await setSchemaEndorsements(conn.name, updated);
-                                setEndorsements(prev => ({ ...prev, [conn.name]: updated }));
-                                // Re-fetch schema with new endorsements applied
-                                const data = await getConnectionSchema(conn.name);
-                                setSchemaData(prev => ({ ...prev, [conn.name]: data }));
-                                toast(`Schema filter: ${nextMode === "endorsed_only" ? "endorsed only" : "all tables"}`, "success");
-                              } catch { toast("Failed to update endorsements", "error"); }
-                            }}
-                            className={`px-2 py-0.5 text-[11px] border rounded-[6px] transition-colors duration-150 ${
-                              endorsements[conn.name]?.mode === "endorsed_only"
-                                ? "border-[var(--color-success)]/30 text-[var(--color-success)] bg-[var(--color-success)]/5"
-                                : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
-                            }`}
-                            title="Toggle between showing all tables or only endorsed tables"
-                          >
-                            <Star className="w-2.5 h-2.5 inline mr-1" strokeWidth={1.5} />
-                            {endorsements[conn.name]?.mode === "endorsed_only" ? "endorsed only" : "all tables"}
-                          </button>
-                          <button
-                            onClick={async () => {
-                              setSchemaLoading(conn.name);
-                              try {
-                                await refreshConnectionSchema(conn.name);
-                                const data = await getConnectionSchema(conn.name);
-                                setSchemaData(prev => ({ ...prev, [conn.name]: { tables: data.tables } }));
-                                // Refresh status and diff after schema refresh
-                                getSchemaRefreshStatus(conn.name)
-                                  .then((status) => setSchemaRefreshStatus(prev => ({ ...prev, [conn.name]: status })))
-                                  .catch(() => {});
-                                getConnectionSchemaDiff(conn.name)
-                                  .then((diff) => {
-                                    if (diff.diff) setSchemaDiff(prev => ({ ...prev, [conn.name]: diff.diff as any }));
-                                    else setSchemaDiff(prev => { const next = { ...prev }; delete next[conn.name]; return next; });
-                                  })
-                                  .catch(() => {});
-                                toast(`${conn.name}: schema refreshed`, "success");
-                              } catch { toast(`${conn.name}: refresh failed`, "error"); }
-                              finally { setSchemaLoading(null); }
-                            }}
-                            disabled={schemaLoading === conn.name}
-                            className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] border border-[var(--color-border)] rounded-[6px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-colors duration-150"
-                            title="Re-introspect schema from database"
-                          >
-                            <RefreshCw className={`w-2.5 h-2.5 ${schemaLoading === conn.name ? "animate-spin" : ""}`} strokeWidth={1.5} />
-                            refresh
-                          </button>
-                          <button
-                            onClick={async () => {
-                              await handleGenerateSemantic(conn.name);
-                            }}
-                            className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] border border-[var(--color-border)] rounded-[6px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-colors duration-150"
-                            title="Generate semantic model with auto-detected joins and business glossary"
-                          >
-                            <Star className="w-2.5 h-2.5" strokeWidth={1.5} />
-                            semantic
-                          </button>
-                          <div className="relative">
-                            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-                            <input
-                              type="text"
-                              placeholder="search tables & columns..."
-                              value={schemaSearch[conn.name] || ""}
-                              onChange={(e) => handleSchemaSearch(conn.name, e.target.value)}
-                              className="w-48 pl-7 pr-2 py-1 text-[12px] bg-[var(--color-bg)] border border-[var(--color-border)] rounded-[10px] text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] focus:border-[var(--color-border-hover)] focus:outline-none"
-                            />
-                            {schemaSearchLoading === conn.name && (
-                              <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-[var(--color-text-dim)]" />
-                            )}
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-px max-h-96 overflow-auto bg-[var(--color-border)]">
-                          {Object.entries(schemaSearchResults[conn.name]?.tables || tables).map(([key, t]: [string, any]) => (
-                            <div key={t.name} className="p-3 bg-[var(--color-bg)]">
-                              <div className="flex items-center gap-2 mb-2">
-                                <Table2 className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-                                <span className="text-[12px] text-[var(--color-text-muted)]">{t.schema}.{t.name}</span>
-                                <span className="text-[11px] text-[var(--color-text-dim)] font-mono tabular-nums">{t.columns?.length || 0} cols</span>
-                                {t.type === "view" && (
-                                  <span className="text-[11px] text-cyan-400">view</span>
-                                )}
-                                {t.row_count > 0 && (
-                                  <span className="text-[11px] text-[var(--color-text-dim)] font-mono tabular-nums">
-                                    ~{t.row_count >= 1000000 ? `${(t.row_count / 1000000).toFixed(1)}M` : t.row_count >= 1000 ? `${(t.row_count / 1000).toFixed(1)}K` : t.row_count} rows
-                                  </span>
-                                )}
-                                {t._relevance_score && (
-                                  <span className="text-[11px] text-[var(--color-success)] font-mono tabular-nums">
-                                    score: {t._relevance_score}
-                                  </span>
-                                )}
-                                <div className="flex-1" />
-                                {/* Endorsement toggle per table */}
-                                <button
-                                  onClick={async (e) => {
-                                    e.stopPropagation();
-                                    const current = endorsements[conn.name] || { endorsed: [], hidden: [], mode: "all" as const };
-                                    const isEndorsed = current.endorsed.includes(key);
-                                    const isHidden = current.hidden.includes(key);
-                                    let updated = { ...current };
-                                    if (isEndorsed) {
-                                      updated.endorsed = current.endorsed.filter(k => k !== key);
-                                    } else if (isHidden) {
-                                      updated.hidden = current.hidden.filter(k => k !== key);
-                                      updated.endorsed = [...current.endorsed, key];
-                                    } else {
-                                      updated.endorsed = [...current.endorsed, key];
-                                    }
-                                    try {
-                                      await setSchemaEndorsements(conn.name, updated);
-                                      setEndorsements(prev => ({ ...prev, [conn.name]: updated }));
-                                    } catch {}
-                                  }}
-                                  className={`p-0.5 transition-colors duration-150 ${
-                                    endorsements[conn.name]?.endorsed?.includes(key)
-                                      ? "text-[var(--color-success)]"
-                                      : "text-[var(--color-text-dim)] opacity-30 hover:opacity-60"
-                                  }`}
-                                  title={endorsements[conn.name]?.endorsed?.includes(key) ? "Endorsed — click to remove" : "Click to endorse for AI agents"}
-                                >
-                                  <Star className="w-2.5 h-2.5" strokeWidth={1.5} />
-                                </button>
-                                <button
-                                  onClick={async (e) => {
-                                    e.stopPropagation();
-                                    const current = endorsements[conn.name] || { endorsed: [], hidden: [], mode: "all" as const };
-                                    const isHidden = current.hidden.includes(key);
-                                    let updated = { ...current };
-                                    if (isHidden) {
-                                      updated.hidden = current.hidden.filter(k => k !== key);
-                                    } else {
-                                      updated.hidden = [...current.hidden, key];
-                                      updated.endorsed = current.endorsed.filter(k => k !== key);
-                                    }
-                                    try {
-                                      await setSchemaEndorsements(conn.name, updated);
-                                      setEndorsements(prev => ({ ...prev, [conn.name]: updated }));
-                                    } catch {}
-                                  }}
-                                  className={`p-0.5 transition-colors duration-150 ${
-                                    endorsements[conn.name]?.hidden?.includes(key)
-                                      ? "text-[var(--color-error)]"
-                                      : "text-[var(--color-text-dim)] opacity-30 hover:opacity-60"
-                                  }`}
-                                  title={endorsements[conn.name]?.hidden?.includes(key) ? "Hidden — click to show" : "Click to hide from AI agents"}
-                                >
-                                  <EyeOff className="w-2.5 h-2.5" strokeWidth={1.5} />
-                                </button>
-                              </div>
-                              {t.description && (
-                                <p className="text-[10px] text-[var(--color-text-dim)] opacity-70 mb-1.5 italic">{t.description}</p>
-                              )}
-                              <div className="space-y-0.5">
-                                {(t.columns || []).slice(0, 8).map((col: any) => {
-                                  const isMatched = t._matched_columns?.includes(col.name);
-                                  return (
-                                  <div key={col.name} className="flex items-center gap-2 text-[11px]">
-                                    <span className={col.primary_key ? "text-[var(--color-warning)]" : isMatched ? "text-[var(--color-success)]" : "text-[var(--color-text-dim)]"}>
-                                      {col.name}
-                                    </span>
-                                    <span className="text-[var(--color-text-dim)] opacity-50">{col.type}</span>
-                                    {col.primary_key && <span className="text-[var(--color-warning)]">pk</span>}
-                                    {isMatched && !col.primary_key && <span className="text-[var(--color-success)] text-[10px]">match</span>}
-                                    {col.comment && <span className="text-[var(--color-text-dim)] opacity-40 text-[10px] italic truncate max-w-[120px]" title={col.comment}>{col.comment}</span>}
-                                  </div>
-                                  );
-                                })}
-                                {t.columns.length > 8 && (
-                                  <p className="text-[11px] text-[var(--color-text-dim)]">+ {t.columns.length - 8} more</p>
-                                )}
-                              </div>
-                              {/* Foreign keys */}
-                              {t.foreign_keys?.length > 0 && (
-                                <div className="mt-2 pt-1.5 border-t border-[var(--color-border)]">
-                                  {t.foreign_keys.map((fk: any, i: number) => (
-                                    <div key={i} className="text-[10px] text-purple-400/80">
-                                      {fk.column} → {fk.references_table}.{fk.references_column}
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                              {/* Column exploration (ReFoRCE pattern) */}
-                              <div className="mt-2 pt-1.5 border-t border-[var(--color-border)]">
-                                <button
-                                  onClick={async (e) => {
-                                    e.stopPropagation();
-                                    const exploreKey = `${conn.name}:${key}`;
-                                    if (exploredData[exploreKey]) {
-                                      setExploredData(prev => { const next = { ...prev }; delete next[exploreKey]; return next; });
-                                      return;
-                                    }
-                                    setExploringTable(exploreKey);
-                                    try {
-                                      const data = await exploreColumns(conn.name, key);
-                                      setExploredData(prev => ({ ...prev, [exploreKey]: data }));
-                                    } catch { toast("Column exploration failed", "error"); }
-                                    finally { setExploringTable(null); }
-                                  }}
-                                  disabled={exploringTable === `${conn.name}:${key}`}
-                                  className="text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
-                                >
-                                  {exploringTable === `${conn.name}:${key}` ? (
-                                    <><Loader2 className="w-2.5 h-2.5 inline animate-spin mr-0.5" /> exploring...</>
-                                  ) : exploredData[`${conn.name}:${key}`] ? (
-                                    <>hide exploration</>
-                                  ) : (
-                                    <><Eye className="w-2.5 h-2.5 inline mr-0.5" strokeWidth={1.5} />explore values &amp; stats</>
-                                  )}
-                                </button>
-                                {exploredData[`${conn.name}:${key}`] && (
-                                  <div className="mt-1.5 space-y-1 animate-fade-in">
-                                    {exploredData[`${conn.name}:${key}`].columns.slice(0, 10).map((ec: any) => (
-                                      <div key={ec.name} className="text-[10px]">
-                                        <span className="text-[var(--color-text-muted)]">{ec.name}</span>
-                                        {ec.value_stats && (
-                                          <span className="text-[var(--color-text-dim)] ml-1.5">
-                                            [{ec.value_stats.min} .. {ec.value_stats.max}]{ec.value_stats.avg != null && ` avg=${ec.value_stats.avg}`}
-                                          </span>
-                                        )}
-                                        {ec.sample_values && ec.sample_values.length > 0 && (
-                                          <span className="text-[var(--color-text-dim)] opacity-60 ml-1.5">
-                                            {ec.sample_values.slice(0, 4).join(", ")}
-                                            {ec.sample_values.length > 4 && "..."}
-                                          </span>
-                                        )}
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ) : (
-                      <p className="text-[12px] text-[var(--color-text-dim)] py-4 text-center">
-                        no schema available. test the connection first.
-                      </p>
-                    )}
-                  </div>
+                  schemaLoading === conn.name && !tables ? (
+                    <div className="connection-schema-empty"><Loader2 className="is-spinning" /> Loading schema</div>
+                  ) : tables && Object.keys(tables).length > 0 ? (
+                    <ConnectionSchemaBrowser
+                      connectionName={conn.name}
+                      tables={tables as Record<string, ConnectionSchemaTable>}
+                      searchTables={schemaSearchResults[conn.name]?.tables as Record<string, ConnectionSchemaTable> | undefined}
+                      searchResultCount={schemaSearchResults[conn.name]?.result_count}
+                      totalTables={schemaSearchResults[conn.name]?.total_tables}
+                      search={schemaSearch[conn.name] || ""}
+                      searchLoading={schemaSearchLoading === conn.name}
+                      onSearch={(value) => handleSchemaSearch(conn.name, value)}
+                      endorsements={endorsements[conn.name] || { endorsed: [], hidden: [], mode: "all" }}
+                      onEndorsementsChange={(value) => setEndorsements((prev) => ({ ...prev, [conn.name]: value }))}
+                      onReload={() => reloadConnectionSchema(conn.name)}
+                      onRefresh={() => handleRefreshSchema(conn.name)}
+                      refreshing={schemaLoading === conn.name}
+                      refreshStatus={schemaRefreshStatus[conn.name]}
+                      schemaChanged={Boolean(schemaDiff[conn.name]?.has_changes)}
+                      onGenerateSemantic={() => handleGenerateSemantic(conn.name)}
+                      exploringKey={exploringTable}
+                      exploredData={exploredData}
+                      onExplore={(tableKey) => handleExploreTable(conn.name, tableKey)}
+                    />
+                  ) : (
+                    <div className="connection-schema-empty">No schema available. Test the connection first.</div>
+                  )
                 )}
-
                 {/* PII Detection Results */}
-                {(piiConfig[conn.name] || (piiData[conn.name] && piiData[conn.name].tables_with_pii > 0)) && (
-                  <div className="border-t border-[var(--color-border)] px-4 py-4 animate-fade-in">
+                {expandedPiiConn === conn.name && (piiConfig[conn.name] || (piiData[conn.name] && piiData[conn.name].tables_with_pii > 0)) && (
+                  <div className="connection-pii-panel border-t border-[var(--color-border)] px-4 py-4 animate-fade-in">
                     <div className="flex items-center justify-between mb-3">
                       <div className="flex items-center gap-2">
                         <Shield className={`w-3.5 h-3.5 ${piiConfig[conn.name]?.enabled ? "text-emerald-400" : "text-[var(--color-warning)]"}`} strokeWidth={1.5} />
@@ -4309,7 +4036,7 @@ export default function ConnectionsPage() {
                     )}
                     <p className="text-[11px] text-[var(--color-text-dim)] mt-2">
                       {piiConfig[conn.name]?.enabled
-                        ? "queries will automatically redact flagged columns (hash, mask, or drop)."
+                        ? "queries will automatically redact flagged columns (hash, mask, or hide)."
                         : "click the toggle to activate automatic pii redaction on query results."}
                     </p>
                   </div>

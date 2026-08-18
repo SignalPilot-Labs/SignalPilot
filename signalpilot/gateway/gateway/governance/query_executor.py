@@ -409,13 +409,15 @@ class GovernedQueryExecutor:
                     actual_cost_usd=None,
                     completed=False,
                 )
+            from gateway.errors.mcp import sanitize_mcp_error
+
             raise GovernedQueryError(
                 code,
                 "Query cancelled"
                 if code == "query_cancelled"
                 else "Query timed out"
                 if code == "query_timeout"
-                else "Query failed",
+                else f"Query failed: {sanitize_mcp_error(str(exc))}",
             ) from exc
 
         elapsed_ms = (time.monotonic() - started) * 1000

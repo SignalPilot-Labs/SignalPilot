@@ -276,6 +276,7 @@ async def create_conversation_with_run(
     commit_sha: str | None = None,
     per_query_budget_usd: float = 0.25,
     chat_budget_usd: float = 1.0,
+    origin: str = "user",
 ) -> tuple[GatewayChatConversation, GatewayChatRun]:
     """Atomically create the first conversation, message, and queued run."""
     now = time.time()
@@ -285,6 +286,7 @@ async def create_conversation_with_run(
         user_id=user_id,
         project_id=project.id,
         surface="standalone",
+        origin=origin,
         branch=branch,
         commit_sha=commit_sha,
         per_query_budget_usd=per_query_budget_usd,
@@ -372,6 +374,7 @@ async def list_conversations(
                 branch=conversation.branch or "main",
                 title=conversation.title or "New chat",
                 status=conversation.status,
+                origin=conversation.origin,
                 created_at=conversation.created_at,
                 updated_at=conversation.updated_at,
                 run_status=latest_run.status if latest_run else None,
@@ -464,6 +467,7 @@ async def get_conversation_detail(
             branch=conversation.branch or "main",
             title=conversation.title or "New chat",
             status=conversation.status,
+            origin=conversation.origin,
             created_at=conversation.created_at,
             updated_at=conversation.updated_at,
             run_status=current_run.status if current_run else None,
@@ -828,6 +832,7 @@ async def fork_shared_conversation(
         user_id=user_id,
         project_id=source.project_id,
         surface="standalone",
+        origin=source.origin,
         branch=source.branch,
         commit_sha=source.commit_sha,
         per_query_budget_usd=per_query_budget_usd,

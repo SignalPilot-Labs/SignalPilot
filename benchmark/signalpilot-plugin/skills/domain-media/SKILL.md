@@ -1,6 +1,6 @@
 ---
 name: domain-media
-description: "Media & entertainment domain knowledge: content catalogs, participation tables, ranking determinism."
+description: "Media & entertainment domain knowledge: content catalogs and participation tables."
 ---
 
 # Media & Entertainment
@@ -24,9 +24,3 @@ Do NOT filter by participant type based on the model name or task description. T
 ## Driving Table
 
 When aggregating content metrics, drive FROM the participation/event table (credits, views, ratings, matches), not the content table (movies, players, tournaments). The participation table has one row per event - that is the correct grain.
-
-## Ranking and Scoring
-
-When ranking entities (top-N, best-rated, most-X), use ROW_NUMBER() with a deterministic tiebreaker - the entity's primary key as the final ORDER BY term. Ordering by a non-unique column (rating, count) alone produces different rankings on each run.
-
-NEVER use DENSE_RANK() for top-N selection - DENSE_RANK() can return more than N rows when ties exist at the boundary.

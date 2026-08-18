@@ -3,6 +3,7 @@
 import {
   AlertCircle,
   ArrowLeft,
+  Bot,
   GitFork,
   Loader2,
   LockKeyhole,
@@ -142,8 +143,16 @@ export function SharedStandaloneDataChat({ token }: { token: string }) {
                 <LockKeyhole className="h-3 w-3" />
                 Team-shared chat
               </div>
-              <div className="max-w-xl truncate text-sm text-[var(--color-text)]">
-                {data.conversation.title}
+              <div className="flex min-w-0 items-center gap-2">
+                <div className="max-w-xl truncate text-sm text-[var(--color-text)]">
+                  {data.conversation.title}
+                </div>
+                {data.conversation.origin === "improvement" && (
+                  <span className="inline-flex flex-none items-center gap-1 rounded-full border border-[var(--color-warning)]/25 bg-[var(--color-warning)]/5 px-2 py-0.5 text-[10px] uppercase tracking-[0.08em] text-[var(--color-warning)]">
+                    <Bot className="h-3 w-3" />
+                    Automated improvement run
+                  </span>
+                )}
               </div>
             </div>
           </div>

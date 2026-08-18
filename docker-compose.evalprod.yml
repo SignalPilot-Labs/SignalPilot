@@ -83,6 +83,11 @@ services:
   web:
     profiles:
       - webui
+    build:
+      args:
+        NEXT_PUBLIC_GATEWAY_URL: http://localhost:3410
+    environment:
+      NEXT_PUBLIC_GATEWAY_URL: http://localhost:3410
 
   minio:
     ports: !override

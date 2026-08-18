@@ -15,7 +15,7 @@ export function MainContent({ children }: { children: ReactNode }) {
   const fullWidth = FULL_WIDTH_PREFIXES.some((prefix) => matchesRoutePrefix(pathname, prefix));
 
   return (
-    <main className={`${fullWidth ? "" : "ml-56"} min-h-screen relative z-10`}>
+    <main className={`${fullWidth ? "" : "md:ml-56"} min-h-screen relative z-10`}>
       {children}
     </main>
   );

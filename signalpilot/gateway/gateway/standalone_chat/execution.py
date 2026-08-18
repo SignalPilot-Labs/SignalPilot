@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.auth.notebook_jwt import mint_session_jwt
 from gateway.config.k8s import get_k8s_settings
 from gateway.db.models import (
+    GatewayChatConversation,
     GatewayChatObjectDeletion,
     GatewayChatRun,
     GatewayQueryProposal,
@@ -93,18 +94,36 @@ async def prepare_execution(
         connection_name=connection_name,
         commit_sha=commit_sha,
     )
+    conversation = await db.get(GatewayChatConversation, run.conversation_id)
+    is_improvement_run = bool(conversation and getattr(conversation, "origin", "user") == "improvement")
     anthropic_api_key = await get_user_anthropic_key(
         db,
         run.org_id,
         run.user_id,
     )
     runtime_auth: dict[str, str] | None = None
-    if anthropic_api_key:
+    if is_improvement_run and (improvement_key := os.getenv("SP_IMPROVEMENT_ANTHROPIC_KEY")):
+        # Automated improvement runs bill to a dedicated Claude Code OAuth
+        # token (sk-ant-oat...), never to the author's personal credential.
+        # OAuth only for now — no API-key path.
+        runtime_auth = {"type": "oauth", "token": improvement_key}
+    elif anthropic_api_key:
         runtime_auth = {"type": "api_key", "token": anthropic_api_key}
     elif oauth_token := (os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or os.getenv("OAUTH_TOKEN")):
         runtime_auth = {"type": "oauth", "token": oauth_token}
     elif server_api_key := os.getenv("ANTHROPIC_API_KEY"):
         runtime_auth = {"type": "api_key", "token": server_api_key}
+    capabilities = [
+        "artifact:publish",
+        "dbt:read",
+        "notebook:analysis",
+        "query:read",
+        "schema:read",
+        "runtime:publish",
+    ]
+    if is_improvement_run:
+        # Unlocks the sandbox VM MCP tools; ordinary chats never carry this.
+        capabilities.append("sandbox:execute")
     payload = {
         "run_id": run.id,
         "project_id": run.project_id,
@@ -119,14 +138,7 @@ async def prepare_execution(
             branch=branch,
             connection_name=connection_name,
             commit_sha=commit_sha,
-            capabilities=[
-                "artifact:publish",
-                "dbt:read",
-                "notebook:analysis",
-                "query:read",
-                "schema:read",
-                "runtime:publish",
-            ],
+            capabilities=capabilities,
             execution_identity=f"chat:{run.id}",
             scopes=["read", "query", "execute"],
             ttl=get_k8s_settings().sp_session_jwt_ttl_seconds,
@@ -134,6 +146,7 @@ async def prepare_execution(
         "prompt": prompt,
         "messages": messages,
         "warm_context": warm_context,
+        "run_origin": "improvement" if is_improvement_run else "user",
         "features": {
             "size_router": enterprise_chat_feature_flags().size_router,
             "size_router_shadow": enterprise_chat_feature_flags().size_router_shadow,

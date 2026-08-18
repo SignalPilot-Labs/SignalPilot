@@ -1,13 +1,7 @@
-"""map_columns — consolidated, any-DB upstream column mapper (MCP tool).
+"""Upstream column observations for dbt models.
 
-A catch-all replacement for the local DuckDB `map-columns` bin script: in ONE call
-it lists every upstream column for a dbt model, profiles each (null/distinct),
-classifies it MAPPED / UNMAPPED-INCLUDE / UNMAPPED-EXCLUDE against the YML contract,
-detects lookup joins and column collisions. The classification/output logic is a
-faithful port of the script; only the database layer is swapped from a local
-`.duckdb` file to the gateway connector (so it works against any database), and
-filesystem reads (model SQL, YML) use `project_dir` — the same pattern the former
-generate_model_blueprint tool used.
+It reports YML matches, source-only columns, profiles, lookup candidates, and
+column collisions as observations.
 """
 
 from __future__ import annotations
@@ -614,22 +608,116 @@ async def _map_model(connector, schema, work_dir, model_name, exclude_set) -> li
     return out
 
 
+async def _map_explicit_upstreams(connector, schema, work_dir, model_name, upstreams):
+    yml_columns = _extract_yml_columns(work_dir, model_name)
+    yml_lower = {name.lower() for name in yml_columns}
+    out = [f"## Pre-write Column Observations: {model_name}"]
+    matched = 0
+    source_only = 0
+    positional_alignments: list[tuple[str, list[tuple[str, str]]]] = []
+    for requested in upstreams:
+        if "." not in requested and sum(
+            1 for key in schema._raw if key.split(".")[-1].lower() == requested.lower()
+        ) > 1:
+            out.append(f"### {requested} — AMBIGUOUS; use schema.relation")
+            continue
+        resolved = schema.resolve(requested)
+        if resolved is None:
+            out.append(f"### {requested} — NOT FOUND")
+            continue
+        columns = _get_db_columns(schema, work_dir, resolved)
+        profile = await _profile_columns(connector, schema, resolved, columns)
+        out.append(f"### {resolved} — {len(columns)} columns")
+        for column_name, column_type in columns:
+            status = "YML-MATCH" if column_name.lower() in yml_lower else "SOURCE-ONLY"
+            matched += status == "YML-MATCH"
+            source_only += status == "SOURCE-ONLY"
+            stats = profile.get(column_name, {})
+            out.append(
+                f"  {column_name} ({column_type}) → {status} "
+                f"[rows={stats.get('total', 0)}, nulls={stats.get('null_count', 0)}, "
+                f"distinct={stats.get('distinct_count', 0)}]"
+            )
+        if yml_columns and len(columns) == len(yml_columns):
+            aligned_pairs = [
+                (yml_name, source_name)
+                for yml_name, (source_name, _) in zip(yml_columns, columns)
+            ]
+            pairs = [f"{position}. {yml_name} <- {source_name}"
+                     for position, (yml_name, source_name) in enumerate(aligned_pairs, start=1)]
+            out.append("  POSITIONAL ALIGNMENT (equal column counts):")
+            out.extend(f"    {pair}" for pair in pairs)
+            out.append("  This is an ordering observation; project evidence decides whether it is a rename mapping.")
+            source_names_lower = {name.lower() for name, _ in columns}
+            exact_anchor_count = sum(
+                yml_name.lower() in source_names_lower for yml_name in yml_columns
+            )
+            exact_positions_agree = exact_anchor_count > 0 and all(
+                yml_name.lower() == source_name.lower()
+                for yml_name, source_name in aligned_pairs
+                if yml_name.lower() in source_names_lower
+            )
+            if exact_positions_agree:
+                positional_alignments.append((resolved, aligned_pairs))
+        out.append("")
+    if len(positional_alignments) == 1:
+        relation, pairs = positional_alignments[0]
+        candidates = []
+        for yml_name, source_name in pairs:
+            yml_tokens = yml_name.lower().split("_")
+            source_tokens = source_name.lower().split("_")
+            shorter, longer = sorted((yml_tokens, source_tokens), key=len)
+            boundary_match = any(
+                longer[start:start + len(shorter)] == shorter
+                for start in (0, len(longer) - len(shorter))
+            )
+            if boundary_match:
+                candidates.append((yml_name, source_name))
+        if candidates:
+            out.append(f"### POSITIONAL DECORATION CANDIDATES: {relation}")
+            out.extend(f"  {yml_name} <- {source_name}" for yml_name, source_name in candidates)
+            out.append("These are sole-upstream, equal-width, exact-name-anchored observations; project evidence decides lineage.")
+    out.append(f"### Summary: {matched} YML matches, {source_only} source-only observations")
+    out.append("These statuses describe availability; project evidence defines output columns.")
+    return out
+
+
+def _observational_mapping(lines: list[str]) -> list[str]:
+    observed = []
+    matched = 0
+    source_only = 0
+    for line in lines:
+        if line.startswith("### Summary:"):
+            continue
+        line = line.replace("UNMAPPED-INCLUDE", "SOURCE-ONLY")
+        line = line.replace("UNMAPPED-EXCLUDE", "SOURCE-ONLY")
+        line = line.replace("MAPPED", "YML-MATCH")
+        line = re.sub(r"\[lookup_join_key:[^\]]+\]", "[lookup candidate]", line)
+        line = line.replace("[varchar_event_date]", "[date-like VARCHAR]")
+        line = line.replace("[varchar_audit_timestamp]", "[timestamp-like VARCHAR]")
+        line = line.replace(" — MUST alias", " — shared-name observation")
+        if "SKIP these" in line or "Expected minimum columns" in line:
+            continue
+        matched += line.count("YML-MATCH")
+        source_only += line.count("SOURCE-ONLY")
+        observed.append(line)
+    observed.append(f"### Summary: {matched} YML matches, {source_only} source-only observations")
+    return observed
+
+
 @audited_tool(mcp)
-async def map_columns(connection_name: str, model_name: str, project_dir: str,
-                      exclude: str = "") -> str:
-    """
-    Map all upstream columns for a dbt model in one call (any database).
+async def map_columns(
+    connection_name: str,
+    model_name: str,
+    project_dir: str,
+    exclude: str = "",
+    upstream_tables: str = "",
+) -> str:
+    """Observe upstream columns for a dbt model.
 
-    Lists every upstream table's columns, profiles them (null rate, distinctness),
-    and classifies each as MAPPED / UNMAPPED-INCLUDE / UNMAPPED-EXCLUDE against the
-    model's YML contract, with lookup-join and collision detection. Run this BEFORE
-    writing a model's SQL to decide which columns to include.
-
-    Args:
-        connection_name: Configured database connection.
-        model_name: dbt model to map.
-        project_dir: Absolute path to the dbt project directory (for YML/SQL).
-        exclude: Optional comma-separated column names to force-exclude.
+    Use authored SQL lineage when `upstream_tables` is empty. Before SQL has
+    lineage, pass up to ten comma-separated unquoted physical relation names.
+    Results describe available columns; project evidence defines output columns.
     """
     if err := _validate_connection_name(connection_name):
         return f"Error: {err}"
@@ -639,6 +727,12 @@ async def map_columns(connection_name: str, model_name: str, project_dir: str,
     if err:
         return err
     exclude_set = {c.strip().lower() for c in exclude.split(",") if c.strip()}
+    explicit_upstreams = [name.strip() for name in upstream_tables.split(",") if name.strip()]
+    if len(explicit_upstreams) > 10:
+        return "Error: upstream_tables accepts at most 10 relations."
+    for name in explicit_upstreams:
+        if not _MODEL_NAME_RE.match(name):
+            return f"Error: Invalid unquoted upstream relation '{name}'."
 
     async with _store_session() as store:
         conn_info = await store.get_connection(connection_name)
@@ -657,14 +751,21 @@ async def map_columns(connection_name: str, model_name: str, project_dir: str,
             conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name
         ) as connector:
             schema = _Schema(await connector.get_schema(), conn_info.db_type)
-            lines = await _map_model(connector, schema, work_dir, model_name, exclude_set)
+            if explicit_upstreams:
+                lines = await _map_explicit_upstreams(
+                    connector, schema, work_dir, model_name, explicit_upstreams
+                )
+            else:
+                lines = _observational_mapping(
+                    await _map_model(connector, schema, work_dir, model_name, exclude_set)
+                )
     except Exception as e:
         return f"Error: {sanitize_mcp_error(str(e))}"
     return "\n".join(lines)
 
 
 # ── analyze_project_db — the DB half of the old scan_project, one call, any DB ──
-_MODEL_PREFIXES = ("stg_", "dim_", "fact_", "int_", "obt_", "fct_", "solution__", "mart_", "auto_")
+_MODEL_PREFIXES = ("stg_", "dim_", "fact_", "int_", "obt_", "fct_", "mart_", "auto_")
 # Parent-child orphan detection uses catalog distinct-counts (pigeonhole), so it never
 # scans a large table. Exact COUNT(DISTINCT) is only used as a fallback on small tables
 # whose stats the catalog doesn't carry (e.g. DuckDB).
@@ -886,3 +987,178 @@ async def analyze_project_db(connection_name: str) -> str:
     if len(out) == 1:
         out.append("  (no lookup, staging-gap, or driving-table signals detected)")
     return "\n".join(out)
+
+
+# -- find_column_producers - which existing models already produce a column ----
+
+def _parse_sql_projections(sql: str) -> list[tuple[str, str]]:
+    """Final-SELECT projections as (output_name, expression_text) pairs.
+
+    Same splitting rules as _parse_sql_columns, but keeps the expression so a
+    caller can show WHERE a value comes from, not only that it exists.
+    """
+    clean = re.sub(r"\{\{.*?\}\}", "___REF___", sql)
+    clean = re.sub(r"\{%.*?%\}", "", clean)
+    clean = re.sub(r"/\*.*?\*/", "", clean, flags=re.DOTALL)
+    clean = re.sub(r"--.*$", "", clean, flags=re.MULTILINE)
+    matches = list(re.finditer(r"SELECT\s+(.*?)\s+FROM\b", clean, re.IGNORECASE | re.DOTALL))
+    if not matches:
+        return []
+    # Resolve the canonical `select * from <final_cte>` tail into that CTE's
+    # own select list (chase up to 5 star hops for nested passthroughs).
+    sel = matches[-1]
+    sel_text = sel.group(1)
+    for _ in range(5):
+        if sel_text.strip() != "*" and not re.fullmatch(r"\w+\.\*", sel_text.strip()):
+            break
+        target_m = re.match(r"\s*([A-Za-z_]\w*)", clean[sel.end():])
+        if not target_m:
+            return []
+        target = target_m.group(1)
+        cte_m = re.search(rf"\b{re.escape(target)}\s+as\s*\(", clean, re.IGNORECASE)
+        if not cte_m:
+            return []
+        inner = next((m for m in matches if m.start() > cte_m.end() - 1), None)
+        if inner is None or inner is sel:
+            return []
+        sel = inner
+        sel_text = sel.group(1)
+    if sel_text.strip() == "*":
+        return []
+    depth = 0
+    current: list[str] = []
+    parts: list[str] = []
+    for ch in sel_text:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            parts.append("".join(current).strip())
+            current = []
+            continue
+        current.append(ch)
+    if current:
+        parts.append("".join(current).strip())
+    projections: list[tuple[str, str]] = []
+    for part in parts:
+        part = " ".join(part.split())
+        if not part or part == "*":
+            continue
+        as_match = re.search(r"\bAS\s+(\w+)\s*$", part, re.IGNORECASE)
+        if as_match:
+            projections.append((as_match.group(1), part))
+            continue
+        words = part.split()
+        name = words[-1].split(".")[-1] if words else ""
+        if name and name != "___REF___" and name.upper() not in (
+            "THEN", "ELSE", "END", "WHEN", "CASE", "AND", "OR", "NOT",
+            "NULL", "TRUE", "FALSE", "AS", "FROM", "WHERE", "SELECT",
+        ):
+            projections.append((name, part))
+    return projections
+
+
+def _direct_relations(sql_text: str) -> list[str]:
+    """Physical relations referenced directly in FROM/JOIN (no ref()/source())."""
+    clean = re.sub(r"\{\{.*?\}\}", "___REF___", sql_text)
+    clean = re.sub(r"--.*$", "", clean, flags=re.MULTILINE)
+    hits = re.findall(r"\b(?:FROM|JOIN)\s+((?:[A-Za-z_][\w$]*\.){0,2}[A-Za-z_][\w$]*)",
+                      clean, re.IGNORECASE)
+    keep: list[str] = []
+    for h in hits:
+        if h == "___REF___" or h.lower() in ("select", "lateral", "unnest", "values"):
+            continue
+        keep.append(h)
+    return keep
+
+
+def _column_producers_report(work_dir: Path, columns: list[str], exclude: set[str]) -> list[str]:
+    """Pure static scan: which existing model files project each column name."""
+    wanted = {c.lower(): c for c in columns}
+    out = [f"## Column Producers: {len(columns)} column(s) checked"]
+    hits: dict[str, list[str]] = {c.lower(): [] for c in columns}
+    cte_names_re = re.compile(r"(?:\bwith\b|,)\s*([A-Za-z_]\w*)\s+as\s*\(", re.IGNORECASE)
+    for sql_file in sorted(work_dir.rglob("*.sql")):
+        rel = str(sql_file.relative_to(work_dir))
+        if any(part in (".claude", "target", "__pycache__") for part in sql_file.parts):
+            continue
+        is_package = "dbt_packages" in sql_file.parts
+        if "macros" in sql_file.parts or rel.startswith("analyses"):
+            continue
+        model = sql_file.stem
+        if model.lower() in exclude:
+            continue
+        try:
+            text = _read_text(sql_file)
+        except Exception:
+            continue
+        projections = _parse_sql_projections(text)
+        if not projections:
+            continue
+        refs = _extract_refs(text)
+        sources = [f"{s}.{t}" for s, t in _extract_sources(text)]
+        cte_names = {m.group(1).lower() for m in cte_names_re.finditer(text)}
+        direct = [d for d in _direct_relations(text) if d.split(".")[-1].lower() not in cte_names]
+        reads = ", ".join(
+            [f"ref('{r}')" for r in dict.fromkeys(refs)]
+            + [f"source('{s}')" for s in dict.fromkeys(sources)]
+            + list(dict.fromkeys(direct))
+        ) or "(no upstream detected)"
+        for name, expr in projections:
+            key = name.lower()
+            if key in wanted:
+                if len(expr) > 140:
+                    expr = expr[:140] + "..."
+                tag = " [package model]" if is_package else ""
+                hits[key].append(f"  {model}{tag} (reads: {reads}) -> {expr}")
+    found = 0
+    for key, original in wanted.items():
+        out.append(f"### {original}")
+        if hits[key]:
+            found += 1
+            out.extend(hits[key][:8])
+            if len(hits[key]) > 8:
+                out.append(f"  ... and {len(hits[key]) - 8} more")
+        else:
+            out.append("  no existing model projects this column")
+    out.append(f"### Summary: {found} of {len(columns)} column(s) already have a producer")
+    out.append("A model that already projects a column is the project's producer for it - "
+               "source the value via ref() to that model rather than re-deriving it from a wider relation.")
+    return out
+
+
+@audited_tool(mcp)
+async def find_column_producers(
+    connection_name: str,
+    column_names: str,
+    project_dir: str,
+    exclude: str = "",
+) -> str:
+    """Find which existing models already produce given output columns.
+
+    Before writing a model, pass the comma-separated output column names it
+    must produce. Scans every model SQL file in the project and reports, per
+    column: each existing model whose final SELECT projects a column with that
+    name, the relations that model reads (ref()/source()/direct), and the
+    projecting expression. Use `exclude` (comma-separated model names) to skip
+    the model being written.
+    """
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
+    work_dir, err = _validated_project_dir(project_dir)
+    if err:
+        return err
+    columns = [c.strip() for c in column_names.split(",") if c.strip()]
+    if not columns:
+        return "Error: column_names cannot be empty. Pass comma-separated output column names."
+    if len(columns) > 50:
+        return "Error: column_names accepts at most 50 columns per call."
+    for c in columns:
+        if not re.match(r"^[A-Za-z_][\w$]{0,127}$", c):
+            return f"Error: Invalid column name '{c}'."
+    exclude_set = {m.strip().lower() for m in exclude.split(",") if m.strip()}
+    try:
+        return "\n".join(_column_producers_report(work_dir, columns, exclude_set))
+    except Exception as e:
+        return f"Error: {sanitize_mcp_error(str(e))}"

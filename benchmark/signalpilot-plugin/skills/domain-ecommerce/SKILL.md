@@ -57,7 +57,6 @@ A fact table may contain rows from ALL of these stages. Only fulfilled/delivered
 A purchase or revenue total counts ONLY completed sales. Returned, refunded, and cancelled items are NOT revenue - they are reversals or abandonments. If a transaction table has a status/flag column, revenue metrics MUST exclude these negative event types.
 
 BEFORE writing any SUM for a revenue metric, run `SELECT DISTINCT <status_col>` on the table in your FROM clause - not its raw source (intermediate models rename columns). Find which values represent returns, refunds, or cancellations from sibling models or existing WHERE clauses. Then exclude them with `WHERE status_col NOT IN (...)`. Keep ALL other values - they are valid sales regardless of what their codes mean.
-
 ## Customer Health Scoring
 
 When categorizing entities into health tiers (green/yellow/orange/red, good/fair/poor, A/B/C/D), use equal-width percentage bands unless the YML description specifies different thresholds - guessing custom breakpoints from data distributions produces arbitrary boundaries that vary between runs. For a 0-100% range with 4 tiers: 0-25%, 25-50%, 50-75%, 75-100%.

@@ -139,11 +139,15 @@ async def compute_coverage(
     executed_task_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     declared: set[str] = set()
+    declared_by_task: dict[str, set[str]] = {}
     for task in eval_set.tasks:
         if executed_task_ids is not None and task.id not in executed_task_ids:
             continue  # partial run: an unexecuted task's covers aren't coverage
-        declared.update(_model_key(c) for c in task.covers)
-        declared.update(_model_key(b) for b in task.builds)
+        task_models = {_model_key(c) for c in task.covers} | {
+            _model_key(b) for b in task.builds
+        }
+        declared.update(task_models)
+        declared_by_task[task.id] = task_models
 
     observed_by_task = await observed_tables_for_run(org_id, run_id)
     observed: set[str] = set()
@@ -169,6 +173,25 @@ async def compute_coverage(
             bucket["total"] += 1
             if str(m["name"]).lower() in hit:
                 bucket["covered"] += 1
+        result["models"] = [
+            {
+                "name": str(model["name"]),
+                "layer": str(model.get("layer", "other")),
+                "covered": _model_key(str(model["name"])) in covered,
+                "declared_by": sorted(
+                    task_id
+                    for task_id, models in declared_by_task.items()
+                    if _model_key(str(model["name"])) in models
+                ),
+                "observed_by": sorted(
+                    task_id
+                    for task_id, models in observed_by_task.items()
+                    if _model_key(str(model["name"]))
+                    in {_model_key(name) for name in models}
+                ),
+            }
+            for model in sorted(project_models, key=lambda item: str(item["name"]))
+        ]
         result["models_total"] = len(project_models)
         result["models_covered"] = len(hit)
         result["pct"] = round(len(hit) / len(project_models) * 100.0, 1)

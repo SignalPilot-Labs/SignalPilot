@@ -357,21 +357,10 @@ async def audit_model_sources(
     source_tables: str,
     sample_nulls: bool = True,
 ) -> str:
-    """
-    Single-call cardinality audit for a materialized dbt model and its sources.
+    """Report model/source row ratios and output-column profiles.
 
-    Queries all upstream source tables and the model itself, computes row count
-    ratios (fan-out / over-filter detection), and optionally scans every output
-    column for NULL fraction and constant-value patterns.
-
-    Args:
-        connection_name: Name of a configured database connection
-        model_name: Name of the materialized dbt model to audit
-        source_tables: Comma-separated list of upstream source/staging tables (1-10)
-        sample_nulls: If True, run NULL-fraction and constant-value scan on output columns
-
-    Returns:
-        Formatted diagnostic report, or an error message.
+    Queries the supplied upstream relations and model, then reports row counts,
+    ratios, NULL fractions, and distinct-value profiles as observations.
     """
     if err := _validate_connection_name(connection_name):
         return f"Error: {err}"
@@ -430,25 +419,16 @@ async def audit_model_sources(
 
         if src_rows == 0:
             ratio_str = "N/A"
-            classification = "WARNING: source has 0 rows"
-            diagnosis_lines.append(f"  - {src} has 0 rows: source table may be empty or not yet built")
+            classification = "OBSERVATION: source has 0 rows"
         else:
             ratio = model_rows / src_rows
             ratio_str = f"{ratio:.2f}x"
             if ratio < 0.5:
-                classification = (
-                    "WARNING: OVER-FILTER — fewer model rows than source (check LEFT vs INNER JOIN or WHERE clause)"
-                )
-                diagnosis_lines.append(
-                    f"  - {src} ratio {ratio_str}: check if INNER JOIN should be LEFT JOIN, or remove over-restrictive WHERE"
-                )
+                classification = "OBSERVATION: model/source ratio below 0.5"
             elif ratio > 2.0:
-                classification = "WARNING: FAN-OUT — model has more rows than source (check for missing pre-aggregation or cross-join)"
-                diagnosis_lines.append(
-                    f"  - {src} ratio {ratio_str}: pre-aggregate or deduplicate {src} before joining; check join key uniqueness"
-                )
+                classification = "OBSERVATION: model/source ratio above 2.0"
             else:
-                classification = "OK"
+                classification = "OBSERVATION"
 
         label = src.ljust(20)
         source_lines.append(f"  {label} {src_rows:>10,} rows  → ratio {ratio_str:<8} {classification}")
@@ -492,21 +472,15 @@ async def audit_model_sources(
                     col_label = col.ljust(24)
                     if dist_count == 1:
                         col_scan_lines.append(
-                            f"  [!!] {col_label}  {dist_count:>8,} distinct — CONSTANT: all rows same value (check CASE WHEN literal or SELECT alias)"
-                        )
-                        diagnosis_lines.append(
-                            f"  - {col} CONSTANT: verify CASE WHEN literals match source values (run SELECT DISTINCT on source col)"
+                            f"  [OBS] {col_label}  {dist_count:>8,} distinct, {null_count:,} nulls"
                         )
                     elif null_frac > 0.5:
                         pct = null_frac * 100
                         col_scan_lines.append(
-                            f"  [!!] {col_label}  {null_count:>8,} nulls ({pct:.1f}%) — LEFT JOIN may be dropping values; use COALESCE or fix join key"
-                        )
-                        diagnosis_lines.append(
-                            f"  - {col} {pct:.0f}% null: verify join key is correct; consider COALESCE({col}, 0) if nulls are valid zeros"
+                            f"  [OBS] {col_label}  {dist_count:>8,} distinct, {null_count:>8,} nulls ({pct:.1f}%)"
                         )
                     else:
-                        col_scan_lines.append(f"  [OK]  {col_label}  {dist_count:>8,} distinct, {null_count:,} nulls")
+                        col_scan_lines.append(f"  [OBS] {col_label}  {dist_count:>8,} distinct, {null_count:,} nulls")
                 except Exception as e:
                     col_scan_lines.append(f"  [--] {col}: error ({sanitize_mcp_error(str(e), cap=100)})")
 
@@ -549,10 +523,10 @@ async def audit_model_sources(
             _SAFE_COL_RE = re.compile(r"^[a-zA-Z0-9_]{1,128}$")
             low_card_cols = []
             for line in col_scan_lines:
-                # Parse "  [OK]  col_name   N distinct, M nulls"
-                if "distinct" in line and "[OK]" in line:
+                # Parse "  [OBS] col_name   N distinct, M nulls"
+                if "distinct" in line and "[OBS]" in line:
                     parts = line.split()
-                    col_idx = 1 if parts[0] == "[OK]" else 2
+                    col_idx = 1
                     col_name = parts[col_idx] if col_idx < len(parts) else ""
                     dist_idx = next((i for i, p in enumerate(parts) if p == "distinct"), -1)
                     if dist_idx > 0:
@@ -653,7 +627,12 @@ async def compare_join_types(
         left_table: Left table name (can be schema.table or just table)
         right_table: Right table name (can be schema.table or just table)
         join_keys: Comma-separated join key pairs, e.g. "a.id = b.id, a.date = b.date"
-        where_clause: Optional WHERE clause (without the WHERE keyword)
+        where_clause: Optional filter (without the WHERE keyword). A predicate that
+            references only one side's alias (a. for left, b. for right) is applied
+            to that table BEFORE the join, so outer-join match counts stay truthful.
+            A predicate referencing both sides (or no alias) is applied AFTER the
+            join and removes unmatched outer-join rows - the report says so when
+            that happens.
 
     Returns:
         Formatted report showing row counts for each JOIN type and match analysis.
@@ -705,41 +684,64 @@ async def compare_join_types(
     left_col, right_col = join_pairs[0]
     join_condition = " AND ".join(f"{lhs} = {rhs}" for lhs, rhs in join_pairs)
 
-    where_part = f"WHERE {where_clause}" if where_clause and where_clause.strip() else ""
-
     _qt_left = _quote_table(left_table)
     _qt_right = _quote_table(right_table)
 
+    # Push a single-side predicate into that side BEFORE the join. A post-join
+    # WHERE on the right alias silently deletes a LEFT JOIN's unmatched rows and
+    # makes LEFT and INNER look identical, which misleads the join-type choice.
+    left_from = f"{_qt_left} a"
+    right_from = f"{_qt_right} b"
+    where_part = ""
+    filter_note = ""
+    pred = where_clause.strip() if where_clause else ""
+    if pred:
+        refs_left = bool(re.search(r"\ba\s*\.", pred))
+        refs_right = bool(re.search(r"\bb\s*\.", pred))
+        if refs_right and not refs_left:
+            right_from = f"(SELECT * FROM {_qt_right} b WHERE {pred}) b"
+            filter_note = f"Filter applied to {right_table} BEFORE the join: {pred}"
+        elif refs_left and not refs_right:
+            left_from = f"(SELECT * FROM {_qt_left} a WHERE {pred}) a"
+            filter_note = f"Filter applied to {left_table} BEFORE the join: {pred}"
+        else:
+            where_part = f"WHERE {pred}"
+            filter_note = (
+                "NOTE: where_clause references both sides or no alias, so it is applied AFTER the join - "
+                "unmatched outer-join rows that fail it are removed from these counts. "
+                "Pass a predicate on a single alias (a. or b.) to pre-filter that side instead."
+            )
+
     sql = f"""
 WITH
-left_count AS (SELECT COUNT(*) AS cnt FROM {_qt_left}),
-right_count AS (SELECT COUNT(*) AS cnt FROM {_qt_right}),
+left_count AS (SELECT COUNT(*) AS cnt FROM {left_from}),
+right_count AS (SELECT COUNT(*) AS cnt FROM {right_from}),
 inner_join AS (
     SELECT COUNT(*) AS cnt
-    FROM {_qt_left} a
-    INNER JOIN {_qt_right} b ON {join_condition}
+    FROM {left_from}
+    INNER JOIN {right_from} ON {join_condition}
     {where_part}
 ),
 left_join AS (
     SELECT COUNT(*) AS cnt,
            COUNT({right_col}) AS matched,
            COUNT(*) - COUNT({right_col}) AS unmatched
-    FROM {_qt_left} a
-    LEFT JOIN {_qt_right} b ON {join_condition}
+    FROM {left_from}
+    LEFT JOIN {right_from} ON {join_condition}
     {where_part}
 ),
 right_join AS (
     SELECT COUNT(*) AS cnt,
            COUNT({left_col}) AS matched,
            COUNT(*) - COUNT({left_col}) AS unmatched
-    FROM {_qt_left} a
-    RIGHT JOIN {_qt_right} b ON {join_condition}
+    FROM {left_from}
+    RIGHT JOIN {right_from} ON {join_condition}
     {where_part}
 ),
 full_join AS (
     SELECT COUNT(*) AS cnt
-    FROM {_qt_left} a
-    FULL OUTER JOIN {_qt_right} b ON {join_condition}
+    FROM {left_from}
+    FULL OUTER JOIN {right_from} ON {join_condition}
     {where_part}
 )
 SELECT
@@ -789,9 +791,13 @@ SELECT
         f"JOIN Impact Analysis: {left_table} × {right_table}",
         f"  ON {join_condition}",
         "",
-        "Source Tables:",
+        "Source Tables (after any pre-join filter):",
         f"  {left_table}: {left_rows:,} rows",
         f"  {right_table}: {right_rows:,} rows",
+    ]
+    if filter_note:
+        lines.append(f"  {filter_note}")
+    lines += [
         "",
         "JOIN Results:",
         f"  INNER JOIN:      {inner_rows:,} rows",
@@ -803,14 +809,14 @@ SELECT
     if inner_rows < left_join_rows:
         lines.append("")
         lines.append(
-            f"⚠ INNER JOIN drops {left_join_rows - inner_rows:,} rows from {left_table} that have no match in {right_table}."
+            f"{left_join_rows - inner_rows:,} rows from {left_table} have no match in {right_table} - "
+            "confirm from the task, YML, or sibling models whether the contract preserves or excludes them."
         )
-        lines.append(f"  Use LEFT JOIN to preserve all {left_table} rows.")
 
-    if inner_rows > left_rows or inner_rows > right_rows:
+    if inner_rows > left_rows:
         lines.append("")
         lines.append(
-            f"⚠ FAN-OUT detected: INNER JOIN ({inner_rows:,}) > source rows. Join keys are not unique — duplicates in one table multiply rows in the other."
+            f"FAN-OUT: INNER JOIN ({inner_rows:,}) > {left_table} rows ({left_rows:,}) - the right-side join key is not unique, so matches multiply driving rows."
         )
 
     if left_join_rows == inner_rows:
@@ -908,11 +914,34 @@ async def verify_model_values(connection_name: str, model_name: str) -> str:
             all_tables_rows = await _query("SHOW TABLES")
             all_tables = [r[list(r.keys())[0]] for r in all_tables_rows]
 
-            # Collect row counts and columns for all non-model tables
+            # Collect row counts and columns for candidate upstream tables.
+            # Small warehouses: exhaustive per-table scan. Large warehouses:
+            # per-table COUNT(*) over thousands of tables takes tens of
+            # minutes, so fetch all columns in one catalog query, shortlist
+            # by column overlap with the model, and only COUNT the shortlist.
             table_info: list[tuple[str, int, list[str]]] = []  # (name, row_count, columns)
-            for tbl in all_tables:
-                if tbl == model_name:
-                    continue
+            scan_tables = [t for t in all_tables if t != model_name]
+            if len(scan_tables) > 50:
+                cols_by_table: dict[str, list[str]] = {}
+                try:
+                    all_col_rows = await _query(
+                        "SELECT table_name, column_name FROM information_schema.columns"
+                    )
+                    for r in all_col_rows:
+                        cols_by_table.setdefault(r["table_name"], []).append(r["column_name"])
+                except Exception:
+                    cols_by_table = {}
+                model_col_set = {n.lower() for n, _ in columns}
+
+                def _overlap(tbl: str) -> int:
+                    return sum(
+                        1 for c in cols_by_table.get(tbl, []) if c.lower() in model_col_set
+                    )
+
+                pool = [t for t in scan_tables if _overlap(t) > 0]
+                pool.sort(key=_overlap, reverse=True)
+                scan_tables = pool[:15] if pool else scan_tables[:15]
+            for tbl in scan_tables:
                 try:
                     row = await _query_one(f'SELECT COUNT(*) AS cnt FROM {_quote_table(tbl)}')
                     cnt = row["cnt"] if row else 0

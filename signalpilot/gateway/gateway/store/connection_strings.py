@@ -93,7 +93,10 @@ def _build_connection_string(conn: ConnectionCreate) -> str:
         pw = f":{url_quote(conn.password or '', safe='')}" if conn.password else ""
         host = conn.host or "localhost"
         port = conn.port or 1433
-        db = conn.database or "master"
+        # Empty database = multi-database mode: the connector signs in to master
+        # and discovers every accessible database. The trailing "/" keeps the
+        # pool key distinct from an explicit /master connection.
+        db = conn.database or ""
         return f"mssql://{user}{pw}@{host}:{port}/{db}"
     if conn.db_type == DBType.trino:
         user = url_quote(conn.username or "trino", safe="")

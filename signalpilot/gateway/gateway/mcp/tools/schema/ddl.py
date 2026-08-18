@@ -467,7 +467,7 @@ async def schema_ddl(connection_name: str, max_tables: int = 50, compress: bool 
     DDL format is preferred over JSON/text for text-to-SQL because:
     - LLMs have seen massive DDL in training, making it the natural schema format
     - DDL encodes constraints (PK, FK, NOT NULL) in standard SQL syntax
-    - Spider2.0 SOTA systems (DAIL-SQL, CHESS) use DDL format
+    - DDL format preserves table and column structure
 
     Use this when you need to write SQL queries against the database.
     For initial exploration, use schema_overview first, then compact_schema,

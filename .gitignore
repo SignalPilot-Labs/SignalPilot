@@ -139,9 +139,11 @@ demo-7/
 demo-8/
 demo-9/
 benchmark-demo-1/
-demo-generator/
 dbt-playground/
 *.zip
+
+# Default host directory for local eval project sets (see SP_EVAL_PROJECTS_HOST_DIR).
+.eval-projects/
 
 # Planning / research / customer docs (never commit)
 # Default-deny for root-level markdown: scratch planning notes land here and

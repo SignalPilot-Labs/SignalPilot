@@ -2,7 +2,7 @@
 """Pre-scan a dbt project and emit a structured context block.
 
 Used by the dbt-workflow SKILL.md via !`python3 scan_project.py` to inject
-project state into the skill prompt before Claude starts working.
+project state for the workflow before model work starts.
 
 Filesystem-only scan: YML models, SQL stubs, dependencies, required columns,
 sources, macros, and current_date hazards. Database-derived hints (lookup joins,
@@ -486,6 +486,52 @@ def main():
             print(f"  {model} is referenced by: {', '.join(sorted(consumers))}")
         print()
 
+    # Upstream convention — who reads what, and layering violations worth copying
+    model_paths: dict[str, str] = {}
+    for sql_file in work_dir.rglob("*.sql"):
+        if any(skip in str(sql_file) for skip in SKIP_DIRS):
+            continue
+        model_paths[sql_file.stem] = str(sql_file.relative_to(work_dir)).replace("\\", "/")
+
+    def _model_layer(name: str) -> str:
+        p = model_paths.get(name, "")
+        if name.startswith("stg_") or "/staging/" in p or p.startswith("staging/"):
+            return "staging"
+        if name.startswith("int_") or "/intermediate/" in p or p.startswith("intermediate/"):
+            return "intermediate"
+        return "mart"
+
+    all_consumers: dict[str, list[str]] = {}
+    for src_model, ref_list in deps.items():
+        for ref_name in ref_list:
+            if src_model != ref_name:
+                all_consumers.setdefault(ref_name, []).append(src_model)
+
+    int_summary: list[str] = []
+    convention_lines: list[str] = []
+    for m, consumers in sorted(all_consumers.items()):
+        layer = _model_layer(m)
+        if layer == "intermediate":
+            marts = sorted(c for c in set(consumers) if _model_layer(c) == "mart")
+            if marts:
+                int_summary.append(f"  {len(marts)} mart(s) read {m}: {', '.join(marts)}")
+        elif layer == "staging":
+            wrapping_ints = sorted(c for c in set(consumers) if _model_layer(c) == "intermediate")
+            direct_marts = sorted(c for c in set(consumers) if _model_layer(c) == "mart")
+            if wrapping_ints and direct_marts:
+                convention_lines.append(
+                    f"  {m}: intermediate(s) {', '.join(wrapping_ints)} wrap it, and mart(s) "
+                    f"{', '.join(direct_marts)} also read it directly — check which convention "
+                    f"your model's siblings follow"
+                )
+    if int_summary or convention_lines:
+        print("UPSTREAM CONVENTION (who reads what — new models follow the project's layering):")
+        for line in int_summary[:12]:
+            print(line)
+        for line in convention_lines[:12]:
+            print(line)
+        print()
+
     # Dependencies for models to build/rewrite
     dep_lines = []
     for model in sorted(work_models):
@@ -552,7 +598,7 @@ def main():
     # current_date warnings
     cd_hits = scan_current_date(work_dir)
     if cd_hits:
-        print("WARNING — FILES USING current_date (must fix with fix_date_spine_hazards):")
+        print("WARNING — FILES USING current_date (fix date spines and date caps with fix_date_spine_hazards; keep current_date that implements a present-anchored YML rule like 'current fiscal year' or 'as of today'):")
         print("\n".join(cd_hits))
         print()
 

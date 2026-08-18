@@ -80,6 +80,8 @@ services:
       SP_FEATURE_CHAT_RUNTIME_RESULTS: ${SP_FEATURE_CHAT_RUNTIME_RESULTS:-true}
       SP_FEATURE_CHAT_RUNTIME_ARTIFACTS: ${SP_FEATURE_CHAT_RUNTIME_ARTIFACTS:-true}
       SP_FEATURE_CHAT_DATASET_REFS: ${SP_FEATURE_CHAT_DATASET_REFS:-false}
+      # Dedicated billing key for automated improvement runs (from root .env).
+      SP_IMPROVEMENT_ANTHROPIC_KEY: ${SP_IMPROVEMENT_ANTHROPIC_KEY:-}
       SP_CHAT_OBJECTS_BUCKET: ${SP_CHAT_OBJECTS_BUCKET:-sp-chat-runtime}
       SP_CHAT_OBJECTS_S3_ENDPOINT: ${SP_CHAT_OBJECTS_S3_ENDPOINT-http://minio:9000}
       SP_CHAT_OBJECTS_S3_REGION: ${SP_CHAT_OBJECTS_S3_REGION-}
@@ -141,7 +143,7 @@ services:
       # Setup containers use host paths for bind mounts.
       # Docker resolves these paths on the host.
       # SP_EVAL_HOST_ROOT comes from .env.
-      SP_EVAL_PROJECTS_HOST_DIR: ${SP_EVAL_HOST_ROOT:-}/demo-generator/trap-arena/projects
+      SP_EVAL_PROJECTS_HOST_DIR: ${SP_EVAL_PROJECTS_HOST_DIR:-}
       SP_EVAL_SETUP_HOST_ROOT: ${SP_EVAL_HOST_ROOT:-}
       # The /demo-db page creates one Xata branch per workspace.
       # Each branch uses the shared demonstration warehouse.
@@ -161,8 +163,10 @@ services:
       - signalpilot-repos:/repos
       - signalpilot-notebook-token:/notebook-token:ro
       - /var/run/docker.sock:/var/run/docker.sock
-      # Local evaluation sets use the trap-arena format and repo_url paths.
-      - ./demo-generator/trap-arena/projects:/eval-projects:ro
+      # Local evaluation project sets, mounted read-only.
+      # Point SP_EVAL_PROJECTS_HOST_DIR at a directory of <name>/project.env sets.
+      # The default is an empty local directory, so the stack starts without one.
+      - ${SP_EVAL_PROJECTS_HOST_DIR:-./.eval-projects}:/eval-projects:ro
     command: >
       sh -c "python3 -m gateway.dev_local_api_key /shared/local_api_key &&
              uvicorn gateway.main:app --host 0.0.0.0 --port 3300"
@@ -226,6 +230,8 @@ services:
       SP_FEATURE_CHAT_RUNTIME_RESULTS: ${SP_FEATURE_CHAT_RUNTIME_RESULTS:-true}
       SP_FEATURE_CHAT_RUNTIME_ARTIFACTS: ${SP_FEATURE_CHAT_RUNTIME_ARTIFACTS:-true}
       SP_FEATURE_CHAT_DATASET_REFS: ${SP_FEATURE_CHAT_DATASET_REFS:-false}
+      # Dedicated billing key for automated improvement runs (from root .env).
+      SP_IMPROVEMENT_ANTHROPIC_KEY: ${SP_IMPROVEMENT_ANTHROPIC_KEY:-}
       SP_CHAT_OBJECTS_BUCKET: ${SP_CHAT_OBJECTS_BUCKET:-sp-chat-runtime}
       SP_CHAT_OBJECTS_S3_ENDPOINT: ${SP_CHAT_OBJECTS_S3_ENDPOINT-http://minio:9000}
       SP_CHAT_OBJECTS_S3_REGION: ${SP_CHAT_OBJECTS_S3_REGION-}

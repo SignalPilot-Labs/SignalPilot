@@ -1,6 +1,6 @@
 ---
 name: sql-workflow
-description: "Use this skill before writing any SQL query. Covers: output shape inference (cardinality clues from the question), efficient schema exploration, iterative CTE-based query building, structured verification loop (row count, NULL audit, fan-out check, sample inspection), error recovery protocol, saving output to result.sql and result.csv, turn budget management, and common benchmark traps."
+description: "Use this skill before writing any SQL query. Covers: output shape inference (cardinality clues from the question), efficient schema exploration, iterative CTE-based query building, structured verification loop (row count, NULL audit, fan-out check, sample inspection), error recovery protocol, saving output to result.sql and result.csv, turn budget management, and common query traps."
 type: skill
 ---
 
@@ -131,9 +131,9 @@ Once you have the correct result:
 
 If your query works and passes all verification checks, SAVE IMMEDIATELY - do not continue exploring "just in case".
 
-## 8. Common Benchmark Traps
+## 8. Common Query Traps
 
-- **Rounding**: Do NOT round unless the question explicitly asks for rounded values. The evaluator uses tolerance-based comparison - full precision is always safer.
+- **Rounding**: Do NOT round unless the question explicitly asks for rounded values. Full precision preserves information unless the question requires rounding.
 - **Column naming**: Match the question's phrasing exactly. If the question says "total revenue", name the column `total_revenue`, not `sum_revenue` or `revenue_total`.
 - **CSV format**: No trailing newline, no BOM, comma delimiter, double-quote strings containing commas.
 - **Empty result**: If the correct answer is 0 or empty, write a CSV with just the header row (or header + "0").

@@ -9,7 +9,7 @@ Databases exercised:
   ``tests/fixtures/seed_mssql.py``. Proves T-SQL OPENROWSET / xp_cmdshell
   payloads are rejected by governance BEFORE any bytes reach the server, and
   that a legitimate governed query still returns rows.
-* **PostgreSQL warehouses** — the trap-arena demo warehouses
+* **PostgreSQL warehouses** — local demo warehouses
   (northwind 5603 / contoso 5608 / fabrikam 5604 / adventureworks 5602). Proves the
   dblink / pg_read_file family is rejected, that a legitimate query executes,
   and that the LIMIT cap actually truncates a real result set end to end.
@@ -18,9 +18,9 @@ Databases exercised:
   real and schema-qualified table reads keep working.
 
 CREDENTIALS: no secret is hardcoded here. Postgres credentials come from
-``SP_TEST_PG_URL`` if set, otherwise they are read at runtime from the local
-(untracked) ``demo-generator/trap-arena/projects/<name>/project.env`` files. If
-neither source is present the Postgres group skips.
+``SP_TEST_PG_URL`` if set, otherwise they are read at runtime from
+``$SP_TEST_PG_PROJECT_DIR/<name>/project.env`` — a local, out-of-repo directory
+of demo project sets. If neither source is present the Postgres group skips.
 """
 
 from __future__ import annotations
@@ -182,10 +182,15 @@ class TestMSSQLLiveGovernance:
 # PostgreSQL warehouses (live containers)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_PROJECT_ENV_DIR = Path(__file__).resolve().parents[3] / "demo-generator" / "trap-arena" / "projects"
-# Local harness project directories to probe, in order. Overridable so a machine
-# whose trap-arena tree uses different directory names can point at them without
-# those names living in the repo:
+# Directory of local demo project sets, each holding a <name>/project.env.
+# It lives outside the repo, so the path is supplied by the environment:
+#   SP_TEST_PG_PROJECT_DIR=/path/to/projects
+# Unset means no local sets, and the Postgres group skips.
+_project_dir_raw = os.environ.get("SP_TEST_PG_PROJECT_DIR", "").strip()
+_PROJECT_ENV_DIR = Path(_project_dir_raw) if _project_dir_raw else None
+# Project directories to probe, in order. Overridable so a machine whose tree
+# uses different directory names can point at them without those names living
+# in the repo:
 #   SP_TEST_PG_PROJECTS=one,two,three
 _PG_PROJECT_ORDER = tuple(
     p.strip()
@@ -197,11 +202,13 @@ _PG_PROJECT_ORDER = tuple(
 
 
 def _read_project_env_url(project: str) -> str | None:
-    """Build a Postgres URL from a local trap-arena project.env, or None.
+    """Build a Postgres URL from a local project.env, or None.
 
     Reads the read-only role. Nothing is printed; the value is only handed to the
     connector.
     """
+    if _PROJECT_ENV_DIR is None:
+        return None
     path = _PROJECT_ENV_DIR / project / "project.env"
     if not path.is_file():
         return None
@@ -274,7 +281,7 @@ POSTGRES_PAYLOADS = [
 
 @pytest.mark.skipif(
     not _PG_UP,
-    reason="No reachable Postgres warehouse (set SP_TEST_PG_URL or start a trap-arena warehouse container)",
+    reason="No reachable Postgres warehouse (set SP_TEST_PG_URL or start a local demo warehouse container)",
 )
 class TestPostgresLiveGovernance:
     DIALECT = "postgres"

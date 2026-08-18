@@ -48,6 +48,8 @@ def _date_hazard_lines(project: ProjectMap) -> list[str]:
         "## WARNING: Models use current_date (date spine hazard) -- AUTO-FIXABLE",
         "These model files use current_date/current_timestamp which will produce incorrect",
         "row counts when run after the source data's date range.",
+        "Keep current_date where a YML description anchors logic to the present",
+        "('current fiscal year', 'as of today', 'active now') - fix only date spines and date caps.",
     ]
     for hazard in project.date_hazards:
         if hazard.get("package"):
@@ -57,7 +59,7 @@ def _date_hazard_lines(project: ProjectMap) -> list[str]:
     lines.append("")
     lines.append(
         f'>>> FIX: Call fix_date_spine_hazards(project_dir="{project.project_dir}",'
-        ' connection_name="<connection>") to auto-fix ALL of these.'
+        ' connection_name="<connection>") to auto-fix the date-spine and date-cap files.'
     )
     lines.append("    This will create local overrides for package models and edit project models in-place.")
     lines.append("")

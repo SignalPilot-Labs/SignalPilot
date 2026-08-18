@@ -744,6 +744,51 @@ async def _ensure_eval_run_lease_columns(engine) -> None:
     logger.info("Ensured lease columns on gateway_eval_runs")
 
 
+async def _ensure_eval_config_repo_binding_columns(engine) -> None:
+    """Add the GitHub installation binding used by private eval repositories."""
+    async with engine.begin() as conn:
+        for ddl in (
+            "ALTER TABLE gateway_eval_configs ADD COLUMN IF NOT EXISTS repo_installation_id VARCHAR(64)",
+            "ALTER TABLE gateway_eval_configs ADD COLUMN IF NOT EXISTS repo_id BIGINT",
+        ):
+            await conn.execute(text(ddl))
+    logger.info("Ensured private repository binding columns on gateway_eval_configs")
+
+
+
+async def _ensure_conversation_origin_column(engine) -> None:
+    """Add origin column to gateway_chat_conversations if it does not exist.
+
+    SQLAlchemy's create_all does not add columns to existing tables, so this
+    idempotent ALTER TABLE handles existing deployments. "user" for
+    person-initiated chats, "improvement" for system-initiated improvement runs.
+    """
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_chat_conversations "
+                "ADD COLUMN IF NOT EXISTS origin VARCHAR(20) NOT NULL DEFAULT 'user'"
+            )
+        )
+    logger.info("Ensured origin column on gateway_chat_conversations")
+
+
+async def _ensure_improvement_slot_width(engine) -> None:
+    """Widen gateway_improvement_runs.started_et_date to VARCHAR(40).
+
+    Nightly slots are ET dates (10 chars); manual triggers store a longer
+    unique tag. Idempotent for tables created before the widening.
+    """
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_improvement_runs "
+                "ALTER COLUMN started_et_date TYPE VARCHAR(40)"
+            )
+        )
+    logger.info("Ensured started_et_date width on gateway_improvement_runs")
+
+
 async def _ensure_notebook_session_org_id(engine) -> None:
     """Add org_id to gateway_notebook_sessions and fill NULL values.
 
@@ -789,8 +834,11 @@ async def init_db() -> None:
     await _ensure_github_authorized_repos_column(engine)
     await _ensure_notebook_token_plaintext_dropped(engine)
     await _ensure_api_key_eval_binding_columns(engine)
+    await _ensure_eval_config_repo_binding_columns(engine)
     await _ensure_eval_run_lease_columns(engine)
     await _ensure_eval_regression_change_columns(engine)
+    await _ensure_conversation_origin_column(engine)
+    await _ensure_improvement_slot_width(engine)
     logger.info("Gateway database tables initialized")
 
 

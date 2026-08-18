@@ -11,6 +11,7 @@ export interface GatewaySettings {
   api_key: string | null;
   knowledge_history_versions_override: number | null;
   deliverable_theme: DeliverableTheme | null;
+  improvement_runs_enabled?: boolean;
 }
 
 export interface ThemeColors {

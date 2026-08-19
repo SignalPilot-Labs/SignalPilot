@@ -44,14 +44,21 @@ LOG_STREAM_MAX_SECONDS = 1800
 _POD_LABEL_SELECTOR = f"{_EVAL_POD_LABEL}=1"
 _DOCKER_LABEL = "signalpilot.eval"
 
-_SANDBOX_NAME_RE = re.compile(r"^(?:sp-eval-[0-9a-f]{6,32}|[0-9a-f]{12,64})$")
+# The Vercel alternative requires >=3 lowercase words plus a random suffix
+# containing an uppercase letter or digit, so plain hyphenated phrases (and
+# sp-eval-* variants the first alternative rejects) never match it.
+_SANDBOX_NAME_RE = re.compile(
+    r"^(?:sp-eval-[0-9a-f]{6,32}|[0-9a-f]{12,64}"
+    r"|[a-z]+(?:-[a-z]+){2,5}-(?=[A-Za-z0-9]*[A-Z0-9])[A-Za-z0-9]{4,16})$"
+)
 
 
 def is_valid_sandbox_name(name: str) -> bool:
     """Names this module will accept from a URL path.
 
-    Covers both what the backends mint: `sp-eval-<hex>` pod names and Docker's
-    hex container ids. Anything else is refused before it reaches an API call.
+    Covers what the backends mint: `sp-eval-<hex>` pod names, Docker's hex
+    container ids, and Vercel's generated word-word-word-Suffix sandbox names.
+    Anything else is refused before it reaches an API call.
     """
     return bool(_SANDBOX_NAME_RE.fullmatch(name or ""))
 
@@ -620,6 +627,174 @@ def _shape_container(c: dict, owners: dict[str, dict]) -> dict:
     }
 
 
+# Vercel.
+
+
+# How often the Vercel log tail re-reads the sandbox log file. The provider
+# has no follow API; the backend tees output to a file and this polls it.
+_VERCEL_LOG_POLL_SECONDS = 2.0
+
+
+class VercelSandboxView:
+    """Vercel backend: ephemeral provider VMs, introspected from run state.
+
+    The provider exposes no pod/event surface to enumerate, so this view lists
+    live sandboxes from the identities the runner records at on_start. Logs
+    tail the file the backend tees inside the sandbox (read_file reattaches by
+    name, so any worker can serve the stream). A sandbox is live while its
+    task row is pending/running; the backend destroys the VM in a finally
+    either way, which ends the tail with sandbox-exited.
+    """
+
+    backend = "vercel"
+    supports_live_logs = True
+
+    def __init__(self, settings: EvalRunSettings, *, org_id: str) -> None:
+        if not org_id:
+            raise ValueError("org_id is required to read eval sandboxes")
+        self._org_id = org_id
+
+    async def aclose(self) -> None:
+        return None
+
+    def _make_runtime(self):
+        from ..config.sandbox_runtime import get_sandbox_runtime_settings
+        from ..sandbox_runtime.vercel import VercelSandboxRuntime
+
+        runtime_settings = get_sandbox_runtime_settings()
+        if not runtime_settings.enabled:
+            return None
+        return VercelSandboxRuntime(project_id=runtime_settings.vercel_project_id)
+
+    async def _owns(self, name: str) -> bool:
+        """A sandbox is this org's only if run state attributes it to one of
+        the org's tasks — read_file must never serve a foreign sandbox."""
+        owners = await runner.sandbox_index(self._org_id)
+        return name in owners
+
+    async def inventory(self) -> dict:
+        from ..db.engine import get_session_factory
+        from ..store import evals as evals_store
+
+        try:
+            factory = get_session_factory()
+            async with factory() as session:
+                live = await evals_store.live_vercel_sandboxes(session, org_id=self._org_id)
+        except Exception as exc:
+            logger.warning("Vercel sandbox inventory failed: %s", exc)
+            return {
+                "backend": self.backend,
+                "live": False,
+                "supports_live_logs": False,
+                "namespace": "",
+                "message": f"Could not read run state: {type(exc).__name__}",
+                "sandboxes": [],
+            }
+        sandboxes = [
+            {
+                "name": e["name"],
+                "backend": self.backend,
+                "phase": "running",
+                "reason": "Running",
+                "message": "",
+                "ready": True,
+                "oom_killed": False,
+                "restart_count": 0,
+                "node": "vercel-sandbox",
+                "created_at": _iso(e.get("started_at")),
+                "started_at": _iso(e.get("started_at")),
+                "age_seconds": _age_seconds(e.get("started_at")),
+                "run_id": e["run_id"],
+                "task_id": e["task_id"],
+                "task_title": e.get("task_title", ""),
+                "task_phase": e.get("task_phase", "agent"),
+            }
+            for e in live
+        ]
+        return {
+            "backend": self.backend,
+            "live": True,
+            "supports_live_logs": True,
+            "namespace": "",
+            "message": ""
+            if sandboxes
+            else "No Vercel sandbox is running right now. Sandboxes appear here while a "
+            "task executes; the full log arrives in the task transcript when it finishes.",
+            "sandboxes": sandboxes,
+        }
+
+    async def events(self, name: str) -> dict:
+        return {
+            "backend": self.backend,
+            "supported": False,
+            "message": "Vercel sandboxes do not expose scheduler events — check the task transcript after the run.",
+            "events": [],
+        }
+
+    async def stream_logs(self, name: str, *, tail_lines: int) -> AsyncIterator[tuple[str, str]]:
+        from ..sandbox_runtime.base import SandboxNotFound
+
+        if not await self._owns(name):
+            yield "error", f"could not attach to {name}: NotFound"
+            yield "end", "attach-failed"
+            return
+        runtime = self._make_runtime()
+        if runtime is None:
+            yield "error", "Vercel credentials are not configured on this gateway"
+            yield "end", "attach-failed"
+            return
+
+        from .backends import _VERCEL_LOG_PATH
+
+        offset = 0
+        first = True
+        sent = 0
+        waiting_reported = False
+        redactor = _RedactionBuffer()
+        deadline = asyncio.get_event_loop().time() + LOG_STREAM_MAX_SECONDS
+        while True:
+            try:
+                data = await runtime.read_file(name, _VERCEL_LOG_PATH)
+            except SandboxNotFound:
+                # The backend destroys the sandbox when the task finishes.
+                if safe := redactor.flush():
+                    yield "log", safe
+                yield "end", "sandbox-exited"
+                return
+            except Exception as exc:
+                yield "error", f"could not read {name}: {type(exc).__name__}"
+                yield "end", "attach-failed"
+                return
+            if data is None:
+                # Sandbox is alive but the task has not started writing yet
+                # (bootstrap is still installing the CLI).
+                if not waiting_reported:
+                    waiting_reported = True
+                    yield "info", "sandbox is bootstrapping — logs start with the task"
+            elif len(data) > offset:
+                chunk = data[offset:]
+                if first:
+                    # Honor the requested tail on first attach.
+                    lines = chunk.splitlines(keepends=True)
+                    chunk = b"".join(lines[-tail_lines:])
+                first = False
+                offset = len(data)
+                sent += len(chunk)
+                if safe := redactor.feed(chunk.decode("utf-8", errors="replace")):
+                    yield "log", safe
+                if sent >= LOG_STREAM_MAX_BYTES:
+                    if safe := redactor.flush():
+                        yield "log", safe
+                    yield "end", "byte-cap"
+                    return
+            if asyncio.get_event_loop().time() >= deadline:
+                if safe := redactor.flush():
+                    yield "log", safe
+                yield "end", "deadline"
+                return
+            await asyncio.sleep(_VERCEL_LOG_POLL_SECONDS)
+
+
 # Selection.
 
 
@@ -632,6 +807,8 @@ def get_sandbox_view(org_id: str) -> SandboxView:
     from ..runtime.mode import is_cloud_mode
 
     settings = get_eval_run_settings()
+    if settings.execution_backend == "vercel":
+        return VercelSandboxView(settings, org_id=org_id)
     if is_cloud_mode():
         return KubernetesSandboxView(settings, org_id=org_id)
     return DockerSandboxView(settings, org_id=org_id)

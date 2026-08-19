@@ -3953,10 +3953,11 @@ export default function ConnectionsPage() {
 
                 {isExpanded && (
                   schemaLoading === conn.name && !tables ? (
-                    <div className="connection-schema-empty"><Loader2 className="is-spinning" /> Loading schema</div>
+                    <div className="connection-schema-empty"><Loader2 className="is-spinning" aria-hidden="true" /><span>Loading schema</span></div>
                   ) : tables && Object.keys(tables).length > 0 ? (
                     <ConnectionSchemaBrowser
                       connectionName={conn.name}
+                      defaultDatabaseName={conn.database || conn.catalog || conn.project || undefined}
                       tables={tables as Record<string, ConnectionSchemaTable>}
                       searchTables={schemaSearchResults[conn.name]?.tables as Record<string, ConnectionSchemaTable> | undefined}
                       searchResultCount={schemaSearchResults[conn.name]?.result_count}

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  AlertTriangle,
+  ArrowLeft,
   Braces,
   Check,
   ChevronRight,
@@ -31,6 +33,12 @@ import {
   setPIIConfig,
 } from "~/lib/api";
 import { useConnection } from "~/lib/connection-context";
+import {
+  connectionDefaultDatabase,
+  groupTablesByDatabase,
+  localSchema,
+  tableDatabaseKey,
+} from "~/lib/schema-databases";
 import { EmptyDatabase, EmptyState } from "~/components/ui/empty-states";
 import { useToast } from "~/components/ui/toast";
 import "./schema.css";
@@ -65,6 +73,7 @@ interface ForeignKey {
 interface TableSchema {
   schema: string;
   name: string;
+  database?: string;
   columns: Column[];
   foreign_keys?: ForeignKey[];
   row_count?: number;
@@ -148,6 +157,8 @@ export default function SchemaExplorerPage() {
   const [schema, setSchema] = useState<SchemaData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedDatabase, setSelectedDatabase] = useState<string | null>(null);
+  const [databaseSearch, setDatabaseSearch] = useState("");
   const [selectedTableKey, setSelectedTableKey] = useState("");
   const [search, setSearch] = useState("");
   const [columnSearch, setColumnSearch] = useState("");
@@ -176,6 +187,8 @@ export default function SchemaExplorerPage() {
       ]);
       setSchema(schemaData);
       setPiiConfigState(config);
+      // Suggestions are session-scoped review flags — a refresh clears them.
+      setPiiDetections({});
       const keys = Object.keys(schemaData.tables).sort((left, right) => left.localeCompare(right));
       setSelectedTableKey((current) => current && schemaData.tables[current] ? current : keys[0] ?? "");
       const status = await getSchemaRefreshStatus(selectedConn).catch(() => null);
@@ -206,6 +219,8 @@ export default function SchemaExplorerPage() {
 
   useEffect(() => {
     setSchema(null);
+    setSelectedDatabase(null);
+    setDatabaseSearch("");
     setSelectedTableKey("");
     setSchemaFilter("all");
     setSearch("");
@@ -229,25 +244,60 @@ export default function SchemaExplorerPage() {
     [schema],
   );
 
+  const fallbackDb = useMemo(
+    () => connectionDefaultDatabase(connections.find((connection) => connection.name === selectedConn)),
+    [connections, selectedConn],
+  );
+
+  const databaseGroups = useMemo(
+    () => groupTablesByDatabase(schema?.tables ?? {}, fallbackDb),
+    [fallbackDb, schema],
+  );
+
+  const filteredDatabaseGroups = useMemo(() => {
+    const needle = databaseSearch.trim().toLowerCase();
+    return needle ? databaseGroups.filter((group) => group.name.toLowerCase().includes(needle)) : databaseGroups;
+  }, [databaseGroups, databaseSearch]);
+
+  const dbTables = useMemo(
+    () => selectedDatabase
+      ? tables.filter(([, table]) => tableDatabaseKey(table, fallbackDb) === selectedDatabase)
+      : [],
+    [fallbackDb, selectedDatabase, tables],
+  );
+
   const schemaGroups = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const [, table] of tables) {
-      const group = table.schema || "default";
+    for (const [, table] of dbTables) {
+      const group = localSchema(table);
       counts.set(group, (counts.get(group) ?? 0) + 1);
     }
     return [...counts.entries()].sort(([left], [right]) => left.localeCompare(right));
-  }, [tables]);
+  }, [dbTables]);
 
   const filteredTables = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    return tables.filter(([key, table]) => {
-      if (schemaFilter !== "all" && (table.schema || "default") !== schemaFilter) return false;
+    return dbTables.filter(([key, table]) => {
+      if (schemaFilter !== "all" && localSchema(table) !== schemaFilter) return false;
       if (!needle) return true;
       return key.toLowerCase().includes(needle)
         || table.name.toLowerCase().includes(needle)
         || table.columns.some((column) => column.name.toLowerCase().includes(needle));
     });
-  }, [schemaFilter, search, tables]);
+  }, [dbTables, schemaFilter, search]);
+
+  const openDatabase = useCallback((name: string) => {
+    setSelectedDatabase(name);
+    setSchemaFilter("all");
+    setSearch("");
+    setColumnSearch("");
+    if (schema) {
+      const first = Object.entries(schema.tables)
+        .filter(([, table]) => tableDatabaseKey(table, fallbackDb) === name)
+        .sort(([left], [right]) => left.localeCompare(right))[0];
+      setSelectedTableKey(first?.[0] ?? "");
+    }
+  }, [fallbackDb, schema]);
 
   const selectedTable = selectedTableKey ? schema?.tables[selectedTableKey] ?? null : null;
   const selectedColumns = useMemo(() => {
@@ -362,9 +412,10 @@ export default function SchemaExplorerPage() {
       {schema && (
         <section className="schema-statusbar" aria-label="Schema summary">
           <span><i className="schema-live-dot" /> {selectedConn}</span>
+          <span><strong>{databaseGroups.length.toLocaleString()}</strong> databases</span>
           <span><strong>{schema.table_count.toLocaleString()}</strong> tables</span>
           <span><strong>{totalColumns.toLocaleString()}</strong> columns</span>
-          <span><strong>{schemaGroups.length.toLocaleString()}</strong> schemas</span>
+          <span><strong>{databaseGroups.reduce((sum, group) => sum + group.schemaCount, 0).toLocaleString()}</strong> schemas</span>
           <span><strong>{protectedColumns.toLocaleString()}</strong> protected</span>
           <span className="schema-statusbar-tail">{schema.db_type}{lastRefresh ? ` / refreshed ${new Date(lastRefresh * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}{refreshInterval ? ` / every ${refreshInterval >= 3600 ? `${Math.round(refreshInterval / 3600)}h` : `${Math.round(refreshInterval / 60)}m`}` : ""}</span>
         </section>
@@ -380,7 +431,51 @@ export default function SchemaExplorerPage() {
         <EmptyState icon={EmptyDatabase} title="Select a connection" description="Choose a database connection to inspect its schema." />
       )}
 
-      {schema && (
+      {schema && !selectedDatabase && (
+        <section className="schema-db-picker" aria-label="Choose a database">
+          <header className="schema-db-picker-head">
+            <div>
+              <h2>Choose a database</h2>
+              <p>{databaseGroups.length === 1 ? "This connection exposes one database" : `This connection exposes ${databaseGroups.length} databases`} — pick one to explore its schemas and tables.</p>
+            </div>
+            {databaseGroups.length > 6 && (
+              <label className="schema-db-search">
+                <Search aria-hidden="true" />
+                <input value={databaseSearch} onChange={(event) => setDatabaseSearch(event.target.value)} placeholder="Filter databases" aria-label="Filter databases" />
+              </label>
+            )}
+          </header>
+          <div className="schema-db-grid">
+            {filteredDatabaseGroups.map((group) => (
+              <button key={group.name} type="button" className="schema-db-card" onClick={() => openDatabase(group.name)}>
+                <span className="schema-db-card-title"><Database aria-hidden="true" /><strong>{group.name}</strong><ChevronRight aria-hidden="true" /></span>
+                <dl>
+                  <div><dt>Tables</dt><dd>{group.tableCount.toLocaleString()}</dd></div>
+                  <div><dt>Schemas</dt><dd>{group.schemaCount.toLocaleString()}</dd></div>
+                  <div><dt>Rows</dt><dd>{formatCount(group.rowCount)}</dd></div>
+                </dl>
+              </button>
+            ))}
+            {filteredDatabaseGroups.length === 0 && <div className="schema-no-results">No matching databases</div>}
+          </div>
+        </section>
+      )}
+
+      {schema && selectedDatabase && (
+        <>
+        <div className="schema-db-breadcrumb">
+          <button type="button" className="schema-db-back" onClick={() => { setSelectedDatabase(null); setSelectedTableKey(""); }}>
+            <ArrowLeft aria-hidden="true" /> Databases
+          </button>
+          <ChevronRight aria-hidden="true" className="schema-db-crumb-sep" />
+          <div className="schema-db-strip" role="tablist" aria-label="Switch database">
+            {databaseGroups.map((group) => (
+              <button key={group.name} type="button" role="tab" aria-selected={group.name === selectedDatabase} className={group.name === selectedDatabase ? "is-active" : ""} onClick={() => openDatabase(group.name)}>
+                <Database aria-hidden="true" />{group.name} <span>{group.tableCount}</span>
+              </button>
+            ))}
+          </div>
+        </div>
         <section className="schema-workbench">
           <aside className="schema-object-browser">
             <div className="schema-pane-heading"><div><span>Objects</span><strong>{filteredTables.length.toLocaleString()}</strong></div></div>
@@ -389,7 +484,7 @@ export default function SchemaExplorerPage() {
               <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Find tables or columns" aria-label="Find tables or columns" />
             </label>
             <div className="schema-filter-strip" role="tablist" aria-label="Filter by schema">
-              <button type="button" className={schemaFilter === "all" ? "is-active" : ""} onClick={() => setSchemaFilter("all")}>All <span>{tables.length}</span></button>
+              <button type="button" className={schemaFilter === "all" ? "is-active" : ""} onClick={() => setSchemaFilter("all")}>All <span>{dbTables.length}</span></button>
               {schemaGroups.map(([group, count]) => (
                 <button key={group} type="button" className={schemaFilter === group ? "is-active" : ""} onClick={() => setSchemaFilter(group)}>{group} <span>{count}</span></button>
               ))}
@@ -398,13 +493,17 @@ export default function SchemaExplorerPage() {
               {filteredTables.length === 0 && <div className="schema-no-results">No matching tables</div>}
               {filteredTables.map(([key, table]) => {
                 const active = selectedTableKey === key;
-                const hiddenCount = table.columns.filter((column) => findRule(piiConfig.rules, column.name)?.[1] === "hide").length;
+                const protectedCount = table.columns.filter((column) => findRule(piiConfig.rules, column.name)).length;
+                const pendingCount = table.columns.filter((column) => !findRule(piiConfig.rules, column.name) && suggestionFor(table, column.name)).length;
                 return (
                   <button key={key} type="button" className={`schema-table-item${active ? " is-active" : ""}`} onClick={() => { setSelectedTableKey(key); setColumnSearch(""); setViewMode("columns"); }}>
                     <Table2 aria-hidden="true" />
-                    <span><strong>{table.name}</strong><small>{table.schema || "default"}</small></span>
+                    <span><strong>{table.name}</strong><small>{localSchema(table)}</small></span>
                     <em>{table.columns.length}</em>
-                    {hiddenCount > 0 && <EyeOff aria-label={`${hiddenCount} protected columns`} />}
+                    <i className="schema-table-flags">
+                      {pendingCount > 0 && <AlertTriangle className="is-pending" aria-label={`${pendingCount} suggested PII columns need a decision`} />}
+                      {protectedCount > 0 && <ShieldCheck className="is-protected" aria-label={`${protectedCount} protected columns`} />}
+                    </i>
                     <ChevronRight aria-hidden="true" />
                   </button>
                 );
@@ -417,7 +516,7 @@ export default function SchemaExplorerPage() {
               <>
                 <header className="schema-table-header">
                   <div className="schema-table-identity">
-                    <span>{selectedTable.schema || "default"}</span>
+                    <span>{selectedDatabase ? `${selectedDatabase} / ${localSchema(selectedTable)}` : localSchema(selectedTable)}</span>
                     <h2>{selectedTable.name}</h2>
                     {selectedTable.description && <p>{selectedTable.description}</p>}
                   </div>
@@ -511,7 +610,7 @@ export default function SchemaExplorerPage() {
                 Object.entries(piiConfig.rules).sort(([left], [right]) => left.localeCompare(right)).map(([column, rule]) => (
                   <button key={column} type="button" onClick={() => {
                     const tableWithColumn = tables.find(([, table]) => table.columns.some((candidate) => candidate.name.toLowerCase() === column.toLowerCase()));
-                    if (tableWithColumn) { setSelectedTableKey(tableWithColumn[0]); setViewMode("columns"); setColumnSearch(column); }
+                    if (tableWithColumn) { setSelectedDatabase(tableDatabaseKey(tableWithColumn[1], fallbackDb)); setSelectedTableKey(tableWithColumn[0]); setViewMode("columns"); setColumnSearch(column); }
                   }}>
                     <span><strong>{column}</strong><small>query result field</small></span><em className={`is-${rule}`}>{rule}</em>
                   </button>
@@ -532,6 +631,7 @@ export default function SchemaExplorerPage() {
             )}
           </aside>
         </section>
+        </>
       )}
     </main>
   );

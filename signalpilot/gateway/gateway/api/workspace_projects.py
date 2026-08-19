@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from ..auth import DBSession, OrgID, UserID
 from ..config.k8s import _LOCAL_GATEWAY_URL_DEFAULT, get_k8s_settings
 from ..models.workspace import (
     WorkspaceProjectCreate,
@@ -14,7 +15,10 @@ from ..models.workspace import (
 )
 from ..runtime.mode import is_cloud_mode
 from ..security.scope_guard import RequireScope
+from ..workspace_store.dbt_detect import resolve_dbt_project_dir_detailed
+from ..workspace_store.store import RevisionNotFound
 from .deps import ProjectsGate, StoreD
+from .workspace_files import WorkspaceStoreD, _valid_branch
 
 # All workspace-project routes require the paid "projects" feature.
 # In local mode the tier resolves to "unlimited", so the gate is a no-op.
@@ -134,6 +138,34 @@ async def get_clone_url(project_id: str, store: StoreD, request: Request):
         "source": project.source,
         "has_repo": True,
     }
+
+
+@router.get("/workspace-projects/{project_id}/dbt-project-dir", dependencies=[RequireScope("read")])
+async def get_dbt_project_dir(
+    project_id: str,
+    org_id: OrgID,
+    _user: UserID,
+    db: DBSession,
+    store: StoreD,
+    ws: WorkspaceStoreD,
+    branch: str = Query("main"),
+):
+    """Resolve where the dbt project lives inside this workspace project.
+
+    An explicit settings["dbt_project_dir"] wins when the directory exists in
+    the branch manifest; otherwise the shallowest manifest directory holding a
+    dbt_project.yml (alphabetical tie-break); otherwise None. "" means the
+    project root.
+    """
+    project = await _get_project_or_404(store, project_id)
+    try:
+        manifest = await ws.load_manifest(
+            db, org_id=org_id, project_id=project_id, branch=_valid_branch(branch)
+        )
+    except RevisionNotFound:
+        manifest = None  # branch has no revisions yet — nothing to detect
+    value, source, detected = resolve_dbt_project_dir_detailed(project.settings, manifest)
+    return {"dbt_project_dir": value, "detected": detected, "source": source}
 
 
 @router.put("/workspace-projects/{project_id}", response_model=WorkspaceProjectInfo, dependencies=[RequireScope("write")])

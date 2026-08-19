@@ -2,12 +2,43 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from gateway.standalone_chat import worker
+
+
+@pytest.mark.asyncio
+async def test_cancellation_monitor_interrupts_the_active_worker_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stop = asyncio.Event()
+
+    class FakeSessionContext:
+        async def __aenter__(self) -> object:
+            return object()
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    async def get_worker_run(*_args: Any, **_kwargs: Any) -> Any:
+        return SimpleNamespace(cancellation_requested_at="2026-08-19T12:00:00Z")
+
+    async def wait_forever() -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(worker, "get_session_factory", lambda: FakeSessionContext)
+    monkeypatch.setattr(worker.chat_store, "get_worker_run", get_worker_run)
+    worker_task = asyncio.create_task(wait_forever())
+
+    await worker._cancellation_monitor("run-a", "worker-a", stop, worker_task)
+
+    assert stop.is_set()
+    with pytest.raises(asyncio.CancelledError):
+        await worker_task
 
 
 @pytest.mark.asyncio
@@ -84,7 +115,12 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
     async def fail_run(*_args: Any, **kwargs: Any) -> None:
         failed_runs.append(kwargs["run_id"])
 
-    async def wait_until_stopped(_run_id: str, _worker_id: str, stop: Any) -> None:
+    async def wait_until_stopped(
+        _run_id: str,
+        _worker_id: str,
+        stop: Any,
+        _worker_task: Any = None,
+    ) -> None:
         await stop.wait()
 
     async def noop(*_args: Any, **_kwargs: Any) -> None:
@@ -184,7 +220,12 @@ async def test_terminal_notebook_validation_error_persists_no_answer_or_artifact
     async def persist_artifacts(*_args: Any, **kwargs: Any) -> None:
         persisted_artifacts.append(kwargs["run_id"])
 
-    async def wait_until_stopped(_run_id: str, _worker_id: str, stop: Any) -> None:
+    async def wait_until_stopped(
+        _run_id: str,
+        _worker_id: str,
+        stop: Any,
+        _worker_task: Any = None,
+    ) -> None:
         await stop.wait()
 
     async def noop(*_args: Any, **_kwargs: Any) -> None:

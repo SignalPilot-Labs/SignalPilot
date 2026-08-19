@@ -39,7 +39,9 @@ from signalpilot._server.ai.standalone_chat_tools import (
     build_standalone_chat_mcp_server,
 )
 from signalpilot._server.api.endpoints.standalone_chat import (
+    IMPROVEMENT_EXTRA_TOOLS,
     STANDALONE_ALLOWED_TOOLS,
+    STANDALONE_DISALLOWED_MCP_TOOLS,
     STANDALONE_SYSTEM_PROMPT,
     _require_execution_scope,
     _runtime_auth_override,
@@ -747,6 +749,12 @@ def test_agent_contract_excludes_mutating_and_external_tools():
         forbidden not in STANDALONE_ALLOWED_TOOLS
         for forbidden in ("Bash", "Write", "Edit", "WebFetch", "WebSearch")
     )
+    assert set(STANDALONE_DISALLOWED_MCP_TOOLS) == {
+        "mcp__signalpilot__analyze_project_db",
+        "mcp__signalpilot__get_dbt_profile",
+        "mcp__signalpilot__map_columns",
+    }
+    assert not set(IMPROVEMENT_EXTRA_TOOLS) & set(STANDALONE_ALLOWED_TOOLS)
 
 
 def test_runtime_publication_sdk_is_exposed_from_top_level_package():

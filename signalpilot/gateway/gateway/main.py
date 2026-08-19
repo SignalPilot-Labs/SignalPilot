@@ -347,6 +347,17 @@ async def lifespan(app: FastAPI):
                     logger.info("JWT-secret GC: deleted %d orphan Secret(s)", deleted)
             except Exception as e:
                 logger.warning("JWT-secret GC error: %s", e)
+            # Eval pods stranded by a gateway restart mid-run: the run path
+            # deletes its pod in a finally, but bare pods have no TTL, so a
+            # crash leaves them Completed forever without this sweep.
+            try:
+                from .evals.backends import reap_terminal_eval_pods
+
+                reaped = await reap_terminal_eval_pods(orch)
+                if reaped:
+                    logger.info("Eval-pod reaper: deleted %d terminal pod(s)", reaped)
+            except Exception as e:
+                logger.warning("Eval-pod reaper error: %s", e)
 
     async def _knowledge_retention_loop():
         """Prune knowledge retrieval events past the retention window.
@@ -419,6 +430,22 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("Eval retention loop error: %s", e)
 
+    async def _improvement_schedule_loop():
+        """Seed due daily improvement runs every minute.
+
+        Each enabled org gets at most one system-initiated run per ET day.
+        """
+        from .improvements.scheduler import run_due_improvement_runs
+
+        while True:
+            await asyncio.sleep(60)
+            try:
+                ran = await run_due_improvement_runs(get_session_factory())
+                if ran:
+                    logger.info("Improvement schedule loop: processed %d org(s)", ran)
+            except Exception as e:
+                logger.warning("Improvement schedule loop error: %s", e)
+
     health_flush_task = asyncio.create_task(_health_flush_loop())
     health_cleanup_task = asyncio.create_task(_health_cleanup_loop())
     health_ping_task = asyncio.create_task(_health_ping_loop())
@@ -429,6 +456,7 @@ async def lifespan(app: FastAPI):
     schema_watch_task = asyncio.create_task(_schema_watch_loop())
     eval_reaper_task = asyncio.create_task(_eval_reaper_loop())
     eval_retention_task = asyncio.create_task(_eval_retention_loop())
+    improvement_schedule_task = asyncio.create_task(_improvement_schedule_loop())
 
     # Start MCP session manager if mounted
     mcp_ctx = None
@@ -484,6 +512,7 @@ async def lifespan(app: FastAPI):
         schema_watch_task.cancel()
         eval_reaper_task.cancel()
         eval_retention_task.cancel()
+        improvement_schedule_task.cancel()
         await pool_manager.close_all()
         dek_cache.clear()
         await close_db()

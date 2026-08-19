@@ -35,6 +35,7 @@ from .query import router as query_router
 from .reports import router as reports_router
 from .sandboxes import router as sandboxes_router
 from .schema import router as schema_router
+from .improvements import router as improvements_router
 from .schema_watches import router as schema_watches_router
 from .security import router as security_router
 from .settings import router as settings_router
@@ -84,6 +85,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(notebook_sessions_router)
     app.include_router(github_router)
     app.include_router(github_bot_router)
+    app.include_router(improvements_router)
     app.include_router(schema_watches_router)
     app.include_router(uploads_router)
     app.include_router(eval_runs_router)

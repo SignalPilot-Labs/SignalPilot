@@ -195,7 +195,12 @@ async def _lease_renewer(run_id: str, worker_id: str, stop: asyncio.Event) -> No
                 return
 
 
-async def _cancellation_monitor(run_id: str, worker_id: str, stop: asyncio.Event) -> None:
+async def _cancellation_monitor(
+    run_id: str,
+    worker_id: str,
+    stop: asyncio.Event,
+    worker_task: asyncio.Task[None],
+) -> None:
     factory = get_session_factory()
     while not stop.is_set():
         try:
@@ -209,7 +214,8 @@ async def _cancellation_monitor(run_id: str, worker_id: str, stop: asyncio.Event
                 stop.set()
                 return
             if run.cancellation_requested_at:
-                await cancel_execution_session(db, run)
+                stop.set()
+                worker_task.cancel()
                 return
 
 
@@ -276,7 +282,11 @@ async def _update_summary(run_id: str) -> None:
 async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
     stop = asyncio.Event()
     renewer = asyncio.create_task(_lease_renewer(run_id, worker_id, stop))
-    cancellation = asyncio.create_task(_cancellation_monitor(run_id, worker_id, stop))
+    worker_task = asyncio.current_task()
+    assert worker_task is not None
+    cancellation = asyncio.create_task(
+        _cancellation_monitor(run_id, worker_id, stop, worker_task)
+    )
     final_text = ""
     streamed_text = ""
     report_proposal: dict[str, Any] | None = None
@@ -520,6 +530,11 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
             await _update_summary(run_id)
     except asyncio.CancelledError:
         async with get_session_factory()() as db:
+            run = await chat_store.get_worker_run(
+                db,
+                run_id=run_id,
+                worker_id=worker_id,
+            )
             await chat_store.fail_run(
                 db,
                 run_id=run_id,
@@ -527,6 +542,8 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                 code="cancelled",
                 message="The run was stopped.",
             )
+            if run is not None:
+                await cancel_execution_session(db, run)
     except Exception as exc:
         logger.warning(
             "Standalone chat run %s failed: %s",

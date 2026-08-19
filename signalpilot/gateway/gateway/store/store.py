@@ -1521,3 +1521,11 @@ class Store:
 
         oid = self._require_org_id()
         return await evals.list_regressions(self.session, org_id=oid, limit=limit)
+
+    async def list_eval_task_performance(self, limit_runs: int = 50) -> list[dict]:
+        from . import evals
+
+        oid = self._require_org_id()
+        return await evals.list_task_performance(
+            self.session, org_id=oid, limit_runs=limit_runs
+        )

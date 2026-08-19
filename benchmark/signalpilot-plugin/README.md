@@ -40,7 +40,7 @@ Step 1 gives you all 30+ MCP tools. Step 2 adds skills and agents on top.
 
 | Skill | Description |
 |-------|-------------|
-| `/signalpilot-dbt:signalpilot` | Main entry point — schema discovery, governed queries |
+| `/signalpilot-dbt:signalpilot` | MCP tool catalog |
 | `/signalpilot-dbt:sql-workflow` | Structured SQL query building with verification |
 | `/signalpilot-dbt:dbt-workflow` | Full dbt project workflow (scan, map, validate, write, verify) |
 | `/signalpilot-dbt:dbt-write` | dbt model writing with column naming and type rules |
@@ -51,15 +51,15 @@ Step 1 gives you all 30+ MCP tools. Step 2 adds skills and agents on top.
 
 | Agent | Description |
 |-------|-------------|
-| `verifier` | Post-build verification of dbt models (7-check protocol) |
+| `verifier` | Read-only structure verification (five checks) |
+| `value-verifier` | Read-only value verification (three checks) |
 
 ## How It Works
 
-1. You ask Claude to build a dbt project or write SQL
-2. Claude loads the `signalpilot` skill (tools overview + skill router)
-3. For dbt projects, `dbt-workflow` orchestrates an 8-step workflow using SignalPilot MCP tools
-4. At Step 8, the `verifier` agent checks all models for correctness
-5. You get a verified, working dbt project
+1. Load `dbt-workflow` for a dbt project.
+2. Follow its ordered workflow with SignalPilot MCP tools.
+3. Use the read-only verifiers after materialization.
+4. Return the verified project.
 
 ## Requirements
 

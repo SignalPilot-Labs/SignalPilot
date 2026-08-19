@@ -5,7 +5,9 @@ import {
   applyStandaloneChatEvent,
   assembleStandaloneRunText,
   containsStandaloneSubmission,
+  deriveStandaloneRunActivity,
   isStandaloneRunReconciled,
+  markStandaloneRunStopped,
   standaloneMessageKey,
   upsertStandaloneConversation,
 } from "~/lib/standalone-chat-state";
@@ -38,6 +40,89 @@ function detailFixture(): StandaloneConversationDetail {
 }
 
 describe("standalone chat state", () => {
+  it("turns runtime events into useful live analysis stages", () => {
+    const event = (
+      sequence: number,
+      type: StandaloneConversationDetail["run_events"][number]["type"],
+      payload: Record<string, unknown>,
+    ): StandaloneConversationDetail["run_events"][number] => ({
+      run_id: "run-1",
+      sequence,
+      type,
+      payload,
+      created_at: `2026-07-31T12:00:${String(sequence).padStart(2, "0")}Z`,
+    });
+
+    const events = [
+      event(1, "progress", {
+        label: "Exploring the project and relevant data",
+      }),
+      event(2, "tool_started", {
+        tool: "mcp__standalone-chat__inspect_dbt",
+      }),
+    ];
+    expect(deriveStandaloneRunActivity(events, "run-1")).toEqual({
+      phase: "analyzing",
+      label: "Analyzing project",
+      detail: "Inspecting dbt metadata",
+    });
+
+    events.push(
+      event(3, "tool_started", {
+        tool: "mcp__signalpilot-notebook__run_cells",
+      }),
+    );
+    expect(deriveStandaloneRunActivity(events, "run-1")).toEqual({
+      phase: "running_cells",
+      label: "Running cells",
+      detail: "Executing notebook analysis",
+    });
+
+    events.push(event(4, "cell_executed", { status: "failed" }));
+    events.push(
+      event(5, "tool_started", {
+        tool: "mcp__signalpilot-notebook__edit_notebook",
+      }),
+    );
+    expect(deriveStandaloneRunActivity(events, "run-1")).toEqual({
+      phase: "fixing_query",
+      label: "Fixing query",
+      detail: "Updating notebook analysis",
+    });
+
+    events.push(
+      event(6, "tool_started", {
+        tool: "mcp__signalpilot__query_database",
+      }),
+    );
+    expect(deriveStandaloneRunActivity(events, "run-1")).toEqual({
+      phase: "fixing_query",
+      label: "Fixing query",
+      detail: "Validating the revised query",
+    });
+  });
+
+  it("ignores activity from another run", () => {
+    expect(
+      deriveStandaloneRunActivity(
+        [
+          {
+            run_id: "run-2",
+            sequence: 1,
+            type: "tool_started",
+            payload: { tool: "mcp__signalpilot-notebook__run_cells" },
+            created_at: "2026-07-31T12:00:01Z",
+          },
+        ],
+        "run-1",
+      ),
+    ).toEqual({
+      phase: "analyzing",
+      label: "Analyzing project",
+      detail: "Finding the relevant models and data",
+    });
+  });
+
   it("separates assistant text blocks divided by tool activity", () => {
     const event = (
       sequence: number,
@@ -100,6 +185,39 @@ describe("standalone chat state", () => {
       sequence: 1,
       created_at: 123,
       metadata: { optimistic: true },
+    });
+  });
+
+  it("shows a stopped run immediately while backend cancellation finishes", () => {
+    const detail = detailFixture();
+    detail.current_run = {
+      id: "run-1",
+      conversation_id: detail.conversation.id,
+      status: "running",
+      retry_of_run_id: null,
+      public_error_code: null,
+      public_error_message: null,
+      cancellation_requested_at: null,
+      created_at: "2026-07-31T12:00:00Z",
+      started_at: "2026-07-31T12:00:01Z",
+      terminal_at: null,
+      last_event_sequence: 3,
+    };
+
+    const updated = markStandaloneRunStopped(
+      detail,
+      "run-1",
+      "2026-07-31T12:00:02Z",
+    );
+
+    expect(updated.current_run).toMatchObject({
+      status: "cancelled",
+      cancellation_requested_at: "2026-07-31T12:00:02Z",
+      terminal_at: "2026-07-31T12:00:02Z",
+    });
+    expect(updated.conversation).toMatchObject({
+      run_status: "cancelled",
+      updated_at: 1785499202,
     });
   });
 

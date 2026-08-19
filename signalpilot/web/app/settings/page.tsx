@@ -17,6 +17,7 @@ import {
   Plus,
   X,
   Ban,
+  CalendarClock,
 } from "lucide-react";
 import { getSettings, updateSettings, getHealth, setApiKey } from "~/lib/api";
 import type { GatewaySettings } from "~/lib/types";
@@ -200,6 +201,31 @@ export default function SettingsPage() {
         </div>
       </section>
       )}
+
+        {/* The following controls configure automated improvement runs. */}
+      <section className="mb-8">
+        <SectionHeader icon={CalendarClock} title="automated improvement runs" />
+        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] overflow-hidden">
+          <div className="p-6">
+            <label className="flex items-start gap-2.5 cursor-pointer group">
+              <input
+                type="checkbox"
+                className="mt-0.5 accent-[var(--color-success)]"
+                checked={settings.improvement_runs_enabled ?? false}
+                onChange={(e) => setSettings({ ...settings, improvement_runs_enabled: e.target.checked })}
+              />
+              <span>
+                <span className="block text-sm text-[var(--color-text)]">
+                  Nightly improvement runs
+                </span>
+                <span className="block text-xs text-[var(--color-text-muted)] mt-0.5">
+                  When enabled, SignalPilot runs an automated cost-optimization analysis of your active project every night at midnight ET and posts the results as a chat.
+                </span>
+              </span>
+            </label>
+          </div>
+        </div>
+      </section>
 
         {/* The following controls configure governance defaults. */}
       <section className="mb-8">

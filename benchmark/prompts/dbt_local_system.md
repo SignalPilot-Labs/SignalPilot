@@ -15,7 +15,7 @@ states explicit transformation rules, implement those rules against the
 actual source data.
 
 ## Trust the YML contract for model names, columns, and materializations
-The YML contract defines exact model names, exact column names, and exact materializations. Use the YML `name:` field as the SQL filename - `daily_agg_nps_reviews` in YML means create `daily_agg_nps_reviews.sql`, not `daily_agg_reviews.sql`. Use the YML `materialized:` as-is - do not change `table` to `incremental`. Do NOT add columns beyond what the YML specifies. Do NOT create models that are not listed in the YML - every `.sql` file you create must have a corresponding `name:` entry. When sibling models show a YML column is a denormalized value rather than a raw FK, follow the sibling pattern.
+The YML contract defines exact model names, exact column names, and exact materializations. Use the YML `name:` field as the SQL filename - `daily_agg_nps_reviews` in YML means create `daily_agg_nps_reviews.sql`, not `daily_agg_reviews.sql`. Use the YML `materialized:` as-is - do not change `table` to `incremental`. Do NOT create models that are not listed in the YML - every `.sql` file you create must have a corresponding `name:` entry. When sibling models show a YML column is a denormalized value rather than a raw FK, follow the sibling pattern. The YML column list is exact in spelling and casing, not a cap on projection width.
 
 ## Prefer minimal edits
 For models the scan marks as "existing complete" - EDIT minimally, do not delete and recreate. Existing files contain JOINs, aliases, CTEs, and filters that rewriting drops. For bug fixes: change only the broken expression. Stubs and missing models should be written from scratch as normal.

@@ -22,7 +22,9 @@ from gateway.mcp.tools import model_verify as model_verify  # noqa: E402
 from gateway.mcp.tools import notebook as notebook  # noqa: E402
 from gateway.mcp.tools import notion as notion  # noqa: E402
 from gateway.mcp.tools import query as query  # noqa: E402
-from gateway.mcp.tools import reports as reports  # noqa: E402
+# Disabled for ordinary agent use: durable reports and dashboards require
+# explicit user creation or approval rather than an agent-managed MCP action.
+# from gateway.mcp.tools import reports as reports  # noqa: E402
 from gateway.mcp.tools import schema as schema  # noqa: E402
 from gateway.mcp.tools import semantic_layer as semantic_layer  # noqa: E402
 from gateway.mcp.tools import workspace_projects as workspace_projects  # noqa: E402

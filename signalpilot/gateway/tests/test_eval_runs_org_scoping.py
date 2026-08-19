@@ -231,6 +231,14 @@ class TestEvalRouteOrgScoping:
         async with _client(session, "org-a") as client:
             assert (await client.get(f"/api/evals/runs/{RUN_A}/progress")).status_code == 200
 
+    async def test_cancel_cannot_reach_a_foreign_or_finished_run(self, session) -> None:
+        await _seed_run(session, "org-a", RUN_A)
+        async with _client(session, "org-b") as client:
+            assert (await client.post(f"/api/evals/runs/{RUN_A}/cancel")).status_code == 404
+        async with _client(session, "org-a") as client:
+            response = await client.post(f"/api/evals/runs/{RUN_A}/cancel")
+        assert response.status_code == 409
+
     async def test_transcript_keys_are_org_prefixed(self, session, fake_obj) -> None:
         """A foreign org asking for the same run/task reads its own (absent)
         key, never org-a's object."""
@@ -279,7 +287,7 @@ class TestEvalRouteOrgScoping:
         )
         async with _client(session, "org-b") as client:
             body = (await client.get("/api/evals/accuracy")).json()
-        assert body == {"history": [], "regressions": []}
+        assert body == {"history": [], "regressions": [], "task_performance": []}
 
     async def test_bad_run_id_is_rejected_before_any_lookup(self, session) -> None:
         async with _client(session, "org-a") as client:

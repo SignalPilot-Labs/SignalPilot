@@ -31,6 +31,7 @@ async def create_conversation(
         user_id=user_id,
         project_id=project_id,
         surface="notebook",
+        origin="user",
         title=title,
         agent_session_id=chat_session_id,
         model=model,

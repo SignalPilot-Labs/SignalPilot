@@ -35,10 +35,8 @@ from ..core.tasks import load_eval_config, load_task
 from ..core.workdir import prepare_workdir, write_claude_md
 from ..dbt_tools.scanner import (
     check_package_availability,
-    classify_sql_models,
     extract_model_columns,
 )
-from ..dbt_tools.templates import create_ephemeral_stubs, create_sql_templates
 from ..evaluation.comparator import evaluate
 from ..evaluation.db_utils import find_result_db, get_table_row_counts
 
@@ -50,87 +48,6 @@ _DBT_SYSTEM_PROMPT_TEMPLATE: str = (PROMPTS_DIR / "dbt_local_system.md").read_te
 
 # Skills are provided by the signalpilot-plugin (installed at user scope).
 # The agent discovers skill names through the plugin.
-
-
-def _snapshot_reference_tables(work_dir: Path, db_path: Path | None) -> None:
-    """Snapshot model tables that exist in the DB before the agent rebuilds them.
-
-    Only snapshots tables where: (1) a model SQL file exists AND is a stub, and
-    (2) the table already exists in the database (pre-computed reference data).
-    Raw source tables and complete models are excluded.
-    """
-    if not db_path or not db_path.exists():
-        return
-
-    import duckdb as _ddb
-
-    complete, stub_models = classify_sql_models(work_dir)
-    log(f"Snapshot: found {len(stub_models)} stubs: {sorted(stub_models)[:5]}")
-    if not stub_models:
-        return
-
-    try:
-        con = _ddb.connect(str(db_path), read_only=True)
-        db_tables = set(r[0] for r in con.execute("SHOW TABLES").fetchall())
-    except Exception as e:
-        log(f"Snapshot: cannot open DB: {e}", "WARN")
-        return
-
-    # Snapshot stubs that exist as pre-computed tables, plus complete sibling
-    # models in the same directories (their sample data helps the verifier
-    # catch NULL vs 0 and expression mismatches).
-    stub_dirs = set()
-    for sql_file in work_dir.rglob("*.sql"):
-        if any(skip in str(sql_file) for skip in ("dbt_packages", "target", ".claude")):
-            continue
-        if sql_file.stem in stub_models:
-            stub_dirs.add(sql_file.parent)
-    sibling_models = set()
-    for d in stub_dirs:
-        for sql_file in d.glob("*.sql"):
-            if sql_file.stem in complete and sql_file.stem in db_tables:
-                sibling_models.add(sql_file.stem)
-    to_snapshot = sorted((stub_models & db_tables) | sibling_models)
-    if not to_snapshot:
-        con.close()
-        log("Snapshot: no stub models have pre-existing tables — skipping")
-        return
-
-    lines = ["# Reference Table Snapshot\n"]
-    for table in to_snapshot:
-        try:
-            row_count = con.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
-            cols = con.execute(
-                f"SELECT column_name, data_type FROM information_schema.columns "
-                f"WHERE table_name = '{table}' ORDER BY ordinal_position"
-            ).fetchall()
-            sample_rows = con.execute(f'SELECT * FROM "{table}" LIMIT 3').fetchall()
-            col_names = [c[0] for c in cols]
-
-            lines.append(f"## {table} ({row_count:,} rows)")
-            lines.append("| Column | Type |")
-            lines.append("|--------|------|")
-            for col_name, col_type in cols:
-                lines.append(f"| {col_name} | {col_type} |")
-            lines.append("")
-            if sample_rows:
-                lines.append("Sample:")
-                lines.append("| " + " | ".join(col_names) + " |")
-                lines.append("|" + "|".join("---" for _ in col_names) + "|")
-                for row in sample_rows:
-                    lines.append("| " + " | ".join(str(v) for v in row) + " |")
-            lines.append("")
-        except Exception as e:
-            lines.append(f"## {table} (ERROR: {e})\n")
-
-    con.close()
-
-    try:
-        snapshot_path = work_dir / "reference_snapshot.md"
-        snapshot_path.write_text("\n".join(lines))
-        log(f"Snapshot: captured {len(to_snapshot)} reference table(s): {to_snapshot}")
-    except Exception as e:
-        log(f"Snapshot: failed to write file: {e}", "WARN")
 
 
 async def run_agent(
@@ -166,7 +83,7 @@ async def run_agent(
         work_dir,
         model,
         max_turns,
-        timeout=900,
+        timeout=1800,
         label="main-agent",
         system_prompt=system_prompt,
     )
@@ -316,11 +233,6 @@ def _post_agent_dbt_run(
             [DBT_BIN, "deps"],
             cwd=str(work_dir), capture_output=True, text=True, timeout=120,
         )
-
-    created_stubs_post = create_ephemeral_stubs(work_dir)
-    if created_stubs_post:
-        log(f"Post-agent ephemeral stubs created: {sorted(created_stubs_post)}")
-
 
     if eval_critical_models:
         dbt_result = _run_dbt_selective(work_dir, eval_critical_models)
@@ -480,11 +392,6 @@ async def _post_agent_dbt_run_async(
             cwd=str(work_dir),
             timeout=120,
         )
-
-    created_stubs_post = create_ephemeral_stubs(work_dir)
-    if created_stubs_post:
-        log(f"Post-agent ephemeral stubs created: {sorted(created_stubs_post)}")
-
 
     if eval_critical_models:
         dbt_result = await _run_dbt_selective_async(work_dir, eval_critical_models)
@@ -655,16 +562,6 @@ async def execute_dbt_task(
         for w in check_package_availability(work_dir):
             log(w, "WARN")
 
-        created_templates = create_sql_templates(work_dir, eval_critical_models)
-        if created_templates:
-            log(f"Pre-populated {len(created_templates)} SQL template(s) for priority models")
-
-        created_stubs = create_ephemeral_stubs(work_dir)
-        if created_stubs:
-            log(f"Auto-created {len(created_stubs)} ephemeral stub(s): {', '.join(sorted(created_stubs))}")
-
-        _snapshot_reference_tables(work_dir, _db)
-
         # Step 4: Run agent
         log_separator("Step 4: Run Claude agent")
         t_agent = time.monotonic()
@@ -682,7 +579,7 @@ async def execute_dbt_task(
                 work_dir,
                 model,
                 max_turns,
-                timeout=900,
+                timeout=1800,
                 label="main-agent",
                 system_prompt=system_prompt,
             )
@@ -843,16 +740,6 @@ def main() -> None:
 
         for w in check_package_availability(work_dir):
             log(w, "WARN")
-
-        created_templates = create_sql_templates(work_dir, eval_critical_models)
-        if created_templates:
-            log(f"Pre-populated {len(created_templates)} SQL template(s) for priority models")
-
-        created_stubs = create_ephemeral_stubs(work_dir)
-        if created_stubs:
-            log(f"Auto-created {len(created_stubs)} ephemeral stub(s): {', '.join(sorted(created_stubs))}")
-
-        _snapshot_reference_tables(work_dir, _db)
 
         # Run the agent.
         t0 = time.monotonic()

@@ -9,9 +9,7 @@ description: "Write a technical spec after research. Distills exploration into s
 
 Check if `<project_dir>/technical_spec.md` exists.
 
-- **If it exists**: read it. Skip macro discovery and Step 5 research.
-  Go directly to writing SQL from the spec. Do NOT re-research - re-researching
-  contradicts persisted decisions and wastes turns.
+- **If it exists**: preserve `prebuild_state.md` and validate affected decisions against the task, YML/config, source relations, verifier findings, and preserved pre-build evidence because retries may invalidate implementation assumptions. Do not treat a relation first materialized during the attempt as original evidence. Update unsupported decisions before SQL changes.
 - **If it does not exist**: write one using the rules in Sections 2-5.
 
 ## 2. Write the Spec
@@ -33,6 +31,9 @@ For EACH model, MUST include ALL seven fields:
    model already computes a value you need, MUST write `ref('that_model')`.
    Do NOT recompute from raw tables - recomputing introduces precision
    drift from rounding order differences.
+   Before finishing the spec, check it against itself: when Key expressions
+   names a model as the source of an expression, Source must list `ref()`
+   of that same model - fix whichever is wrong.
 2. **Driving table**: which table in the FROM clause. State the row count
    from the Step 1 scan or a `query_database` COUNT.
 3. **Joins**: each join with type (LEFT/INNER/FULL OUTER) and exact keys.

@@ -889,6 +889,8 @@ class GatewayChatConversation(GatewayBase):
     user_id: Mapped[str] = mapped_column(String, nullable=False)
     project_id: Mapped[str | None] = mapped_column(String)
     surface: Mapped[str] = mapped_column(String(20), nullable=False, default="notebook", server_default="notebook")
+    # "user" (person-initiated) or "improvement" (system-initiated improvement run)
+    origin: Mapped[str] = mapped_column(String(20), nullable=False, default="user", server_default="user")
     branch: Mapped[str | None] = mapped_column(String(100))
     commit_sha: Mapped[str | None] = mapped_column(String(40))
     per_query_budget_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.25, server_default="0.25")
@@ -1764,6 +1766,8 @@ class GatewayEvalConfig(GatewayBase):
 
     org_id: Mapped[str] = mapped_column(String, primary_key=True)
     repo_url: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    repo_installation_id: Mapped[str | None] = mapped_column(String(64))
+    repo_id: Mapped[int | None] = mapped_column(BigInteger)
     model: Mapped[str] = mapped_column(String(64), nullable=False, default="sonnet")
     max_tasks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     prompt_preamble: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -1917,3 +1921,36 @@ class GatewayEvalRegression(GatewayBase):
     other_changes: Mapped[list | None] = mapped_column(JSON)
 
     __table_args__ = (Index("ix_gw_evalreg_org_created", "org_id", "created_at"),)
+
+
+# Automated improvement runs.
+
+
+class GatewayImprovementRun(GatewayBase):
+    """One system-initiated improvement run attempt per org per ET calendar day.
+
+    A row is written for every consumed day slot — seeded, skipped (no eligible
+    project), or failed — so the (org_id, started_et_date) uniqueness makes
+    double-fires impossible even across processes.
+    """
+
+    __tablename__ = "gateway_improvement_runs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str | None] = mapped_column(String)
+    conversation_id: Mapped[str | None] = mapped_column(String)
+    run_id: Mapped[str | None] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="queued", server_default="queued")
+    trigger: Mapped[str] = mapped_column(String(20), nullable=False, default="scheduled", server_default="scheduled")
+    detail_json: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
+    # The America/New_York calendar date (YYYY-MM-DD) this run counts for.
+    # ET calendar day ("2026-08-11") for nightly slots; manual triggers use a
+    # longer unique tag so they never consume the nightly slot.
+    started_et_date: Mapped[str] = mapped_column(String(40), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "started_et_date", name="uq_gw_improvement_org_day"),
+        Index("ix_gw_improvement_org_created", "org_id", "created_at"),
+    )

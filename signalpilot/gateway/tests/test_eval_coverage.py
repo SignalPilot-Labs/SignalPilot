@@ -109,6 +109,10 @@ class TestComputeCoverage:
         )
         assert partial["declared"] == ["fct_orders"]
         assert partial["models_covered"] == 1
+        marts = {model["name"]: model for model in partial["models"]}
+        assert marts["fct_orders"]["declared_by"] == ["t1"]
+        assert marts["fct_orders"]["observed_by"] == ["t1"]
+        assert marts["fct_untouched"]["covered"] is False
 
         full = await coverage.compute_coverage(ORG, RUN, self._set(), self._models)
         assert full["declared"] == ["dim_users", "fct_orders", "fct_untouched"]

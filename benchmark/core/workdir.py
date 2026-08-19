@@ -296,7 +296,6 @@ Use SignalPilot MCP tools to explore and query the database:
 - `mcp__signalpilot__generate_sql_skeleton` — generate SELECT template from YML column list
 
 ## Key Rules
-- Always use `{{ config(materialized='table') }}` at the top of every model
 - Column names in YML are exact — copy them into SELECT aliases character-for-character
 - When a sibling model exists, copy its JOIN types exactly (see dbt-write skill)
 """

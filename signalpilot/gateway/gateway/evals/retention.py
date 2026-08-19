@@ -102,12 +102,17 @@ async def recover_stale_runs() -> int:
         except Exception:
             logger.exception("could not revoke keys for stale run %s", run_id)
         async with factory() as session:
+            was_cancelling = run.get("status") == "cancelling"
             await evals_store.update_run(
                 session,
                 org_id=org_id,
                 run_id=run_id,
-                status="failed",
-                error="run did not finish — the gateway executing it stopped responding",
+                status="cancelled" if was_cancelling else "failed",
+                error=(
+                    None
+                    if was_cancelling
+                    else "run did not finish because the gateway executing it stopped responding"
+                ),
                 finished_at=_now_iso(),
                 lease_expires_at=None,
             )

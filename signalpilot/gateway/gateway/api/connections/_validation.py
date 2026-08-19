@@ -39,7 +39,9 @@ def _validate_connection_params(conn: ConnectionCreate) -> list[str]:
             errors.append(f"{db} requires a host")
         if not conn.username:
             errors.append(f"{db} requires a username")
-        if not conn.database:
+        # mssql: database is optional — when omitted, the connector discovers
+        # every accessible database on the server (multi-database mode).
+        if not conn.database and db != "mssql":
             errors.append(f"{db} requires a database")
 
     if db == "trino":

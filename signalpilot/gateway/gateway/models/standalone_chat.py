@@ -202,6 +202,7 @@ class StandaloneConversationInfo(BaseModel):
     branch: str
     title: str
     status: Literal["active", "archived"]
+    origin: str = "user"
     created_at: float
     updated_at: float
     run_status: ChatRunStatus | None = None

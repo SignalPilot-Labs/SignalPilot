@@ -13,10 +13,12 @@
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import useSWR, { mutate } from "swr";
 import {
   BookOpen,
+  BarChart3,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -30,6 +32,7 @@ import {
   Save,
   Search,
   Settings2,
+  Square,
   TrendingUp,
   X,
   XCircle,
@@ -44,6 +47,7 @@ import {
   YAxis,
 } from "recharts";
 import {
+  cancelEvalRun,
   downloadEvalArtifact,
   downloadEvalRunExport,
   getEvalAccuracy,
@@ -68,6 +72,8 @@ import { PageHeader } from "~/components/ui/page-header";
 import { useToast } from "~/components/ui/toast";
 import { Md, fmtNum } from "./_components/Markdown";
 import { RunProgressBar, SandboxPanel } from "./_components/SandboxPanel";
+import { ControlDeck } from "./_components/ControlDeck";
+import { EvalOnboarding } from "./_components/EvalOnboarding";
 import { TranscriptSlideOver } from "./_components/TranscriptView";
 import "./evals.css";
 
@@ -81,6 +87,7 @@ const VERDICT_STYLE: Record<string, { color: string; label: string }> = {
   UNGRADED: { color: "var(--color-text-dim)", label: "ungraded" },
   ERROR: { color: "#e5484d", label: "run error" },
   SETUP_FAILED: { color: "#e5484d", label: "setup failed" },
+  CANCELLED: { color: "var(--color-text-dim)", label: "cancelled" },
 };
 
 function VerdictBadge({ verdict }: { verdict: string | null }) {
@@ -97,8 +104,9 @@ function StatusDot({ status }: { status: string }) {
   const color =
     status === "completed" ? "var(--color-success)"
     : status === "failed" ? "#e5484d"
+    : status === "cancelled" ? "var(--color-text-dim)"
     : "var(--color-warning, #f5a623)";
-  const live = status === "running" || status === "preparing";
+  const live = status === "running" || status === "preparing" || status === "cancelling";
   return (
     <span className="inline-flex items-center gap-1.5 text-[11px] uppercase tracking-[0.12em]" style={{ color }}>
       <span className={`w-1.5 h-1.5 rounded-full ${live ? "animate-pulse" : ""}`} style={{ background: color }} />
@@ -153,6 +161,8 @@ function ConfigForm({ onSaved }: { onSaved: () => void }) {
   const { data, mutate } = useSWR("eval-config", getEvalConfig);
   const [form, setForm] = useState({
     repo_url: "",
+    repo_installation_id: null as string | null,
+    repo_id: null as number | null,
     model: "sonnet",
     max_tasks: 0,
     prompt_preamble: "",
@@ -167,6 +177,8 @@ function ConfigForm({ onSaved }: { onSaved: () => void }) {
     if (data && !loaded) {
       setForm({
         repo_url: data.repo_url ?? "",
+        repo_installation_id: data.repo_installation_id ?? null,
+        repo_id: data.repo_id ?? null,
         model: data.model ?? "sonnet",
         max_tasks: data.max_tasks ?? 0,
         prompt_preamble: data.prompt_preamble ?? "",
@@ -183,6 +195,8 @@ function ConfigForm({ onSaved }: { onSaved: () => void }) {
     try {
       await putEvalConfig({
         repo_url: form.repo_url,
+        repo_installation_id: form.repo_installation_id,
+        repo_id: form.repo_id,
         model: form.model,
         max_tasks: form.max_tasks,
         prompt_preamble: form.prompt_preamble,
@@ -212,7 +226,7 @@ function ConfigForm({ onSaved }: { onSaved: () => void }) {
         <label className="block text-xs text-[var(--color-text-muted)] mb-1.5">
           Repo — public git URL, or a local path under /eval-projects (format: eval-format.md)
         </label>
-        <input className={inputCls} value={form.repo_url} onChange={(e) => setForm({ ...form, repo_url: e.target.value })} placeholder="https://github.com/org/eval-set.git  ·  /eval-projects/northwind" />
+        <input className={inputCls} value={form.repo_url} onChange={(e) => setForm({ ...form, repo_url: e.target.value, repo_installation_id: null, repo_id: null })} placeholder="https://github.com/org/eval-set.git  ·  /eval-projects/northwind" />
       </div>
       <div>
         <label className="block text-xs text-[var(--color-text-muted)] mb-1.5">Model</label>
@@ -220,7 +234,7 @@ function ConfigForm({ onSaved }: { onSaved: () => void }) {
       </div>
       <div>
         <label className="block text-xs text-[var(--color-text-muted)] mb-1.5">Max tasks per run (0 = all)</label>
-        <input className={inputCls} type="number" min={0} max={100} value={form.max_tasks} onChange={(e) => setForm({ ...form, max_tasks: Number(e.target.value) || 0 })} />
+        <input className={inputCls} type="number" min={0} max={200} value={form.max_tasks} onChange={(e) => setForm({ ...form, max_tasks: Number(e.target.value) || 0 })} />
       </div>
       <div>
         <label className="block text-xs text-[var(--color-text-muted)] mb-1.5">Connection — warehouse connection the graded agent must use</label>
@@ -925,10 +939,11 @@ function CoveragePanel({ coverage }: { coverage: EvalCoverage }) {
 function RunDetail({ runId }: { runId: string }) {
   const { toast } = useToast();
   const [exporting, setExporting] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const { data: run } = useSWR(`eval-run-${runId}`, () => getEvalRun(runId), {
-    refreshInterval: (latest) => (latest && (latest.status === "running" || latest.status === "preparing") ? 3000 : 0),
+    refreshInterval: (latest) => (latest && (latest.status === "running" || latest.status === "preparing" || latest.status === "cancelling") ? 2000 : 0),
   });
-  const live = run?.status === "running" || run?.status === "preparing";
+  const live = run?.status === "running" || run?.status === "preparing" || run?.status === "cancelling";
   const { data: progress } = useSWR(
     live ? `eval-run-progress-${runId}` : null,
     () => getEvalRunProgress(runId),
@@ -944,6 +959,19 @@ function RunDetail({ runId }: { runId: string }) {
       toast(`export failed: ${err instanceof Error ? err.message : "unknown"}`, "error");
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function stopRun() {
+    setStopping(true);
+    try {
+      await cancelEvalRun(runId);
+      await Promise.all([mutate("eval-runs"), mutate(`eval-run-${runId}`)]);
+      toast("eval cancellation requested", "success");
+    } catch (err) {
+      toast(`could not stop run: ${err instanceof Error ? err.message : "unknown"}`, "error");
+    } finally {
+      setStopping(false);
     }
   }
 
@@ -977,6 +1005,16 @@ function RunDetail({ runId }: { runId: string }) {
           </p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
+          {live && (
+            <button
+              onClick={stopRun}
+              disabled={stopping || run.status === "cancelling"}
+              className="ev-stop-command"
+            >
+              {stopping || run.status === "cancelling" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Square className="w-3 h-3" fill="currentColor" />}
+              {run.status === "cancelling" ? "Stopping" : "Stop run"}
+            </button>
+          )}
           {run.status === "completed" && (
             <div className="flex items-center gap-3 text-sm">
               {allPass ? <CheckCircle2 className="w-4 h-4 text-[var(--color-success)]" /> : <XCircle className="w-4 h-4 text-[#e5484d]" />}
@@ -1380,13 +1418,14 @@ function EvalsPageInner() {
   const searchParams = useSearchParams();
   const [selectedRun, setSelectedRun] = useState<string | null>(() => searchParams.get("run"));
   const [detailTask, setDetailTask] = useState<EvalTask | null>(null);
+  const [configOpen, setConfigOpen] = useState(false);
 
   // An unentitled workspace can call only the availability route.
   // Delay all other requests until the availability response confirms access.
   const { data: availability, isLoading: availLoading } = useSWR("eval-availability", getEvalAvailability);
   const enabled = availability?.enabled === true;
 
-  const { data: cfg } = useSWR(enabled ? "eval-config" : null, getEvalConfig);
+  const { data: cfg, isLoading: cfgLoading } = useSWR(enabled ? "eval-config" : null, getEvalConfig);
   const { data: evalSet, error: tasksError } = useSWR(
     enabled && cfg?.repo_url ? `eval-tasks-${cfg.repo_url}` : null,
     () => listEvalTasks(),
@@ -1394,9 +1433,10 @@ function EvalsPageInner() {
   const tasks = evalSet?.tasks;
   const { data: runsData } = useSWR(enabled ? "eval-runs" : null, listEvalRuns, {
     refreshInterval: (latest) =>
-      latest?.runs?.some((r: EvalRun) => r.status === "running" || r.status === "preparing") ? 4000 : 15000,
+      latest?.runs?.some((r: EvalRun) => r.status === "running" || r.status === "preparing" || r.status === "cancelling") ? 2500 : 15000,
   });
   const runs = runsData?.runs ?? [];
+  const activeRun = runs.find((run) => run.status === "running" || run.status === "preparing" || run.status === "cancelling");
 
   const header = (
     <PageHeader
@@ -1423,12 +1463,44 @@ function EvalsPageInner() {
     );
   }
 
+  if (cfgLoading || !cfg) {
+    return (
+      <div className="min-h-screen p-8 animate-fade-in">
+        <div className="ev-onboarding-loading">
+          <Loader2 className="w-4 h-4 animate-spin" /> Loading eval workspace...
+        </div>
+      </div>
+    );
+  }
+
+  if (!cfg.repo_url) {
+    return (
+      <div className="min-h-screen p-8 animate-fade-in ev-onboarding-page">
+        <EvalOnboarding config={cfg} onComplete={() => setConfigOpen(false)} />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen p-8 animate-fade-in">
       {header}
 
       <div className="space-y-6">
-        <Hero evalSet={evalSet} repoUrl={cfg?.repo_url ?? ""} model={cfg?.model ?? "sonnet"} runnerEnabled={cfg?.enabled ?? true} cfgLoaded={!!cfg} />
+        <ControlDeck
+          evalSet={evalSet}
+          repoUrl={cfg?.repo_url ?? ""}
+          model={cfg?.model ?? "sonnet"}
+          runnerEnabled={cfg?.enabled ?? true}
+          activeRun={activeRun}
+          onStarted={setSelectedRun}
+          onConfigure={() => setConfigOpen((open) => !open)}
+        />
+
+        {configOpen && (
+          <div className="ev-card px-6 pb-6">
+            <ConfigForm onSaved={() => setConfigOpen(false)} />
+          </div>
+        )}
 
         {tasksError && cfg?.repo_url && (
           <p className="text-sm text-[var(--color-text-dim)]">
@@ -1443,8 +1515,6 @@ function EvalsPageInner() {
         {selectedRun && <RunDetail runId={selectedRun} />}
 
         <SandboxPanel />
-
-        <AccuracySection />
 
         <RunsList runs={runs} selectedRun={selectedRun} onSelect={setSelectedRun} />
       </div>

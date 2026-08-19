@@ -84,6 +84,54 @@ STANDALONE_ALLOWED_TOOLS = [
     "mcp__signalpilot-notebook__get_notebook_errors",
 ]
 
+# Additional gateway tools available only to automated improvement runs. The
+# gateway enforces this server-side through the sandbox:execute JWT capability;
+# this list only widens the agent-side allowlist for those runs.
+IMPROVEMENT_EXTRA_TOOLS = [
+    "mcp__signalpilot__sandbox_exec",
+    "mcp__signalpilot__sandbox_write_file",
+    "mcp__signalpilot__sandbox_read_file",
+]
+
+# Gateway MCP tools that must not be offered to the ordinary Data Chat agent.
+# analyze_project_db and map_columns can return after they use the governed
+# plan/result and frozen-project boundaries. get_dbt_profile is intentionally
+# reserved for writable dbt/Xata administration.
+STANDALONE_DISALLOWED_MCP_TOOLS = [
+    "mcp__signalpilot__analyze_project_db",
+    "mcp__signalpilot__get_dbt_profile",
+    "mcp__signalpilot__map_columns",
+]
+
+IMPROVEMENT_SYSTEM_PROMPT_SUFFIX = """
+
+<automated_improvement_run>
+This is an AUTOMATED IMPROVEMENT RUN scheduled by SignalPilot, not a user
+conversation. Your mission: analyze the selected dbt project for warehouse
+cost-saving opportunities and publish an HTML report.
+
+Additional rules for this run only:
+- You have sandbox VM tools (sandbox_exec, sandbox_write_file,
+  sandbox_read_file): a disposable Linux VM with python3, uv, pip, and git.
+  Use it to install dbt and parse/compile the project sources you need.
+  The project files are also available read-only in your working directory.
+- Workflow: enumerate the project's models, use estimate_query_cost on the
+  compiled SQL of the most material models against the selected connection,
+  and identify concrete savings (duplicated subqueries worth extracting into
+  a cached staging model, SELECT * from wide tables, expensive views that
+  many models reference, dead models with no downstream refs).
+- Rank recommendations by estimated savings and show before/after cost when
+  you can estimate both.
+- Publish exactly one HTML report artifact via publish_report titled
+  "Cost optimization report". The report must include: an executive summary,
+  a ranked recommendation table with estimated impact, and the per-model
+  cost estimates you gathered. If you find no meaningful savings, publish
+  the report saying so with the evidence.
+- Never modify the database, the project, or any external system. Read-only
+  queries and the sandbox only.
+- End with a 3-6 sentence plain-language summary of the findings.
+</automated_improvement_run>"""
+
 STANDALONE_SYSTEM_PROMPT = """You are SignalPilot Data Chat, helping a non-technical business user answer questions from one governed project.
 
 Rules:
@@ -755,8 +803,10 @@ async def execute(*, request: Request) -> StreamingResponse:
         body.get("features") if isinstance(body.get("features"), dict) else {}
     )
     notebook_analysis_enabled = bool(feature_values.get("notebook_analysis"))
+    is_improvement_run = str(body.get("run_origin") or "user") == "improvement"
     system_prompt = (
-        f"{STANDALONE_SYSTEM_PROMPT}\n\n"
+        f"{STANDALONE_SYSTEM_PROMPT}"
+        f"{IMPROVEMENT_SYSTEM_PROMPT_SUFFIX if is_improvement_run else ''}\n\n"
         f"Selected project: {project_id}\nFrozen branch: {branch}\nFrozen commit: {commit_sha}\n"
         f"Selected connection: {connection_name}\n\n"
         f"<governed_project_context>\n{warm_context}\n</governed_project_context>"
@@ -1020,16 +1070,24 @@ async def execute(*, request: Request) -> StreamingResponse:
                     ),
                     cwd=str(project_directory),
                     disallow_file_edits=True,
-                    additional_disallowed_tools=["WebFetch", "WebSearch"],
+                    additional_disallowed_tools=[
+                        "WebFetch",
+                        "WebSearch",
+                        *STANDALONE_DISALLOWED_MCP_TOOLS,
+                        *([] if is_improvement_run else IMPROVEMENT_EXTRA_TOOLS),
+                    ],
                     allowed_tools=(
-                        STANDALONE_ALLOWED_TOOLS
-                        if notebook_analysis_enabled
-                        else [
-                            tool
-                            for tool in STANDALONE_ALLOWED_TOOLS
-                            if "signalpilot-notebook" not in tool
-                            and not tool.endswith("start_analysis_notebook")
-                        ]
+                        (
+                            STANDALONE_ALLOWED_TOOLS
+                            if notebook_analysis_enabled
+                            else [
+                                tool
+                                for tool in STANDALONE_ALLOWED_TOOLS
+                                if "signalpilot-notebook" not in tool
+                                and not tool.endswith("start_analysis_notebook")
+                            ]
+                        )
+                        + (IMPROVEMENT_EXTRA_TOOLS if is_improvement_run else [])
                     ),
                     additional_mcp_servers={
                         "standalone-chat": artifact_server

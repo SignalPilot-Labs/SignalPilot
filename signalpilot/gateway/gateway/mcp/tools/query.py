@@ -198,10 +198,29 @@ async def query_database(
     columns = list(result.rows[0].keys())
     lines = [" | ".join(str(c) for c in columns)]
     lines.append("-" * len(lines[0]))
-    for row in result.rows[:50]:  # Cap model display, not the durable structured result.
-        lines.append(" | ".join(str(row.get(c, "")) for c in columns))
-    if result.row_count > 50:
-        lines.append(f"... ({result.row_count} saved rows, showing first 50)")
+    # Cap model display, not the durable structured result. The floor is 50 rows;
+    # narrow rows (metadata enumerations, column lists) keep printing within a
+    # character budget so a schema listing is not cut off mid-table.
+    display_floor = 50
+    char_budget = 12000
+    shown = 0
+    chars = 0
+    for row in result.rows:
+        if shown >= 400:
+            break
+        line = " | ".join(str(row.get(c, "")) for c in columns)
+        if shown >= display_floor and chars + len(line) > char_budget:
+            break
+        lines.append(line)
+        shown += 1
+        chars += len(line) + 1
+    if result.row_count > shown:
+        lines.append(
+            f"[INCOMPLETE DISPLAY] {result.row_count} rows total; only the first {shown} are shown above. "
+            f"The remaining {result.row_count - shown} rows exist but are not displayed. "
+            f"Do not treat the list above as complete: re-run the query with a WHERE filter or OFFSET {shown} "
+            f"to see every remaining row before concluding anything about what the full result does or does not contain."
+        )
     if result.truncation_reason:
         lines.append(f"Completeness note: {result.truncation_reason}")
 
@@ -248,8 +267,8 @@ async def explain_query(connection_name: str, sql: str) -> str:
     Use this to validate a query before execution — catches errors,
     shows estimated cost, and reveals potential performance issues.
 
-    This enables the "generate → explain → fix → execute" workflow
-    used by Spider2.0 SOTA systems for higher accuracy.
+    Use the generate, explain, fix, and execute sequence because the plan can
+    reveal errors before execution.
 
     Args:
         connection_name: Name of the database connection
@@ -364,8 +383,8 @@ async def query_history(connection_name: str, limit: int = 10) -> str:
     Useful for learning query patterns, understanding the data model
     through real usage, and avoiding repeating previously failed queries.
 
-    Spider2.0 SOTA insight: agents that reference prior successful queries
-    have higher accuracy on follow-up questions in the same session.
+    Prior successful queries can provide reusable patterns for follow-up work
+    in the same session.
 
     Args:
         connection_name: Name of the database connection

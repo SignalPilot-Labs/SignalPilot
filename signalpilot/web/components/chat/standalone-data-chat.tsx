@@ -3,6 +3,7 @@
 import {
   AlertCircle,
   ArrowDownToLine,
+  Bot,
   ChevronRight,
   CircleStop,
   Copy,
@@ -75,16 +76,20 @@ import {
   applyStandaloneChatEvent,
   assembleStandaloneRunText,
   containsStandaloneSubmission,
+  deriveStandaloneRunActivity,
   isStandaloneRunReconciled,
+  markStandaloneRunStopped,
   standaloneMessageKey,
   upsertStandaloneConversation,
   type OptimisticUserMessage,
+  type StandaloneRunActivity,
 } from "~/lib/standalone-chat-state";
 import { projectSettingsHref } from "~/lib/project-settings-route";
 
 type UiMessage = StandaloneChatMessage & {
   runId?: string;
   runStatus?: StandaloneChatRunStatus;
+  activity?: StandaloneRunActivity;
   synthetic?: boolean;
 };
 
@@ -126,6 +131,22 @@ function statusTone(status: StandaloneChatRunStatus | null): string {
     return "text-[var(--color-warning)]";
   if (status === "failed") return "text-[var(--color-error)]";
   return "text-[var(--color-text-dim)]";
+}
+
+function isImprovementConversation(
+  conversation: { origin?: string } | null | undefined,
+): boolean {
+  return conversation?.origin === "improvement";
+}
+
+/** Small pill marking a system-initiated (automated improvement) conversation. */
+function AutomatedBadge() {
+  return (
+    <span className="inline-flex flex-none items-center gap-1 rounded-full border border-[var(--color-warning)]/25 bg-[var(--color-warning)]/5 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.08em] text-[var(--color-warning)]">
+      <Bot className="h-2.5 w-2.5" />
+      Automated
+    </span>
+  );
 }
 
 function isStreamingStatus(status: StandaloneChatRunStatus | undefined) {
@@ -826,10 +847,25 @@ function AssistantMessage({ message }: { message: UiMessage }) {
         </div>
         <div className="min-w-0 flex-1">
           <div className="chat-markdown">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {message.content}
-            </ReactMarkdown>
+            {message.content && (
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {message.content}
+              </ReactMarkdown>
+            )}
           </div>
+          {running && message.activity && (
+            <p
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              className={`${message.content ? "mt-3" : ""} text-sm text-[var(--color-text-muted)]`}
+            >
+              <span className="font-medium text-[var(--color-text)]">
+                {message.activity.label}:
+              </span>{" "}
+              {message.activity.detail}
+            </p>
+          )}
           {attachedArtifacts.length > 0 && (
             <div className="mt-5 space-y-4">
               {attachedArtifacts.map((artifact) => (
@@ -1085,6 +1121,7 @@ function ConversationRail({
                   <span className="min-w-0 flex-1 truncate">
                     {conversation.title}
                   </span>
+                  {isImprovementConversation(conversation) && <AutomatedBadge />}
                   {loadingConversationId === conversation.id && (
                     <Loader2 className="h-3 w-3 flex-none animate-spin text-[var(--color-text-dim)]" />
                   )}
@@ -1581,16 +1618,15 @@ export function StandaloneDataChat({
         const error = [...runEvents]
           .reverse()
           .find((event) => event.type === "error");
-        const progress = [...runEvents]
-          .reverse()
-          .find((event) => event.type === "progress");
         const content =
           (clarification && eventText(clarification, "message")) ||
           streamed ||
           (error && eventText(error, "message")) ||
           (currentRun.status === "cancelled"
             ? "This run was stopped."
-            : eventText(progress, "label") || "Preparing your answer…");
+            : currentRun.status === "completed"
+              ? "Finalizing your answer…"
+              : "");
         messages.push({
           id: `run-${currentRun.id}`,
           role: "assistant",
@@ -1600,6 +1636,7 @@ export function StandaloneDataChat({
           metadata: { run_id: currentRun.id, optimistic: true },
           runId: currentRun.id,
           runStatus: currentRun.status,
+          activity: deriveStandaloneRunActivity(runEvents, currentRun.id),
           synthetic: true,
         });
       }
@@ -1625,11 +1662,12 @@ export function StandaloneDataChat({
       messages.push({
         id: `pending-assistant-${pendingSubmission.id}`,
         role: "assistant",
-        content: "Preparing your answer…",
+        content: "",
         sequence: Number.MAX_SAFE_INTEGER,
         created_at: pendingSubmission.createdAt,
         metadata: { optimistic: true },
         runStatus: "queued",
+        activity: deriveStandaloneRunActivity([], ""),
         synthetic: true,
       });
     }
@@ -1799,18 +1837,45 @@ export function StandaloneDataChat({
 
   const onStop = useCallback(
     async (runId: string) => {
+      const stoppedAt = new Date().toISOString();
+      await mutateDetail(
+        (current) =>
+          current
+            ? markStandaloneRunStopped(current, runId, stoppedAt)
+            : current,
+        { revalidate: false },
+      );
+      await mutateHistory(
+        (current) =>
+          current
+            ? {
+                conversations: current.conversations.map((conversation) =>
+                  conversation.id === conversationId
+                    ? {
+                        ...conversation,
+                        run_status: "cancelled" as const,
+                        updated_at: Date.parse(stoppedAt) / 1_000,
+                      }
+                    : conversation,
+                ),
+              }
+            : current,
+        { revalidate: false },
+      );
       try {
         await cancelStandaloneRun(runId);
-        await mutateDetail();
-        await mutateHistory();
+        void mutateDetail();
+        void mutateHistory();
       } catch (error) {
+        void mutateDetail();
+        void mutateHistory();
         toast(
           error instanceof Error ? error.message : "Could not stop the run",
           "error",
         );
       }
     },
-    [mutateDetail, mutateHistory, toast],
+    [conversationId, mutateDetail, mutateHistory, toast],
   );
   const onRetry = useCallback(
     async (runId: string) => {
@@ -2122,6 +2187,18 @@ export function StandaloneDataChat({
                 >
                   <Share2 className="h-4 w-4" />
                 </button>
+              )}
+            {conversationId &&
+              isImprovementConversation(detail?.conversation) && (
+                <div className="flex-none px-6 pt-4">
+                  <div className="mx-auto flex max-w-3xl items-center gap-2 rounded-xl border border-[var(--color-warning)]/25 bg-[var(--color-warning)]/5 px-4 py-2.5 text-xs text-[var(--color-warning)]">
+                    <Bot className="h-3.5 w-3.5 flex-none" />
+                    Automated improvement run
+                    <span className="text-[var(--color-text-dim)]">
+                      · started by SignalPilot, not a teammate
+                    </span>
+                  </div>
+                </div>
               )}
             {conversationId && unreadyMessage && (
               <div className="flex-none px-6 pt-4">

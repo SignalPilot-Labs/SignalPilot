@@ -35,6 +35,8 @@ TRACE_RUN_WINDOW = 100
 
 _CONFIG_FIELDS = (
     "repo_url",
+    "repo_installation_id",
+    "repo_id",
     "model",
     "max_tasks",
     "prompt_preamble",
@@ -48,6 +50,8 @@ def _config_dict(row: GatewayEvalConfig | None) -> dict[str, Any]:
     if row is None:
         return {
             "repo_url": "",
+            "repo_installation_id": None,
+            "repo_id": None,
             "model": "sonnet",
             "max_tasks": 0,
             "prompt_preamble": "",
@@ -57,6 +61,8 @@ def _config_dict(row: GatewayEvalConfig | None) -> dict[str, Any]:
         }
     return {
         "repo_url": row.repo_url,
+        "repo_installation_id": row.repo_installation_id,
+        "repo_id": row.repo_id,
         "model": row.model,
         "max_tasks": row.max_tasks,
         "prompt_preamble": row.prompt_preamble,
@@ -258,7 +264,7 @@ async def list_live_runs(session: AsyncSession, *, org_id: str | None = None) ->
     Use the lease instead of status to determine whether a run is active.
     """
     stmt = select(GatewayEvalRun).where(
-        GatewayEvalRun.status.in_(("preparing", "running")),
+        GatewayEvalRun.status.in_(("preparing", "running", "cancelling")),
         GatewayEvalRun.lease_expires_at.is_not(None),
         GatewayEvalRun.lease_expires_at > time.time(),
     )
@@ -274,7 +280,7 @@ async def list_stale_runs(session: AsyncSession) -> list[dict[str, Any]]:
         (
             await session.execute(
                 select(GatewayEvalRun).where(
-                    GatewayEvalRun.status.in_(("preparing", "running")),
+                    GatewayEvalRun.status.in_(("preparing", "running", "cancelling")),
                     (GatewayEvalRun.lease_expires_at.is_(None))
                     | (GatewayEvalRun.lease_expires_at <= time.time()),
                 )
@@ -338,6 +344,29 @@ async def update_task(
             GatewayEvalRunTask.task_id == task_id,
         )
         .values(**fields)
+    )
+    await session.commit()
+
+
+async def cancel_open_tasks(
+    session: AsyncSession, *, org_id: str, run_id: str, finished_at: str
+) -> None:
+    """Mark every task that did not finish as cancelled."""
+    await session.execute(
+        update(GatewayEvalRunTask)
+        .where(
+            GatewayEvalRunTask.org_id == org_id,
+            GatewayEvalRunTask.run_id == run_id,
+            GatewayEvalRunTask.status.in_(("pending", "running")),
+        )
+        .values(
+            status="cancelled",
+            verdict="CANCELLED",
+            answer="Run cancelled by user.",
+            error=None,
+            finished_at=finished_at,
+            sandbox=None,
+        )
     )
     await session.commit()
 
@@ -406,6 +435,64 @@ async def tasks_with_live_sandboxes(
     return index
 
 
+async def live_vercel_sandboxes(
+    session: AsyncSession, *, org_id: str, limit_runs: int = 25
+) -> list[dict[str, Any]]:
+    """Vercel sandboxes attributed to tasks still executing, for the panel.
+
+    The Vercel provider has no pod/label API surface to enumerate, so run
+    state is the only inventory: a sandbox is "live" while its task row is
+    pending/running (the backend destroys the VM in a finally either way).
+    """
+    run_ids = (
+        (
+            await session.execute(
+                select(GatewayEvalRun.id)
+                .where(GatewayEvalRun.org_id == org_id)
+                .order_by(GatewayEvalRun.created_at.desc())
+                .limit(limit_runs)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not run_ids:
+        return []
+    rows = (
+        (
+            await session.execute(
+                select(GatewayEvalRunTask).where(
+                    GatewayEvalRunTask.org_id == org_id,
+                    GatewayEvalRunTask.run_id.in_(run_ids),
+                    GatewayEvalRunTask.status.in_(("pending", "running")),
+                    GatewayEvalRunTask.sandbox.is_not(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    out: list[dict[str, Any]] = []
+    for t in rows:
+        sandbox = t.sandbox or {}
+        if str(sandbox.get("backend", "") or "") != "vercel":
+            continue
+        name = str(sandbox.get("name", "") or "")
+        if not name:
+            continue
+        out.append(
+            {
+                "name": name,
+                "run_id": t.run_id,
+                "task_id": t.task_id,
+                "task_title": t.title,
+                "task_phase": str(sandbox.get("phase", "") or "agent"),
+                "started_at": sandbox.get("started_at"),
+            }
+        )
+    return out
+
+
 # Accuracy history + regressions.
 
 
@@ -447,6 +534,101 @@ async def list_accuracy(
         }
         for r in rows
     ]
+
+
+async def list_task_performance(
+    session: AsyncSession, *, org_id: str, limit_runs: int = 50
+) -> list[dict[str, Any]]:
+    """Aggregate recent completed task results for the accuracy page."""
+    run_ids = list(
+        (
+            await session.execute(
+                select(GatewayEvalRun.id)
+                .where(
+                    GatewayEvalRun.org_id == org_id,
+                    GatewayEvalRun.status.in_(("completed", "failed")),
+                )
+                .order_by(GatewayEvalRun.created_at.desc())
+                .limit(limit_runs)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not run_ids:
+        return []
+
+    rows = (
+        (
+            await session.execute(
+                select(GatewayEvalRunTask, GatewayEvalRun.created_at)
+                .join(
+                    GatewayEvalRun,
+                    (GatewayEvalRun.id == GatewayEvalRunTask.run_id)
+                    & (GatewayEvalRun.org_id == GatewayEvalRunTask.org_id),
+                )
+                .where(
+                    GatewayEvalRunTask.org_id == org_id,
+                    GatewayEvalRunTask.run_id.in_(run_ids),
+                    GatewayEvalRunTask.verdict.is_not(None),
+                    GatewayEvalRunTask.verdict != "CANCELLED",
+                )
+                .order_by(GatewayEvalRun.created_at.desc())
+            )
+        )
+        .all()
+    )
+    by_task: dict[str, dict[str, Any]] = {}
+    for task, _created_at in rows:
+        item = by_task.setdefault(
+            task.task_id,
+            {
+                "task_id": task.task_id,
+                "title": task.title,
+                "kind": task.kind,
+                "class": task.task_class,
+                "covers": sorted(set(task.covers or []) | set(task.builds or [])),
+                "attempts": 0,
+                "correct": 0,
+                "partial": 0,
+                "off": 0,
+                "errors": 0,
+                "duration_total_s": 0.0,
+                "duration_samples": 0,
+                "last_verdict": task.verdict,
+                "last_run_id": task.run_id,
+            },
+        )
+        item["attempts"] += 1
+        verdict = str(task.verdict or "").upper()
+        if verdict == "CORRECT":
+            item["correct"] += 1
+        elif verdict == "PARTIAL":
+            item["partial"] += 1
+        elif verdict in ("OFF", "UNKNOWN"):
+            item["off"] += 1
+        elif verdict in ("ERROR", "SETUP_FAILED"):
+            item["errors"] += 1
+        if task.duration_s is not None:
+            item["duration_total_s"] += float(task.duration_s)
+            item["duration_samples"] += 1
+
+    result = []
+    for item in by_task.values():
+        attempts = item.pop("attempts")
+        duration_total = item.pop("duration_total_s")
+        duration_samples = item.pop("duration_samples")
+        result.append(
+            {
+                **item,
+                "attempts": attempts,
+                "pass_rate_pct": round(item["correct"] / attempts * 100.0, 1),
+                "avg_duration_s": (
+                    round(duration_total / duration_samples, 1) if duration_samples else None
+                ),
+            }
+        )
+    return sorted(result, key=lambda item: (item["pass_rate_pct"], -item["attempts"], item["task_id"]))
 
 
 async def trailing_baseline(
@@ -578,7 +760,7 @@ async def runs_outside_window(
                     GatewayEvalRun.org_id == org_id,
                     col.is_(False),
                     GatewayEvalRun.id.not_in(keep),
-                    GatewayEvalRun.status.not_in(("preparing", "running")),
+                    GatewayEvalRun.status.not_in(("preparing", "running", "cancelling")),
                 )
             )
         )

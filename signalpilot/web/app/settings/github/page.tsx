@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   GitBranch,
@@ -34,6 +35,7 @@ import { useToast } from "~/components/ui/toast";
 export default function GitHubConnectionsPage() {
   const { toast } = useToast();
   const searchParams = useSearchParams();
+  const router = useRouter();
 
   const [installations, setInstallations] = useState<GitHubInstallation[]>([]);
   const [repoLinks, setRepoLinks] = useState<GitHubRepoLink[]>([]);
@@ -78,11 +80,16 @@ export default function GitHubConnectionsPage() {
     refresh();
     if (searchParams.get("installed") === "true") {
       toast("GitHub App connected successfully", "success");
+      const returnTo = sessionStorage.getItem("sp_github_return_to");
+      if (returnTo === "/evals") {
+        sessionStorage.removeItem("sp_github_return_to");
+        router.replace(returnTo);
+      }
     }
     if (githubErrorMessage) {
       toast(githubErrorMessage, "error");
     }
-  }, [githubErrorMessage, refresh, searchParams, toast]);
+  }, [githubErrorMessage, refresh, router, searchParams, toast]);
 
   async function handleConnectGitHub() {
     setConnecting(true);

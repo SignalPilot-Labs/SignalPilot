@@ -415,17 +415,203 @@ class KubernetesBackend:
                     logger.warning("Failed to delete eval %s %s/%s: %s", what, ns, pod_name, exc)
 
 
+# Vercel.
+
+# Prepares a fresh Vercel sandbox for the runner script: the script assumes
+# /work exists and `claude` is on PATH — both baked into the runner image on
+# the container backends, neither present in a stock sandbox.
+_VERCEL_BOOTSTRAP = (
+    "sudo mkdir -p /work && sudo chown \"$(id -u):$(id -g)\" /work && "
+    "command -v claude >/dev/null 2>&1 || sudo npm install -g @anthropic-ai/claude-code"
+)
+_VERCEL_BOOTSTRAP_TIMEOUT = 240
+# Provider-side ceiling on execution_time_limit (45 min); creation headroom
+# beyond the eval timeout covers bootstrap plus scheduling.
+_VERCEL_MAX_LIFETIME = 2700
+_VERCEL_LIFETIME_HEADROOM = 300
+# The run's combined output is tee'd here inside the sandbox so the panel can
+# poll a live tail (exec only returns output when the command finishes).
+_VERCEL_LOG_PATH = "/tmp/sp-eval-output.log"
+
+
+class VercelBackend:
+    """One ephemeral Vercel sandbox VM per eval container.
+
+    Unlike the container backends, there is no runner image: the sandbox is a
+    stock VM bootstrapped with the Claude CLI at start. The eval MCP config
+    must therefore point at a publicly reachable gateway URL (SP_EVAL_MCP_URL)
+    — sandboxes run in Vercel's network, not next to the gateway.
+
+    Credentials ride the exec environment only; they are never baked into the
+    sandbox spec, and the sandbox is destroyed in a finally block with the
+    provider's execution time limit as backstop.
+    """
+
+    def __init__(self, settings: EvalRunSettings, *, org_id: str) -> None:
+        from ..config.sandbox_runtime import get_sandbox_runtime_settings
+
+        runtime_settings = get_sandbox_runtime_settings()
+        if not runtime_settings.enabled:
+            raise RuntimeError(
+                "Vercel eval backend unavailable: VERCEL_TOKEN / VERCEL_TEAM_ID / "
+                "VERCEL_PROJECT_ID are not all configured."
+            )
+        self._settings = settings
+        self._org_id = org_id
+        self._runtime_settings = runtime_settings
+
+    async def aclose(self) -> None:
+        return None
+
+    def _make_runtime(self):
+        from ..sandbox_runtime.vercel import VercelSandboxRuntime
+
+        return VercelSandboxRuntime(project_id=self._runtime_settings.vercel_project_id)
+
+    @staticmethod
+    def _shell_command(spec: ContainerRun) -> str:
+        # _task_spec/_script_spec always ship ["sh", "-lc", script]; anything
+        # else is joined defensively rather than guessed at.
+        if len(spec.command) == 3 and spec.command[0] == "sh" and spec.command[1] in ("-lc", "-c"):
+            return spec.command[2]
+        import shlex
+
+        return shlex.join(spec.command)
+
+    async def run(self, spec: ContainerRun) -> tuple[int, str]:
+        if spec.binds or spec.extra_network:
+            raise RuntimeError(
+                "This eval set needs host bind mounts or an extra docker network, "
+                "which the Vercel backend cannot provide. Use a git eval repo "
+                "with a self-contained setup script."
+            )
+        from ..sandbox_runtime.base import SandboxSpec
+
+        runtime = self._make_runtime()
+        lifetime = min(spec.timeout_seconds + _VERCEL_LIFETIME_HEADROOM, _VERCEL_MAX_LIFETIME)
+        # Secrets go to exec env, not the creation spec: creation metadata is
+        # readable back from the provider API, per-exec env is not persisted.
+        sandbox_id = await runtime.create(
+            SandboxSpec(time_limit_seconds=lifetime, tags={"sp-eval": "1", "org": self._org_id[:64]})
+        )
+        _notify_start(spec, {"backend": "vercel", "name": sandbox_id, "namespace": ""})
+        try:
+            boot = await runtime.exec(
+                sandbox_id, _VERCEL_BOOTSTRAP, timeout_seconds=_VERCEL_BOOTSTRAP_TIMEOUT
+            )
+            if boot.returncode != 0:
+                return 1, (
+                    "Vercel sandbox bootstrap failed "
+                    f"(exit {boot.returncode}):\n{boot.stdout}\n{boot.stderr}"
+                )
+            loop = asyncio.get_event_loop()
+            started = loop.time()
+            # tee the merged output to a file: exec only returns output at
+            # completion, so the file is what makes a live panel tail (and a
+            # post-kill log recovery) possible. pipefail preserves the task's
+            # exit code through the tee.
+            wrapped = (
+                "set -o pipefail; { "
+                + self._shell_command(spec)
+                + f" ; }} 2>&1 | tee {_VERCEL_LOG_PATH}"
+            )
+            result = await runtime.exec(
+                sandbox_id,
+                wrapped,
+                env={**spec.env, **spec.secret_env},
+                timeout_seconds=spec.timeout_seconds,
+            )
+            logs = result.stdout + (("\n" + result.stderr) if result.stderr else "")
+            if not logs.strip():
+                # A kill_after termination can drop the captured stream; the
+                # tee'd file still holds everything up to the kill.
+                data = await runtime.read_file(sandbox_id, _VERCEL_LOG_PATH)
+                if data:
+                    logs = data.decode("utf-8", errors="replace")
+            # kill_after reports a plain non-zero exit; recover the timeout
+            # signal from elapsed time so grading treats it like the container
+            # backends' TIMED_OUT.
+            if result.returncode != 0 and loop.time() - started >= spec.timeout_seconds - 1:
+                return TIMED_OUT, logs
+            return result.returncode, logs
+        finally:
+            await runtime.destroy(sandbox_id)
+
+
+# Reaper.
+
+# Terminal pods linger this long so the sandbox panel can still show their
+# outcome, then they are removed. The run path deletes its own pod in a
+# finally block; this only catches pods stranded by a gateway crash/restart
+# mid-run — bare pods have no TTL, so without it they live forever.
+_EVAL_POD_REAP_AGE_SECONDS = 3600
+
+
+async def reap_terminal_eval_pods(orch, *, max_age_seconds: int = _EVAL_POD_REAP_AGE_SECONDS) -> int:
+    """Delete eval pods (and their env Secrets) in a terminal phase past the age cap.
+
+    `orch` is a KubernetesOrchestrator with an initialized client. Returns the
+    number of pods deleted; permission or listing failures return 0 rather
+    than raising — the cleanup loop must survive a partially-scoped RBAC.
+    """
+    from datetime import UTC, datetime
+
+    await orch._ensure_client()
+    core = orch._core_api
+    if core is None:
+        return 0
+    try:
+        pods = (await core.list_pod_for_all_namespaces(label_selector=f"{_EVAL_POD_LABEL}=1")).to_dict()
+    except Exception as exc:
+        logger.warning("Eval-pod reaper: cannot list pods (%s)", exc)
+        return 0
+
+    now = datetime.now(UTC)
+    deleted = 0
+    for pod in pods.get("items") or []:
+        meta = pod.get("metadata") or {}
+        phase = ((pod.get("status") or {}).get("phase") or "").lower()
+        if phase not in ("succeeded", "failed"):
+            continue
+        created = meta.get("creation_timestamp")
+        if created is not None and (now - created).total_seconds() < max_age_seconds:
+            continue
+        name, ns = meta.get("name") or "", meta.get("namespace") or ""
+        if not name or not ns:
+            continue
+        try:
+            await core.delete_namespaced_pod(name=name, namespace=ns, grace_period_seconds=0)
+            deleted += 1
+            logger.info("Eval-pod reaper: deleted terminal pod %s/%s (phase=%s)", ns, name, phase)
+        except Exception as exc:
+            if "404" not in str(exc):
+                logger.warning("Eval-pod reaper: failed to delete %s/%s: %s", ns, name, exc)
+            continue
+        # The env Secret is ownerRef'd to the pod, but GC is best-effort and a
+        # credential must not outlive the reaped pod.
+        try:
+            await core.delete_namespaced_secret(name=f"sp-eval-env-{name}", namespace=ns)
+        except Exception as exc:
+            if "404" not in str(exc) and "Not Found" not in str(exc):
+                logger.warning("Eval-pod reaper: failed to delete secret for %s/%s: %s", ns, name, exc)
+    return deleted
+
+
 # Selection.
 
 
 def get_execution_backend(settings: EvalRunSettings, *, org_id: str) -> ExecutionBackend:
     """Pick the backend for the current deployment mode.
 
-    Cloud never reaches DockerBackend: a cluster this gateway cannot talk to is
-    a failed run, not a reason to hand untrusted eval workloads the host daemon.
+    SP_EVAL_EXECUTION_BACKEND=vercel opts eval workloads onto ephemeral Vercel
+    sandbox VMs in any mode. Otherwise cloud never reaches DockerBackend: a
+    cluster this gateway cannot talk to is a failed run, not a reason to hand
+    untrusted eval workloads the host daemon.
     """
     from ..runtime.mode import is_cloud_mode
 
+    if settings.execution_backend == "vercel":
+        return VercelBackend(settings, org_id=org_id)
     if is_cloud_mode():
         return KubernetesBackend(settings, org_id=org_id)
     return DockerBackend(settings)

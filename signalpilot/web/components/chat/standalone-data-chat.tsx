@@ -72,6 +72,7 @@ import {
   containsStandaloneSubmission,
   deriveStandaloneRunActivity,
   isStandaloneRunReconciled,
+  markStandaloneRunStopped,
   standaloneMessageKey,
   upsertStandaloneConversation,
   type OptimisticUserMessage,
@@ -1499,18 +1500,45 @@ export function StandaloneDataChat({
 
   const onStop = useCallback(
     async (runId: string) => {
+      const stoppedAt = new Date().toISOString();
+      await mutateDetail(
+        (current) =>
+          current
+            ? markStandaloneRunStopped(current, runId, stoppedAt)
+            : current,
+        { revalidate: false },
+      );
+      await mutateHistory(
+        (current) =>
+          current
+            ? {
+                conversations: current.conversations.map((conversation) =>
+                  conversation.id === conversationId
+                    ? {
+                        ...conversation,
+                        run_status: "cancelled" as const,
+                        updated_at: Date.parse(stoppedAt) / 1_000,
+                      }
+                    : conversation,
+                ),
+              }
+            : current,
+        { revalidate: false },
+      );
       try {
         await cancelStandaloneRun(runId);
-        await mutateDetail();
-        await mutateHistory();
+        void mutateDetail();
+        void mutateHistory();
       } catch (error) {
+        void mutateDetail();
+        void mutateHistory();
         toast(
           error instanceof Error ? error.message : "Could not stop the run",
           "error",
         );
       }
     },
-    [mutateDetail, mutateHistory, toast],
+    [conversationId, mutateDetail, mutateHistory, toast],
   );
   const onRetry = useCallback(
     async (runId: string) => {

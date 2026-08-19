@@ -90,6 +90,16 @@ IMPROVEMENT_EXTRA_TOOLS = [
     "mcp__signalpilot__sandbox_read_file",
 ]
 
+# Gateway MCP tools that must not be offered to the ordinary Data Chat agent.
+# analyze_project_db and map_columns can return after they use the governed
+# plan/result and frozen-project boundaries. get_dbt_profile is intentionally
+# reserved for writable dbt/Xata administration.
+STANDALONE_DISALLOWED_MCP_TOOLS = [
+    "mcp__signalpilot__analyze_project_db",
+    "mcp__signalpilot__get_dbt_profile",
+    "mcp__signalpilot__map_columns",
+]
+
 IMPROVEMENT_SYSTEM_PROMPT_SUFFIX = """
 
 <automated_improvement_run>
@@ -990,7 +1000,12 @@ async def execute(*, request: Request) -> StreamingResponse:
                     ),
                     cwd=str(project_directory),
                     disallow_file_edits=True,
-                    additional_disallowed_tools=["WebFetch", "WebSearch"],
+                    additional_disallowed_tools=[
+                        "WebFetch",
+                        "WebSearch",
+                        *STANDALONE_DISALLOWED_MCP_TOOLS,
+                        *([] if is_improvement_run else IMPROVEMENT_EXTRA_TOOLS),
+                    ],
                     allowed_tools=(
                         (
                             STANDALONE_ALLOWED_TOOLS

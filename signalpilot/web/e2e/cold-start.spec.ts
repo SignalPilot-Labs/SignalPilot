@@ -1,8 +1,8 @@
 import { test, expect } from "@playwright/test";
 
+import { resolveProject } from "./helpers";
+
 const GATEWAY = "http://localhost:3300";
-const PROJECT = "c90eacbf-3f69-45d3-a7e9-2bff3266ede7";
-const URL = `/projects?project=${PROJECT}&branch=main&file=intro.py`;
 
 test("cold start — no pod, deep-link URL auto-launches and loads file", async ({
   page,
@@ -12,6 +12,8 @@ test("cold start — no pod, deep-link URL auto-launches and loads file", async 
 
   const keyRes = await request.get("http://localhost:3200/api/local-key");
   const apiKey = (await keyRes.json()).key;
+  const project = await resolveProject(request);
+  const URL = `/projects?project=${project.id}&branch=main&file=notebooks%2Fintro.py`;
 
   const t0 = Date.now();
   const ts = (label: string) => {
@@ -45,14 +47,11 @@ test("cold start — no pod, deep-link URL auto-launches and loads file", async 
   const hasOverlay = await startingOverlay.isVisible({ timeout: 5000 }).catch(() => false);
   ts(hasOverlay ? "Loading overlay visible (no landing page)" : "No overlay — checking state...");
 
-  // Wait for "running" status
-  const runningText = page.getByText("running");
-  await expect(runningText).toBeVisible({ timeout: 90_000 });
-  const tRunning = ts("Session running");
-
-  // Wait for .sp-root
+  // Wait for the notebook embed — the definitive "session is up" signal in
+  // the current UI (the old bare "running" label no longer exists on boot).
   const spRoot = page.locator(".sp-root");
-  await expect(spRoot).toBeAttached({ timeout: 15_000 });
+  await expect(spRoot).toBeAttached({ timeout: 120_000 });
+  const tRunning = ts("Session running");
   const tEmbed = ts("Embed attached");
 
   // Wait for kernel

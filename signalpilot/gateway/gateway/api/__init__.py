@@ -9,6 +9,7 @@ from ..git.http_server import router as git_http_router
 from ..runtime.mode import is_cloud_mode
 from .agent_runs import router as agent_runs_router
 from .analysis_trails import router as analysis_trails_router
+from .artifacts import router as artifacts_router
 from .audit import router as audit_router
 from .budget import router as budget_router
 from .byok import router as byok_router
@@ -82,6 +83,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(chat_traces_router)
     app.include_router(agent_runs_router)
     app.include_router(analysis_trails_router)
+    app.include_router(artifacts_router)
     app.include_router(notebook_sessions_router)
     app.include_router(github_router)
     app.include_router(github_bot_router)

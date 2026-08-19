@@ -680,6 +680,10 @@ def build_standalone_chat_mcp_server(
             },
         ),
     ]
+    if notebook_mcp_app is None:
+        tools = [
+            tool for tool in tools if tool.name != "start_analysis_notebook"
+        ]
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:

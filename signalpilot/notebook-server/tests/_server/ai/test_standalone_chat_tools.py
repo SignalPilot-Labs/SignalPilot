@@ -9,7 +9,12 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from mcp.types import CallToolRequest, CallToolRequestParams, TextContent
+from mcp.types import (
+    CallToolRequest,
+    CallToolRequestParams,
+    ListToolsRequest,
+    TextContent,
+)
 from PIL import Image
 from starlette.exceptions import HTTPException
 
@@ -43,9 +48,11 @@ from signalpilot._server.api.endpoints.standalone_chat import (
     STANDALONE_ALLOWED_TOOLS,
     STANDALONE_DISALLOWED_MCP_TOOLS,
     STANDALONE_SYSTEM_PROMPT,
+    _allowed_tools_for_features,
     _require_execution_scope,
     _runtime_auth_override,
     _scoped_gateway_mcp_config,
+    _system_prompt_for_features,
 )
 
 
@@ -755,6 +762,29 @@ def test_agent_contract_excludes_mutating_and_external_tools():
         "mcp__signalpilot__map_columns",
     }
     assert not set(IMPROVEMENT_EXTRA_TOOLS) & set(STANDALONE_ALLOWED_TOOLS)
+
+
+@pytest.mark.asyncio
+async def test_disabled_notebook_feature_removes_tools_and_prompt_instructions():
+    allowed_tools = _allowed_tools_for_features(
+        notebook_analysis_enabled=False
+    )
+    prompt = _system_prompt_for_features(notebook_analysis_enabled=False)
+    server = build_standalone_chat_mcp_server(
+        StandaloneArtifactCollector(), notebook_mcp_app=None
+    )["instance"]
+    response = await server.request_handlers[ListToolsRequest](
+        ListToolsRequest()
+    )
+
+    assert "mcp__standalone-chat__start_analysis_notebook" not in allowed_tools
+    assert not any("signalpilot-notebook" in tool for tool in allowed_tools)
+    assert "Notebook analysis is disabled for this run" in prompt
+    assert "call start_analysis_notebook" not in prompt
+    assert "marimo reactive notebook" not in prompt
+    assert "start_analysis_notebook" not in {
+        tool.name for tool in response.root.tools
+    }
 
 
 def test_runtime_publication_sdk_is_exposed_from_top_level_package():

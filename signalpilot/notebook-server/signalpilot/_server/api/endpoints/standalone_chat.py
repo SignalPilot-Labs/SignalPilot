@@ -172,6 +172,60 @@ Rules:
 """
 
 
+_NOTEBOOK_ONLY_RULE_PREFIXES = (
+    "- If the route is notebook_sdk or dataset_ref",
+    "- The analysis notebook is a marimo reactive notebook",
+    "- Define shared imports and reusable DataFrames once",
+    "- If edit_notebook returns MultipleDefinitionError",
+    "- Never edit, remove, or redefine the seeded",
+    "- For notebook_sdk, first define `plan_id`",
+    "- Never copy MCP previews into notebook DataFrames",
+    "- Keep complete bounded DataFrames inside the kernel",
+    "- Publish derived rows from the kernel",
+    "- Publish a runtime file with exactly",
+    "- PublishedResult exposes only",
+    "- Do not catch or suppress publication exceptions",
+    "- Prefer governed SDK structured-result IDs",
+)
+
+
+def _system_prompt_for_features(*, notebook_analysis_enabled: bool) -> str:
+    if notebook_analysis_enabled:
+        return STANDALONE_SYSTEM_PROMPT
+    lines = [
+        line
+        for line in STANDALONE_SYSTEM_PROMPT.splitlines()
+        if not line.startswith(_NOTEBOOK_ONLY_RULE_PREFIXES)
+    ]
+    disabled_rule = (
+        "- Notebook analysis is disabled for this run. Do not call notebook "
+        "tools; use an exact MCP plan or rewrite aggregate_required work as "
+        "bounded warehouse SQL."
+    )
+    insert_at = (
+        lines.index(
+            "- Use query_database with the returned plan_id only when the plan route is mcp."
+        )
+        + 1
+    )
+    lines.insert(insert_at, disabled_rule)
+    return "\n".join(lines)
+
+
+def _allowed_tools_for_features(
+    *,
+    notebook_analysis_enabled: bool,
+) -> list[str]:
+    if notebook_analysis_enabled:
+        return list(STANDALONE_ALLOWED_TOOLS)
+    return [
+        tool
+        for tool in STANDALONE_ALLOWED_TOOLS
+        if "signalpilot-notebook" not in tool
+        and not tool.endswith("start_analysis_notebook")
+    ]
+
+
 def _require_execution_scope(
     body: dict[str, Any],
 ) -> tuple[str, str, str, str, str]:
@@ -807,7 +861,7 @@ async def execute(*, request: Request) -> StreamingResponse:
     notebook_analysis_enabled = bool(feature_values.get("notebook_analysis"))
     is_improvement_run = str(body.get("run_origin") or "user") == "improvement"
     system_prompt = (
-        f"{STANDALONE_SYSTEM_PROMPT}"
+        f"{_system_prompt_for_features(notebook_analysis_enabled=notebook_analysis_enabled)}"
         f"{IMPROVEMENT_SYSTEM_PROMPT_SUFFIX if is_improvement_run else ''}\n\n"
         f"Selected project: {project_id}\nFrozen branch: {branch}\nFrozen commit: {commit_sha}\n"
         f"Selected connection: {connection_name}\n\n"
@@ -1076,20 +1130,21 @@ async def execute(*, request: Request) -> StreamingResponse:
                         "WebFetch",
                         "WebSearch",
                         *STANDALONE_DISALLOWED_MCP_TOOLS,
-                        *([] if is_improvement_run else IMPROVEMENT_EXTRA_TOOLS),
+                        *(
+                            []
+                            if is_improvement_run
+                            else IMPROVEMENT_EXTRA_TOOLS
+                        ),
                     ],
                     allowed_tools=(
-                        (
-                            STANDALONE_ALLOWED_TOOLS
-                            if notebook_analysis_enabled
-                            else [
-                                tool
-                                for tool in STANDALONE_ALLOWED_TOOLS
-                                if "signalpilot-notebook" not in tool
-                                and not tool.endswith("start_analysis_notebook")
-                            ]
+                        _allowed_tools_for_features(
+                            notebook_analysis_enabled=notebook_analysis_enabled
                         )
-                        + (IMPROVEMENT_EXTRA_TOOLS if is_improvement_run else [])
+                        + (
+                            IMPROVEMENT_EXTRA_TOOLS
+                            if is_improvement_run
+                            else []
+                        )
                     ),
                     additional_mcp_servers={
                         "standalone-chat": artifact_server

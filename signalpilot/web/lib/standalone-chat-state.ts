@@ -225,6 +225,28 @@ export function appendOptimisticUserMessage(
   };
 }
 
+export function markStandaloneRunStopped(
+  detail: StandaloneConversationDetail,
+  runId: string,
+  stoppedAt = new Date().toISOString(),
+): StandaloneConversationDetail {
+  if (detail.current_run?.id !== runId) return detail;
+  return {
+    ...detail,
+    conversation: {
+      ...detail.conversation,
+      run_status: "cancelled",
+      updated_at: Date.parse(stoppedAt) / 1_000,
+    },
+    current_run: {
+      ...detail.current_run,
+      status: "cancelled",
+      cancellation_requested_at: stoppedAt,
+      terminal_at: stoppedAt,
+    },
+  };
+}
+
 export function containsStandaloneSubmission(
   messages: StandaloneChatMessage[],
   submission: OptimisticUserMessage,

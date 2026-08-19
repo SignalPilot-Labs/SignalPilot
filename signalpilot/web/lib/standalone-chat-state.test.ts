@@ -7,6 +7,7 @@ import {
   containsStandaloneSubmission,
   deriveStandaloneRunActivity,
   isStandaloneRunReconciled,
+  markStandaloneRunStopped,
   standaloneMessageKey,
   upsertStandaloneConversation,
 } from "~/lib/standalone-chat-state";
@@ -184,6 +185,39 @@ describe("standalone chat state", () => {
       sequence: 1,
       created_at: 123,
       metadata: { optimistic: true },
+    });
+  });
+
+  it("shows a stopped run immediately while backend cancellation finishes", () => {
+    const detail = detailFixture();
+    detail.current_run = {
+      id: "run-1",
+      conversation_id: detail.conversation.id,
+      status: "running",
+      retry_of_run_id: null,
+      public_error_code: null,
+      public_error_message: null,
+      cancellation_requested_at: null,
+      created_at: "2026-07-31T12:00:00Z",
+      started_at: "2026-07-31T12:00:01Z",
+      terminal_at: null,
+      last_event_sequence: 3,
+    };
+
+    const updated = markStandaloneRunStopped(
+      detail,
+      "run-1",
+      "2026-07-31T12:00:02Z",
+    );
+
+    expect(updated.current_run).toMatchObject({
+      status: "cancelled",
+      cancellation_requested_at: "2026-07-31T12:00:02Z",
+      terminal_at: "2026-07-31T12:00:02Z",
+    });
+    expect(updated.conversation).toMatchObject({
+      run_status: "cancelled",
+      updated_at: 1785499202,
     });
   });
 

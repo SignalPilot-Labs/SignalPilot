@@ -462,9 +462,9 @@ class TestWorkloadClusterRoleManifest:
         assert "resourcequotas" in pod_rule["resources"]
         assert "limitranges" in pod_rule["resources"]
 
-        exec_rule = next(r for r in rules if "pods/exec" in r["resources"])
-        assert "create" in exec_rule["verbs"]
-        assert exec_rule["apiGroups"] == [""]
+        # Notebook Runtime v2 removed the pods/exec grant entirely — no code
+        # path issues exec anymore, so the manifest must not grant it.
+        assert not any("pods/exec" in r["resources"] for r in rules)
 
         secret_rule = next(r for r in rules if "secrets" in r["resources"])
         assert set(secret_rule["verbs"]) >= {"create", "get", "list", "patch", "delete"}

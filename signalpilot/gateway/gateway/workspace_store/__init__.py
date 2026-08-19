@@ -17,6 +17,14 @@ Blobs are shared across branches and revisions: identical content stores once.
 Manifests are immutable: deletion is a new revision, old links keep resolving.
 """
 
+from .github_sync import (
+    ExportResult,
+    GitHubExportError,
+    GitHubImportError,
+    ImportResult,
+    export_revision_to_git,
+    import_repo_to_revisions,
+)
 from .lease import LeaseHeld, acquire_lease, release_lease, renew_lease
 from .model import FileEntry, Manifest, blob_key, manifest_key, snapshot_key
 from .objects import WorkspaceObjectStorage, workspace_object_storage
@@ -24,7 +32,11 @@ from .paths import WorkspacePathError, confine_relpath
 from .store import RevisionConflict, WorkspaceStore
 
 __all__ = [
+    "ExportResult",
     "FileEntry",
+    "GitHubExportError",
+    "GitHubImportError",
+    "ImportResult",
     "LeaseHeld",
     "Manifest",
     "RevisionConflict",
@@ -34,6 +46,8 @@ __all__ = [
     "acquire_lease",
     "blob_key",
     "confine_relpath",
+    "export_revision_to_git",
+    "import_repo_to_revisions",
     "manifest_key",
     "release_lease",
     "renew_lease",

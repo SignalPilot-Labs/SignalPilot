@@ -123,7 +123,15 @@ def delete_repo(project_id: str) -> bool:
         return False
 
     import shutil
-    shutil.rmtree(path)
+    import stat
+
+    def _clear_readonly_and_retry(func, target, exc):
+        # Git marks object files read-only; on Windows os.unlink refuses to
+        # delete them until the read-only bit is cleared.
+        os.chmod(target, stat.S_IWRITE)
+        func(target)
+
+    shutil.rmtree(path, onexc=_clear_readonly_and_retry)
     logger.info("Deleted bare repo: %s", path)
     return True
 

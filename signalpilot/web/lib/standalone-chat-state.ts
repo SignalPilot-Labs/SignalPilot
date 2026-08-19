@@ -49,6 +49,30 @@ export function containsStandaloneSubmission(
   );
 }
 
+export function hideSupersededStandaloneFailures(
+  messages: StandaloneChatMessage[],
+): StandaloneChatMessage[] {
+  const visible: StandaloneChatMessage[] = [];
+  let laterCompletedAttempt = false;
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message) continue;
+    if (message.role === "user") {
+      laterCompletedAttempt = false;
+      visible.push(message);
+      continue;
+    }
+
+    const status = message.metadata.status;
+    if (status === "completed") laterCompletedAttempt = true;
+    if (status === "failed" && laterCompletedAttempt) continue;
+    visible.push(message);
+  }
+
+  return visible.reverse();
+}
+
 const runStatuses = new Set<StandaloneChatRunStatus>([
   "queued",
   "running",

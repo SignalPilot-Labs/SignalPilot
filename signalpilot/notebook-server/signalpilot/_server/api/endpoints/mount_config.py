@@ -65,39 +65,16 @@ async def build_mount_config(request: Request) -> MountConfigResponse:
 
     file_key_from_query = app_state.query_params(FILE_QUERY_PARAM_KEY)
     project_id_from_query = app_state.query_params("project")
+    del project_id_from_query
     file_key = (
         file_key_from_query
         or app_state.session_manager.workspace.get_unique_file_key()
     )
 
-    cloud_local_dir = _resolve_cloud_project(app_state, project_id_from_query)
-
     if not file_key:
         return _build_home_config(app_state)
 
-    return await _build_notebook_config(app_state, file_key, cloud_local_dir)
-
-
-def _resolve_cloud_project(
-    app_state: AppState, project_id: str | None
-) -> Path | None:
-    if not project_id:
-        return None
-
-    from signalpilot._server.files.project_sync import (
-        local_project_dir,
-        sync_project,
-    )
-
-    branch = app_state.query_params("branch") or "main"
-    local_dir = local_project_dir(project_id)
-
-    try:
-        sync_project(project_id, branch)
-    except Exception as e:
-        LOGGER.warning("Cloud project sync failed: %s", e)
-
-    return local_dir if local_dir.exists() else None
+    return await _build_notebook_config(app_state, file_key)
 
 
 def _build_home_config(app_state: AppState) -> MountConfigResponse:
@@ -130,13 +107,8 @@ def _resolve_absolute_filepath(file_key: str) -> str:
 async def _build_notebook_config(
     app_state: AppState,
     file_key: str,
-    cloud_local_dir: Path | None,
 ) -> MountConfigResponse:
-    directory = (
-        str(cloud_local_dir)
-        if cloud_local_dir is not None
-        else app_state.session_manager.workspace.directory
-    )
+    directory = app_state.session_manager.workspace.directory
     if file_key.startswith(NEW_FILE):
         resolved_file_key = file_key
         is_raw_file = file_key == NEW_FILE + "raw"

@@ -1,19 +1,32 @@
-"""
-Cloud file system backed by the SignalPilot Gateway workspace-projects API.
+"""S3-native file system proxied through the gateway Workspace Files API.
 
-All file operations are proxied to the gateway's S3-backed storage.
-Paths are project-relative (e.g., "models/staging/stg_orders.sql").
+Notebook Runtime v2 storage plane: files are pulled on demand and every
+mutation is a write-through commit that creates a new revision. There is no
+local working tree — the browser holds unsaved buffers, S3 holds the saved
+working copy, and this class is the seam between them.
+
+Contract (gateway/api/workspace_files.py — the source of truth):
+
+    GET/PUT/DELETE /api/workspace-projects/{project_id}/files/{path}?branch=
+    POST .../files:list|files:search|files:copy|files:move   {branch, ...}
+    POST .../files:batch  {branch, base_revision, upserts, deletes, message}
+
+The branch always travels as a query/body parameter (it may contain '/'),
+never a path segment. A 409 from files:batch is a compare-and-swap conflict
+(another writer committed first) and surfaces as
+:class:`GatewayConflictError`.
 """
+
 from __future__ import annotations
 
+import base64
 import mimetypes
-import os
+import posixpath
 from typing import Any, Literal
 
 import httpx
 
 from signalpilot import _loggers
-from signalpilot._server.auth.session_token import load_session_jwt
 from signalpilot._server.files.file_system import FileSystem
 from signalpilot._server.models.files import FileDetailsResponse, FileInfo
 
@@ -22,83 +35,146 @@ LOGGER = _loggers.sp_logger()
 NOTEBOOK_EXTENSIONS = {".py", ".md", ".qmd"}
 IGNORE_NAMES = {"__pycache__", ".git", "node_modules", ".venv", "target"}
 
+_DIR_PLACEHOLDER = ".gitkeep"
+
+
+class GatewayFileSystemError(OSError):
+    """A workspace-files call failed at the gateway."""
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class GatewayConflictError(GatewayFileSystemError):
+    """Compare-and-swap conflict: another writer committed a newer revision."""
+
+
+def _error_from_response(resp: httpx.Response) -> GatewayFileSystemError:
+    detail: Any
+    try:
+        detail = resp.json().get("detail")
+    except Exception:
+        detail = resp.text[:500]
+    message = f"Gateway workspace files request failed ({resp.status_code}): {detail}"
+    if resp.status_code == 409:
+        return GatewayConflictError(message, status_code=409)
+    return GatewayFileSystemError(message, status_code=resp.status_code)
+
 
 class GatewayFileSystem(FileSystem):
-    """FileSystem implementation backed by the SignalPilot Gateway API."""
+    """FileSystem over the gateway Workspace Files API (S3 storage plane)."""
 
     def __init__(
         self,
+        *,
         gateway_url: str,
-        api_key: str,
+        token: str,
         project_id: str,
         branch: str = "main",
+        transport: httpx.BaseTransport | None = None,
+        timeout: float = 30.0,
     ) -> None:
         from signalpilot._utils.localhost import fix_localhost_url
-        self._gateway_url = fix_localhost_url(gateway_url).rstrip("/")
-        self._api_key = api_key
+
+        base = fix_localhost_url(gateway_url).rstrip("/")
         self._project_id = project_id
         self._branch = branch
-        self._base = f"{self._gateway_url}/api/workspace-projects/{project_id}/branches/{branch}"
-        jwt = load_session_jwt()
-        if jwt:
-            self._headers = {"Authorization": f"Bearer {jwt}"}
-        elif api_key:
-            self._headers = {"X-API-Key": api_key}
-        else:
-            self._headers = {}
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        self._client = httpx.Client(
+            base_url=f"{base}/api/workspace-projects/{project_id}",
+            headers=headers,
+            timeout=timeout,
+            transport=transport,
+        )
+
+    @property
+    def branch(self) -> str:
+        return self._branch
+
+    @property
+    def project_id(self) -> str:
+        return self._project_id
 
     # ── Helpers ──────────────────────────────────────────────────────
 
-    def _request(
-        self,
-        method: str,
-        path: str,
-        *,
-        json: dict[str, Any] | None = None,
-        content: bytes | str | None = None,
-        params: dict[str, str] | None = None,
-        headers: dict[str, str] | None = None,
-    ) -> httpx.Response:
-        url = f"{self._base}/{path}"
-        hdrs = {**self._headers}
-        if headers:
-            hdrs.update(headers)
-        return httpx.request(
-            method,
-            url,
-            json=json,
-            content=content,
-            params=params,
-            headers=hdrs,
-            timeout=30.0,
-        )
+    @staticmethod
+    def _rel(path: str) -> str:
+        rel = posixpath.normpath(path.replace("\\", "/").strip("/"))
+        if rel in (".", ""):
+            return ""
+        if rel.startswith(".."):
+            raise ValueError(f"Path escapes the workspace: {path!r}")
+        return rel
 
-    def _strip_project_prefix(self, key: str) -> str:
-        """Strip the projects/<id>/ URL path prefix from a key."""
-        prefix = f"projects/{self._project_id}/"
-        if key.startswith(prefix):
-            return key[len(prefix):]
-        return key
+    def _get_file(self, rel: str) -> httpx.Response:
+        return self._client.get(f"/files/{rel}", params={"branch": self._branch})
+
+    def _put_file(self, rel: str, content: bytes) -> None:
+        resp = self._client.put(
+            f"/files/{rel}",
+            params={"branch": self._branch},
+            content=content,
+            headers={
+                "Content-Type": mimetypes.guess_type(rel)[0]
+                or "application/octet-stream"
+            },
+        )
+        if resp.status_code != 200:
+            raise _error_from_response(resp)
+
+    def _post(self, op: str, body: dict[str, Any]) -> httpx.Response:
+        return self._client.post(op, json={"branch": self._branch, **body})
+
+    def _list_entries(self, prefix: str = "") -> list[dict[str, Any]]:
+        body: dict[str, Any] = {}
+        if prefix:
+            body["prefix"] = prefix
+        resp = self._post("/files:list", body)
+        if resp.status_code != 200:
+            raise _error_from_response(resp)
+        return list(resp.json().get("files", []))
+
+    def _batch(
+        self,
+        *,
+        upserts: list[dict[str, Any]] | None = None,
+        deletes: list[str] | None = None,
+        message: str | None = None,
+    ) -> int:
+        resp = self._post(
+            "/files:batch",
+            {
+                "base_revision": None,
+                "upserts": upserts or [],
+                "deletes": deletes or [],
+                "message": message,
+            },
+        )
+        if resp.status_code != 200:
+            raise _error_from_response(resp)
+        return int(resp.json()["revision"])
 
     def _make_file_info(
         self,
-        relative_path: str,
+        rel: str,
         *,
         is_directory: bool = False,
-        size: int = 0,
         last_modified: float | None = None,
     ) -> FileInfo:
-        name = relative_path.rstrip("/").rsplit("/", 1)[-1] if "/" in relative_path else relative_path
-        ext = os.path.splitext(name)[1].lower()
-        is_sp = ext in NOTEBOOK_EXTENSIONS and not is_directory
+        name = rel.rstrip("/").rsplit("/", 1)[-1] if rel else ""
+        ext = posixpath.splitext(name)[1].lower()
         return FileInfo(
-            id=relative_path,
-            path=relative_path,
+            id=rel,
+            path=rel,
             name=name,
             is_directory=is_directory,
-            is_sp_file=is_sp,
+            is_sp_file=not is_directory and ext in NOTEBOOK_EXTENSIONS,
             last_modified=last_modified,
         )
+
+    def _is_directory(self, rel: str) -> bool:
+        return bool(rel == "" or self._list_entries(rel))
 
     # ── FileSystem interface ─────────────────────────────────────────
 
@@ -106,57 +182,41 @@ class GatewayFileSystem(FileSystem):
         return ""
 
     def list_files(self, path: str) -> list[FileInfo]:
-        prefix = path.strip("/")
-        params = {}
-        if prefix:
-            params["prefix"] = prefix + "/"
-
-        resp = self._request("GET", "files", params=params)
-        if resp.status_code != 200:
-            LOGGER.error(f"Gateway list_files failed: {resp.status_code} {resp.text}")
+        prefix = self._rel(path)
+        try:
+            entries = self._list_entries(prefix)
+        except GatewayFileSystemError as exc:
+            LOGGER.error("Gateway list_files failed: %s", exc)
             return []
 
-        data = resp.json()
-        raw_files: list[dict[str, Any]] = data.get("files", [])
-
-        # Build immediate children from flat file list
-        dirs: dict[str, float] = {}
+        strip = f"{prefix}/" if prefix else ""
+        dirs: dict[str, float | None] = {}
         files: list[FileInfo] = []
-        strip_prefix = (prefix + "/") if prefix else ""
-
-        for f in raw_files:
-            rel = self._strip_project_prefix(f["key"])
-            if strip_prefix and rel.startswith(strip_prefix):
-                rel = rel[len(strip_prefix):]
-            elif strip_prefix:
-                continue
-
+        for entry in entries:
+            rel = str(entry.get("path", ""))
+            if strip:
+                if not rel.startswith(strip):
+                    continue
+                rel = rel[len(strip):]
             if not rel:
                 continue
-
-            name = rel.split("/")[0]
+            name = rel.split("/", 1)[0]
             if name in IGNORE_NAMES:
                 continue
-
+            child = f"{prefix}/{name}" if prefix else name
+            mtime = entry.get("mtime") or None
             if "/" in rel:
-                # Nested item → this is a subdirectory
-                dir_path = f"{prefix}/{name}" if prefix else name
-                ts = f.get("last_modified")
-                if dir_path not in dirs or (ts and ts > (dirs[dir_path] or 0)):
-                    dirs[dir_path] = ts
-            else:
-                file_path = f"{prefix}/{rel}" if prefix else rel
-                files.append(self._make_file_info(
-                    file_path,
-                    size=f.get("size", 0),
-                    last_modified=f.get("last_modified"),
-                ))
+                prev = dirs.get(child)
+                if child not in dirs or (mtime and mtime > (prev or 0)):
+                    dirs[child] = mtime
+            elif name != _DIR_PLACEHOLDER:
+                files.append(self._make_file_info(child, last_modified=mtime))
 
         dir_infos = [
             self._make_file_info(d, is_directory=True, last_modified=dirs[d])
             for d in sorted(dirs)
         ]
-        files.sort(key=lambda fi: fi.name.lower())
+        files.sort(key=lambda info: info.name.lower())
         return dir_infos + files
 
     def get_details(
@@ -165,13 +225,12 @@ class GatewayFileSystem(FileSystem):
         encoding: str | None = None,
         contents: str | None = None,
     ) -> FileDetailsResponse:
-        rel = path.strip("/")
+        rel = self._rel(path)
         if not rel:
             return FileDetailsResponse(
                 file=self._make_file_info("", is_directory=True),
                 contents=None,
             )
-
         if contents is not None:
             return FileDetailsResponse(
                 file=self._make_file_info(rel),
@@ -179,106 +238,150 @@ class GatewayFileSystem(FileSystem):
                 mime_type=mimetypes.guess_type(rel)[0],
             )
 
-        resp = self._request("GET", f"files/{rel}")
+        resp = self._get_file(rel)
         if resp.status_code == 404:
+            if self._is_directory(rel):
+                return FileDetailsResponse(
+                    file=self._make_file_info(rel, is_directory=True),
+                    contents=None,
+                )
             raise FileNotFoundError(f"File not found: {rel}")
-        resp.raise_for_status()
+        if resp.status_code != 200:
+            raise _error_from_response(resp)
 
-        text = resp.text
-        mime = mimetypes.guess_type(rel)[0] or "text/plain"
+        raw = resp.content
+        is_base64 = False
+        try:
+            text = raw.decode(encoding or "utf-8")
+        except UnicodeDecodeError:
+            text = base64.b64encode(raw).decode("utf-8")
+            is_base64 = True
         return FileDetailsResponse(
-            file=self._make_file_info(rel, size=len(text)),
+            file=self._make_file_info(rel),
             contents=text,
-            mime_type=mime,
+            mime_type=mimetypes.guess_type(rel)[0] or "text/plain",
+            is_base64=is_base64,
         )
 
     def open_file(self, path: str, encoding: str | None = None) -> str | bytes:
-        rel = path.strip("/")
-        resp = self._request("GET", f"files/{rel}")
-        resp.raise_for_status()
-        return resp.text
+        rel = self._rel(path)
+        resp = self._get_file(rel)
+        if resp.status_code == 404:
+            raise FileNotFoundError(f"File not found: {rel}")
+        if resp.status_code != 200:
+            raise _error_from_response(resp)
+        try:
+            return resp.content.decode(encoding or "utf-8")
+        except UnicodeDecodeError:
+            return resp.content
 
     def create_file_or_directory(
         self,
         path: str,
-        file_type: Literal["file", "directory"],
+        file_type: Literal["file", "directory", "notebook"],
         name: str,
         contents: bytes | None,
     ) -> FileInfo:
-        parent = path.strip("/")
-        new_path = f"{parent}/{name}" if parent else name
+        if not name.strip():
+            raise ValueError("Cannot create file or directory with empty name")
+        if (
+            "/" in name
+            or "\\" in name
+            or "\x00" in name
+            or name in (".", "..")
+        ):
+            raise ValueError(
+                f"Invalid name {name!r}: must not contain path separators "
+                "or refer to a parent directory"
+            )
+        parent = self._rel(path)
+        rel = f"{parent}/{name}" if parent else name
 
         if file_type == "directory":
-            # S3 has no real directories; create a placeholder
-            self._request(
-                "PUT",
-                f"files/{new_path}/.gitkeep",
-                content=b"",
-                headers={"Content-Type": "text/plain"},
-            )
-            return self._make_file_info(new_path, is_directory=True)
+            # The manifest has no empty directories; commit a placeholder.
+            self._put_file(f"{rel}/{_DIR_PLACEHOLDER}", b"")
+            return self._make_file_info(rel, is_directory=True)
 
         body = contents or b""
-        ext = os.path.splitext(name)[1].lower()
-        ct = {
-            ".sql": "text/sql",
-            ".yml": "text/yaml",
-            ".yaml": "text/yaml",
-            ".py": "text/x-python",
-            ".json": "application/json",
-            ".csv": "text/csv",
-        }.get(ext, "text/plain")
+        if file_type == "notebook" and not contents:
+            from signalpilot._convert.converters import SpConvert
+            from signalpilot._session.notebook.file_manager import (
+                AppFileManager,
+            )
 
-        resp = self._request(
-            "PUT",
-            f"files/{new_path}",
-            content=body,
-            headers={"Content-Type": ct},
-        )
-        resp.raise_for_status()
-        return self._make_file_info(new_path, size=len(body))
+            ir = AppFileManager(None).app.to_ir()
+            converter = SpConvert.from_ir(ir)
+            if posixpath.splitext(name)[1].lower() in (".md", ".qmd"):
+                code = converter.to_markdown(name)
+            else:
+                code = converter.to_py()
+            body = code.encode("utf-8")
+
+        self._put_file(rel, body)
+        return self._make_file_info(rel)
 
     def delete_file_or_directory(self, path: str) -> bool:
-        rel = path.strip("/")
-        resp = self._request("DELETE", f"files/{rel}")
-        return resp.status_code == 204
+        rel = self._rel(path)
+        if not rel:
+            return False
+        resp = self._client.delete(
+            f"/files/{rel}", params={"branch": self._branch}
+        )
+        if resp.status_code == 200:
+            return True
+        if resp.status_code == 404:
+            # Not a file — delete every file under the prefix in one commit.
+            paths = [str(e["path"]) for e in self._list_entries(rel)]
+            if not paths:
+                return False
+            self._batch(deletes=paths, message=f"delete {rel}/")
+            return True
+        raise _error_from_response(resp)
 
     def copy_file_or_directory(self, path: str, new_path: str) -> FileInfo:
-        resp = self._request("POST", "files:copy", json={
-            "source": path.strip("/"),
-            "destination": new_path.strip("/"),
-        })
-        resp.raise_for_status()
-        return self._make_file_info(new_path.strip("/"))
+        return self._copy_or_move(path, new_path, op="/files:copy")
 
     def move_file_or_directory(self, path: str, new_path: str) -> FileInfo:
-        resp = self._request("POST", "files:move", json={
-            "source": path.strip("/"),
-            "destination": new_path.strip("/"),
-        })
-        resp.raise_for_status()
-        return self._make_file_info(new_path.strip("/"))
+        return self._copy_or_move(path, new_path, op="/files:move")
+
+    def _copy_or_move(self, path: str, new_path: str, *, op: str) -> FileInfo:
+        source = self._rel(path)
+        destination = self._rel(new_path)
+        resp = self._post(op, {"source": source, "destination": destination})
+        if resp.status_code == 404 and self._is_directory(source):
+            # Directory copy/move: one batch of reference upserts (+ deletes).
+            entries = self._list_entries(source)
+            upserts = [
+                {
+                    "path": f"{destination}/{str(e['path'])[len(source) + 1:]}",
+                    "sha256": e["sha256"],
+                    "size": e["size"],
+                    "mode": e.get("mode", 0o644),
+                    "mtime": e.get("mtime"),
+                }
+                for e in entries
+            ]
+            deletes = (
+                [str(e["path"]) for e in entries]
+                if op == "/files:move"
+                else []
+            )
+            self._batch(
+                upserts=upserts,
+                deletes=deletes,
+                message=f"{op.rsplit(':', 1)[-1]} {source} -> {destination}",
+            )
+            return self._make_file_info(destination, is_directory=True)
+        if resp.status_code != 200:
+            raise _error_from_response(resp)
+        return self._make_file_info(destination)
 
     def update_file(self, path: str, contents: str) -> FileInfo:
-        rel = path.strip("/")
-        ext = os.path.splitext(rel)[1].lower()
-        ct = {
-            ".sql": "text/sql",
-            ".yml": "text/yaml",
-            ".yaml": "text/yaml",
-            ".py": "text/x-python",
-            ".json": "application/json",
-            ".csv": "text/csv",
-        }.get(ext, "text/plain")
-
-        resp = self._request(
-            "PUT",
-            f"files/{rel}",
-            content=contents.encode("utf-8"),
-            headers={"Content-Type": ct},
-        )
-        resp.raise_for_status()
-        return self._make_file_info(rel, size=len(contents))
+        # Write-through save: a single-file PUT is a new revision. It either
+        # committed (durable) or raised (the caller sees the failure).
+        rel = self._rel(path)
+        self._put_file(rel, contents.encode("utf-8"))
+        return self._make_file_info(rel)
 
     def search(
         self,
@@ -290,25 +393,81 @@ class GatewayFileSystem(FileSystem):
         depth: int = 3,
         limit: int = 100,
     ) -> list[FileInfo]:
-        resp = self._request("POST", "files:search", json={
-            "q": query,
-            "max_results": limit,
-        })
+        del depth  # manifest search is flat; depth is a disk-walk concept
+        if not query.strip():
+            return []
+        resp = self._post("/files:search", {"query": query})
         if resp.status_code != 200:
+            LOGGER.error(
+                "Gateway search failed: %s %s", resp.status_code, resp.text[:200]
+            )
             return []
 
+        prefix = f"{self._rel(path)}/" if path and self._rel(path) else ""
+        needle = query.lower()
         results: list[FileInfo] = []
-        for item in resp.json().get("results", []):
-            rel = item.get("key", "")
-            is_dir = rel.endswith("/")
-            if is_dir and not include_directories:
+        seen_dirs: set[str] = set()
+        for entry in resp.json().get("files", []):
+            rel = str(entry.get("path", ""))
+            if prefix and not rel.startswith(prefix):
                 continue
-            if not is_dir and not include_files:
-                continue
-            results.append(self._make_file_info(
-                rel.rstrip("/"),
-                is_directory=is_dir,
-                size=item.get("size", 0),
-                last_modified=item.get("last_modified"),
-            ))
+            if include_files and needle in rel.rsplit("/", 1)[-1].lower():
+                results.append(
+                    self._make_file_info(
+                        rel, last_modified=entry.get("mtime") or None
+                    )
+                )
+            if include_directories:
+                parts = rel.split("/")[:-1]
+                for i, part in enumerate(parts):
+                    if needle in part.lower():
+                        dir_path = "/".join(parts[: i + 1])
+                        if dir_path not in seen_dirs:
+                            seen_dirs.add(dir_path)
+                            results.append(
+                                self._make_file_info(
+                                    dir_path, is_directory=True
+                                )
+                            )
+        results.sort(
+            key=lambda info: (
+                0
+                if info.name.lower() == needle
+                else 1
+                if info.name.lower().startswith(needle)
+                else 2,
+                info.name,
+            )
+        )
         return results[:limit]
+
+    # ── Branch operations (S3 has every branch) ──────────────────────
+
+    def fork_branch(self, new_branch: str, *, message: str | None = None) -> int:
+        """Create ``new_branch`` from this filesystem's branch head.
+
+        Blobs are content-addressed per project, so the fork is a single
+        batch commit of reference upserts — no bytes move.
+        """
+        entries = self._list_entries()
+        if not entries:
+            raise GatewayFileSystemError(
+                f"Branch {self._branch!r} has no files to fork from"
+            )
+        fork = GatewayFileSystem.__new__(GatewayFileSystem)
+        fork._project_id = self._project_id
+        fork._branch = new_branch
+        fork._client = self._client
+        return fork._batch(
+            upserts=[
+                {
+                    "path": e["path"],
+                    "sha256": e["sha256"],
+                    "size": e["size"],
+                    "mode": e.get("mode", 0o644),
+                    "mtime": e.get("mtime"),
+                }
+                for e in entries
+            ],
+            message=message or f"fork from {self._branch}",
+        )

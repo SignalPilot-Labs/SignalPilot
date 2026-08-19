@@ -29,18 +29,8 @@ _SESSION_REQUIRED_KEYS: frozenset[str] = frozenset({"version", "metadata", "cell
 
 
 def _get_directory(request: Request, app_state: AppState) -> str | None:
-    """Get the working directory, preferring cloud project sync dir.
-
-    Copied from files.py to avoid a shared util in this round.
-    """
-    project_id = request.headers.get("x-gateway-project-id")
-    if project_id:
-        branch = request.headers.get("x-gateway-branch-id", "main")
-        from signalpilot._server.files.project_sync import local_project_dir
-
-        local_dir = local_project_dir(project_id, branch)
-        if local_dir.exists():
-            return str(local_dir)
+    """Get the working directory for this session."""
+    del request
     return app_state.session_manager.workspace.directory
 
 

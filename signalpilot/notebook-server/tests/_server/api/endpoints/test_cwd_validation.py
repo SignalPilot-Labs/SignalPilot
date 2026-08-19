@@ -21,7 +21,7 @@ import pytest
 
 def _patch_projects_root(monkeypatch, path: Path) -> None:
     monkeypatch.setattr(
-        "signalpilot._server.files.project_sync.PROJECTS_ROOT",
+        "signalpilot._server.files.workspace.PROJECTS_ROOT",
         path,
     )
 

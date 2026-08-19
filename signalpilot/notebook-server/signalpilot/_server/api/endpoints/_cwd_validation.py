@@ -40,7 +40,7 @@ def validate_terminal_cwd(raw_cwd: str | None) -> str | None:
     if not raw_cwd:
         return None
 
-    from signalpilot._server.files.project_sync import PROJECTS_ROOT
+    from signalpilot._server.files.workspace import PROJECTS_ROOT
 
     # Belt-and-braces: reject .. in path components before resolution.
     # This guards against future Python changes to .resolve() semantics.

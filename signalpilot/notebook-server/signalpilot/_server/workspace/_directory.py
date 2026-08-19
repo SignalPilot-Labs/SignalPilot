@@ -39,9 +39,9 @@ class DirectoryWorkspace(NotebookWorkspace):
         self._lazy_files: list[FileInfo] | None = None
         self._validator = PathValidator(abs_directory)
         self._scanner = DirectoryScanner(str(abs_directory), include_markdown)
-        # Allow access to cloud project sync directories
+        # Allow access to the execution scratch area (materialized checkouts)
         try:
-            from signalpilot._server.files.project_sync import PROJECTS_ROOT
+            from signalpilot._server.files.workspace import PROJECTS_ROOT
             if PROJECTS_ROOT.exists():
                 self._validator.register_temp_dir(str(PROJECTS_ROOT))
         except Exception:
@@ -92,11 +92,11 @@ class DirectoryWorkspace(NotebookWorkspace):
         if filepath.exists():
             return str(filepath)
 
-        # Fallback: check cloud project sync directories
+        # Fallback: check execution scratch checkouts
         # (structured as ~/.sp/projects/{id}/{name}/)
         if not Path(key).is_absolute():
             try:
-                from signalpilot._server.files.project_sync import PROJECTS_ROOT
+                from signalpilot._server.files.workspace import PROJECTS_ROOT
 
                 if PROJECTS_ROOT.exists():
                     for project_dir in PROJECTS_ROOT.glob("*/*"):

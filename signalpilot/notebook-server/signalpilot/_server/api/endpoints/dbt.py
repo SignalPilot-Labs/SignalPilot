@@ -27,17 +27,10 @@ router = APIRouter()
 
 
 def _resolve_start_dir(request: Any, body_dir: str | None) -> str | None:
-    """Resolve the dbt start directory, preferring cloud project sync dir."""
+    """Resolve the dbt start directory."""
+    del request
     if body_dir:
         return str(confine(body_dir, label="projectDir"))
-    project_id = request.headers.get("x-gateway-project-id")
-    if project_id:
-        branch = request.headers.get("x-gateway-branch-id", "main")
-        from signalpilot._server.files.project_sync import local_project_dir
-
-        local_dir = local_project_dir(project_id, branch)
-        if local_dir.exists():
-            return str(local_dir)
     return None
 
 

@@ -10,11 +10,11 @@ import json
 import os
 import re
 import shutil
-import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
+from starlette.authentication import requires
 from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse, StreamingResponse
 
@@ -32,7 +32,7 @@ from signalpilot._server.ai.standalone_chat_tools import (
     StandaloneNotebookLifecycle,
     build_standalone_chat_mcp_server,
 )
-from signalpilot._server.files import project_sync
+from signalpilot._server.files.workspace import PROJECTS_ROOT
 from signalpilot._server.router import APIRouter
 from signalpilot._types.ids import SessionId
 
@@ -651,15 +651,81 @@ def _start_analysis_kernel(app: Any, notebook_path: Path) -> str:
     return session_id
 
 
-def _frozen_project_directory(project_id: str) -> Path | None:
-    parent = project_sync.PROJECTS_ROOT / project_id
-    if not parent.exists():
-        return None
-    roots = sorted(
-        (path.parent for path in parent.rglob(".git") if path.is_dir()),
-        key=lambda path: len(path.parts),
+_CHECKOUT_ID_RE = re.compile(r"^[A-Za-z0-9-]{8,80}$")
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+
+def _checkout_directory(project_id: str, checkout_id: str) -> Path:
+    """Validated scratch location for one run's materialized checkout."""
+    if not _UUID_RE.fullmatch(project_id):
+        raise ValueError(f"Invalid project ID: {project_id!r}")
+    if not _CHECKOUT_ID_RE.fullmatch(checkout_id):
+        raise ValueError("Invalid frozen checkout id")
+    root = (PROJECTS_ROOT / ".standalone-chat" / project_id).resolve()
+    checkout = (root / checkout_id).resolve()
+    if root not in checkout.parents:
+        raise ValueError("Invalid frozen checkout path")
+    return checkout
+
+
+def _materialize_snapshot_checkout(
+    *,
+    project_id: str,
+    branch: str,
+    checkout_id: str,
+    gateway_url: str,
+    gateway_token: str,
+) -> Path:
+    """Materialize a disposable execution checkout from the S3 snapshot.
+
+    Disk is never the truth: the tarball is the branch head's revision,
+    pulled through the gateway Workspace Files API snapshot endpoint.
+    """
+    import tarfile
+    import tempfile
+
+    if not gateway_token:
+        raise ValueError("Scoped gateway identity required")
+    checkout = _checkout_directory(project_id, checkout_id)
+
+    response = httpx.get(
+        f"{gateway_url}/api/workspace-projects/{project_id}/snapshot",
+        params={"branch": branch},
+        headers={"Authorization": f"Bearer {gateway_token}"},
+        timeout=30.0,
     )
-    return roots[0] if roots else None
+    response.raise_for_status()
+    snapshot_url = str(response.json().get("url") or "")
+    if not snapshot_url:
+        raise ValueError("No snapshot URL available")
+
+    if checkout.exists():
+        shutil.rmtree(checkout)
+    checkout.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryFile() as spool:
+        with httpx.stream("GET", snapshot_url, timeout=120.0) as tarball:
+            tarball.raise_for_status()
+            for chunk in tarball.iter_bytes():
+                spool.write(chunk)
+        spool.seek(0)
+        with tarfile.open(fileobj=spool, mode="r:*") as tar:
+            for member in tar.getmembers():
+                name = member.name.replace("\\", "/")
+                if (
+                    name.startswith(("/", "../"))
+                    or "/../" in name
+                    or member.islnk()
+                    or member.issym()
+                ):
+                    raise ValueError(
+                        f"Unsafe member in snapshot tarball: {member.name!r}"
+                    )
+            tar.extractall(checkout)  # noqa: S202 — members validated above
+    return checkout
 
 
 async def _execution_project_directory(
@@ -667,71 +733,53 @@ async def _execution_project_directory(
     run_id: str,
     project_id: str,
     branch: str,
-    commit_sha: str,
+    gateway_url: str,
     gateway_token: str,
 ) -> tuple[Path, bool]:
-    project_directory = _frozen_project_directory(project_id)
-    if project_directory is not None and _project_is_unchanged(
-        project_directory, commit_sha
-    ):
-        return project_directory, False
-    if os.getenv("SP_CHAT_RUN_ID"):
-        raise HTTPException(
-            status_code=409,
-            detail="Frozen project workspace is not reproducible",
-        )
+    """Return (checkout_path, created). Reuses this run's existing checkout
+    (follow-up messages in the same run); otherwise pulls a fresh snapshot."""
     try:
-        project_directory = await asyncio.to_thread(
-            project_sync.materialize_frozen_checkout,
+        checkout = _checkout_directory(project_id, run_id)
+        if checkout.is_dir() and any(checkout.iterdir()):
+            return checkout, False
+        checkout = await asyncio.to_thread(
+            _materialize_snapshot_checkout,
             project_id=project_id,
             branch=branch,
-            commit_sha=commit_sha,
             checkout_id=run_id,
+            gateway_url=gateway_url,
             gateway_token=gateway_token,
         )
-    except (
-        OSError,
-        subprocess.SubprocessError,
-        ValueError,
-        httpx.HTTPError,
-    ) as exc:
+    except (OSError, ValueError, httpx.HTTPError) as exc:
         raise HTTPException(
             status_code=409,
             detail="Frozen project workspace could not be prepared",
         ) from exc
-    if not _project_is_unchanged(project_directory, commit_sha):
-        shutil.rmtree(project_directory, ignore_errors=True)
-        raise HTTPException(
-            status_code=409,
-            detail="Frozen project workspace is not reproducible",
-        )
-    return project_directory, True
+    return checkout, True
 
 
-def _project_is_unchanged(project_directory: Path, commit_sha: str) -> bool:
-    try:
-        head = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=project_directory,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        status = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=all"],
-            cwd=project_directory,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return (
-        head.returncode == 0
-        and head.stdout.strip().lower() == commit_sha.lower()
-        and status.returncode == 0
-        and not status.stdout.strip()
-    )
+def _tree_digest(directory: Path) -> str:
+    """Content digest of a materialized checkout.
+
+    Replaces the git-status integrity check from the worktree era: the frozen
+    checkout has no git, so 'unchanged' means every file's bytes hash the same
+    as when the run started. Path order is normalized so the digest is stable
+    across platforms.
+    """
+    import hashlib
+
+    digest = hashlib.sha256()
+    for path in sorted(directory.rglob("*"), key=lambda p: p.as_posix()):
+        if not path.is_file():
+            continue
+        digest.update(path.relative_to(directory).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(hashlib.sha256(path.read_bytes()).digest())
+    return digest.hexdigest()
+
+
+def _project_is_unchanged(directory: Path, baseline_digest: str) -> bool:
+    return _tree_digest(directory) == baseline_digest
 
 
 def _runtime_auth_override(body: dict[str, Any]) -> dict[str, str] | None:
@@ -752,6 +800,7 @@ def _runtime_auth_override(body: dict[str, Any]) -> dict[str, str] | None:
 
 
 @router.post("/execute")
+@requires("edit")
 async def execute(*, request: Request) -> StreamingResponse:
     body = await request.json()
     run_id, project_id, branch, connection_name, commit_sha = (
@@ -854,12 +903,18 @@ async def execute(*, request: Request) -> StreamingResponse:
             run_id=run_id,
             project_id=project_id,
             branch=branch,
-            commit_sha=commit_sha,
+            gateway_url=gateway_api_url,
             gateway_token=scoped_token,
         )
     except Exception:
         shutil.rmtree(scratch, ignore_errors=True)
         raise
+
+    project_baseline_digest = (
+        await asyncio.to_thread(_tree_digest, project_directory)
+        if project_directory is not None
+        else None
+    )
 
     async def stream() -> AsyncGenerator[bytes, None]:
         current_lifecycle: StandaloneNotebookLifecycle | None = None
@@ -1065,8 +1120,8 @@ async def execute(*, request: Request) -> StreamingResponse:
                 if agent_failed:
                     return
 
-                if project_directory is not None and not _project_is_unchanged(
-                    project_directory, commit_sha
+                if project_directory is not None and not await asyncio.to_thread(
+                    _project_is_unchanged, project_directory, project_baseline_digest
                 ):
                     yield (
                         json.dumps(
@@ -1246,6 +1301,7 @@ async def execute(*, request: Request) -> StreamingResponse:
 
 
 @router.post("/cancel/{run_id}")
+@requires("edit")
 async def cancel(*, request: Request) -> JSONResponse:
     run_id = request.path_params["run_id"]
     if not _RUN_ID_RE.fullmatch(run_id):

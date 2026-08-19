@@ -211,30 +211,6 @@ async def etc(app: Starlette) -> AsyncIterator[None]:
 
 
 @contextlib.asynccontextmanager
-async def workspace_sync(app: Starlette) -> AsyncIterator[None]:
-    """Runtime v2: continuous S3 write-back when SP_WORKSPACE_MODE=s3.
-
-    The workspace on disk is a cache of the gateway's S3 store; this agent is
-    what makes edits durable. flush() runs on shutdown as the last barrier.
-    """
-    del app
-    import os
-    from pathlib import Path
-
-    from signalpilot._server.files import s3_sync
-
-    agent = s3_sync.start_from_environment(Path(os.getcwd()))
-    try:
-        yield
-    finally:
-        if agent is not None:
-            try:
-                await agent.stop()
-            except Exception:
-                LOGGER.warning("Workspace sync final flush failed", exc_info=True)
-
-
-@contextlib.asynccontextmanager
 async def reap_subprocesses(app: Starlette) -> AsyncIterator[None]:
     del app
     yield

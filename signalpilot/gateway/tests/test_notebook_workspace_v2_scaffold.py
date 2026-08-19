@@ -613,23 +613,129 @@ class TestUserWorkflows:
 
 
 class TestSessionLifecycle:
+    """Unit-level lifecycle coverage lives in tests/test_notebook_sessions.py
+    (reuse/recreate/resume/lease/quota); this class asserts the seam-level
+    contracts the migration gates on."""
+
     def test_active_session_extends_instead_of_dying_at_time_limit(self):
-        _target("§5.3 extend-loop", "G3")
+        """The vercel backend exposes extend(); the lifecycle loop drives it
+        for every session with a fresh ping (see gateway/main.py). The
+        provider grant is capped, so extend must be a first-class operation."""
+        import inspect
 
-    def test_idle_session_snapshots_to_zero(self):
-        _target("§5.3", "G3")
+        from gateway.notebooks.backends import VercelNotebookBackend
+        from gateway.sandbox_runtime.base import SandboxRuntime
 
-    def test_resume_from_snapshot_within_seconds_budget(self):
-        _target("§5.3 resume", "G3")
+        assert callable(VercelNotebookBackend.extend)
+        assert "extend_time_limit" in dict(inspect.getmembers(SandboxRuntime))
 
-    def test_backend_seam_flag_selects_vercel_like_the_eval_flag(self):
-        _target("§5 SP_NOTEBOOK_EXECUTION_BACKEND", "G3")
+    @pytest.mark.asyncio
+    async def test_idle_session_snapshots_to_zero(self):
+        """snapshot_idle_session: snapshot → release compute → row resumable,
+        upstream cleared, lease released."""
+        from unittest.mock import ANY, AsyncMock, patch
+
+        from gateway.notebooks import session_service
+        from gateway.store.notebook_sessions import NotebookSessionInternal
+
+        backend = AsyncMock()
+        backend.name = "vercel"
+        backend.snapshot_and_stop.return_value = "snap-42"
+        internal = NotebookSessionInternal(
+            session_id="sess-idle", org_id=ORG, user_id="u", status="running",
+            backend="vercel", runtime_handle="sbx-idle", snapshot_id=None,
+            upstream_url="https://sbx.vercel.run", access_token=None,
+            project_id="proj-1", branch="main",
+        )
+        with (
+            patch.object(session_service.ns, "update_session_runtime", AsyncMock()) as update,
+            patch.object(session_service, "release_lease", AsyncMock()) as release,
+        ):
+            await session_service.snapshot_idle_session(
+                AsyncMock(), internal=internal, backend=backend
+            )
+        backend.snapshot_and_stop.assert_awaited_once_with("sbx-idle")
+        update.assert_awaited_once_with(
+            ANY,
+            session_id="sess-idle",
+            org_id=ORG,
+            status="snapshotted",
+            snapshot_id="snap-42",
+            clear_upstream=True,
+        )
+        release.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_resume_from_snapshot_within_seconds_budget(self):
+        """Resume is in-place (same handle) — no create, no hydration; the
+        resumed route URL replaces the cleared upstream."""
+        from unittest.mock import AsyncMock
+
+        from gateway.notebooks.backends import VercelNotebookBackend
+
+        runtime = AsyncMock()
+        runtime.routes.return_value = {2718: "https://sbx-idle.vercel.run"}
+        runtime.exec.return_value = type("R", (), {"ok": True})()
+        from gateway.config.notebooks import NotebookSettings
+
+        backend = VercelNotebookBackend(NotebookSettings(), runtime=runtime)
+        upstream = await backend.resume("sbx-idle")
+        runtime.resume.assert_awaited_once_with("sbx-idle")
+        runtime.create.assert_not_awaited()
+        assert upstream == "https://sbx-idle.vercel.run"
+
+    def test_backend_seam_flag_selects_vercel_like_the_eval_flag(self, monkeypatch):
+        from gateway.config.notebooks import NotebookSettings
+
+        monkeypatch.delenv("SP_NOTEBOOK_DIRECT_URL", raising=False)
+        monkeypatch.setenv("SP_NOTEBOOK_EXECUTION_BACKEND", "vercel")
+        assert NotebookSettings().resolved_backend() == "vercel"
+        monkeypatch.setenv("SP_NOTEBOOK_EXECUTION_BACKEND", "")
+        monkeypatch.setenv("SP_NOTEBOOK_DIRECT_URL", "http://notebook:2718")
+        assert NotebookSettings().resolved_backend() == "direct"
+        monkeypatch.setenv("SP_NOTEBOOK_EXECUTION_BACKEND", "fargate")
+        with pytest.raises(ValueError, match="SP_NOTEBOOK_EXECUTION_BACKEND"):
+            NotebookSettings()
 
     def test_pod_endpoints_require_auth_before_public_route_urls_exist(self):
-        _target("§5.7 security", "G3 (hard precondition)")
+        """Hard precondition: every /api/notion-analysis and
+        /api/standalone-chat route on the notebook-server must carry
+        @requires — NetworkPolicy protection does not survive public sandbox
+        route URLs. Static source check (the notebook-server is a separate
+        package not importable from this venv)."""
+        import re
+        from pathlib import Path
 
-    def test_run_notebook_mcp_tool_uses_pinned_digest_runtime(self):
-        _target("§5.6", "G3 (hard precondition)")
+        endpoints = (
+            Path(__file__).resolve().parents[2]
+            / "notebook-server" / "signalpilot" / "_server" / "api" / "endpoints"
+        )
+        for name in ("notion_analysis.py", "standalone_chat.py"):
+            source = (endpoints / name).read_text(encoding="utf-8")
+            routes = re.findall(r"@router\.(?:get|post|put|delete|websocket)\(", source)
+            decorated = re.findall(r"@requires\(", source)
+            assert routes, f"{name}: no routes found — did the file move?"
+            assert len(decorated) >= len(routes), (
+                f"{name}: {len(routes)} routes but only {len(decorated)} @requires — "
+                "an unauthenticated route behind a public URL"
+            )
+
+    def test_run_notebook_mcp_tool_uses_pinned_digest_runtime(self, monkeypatch):
+        """The tool goes through the session service, whose vercel backend
+        enforces SP_NOTEBOOK_VERCEL_IMAGE digest pinning in cloud mode — the
+        old direct-os.getenv image bypass no longer exists anywhere."""
+        import inspect
+
+        from gateway.config.notebooks import NotebookSettings
+        from gateway.mcp.tools import notebook as tool
+
+        source = inspect.getsource(tool)
+        assert "SP_NOTEBOOK_IMAGE" not in source
+        assert "ensure_notebook_session" in source
+        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
+        monkeypatch.setenv("SP_NOTEBOOK_VERCEL_IMAGE", "reg/sp-notebook:latest")
+        with pytest.raises(ValueError, match="digest-pinned"):
+            NotebookSettings().require_vercel_image(cloud=True)
 
 
 # ── §4.5 Git as exporter (gates G5–G6) ──────────────────────────────────────

@@ -364,13 +364,10 @@ kubectl get --raw "/api/v1/nodes/$NODE/proxy/configz" | jq '.kubeletconfig.podPi
 The `admission/` directory holds cluster admission policies that backstop the RBAC
 and runtime controls. Apply them on any multi-tenant cluster:
 
-- **`require-gvisor-*`** — reject any notebook pod whose `runtimeClassName` is not
-  the sandbox runtime, so a pod can never schedule without gVisor/Kata isolation
-  even if the gateway is misconfigured.
-- **`restrict-pod-exec-*`** — narrow the gateway's `pods/exec` grant in a way RBAC
-  cannot express: only `container=notebook` on pods named `^nb-[0-9a-f]{12}$`. The
-  gateway's `pods/exec` grant is broad by necessity (RBAC can't prefix-match pod
-  names); this policy enforces the pod-name shape and container at admission time.
+- **`require-gvisor-*`** — reject any sandboxed workload pod (eval pods, since
+  Notebook Runtime v2 moved notebooks off the cluster) whose `runtimeClassName`
+  is not the sandbox runtime, so a pod can never schedule without gVisor/Kata
+  isolation even if the gateway is misconfigured.
 - **`restrict-rbac-writes-*`** (SP-SEC-009) — confine the gateway's one retained
   cluster-wide write capability. Tenant namespaces are created dynamically, so the
   gateway must be able to create the RoleBinding that grants it workload verbs in the
@@ -387,11 +384,10 @@ Kyverno variant — apply whichever your cluster supports:
 
 ```bash
 kubectl apply -f deploy/k8s/admission/require-gvisor-validatingadmissionpolicy.yaml
-kubectl apply -f deploy/k8s/admission/restrict-pod-exec-validatingadmissionpolicy.yaml
 kubectl apply -f deploy/k8s/admission/restrict-rbac-writes-validatingadmissionpolicy.yaml
 # (or the *-kyverno.yaml variants if you run Kyverno)
 ```
 
-At the application boundary this is reinforced: the gateway issues `pods/exec` only
-against the `notebook` container, never an operator-supplied name. See
-`admission/README.md` for the policy test suite.
+Notebook Runtime v2 removed the gateway's `pods/exec` grant entirely (notebook
+compute left the cluster), so the former `restrict-pod-exec-*` policies were
+deleted with it. See `admission/README.md` for the policy test suite.

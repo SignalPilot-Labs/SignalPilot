@@ -35,6 +35,7 @@ from signalpilot._server.ai.standalone_chat_tools import (
 from signalpilot._server.files import project_sync
 from signalpilot._server.router import APIRouter
 from signalpilot._types.ids import SessionId
+from signalpilot._utils.requests import RequestError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -536,15 +537,16 @@ async def _archive_analysis_notebook(
                 include_code=False,
             ),
         )
-    except FileNotFoundError:
+    except (FileNotFoundError, RequestError, httpx.HTTPError) as exc:
         # The slim runtime image intentionally omits the notebook frontend
         # bundle. Preserve the validated evidence in a bounded, code-free HTML
         # archive instead of rejecting an otherwise clean analysis.
         LOGGER.warning(
             "Notebook frontend assets unavailable; using safe archive fallback "
-            "run_id=%s session_id=%s",
+            "run_id=%s session_id=%s error_type=%s",
             run_id,
             session_id,
+            type(exc).__name__,
         )
         html = _fallback_archive_html(
             session,

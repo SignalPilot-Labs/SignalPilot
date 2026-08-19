@@ -13,9 +13,12 @@ import httpx
 import pytest
 from starlette.requests import Request
 
+from signalpilot._config.settings import GLOBAL_SETTINGS
 from signalpilot._server.ai.claude_agent import AgentEvent
 from signalpilot._server.api.endpoints import standalone_chat
 from signalpilot._server.files import project_sync
+from signalpilot._utils import requests
+from signalpilot._utils.requests import RequestError
 
 
 def test_seeded_analysis_notebooks_keep_run_tokens_out_of_source_and_isolated(
@@ -134,6 +137,7 @@ def _runtime_session(*, dirty: bool = False) -> Any:
     session = SimpleNamespace(
         app_file_manager=SimpleNamespace(
             app=SimpleNamespace(
+                to_py=lambda: "answer = 1",
                 cell_manager=SimpleNamespace(
                     cell_data=lambda: [
                         SimpleNamespace(cell_id=cell_id, code="answer = 1")
@@ -141,6 +145,7 @@ def _runtime_session(*, dirty: bool = False) -> Any:
                 )
             )
         ),
+        config_manager=SimpleNamespace(get_config=lambda: {"display": {}}),
         session_view=SimpleNamespace(
             cell_notifications={cell_id: notification}
         ),
@@ -228,8 +233,17 @@ def test_recovery_context_keeps_prior_graph_errors(
 
 
 @pytest.mark.asyncio
-async def test_archive_uses_a_safe_fallback_without_frontend_assets(
+@pytest.mark.parametrize(
+    "export_error",
+    [
+        FileNotFoundError("frontend index missing"),
+        RequestError("network unavailable"),
+    ],
+    ids=["missing-assets", "http-failure"],
+)
+async def test_archive_uses_safe_fallback_when_frontend_export_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
+    export_error: Exception,
 ) -> None:
     scoped_token = "runtime-secret-token"
     cell_id = "cell-a"
@@ -260,7 +274,7 @@ async def test_archive_uses_a_safe_fallback_without_frontend_assets(
 
     class MissingAssetsExporter:
         def export_as_html(self, **_kwargs: Any) -> tuple[str, str]:
-            raise FileNotFoundError("frontend index missing")
+            raise export_error
 
     class FakeResponse:
         def raise_for_status(self) -> None:
@@ -391,7 +405,7 @@ async def test_execute_materializes_the_frozen_project_before_starting_the_agent
 
 
 @pytest.mark.asyncio
-async def test_dirty_notebook_is_reset_and_only_clean_retry_answer_is_emitted(
+async def test_validated_retry_survives_offline_development_archive(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -406,7 +420,7 @@ async def test_dirty_notebook_is_reset_and_only_clean_retry_answer_is_emitted(
     event_sinks: list[Any] = []
     closed: list[str] = []
     cleared: list[str] = []
-    archived: list[str] = []
+    archived: dict[str, Any] = {}
     clean_starts: list[Path] = []
     agent_attempts = 0
 
@@ -478,11 +492,51 @@ async def test_dirty_notebook_is_reset_and_only_clean_retry_answer_is_emitted(
         yield AgentEvent(type="text_delta", content="Accepted streamed text")
         yield AgentEvent(type="text", content="Accepted answer")
 
-    async def archive(**kwargs: Any) -> str:
-        archived.append(kwargs["session_id"])
-        return "archive-clean"
+    class FakeArchiveResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, str]:
+            return {"archive_id": "archive-clean"}
+
+    class FakeArchiveClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def post(self, _url: str, **kwargs: Any) -> FakeArchiveResponse:
+            archived.update(kwargs["json"])
+            return FakeArchiveResponse()
+
+    class OfflineExporter:
+        def export_as_html(self, **_kwargs: Any) -> tuple[str, str]:
+            raise RequestError("network unavailable")
 
     monkeypatch.setenv("SP_CHAT_SCRATCH_ROOT", str(tmp_path / "scratch"))
+    monkeypatch.setattr(GLOBAL_SETTINGS, "DEVELOPMENT_MODE", True)
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda *_args, **_kwargs: pytest.fail(
+            "development archive attempted a network request"
+        ),
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", FakeArchiveClient)
+    monkeypatch.setitem(
+        sys.modules,
+        "signalpilot._server.export.exporter",
+        SimpleNamespace(Exporter=OfflineExporter),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "signalpilot._server.models.export",
+        SimpleNamespace(ExportAsHTMLRequest=lambda **kwargs: kwargs),
+    )
     monkeypatch.setattr(
         standalone_chat, "_execution_project_directory", execution_directory
     )
@@ -509,7 +563,6 @@ async def test_dirty_notebook_is_reset_and_only_clean_retry_answer_is_emitted(
             "kernel-2",
         )[-1],
     )
-    monkeypatch.setattr(standalone_chat, "_archive_analysis_notebook", archive)
     monkeypatch.setattr(
         standalone_chat, "_project_is_unchanged", lambda *_args: True
     )
@@ -563,7 +616,9 @@ async def test_dirty_notebook_is_reset_and_only_clean_retry_answer_is_emitted(
     assert "REJECTED LEAK" not in json.dumps(events)
     assert closed == ["kernel-1", "kernel-2"]
     assert clean_starts == [seeded_paths[0]]
-    assert archived == ["kernel-2"]
+    archived_html = base64.b64decode(archived["html_base64"]).decode()
+    assert "Validated analysis notebook" in archived_html
+    assert "answer = 1" not in archived_html
     assert cleared.count(f"standalone:{run_id}") >= 2
 
 

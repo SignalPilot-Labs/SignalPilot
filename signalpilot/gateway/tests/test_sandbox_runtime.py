@@ -449,3 +449,67 @@ class TestVercelRuntimeLive:
         finally:
             await runtime.destroy(sandbox_id)
             reset_sandbox_runtime_settings()
+
+    async def test_server_shape_route_url_and_detached_process(self) -> None:
+        """Notebook Runtime v2's load-bearing provider claims, proven live:
+        an exposed port gets a public route URL, a detached process serves it
+        from outside the provider network, and list() finds it by tag."""
+        import httpx
+
+        reset_sandbox_runtime_settings()
+        runtime = get_sandbox_runtime()
+        sandbox_id = await runtime.create(
+            SandboxSpec(
+                time_limit_seconds=240,
+                ports=(8000,),
+                tags={"sp_purpose": "unit-test-v2"},
+            )
+        )
+        try:
+            await runtime.write_file(
+                sandbox_id, "/tmp/www/index.html", b"sp-live-route-ok"
+            )
+            await runtime.start_process(
+                sandbox_id, "cd /tmp/www && python3 -m http.server 8000"
+            )
+            routes = await runtime.routes(sandbox_id)
+            assert 8000 in routes and routes[8000].startswith("https://")
+
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                body = ""
+                for _ in range(15):
+                    try:
+                        response = await client.get(routes[8000])
+                        if response.status_code == 200:
+                            body = response.text
+                            break
+                    except httpx.HTTPError:
+                        pass
+                    await asyncio.sleep(2)
+            assert "sp-live-route-ok" in body
+
+            rows = await runtime.list(tags={"sp_purpose": "unit-test-v2"})
+            assert sandbox_id in {row.sandbox_id for row in rows}
+        finally:
+            await runtime.destroy(sandbox_id)
+            reset_sandbox_runtime_settings()
+
+    async def test_snapshot_stop_resume_cycle(self) -> None:
+        """Scale-to-zero, proven live: snapshot → stop → resume; files written
+        before the stop are still there after resume."""
+        reset_sandbox_runtime_settings()
+        runtime = get_sandbox_runtime()
+        sandbox_id = await runtime.create(
+            SandboxSpec(time_limit_seconds=240, tags={"sp_purpose": "unit-test-v2"})
+        )
+        try:
+            await runtime.write_file(sandbox_id, "/tmp/state.txt", b"pre-snapshot")
+            # Provider floor: snapshot expiration must be >= one day.
+            snapshot_id = await runtime.snapshot(sandbox_id, expiration_seconds=86400)
+            assert snapshot_id
+            await runtime.stop(sandbox_id)
+            await runtime.resume(sandbox_id)
+            assert await runtime.read_file(sandbox_id, "/tmp/state.txt") == b"pre-snapshot"
+        finally:
+            await runtime.destroy(sandbox_id)
+            reset_sandbox_runtime_settings()

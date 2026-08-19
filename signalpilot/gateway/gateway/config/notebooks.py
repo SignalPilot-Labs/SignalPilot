@@ -43,8 +43,12 @@ class NotebookSettings:
         default_factory=lambda: int(os.getenv("SP_NOTEBOOK_IDLE_SNAPSHOT_SECONDS", "900"))
     )
     # How long snapshots stay resumable before a cold start takes over.
+    # Provider floor is one day (verified live); shorter values are clamped.
     snapshot_expiration_seconds: int = field(
-        default_factory=lambda: int(os.getenv("SP_NOTEBOOK_SNAPSHOT_EXPIRATION_SECONDS", str(7 * 86400)))
+        default_factory=lambda: max(
+            86400,
+            int(os.getenv("SP_NOTEBOOK_SNAPSHOT_EXPIRATION_SECONDS", str(7 * 86400))),
+        )
     )
     start_timeout_seconds: int = field(
         default_factory=lambda: max(30, int(os.getenv("SP_NOTEBOOK_START_TIMEOUT_SECONDS", "90")))

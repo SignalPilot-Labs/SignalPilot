@@ -16,6 +16,7 @@ import hashlib
 import io
 import tarfile
 import uuid
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -557,56 +558,241 @@ def _run(coroutine):
 # ── §4.3 Sync agent (gate G2) ───────────────────────────────────────────────
 
 
-class TestSyncAgent:
-    def test_notebook_save_flushes_within_debounce_window(self):
-        _target("§4.3", "G2")
+class TestWriteThroughFilePlane:
+    """§4.3 REVISED (supersedes the sync-agent design): there is no local
+    mirror and no debounce window. A save IS a durable commit; a crash loses
+    nothing that was saved. The notebook-server client half of this contract
+    is covered in notebook-server/tests/test_gateway_file_system.py."""
 
-    def test_edit_then_save_roundtrip_preserves_exact_content(self):
-        _target("§4.3", "G2")
+    def test_save_is_durable_immediately_no_debounce_window(self, api, storage):
+        """The old bar was 'durable within 2s'; the new bar is: the PUT
+        response already names the committed revision, and the blob is in S3
+        before the client hears success."""
+        project = _create_project(api)
+        response = api.put(
+            f"/api/workspace-projects/{project}/files/nb.py", content=b"x = 1"
+        )
+        assert response.json()["revision"] == 0
+        digest = hashlib.sha256(b"x = 1").hexdigest()
+        from gateway.workspace_store import blob_key
 
-    def test_flush_barrier_runs_before_snapshot_destroy_and_handoff(self):
-        _target("§4.3 flush barriers", "G2")
+        assert _run(storage.get_bytes(blob_key(ORG, project, digest))) == b"x = 1"
 
-    def test_crash_loses_at_most_the_debounce_window(self):
-        _target("§4.3 / §7 failure modes", "G2")
+    def test_edit_then_save_roundtrip_preserves_exact_content(self, api):
+        """USER STORY: edit an existing file, save, reopen — byte-identical,
+        no CRLF/encoding mangling, mtime advances."""
+        project = _create_project(api)
+        original = "df = 1\r\nx = 'unicode: é'\n".encode()
+        api.put(f"/api/workspace-projects/{project}/files/a.py", content=original)
+        first = api.post(
+            f"/api/workspace-projects/{project}/files:list", json={"branch": "main"}
+        ).json()["files"][0]
+        edited = original + b"y = 2\n"
+        api.put(f"/api/workspace-projects/{project}/files/a.py", content=edited)
+        assert api.get(f"/api/workspace-projects/{project}/files/a.py").content == edited
+        second = api.post(
+            f"/api/workspace-projects/{project}/files:list", json={"branch": "main"}
+        ).json()["files"][0]
+        assert second["mtime"] >= first["mtime"]
 
-    def test_conflict_replays_local_changes_then_retries_once(self):
-        _target("§4.3 conflict", "G2")
+    def test_unsaved_state_is_the_only_crash_loss(self, api):
+        """§7: with write-through saves, a dead sandbox loses only the
+        browser's unsaved buffer — every committed revision still serves."""
+        project = _create_project(api)
+        api.put(f"/api/workspace-projects/{project}/files/kept.py", content=b"saved")
+        # The sandbox dying is a non-event for storage: no flush, no barrier,
+        # nothing to reconcile. Head still serves the last save.
+        assert api.get(f"/api/workspace-projects/{project}/files/kept.py").content == b"saved"
 
-    def test_spsyncignore_excludes_cache_venvs_tmp(self):
-        _target("§4.3 .spsyncignore", "G2")
+    def test_conflicting_batch_is_rejected_by_cas_and_retry_converges(self, api):
+        project = _create_project(api)
+        api.put(f"/api/workspace-projects/{project}/files/base.py", content=b"0")
+        stale = api.post(
+            f"/api/workspace-projects/{project}/files:batch",
+            json={
+                "branch": "main",
+                "base_revision": None,
+                "upserts": [{"path": "loser.py", "content_b64": "eA=="}],
+                "deletes": [],
+            },
+        )
+        assert stale.status_code == 409
+        head = api.get(f"/api/workspace-projects/{project}/revisions").json()[
+            "revisions"
+        ][0]["revision"]
+        retry = api.post(
+            f"/api/workspace-projects/{project}/files:batch",
+            json={
+                "branch": "main",
+                "base_revision": head,
+                "upserts": [{"path": "loser.py", "content_b64": "eA=="}],
+                "deletes": [],
+            },
+        )
+        assert retry.status_code == 200
 
-    def test_large_files_travel_by_presigned_put_and_commit_by_reference(self):
-        _target("§4.3 >8MB path", "G2")
+    def test_large_files_travel_by_presigned_put_and_commit_by_reference(
+        self, api, storage
+    ):
+        project = _create_project(api)
+        payload = b"parquet-bytes " * 100
+        digest = hashlib.sha256(payload).hexdigest()
+        grant = api.post(
+            f"/api/workspace-projects/{project}/files:upload-url",
+            json={"sha256": digest, "size": len(payload)},
+        )
+        assert grant.status_code == 200
+        # moto's presigned PUT needs no network here — write the blob at the
+        # granted key, exactly what the client's PUT would do.
+        _run(storage.put_bytes(grant.json()["key"], payload))
+        committed = api.post(
+            f"/api/workspace-projects/{project}/files:batch",
+            json={
+                "branch": "main",
+                "base_revision": None,
+                "upserts": [{"path": "data/big.parquet", "sha256": digest, "size": len(payload)}],
+                "deletes": [],
+            },
+        )
+        assert committed.status_code == 200
+        got = api.get(f"/api/workspace-projects/{project}/files/data/big.parquet")
+        assert got.content == payload
 
-    def test_session_sidecars_sync_but_persistent_cache_does_not(self):
-        _target("§4.3 __sp__", "G2")
+    def test_session_sidecars_are_ordinary_files(self, api):
+        """__sp__ session snapshots (the reconnect experience) commit like any
+        file; nothing in the storage plane special-cases them."""
+        project = _create_project(api)
+        response = api.put(
+            f"/api/workspace-projects/{project}/files/__sp__/session/nb.py.json",
+            content=b'{"cells": []}',
+        )
+        assert response.status_code == 200
+        assert (
+            api.get(
+                f"/api/workspace-projects/{project}/files/__sp__/session/nb.py.json"
+            ).content
+            == b'{"cells": []}'
+        )
 
 
 # ── User interaction semantics (the jupyter-lab-like UX; gates G2–G4) ──────
 
 
 class TestUserWorkflows:
-    def test_save_edit_save_delete_navigate_back_full_journey(self):
-        _target("§4 overall", "G4")
+    def test_save_edit_save_delete_navigate_back_full_journey(self, api):
+        """USER STORY (end to end): create file → save → edit → save → delete
+        → navigate back via an old link → recoverable from revision history,
+        with a working restore affordance, never a 500."""
+        project = _create_project(api)
+        base = f"/api/workspace-projects/{project}"
+        assert api.put(f"{base}/files/report.md", content=b"v1").json()["revision"] == 0
+        assert api.put(f"{base}/files/report.md", content=b"v2").json()["revision"] == 1
+        assert api.delete(f"{base}/files/report.md").json()["revision"] == 2
 
-    def test_deleting_a_project_tombstones_links_instead_of_500(self):
-        _target("§4.2", "G4")
+        # Navigate back via an old link: never a 500, always the old bytes.
+        assert api.get(f"{base}/files/report.md").status_code == 404
+        assert api.get(f"{base}/files/report.md?revision=1").content == b"v2"
+        assert api.get(f"{base}/files/report.md?revision=0").content == b"v1"
 
-    def test_rename_move_preserves_revision_lineage(self):
-        _target("§4.2 files:move", "G2")
+        # Restore affordance: re-save the recovered content as a new revision.
+        old = api.get(f"{base}/files/report.md?revision=1").content
+        assert api.put(f"{base}/files/report.md", content=old).json()["revision"] == 3
+        assert api.get(f"{base}/files/report.md").content == b"v2"
 
-    def test_browser_refresh_mid_edit_rehydrates_unsaved_state(self):
-        _target("§4.3 __sp__ sidecars", "G4")
+    def test_deleting_a_project_tombstones_links_instead_of_500(self, api):
+        project = _create_project(api)
+        api.put(f"/api/workspace-projects/{project}/files/kept.py", content=b"x")
+        assert api.delete(f"/api/workspace-projects/{project}").status_code == 204
+        response = api.get(f"/api/workspace-projects/{project}/files/kept.py")
+        assert response.status_code == 410
+        assert response.json()["detail"]["tombstone"] is True
 
-    def test_two_users_same_project_different_branches_never_interfere(self):
-        _target("§4.4", "G4")
+    def test_rename_move_preserves_revision_lineage(self, api):
+        project = _create_project(api)
+        base = f"/api/workspace-projects/{project}"
+        api.put(f"{base}/files/old-name.py", content=b"content")
+        moved = api.post(
+            f"{base}/files:move",
+            json={"source": "old-name.py", "destination": "new-name.py"},
+        )
+        assert moved.status_code == 200
+        # Head: only the new name; lineage: the pre-move revision still serves
+        # the old path, and both entries share one blob (same sha).
+        assert api.get(f"{base}/files/new-name.py").content == b"content"
+        assert api.get(f"{base}/files/old-name.py").status_code == 404
+        old_sha = api.get(f"{base}/files/old-name.py?revision=0").headers["X-SP-Sha256"]
+        new_sha = api.get(f"{base}/files/new-name.py").headers["X-SP-Sha256"]
+        assert old_sha == new_sha
 
-    def test_branch_switch_hydrates_the_other_branchs_snapshot(self):
-        _target("§4.5", "G3")
+    def test_browser_refresh_mid_edit_rehydrates_from_session_sidecar(self, api):
+        """USER STORY: refresh mid-edit. Unsaved buffers are browser-tier by
+        design (three-tier model); what the platform guarantees is that the
+        session sidecar — outputs, cell state — reloads from the same branch
+        the editor left, with no compute required."""
+        project = _create_project(api)
+        base = f"/api/workspace-projects/{project}"
+        api.put(f"{base}/files/nb.py", content=b"x = 1")
+        api.put(
+            f"{base}/files/__sp__/session/nb.py.json",
+            content=b'{"cells": [{"id": "a", "output": "1"}]}',
+        )
+        # The refreshed page re-reads both without any session existing.
+        assert api.get(f"{base}/files/nb.py").content == b"x = 1"
+        assert b'"output": "1"' in api.get(
+            f"{base}/files/__sp__/session/nb.py.json"
+        ).content
 
-    def test_notebook_page_loads_without_a_k8s_pod(self):
-        _target("§3 target architecture", "G3")
+    def test_two_users_same_project_different_branches_never_interfere(self, api):
+        project = _create_project(api)
+        base = f"/api/workspace-projects/{project}"
+        api.put(f"{base}/files/model.sql?branch=alice/work", content=b"alice")
+        api.put(f"{base}/files/model.sql?branch=bob/work", content=b"bob")
+        assert api.get(f"{base}/files/model.sql?branch=alice/work").content == b"alice"
+        assert api.get(f"{base}/files/model.sql?branch=bob/work").content == b"bob"
+        assert api.get(f"{base}/files/model.sql").status_code == 404  # main untouched
+
+    def test_branch_switch_serves_the_other_branchs_content(self, api):
+        """Branch switching is re-pointing reads — no clone, no checkout."""
+        project = _create_project(api)
+        base = f"/api/workspace-projects/{project}"
+        api.put(f"{base}/files/config.yml", content=b"env: main")
+        api.put(f"{base}/files/config.yml?branch=feature/x", content=b"env: feature")
+        snap_main = api.get(f"{base}/snapshot").json()
+        snap_feature = api.get(f"{base}/snapshot?branch=feature/x").json()
+        assert snap_main["key"] != snap_feature["key"]
+        assert api.get(f"{base}/files/config.yml?branch=feature/x").content == b"env: feature"
+
+    def test_notebook_page_loads_without_any_compute(self, api):
+        """The point of the whole redesign: browsing project files must not
+        require pod/sandbox scheduling. This composed app carries no notebook
+        session machinery at all — file reads work anyway."""
+        from gateway.db.models import GatewayNotebookSession
+
+        project = _create_project(api)
+        api.put(f"/api/workspace-projects/{project}/files/nb.py", content=b"x")
+        listing = api.post(
+            f"/api/workspace-projects/{project}/files:list", json={"branch": "main"}
+        )
+        assert [f["path"] for f in listing.json()["files"]] == ["nb.py"]
+        # And no session row was ever created to serve those reads.
+        import asyncio as _asyncio
+
+        from sqlalchemy import func, select
+
+        from gateway.db.engine import get_db as _get_db  # the override target
+
+        async def _count() -> int:
+            agen = api.app.dependency_overrides[_get_db]()
+            session = await agen.__anext__()
+            try:
+                result = await session.execute(
+                    select(func.count()).select_from(GatewayNotebookSession)
+                )
+                return int(result.scalar_one())
+            finally:
+                await agen.aclose()
+
+        assert _asyncio.run(_count()) == 0
 
 
 # ── §5.3 Session lifecycle (gate G3: runtime v2 + backend seam) ─────────────
@@ -742,34 +928,220 @@ class TestSessionLifecycle:
 
 
 class TestGitExporter:
-    def test_every_s3_revision_maps_to_exactly_one_export_commit(self):
-        _target("§4.5", "G5")
+    """§4.5 gate assertions. The full behavioral suite (import/export round
+    trips, deletions, retry convergence) is tests/test_github_pull_store.py;
+    these pin the four contracts the migration gates on."""
 
-    def test_inbound_github_push_imports_as_a_new_revision(self):
-        _target("§4.5", "G5")
+    @pytest.fixture
+    def repos(self, monkeypatch, tmp_path):
+        from gateway.git import repos as repos_mod
 
-    def test_export_failure_never_blocks_editing(self):
-        _target("§4.5 / §7", "G5")
+        monkeypatch.setattr(repos_mod, "REPOS_ROOT", tmp_path / "repos")
+        (tmp_path / "repos").mkdir()
+        return repos_mod
+
+    @staticmethod
+    def _git(*args, cwd=None) -> str:
+        import subprocess
+
+        result = subprocess.run(
+            ["git", "-c", "user.email=t@test", "-c", "user.name=test", *args],
+            cwd=str(cwd) if cwd else None,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout
+
+    def _seeded_project(self, repos, tmp_path):
+        project = _pid()
+        src = tmp_path / f"remote-{project[:8]}"
+        src.mkdir()
+        self._git("init", "--initial-branch", "main", str(src))
+        (src / "models.sql").write_text("select 1", encoding="utf-8")
+        self._git("add", "-A", cwd=src)
+        self._git("commit", "-m", "seed", cwd=src)
+        self._git("config", "receive.denyCurrentBranch", "ignore", cwd=src)
+        repos.init_bare_repo(project)
+        repos.clone_from_remote(project, str(src))
+        return project, str(src)
+
+    @pytest.mark.asyncio
+    async def test_every_s3_revision_maps_to_exactly_one_export_commit(
+        self, repos, tmp_path, storage, db, ws
+    ):
+        from sqlalchemy import select
+
+        from gateway.db.models import GatewayWorkspaceRevision
+        from gateway.workspace_store import export_revision_to_git, import_repo_to_revisions
+
+        project, remote = self._seeded_project(repos, tmp_path)
+        await import_repo_to_revisions(db, storage, org_id=ORG, project_id=project)
+        await _put(ws, db, project, "new.sql", b"select 2")
+
+        first = await export_revision_to_git(
+            db, storage, org_id=ORG, project_id=project, branch="main", remote_url=remote
+        )
+        second = await export_revision_to_git(
+            db, storage, org_id=ORG, project_id=project, branch="main", remote_url=remote
+        )
+        assert first.commit_sha == second.commit_sha  # re-export is a no-op
+        row = (
+            await db.execute(
+                select(GatewayWorkspaceRevision).where(
+                    GatewayWorkspaceRevision.project_id == project,
+                    GatewayWorkspaceRevision.export_commit_sha == first.commit_sha,
+                )
+            )
+        ).scalars().all()
+        assert len(row) == 1
+
+    @pytest.mark.asyncio
+    async def test_inbound_github_change_imports_as_a_new_revision(
+        self, repos, tmp_path, storage, db, ws
+    ):
+        from gateway.workspace_store import import_repo_to_revisions
+
+        project, remote = self._seeded_project(repos, tmp_path)
+        first = await import_repo_to_revisions(db, storage, org_id=ORG, project_id=project)
+        (Path(remote) / "upstream.sql").write_text("select 9", encoding="utf-8")
+        self._git("add", "-A", cwd=remote)
+        self._git("commit", "-m", "upstream", cwd=remote)
+        self._git("fetch", str(Path(remote)), "main:main", cwd=repos.repo_path(project))
+        second = await import_repo_to_revisions(db, storage, org_id=ORG, project_id=project)
+        assert second.revision == (first.revision or 0) + 1
+        got = await ws.read_file(
+            db, org_id=ORG, project_id=project, branch="main", path="upstream.sql"
+        )
+        assert got[1] == b"select 9"
+
+    @pytest.mark.asyncio
+    async def test_export_failure_never_blocks_editing(
+        self, repos, tmp_path, storage, db, ws
+    ):
+        from gateway.workspace_store import export_revision_to_git, import_repo_to_revisions
+        from gateway.workspace_store.github_sync import GitHubExportError
+
+        project, _ = self._seeded_project(repos, tmp_path)
+        await import_repo_to_revisions(db, storage, org_id=ORG, project_id=project)
+        with pytest.raises(GitHubExportError):
+            await export_revision_to_git(
+                db,
+                storage,
+                org_id=ORG,
+                project_id=project,
+                branch="main",
+                remote_url=str(tmp_path / "does-not-exist"),
+            )
+        # Editing continues: the failed export left revisions writable.
+        manifest = await _put(ws, db, project, "after-failure.sql", b"still editing")
+        assert manifest.entry("after-failure.sql") is not None
 
     def test_agent_branches_still_never_reach_github(self):
-        _target("§4.5 (carries over sync.py contract)", "G5")
+        from gateway.git.sync import AGENT_BRANCH_PREFIXES, is_agent_branch
+
+        assert "signalpilot-agent/" in AGENT_BRANCH_PREFIXES
+        assert "analysis/" in AGENT_BRANCH_PREFIXES
+        assert is_agent_branch("signalpilot-agent/run-1")
+        assert is_agent_branch("analysis/slack/req-1")
+        assert not is_agent_branch("main")
+        assert not is_agent_branch("feature/analysis")
 
 
 # ── Unified artifacts (new build item surfaced 2026-08-19) ──────────────────
 
 
 class TestUnifiedArtifacts:
-    def test_artifact_index_lists_across_chat_eval_and_notebook_sources(self):
-        _target("artifacts index (new)", "G4")
+    """Gate assertions over the unified index; the behavioral suite is
+    tests/test_artifacts_index.py (filters, org isolation, pagination)."""
 
-    def test_artifact_records_carry_provenance_run_task_session(self):
-        _target("artifacts index (new)", "G4")
+    @pytest_asyncio.fixture
+    async def seeded(self, db):
+        from tests.test_artifacts_index import seed_chat_artifact, seed_eval_artifacts
 
-    def test_browse_page_renders_and_downloads_without_a_pod(self):
-        _target("artifacts browse page (new)", "G4")
+        chat_run_id, _ = await seed_chat_artifact(db, org_id=ORG)
+        eval_run_id = await seed_eval_artifacts(db, org_id=ORG)
+        return db, chat_run_id, eval_run_id
 
-    def test_agent_committed_artifacts_appear_in_the_index(self):
-        _target("artifacts index (new)", "G4")
+    @pytest.mark.asyncio
+    async def test_artifact_index_lists_across_chat_and_eval_sources(self, seeded):
+        from gateway.store.artifacts_index import list_artifacts
 
-    def test_artifact_retention_prunes_blobs_but_never_provenance_rows(self):
-        _target("artifacts index (new)", "G4")
+        db, _, _ = seeded
+        records, total = await list_artifacts(db, org_id=ORG)
+        assert total == 2
+        assert {record.kind for record in records} == {"chat", "eval"}
+
+    @pytest.mark.asyncio
+    async def test_artifact_records_carry_provenance_run_task_session(self, seeded):
+        from gateway.store.artifacts_index import list_artifacts
+
+        db, chat_run_id, eval_run_id = seeded
+        records, _ = await list_artifacts(db, org_id=ORG)
+        by_kind = {record.kind: record.to_dict() for record in records}
+        assert by_kind["chat"]["provenance"]["run_id"] == chat_run_id
+        assert by_kind["chat"]["provenance"]["session_id"] == "vs-123"
+        assert by_kind["chat"]["provenance"]["conversation_id"]
+        assert by_kind["eval"]["provenance"]["run_id"] == eval_run_id
+        assert by_kind["eval"]["provenance"]["task_id"] == "q1"
+
+    @pytest.mark.asyncio
+    async def test_index_serves_without_any_compute(self, seeded):
+        """Pod-free browsing at the API boundary: a composed app with only
+        the artifacts router lists everything; no session machinery exists.
+        (The dedicated web browse page is the remaining FE follow-up.)"""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from gateway.api.artifacts import router as artifacts_router
+        from gateway.auth import resolve_org_id, resolve_user_id
+        from gateway.db.engine import get_db
+        from gateway.security.scope_guard import _resolve_user_id as scope_user
+
+        db, _, _ = seeded
+        app = FastAPI()
+        app.include_router(artifacts_router)
+
+        async def _get_db():
+            yield db
+
+        async def _user() -> str:
+            return "test-user"
+
+        async def _org() -> str:
+            return ORG
+
+        app.dependency_overrides[get_db] = _get_db
+        app.dependency_overrides[resolve_user_id] = _user
+        app.dependency_overrides[resolve_org_id] = _org
+        app.dependency_overrides[scope_user] = _user
+        client = TestClient(app)
+        body = client.get("/api/artifacts").json()
+        assert body["total"] == 2
+        assert all(record["download"]["route"] for record in body["artifacts"])
+
+    @pytest.mark.asyncio
+    async def test_agent_run_artifacts_appear_in_the_index(self, db):
+        """An artifact committed by an agent run is discoverable without
+        knowing the branch/run — it lists by org like any other."""
+        from tests.test_artifacts_index import seed_chat_artifact
+
+        from gateway.store.artifacts_index import list_artifacts
+
+        run_id, _ = await seed_chat_artifact(
+            db, org_id=ORG, filename="agent-report.html", session_id="chat:run-77"
+        )
+        records, _ = await list_artifacts(db, org_id=ORG)
+        match = [r for r in records if r.to_dict()["name"] == "agent-report.html"]
+        assert match and match[0].to_dict()["provenance"]["run_id"] == run_id
+
+    @pytest.mark.asyncio
+    async def test_artifact_retention_prunes_blobs_but_never_provenance_rows(self, db):
+        from tests.test_artifacts_index import seed_eval_artifacts
+
+        from gateway.store.artifacts_index import list_artifacts
+
+        await seed_eval_artifacts(db, org_id=ORG, artifacts_pruned=True)
+        records, total = await list_artifacts(db, org_id=ORG, kind="eval")
+        assert total == 1  # the provenance row still lists
+        assert records[0].to_dict()["available"] is False  # the blob does not

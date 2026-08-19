@@ -645,6 +645,35 @@ async def _ensure_notebook_session_columns(engine) -> None:
     logger.info("Ensured notebook session columns")
 
 
+async def _ensure_notebook_session_v2_columns(engine) -> None:
+    """Add the notebook runtime v2 columns if they don't exist.
+
+    The v2 session model (backend seam, sandbox runtime handles, snapshot
+    resume) added these to GatewayNotebookSession; without this, any DB
+    created before v2 fails every session query with UndefinedColumnError.
+    Idempotent ADD COLUMN IF NOT EXISTS. `backend` defaults to 'k8s' for
+    pre-existing rows — they were pods; new rows get the model default.
+    """
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_notebook_sessions "
+                "ADD COLUMN IF NOT EXISTS backend VARCHAR(20) NOT NULL DEFAULT 'k8s'"
+            )
+        )
+        await conn.execute(
+            text("ALTER TABLE gateway_notebook_sessions ADD COLUMN IF NOT EXISTS runtime_handle VARCHAR(200)")
+        )
+        await conn.execute(text("ALTER TABLE gateway_notebook_sessions ADD COLUMN IF NOT EXISTS upstream_url TEXT"))
+        await conn.execute(
+            text("ALTER TABLE gateway_notebook_sessions ADD COLUMN IF NOT EXISTS snapshot_id VARCHAR(200)")
+        )
+        await conn.execute(
+            text("ALTER TABLE gateway_notebook_sessions ADD COLUMN IF NOT EXISTS last_extend_at DOUBLE PRECISION")
+        )
+    logger.info("Ensured notebook session v2 columns")
+
+
 async def _ensure_notebook_session_pod_ip_internal(engine) -> None:
     """Add pod_ip_internal column to gateway_notebook_sessions if it does not exist.
 
@@ -830,6 +859,7 @@ async def init_db() -> None:
     await _ensure_notebook_session_columns(engine)
     await _ensure_notebook_session_org_id(engine)
     await _ensure_notebook_session_pod_ip_internal(engine)
+    await _ensure_notebook_session_v2_columns(engine)
     await _ensure_drop_s3_prefix_column(engine)
     await _ensure_github_authorized_repos_column(engine)
     await _ensure_notebook_token_plaintext_dropped(engine)

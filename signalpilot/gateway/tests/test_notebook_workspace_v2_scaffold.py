@@ -16,6 +16,7 @@ import hashlib
 import io
 import tarfile
 import uuid
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -253,11 +254,14 @@ class TestSessionLease:
 
 @pytest.fixture
 def api(storage, monkeypatch):
+    """The real app over aiosqlite + moto, with auth pinned by dependency
+    override so state left behind by other test modules cannot bleed in."""
     from fastapi.testclient import TestClient
 
+    from gateway.auth import resolve_org_id, resolve_user_id
     from gateway.db.engine import get_db
     from gateway.main import app
-    from gateway.store import get_local_api_key
+    from gateway.security.scope_guard import _resolve_user_id as scope_resolve_user_id
 
     engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
@@ -278,15 +282,49 @@ def api(storage, monkeypatch):
         async with factory() as session:
             yield session
 
+    async def _user() -> str:
+        return "test-user"
+
+    async def _org() -> str:
+        return ORG
+
     monkeypatch.setattr(
         "gateway.api.workspace_files.workspace_object_storage", lambda: storage
     )
+    # The middleware's eval-credential probe needs a DB it doesn't have here.
+    monkeypatch.setattr(
+        "gateway.http.middleware.auth._eval_credentials_active",
+        AsyncMock(return_value=False),
+    )
+    # App lifespan collaborators that would otherwise demand a live Postgres.
+    monkeypatch.setattr("gateway.main.init_db", AsyncMock())
+    monkeypatch.setattr("gateway.main.close_db", AsyncMock())
+    monkeypatch.setattr("gateway.main.get_session_factory", lambda: AsyncMock())
+    monkeypatch.setattr("gateway.main._mcp_session_manager", None)
+    monkeypatch.setattr(
+        "gateway.connectors.health_monitor.health_monitor.load_from_db", AsyncMock()
+    )
     app.dependency_overrides[get_db] = _get_db
-    api_key = get_local_api_key()
+    app.dependency_overrides[resolve_user_id] = _user
+    app.dependency_overrides[resolve_org_id] = _org
+    app.dependency_overrides[scope_resolve_user_id] = _user
     try:
-        yield TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
+        # A syntactically valid JWT (non sp_) passes the API-key middleware
+        # through to resolve_user_id, which the override above pins — the
+        # signature is never checked because verification is the override.
+        import base64
+        import json as _json
+
+        def _b64(obj) -> str:
+            return base64.urlsafe_b64encode(_json.dumps(obj).encode()).rstrip(b"=").decode()
+
+        shaped = f"{_b64({'alg': 'HS256', 'typ': 'JWT'})}.{_b64({'sub': 'test-user'})}.c2ln"
+        yield TestClient(app, headers={"Authorization": f"Bearer {shaped}"})
     finally:
         app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(resolve_user_id, None)
+        app.dependency_overrides.pop(resolve_org_id, None)
+        app.dependency_overrides.pop(scope_resolve_user_id, None)
 
 
 def _create_project(api) -> str:
@@ -476,13 +514,23 @@ class TestWorkspaceFilesAPI:
         from gateway.main import app
 
         project = _create_project(api)
-        anonymous = TestClient(app)
-        response = anonymous.put(
-            f"/api/workspace-projects/{project}/files/hack.txt", content=b"nope"
-        )
-        # Deployed, the auth middleware answers 401/403; in this hermetic run
-        # its credential check has no DATABASE_URL and fails closed with 503.
-        # The contract under test: the mutation is refused and writes nothing.
+        # Drop this fixture's auth overrides so the request is genuinely
+        # anonymous, then restore them for the verification read.
+        saved = dict(app.dependency_overrides)
+        try:
+            from gateway.db.engine import get_db
+
+            app.dependency_overrides.clear()
+            app.dependency_overrides[get_db] = saved[get_db]
+            anonymous = TestClient(app, raise_server_exceptions=False)
+            response = anonymous.put(
+                f"/api/workspace-projects/{project}/files/hack.txt", content=b"nope"
+            )
+        finally:
+            app.dependency_overrides.clear()
+            app.dependency_overrides.update(saved)
+        # The mutation is refused (401/403 deployed; any 4xx/5xx here) and
+        # writes nothing.
         assert response.status_code >= 400
         revisions = api.get(f"/api/workspace-projects/{project}/revisions").json()["revisions"]
         assert revisions == []

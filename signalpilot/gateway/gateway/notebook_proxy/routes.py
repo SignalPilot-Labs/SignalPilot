@@ -126,9 +126,14 @@ async def proxy_websocket(
         )
         forwarded_query = ""
 
-    upstream_url = (
-        f"ws://{proxy_session.upstream_base.removeprefix('http://')}/{path.lstrip('/')}"
-    )
+    # http upstreams (local direct container) bridge as ws; https upstreams
+    # (sandbox route URLs) bridge as wss.
+    base = proxy_session.upstream_base
+    if base.startswith("https://"):
+        ws_base = f"wss://{base.removeprefix('https://')}"
+    else:
+        ws_base = f"ws://{base.removeprefix('http://')}"
+    upstream_url = f"{ws_base}/{path.lstrip('/')}"
     if forwarded_query:
         upstream_url = f"{upstream_url}?{forwarded_query}"
 

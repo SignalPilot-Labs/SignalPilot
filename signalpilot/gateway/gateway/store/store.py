@@ -46,6 +46,7 @@ from gateway.models.knowledge import KnowledgeDoc, KnowledgeDocCreate, Knowledge
 from gateway.runtime.mode import is_cloud_mode
 from gateway.store._constants import CURRENT_KEY_VERSION
 from gateway.store.connection_strings import _build_connection_string, _extract_credential_extras
+from gateway.util.tasks import fire_and_forget
 from gateway.store.crypto import (
     CredentialEncryptionError,
     _decrypt_with_migration,
@@ -1179,7 +1180,7 @@ class Store:
             ]
         bump_ids = [h.doc.id for h in hits] if bump_view else None
         if events or bump_ids:
-            knowledge_search_mod.fire_and_forget(
+            fire_and_forget(
                 knowledge_search_mod.log_retrieval_events(events, bump_view_ids=bump_ids)
             )
         return hits
@@ -1193,7 +1194,7 @@ class Store:
             knowledge_search_mod.RetrievalEvent(org_id=oid, doc_id=d, source=source, query=query, user_id=self.user_id)
             for d in doc_ids
         ]
-        knowledge_search_mod.fire_and_forget(
+        fire_and_forget(
             knowledge_search_mod.log_retrieval_events(events, bump_view_ids=doc_ids if bump_view else None)
         )
 

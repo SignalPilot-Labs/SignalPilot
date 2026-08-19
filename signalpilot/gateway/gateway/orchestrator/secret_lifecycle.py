@@ -1,17 +1,13 @@
-"""Shared helper for the per-pod credential Secret + Pod creation lifecycle.
+"""Per-pod credential Secret + Pod creation lifecycle for eval workloads.
 
-Both the HTTP path (gateway/api/notebook_sessions.py) and the MCP path
-(gateway/mcp/tools/notebook.py) must: create the Secret, create the Pod,
-then patch ownerReference so kube GC cleans up the Secret when the pod dies.
-
-This helper owns that three-step contract.  Post-return invariant:
+The eval Kubernetes backend stages a per-run env Secret, creates the pod, then
+patches ownerReference so kube GC removes the Secret with the pod that owns it.
+Post-return invariant:
   - The Pod and Secret both exist, Secret has ownerReference pointing to Pod.
   - On any failure, cleanup is attempted and the original exception is re-raised.
   - Secret-create failure: just re-raise (nothing to clean up).
-  - Pod-create or ownerRef-patch failure: delete Secret (and Pod if it exists), then re-raise.
-
-R7 F-13 (1b): extracted to eliminate the two-callsite drift that caused the MCP
-path to miss the ownerRef patch for an entire round.
+  - Pod-create or ownerRef-patch failure: delete Secret (and Pod if it exists),
+    then re-raise.
 """
 
 from __future__ import annotations
@@ -36,20 +32,15 @@ async def create_secret_with_owner_ref(
     pod_name: str,
     create_pod_fn: Callable[[], Awaitable[Any]],
 ) -> Any:
-    """Create secret_name carrying `values`, call create_pod_fn, then patch ownerRef.
-
-    Workload-agnostic core of the three-step contract described in the module
-    docstring: notebook sessions and eval pods both stage credentials this way so
-    kube GC removes the Secret with the Pod that owns it.
-    """
+    """Create secret_name carrying `values`, call create_pod_fn, then patch ownerRef."""
     from kubernetes_asyncio import client as k8s_client
     from kubernetes_asyncio.client.exceptions import ApiException
 
     # The secret name is derived from the pod name, so a Secret from a prior
-    # session can linger if its pod was deleted before kube GC removed the
+    # run can linger if its pod was deleted before kube GC removed the
     # owner-ref'd Secret, or if a previous create half-failed. Delete any stale
     # Secret first so create is idempotent (otherwise create 409s "already
-    # exists" and the session never starts).
+    # exists" and the run never starts).
     try:
         await core_v1.delete_namespaced_secret(name=secret_name, namespace=namespace)
     except ApiException as exc:
@@ -116,53 +107,3 @@ async def create_secret_with_owner_ref(
         raise  # Re-raise original exception; do NOT swallow.
 
     return pod_obj
-
-
-async def create_jwt_secret_with_owner_ref(
-    core_v1: Any,
-    *,
-    namespace: str,
-    pod_name: str,
-    session_jwt: str,
-    notebook_token: str,
-    create_pod_fn: Callable[[], Awaitable[Any]],
-) -> Any:
-    """Create the sp-jwt-<pod_name> Secret, call create_pod_fn, then patch ownerRef.
-
-    Args:
-        core_v1: An initialised kubernetes_asyncio CoreV1Api client.
-        namespace: Tenant namespace where both Secret and Pod live.
-        pod_name: Name of the pod being created (also used to derive secret_name).
-        session_jwt: Raw JWT string to store in the Secret (base64-encoded internally).
-        notebook_token: Per-pod notebook auth token. Required — an empty value would
-            produce a pod that serves anonymous callers, so it raises instead.
-        create_pod_fn: Async callable that creates the Pod and returns the pod object.
-            Called with no arguments; any required params must be captured in the closure.
-
-    Returns:
-        The pod object returned by create_pod_fn (a V1Pod or equivalent dict).
-
-    Raises:
-        ValueError: notebook_token is empty.
-        Any exception raised during secret create, pod create, pod read, or ownerRef patch.
-        On pod-create or patch failure, delete_namespaced_secret is called before re-raising.
-    """
-    from .kubernetes import SP_NOTEBOOK_TOKEN_SECRET_KEY
-
-    if not notebook_token:
-        raise ValueError(
-            f"Refusing to stage credentials for pod {pod_name!r} without a notebook "
-            "auth token: the pod would accept unauthenticated callers."
-        )
-
-    return await create_secret_with_owner_ref(
-        core_v1,
-        namespace=namespace,
-        secret_name=f"sp-jwt-{pod_name}",
-        values={
-            "session_jwt": session_jwt,
-            SP_NOTEBOOK_TOKEN_SECRET_KEY: notebook_token,
-        },
-        pod_name=pod_name,
-        create_pod_fn=create_pod_fn,
-    )

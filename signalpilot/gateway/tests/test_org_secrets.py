@@ -196,15 +196,15 @@ def test_org_secrets_api_update_stops_active_notebook_sessions(tmp_path, monkeyp
                 user_id="user-1",
                 project_id=None,
                 branch="main",
-                pod_name="nb-local",
+                backend="vercel",
             )
-            await ns.update_session_status(
+            await ns.update_session_runtime(
                 session,
                 session_id=active.id,
                 org_id="local",
                 status="running",
-                pod_ip="10.0.0.1",
-                pod_ip_internal="10.0.0.1",
+                runtime_handle="sbx-local",
+                upstream_url="https://sbx-local.vercel.run",
             )
             other = await ns.create_session(
                 session,
@@ -212,42 +212,38 @@ def test_org_secrets_api_update_stops_active_notebook_sessions(tmp_path, monkeyp
                 user_id="user-2",
                 project_id=None,
                 branch="main",
-                pod_name="nb-other",
+                backend="vercel",
             )
-            await ns.update_session_status(
+            await ns.update_session_runtime(
                 session,
                 session_id=other.id,
                 org_id="other",
                 status="running",
-                pod_ip="10.0.0.2",
-                pod_ip_internal="10.0.0.2",
+                runtime_handle="sbx-other",
+                upstream_url="https://sbx-other.vercel.run",
             )
 
     asyncio.run(seed_sessions())
 
-    class FakeOrchestrator:
+    class FakeBackend:
+        name = "vercel"
+
         def __init__(self) -> None:
-            self.deleted: list[tuple[str, str]] = []
-            self.closed = False
+            self.terminated: list[str] = []
 
-        async def delete_pod(self, pod_name: str, *, org_id: str) -> bool:
-            self.deleted.append((pod_name, org_id))
-            return True
+        async def terminate(self, runtime_handle: str) -> None:
+            self.terminated.append(runtime_handle)
 
-        async def close(self) -> None:
-            self.closed = True
-
-    fake_orch = FakeOrchestrator()
-
-    async def fake_get_orchestrator() -> FakeOrchestrator:
-        return fake_orch
+    fake_backend = FakeBackend()
 
     async def _mock_db_session():
         async with Session() as session:
             yield session
 
     monkeypatch.delenv("SP_NOTEBOOK_DIRECT_URL", raising=False)
-    monkeypatch.setattr(org_secrets_api, "_get_orchestrator", fake_get_orchestrator)
+    monkeypatch.setattr(
+        "gateway.notebooks.session_service.get_notebook_backend", lambda *a, **k: fake_backend
+    )
     app.dependency_overrides[get_db] = _mock_db_session
     try:
         api_key = get_local_api_key()
@@ -265,8 +261,7 @@ def test_org_secrets_api_update_stops_active_notebook_sessions(tmp_path, monkeyp
         local_active, other_active = asyncio.run(check_sessions())
         assert local_active == 0
         assert other_active == 1
-        assert fake_orch.deleted == [("nb-local", "local")]
-        assert fake_orch.closed is True
+        assert fake_backend.terminated == ["sbx-local"]
     finally:
         app.dependency_overrides.pop(get_db, None)
         asyncio.run(engine.dispose())

@@ -45,7 +45,7 @@ from ..auth.user import LOCAL_ORG_ID, resolve_org_id, resolve_user_id, verify_jw
 from ..runtime.mode import is_cloud_mode
 from ..store import get_local_api_key
 from ..store import notebook_sessions as ns
-from .constants import LOCAL_NOTEBOOK_TOKEN_FILE, POD_PORT, SESSION_ID_PATTERN_STR
+from .constants import LOCAL_NOTEBOOK_TOKEN_FILE, SESSION_ID_PATTERN_STR
 
 SESSION_ID_PATTERN = re.compile(SESSION_ID_PATTERN_STR)
 
@@ -205,18 +205,21 @@ async def resolve_proxy_session(
               session.user_id, session.org_id, session.status)
 
     # Step 5: readiness check + upstream URL resolution.
-    direct_url = os.getenv("SP_NOTEBOOK_DIRECT_URL", "")
-    if direct_url:
-        # One shared notebook container, not a per-session pod: its token comes from
-        # the container's own token file rather than the session row.
-        upstream_base = direct_url.rstrip("/")
+    if session.backend == "direct":
+        # One shared notebook container, not per-session compute: its token
+        # comes from the container's own token file, not the session row.
+        upstream_base = (session.upstream_url or os.getenv("SP_NOTEBOOK_DIRECT_URL", "")).rstrip("/")
         upstream_token = _local_notebook_token()
-    elif session.status != "running" or not session.pod_ip_internal:
-        _log.warning("REJECT: not ready status=%s pod_ip_internal=%s",
-                      session.status, session.pod_ip_internal)
+        if not upstream_base:
+            raise HTTPException(status_code=409, detail="Session not ready")
+    elif session.status != "running" or not session.upstream_url:
+        _log.warning("REJECT: not ready status=%s upstream=%s",
+                      session.status, bool(session.upstream_url))
         raise HTTPException(status_code=409, detail="Session not ready")
     else:
-        upstream_base = f"http://{session.pod_ip_internal}:{POD_PORT}/notebook/{session_id}"
+        from ..notebooks.session_service import upstream_base_for
+
+        upstream_base = upstream_base_for(session)
         upstream_token = session.access_token
 
     if not upstream_token:

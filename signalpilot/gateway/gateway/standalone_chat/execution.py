@@ -234,20 +234,17 @@ async def cleanup_finished_execution(db: AsyncSession, *, run_id: str) -> None:
     )
     if session_info is None:
         return
-    if not os.getenv("SP_NOTEBOOK_DIRECT_URL") and session_info.pod_name:
-        try:
-            from gateway.notebooks.session_service import _get_orchestrator
+    try:
+        from gateway.notebooks.session_service import terminate_session
 
-            orchestrator = await _get_orchestrator()
-            await orchestrator.delete_pod(session_info.pod_name, org_id=run.org_id)
-        except Exception:
-            # The normal stale-session reaper remains a fallback.
-            pass
-    await notebook_session_store.mark_stopped(
-        db,
-        session_id=session_info.id,
-        org_id=run.org_id,
-    )
+        await terminate_session(db, session_info=session_info)
+    except Exception:
+        # The normal lifecycle reaper remains a fallback.
+        await notebook_session_store.mark_stopped(
+            db,
+            session_id=session_info.id,
+            org_id=run.org_id,
+        )
 
 
 async def cleanup_expired_approval_sandboxes(db: AsyncSession) -> int:
@@ -284,19 +281,12 @@ async def cleanup_expired_approval_sandboxes(db: AsyncSession) -> int:
         )
         if session_info is None:
             continue
-        if not os.getenv("SP_NOTEBOOK_DIRECT_URL") and session_info.pod_name:
-            try:
-                from gateway.notebooks.session_service import _get_orchestrator
+        try:
+            from gateway.notebooks.session_service import terminate_session
 
-                orchestrator = await _get_orchestrator()
-                await orchestrator.delete_pod(session_info.pod_name, org_id=run.org_id)
-            except Exception:
-                continue
-        await notebook_session_store.mark_stopped(
-            db,
-            session_id=session_info.id,
-            org_id=run.org_id,
-        )
+            await terminate_session(db, session_info=session_info)
+        except Exception:
+            continue
         run.execution_session_id = None
         await db.commit()
         cleaned += 1

@@ -195,72 +195,31 @@ class TestNotebookSessionScopeAllowlistIntersection:
 
 
 class TestGatewayUrlFromConfig:
-    """SP_PUBLIC_GATEWAY_URL is sourced from config, not request Host header."""
+    """SP_GATEWAY_URL in the runtime env is sourced from config, never Host."""
 
-    def test_create_session_uses_config_url_not_request_host(self, monkeypatch):
-        """create_session passes sp_public_gateway_url to create_pod, ignoring request Host."""
-        _patch_secret(monkeypatch)
-        from unittest.mock import AsyncMock, patch
+    @pytest.mark.asyncio
+    async def test_runtime_env_uses_config_url_not_request_host(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
 
-        from gateway.api import notebook_sessions as ns_api
         from gateway.config.k8s import K8sSettings
-        from gateway.models.notebook_sessions import NotebookSessionInfo
-        from gateway.orchestrator import PodInfo
-        from gateway.store import notebook_sessions as ns_store
+        from gateway.notebooks import session_service
 
-        # Mock k8s settings to return a known gateway URL
         fake_settings = MagicMock(spec=K8sSettings)
         fake_settings.sp_public_gateway_url = "http://configured-gateway:3300"
-        fake_settings.sp_session_jwt_ttl_seconds = 3600
-
-        new_session = NotebookSessionInfo(
-            id="sess-url-test",
-            org_id="org-1",
-            user_id="user-1",
-            branch="main",
-            pod_name="nb-url-test",
-            pod_ip=None,
-            access_token="tok-url",
-            status="creating",
-            last_ping=time.time(),
-            created_at=time.time(),
+        monkeypatch.setattr(session_service, "get_k8s_settings", lambda: fake_settings)
+        monkeypatch.delenv("SP_WEB_URL", raising=False)
+        monkeypatch.delenv("SIGNALPILOT_WEB_URL", raising=False)
+        monkeypatch.setattr(
+            session_service.org_secrets_store,
+            "resolve_anthropic_key",
+            AsyncMock(return_value=None),
         )
 
-        mock_orch = AsyncMock()
-        mock_orch.create_pod.return_value = PodInfo(name="nb-url-test", ip=None, status="pending")
-        mock_orch.wait_for_running = AsyncMock(
-            return_value=PodInfo(name="nb-url-test", ip=None, status="running")
+        env = await session_service._runtime_env(
+            AsyncMock(), org_id="org-1", extra_env=None
         )
-        mock_orch.wait_for_ready.return_value = PodInfo(
-            name="nb-url-test", ip="10.0.0.5:2718", status="running"
-        )
-
-        monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=None))
-        monkeypatch.setattr(ns_store, "create_session", AsyncMock(return_value=new_session))
-        monkeypatch.setattr(ns_store, "delete_stopped", AsyncMock())
-        monkeypatch.setattr(ns_store, "update_session_status", AsyncMock())
-        monkeypatch.setattr(ns_api, "_get_orchestrator", AsyncMock(return_value=mock_orch))
-        monkeypatch.setattr(ns_api, "get_k8s_settings", lambda: fake_settings)
-
-        store = MagicMock()
-        store.org_id = "org-1"
-        store.user_id = "user-1"
-        store.session = AsyncMock()
-
-        from gateway.models.notebook_sessions import NotebookSessionCreate
-
-        body = NotebookSessionCreate(branch="main")
-
-        mock_response = MagicMock()
-        mock_response.headers = {}
-
-        import asyncio
-
-        asyncio.run(ns_api.create_session(body, store, mock_response))
-
-        call_kwargs = mock_orch.create_pod.call_args.kwargs
-        # Must use the config URL, NOT any Host-header-derived value
-        assert call_kwargs["gateway_url"] == "http://configured-gateway:3300"
+        assert env["SP_GATEWAY_URL"] == "http://configured-gateway:3300"
+        assert env["SP_GATEWAY_PUBLIC_URL"] == "http://configured-gateway:3300"
 
 
 # ─── M-4: alg=none and alg=RS256 rejected by notebook verifier ───────────────
@@ -411,63 +370,35 @@ class TestCloudModeEmptyUserId:
     async def test_local_mode_none_user_id_uses_fallback(self, monkeypatch):
         """Local mode with None user_id falls back to 'local' (no error)."""
         _patch_secret(monkeypatch)
-        from unittest.mock import AsyncMock
+        from unittest.mock import AsyncMock, MagicMock
 
         from gateway.api import notebook_sessions as ns_api
-        from gateway.config.k8s import K8sSettings
-        from gateway.models.notebook_sessions import NotebookSessionInfo
-        from gateway.orchestrator import PodInfo
-        from gateway.store import notebook_sessions as ns_store
+        from gateway.models.notebook_sessions import NotebookSessionCreate
 
         monkeypatch.setattr(ns_api, "is_cloud_mode", lambda: False)
 
-        fake_settings = MagicMock(spec=K8sSettings)
-        fake_settings.sp_public_gateway_url = "http://gateway:3300"
-        fake_settings.sp_session_jwt_ttl_seconds = 3600
-        monkeypatch.setattr(ns_api, "get_k8s_settings", lambda: fake_settings)
+        captured = {}
 
-        new_session = NotebookSessionInfo(
-            id="sess-local",
-            org_id="local",
-            user_id="local",
-            branch="main",
-            pod_name="nb-local",
-            pod_ip=None,
-            access_token="tok-local",
-            status="creating",
-            last_ping=time.time(),
-            created_at=time.time(),
-        )
+        async def _fake_ensure(session, **kwargs):
+            captured.update(kwargs)
+            from gateway.models.notebook_sessions import NotebookSessionInfo
 
-        mock_orch = AsyncMock()
-        mock_orch.is_pod_alive.return_value = False
-        mock_orch.create_pod.return_value = PodInfo(name="nb-local", ip=None, status="pending")
-        mock_orch.wait_for_running = AsyncMock(
-            return_value=PodInfo(name="nb-local", ip=None, status="running")
-        )
-        mock_orch.wait_for_ready.return_value = PodInfo(name="nb-local", ip="10.0.0.6:2718", status="running")
+            return NotebookSessionInfo(
+                id="sess-local", org_id="local", user_id="local", status="running"
+            )
 
-        monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=None))
-        monkeypatch.setattr(ns_store, "create_session", AsyncMock(return_value=new_session))
-        monkeypatch.setattr(ns_store, "delete_stopped", AsyncMock())
-        monkeypatch.setattr(ns_store, "update_session_status", AsyncMock())
-        monkeypatch.setattr(ns_api, "_get_orchestrator", AsyncMock(return_value=mock_orch))
+        monkeypatch.setattr(ns_api.session_service, "ensure_notebook_session", _fake_ensure)
 
         store = MagicMock()
         store.org_id = "local"
-        store.user_id = None  # None in local mode — should fall back to "local"
+        store.user_id = None
         store.session = AsyncMock()
 
-        from gateway.models.notebook_sessions import NotebookSessionCreate
-
-        body = NotebookSessionCreate(branch="main")
-        mock_response = MagicMock()
-        mock_response.headers = {}
-        result = await ns_api.create_session(body, store, mock_response)
-        assert result is not None
-
-
-# ─── M: scopes claim in minted JWT ────────────────────────────────────────────
+        result = await ns_api.create_session(
+            NotebookSessionCreate(branch="main"), store, MagicMock()
+        )
+        assert result.user_id == "local"
+        assert captured["user_id"] == "local"
 
 
 class TestMintedJWTContainsScopes:

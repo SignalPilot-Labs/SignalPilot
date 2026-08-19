@@ -1558,7 +1558,13 @@ class GatewayAgentRun(GatewayBase):
 
 
 class GatewayNotebookSession(GatewayBase):
-    """One active notebook pod per user."""
+    """One notebook compute session per (org, user).
+
+    Runtime v2: compute is a sandbox VM (or the local direct container), never
+    a pod. `runtime_handle` is the provider handle (sandbox name), reattachable
+    by any gateway worker. `upstream_url` is the base URL the proxy dials.
+    Status: creating | running | snapshotted | stopped | error.
+    """
 
     __tablename__ = "gateway_notebook_sessions"
 
@@ -1567,14 +1573,14 @@ class GatewayNotebookSession(GatewayBase):
     user_id: Mapped[str] = mapped_column(String, nullable=False)
     project_id: Mapped[str | None] = mapped_column(String)
     branch: Mapped[str] = mapped_column(String(100), nullable=False, default="main")
-    pod_name: Mapped[str | None] = mapped_column(String)
-    pod_ip: Mapped[str | None] = mapped_column(String)
-    # pod_ip_internal is the cluster address that the gateway proxy uses.
-    # pod_ip is the external NodePort address.
-    pod_ip_internal: Mapped[str | None] = mapped_column(Text, nullable=True)
+    backend: Mapped[str] = mapped_column(String(20), nullable=False, default="vercel")
+    runtime_handle: Mapped[str | None] = mapped_column(String(200))
+    upstream_url: Mapped[str | None] = mapped_column(Text)
+    snapshot_id: Mapped[str | None] = mapped_column(String(200))
     access_token_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="creating")
     last_ping: Mapped[float | None] = mapped_column(Float)
+    last_extend_at: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
 
     __table_args__ = (

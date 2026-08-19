@@ -16,7 +16,9 @@ import base64
 import binascii
 import re
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from ..auth import DBSession, OrgID, UserID
@@ -38,8 +40,12 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_INLINE_BYTES = 8 * 1024 * 1024
 
 
-def _workspace_store() -> WorkspaceStore:
+def get_workspace_store() -> WorkspaceStore:
+    """FastAPI dependency: the S3-backed workspace store."""
     return WorkspaceStore(workspace_object_storage())
+
+
+WorkspaceStoreD = Annotated[WorkspaceStore, Depends(get_workspace_store)]
 
 
 def _valid_branch(branch: str) -> str:
@@ -85,10 +91,10 @@ async def get_file(
     _user: UserID,
     db: DBSession,
     store: StoreD,
+    ws: WorkspaceStoreD,
     branch: str = Query("main"),
     revision: int | None = Query(None, ge=0),
 ):
-    ws = _workspace_store()
     await _require_project(store, ws, db, project_id)
     result = await ws.read_file(
         db,
@@ -123,9 +129,9 @@ async def put_file(
     user_id: UserID,
     db: DBSession,
     store: StoreD,
+    ws: WorkspaceStoreD,
     branch: str = Query("main"),
 ):
-    ws = _workspace_store()
     await _require_project(store, ws, db, project_id)
     content = await request.body()
     if len(content) > _MAX_INLINE_BYTES:
@@ -154,9 +160,9 @@ async def delete_file(
     user_id: UserID,
     db: DBSession,
     store: StoreD,
+    ws: WorkspaceStoreD,
     branch: str = Query("main"),
 ):
-    ws = _workspace_store()
     await _require_project(store, ws, db, project_id)
     branch = _valid_branch(branch)
     path = _confined(path)
@@ -221,8 +227,8 @@ async def list_files(
     _user: UserID,
     db: DBSession,
     store: StoreD,
+    ws: WorkspaceStoreD,
 ):
-    ws = _workspace_store()
     await _require_project(store, ws, db, project_id)
     branch = _valid_branch(body.branch)
     try:
@@ -251,8 +257,8 @@ async def search_files(
     _user: UserID,
     db: DBSession,
     store: StoreD,
+    ws: WorkspaceStoreD,
 ):
-    ws = _workspace_store()
     await _require_project(store, ws, db, project_id)
     manifest = await _manifest_or_404(
         ws, db, org_id=org_id, project_id=project_id,
@@ -276,8 +282,9 @@ async def copy_file(
     user_id: UserID,
     db: DBSession,
     store: StoreD,
+    ws: WorkspaceStoreD,
 ):
-    return await _copy_or_move(project_id, body, org_id, user_id, db, store, move=False)
+    return await _copy_or_move(project_id, body, org_id, user_id, db, store, ws, move=False)
 
 
 @router.post(
@@ -291,12 +298,12 @@ async def move_file(
     user_id: UserID,
     db: DBSession,
     store: StoreD,
+    ws: WorkspaceStoreD,
 ):
-    return await _copy_or_move(project_id, body, org_id, user_id, db, store, move=True)
+    return await _copy_or_move(project_id, body, org_id, user_id, db, store, ws, move=True)
 
 
-async def _copy_or_move(project_id, body, org_id, user_id, db, store, *, move: bool):
-    ws = _workspace_store()
+async def _copy_or_move(project_id, body, org_id, user_id, db, store, ws, *, move: bool):
     await _require_project(store, ws, db, project_id)
     try:
         manifest = await ws.copy_file(
@@ -347,8 +354,8 @@ async def batch_commit(
     user_id: UserID,
     db: DBSession,
     store: StoreD,
+    ws: WorkspaceStoreD,
 ):
-    ws = _workspace_store()
     await _require_project(store, ws, db, project_id)
     if not body.upserts and not body.deletes:
         raise HTTPException(status_code=400, detail="Empty batch")
@@ -414,8 +421,8 @@ async def blob_upload_url(
     _user: UserID,
     db: DBSession,
     store: StoreD,
+    ws: WorkspaceStoreD,
 ):
-    ws = _workspace_store()
     await _require_project(store, ws, db, project_id)
     if not _SHA256_RE.match(body.sha256):
         raise HTTPException(status_code=400, detail="sha256 must be 64 lowercase hex chars")
@@ -437,10 +444,10 @@ async def snapshot(
     _user: UserID,
     db: DBSession,
     store: StoreD,
+    ws: WorkspaceStoreD,
     branch: str = Query("main"),
     revision: int | None = Query(None, ge=0),
 ):
-    ws = _workspace_store()
     await _require_project(store, ws, db, project_id)
     try:
         resolved, key = await ws.build_snapshot(
@@ -462,10 +469,10 @@ async def revisions(
     _user: UserID,
     db: DBSession,
     store: StoreD,
+    ws: WorkspaceStoreD,
     branch: str = Query("main"),
     limit: int = Query(100, ge=1, le=500),
 ):
-    ws = _workspace_store()
     await _require_project(store, ws, db, project_id)
     rows = await ws.list_revisions(
         db, org_id=org_id, project_id=project_id, branch=_valid_branch(branch), limit=limit

@@ -122,7 +122,10 @@
 .connection-schema-explore > div { display: flex; gap: 0.65rem; margin-top: 0.4rem; overflow-x: auto; }
 .connection-schema-explore > div span { flex: 0 0 auto; color: var(--color-text-dim); font-size: 7px; }
 .connection-schema-explore > div strong { color: var(--color-text-muted); font-family: var(--font-mono); font-weight: 500; }
-.connection-schema-empty { display: flex; min-height: 90px; align-items: center; justify-content: center; color: var(--color-text-dim); font-size: 9px; }
+.connection-schema-empty { display: flex; min-height: 90px; align-items: center; justify-content: center; gap: 0.45rem; color: var(--color-text-dim); font-size: 9px; }
+.connection-schema-empty svg { width: 13px; height: 13px; flex: 0 0 auto; }
+.connection-schema-empty .is-spinning { animation: connection-schema-spin 800ms linear infinite; }
+@keyframes connection-schema-spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 1120px) {
   .connections-overview { grid-template-columns: repeat(4, 1fr); }
@@ -156,3 +159,20 @@
   .connection-schema-detail header dl { grid-template-columns: repeat(3, 1fr); }
   .connection-schema-detail header dl div:first-child { border-left: 0; }
 }
+
+/* ── Database picker step (schema browser) ── */
+.connection-schema-db-picker { padding: 0.65rem 0.75rem 0.85rem; }
+.connection-schema-db-picker > header { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.55rem; color: var(--color-text-dim); font-size: 8px; white-space: nowrap; }
+.connection-schema-db-picker > header strong { color: var(--color-text-muted); font-family: var(--font-mono); font-weight: 500; }
+.connection-schema-db-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 0.45rem; }
+.connection-schema-db-grid > button { display: grid; grid-template-columns: 13px minmax(0, 1fr) 11px; align-items: center; gap: 0.45rem; padding: 0.5rem 0.55rem; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-bg-input); color: var(--color-text-dim); text-align: left; transition: border-color 120ms ease, background 120ms ease; }
+.connection-schema-db-grid > button:hover { border-color: var(--color-border-active); background: var(--color-bg-hover); color: var(--color-text-muted); }
+.connection-schema-db-grid > button > svg { width: 12px; height: 12px; }
+.connection-schema-db-grid > button span { min-width: 0; }
+.connection-schema-db-grid > button strong { display: block; overflow: hidden; color: var(--color-text); font-family: var(--font-mono); font-size: 9px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.connection-schema-db-grid > button small { display: block; margin-top: 0.12rem; overflow: hidden; color: var(--color-text-dim); font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
+.connection-schema-db-back { display: inline-flex; height: 22px; flex: 0 0 auto; align-items: center; gap: 0.25rem; padding: 0 0.4rem; border: 1px solid var(--color-border); border-radius: 4px; color: var(--color-text-dim); font-size: 8px; white-space: nowrap; }
+.connection-schema-db-back:hover { color: var(--color-text); background: var(--color-bg-hover); }
+.connection-schema-db-back svg { width: 9px; height: 9px; }
+.connection-schema-db-current { display: inline-flex; align-items: center; gap: 0.25rem; }
+.connection-schema-db-current strong { overflow: hidden; max-width: 160px; text-overflow: ellipsis; white-space: nowrap; }

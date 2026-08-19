@@ -435,6 +435,64 @@ async def tasks_with_live_sandboxes(
     return index
 
 
+async def live_vercel_sandboxes(
+    session: AsyncSession, *, org_id: str, limit_runs: int = 25
+) -> list[dict[str, Any]]:
+    """Vercel sandboxes attributed to tasks still executing, for the panel.
+
+    The Vercel provider has no pod/label API surface to enumerate, so run
+    state is the only inventory: a sandbox is "live" while its task row is
+    pending/running (the backend destroys the VM in a finally either way).
+    """
+    run_ids = (
+        (
+            await session.execute(
+                select(GatewayEvalRun.id)
+                .where(GatewayEvalRun.org_id == org_id)
+                .order_by(GatewayEvalRun.created_at.desc())
+                .limit(limit_runs)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not run_ids:
+        return []
+    rows = (
+        (
+            await session.execute(
+                select(GatewayEvalRunTask).where(
+                    GatewayEvalRunTask.org_id == org_id,
+                    GatewayEvalRunTask.run_id.in_(run_ids),
+                    GatewayEvalRunTask.status.in_(("pending", "running")),
+                    GatewayEvalRunTask.sandbox.is_not(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    out: list[dict[str, Any]] = []
+    for t in rows:
+        sandbox = t.sandbox or {}
+        if str(sandbox.get("backend", "") or "") != "vercel":
+            continue
+        name = str(sandbox.get("name", "") or "")
+        if not name:
+            continue
+        out.append(
+            {
+                "name": name,
+                "run_id": t.run_id,
+                "task_id": t.task_id,
+                "task_title": t.title,
+                "task_phase": str(sandbox.get("phase", "") or "agent"),
+                "started_at": sandbox.get("started_at"),
+            }
+        )
+    return out
+
+
 # Accuracy history + regressions.
 
 

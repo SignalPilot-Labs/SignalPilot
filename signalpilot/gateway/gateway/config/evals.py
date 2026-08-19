@@ -48,6 +48,9 @@ class EvalRunSettings(_GatewaySettingsBase):
 
     runner_image: str = Field("", alias="SP_EVAL_RUNNER_IMAGE")
     setup_image: str = Field("", alias="SP_EVAL_SETUP_IMAGE")
+    # "" = pick by deployment mode (docker locally, kubernetes in cloud);
+    # "vercel" = ephemeral Vercel sandbox VMs (needs VERCEL_* credentials).
+    execution_backend: str = Field("", alias="SP_EVAL_EXECUTION_BACKEND")
     docker_socket: str = Field("/var/run/docker.sock", alias="SP_EVAL_DOCKER_SOCKET")
     docker_network: str = Field("signalpilot_eval_runtime", alias="SP_EVAL_DOCKER_NETWORK")
     mcp_url: str = Field("http://gateway:3300/mcp", alias="SP_EVAL_MCP_URL")
@@ -171,6 +174,15 @@ class EvalRunSettings(_GatewaySettingsBase):
                 "Floating tags like ':latest' are not allowed. "
                 "Look up the digest with: crane digest <image> OR "
                 "docker buildx imagetools inspect <image>"
+            )
+        return v
+
+    @field_validator("execution_backend", mode="after")
+    @classmethod
+    def _known_backend(cls, v: str) -> str:
+        if v not in ("", "vercel"):
+            raise ValueError(
+                f"SP_EVAL_EXECUTION_BACKEND must be empty or 'vercel', got {v!r}"
             )
         return v
 

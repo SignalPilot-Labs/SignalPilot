@@ -205,7 +205,17 @@ def _patch_owners(monkeypatch, owners: dict[str, dict] | None = None) -> None:
 
 
 class TestSandboxNameValidation:
-    @pytest.mark.parametrize("name", ["sp-eval-aaaaaaaaaaaa", "a" * 12, "0123456789abcdef" * 4])
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "sp-eval-aaaaaaaaaaaa",
+            "a" * 12,
+            "0123456789abcdef" * 4,
+            # Vercel-generated sandbox names
+            "gold-planned-chicken-DbtqQZ",
+            "ivory-complicated-pelican-euE6FH",
+        ],
+    )
     def test_accepts_backend_minted_names(self, name: str) -> None:
         assert sandboxes.is_valid_sandbox_name(name)
 

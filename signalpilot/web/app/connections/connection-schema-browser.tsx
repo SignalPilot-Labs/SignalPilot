@@ -3,9 +3,12 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
+  ArrowLeft,
   ArrowUpRight,
   Check,
+  ChevronRight,
   Clock,
+  Database,
   Eye,
   EyeOff,
   KeyRound,
@@ -18,11 +21,13 @@ import {
 } from "lucide-react";
 import { setSchemaEndorsements } from "~/lib/api";
 import { useConnection } from "~/lib/connection-context";
+import { groupTablesByDatabase, localSchema, tableDatabaseKey } from "~/lib/schema-databases";
 import { useToast } from "~/components/ui/toast";
 
 export interface ConnectionSchemaTable {
   schema?: string;
   name: string;
+  database?: string;
   type?: string;
   description?: string;
   row_count?: number;
@@ -67,6 +72,8 @@ interface ExploredColumn {
 
 interface Props {
   connectionName: string;
+  /** Configured database/catalog of the connection — labels the implicit group on single-database connectors. */
+  defaultDatabaseName?: string;
   tables: Record<string, ConnectionSchemaTable>;
   searchTables?: Record<string, ConnectionSchemaTable>;
   searchResultCount?: number;
@@ -105,10 +112,9 @@ function relativeTime(timestamp: number | null | undefined): string {
 
 export function ConnectionSchemaBrowser({
   connectionName,
+  defaultDatabaseName,
   tables,
   searchTables,
-  searchResultCount,
-  totalTables,
   search,
   searchLoading,
   onSearch,
@@ -126,22 +132,43 @@ export function ConnectionSchemaBrowser({
 }: Props) {
   const { setSelectedConn } = useConnection();
   const { toast } = useToast();
+  const [selectedDb, setSelectedDb] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState("");
   const [savingTable, setSavingTable] = useState(false);
   const [semanticLoading, setSemanticLoading] = useState(false);
-  const displayTables = searchTables ?? tables;
+
+  const fallbackDb = defaultDatabaseName || "default";
+  const databaseGroups = useMemo(() => groupTablesByDatabase(tables, fallbackDb), [fallbackDb, tables]);
+
+  useEffect(() => {
+    setSelectedDb(null);
+    setSelectedKey("");
+  }, [connectionName]);
+
+  const sourceTables = searchTables ?? tables;
+  const displayTables = useMemo(() => {
+    if (!selectedDb) return {};
+    return Object.fromEntries(
+      Object.entries(sourceTables).filter(([, table]) => tableDatabaseKey(table, fallbackDb) === selectedDb),
+    );
+  }, [fallbackDb, selectedDb, sourceTables]);
+  const dbTableTotal = useMemo(
+    () => selectedDb
+      ? Object.values(tables).filter((table) => tableDatabaseKey(table, fallbackDb) === selectedDb).length
+      : 0,
+    [fallbackDb, selectedDb, tables],
+  );
   const entries = useMemo(
-    () => Object.entries(displayTables).sort(([, left], [, right]) => {
-      const leftSchema = left.schema || "default";
-      const rightSchema = right.schema || "default";
-      return leftSchema.localeCompare(rightSchema) || left.name.localeCompare(right.name);
-    }),
+    () => Object.entries(displayTables).sort(([, left], [, right]) =>
+      localSchema(left).localeCompare(localSchema(right)) || left.name.localeCompare(right.name),
+    ),
     [displayTables],
   );
 
   useEffect(() => {
+    if (!selectedDb) return;
     if (!selectedKey || !displayTables[selectedKey]) setSelectedKey(entries[0]?.[0] ?? "");
-  }, [displayTables, entries, selectedKey]);
+  }, [displayTables, entries, selectedDb, selectedKey]);
 
   const selectedTable = selectedKey ? displayTables[selectedKey] : undefined;
   const selectedExploredData = selectedKey ? exploredData[`${connectionName}:${selectedKey}`] : undefined;
@@ -202,11 +229,40 @@ export function ConnectionSchemaBrowser({
     }
   }
 
+  if (!selectedDb) {
+    return (
+      <section className="connection-schema-workbench">
+        <div className="connection-schema-db-picker">
+          <header>
+            <span><strong>{databaseGroups.length}</strong> {databaseGroups.length === 1 ? "database" : "databases"} on this connection</span>
+            <span>pick a database to explore its tables</span>
+          </header>
+          <div className="connection-schema-db-grid">
+            {databaseGroups.map((group) => (
+              <button key={group.name} type="button" onClick={() => setSelectedDb(group.name)}>
+                <Database aria-hidden="true" />
+                <span>
+                  <strong>{group.name}</strong>
+                  <small>{group.schemaCount} {group.schemaCount === 1 ? "schema" : "schemas"} · {group.tableCount} {group.tableCount === 1 ? "table" : "tables"}</small>
+                </span>
+                <ChevronRight aria-hidden="true" />
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="connection-schema-workbench">
       <header className="connection-schema-toolbar">
         <div className="connection-schema-summary">
-          <span><strong>{searchTables ? searchResultCount ?? entries.length : entries.length}</strong>{searchTables ? ` of ${totalTables ?? Object.keys(tables).length}` : ""} tables</span>
+          <button type="button" className="connection-schema-db-back" onClick={() => { setSelectedDb(null); setSelectedKey(""); }} title="Choose another database">
+            <ArrowLeft aria-hidden="true" /><span>databases</span>
+          </button>
+          <span className="connection-schema-db-current"><Database aria-hidden="true" /><strong>{selectedDb}</strong></span>
+          <span><strong>{entries.length}</strong>{searchTables ? ` of ${dbTableTotal}` : ""} tables</span>
           <span><strong>{columnCount}</strong> columns</span>
           <span><strong>{relationshipCount}</strong> relationships</span>
           {refreshStatus?.fingerprint && <code>#{refreshStatus.fingerprint.slice(0, 8)}</code>}
@@ -228,7 +284,7 @@ export function ConnectionSchemaBrowser({
             {entries.map(([key, table]) => (
               <button key={key} type="button" className={selectedKey === key ? "is-active" : ""} onClick={() => setSelectedKey(key)}>
                 <Table2 />
-                <span><strong>{table.name}</strong><small>{table.schema || "default"}</small></span>
+                <span><strong>{table.name}</strong><small>{localSchema(table)}</small></span>
                 <em>{table.columns?.length ?? 0}</em>
                 {endorsements.endorsed.includes(key) && <Star className="is-endorsed" aria-label="Endorsed" />}
                 {endorsements.hidden.includes(key) && <EyeOff className="is-hidden" aria-label="Hidden from agents" />}
@@ -242,7 +298,7 @@ export function ConnectionSchemaBrowser({
           {selectedTable ? (
             <>
               <header>
-                <div><span>{selectedTable.schema || "default"}</span><h3>{selectedTable.name}</h3><p>{selectedTable.description || `${selectedTable.type === "view" ? "View" : "Table"} with ${selectedTable.columns?.length ?? 0} columns`}</p></div>
+                <div><span>{selectedDb} / {localSchema(selectedTable)}</span><h3>{selectedTable.name}</h3><p>{selectedTable.description || `${selectedTable.type === "view" ? "View" : "Table"} with ${selectedTable.columns?.length ?? 0} columns`}</p></div>
                 <dl><div><dt>Rows</dt><dd>{formatRows(selectedTable.row_count)}</dd></div><div><dt>Columns</dt><dd>{selectedTable.columns?.length ?? 0}</dd></div><div><dt>Relations</dt><dd>{selectedTable.foreign_keys?.length ?? 0}</dd></div></dl>
                 <div className="connection-schema-table-actions">
                   <button type="button" className={selectedEndorsed ? "is-endorsed" : ""} onClick={() => void toggleSelectedEndorsement()} disabled={savingTable} title={selectedEndorsed ? "Remove endorsement" : "Endorse for agents"}>{savingTable ? <Loader2 className="is-spinning" /> : selectedEndorsed ? <Check /> : <Star />}<span>{selectedEndorsed ? "Endorsed" : "Endorse"}</span></button>

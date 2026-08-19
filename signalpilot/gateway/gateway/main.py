@@ -345,6 +345,17 @@ async def lifespan(app: FastAPI):
                     logger.info("JWT-secret GC: deleted %d orphan Secret(s)", deleted)
             except Exception as e:
                 logger.warning("JWT-secret GC error: %s", e)
+            # Eval pods stranded by a gateway restart mid-run: the run path
+            # deletes its pod in a finally, but bare pods have no TTL, so a
+            # crash leaves them Completed forever without this sweep.
+            try:
+                from .evals.backends import reap_terminal_eval_pods
+
+                reaped = await reap_terminal_eval_pods(orch)
+                if reaped:
+                    logger.info("Eval-pod reaper: deleted %d terminal pod(s)", reaped)
+            except Exception as e:
+                logger.warning("Eval-pod reaper error: %s", e)
 
     async def _knowledge_retention_loop():
         """Prune knowledge retrieval events past the retention window.

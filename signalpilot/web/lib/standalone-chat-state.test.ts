@@ -5,6 +5,7 @@ import {
   applyStandaloneChatEvent,
   assembleStandaloneRunText,
   containsStandaloneSubmission,
+  deriveStandaloneRunActivity,
   isStandaloneRunReconciled,
   standaloneMessageKey,
   upsertStandaloneConversation,
@@ -38,6 +39,89 @@ function detailFixture(): StandaloneConversationDetail {
 }
 
 describe("standalone chat state", () => {
+  it("turns runtime events into useful live analysis stages", () => {
+    const event = (
+      sequence: number,
+      type: StandaloneConversationDetail["run_events"][number]["type"],
+      payload: Record<string, unknown>,
+    ): StandaloneConversationDetail["run_events"][number] => ({
+      run_id: "run-1",
+      sequence,
+      type,
+      payload,
+      created_at: `2026-07-31T12:00:${String(sequence).padStart(2, "0")}Z`,
+    });
+
+    const events = [
+      event(1, "progress", {
+        label: "Exploring the project and relevant data",
+      }),
+      event(2, "tool_started", {
+        tool: "mcp__standalone-chat__inspect_dbt",
+      }),
+    ];
+    expect(deriveStandaloneRunActivity(events, "run-1")).toEqual({
+      phase: "analyzing",
+      label: "Analyzing project",
+      detail: "Inspecting dbt metadata",
+    });
+
+    events.push(
+      event(3, "tool_started", {
+        tool: "mcp__signalpilot-notebook__run_cells",
+      }),
+    );
+    expect(deriveStandaloneRunActivity(events, "run-1")).toEqual({
+      phase: "running_cells",
+      label: "Running cells",
+      detail: "Executing notebook analysis",
+    });
+
+    events.push(event(4, "cell_executed", { status: "failed" }));
+    events.push(
+      event(5, "tool_started", {
+        tool: "mcp__signalpilot-notebook__edit_notebook",
+      }),
+    );
+    expect(deriveStandaloneRunActivity(events, "run-1")).toEqual({
+      phase: "fixing_query",
+      label: "Fixing query",
+      detail: "Updating notebook analysis",
+    });
+
+    events.push(
+      event(6, "tool_started", {
+        tool: "mcp__signalpilot__query_database",
+      }),
+    );
+    expect(deriveStandaloneRunActivity(events, "run-1")).toEqual({
+      phase: "fixing_query",
+      label: "Fixing query",
+      detail: "Validating the revised query",
+    });
+  });
+
+  it("ignores activity from another run", () => {
+    expect(
+      deriveStandaloneRunActivity(
+        [
+          {
+            run_id: "run-2",
+            sequence: 1,
+            type: "tool_started",
+            payload: { tool: "mcp__signalpilot-notebook__run_cells" },
+            created_at: "2026-07-31T12:00:01Z",
+          },
+        ],
+        "run-1",
+      ),
+    ).toEqual({
+      phase: "analyzing",
+      label: "Analyzing project",
+      detail: "Finding the relevant models and data",
+    });
+  });
+
   it("separates assistant text blocks divided by tool activity", () => {
     const event = (
       sequence: number,

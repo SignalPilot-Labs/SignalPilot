@@ -70,16 +70,19 @@ import {
   applyStandaloneChatEvent,
   assembleStandaloneRunText,
   containsStandaloneSubmission,
+  deriveStandaloneRunActivity,
   isStandaloneRunReconciled,
   standaloneMessageKey,
   upsertStandaloneConversation,
   type OptimisticUserMessage,
+  type StandaloneRunActivity,
 } from "~/lib/standalone-chat-state";
 import { projectSettingsHref } from "~/lib/project-settings-route";
 
 type UiMessage = StandaloneChatMessage & {
   runId?: string;
   runStatus?: StandaloneChatRunStatus;
+  activity?: StandaloneRunActivity;
   synthetic?: boolean;
 };
 
@@ -559,10 +562,25 @@ function AssistantMessage({ message }: { message: UiMessage }) {
         </div>
         <div className="min-w-0 flex-1">
           <div className="chat-markdown">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {message.content}
-            </ReactMarkdown>
+            {message.content && (
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {message.content}
+              </ReactMarkdown>
+            )}
           </div>
+          {running && message.activity && (
+            <p
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              className={`${message.content ? "mt-3" : ""} text-sm text-[var(--color-text-muted)]`}
+            >
+              <span className="font-medium text-[var(--color-text)]">
+                {message.activity.label}:
+              </span>{" "}
+              {message.activity.detail}
+            </p>
+          )}
           {attachedArtifacts.length > 0 && (
             <div className="mt-5 space-y-4">
               {attachedArtifacts.map((artifact) => (
@@ -1272,16 +1290,15 @@ export function StandaloneDataChat({
         const error = [...runEvents]
           .reverse()
           .find((event) => event.type === "error");
-        const progress = [...runEvents]
-          .reverse()
-          .find((event) => event.type === "progress");
         const content =
           (clarification && eventText(clarification, "message")) ||
           streamed ||
           (error && eventText(error, "message")) ||
           (currentRun.status === "cancelled"
             ? "This run was stopped."
-            : eventText(progress, "label") || "Preparing your answer…");
+            : currentRun.status === "completed"
+              ? "Finalizing your answer…"
+              : "");
         messages.push({
           id: `run-${currentRun.id}`,
           role: "assistant",
@@ -1291,6 +1308,7 @@ export function StandaloneDataChat({
           metadata: { run_id: currentRun.id, optimistic: true },
           runId: currentRun.id,
           runStatus: currentRun.status,
+          activity: deriveStandaloneRunActivity(runEvents, currentRun.id),
           synthetic: true,
         });
       }
@@ -1316,11 +1334,12 @@ export function StandaloneDataChat({
       messages.push({
         id: `pending-assistant-${pendingSubmission.id}`,
         role: "assistant",
-        content: "Preparing your answer…",
+        content: "",
         sequence: Number.MAX_SAFE_INTEGER,
         created_at: pendingSubmission.createdAt,
         metadata: { optimistic: true },
         runStatus: "queued",
+        activity: deriveStandaloneRunActivity([], ""),
         synthetic: true,
       });
     }

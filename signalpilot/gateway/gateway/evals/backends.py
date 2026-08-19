@@ -353,7 +353,7 @@ class KubernetesBackend:
             resources=self._settings.pod_resources,
         )
 
-        from ..orchestrator.jwt_secret_lifecycle import create_secret_with_owner_ref
+        from ..orchestrator.secret_lifecycle import create_secret_with_owner_ref
 
         await create_secret_with_owner_ref(
             core,

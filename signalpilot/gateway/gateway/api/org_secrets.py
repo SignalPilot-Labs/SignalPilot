@@ -10,7 +10,6 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from ..db.models import GatewayOrgSecrets
-from ..notebooks import session_service
 from ..security.scope_guard import RequireScope
 from ..store import notebook_sessions as ns
 from ..store import org_secrets as org_secrets_store
@@ -19,7 +18,6 @@ from .deps import StoreD
 
 router = APIRouter(prefix="/api/org")
 logger = logging.getLogger(__name__)
-_get_orchestrator = session_service._get_orchestrator
 
 
 def _mask_preview(key: str) -> str:
@@ -76,45 +74,26 @@ async def _response_for_row(store: StoreD, org_id: str) -> OrgSecretsResponse:
 
 
 async def _stop_active_notebook_sessions_for_org(store: StoreD, org_id: str) -> int:
-    sessions = await ns.list_active_sessions_for_org(store.session, org_id=org_id)
-    if not sessions:
-        return 0
+    """Terminate every active session so new compute picks up the rotated key."""
+    from ..notebooks.session_service import terminate_session
 
-    orch = None
-    if not os.getenv("SP_NOTEBOOK_DIRECT_URL", "").strip():
+    sessions = await ns.list_active_sessions_for_org(store.session, org_id=org_id)
+    stopped = 0
+    for notebook_session in sessions:
         try:
-            orch = await _get_orchestrator()
+            await terminate_session(store.session, session_info=notebook_session)
         except Exception:
             logger.warning(
-                "Could not initialize notebook orchestrator while rotating org secrets",
+                "Could not terminate notebook session %s after org secret update",
+                notebook_session.id,
                 exc_info=True,
             )
-
-    stopped = 0
-    try:
-        for notebook_session in sessions:
-            if orch and notebook_session.pod_name:
-                try:
-                    await orch.delete_pod(notebook_session.pod_name, org_id=org_id)
-                except Exception:
-                    logger.warning(
-                        "Could not delete notebook pod %s after org secret update",
-                        notebook_session.pod_name,
-                        exc_info=True,
-                    )
             await ns.mark_stopped(
                 store.session,
                 session_id=notebook_session.id,
                 org_id=notebook_session.org_id,
             )
-            stopped += 1
-    finally:
-        if orch:
-            try:
-                await orch.close()
-            except Exception:
-                logger.debug("Could not close notebook orchestrator", exc_info=True)
-
+        stopped += 1
     return stopped
 
 

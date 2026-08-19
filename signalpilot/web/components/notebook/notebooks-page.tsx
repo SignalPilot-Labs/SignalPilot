@@ -182,7 +182,7 @@ export default function NotebooksPage() {
     : Boolean(urlFile || urlSessionId);
 
   const [state, setState] = useState<AppState>("loading");
-  const [launchStatus, setLaunchStatus] = useState(hasDeepLink ? "connecting to pod..." : "");
+  const [launchStatus, setLaunchStatus] = useState(hasDeepLink ? "connecting to your workspace..." : "");
   const [notebookConfig, setNotebookConfig] = useState<NotebookConfig | null>(null);
   const [, setActiveNotebookSession] =
     useState<NotebookSession | null>(null);
@@ -701,7 +701,7 @@ export default function NotebooksPage() {
         setState("no-session");
         return;
       }
-      setLaunchStatus("waiting for pod...");
+      setLaunchStatus("starting your workspace runtime...");
       const config = await buildConfig(session.id, apiKey, product, trail);
 
       setNotebookConfig(config);

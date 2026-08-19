@@ -158,6 +158,20 @@ async def explore_columns_deep(name: str, store: StoreD, body: dict):
 
     table_info = cached.get(table_key)
     if not table_info:
+        # Tolerant resolution: optional schema prefix, case-insensitive key,
+        # then bare-name match (same semantics as describe_table).
+        t_lower = table_key.lower()
+        bare = t_lower.split(".")[-1]
+        for key, tbl in cached.items():
+            if key.lower() == t_lower:
+                table_key, table_info = key, tbl
+                break
+        else:
+            for key, tbl in cached.items():
+                if tbl.get("name", "").lower() == bare:
+                    table_key, table_info = key, tbl
+                    break
+    if not table_info:
         raise HTTPException(status_code=404, detail=f"Table '{table_key}' not found in schema")
 
     all_columns = table_info.get("columns", [])

@@ -1,13 +1,15 @@
 """Integration tests for notebook session endpoints and related auth dispatch.
 
-Tests:
+Runtime v2: compute is a sandbox behind the NotebookBackend seam. Tests cover:
 - Cross-org GET/DELETE return 404.
 - Notebook-session JWT accepted on inbound requests.
 - Clerk-shaped JWT not accepted by notebook-session verifier.
-- Notebook-session JWT not accepted by Clerk verifier.
 - sp_-prefixed local API key still authenticates end-to-end.
-- Pod spec contains SP_SESSION_JWT and NOT SP_API_KEY in cloud mode.
-- Session reuse when pod alive; recreate when pod dead.
+- Launch credentials: the session JWT rides the boot process env, the notebook
+  token rides write_file — neither lands in the sandbox creation spec.
+- Session reuse when the runtime is alive; recreate when dead; resume when
+  snapshotted.
+- Org budget exhaustion returns 429.
 - Direct store get_session_by_id cross-org returns None.
 """
 
@@ -16,12 +18,10 @@ from __future__ import annotations
 import time
 import uuid
 from types import SimpleNamespace
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import jwt
 import pytest
-import pytest_asyncio
 from cryptography.fernet import Fernet
 from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
@@ -92,6 +92,116 @@ def _make_clerk_jwt(user_id: str = "clerk-user", org_id: str = "clerk-org") -> s
     return jwt.encode(payload, "clerk-secret", algorithm="HS256")
 
 
+class FakeBackend:
+    """In-memory NotebookBackend covering the whole protocol."""
+
+    name = "vercel"
+
+    def __init__(self) -> None:
+        self.launches: list = []
+        self.terminated: list[str] = []
+        self.resumed: list[str] = []
+        self.extends: list[tuple[str, int]] = []
+        self.alive = True
+        self.launch_error: Exception | None = None
+        self.resume_url: str | None = "https://resumed.vercel.run"
+        self.counter = 0
+
+    async def launch(self, request):
+        from gateway.notebooks.backends import NotebookLaunch
+
+        if self.launch_error is not None:
+            raise self.launch_error
+        self.launches.append(request)
+        self.counter += 1
+        return NotebookLaunch(
+            runtime_handle=f"sbx-{self.counter}",
+            upstream_url=f"https://sbx-{self.counter}.vercel.run",
+        )
+
+    async def is_alive(self, runtime_handle: str) -> bool:
+        return self.alive
+
+    async def resume(self, runtime_handle: str) -> str:
+        if self.resume_url is None:
+            raise RuntimeError("resume failed")
+        self.resumed.append(runtime_handle)
+        return self.resume_url
+
+    async def snapshot_and_stop(self, runtime_handle: str):
+        return "snap-1"
+
+    async def extend(self, runtime_handle: str, seconds: int) -> None:
+        self.extends.append((runtime_handle, seconds))
+
+    async def terminate(self, runtime_handle: str) -> None:
+        self.terminated.append(runtime_handle)
+
+    async def reap_orphans(self, keep):
+        return 0
+
+
+def _session_info(**overrides):
+    from gateway.models.notebook_sessions import NotebookSessionInfo
+
+    defaults = dict(
+        id="sess-1",
+        org_id="org-1",
+        user_id="user-1",
+        project_id="proj-1",
+        branch="main",
+        backend="vercel",
+        status="running",
+        last_ping=time.time(),
+        created_at=time.time(),
+    )
+    defaults.update(overrides)
+    return NotebookSessionInfo(**defaults)
+
+
+def _internal(**overrides):
+    from gateway.store.notebook_sessions import NotebookSessionInternal
+
+    defaults = dict(
+        session_id="sess-1",
+        org_id="org-1",
+        user_id="user-1",
+        status="running",
+        backend="vercel",
+        runtime_handle="sbx-live",
+        upstream_url="https://sbx-live.vercel.run",
+        snapshot_id=None,
+        access_token="tok-1",
+        project_id="proj-1",
+        branch="main",
+    )
+    defaults.update(overrides)
+    return NotebookSessionInternal(**defaults)
+
+
+@pytest.fixture
+def svc(monkeypatch):
+    """session_service with the store and workspace seams mocked out."""
+    from gateway.notebooks import session_service as service
+    from gateway.store import notebook_sessions as ns_store
+
+    mocks = SimpleNamespace(
+        get_active_session=AsyncMock(return_value=None),
+        get_session_internal=AsyncMock(return_value=_internal()),
+        create_session=AsyncMock(return_value=_session_info(status="creating")),
+        update_session_runtime=AsyncMock(),
+        mark_stopped=AsyncMock(),
+        delete_stopped=AsyncMock(),
+        count_running_for_org=AsyncMock(return_value=0),
+    )
+    for name, mock in vars(mocks).items():
+        monkeypatch.setattr(ns_store, name, mock)
+    monkeypatch.setattr(service, "acquire_lease", AsyncMock(return_value=time.time() + 90))
+    monkeypatch.setattr(service, "release_lease", AsyncMock(return_value=True))
+    monkeypatch.setattr(service, "_hydration_source", AsyncMock(return_value=(None, None)))
+    return mocks
+
+
 # Verify store behavior.
 
 
@@ -100,7 +210,6 @@ class TestStoreGetSessionByIdCrossOrg:
 
     @pytest.mark.asyncio
     async def test_cross_org_returns_none(self):
-        """get_session_by_id with wrong org_id returns None without revealing existence."""
         from gateway.store.notebook_sessions import get_session_by_id
 
         mock_session = AsyncMock()
@@ -113,9 +222,6 @@ class TestStoreGetSessionByIdCrossOrg:
 
     @pytest.mark.asyncio
     async def test_same_org_returns_session(self):
-        """get_session_by_id with correct org returns the session."""
-        import time
-
         from gateway.db.models import GatewayNotebookSession
         from gateway.store.notebook_sessions import get_session_by_id
 
@@ -125,8 +231,9 @@ class TestStoreGetSessionByIdCrossOrg:
             user_id="user-1",
             project_id="proj-1",
             branch="main",
-            pod_name="nb-test",
-            pod_ip=None,
+            backend="vercel",
+            runtime_handle="sbx-abc",
+            upstream_url="https://sbx-abc.vercel.run",
             access_token_enc=None,
             status="running",
             last_ping=time.time(),
@@ -141,6 +248,10 @@ class TestStoreGetSessionByIdCrossOrg:
         assert result is not None
         assert result.id == "sess-abc"
         assert result.org_id == "org-1"
+        assert result.backend == "vercel"
+        # FE view never carries the upstream URL or credentials.
+        assert not hasattr(result, "upstream_url")
+        assert not hasattr(result, "access_token")
 
 
 class TestStoreNotebookSessionTokenStorage:
@@ -165,7 +276,7 @@ class TestStoreNotebookSessionTokenStorage:
             user_id="user-1",
             project_id="proj-1",
             branch="main",
-            pod_name="nb-test",
+            backend="vercel",
         )
 
         assert len(rows) == 1
@@ -177,7 +288,7 @@ class TestStoreNotebookSessionTokenStorage:
         token, needs_migration = _decrypt_with_migration(row.access_token_enc)
         assert token == "generated-token"
         assert needs_migration is False
-        assert info.access_token is None
+        assert not hasattr(info, "access_token")
         mock_session.commit.assert_awaited_once()
 
 
@@ -189,13 +300,9 @@ class TestNotebookJWTVerifierDispatch:
 
     @pytest.mark.asyncio
     async def test_notebook_session_jwt_accepted(self, monkeypatch):
-        """A notebook-session JWT routes to verify_session_jwt and succeeds."""
         monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
         monkeypatch.delenv("CLERK_PUBLISHABLE_KEY", raising=False)
         _patch_jwt_secret(monkeypatch)
-
-        # Reimport to pick up monkeypatched mode
-        import importlib
 
         import gateway.auth.user as user_mod
         import gateway.runtime.mode as mode_mod
@@ -257,7 +364,6 @@ class TestNotebookJWTVerifierDispatch:
 
     @pytest.mark.asyncio
     async def test_clerk_shaped_jwt_not_routed_to_notebook_verifier(self, monkeypatch):
-        """A Clerk-shaped JWT (different iss) is NOT sent to notebook-session verifier."""
         _patch_jwt_secret(monkeypatch)
 
         import gateway.auth.user as user_mod
@@ -265,7 +371,6 @@ class TestNotebookJWTVerifierDispatch:
         monkeypatch.setattr(user_mod, "is_cloud_mode", lambda: True)
 
         clerk_token = _make_clerk_jwt()
-        # Notebook verifier should never be called
         verify_called = []
 
         def _fake_verify(token):
@@ -280,7 +385,6 @@ class TestNotebookJWTVerifierDispatch:
         request.headers = {"authorization": f"Bearer {clerk_token}"}
         request.cookies = {}
 
-        # Should attempt Clerk path (which will fail since no JWKS client in test)
         with pytest.raises(HTTPException) as exc_info:
             await user_mod.resolve_user_id(request)
         assert exc_info.value.status_code in (401, 500)
@@ -288,14 +392,12 @@ class TestNotebookJWTVerifierDispatch:
 
     @pytest.mark.asyncio
     async def test_notebook_jwt_with_clerk_iss_rejected_by_nb_verifier(self, monkeypatch):
-        """A token claiming Clerk iss (but signed with nb key) is routed to Clerk verifier, fails."""
         _patch_jwt_secret(monkeypatch)
 
         import gateway.auth.user as user_mod
 
         monkeypatch.setattr(user_mod, "is_cloud_mode", lambda: True)
 
-        # Token has Clerk iss but is signed with our HS256 secret
         payload = {
             "iss": "https://clerk.example.com",
             "sub": "user-1",
@@ -311,14 +413,12 @@ class TestNotebookJWTVerifierDispatch:
         request.headers = {"authorization": f"Bearer {token}"}
         request.cookies = {}
 
-        # The Clerk verifier rejects the algorithm and missing JWKS data.
         with pytest.raises(HTTPException) as exc_info:
             await user_mod.resolve_user_id(request)
         assert exc_info.value.status_code in (401, 500)
 
     @pytest.mark.asyncio
     async def test_sp_prefix_short_circuits_no_jwt_decode(self, monkeypatch):
-        """sp_-prefixed bearer token hits local API key path, never attempts JWT decode."""
         import gateway.auth.user as user_mod
 
         monkeypatch.setattr(user_mod, "is_cloud_mode", lambda: False)
@@ -334,7 +434,6 @@ class TestNotebookJWTVerifierDispatch:
 
         request = MagicMock()
         request.state = MagicMock()
-        # auth state already set by APIKeyAuthMiddleware for local API key
         request.state.auth = {
             "auth_method": "api_key",
             "user_id": "local-user",
@@ -344,7 +443,6 @@ class TestNotebookJWTVerifierDispatch:
         request.headers = {"authorization": "Bearer sp_test_key_abc123"}
         request.cookies = {}
 
-        # auth_state is already set so resolve_user_id short-circuits at step 1
         user_id = await user_mod.resolve_user_id(request)
         assert user_id == "local-user"
         assert len(decode_called) == 0
@@ -361,218 +459,155 @@ def _make_mock_store(org_id: str = "org-1", user_id: str = "user-1") -> AsyncMoc
     return store
 
 
-def _build_app_client(monkeypatch, org_id: str = "org-1", user_id: str = "user-1"):
-    """Build a TestClient with mocked auth returning (org_id, user_id)."""
-    from gateway.api.deps import get_store
-    from gateway.auth import resolve_org_id, resolve_user_id
-    from gateway.main import app
-
-    async def _fake_user_id(request: Request) -> str:
-        return user_id
-
-    async def _fake_org_id(request: Request, _user_id) -> str:
-        return org_id
-
-    async def _fake_store() -> AsyncMock:
-        return _make_mock_store(org_id=org_id, user_id=user_id)
-
-    app.dependency_overrides[resolve_user_id] = _fake_user_id
-    app.dependency_overrides[resolve_org_id] = _fake_org_id
-    app.dependency_overrides[get_store] = _fake_store
-
-    return app
-
-
-_APP_PATCHES = [
-    patch("gateway.main.init_db", new_callable=AsyncMock),
-    patch("gateway.main.close_db", new_callable=AsyncMock),
-    patch("gateway.main.get_session_factory", return_value=AsyncMock()),
-    patch("gateway.main._mcp_session_manager", None),
-    patch("gateway.connectors.health_monitor.health_monitor.load_from_db", new_callable=AsyncMock),
-    patch("gateway.auth.jwt_secret.load_session_jwt_secret", return_value=_TEST_SECRET),
-    patch("gateway.auth.notebook_jwt.load_session_jwt_secret", return_value=_TEST_SECRET),
-]
-
-
-def _enter_patches():
-    """Enter all app patches and return the stack."""
-    stack = []
-    for p in _APP_PATCHES:
-        stack.append(p.__enter__())
-    return stack
-
-
-def _exit_patches():
-    for p in reversed(_APP_PATCHES):
-        p.__exit__(None, None, None)
-
-
-def _build_test_client(org_id: str = "org-1", user_id: str = "user-1") -> TestClient:
-    """Build a TestClient with mocked auth."""
-    from gateway.api.deps import get_store
-    from gateway.auth import resolve_org_id, resolve_user_id
-    from gateway.main import app
-
-    async def _fake_user_id(request: Request) -> str:
-        return user_id
-
-    async def _fake_org_id(request: Request, _user_id) -> str:
-        return org_id
-
-    async def _fake_store():
-        return _make_mock_store(org_id=org_id, user_id=user_id)
-
-    app.dependency_overrides[resolve_user_id] = _fake_user_id
-    app.dependency_overrides[resolve_org_id] = _fake_org_id
-    app.dependency_overrides[get_store] = _fake_store
-    return TestClient(app, raise_server_exceptions=False)
+def _make_mock_response():
+    resp = MagicMock()
+    resp.headers = {}
+    return resp
 
 
 class TestCrossOrgScopingHTTP:
     """Cross-org GET/DELETE return 404."""
 
-    def test_cross_org_get_returns_404(self, monkeypatch):
-        """GET /api/notebook-sessions/{id} from a different org returns 404."""
+    def _client(self, org_id: str, user_id: str):
         from gateway.api.deps import get_store
         from gateway.auth import resolve_org_id, resolve_user_id
         from gateway.main import app
 
-        session_id = str(uuid.uuid4())
-        org_b = "org-b"
-
-        async def _fake_get_session_by_id(session, *, session_id, org_id):
-            return None  # Cross-org: always returns None
-
         async def _fake_user_id(request: Request) -> str:
-            return "user-b"
+            return user_id
 
-        async def _fake_org_id(request: Request, _user_id) -> str:
-            return org_b
+        async def _fake_org_id(request: Request) -> str:
+            return org_id
 
-        async def _fake_store_b():
-            return _make_mock_store(org_id=org_b, user_id="user-b")
+        async def _fake_store():
+            return _make_mock_store(org_id=org_id, user_id=user_id)
 
         app.dependency_overrides[resolve_user_id] = _fake_user_id
         app.dependency_overrides[resolve_org_id] = _fake_org_id
-        app.dependency_overrides[get_store] = _fake_store_b
+        app.dependency_overrides[get_store] = _fake_store
+        return app
 
+    def _cleanup(self):
+        from gateway.api.deps import get_store
+        from gateway.auth import resolve_org_id, resolve_user_id
+        from gateway.main import app
+
+        app.dependency_overrides.pop(resolve_user_id, None)
+        app.dependency_overrides.pop(resolve_org_id, None)
+        app.dependency_overrides.pop(get_store, None)
+
+    def _request(self, method: str, session_id: str):
+        from gateway.main import app
+
+        app_patches = (
+            patch("gateway.main.init_db", new_callable=AsyncMock),
+            patch("gateway.main.close_db", new_callable=AsyncMock),
+            patch("gateway.main.get_session_factory", return_value=AsyncMock()),
+            patch("gateway.main._mcp_session_manager", None),
+            patch("gateway.connectors.health_monitor.health_monitor.load_from_db", new_callable=AsyncMock),
+            patch("gateway.auth.jwt_secret.load_session_jwt_secret", return_value=_TEST_SECRET),
+            patch("gateway.auth.notebook_jwt.load_session_jwt_secret", return_value=_TEST_SECRET),
+            patch("gateway.store.notebook_sessions.get_session_by_id", AsyncMock(return_value=None)),
+            # The middleware's eval-credential probe needs a DB; inert here.
+            patch(
+                "gateway.http.middleware.auth._eval_credentials_active",
+                AsyncMock(return_value=False),
+            ),
+        )
+        with (
+            app_patches[0], app_patches[1], app_patches[2], app_patches[3],
+            app_patches[4], app_patches[5], app_patches[6], app_patches[7],
+            app_patches[8],
+        ):
+            client = TestClient(app, raise_server_exceptions=False)
+            with client:
+                return client.request(method, f"/api/notebook-sessions/{session_id}")
+
+    def test_cross_org_get_returns_404(self, monkeypatch):
+        self._client("org-b", "user-b")
         try:
-            with (
-                patch("gateway.main.init_db", new_callable=AsyncMock),
-                patch("gateway.main.close_db", new_callable=AsyncMock),
-                patch("gateway.main.get_session_factory", return_value=AsyncMock()),
-                patch("gateway.main._mcp_session_manager", None),
-                patch("gateway.connectors.health_monitor.health_monitor.load_from_db", new_callable=AsyncMock),
-                patch("gateway.auth.jwt_secret.load_session_jwt_secret", return_value=_TEST_SECRET),
-                patch("gateway.auth.notebook_jwt.load_session_jwt_secret", return_value=_TEST_SECRET),
-                patch(
-                    "gateway.store.notebook_sessions.get_session_by_id",
-                    side_effect=_fake_get_session_by_id,
-                ),
-            ):
-                client = TestClient(app, raise_server_exceptions=False)
-                with client:
-                    resp = client.get(f"/api/notebook-sessions/{session_id}")
+            resp = self._request("GET", str(uuid.uuid4()))
             assert resp.status_code == 404
         finally:
-            app.dependency_overrides.pop(resolve_user_id, None)
-            app.dependency_overrides.pop(resolve_org_id, None)
-            app.dependency_overrides.pop(get_store, None)
+            self._cleanup()
 
     def test_cross_org_delete_returns_404(self, monkeypatch):
-        """DELETE /api/notebook-sessions/{id} from a different org returns 404."""
-        from gateway.api.deps import get_store
-        from gateway.auth import resolve_org_id, resolve_user_id
-        from gateway.main import app
-
-        session_id = str(uuid.uuid4())
-        org_b = "org-b"
-
-        async def _fake_get_session_by_id(session, *, session_id, org_id):
-            return None  # Cross-org: always None
-
-        async def _fake_user_id(request: Request) -> str:
-            return "user-b"
-
-        async def _fake_org_id(request: Request, _user_id) -> str:
-            return org_b
-
-        async def _fake_store_b():
-            return _make_mock_store(org_id=org_b, user_id="user-b")
-
-        app.dependency_overrides[resolve_user_id] = _fake_user_id
-        app.dependency_overrides[resolve_org_id] = _fake_org_id
-        app.dependency_overrides[get_store] = _fake_store_b
-
+        self._client("org-b", "user-b")
         try:
-            with (
-                patch("gateway.main.init_db", new_callable=AsyncMock),
-                patch("gateway.main.close_db", new_callable=AsyncMock),
-                patch("gateway.main.get_session_factory", return_value=AsyncMock()),
-                patch("gateway.main._mcp_session_manager", None),
-                patch("gateway.connectors.health_monitor.health_monitor.load_from_db", new_callable=AsyncMock),
-                patch("gateway.auth.jwt_secret.load_session_jwt_secret", return_value=_TEST_SECRET),
-                patch("gateway.auth.notebook_jwt.load_session_jwt_secret", return_value=_TEST_SECRET),
-                patch(
-                    "gateway.store.notebook_sessions.get_session_by_id",
-                    side_effect=_fake_get_session_by_id,
-                ),
-            ):
-                client = TestClient(app, raise_server_exceptions=False)
-                with client:
-                    resp = client.delete(f"/api/notebook-sessions/{session_id}")
+            resp = self._request("DELETE", str(uuid.uuid4()))
             assert resp.status_code == 404
         finally:
-            app.dependency_overrides.pop(resolve_user_id, None)
-            app.dependency_overrides.pop(resolve_org_id, None)
-            app.dependency_overrides.pop(get_store, None)
+            self._cleanup()
 
 
-class TestPodSpecEnv:
-    """Pod spec dict contains SP_SESSION_JWT and NOT SP_API_KEY."""
+class TestLaunchCredentials:
+    """Launch credentials: JWT in the boot process env only, token via
+    write_file, nothing secret in the sandbox creation spec."""
 
-    def test_pod_env_contains_session_jwt_not_api_key(self, monkeypatch):
-        """_pod_manifest produces SP_SESSION_JWT and no SP_API_KEY."""
-        from gateway.orchestrator.kubernetes import _pod_manifest
+    @pytest.mark.asyncio
+    async def test_session_jwt_rides_process_env_not_spec(self, monkeypatch):
+        from gateway.config.notebooks import NotebookSettings
+        from gateway.notebooks.backends import LaunchRequest, VercelNotebookBackend
 
-        manifest = _pod_manifest(
-            pod_name="nb-test",
-            namespace="default",
-            image="signalpilot-notebook:latest",
-            user_id="user-1",
-            org_id="org-1",
-            project_id="proj-1",
-            branch="main",
-            gateway_url="http://localhost:3300",
-            session_jwt="test.jwt.token",
-            session_id="sess-abc",
-            access_token="access-abc",
+        runtime = AsyncMock()
+        runtime.create.return_value = "sbx-x"
+        runtime.exec.return_value = SimpleNamespace(ok=True, stdout="", stderr="")
+        runtime.routes.return_value = {2718: "https://sbx-x.vercel.run"}
+        runtime.start_process.return_value = "proc-1"
+
+        monkeypatch.setenv("SP_NOTEBOOK_VERCEL_IMAGE", "reg/sp-notebook:dev")
+        monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
+        backend = VercelNotebookBackend(NotebookSettings(), runtime=runtime)
+        launch = await backend.launch(
+            LaunchRequest(
+                org_id="org-1",
+                user_id="user-1",
+                session_id="sess-abc",
+                project_id="proj-1",
+                branch="main",
+                session_jwt="jwt.value.here",
+                notebook_token="nb-token",
+            )
         )
-        env_names = {e["name"] for e in manifest["spec"]["containers"][0]["env"]}
-        assert "SP_SESSION_JWT" in env_names
-        assert "SP_SESSION_ID" in env_names
-        assert "SP_API_KEY" not in env_names
+        assert launch.upstream_url == "https://sbx-x.vercel.run"
 
-    def test_pod_env_session_jwt_value(self, monkeypatch):
-        """SP_SESSION_JWT env var gets the correct value."""
-        from gateway.orchestrator.kubernetes import _pod_manifest
+        spec = runtime.create.await_args.args[0]
+        assert spec.env == {}  # creation metadata is provider-readable: no secrets
+        assert 2718 in spec.ports
+        assert spec.tags["sp-purpose"] == "notebook"
 
-        manifest = _pod_manifest(
-            pod_name="nb-test",
-            namespace="default",
-            image="signalpilot-notebook:latest",
-            user_id="user-1",
-            org_id="org-1",
-            project_id=None,
-            branch="main",
-            gateway_url="http://localhost:3300",
-            session_jwt="my.jwt.value",
-            session_id="sess-xyz",
-            access_token=None,
-        )
-        env_by_name = {e["name"]: e["value"] for e in manifest["spec"]["containers"][0]["env"]}
-        assert env_by_name["SP_SESSION_JWT"] == "my.jwt.value"
-        assert env_by_name["SP_SESSION_ID"] == "sess-xyz"
+        runtime.write_file.assert_awaited_once()
+        write_args = runtime.write_file.await_args.args
+        assert write_args[2] == b"nb-token"
+
+        process_env = runtime.start_process.await_args.kwargs["env"]
+        assert process_env["SP_SESSION_JWT"] == "jwt.value.here"
+        assert process_env["SP_SESSION_ID"] == "sess-abc"
+        assert "SP_API_KEY" not in process_env
+
+    @pytest.mark.asyncio
+    async def test_launch_failure_destroys_the_sandbox(self, monkeypatch):
+        from gateway.config.notebooks import NotebookSettings
+        from gateway.notebooks.backends import LaunchRequest, NotebookLaunchError, VercelNotebookBackend
+
+        runtime = AsyncMock()
+        runtime.create.return_value = "sbx-x"
+        runtime.start_process.return_value = "proc-1"
+        runtime.exec.return_value = SimpleNamespace(ok=False, stdout="", stderr="connection refused")
+
+        monkeypatch.setenv("SP_NOTEBOOK_VERCEL_IMAGE", "reg/sp-notebook:dev")
+        monkeypatch.setenv("SP_NOTEBOOK_START_TIMEOUT_SECONDS", "30")
+        settings = NotebookSettings()
+        object.__setattr__(settings, "start_timeout_seconds", 0)  # fail immediately
+        backend = VercelNotebookBackend(settings, runtime=runtime)
+        with pytest.raises(NotebookLaunchError):
+            await backend.launch(
+                LaunchRequest(
+                    org_id="o", user_id="u", session_id="s", project_id=None,
+                    branch="main", session_jwt="j", notebook_token="t",
+                )
+            )
+        runtime.destroy.assert_awaited_once_with("sbx-x")
 
 
 class TestProjectAuthorizationBeforeProvisioning:
@@ -588,11 +623,7 @@ class TestProjectAuthorizationBeforeProvisioning:
         store = _make_mock_store(org_id="org-b", user_id="user-b")
         store.get_workspace_project.return_value = None
         ensure_session = AsyncMock()
-        monkeypatch.setattr(
-            ns_api.session_service,
-            "ensure_notebook_session",
-            ensure_session,
-        )
+        monkeypatch.setattr(ns_api.session_service, "ensure_notebook_session", ensure_session)
 
         with pytest.raises(HTTPException) as exc_info:
             await ns_api.create_session(
@@ -610,33 +641,18 @@ class TestProjectAuthorizationBeforeProvisioning:
         self, monkeypatch
     ):
         from gateway.api import notebook_sessions as ns_api
-        from gateway.models.notebook_sessions import (
-            NotebookSessionCreate,
-            NotebookSessionInfo,
-        )
+        from gateway.models.notebook_sessions import NotebookSessionCreate
 
         store = _make_mock_store(org_id="org-1", user_id="recipient-user")
         store.get_workspace_project.return_value = MagicMock(id="project-1")
-        recipient_session = NotebookSessionInfo(
-            id="recipient-session",
-            org_id="org-1",
-            user_id="recipient-user",
-            project_id="project-1",
-            branch="feature/share",
-            status="running",
+        recipient_session = _session_info(
+            id="recipient-session", user_id="recipient-user", branch="feature/share"
         )
         ensure_session = AsyncMock(return_value=recipient_session)
-        monkeypatch.setattr(
-            ns_api.session_service,
-            "ensure_notebook_session",
-            ensure_session,
-        )
+        monkeypatch.setattr(ns_api.session_service, "ensure_notebook_session", ensure_session)
 
         result = await ns_api.create_session(
-            NotebookSessionCreate(
-                project_id="project-1",
-                branch="feature/share",
-            ),
+            NotebookSessionCreate(project_id="project-1", branch="feature/share"),
             store,
             _make_mock_response(),
         )
@@ -649,383 +665,238 @@ class TestProjectAuthorizationBeforeProvisioning:
             user_id="recipient-user",
             project_id="project-1",
             branch="feature/share",
-            get_orchestrator=ns_api._get_orchestrator,
         )
 
 
-class TestSessionReuse:
-    """Verify session reuse for an active pod and recreation for an inactive pod."""
+class TestSessionLifecycleService:
+    """ensure_notebook_session: reuse, recreate, resume, launch wiring."""
 
     @pytest.mark.asyncio
-    async def test_session_reuse_when_pod_alive(self, monkeypatch):
-        """Second create_session call returns existing session when pod is alive."""
+    async def test_session_reuse_when_runtime_alive(self, svc, monkeypatch):
         _patch_jwt_secret(monkeypatch)
+        from gateway.notebooks import session_service as service
 
-        import time
+        backend = FakeBackend()
+        svc.get_active_session.return_value = _session_info()
 
-        from gateway.api import notebook_sessions as ns_api
-        from gateway.models.notebook_sessions import NotebookSessionInfo
-        from gateway.store import notebook_sessions as ns_store
-
-        existing_session = NotebookSessionInfo(
-            id="existing-sess",
+        result = await service.ensure_notebook_session(
+            AsyncMock(),
             org_id="org-1",
             user_id="user-1",
             project_id="proj-1",
             branch="main",
-            pod_name="nb-abc",
-            pod_ip="10.0.0.1:2718",
-            access_token="tok-abc",
-            status="running",
-            last_ping=time.time(),
-            created_at=time.time(),
+            backend=backend,
         )
-        existing_session.notebook_url = "http://10.0.0.1:2718?access_token=tok-abc"
-
-        mock_orch = AsyncMock()
-        mock_orch.is_pod_alive.return_value = True
-
-        monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=existing_session))
-        monkeypatch.setattr(
-            ns_store,
-            "get_session_internal",
-            AsyncMock(return_value=SimpleNamespace(pod_ip_internal="10.0.0.1")),
-        )
-        monkeypatch.setattr(ns_api, "_get_orchestrator", AsyncMock(return_value=mock_orch))
-
-        store = _make_mock_store()
-
-        from gateway.models.notebook_sessions import NotebookSessionCreate
-
-        body = NotebookSessionCreate(project_id="proj-1", branch="main")
-
-        result = await ns_api.create_session(body, store, _make_mock_response())
-        assert result.id == "existing-sess"
-        mock_orch.create_pod.assert_not_called()
+        assert result.id == "sess-1"
+        assert backend.launches == []  # reused, not relaunched
 
     @pytest.mark.asyncio
-    async def test_session_recreated_when_pod_dead(self, monkeypatch):
-        """create_session recreates pod when is_pod_alive returns False."""
+    async def test_session_recreated_when_runtime_dead(self, svc, monkeypatch):
         _patch_jwt_secret(monkeypatch)
+        from gateway.notebooks import session_service as service
 
-        import time
+        backend = FakeBackend()
+        backend.alive = False
+        svc.get_active_session.return_value = _session_info(id="dead-sess")
+        svc.create_session.return_value = _session_info(id="new-sess", status="creating")
 
-        from gateway.api import notebook_sessions as ns_api
-        from gateway.models.notebook_sessions import NotebookSessionInfo
-        from gateway.orchestrator import PodInfo
-        from gateway.store import notebook_sessions as ns_store
-
-        existing_session = NotebookSessionInfo(
-            id="dead-sess",
+        result = await service.ensure_notebook_session(
+            AsyncMock(),
             org_id="org-1",
             user_id="user-1",
             project_id="proj-1",
             branch="main",
-            pod_name="nb-dead",
-            pod_ip="10.0.0.2:2718",
-            access_token="tok-dead",
-            status="running",
-            last_ping=time.time(),
-            created_at=time.time(),
+            backend=backend,
         )
-
-        new_session = NotebookSessionInfo(
-            id="new-sess",
-            org_id="org-1",
-            user_id="user-1",
-            project_id="proj-1",
-            branch="main",
-            pod_name="nb-new",
-            pod_ip=None,
-            access_token="tok-new",
-            status="creating",
-            last_ping=time.time(),
-            created_at=time.time(),
-        )
-
-        mock_orch = AsyncMock()
-        mock_orch.is_pod_alive.return_value = False
-        mock_orch.create_pod.return_value = PodInfo(name="nb-new", ip=None, status="pending")
-        mock_orch.wait_for_running = AsyncMock(
-            return_value=PodInfo(name="nb-new", ip=None, status="running")
-        )
-        mock_orch.wait_for_ready.return_value = PodInfo(name="nb-new", ip="10.0.0.3:2718", status="running")
-
-        mark_stopped_calls = []
-
-        async def _mock_mark_stopped(session, *, session_id, org_id):
-            mark_stopped_calls.append(session_id)
-
-        async def _mock_delete_stopped(session, *, org_id, user_id):
-            pass
-
-        async def _mock_update_status(session, *, session_id, org_id, status, pod_ip=None, pod_ip_internal=None):
-            pass
-
-        monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=existing_session))
-        monkeypatch.setattr(
-            ns_store,
-            "get_session_internal",
-            AsyncMock(return_value=SimpleNamespace(pod_ip_internal="10.0.0.2")),
-        )
-        monkeypatch.setattr(ns_store, "create_session", AsyncMock(return_value=new_session))
-        monkeypatch.setattr(ns_store, "mark_stopped", _mock_mark_stopped)
-        monkeypatch.setattr(ns_store, "delete_stopped", _mock_delete_stopped)
-        monkeypatch.setattr(ns_store, "update_session_status", _mock_update_status)
-        monkeypatch.setattr(ns_api, "_get_orchestrator", AsyncMock(return_value=mock_orch))
-
-        store = _make_mock_store()
-
-        from gateway.models.notebook_sessions import NotebookSessionCreate
-
-        body = NotebookSessionCreate(project_id="proj-1", branch="main")
-
-        result = await ns_api.create_session(body, store, _make_mock_response())
         assert result.id == "new-sess"
-        mock_orch.create_pod.assert_called_once()
-        # Verify mark_stopped was called for the dead session
-        assert "dead-sess" in mark_stopped_calls
+        assert backend.terminated == ["sbx-live"]  # dead runtime torn down
+        assert len(backend.launches) == 1
+        svc.mark_stopped.assert_awaited()
 
     @pytest.mark.asyncio
-    async def test_create_pod_receives_session_jwt_not_api_key(self, monkeypatch):
-        """create_pod call does NOT pass api_key; instead passes session_jwt."""
+    async def test_snapshotted_session_resumes_in_place(self, svc, monkeypatch):
         _patch_jwt_secret(monkeypatch)
+        from gateway.notebooks import session_service as service
 
-        import time
+        backend = FakeBackend()
+        svc.get_active_session.return_value = _session_info(status="snapshotted")
+        svc.get_session_internal.return_value = _internal(
+            status="snapshotted", snapshot_id="snap-9", upstream_url=None
+        )
+        svc.get_session_by_id = AsyncMock(return_value=_session_info(status="running"))
+        monkeypatch.setattr(
+            "gateway.store.notebook_sessions.get_session_by_id", svc.get_session_by_id
+        )
 
-        from gateway.api import notebook_sessions as ns_api
-        from gateway.models.notebook_sessions import NotebookSessionInfo
-        from gateway.orchestrator import PodInfo
-        from gateway.store import notebook_sessions as ns_store
-
-        new_session = NotebookSessionInfo(
-            id="sess-new",
+        result = await service.ensure_notebook_session(
+            AsyncMock(),
             org_id="org-1",
             user_id="user-1",
             project_id="proj-1",
             branch="main",
-            pod_name="nb-test",
-            pod_ip=None,
-            access_token="tok-new",
-            status="creating",
-            last_ping=time.time(),
-            created_at=time.time(),
+            backend=backend,
         )
+        assert result.status == "running"
+        assert backend.resumed == ["sbx-live"]
+        assert backend.launches == []
+        update_kwargs = svc.update_session_runtime.await_args.kwargs
+        assert update_kwargs["upstream_url"] == "https://resumed.vercel.run"
 
-        mock_orch = AsyncMock()
-        mock_orch.create_pod.return_value = PodInfo(name="nb-test", ip=None, status="pending")
-        mock_orch.wait_for_running = AsyncMock(
-            return_value=PodInfo(name="nb-test", ip=None, status="running")
+    @pytest.mark.asyncio
+    async def test_project_or_branch_switch_replaces_the_session(self, svc, monkeypatch):
+        _patch_jwt_secret(monkeypatch)
+        from gateway.notebooks import session_service as service
+
+        backend = FakeBackend()
+        svc.get_active_session.return_value = _session_info(branch="other-branch")
+        svc.create_session.return_value = _session_info(id="new-sess", status="creating")
+
+        result = await service.ensure_notebook_session(
+            AsyncMock(),
+            org_id="org-1",
+            user_id="user-1",
+            project_id="proj-1",
+            branch="main",
+            backend=backend,
         )
-        mock_orch.wait_for_ready.return_value = PodInfo(name="nb-test", ip="10.0.0.4:2718", status="running")
+        assert result.id == "new-sess"
+        assert backend.terminated == ["sbx-live"]
 
-        monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=None))
-        monkeypatch.setattr(ns_store, "create_session", AsyncMock(return_value=new_session))
-        monkeypatch.setattr(ns_store, "delete_stopped", AsyncMock())
-        monkeypatch.setattr(ns_store, "update_session_status", AsyncMock())
-        monkeypatch.setattr(ns_api, "_get_orchestrator", AsyncMock(return_value=mock_orch))
+    @pytest.mark.asyncio
+    async def test_launch_receives_valid_session_jwt(self, svc, monkeypatch):
+        _patch_jwt_secret(monkeypatch)
+        from gateway.notebooks import session_service as service
 
-        store = _make_mock_store()
-
-        from gateway.models.notebook_sessions import NotebookSessionCreate
-
-        body = NotebookSessionCreate(project_id="proj-1", branch="main")
-
-        await ns_api.create_session(body, store, _make_mock_response())
-
-        call_kwargs = mock_orch.create_pod.call_args.kwargs
-        assert "session_jwt" in call_kwargs
-        assert "api_key" not in call_kwargs
-
-        # Verify the JWT is a valid notebook session JWT
-        token = call_kwargs["session_jwt"]
-        claims = verify_session_jwt(token)
+        backend = FakeBackend()
+        await service.ensure_notebook_session(
+            AsyncMock(),
+            org_id="org-1",
+            user_id="user-1",
+            project_id="proj-1",
+            branch="main",
+            backend=backend,
+        )
+        (request,) = backend.launches
+        claims = verify_session_jwt(request.session_jwt)
         assert claims["sub"] == "user-1"
         assert claims["org_id"] == "org-1"
+        assert request.notebook_token  # minted by the store
+
+    @pytest.mark.asyncio
+    async def test_writer_session_takes_the_branch_lease(self, svc, monkeypatch):
+        _patch_jwt_secret(monkeypatch)
+        from gateway.notebooks import session_service as service
+
+        backend = FakeBackend()
+        await service.ensure_notebook_session(
+            AsyncMock(),
+            org_id="org-1",
+            user_id="user-1",
+            project_id="proj-1",
+            branch="main",
+            backend=backend,
+        )
+        service.acquire_lease.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_read_only_session_never_takes_a_lease(self, svc, monkeypatch):
+        _patch_jwt_secret(monkeypatch)
+        from gateway.notebooks import session_service as service
+
+        backend = FakeBackend()
+        await service.ensure_notebook_session(
+            AsyncMock(),
+            org_id="org-1",
+            user_id="chat:run-1",
+            project_id="proj-1",
+            branch="main",
+            read_only=True,
+            backend=backend,
+        )
+        service.acquire_lease.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_launch_failure_marks_error_and_releases_lease(self, svc, monkeypatch):
+        _patch_jwt_secret(monkeypatch)
+        from gateway.notebooks import session_service as service
+
+        backend = FakeBackend()
+        backend.launch_error = RuntimeError("provider down")
+
+        with pytest.raises(service.NotebookSessionError):
+            await service.ensure_notebook_session(
+                AsyncMock(),
+                org_id="org-1",
+                user_id="user-1",
+                project_id="proj-1",
+                branch="main",
+                backend=backend,
+            )
+        statuses = [c.kwargs.get("status") for c in svc.update_session_runtime.await_args_list]
+        assert "error" in statuses
+        service.release_lease.assert_awaited()
 
 
-class TestR3OrgIdEnforcement:
-    """Verify organization propagation and quota enforcement."""
+class TestOrgEnforcement:
+    """Organization propagation and budget enforcement."""
 
     @pytest.mark.asyncio
     async def test_create_session_empty_org_id_returns_400(self, monkeypatch):
-        """create_session with empty org_id returns 400."""
         _patch_jwt_secret(monkeypatch)
 
         from gateway.api import notebook_sessions as ns_api
-        from gateway.store import notebook_sessions as ns_store
-
-        monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=None))
+        from gateway.models.notebook_sessions import NotebookSessionCreate
 
         store = _make_mock_store(org_id="", user_id="user-1")
 
-        from fastapi import HTTPException
-
-        from gateway.models.notebook_sessions import NotebookSessionCreate
-
-        body = NotebookSessionCreate(project_id="proj-1", branch="main")
-
         with pytest.raises(HTTPException) as exc_info:
-            await ns_api.create_session(body, store, _make_mock_response())
+            await ns_api.create_session(
+                NotebookSessionCreate(project_id="proj-1", branch="main"),
+                store,
+                _make_mock_response(),
+            )
         assert exc_info.value.status_code == 400
         assert "org_id" in exc_info.value.detail.lower()
 
     @pytest.mark.asyncio
-    async def test_create_session_quota_exhausted_returns_429(self, monkeypatch):
-        """Verify that a Kubernetes quota denial returns API status 429."""
+    async def test_org_budget_exhausted_raises_quota_error(self, svc, monkeypatch):
         _patch_jwt_secret(monkeypatch)
+        from gateway.notebooks import session_service as service
 
-        import time
+        backend = FakeBackend()
+        svc.count_running_for_org.return_value = 10_000
 
+        with pytest.raises(service.NotebookQuotaExceededError):
+            await service.ensure_notebook_session(
+                AsyncMock(),
+                org_id="org-1",
+                user_id="user-1",
+                project_id="proj-1",
+                branch="main",
+                backend=backend,
+            )
+        assert backend.launches == []
+
+    @pytest.mark.asyncio
+    async def test_quota_error_maps_to_429(self, monkeypatch):
         from gateway.api import notebook_sessions as ns_api
-        from gateway.models.notebook_sessions import NotebookSessionInfo
-        from gateway.store import notebook_sessions as ns_store
-
-        new_session = NotebookSessionInfo(
-            id="sess-quota",
-            org_id="org-1",
-            user_id="user-1",
-            project_id="proj-1",
-            branch="main",
-            pod_name="nb-quota",
-            pod_ip=None,
-            access_token="tok-quota",
-            status="creating",
-            last_ping=time.time(),
-            created_at=time.time(),
-        )
-
-        mock_orch = AsyncMock()
-        # _is_quota_exceeded_error reads structured status and body fields.
-        _E = type("ApiException", (Exception,), {})
-        _quota_exc = _E("Forbidden")
-        _quota_exc.status = 403  # type: ignore[attr-defined]
-        _quota_exc.body = "pods 'nb-quota' is forbidden: exceeded quota: default-quota"  # type: ignore[attr-defined]
-        mock_orch.create_pod.side_effect = _quota_exc
-
-        monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=None))
-        monkeypatch.setattr(ns_store, "create_session", AsyncMock(return_value=new_session))
-        monkeypatch.setattr(ns_store, "delete_stopped", AsyncMock())
-        monkeypatch.setattr(ns_store, "update_session_status", AsyncMock())
-        monkeypatch.setattr(ns_api, "_get_orchestrator", AsyncMock(return_value=mock_orch))
+        from gateway.models.notebook_sessions import NotebookSessionCreate
+        from gateway.notebooks.session_service import NotebookQuotaExceededError
 
         store = _make_mock_store()
-
-        from fastapi import HTTPException
-
-        from gateway.models.notebook_sessions import NotebookSessionCreate
-
-        body = NotebookSessionCreate(project_id="proj-1", branch="main")
-
+        store.get_workspace_project.return_value = MagicMock(id="proj-1")
+        monkeypatch.setattr(
+            ns_api.session_service,
+            "ensure_notebook_session",
+            AsyncMock(side_effect=NotebookQuotaExceededError("full")),
+        )
         with pytest.raises(HTTPException) as exc_info:
-            await ns_api.create_session(body, store, _make_mock_response())
+            await ns_api.create_session(
+                NotebookSessionCreate(project_id="proj-1", branch="main"),
+                store,
+                _make_mock_response(),
+            )
         assert exc_info.value.status_code == 429
-        assert "quota" in exc_info.value.detail.lower()
-
-    @pytest.mark.asyncio
-    async def test_is_pod_alive_called_with_org_id(self, monkeypatch):
-        """is_pod_alive is called with org_id keyword argument on session reuse check."""
-        _patch_jwt_secret(monkeypatch)
-
-        import time
-
-        from gateway.api import notebook_sessions as ns_api
-        from gateway.models.notebook_sessions import NotebookSessionInfo
-        from gateway.store import notebook_sessions as ns_store
-
-        existing_session = NotebookSessionInfo(
-            id="sess-alive",
-            org_id="org-1",
-            user_id="user-1",
-            project_id="proj-1",
-            branch="main",
-            pod_name="nb-alive",
-            pod_ip="10.0.0.1:2718",
-            access_token="tok-alive",
-            status="running",
-            last_ping=time.time(),
-            created_at=time.time(),
-        )
-        existing_session.notebook_url = "/notebook/sess-alive/_init"
-
-        is_alive_calls = []
-
-        async def _fake_is_pod_alive(pod_name, *, org_id):
-            is_alive_calls.append({"pod_name": pod_name, "org_id": org_id})
-            return True
-
-        mock_orch = AsyncMock()
-        mock_orch.is_pod_alive = _fake_is_pod_alive
-
-        monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=existing_session))
-        monkeypatch.setattr(ns_api, "_get_orchestrator", AsyncMock(return_value=mock_orch))
-
-        store = _make_mock_store(org_id="org-1", user_id="user-1")
-
-        from gateway.models.notebook_sessions import NotebookSessionCreate
-
-        body = NotebookSessionCreate(project_id="proj-1", branch="main")
-
-        result = await ns_api.create_session(body, store, _make_mock_response())
-        assert result.id == "sess-alive"
-        assert len(is_alive_calls) == 1
-        assert is_alive_calls[0]["org_id"] == "org-1"
-        assert is_alive_calls[0]["pod_name"] == "nb-alive"
-
-    @pytest.mark.asyncio
-    async def test_wait_for_ready_called_with_org_id(self, monkeypatch):
-        """wait_for_ready is called with org_id keyword argument."""
-        _patch_jwt_secret(monkeypatch)
-
-        import time
-
-        from gateway.api import notebook_sessions as ns_api
-        from gateway.models.notebook_sessions import NotebookSessionInfo
-        from gateway.orchestrator import PodInfo
-        from gateway.store import notebook_sessions as ns_store
-
-        new_session = NotebookSessionInfo(
-            id="sess-new",
-            org_id="org-1",
-            user_id="user-1",
-            project_id="proj-1",
-            branch="main",
-            pod_name="nb-test",
-            pod_ip=None,
-            access_token="tok-new",
-            status="creating",
-            last_ping=time.time(),
-            created_at=time.time(),
-        )
-
-        wait_calls = []
-
-        async def _fake_wait(pod_name, *, org_id, timeout=60):
-            wait_calls.append({"pod_name": pod_name, "org_id": org_id})
-            return PodInfo(name=pod_name, ip="10.0.0.5", status="running", internal_ip="10.0.0.5")
-
-        mock_orch = AsyncMock()
-        mock_orch.create_pod.return_value = PodInfo(name="nb-test", ip=None, status="pending")
-        mock_orch.wait_for_running = AsyncMock(
-            return_value=PodInfo(name="nb-test", ip=None, status="running")
-        )
-        mock_orch.wait_for_ready = _fake_wait
-
-        monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=None))
-        monkeypatch.setattr(ns_store, "create_session", AsyncMock(return_value=new_session))
-        monkeypatch.setattr(ns_store, "delete_stopped", AsyncMock())
-        monkeypatch.setattr(ns_store, "update_session_status", AsyncMock())
-        monkeypatch.setattr(ns_api, "_get_orchestrator", AsyncMock(return_value=mock_orch))
-
-        store = _make_mock_store(org_id="org-1", user_id="user-1")
-
-        from gateway.models.notebook_sessions import NotebookSessionCreate
-
-        body = NotebookSessionCreate(project_id="proj-1", branch="main")
-
-        await ns_api.create_session(body, store, _make_mock_response())
-        assert len(wait_calls) == 1
-        assert wait_calls[0]["org_id"] == "org-1"
 
 
 class TestLocalAPIKeyAuth:
@@ -1033,7 +904,6 @@ class TestLocalAPIKeyAuth:
 
     @pytest.mark.asyncio
     async def test_sp_prefix_key_with_auth_state_resolves_correctly(self, monkeypatch):
-        """When auth state is already set (by APIKeyAuthMiddleware), sp_ bearer resolves fine."""
         monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
 
         import gateway.auth.user as user_mod
@@ -1056,7 +926,6 @@ class TestLocalAPIKeyAuth:
 
     @pytest.mark.asyncio
     async def test_sp_prefix_key_without_auth_state_raises_401(self, monkeypatch):
-        """sp_ key with no auth state (unrecognized key) returns 401."""
         import gateway.auth.user as user_mod
 
         monkeypatch.setattr(user_mod, "is_cloud_mode", lambda: False)
@@ -1072,185 +941,31 @@ class TestLocalAPIKeyAuth:
         assert exc_info.value.status_code == 401
 
 
-
-# --- Option B entrypoint contract tests ---
-
-
-def _make_mock_response():
-    resp = MagicMock()
-    resp.headers = {}
-    return resp
-
-
-class TestOptionBEntrypoint:
-    @pytest.mark.asyncio
-    async def test_create_session_sequence_no_populate(self, monkeypatch):
-        """create_session: create_pod -> wait_for_running -> wait_for_ready. No populate call."""
-        _patch_jwt_secret(monkeypatch)
-
-        import time
-
-        from gateway.api import notebook_sessions as ns_api
-        from gateway.models.notebook_sessions import NotebookSessionInfo
-        from gateway.orchestrator import PodInfo
-        from gateway.store import notebook_sessions as ns_store
-
-        call_order: list[str] = []
-
-        new_session = NotebookSessionInfo(
-            id="sess-optb",
-            org_id="org-1",
-            user_id="user-1",
-            project_id="proj-1",
-            branch="main",
-            pod_name="nb-optb",
-            pod_ip=None,
-            access_token="tok-optb",
-            status="creating",
-            last_ping=time.time(),
-            created_at=time.time(),
-        )
-
-        mock_orch = AsyncMock()
-
-        async def _create_pod(*a, **kw):
-            call_order.append("create_pod")
-            return PodInfo(name="nb-optb", ip=None, status="pending")
-
-        async def _wait_running(*a, **kw):
-            call_order.append("wait_for_running")
-            return PodInfo(name="nb-optb", ip=None, status="running")
-
-        async def _wait_ready(*a, **kw):
-            call_order.append("wait_for_ready")
-            return PodInfo(name="nb-optb", ip="10.0.0.9", status="running", internal_ip="10.0.0.9")
-
-        mock_orch.create_pod = _create_pod
-        mock_orch.wait_for_running = _wait_running
-        mock_orch.wait_for_ready = _wait_ready
-
-        monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=None))
-        monkeypatch.setattr(ns_store, "create_session", AsyncMock(return_value=new_session))
-        monkeypatch.setattr(ns_store, "delete_stopped", AsyncMock())
-        monkeypatch.setattr(ns_store, "update_session_status", AsyncMock())
-        monkeypatch.setattr(ns_api, "_get_orchestrator", AsyncMock(return_value=mock_orch))
-
-        store = _make_mock_store()
-        response = _make_mock_response()
-
-        from gateway.models.notebook_sessions import NotebookSessionCreate
-
-        body = NotebookSessionCreate(project_id="proj-1", branch="main")
-
-        result = await ns_api.create_session(body, store, response)
-        assert result.id == "sess-optb"
-        assert "create_pod" in call_order
-        assert "wait_for_running" in call_order
-        assert "wait_for_ready" in call_order
-        assert call_order.index("wait_for_running") < call_order.index("wait_for_ready")
-
-    def test_pod_cmd_contains_project_sync_boot(self):
-        """Pod CMD contains project_sync_boot (regression guard for entrypoint contract)."""
-        from gateway.orchestrator.kubernetes import _pod_manifest
-
-        manifest = _pod_manifest(
-            pod_name="nb-test",
-            namespace="default",
-            image="signalpilot-notebook:latest",
-            user_id="user-1",
-            org_id="org-1",
-            project_id="proj-1",
-            branch="main",
-            gateway_url="http://localhost:3300",
-            session_jwt="test.jwt.token",
-            session_id="sess-abc",
-            access_token=None,
-        )
-        command = manifest["spec"]["containers"][0]["command"]
-        cmd_str = " ".join(command)
-        assert "project_sync_boot" in cmd_str
-        assert ".sp-ready" not in cmd_str
+class TestTerminateSession:
+    """delete paths release compute, the lease, and mark the row stopped."""
 
     @pytest.mark.asyncio
-    async def test_delete_session_deletes_pod_and_marks_stopped(self, monkeypatch):
-        """delete_session: deletes pod and marks session stopped."""
-        _patch_jwt_secret(monkeypatch)
+    async def test_terminate_releases_runtime_lease_and_marks_stopped(self, svc, monkeypatch):
+        from gateway.notebooks import session_service as service
 
-        import time
+        backend = FakeBackend()
+        await service.terminate_session(
+            AsyncMock(), session_info=_session_info(), backend=backend
+        )
+        assert backend.terminated == ["sbx-live"]
+        service.release_lease.assert_awaited_once()
+        svc.mark_stopped.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_delete_endpoint_terminates(self, monkeypatch):
         from gateway.api import notebook_sessions as ns_api
-        from gateway.models.notebook_sessions import NotebookSessionInfo
         from gateway.store import notebook_sessions as ns_store
 
-        existing_session = NotebookSessionInfo(
-            id="sess-del",
-            org_id="org-1",
-            user_id="user-1",
-            project_id="proj-1",
-            branch="main",
-            pod_name="nb-del",
-            pod_ip="10.0.0.1",
-            access_token="tok-del",
-            status="running",
-            last_ping=time.time(),
-            created_at=time.time(),
-        )
+        session = _session_info()
+        monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=session))
+        terminate = AsyncMock()
+        monkeypatch.setattr(ns_api.session_service, "terminate_session", terminate)
 
-        mock_orch = AsyncMock()
-        delete_pod_calls = []
-
-        async def _mock_delete_pod(pod_name, *, org_id):
-            delete_pod_calls.append(pod_name)
-            return True
-
-        mock_orch.delete_pod = _mock_delete_pod
-        mark_stopped_calls = []
-
-        monkeypatch.setattr(ns_store, "get_active_session", AsyncMock(return_value=existing_session))
-        monkeypatch.setattr(
-            ns_store, "mark_stopped",
-            AsyncMock(side_effect=lambda *a, **kw: mark_stopped_calls.append(True))
-        )
-        monkeypatch.setattr(ns_api, "_get_orchestrator", AsyncMock(return_value=mock_orch))
-
-        store = _make_mock_store()
-        response = _make_mock_response()
-
-        await ns_api.delete_session(store, response)
-
-        assert delete_pod_calls == ["nb-del"]
-        assert mark_stopped_calls
-
-
-class TestIsQuotaExceededErrorClassification:
-    """Verify that _is_quota_exceeded_error reads the structured status field."""
-
-    def test_returns_true_for_403_with_exceeded_quota_body(self):
-        from gateway.api.notebook_sessions import _is_quota_exceeded_error
-
-        exc = type("E", (Exception,), {})()
-        exc.status = 403  # type: ignore[attr-defined]
-        exc.body = "pods exceeded quota for pods in namespace sp-nb-abc"  # type: ignore[attr-defined]
-        assert _is_quota_exceeded_error(exc) is True
-
-    def test_returns_false_for_403_without_quota_body(self):
-        from gateway.api.notebook_sessions import _is_quota_exceeded_error
-
-        exc = type("E", (Exception,), {})()
-        exc.status = 403  # type: ignore[attr-defined]
-        exc.body = "forbidden"  # type: ignore[attr-defined]
-        assert _is_quota_exceeded_error(exc) is False
-
-    def test_returns_false_for_non_403_status(self):
-        from gateway.api.notebook_sessions import _is_quota_exceeded_error
-
-        exc = type("E", (Exception,), {})()
-        exc.status = 429  # type: ignore[attr-defined]
-        exc.body = "exceeded quota"  # type: ignore[attr-defined]
-        assert _is_quota_exceeded_error(exc) is False
-
-    def test_returns_false_for_plain_exception_with_403_in_message(self):
-        """Verify that message text alone does not identify a quota error."""
-        from gateway.api.notebook_sessions import _is_quota_exceeded_error
-
-        assert _is_quota_exceeded_error(Exception("403 exceeded quota forbidden")) is False
+        await ns_api.delete_session(_make_mock_store(), _make_mock_response())
+        terminate.assert_awaited_once()
+        assert terminate.await_args.kwargs["session_info"] == session

@@ -645,16 +645,44 @@ async def _ensure_notebook_session_columns(engine) -> None:
     logger.info("Ensured notebook session columns")
 
 
-async def _ensure_notebook_session_pod_ip_internal(engine) -> None:
-    """Add pod_ip_internal column to gateway_notebook_sessions if it does not exist.
+async def _ensure_notebook_session_v2_columns(engine) -> None:
+    """Migrate gateway_notebook_sessions to the Runtime v2 shape.
 
-    Idempotent ADD COLUMN IF NOT EXISTS. No index needed (lookup is by PK).
-    The proxy uses this column to reach the pod inside the cluster.
-    The pod_ip column contains the external NodePort address.
+    Adds the v2 columns (backend seam, sandbox runtime handles, snapshot
+    resume) and drops the pod-era columns — pod compute no longer exists, so
+    any row that referenced a pod is dead by definition and gets stopped.
+    Idempotent: ADD/DROP COLUMN IF (NOT) EXISTS throughout.
     """
     async with engine.begin() as conn:
-        await conn.execute(text("ALTER TABLE gateway_notebook_sessions ADD COLUMN IF NOT EXISTS pod_ip_internal TEXT"))
-    logger.info("Ensured pod_ip_internal column on gateway_notebook_sessions")
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_notebook_sessions "
+                "ADD COLUMN IF NOT EXISTS backend VARCHAR(20) NOT NULL DEFAULT 'vercel'"
+            )
+        )
+        await conn.execute(
+            text("ALTER TABLE gateway_notebook_sessions ADD COLUMN IF NOT EXISTS runtime_handle VARCHAR(200)")
+        )
+        await conn.execute(text("ALTER TABLE gateway_notebook_sessions ADD COLUMN IF NOT EXISTS upstream_url TEXT"))
+        await conn.execute(
+            text("ALTER TABLE gateway_notebook_sessions ADD COLUMN IF NOT EXISTS snapshot_id VARCHAR(200)")
+        )
+        await conn.execute(
+            text("ALTER TABLE gateway_notebook_sessions ADD COLUMN IF NOT EXISTS last_extend_at DOUBLE PRECISION")
+        )
+        # Pod-era rows have no runtime handle: stop them before dropping the
+        # columns that described their compute.
+        await conn.execute(
+            text(
+                "UPDATE gateway_notebook_sessions SET status = 'stopped' "
+                "WHERE runtime_handle IS NULL AND status IN ('creating', 'running')"
+            )
+        )
+        for legacy in ("pod_name", "pod_ip", "pod_ip_internal"):
+            await conn.execute(
+                text(f"ALTER TABLE gateway_notebook_sessions DROP COLUMN IF EXISTS {legacy}")
+            )
+    logger.info("Ensured notebook session v2 columns (pod-era columns dropped)")
 
 
 async def _ensure_drop_s3_prefix_column(engine) -> None:
@@ -829,7 +857,7 @@ async def init_db() -> None:
     await _ensure_branch_columns(engine)
     await _ensure_notebook_session_columns(engine)
     await _ensure_notebook_session_org_id(engine)
-    await _ensure_notebook_session_pod_ip_internal(engine)
+    await _ensure_notebook_session_v2_columns(engine)
     await _ensure_drop_s3_prefix_column(engine)
     await _ensure_github_authorized_repos_column(engine)
     await _ensure_notebook_token_plaintext_dropped(engine)

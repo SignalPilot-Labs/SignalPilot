@@ -1,7 +1,14 @@
 import { test, expect, type Page } from "@playwright/test";
 
-const PROJECT_ID = "3781d00d-3f10-4139-9b70-2e4cd9c42c63";
+import { resolveProject } from "./helpers";
+
+// Resolved at runtime — hardcoded ids rot when the database changes.
+let PROJECT_ID = "";
 const GATEWAY = "http://localhost:3300";
+
+test.beforeAll(async ({ request }) => {
+  PROJECT_ID = (await resolveProject(request)).id;
+});
 
 // ─── Helpers ─────────────────────────────────────────────────────
 async function getApiKey(): Promise<string> {
@@ -216,26 +223,19 @@ test.describe("Project Navigation", () => {
 
     await page.goto("/projects", { waitUntil: "domcontentloaded" });
 
-    const openBtn = page.getByRole("button", { name: /open ide/i });
-    const runningText = page.getByText("running");
-    await Promise.race([
-      runningText.waitFor({ timeout: 30_000 }),
-      openBtn.waitFor({ timeout: 30_000 }),
-    ]);
+    // Current landing: project cards + "Create new project". Click the first
+    // project card (its accessible name includes its settings affordance).
+    const createBtn = page.getByRole("button", { name: /create new project/i });
+    await createBtn.waitFor({ timeout: 30_000 });
+    const projectCard = page.getByRole("button", { name: /settings for/i }).first();
+    await projectCard.waitFor({ timeout: 15_000 });
+    await projectCard.click();
 
-    if (await openBtn.isVisible().catch(() => false)) {
-      await openBtn.click();
-      await runningText.waitFor({ timeout: 60_000 });
-    }
-
-    await waitForNotebook(page);
+    await waitForNotebook(page, 120_000);
     console.log("Notebook loaded from landing page");
 
     await page.goto("/projects", { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(3000);
-
-    const stillRunning = await runningText.isVisible({ timeout: 10_000 }).catch(() => false);
-    expect(stillRunning).toBe(true);
+    await createBtn.waitFor({ timeout: 30_000 });
     expectNoFatalErrors(errors, "navigation");
   });
 });
@@ -337,7 +337,7 @@ test.describe("Cold Start", () => {
       { waitUntil: "domcontentloaded" }
     );
 
-    const loadingText = page.getByText(/creating session|connecting to pod|waiting for pod/i);
+    const loadingText = page.getByText(/creating session|connecting to|starting|preparing workspace|syncing/i);
     await loadingText.waitFor({ timeout: 15_000 }).catch(() => {});
 
     await waitForNotebook(page, 120_000);

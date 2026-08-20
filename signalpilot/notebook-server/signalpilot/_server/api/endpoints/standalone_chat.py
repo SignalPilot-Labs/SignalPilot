@@ -30,11 +30,13 @@ from signalpilot._server.ai.claude_agent import (
 from signalpilot._server.ai.standalone_chat_tools import (
     StandaloneArtifactCollector,
     StandaloneNotebookLifecycle,
+    _collected_artifact_is_complete,
     build_standalone_chat_mcp_server,
 )
 from signalpilot._server.files import project_sync
 from signalpilot._server.router import APIRouter
 from signalpilot._types.ids import SessionId
+from signalpilot._utils.requests import RequestError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -73,6 +75,9 @@ STANDALONE_ALLOWED_TOOLS = [
     "mcp__standalone-chat__publish_chart",
     "mcp__standalone-chat__publish_report",
     "mcp__standalone-chat__publish_table",
+    "mcp__standalone-chat__list_saved_report_catalog",
+    "mcp__standalone-chat__load_report_context",
+    "mcp__standalone-chat__propose_report_action",
     "mcp__standalone-chat__inspect_dbt",
     "mcp__standalone-chat__start_analysis_notebook",
     "mcp__signalpilot-notebook__edit_notebook",
@@ -157,10 +162,69 @@ Rules:
 - Explicitly disclose incomplete, unknown-completeness, or display-limited results.
 - Use SignalPilot MCP for schema discovery and bounded pre-analysis. MCP row samples are context-limited and must never be treated as a complete dataset.
 - Prefer governed SDK structured-result IDs for substantial analysis and for every published artifact.
+- REQUIRED POST-PUBLICATION STEP: after publishing any complete non-truncated table, chart, or report, do not give the final answer yet; scan every page from list_saved_report_catalog and then call propose_report_action exactly once. Catalog pages contain semantics, never result rows.
+- Compare reports in this order: exact artifact content, normalized title, then semantic meaning across the complete catalog. Semantic equivalence requires the same business question, project/data domain, core metrics, entity or grain, and compatible dimensions and filters.
+- Treat newer dates or warehouse data, formatting, visualization changes, additional breakdowns, and small wording changes as updates. Treat changed metric definitions, entity or grain, business purpose, governed project, or incompatible populations as distinct reports.
+- Load the matched report with load_report_context before proposing an update, except when the user explicitly attached that report. Historical SQL is context only; plan every new execution normally.
+- Call propose_report_action exactly once for an eligible completed artifact. Use open for exact content, update for a semantic match, create only when the full catalog has no match, or no_suggestion with a concrete reason when the artifact should not be promoted. Report creation or update always waits for the user's UI approval.
 - The dbt project is frozen at the supplied commit. Inspect it but never run dbt run, build, seed, or snapshot.
 - Never mention or expose confidence scores, hidden reasoning, chain-of-thought, credentials, or implementation internals.
 - Do not suggest follow-up questions.
 """
+
+
+_NOTEBOOK_ONLY_RULE_PREFIXES = (
+    "- If the route is notebook_sdk or dataset_ref",
+    "- The analysis notebook is a marimo reactive notebook",
+    "- Define shared imports and reusable DataFrames once",
+    "- If edit_notebook returns MultipleDefinitionError",
+    "- Never edit, remove, or redefine the seeded",
+    "- For notebook_sdk, first define `plan_id`",
+    "- Never copy MCP previews into notebook DataFrames",
+    "- Keep complete bounded DataFrames inside the kernel",
+    "- Publish derived rows from the kernel",
+    "- Publish a runtime file with exactly",
+    "- PublishedResult exposes only",
+    "- Do not catch or suppress publication exceptions",
+    "- Prefer governed SDK structured-result IDs",
+)
+
+
+def _system_prompt_for_features(*, notebook_analysis_enabled: bool) -> str:
+    if notebook_analysis_enabled:
+        return STANDALONE_SYSTEM_PROMPT
+    lines = [
+        line
+        for line in STANDALONE_SYSTEM_PROMPT.splitlines()
+        if not line.startswith(_NOTEBOOK_ONLY_RULE_PREFIXES)
+    ]
+    disabled_rule = (
+        "- Notebook analysis is disabled for this run. Do not call notebook "
+        "tools; use an exact MCP plan or rewrite aggregate_required work as "
+        "bounded warehouse SQL."
+    )
+    insert_at = (
+        lines.index(
+            "- Use query_database with the returned plan_id only when the plan route is mcp."
+        )
+        + 1
+    )
+    lines.insert(insert_at, disabled_rule)
+    return "\n".join(lines)
+
+
+def _allowed_tools_for_features(
+    *,
+    notebook_analysis_enabled: bool,
+) -> list[str]:
+    if notebook_analysis_enabled:
+        return list(STANDALONE_ALLOWED_TOOLS)
+    return [
+        tool
+        for tool in STANDALONE_ALLOWED_TOOLS
+        if "signalpilot-notebook" not in tool
+        and not tool.endswith("start_analysis_notebook")
+    ]
 
 
 def _require_execution_scope(
@@ -528,15 +592,16 @@ async def _archive_analysis_notebook(
                 include_code=False,
             ),
         )
-    except FileNotFoundError:
+    except (FileNotFoundError, RequestError, httpx.HTTPError) as exc:
         # The slim runtime image intentionally omits the notebook frontend
         # bundle. Preserve the validated evidence in a bounded, code-free HTML
         # archive instead of rejecting an otherwise clean analysis.
         LOGGER.warning(
             "Notebook frontend assets unavailable; using safe archive fallback "
-            "run_id=%s session_id=%s",
+            "run_id=%s session_id=%s error_type=%s",
             run_id,
             session_id,
+            type(exc).__name__,
         )
         html = _fallback_archive_html(
             session,
@@ -797,7 +862,7 @@ async def execute(*, request: Request) -> StreamingResponse:
     notebook_analysis_enabled = bool(feature_values.get("notebook_analysis"))
     is_improvement_run = str(body.get("run_origin") or "user") == "improvement"
     system_prompt = (
-        f"{STANDALONE_SYSTEM_PROMPT}"
+        f"{_system_prompt_for_features(notebook_analysis_enabled=notebook_analysis_enabled)}"
         f"{IMPROVEMENT_SYSTEM_PROMPT_SUFFIX if is_improvement_run else ''}\n\n"
         f"Selected project: {project_id}\nFrozen branch: {branch}\nFrozen commit: {commit_sha}\n"
         f"Selected connection: {connection_name}\n\n"
@@ -851,6 +916,55 @@ async def execute(*, request: Request) -> StreamingResponse:
         value = response.json()
         if not isinstance(value, dict):
             raise ValueError("Invalid governed query plan")
+        return value
+
+    async def load_report_catalog(cursor: str | None) -> dict[str, Any]:
+        params = {"limit": "50"}
+        if cursor:
+            params["cursor"] = cursor
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{gateway_api_url}/api/chat/runs/{run_id}/report-catalog",
+                params=params,
+                headers={"Authorization": f"Bearer {scoped_token}"},
+            )
+        response.raise_for_status()
+        value = response.json()
+        if not isinstance(value, dict):
+            raise ValueError("Invalid saved report catalog")
+        return value
+
+    async def load_report_context(report_id: str) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{gateway_api_url}/api/chat/runs/{run_id}/report-context/{report_id}",
+                headers={"Authorization": f"Bearer {scoped_token}"},
+            )
+        if response.status_code == 404:
+            raise ValueError("Saved report not found")
+        response.raise_for_status()
+        value = response.json()
+        if not isinstance(value, dict):
+            raise ValueError("Invalid saved report context")
+        return value
+
+    async def check_published_artifact(
+        artifact_kind: str,
+        artifact_filename: str,
+    ) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{gateway_api_url}/api/chat/runs/{run_id}/published-report-artifact",
+                params={
+                    "artifact_kind": artifact_kind,
+                    "artifact_filename": artifact_filename,
+                },
+                headers={"Authorization": f"Bearer {scoped_token}"},
+            )
+        response.raise_for_status()
+        value = response.json()
+        if not isinstance(value, dict):
+            raise ValueError("Invalid published artifact state")
         return value
 
     auth_config_override = _runtime_auth_override(body)
@@ -963,6 +1077,19 @@ async def execute(*, request: Request) -> StreamingResponse:
                     event_sink=lifecycle_event,
                     notebook_lifecycle=lifecycle,
                     runtime_redactions=(scoped_token,),
+                    report_catalog_loader=load_report_catalog,
+                    report_context_loader=load_report_context,
+                    published_artifact_checker=check_published_artifact,
+                    attached_report_id=str(
+                        (
+                            (body.get("warm_context") or {}).get(
+                                "report_reference"
+                            )
+                            or {}
+                        ).get("report_id")
+                        or ""
+                    )
+                    or None,
                 )
                 attempt_prompt = prompt
                 if recovery_failure is not None:
@@ -1004,20 +1131,21 @@ async def execute(*, request: Request) -> StreamingResponse:
                         "WebFetch",
                         "WebSearch",
                         *STANDALONE_DISALLOWED_MCP_TOOLS,
-                        *([] if is_improvement_run else IMPROVEMENT_EXTRA_TOOLS),
+                        *(
+                            []
+                            if is_improvement_run
+                            else IMPROVEMENT_EXTRA_TOOLS
+                        ),
                     ],
                     allowed_tools=(
-                        (
-                            STANDALONE_ALLOWED_TOOLS
-                            if notebook_analysis_enabled
-                            else [
-                                tool
-                                for tool in STANDALONE_ALLOWED_TOOLS
-                                if "signalpilot-notebook" not in tool
-                                and not tool.endswith("start_analysis_notebook")
-                            ]
+                        _allowed_tools_for_features(
+                            notebook_analysis_enabled=notebook_analysis_enabled
                         )
-                        + (IMPROVEMENT_EXTRA_TOOLS if is_improvement_run else [])
+                        + (
+                            IMPROVEMENT_EXTRA_TOOLS
+                            if is_improvement_run
+                            else []
+                        )
                     ),
                     additional_mcp_servers={
                         "standalone-chat": artifact_server
@@ -1231,11 +1359,51 @@ async def execute(*, request: Request) -> StreamingResponse:
                     _ANALYSIS_SESSIONS_BY_RUN.pop(run_id, None)
                     lifecycle.session_id = None
                 accepted_text = (final_text or streamed_text).strip()
+                complete_artifacts = [
+                    artifact
+                    for artifact in collector.artifacts
+                    if _collected_artifact_is_complete(artifact)
+                ]
+                if (
+                    complete_artifacts
+                    and collector.report_action_outcome is None
+                ):
+                    artifact = complete_artifacts[-1]
+                    LOGGER.warning(
+                        "Completed standalone artifact had no report action outcome "
+                        "run_id=%s kind=%s filename=%s",
+                        run_id,
+                        artifact.get("kind"),
+                        artifact.get("filename"),
+                    )
+                    collector.report_action_outcome = {
+                        "action": "no_suggestion",
+                        "artifact_kind": artifact.get("kind"),
+                        "artifact_filename": artifact.get("filename"),
+                        "title": artifact.get("filename"),
+                        "reason": (
+                            "The analysis agent completed without recording the required "
+                            "catalog-backed report decision."
+                        ),
+                        "source": "completion_check",
+                        "catalog_revision": collector.report_catalog_revision,
+                        "catalog_scan_complete": (
+                            collector.report_catalog_scan_complete
+                        ),
+                    }
                 final_payload = {
                     "type": "final",
                     "content": accepted_text,
                     "artifacts": collector.artifacts,
                 }
+                if collector.report_proposal is not None:
+                    final_payload["report_proposal"] = (
+                        collector.report_proposal
+                    )
+                if collector.report_action_outcome is not None:
+                    final_payload["report_action_outcome"] = (
+                        collector.report_action_outcome
+                    )
                 if archive_id is not None:
                     final_payload["archive_id"] = archive_id
                     final_payload["kernel_stopped"] = kernel_stopped

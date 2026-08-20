@@ -14,6 +14,8 @@ import urllib.parse
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
+from ..log_redaction import redact_secret_path
+
 logger = logging.getLogger(__name__)
 
 # Exempt path prefixes — these paths have their own auth / CSRF model and
@@ -127,7 +129,7 @@ class CookieAuthCsrfMiddleware(BaseHTTPMiddleware):
         request_id = getattr(request.state, "request_id", "unknown")
         logger.warning(
             "csrf_block path=%s method=%s origin=%r sec_fetch_site=%r referer_host=%r request_id=%s",
-            request.url.path,
+            redact_secret_path(request.url.path),
             request.method,
             origin,
             sec_fetch_site,

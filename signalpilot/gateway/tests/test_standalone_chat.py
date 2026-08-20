@@ -1071,6 +1071,16 @@ async def test_claim_completion_and_final_message_are_idempotent(db_session):
         run_id=run.id,
         worker_id="worker-a",
         content="Revenue increased.",
+        report_action_outcome={
+            "action": "no_suggestion",
+            "artifact_kind": "report",
+            "artifact_filename": "diagnostic.html",
+            "reason": "One-off diagnostic.",
+            "source": "agent",
+            "catalog_scan_complete": True,
+            "catalog_revision": "must-not-be-exposed",
+            "loaded_report_ids": ["must-not-be-exposed"],
+        },
     )
     second = await chat_store.complete_run(
         db_session,
@@ -1079,6 +1089,14 @@ async def test_claim_completion_and_final_message_are_idempotent(db_session):
         content="Duplicate.",
     )
     assert first is not None
+    assert first.metadata_json["report_action_outcome"] == {
+        "action": "no_suggestion",
+        "artifact_kind": "report",
+        "artifact_filename": "diagnostic.html",
+        "reason": "One-off diagnostic.",
+        "source": "agent",
+        "catalog_scan_complete": True,
+    }
     assert second is None
     count = await db_session.scalar(
         select(func.count(GatewayChatMessage.id)).where(

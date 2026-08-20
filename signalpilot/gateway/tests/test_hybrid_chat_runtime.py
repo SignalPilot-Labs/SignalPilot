@@ -41,6 +41,7 @@ def _route(
     supported: bool = True,
     justified: bool = False,
     raw_export: bool = False,
+    notebook_analysis: bool = True,
 ):
     return choose_query_route(
         execution_need=execution_need,  # type: ignore[arg-type]
@@ -51,6 +52,7 @@ def _route(
         connector_supports_datasets=supported,
         row_level_analysis_justified=justified,
         raw_export_requested=raw_export,
+        notebook_analysis_enabled=notebook_analysis,
     )
 
 
@@ -204,6 +206,34 @@ def test_track_b_requires_flag_connector_support_and_row_level_justification():
         justified=True,
         raw_export=True,
     )[0] == "refuse"
+
+
+@pytest.mark.parametrize("execution_need", ["sql", "python"])
+def test_notebook_routes_are_not_selected_when_notebook_analysis_is_disabled(
+    execution_need,
+):
+    assert _route(
+        rows=MCP_MAX_ROWS + 1,
+        byte_size=1,
+        execution_need=execution_need,
+        notebook_analysis=False,
+    ) == (
+        "aggregate_required",
+        "Notebook analysis is disabled; rewrite the work as a bounded warehouse aggregate.",
+        None,
+    )
+
+    assert (
+        _route(
+            rows=TRACK_A_MAX_ROWS + 1,
+            byte_size=1,
+            track_b=True,
+            supported=True,
+            justified=True,
+            notebook_analysis=False,
+        )[0]
+        == "aggregate_required"
+    )
 
 
 def test_routes_are_deterministic_for_identical_inputs():

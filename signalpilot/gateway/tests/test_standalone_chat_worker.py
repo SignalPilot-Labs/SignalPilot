@@ -45,6 +45,7 @@ async def test_cancellation_monitor_interrupts_the_active_worker_task(
 async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pytest.MonkeyPatch) -> None:
     active_sessions = 0
     completed_runs: list[str] = []
+    completion_payloads: list[dict[str, Any]] = []
     failed_runs: list[str] = []
     appended_events: list[tuple[str, dict[str, Any]]] = []
 
@@ -104,13 +105,25 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
             "type": "progress",
             "content": "Restarting analysis in a clean notebook",
         }
-        yield {"type": "final", "content": "Analysis complete", "artifacts": []}
+        yield {
+            "type": "final",
+            "content": "Analysis complete",
+            "artifacts": [],
+            "report_action_outcome": {
+                "action": "no_suggestion",
+                "artifact_kind": "report",
+                "artifact_filename": "diagnostic.html",
+                "reason": "One-off diagnostic.",
+                "catalog_scan_complete": True,
+            },
+        }
 
     async def prepare_execution(*_args: Any, **_kwargs: Any) -> object:
         return object()
 
     async def complete_run(*_args: Any, **kwargs: Any) -> None:
         completed_runs.append(kwargs["run_id"])
+        completion_payloads.append(kwargs)
 
     async def fail_run(*_args: Any, **kwargs: Any) -> None:
         failed_runs.append(kwargs["run_id"])
@@ -150,6 +163,13 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
     await worker._execute_claimed_run("run-a", "worker-a")
 
     assert completed_runs == ["run-a"]
+    assert completion_payloads[0]["report_action_outcome"] == {
+        "action": "no_suggestion",
+        "artifact_kind": "report",
+        "artifact_filename": "diagnostic.html",
+        "reason": "One-off diagnostic.",
+        "catalog_scan_complete": True,
+    }
     assert failed_runs == []
     assert ("cell_executed", {"status": "failed"}) in appended_events
     assert (

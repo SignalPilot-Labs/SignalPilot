@@ -13,6 +13,7 @@ import {
   MoreHorizontal,
   PanelLeft,
   Play,
+  Save,
   Share2,
   Sparkles,
   Table2,
@@ -37,6 +38,7 @@ import useSWR, { useSWRConfig } from "swr";
 import type { VisualizationSpec } from "vega-embed";
 import {
   archiveStandaloneConversation,
+  approveChatReportSuggestion,
   cancelStandaloneRun,
   clarifyStandaloneRun,
   createStandaloneConversation,
@@ -47,8 +49,10 @@ import {
   getStandaloneChatBootstrap,
   getStandaloneChatProjectReadiness,
   getStandaloneConversation,
+  getSavedChatReport,
   listStandaloneConversations,
   openStandaloneNotebookArchive,
+  promoteChatArtifact,
   renameStandaloneConversation,
   retryStandaloneRun,
   revokeStandaloneConversationShare,
@@ -61,6 +65,8 @@ import {
   type StandaloneChatRunStatus,
   type StandaloneConversation,
   type StandaloneConversationDetail,
+  type ChatReportMention,
+  type ChatReportSuggestion,
 } from "~/lib/api";
 import { StandaloneArtifactContext } from "~/components/chat/standalone-artifact-context";
 import { StandaloneChatComposer } from "~/components/chat/standalone-chat-composer";
@@ -92,6 +98,9 @@ type ChatUiContextValue = {
   artifacts: StandaloneChatArtifact[];
   onStop: (runId: string) => Promise<void>;
   onRetry: (runId: string) => Promise<void>;
+  onApproveReportSuggestion: (
+    messageId: string,
+  ) => Promise<{ report_id: string }>;
 };
 
 const ChatUiContext = createContext<ChatUiContextValue | null>(null);
@@ -242,6 +251,10 @@ export type ArtifactPreviewData = Pick<
   | "assumptions"
   | "exclusions"
   | "caveats"
+  | "saved_report_id"
+  | "saved_report_version_id"
+  | "saved_report_title"
+  | "report_action"
   | "created_at"
   | "download_formats"
 >;
@@ -290,13 +303,16 @@ function RuntimeChartPreview({
 function ArtifactDownloads({
   artifact,
   onDownload,
+  canSaveAsReport = false,
 }: {
   artifact: ArtifactPreviewData;
   onDownload: ArtifactDownload;
+  canSaveAsReport?: boolean;
 }) {
   const { toast } = useToast();
   return (
     <div className="flex flex-wrap items-center gap-2">
+      {canSaveAsReport && <SaveArtifactAsReportAction artifact={artifact} />}
       {artifact.download_formats.map((format) => (
         <button
           key={format}
@@ -316,12 +332,148 @@ function ArtifactDownloads({
   );
 }
 
+function SaveArtifactAsReportAction({
+  artifact,
+}: {
+  artifact: ArtifactPreviewData;
+}) {
+  const router = useRouter();
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const isUpdate =
+    artifact.report_action === "update" && Boolean(artifact.saved_report_id);
+
+  if (artifact.report_action === "open" && artifact.saved_report_id) {
+    return (
+      <button
+        type="button"
+        onClick={() => router.push(`/reports/${artifact.saved_report_id}`)}
+        className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--color-text)] px-2 py-1 text-[11px] text-[var(--color-bg)]"
+      >
+        <FileChartColumn className="h-3 w-3" />
+        Open report
+      </button>
+    );
+  }
+
+  const begin = () => {
+    setTitle(
+      isUpdate && artifact.saved_report_title
+        ? artifact.saved_report_title
+        : artifact.filename.replace(/\.[^.]+$/, ""),
+    );
+    setOpen(true);
+  };
+
+  const submit = async () => {
+    const cleanTitle = title.trim();
+    if (!cleanTitle || submitting) return;
+    setSubmitting(true);
+    try {
+      const result = await promoteChatArtifact(artifact.id, cleanTitle);
+      setOpen(false);
+      toast(
+        result.status === "created"
+          ? "Report saved"
+          : result.status === "updated"
+            ? "Report updated"
+            : "Report already up to date",
+        "success",
+      );
+      router.push(`/reports/${result.report_id}`);
+    } catch (error) {
+      toast(
+        error instanceof Error
+          ? error.message
+          : isUpdate
+            ? "Could not update report"
+            : "Could not save report",
+        "error",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={begin}
+        className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--color-text)] px-2 py-1 text-[11px] text-[var(--color-bg)]"
+      >
+        <Save className="h-3 w-3" />
+        {isUpdate ? "Update report" : "Save as report"}
+      </button>
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={`save-report-title-${artifact.id}`}
+            className="w-full max-w-md rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-5 text-left shadow-2xl"
+          >
+            <h2
+              id={`save-report-title-${artifact.id}`}
+              className="text-base text-[var(--color-text)]"
+            >
+              {isUpdate ? "Update report" : "Save as report"}
+            </h2>
+            <p className="mt-1 text-xs text-[var(--color-text-dim)]">
+              {isUpdate
+                ? `This artifact will become a new version of “${title}”.`
+                : "Save this artifact as a report you can refresh and share later."}
+            </p>
+            {!isUpdate && (
+              <label className="mt-4 block text-xs text-[var(--color-text-muted)]">
+                Report title
+                <input
+                  autoFocus
+                  value={title}
+                  onChange={(event) => setTitle(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void submit();
+                  }}
+                  className="mt-2 w-full rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-border-hover)]"
+                />
+              </label>
+            )}
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={() => setOpen(false)}
+                className="rounded-xl px-3 py-2 text-xs text-[var(--color-text-muted)] disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!title.trim() || submitting}
+                onClick={() => void submit()}
+                className="inline-flex items-center gap-2 rounded-xl bg-[var(--color-text)] px-3 py-2 text-xs text-[var(--color-bg)] disabled:opacity-50"
+              >
+                {submitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {isUpdate ? "Update report" : "Save report"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 export function ArtifactPreview({
   artifact,
   onDownload = downloadStandaloneArtifact,
+  canSaveAsReport = false,
 }: {
   artifact: ArtifactPreviewData;
   onDownload?: ArtifactDownload;
+  canSaveAsReport?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const snapshot = artifact.snapshot;
@@ -362,7 +514,11 @@ export function ArtifactPreview({
                 {expanded ? "Collapse" : "Open"}
               </button>
             )}
-            <ArtifactDownloads artifact={artifact} onDownload={onDownload} />
+            <ArtifactDownloads
+              artifact={artifact}
+              onDownload={onDownload}
+              canSaveAsReport={canSaveAsReport}
+            />
           </div>
         </div>
         <div
@@ -446,7 +602,11 @@ export function ArtifactPreview({
               {artifact.filename}
             </span>
           </div>
-          <ArtifactDownloads artifact={artifact} onDownload={onDownload} />
+          <ArtifactDownloads
+            artifact={artifact}
+            onDownload={onDownload}
+            canSaveAsReport={canSaveAsReport}
+          />
         </div>
         <div className="min-h-64 overflow-x-auto p-4">
           {snapshot.runtime_png === true ? (
@@ -496,7 +656,11 @@ export function ArtifactPreview({
             {artifact.filename}
           </span>
         </div>
-        <ArtifactDownloads artifact={artifact} onDownload={onDownload} />
+        <ArtifactDownloads
+          artifact={artifact}
+          onDownload={onDownload}
+          canSaveAsReport={canSaveAsReport}
+        />
       </div>
       {hasRenderableReport ? (
         <iframe
@@ -524,6 +688,123 @@ export function ArtifactPreview({
   );
 }
 
+function ReportSuggestionCard({
+  messageId,
+  suggestion,
+}: {
+  messageId: string;
+  suggestion: ChatReportSuggestion;
+}) {
+  const router = useRouter();
+  const { toast } = useToast();
+  const { onApproveReportSuggestion } = useChatUi();
+  const [dismissed, setDismissed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [approvedReportId, setApprovedReportId] = useState(
+    suggestion.approval?.report_id ?? null,
+  );
+  if (dismissed) return null;
+  const reportId = approvedReportId || suggestion.report_id;
+  const openOnly = suggestion.action === "open";
+  const label =
+    suggestion.action === "create"
+      ? "Create report"
+      : suggestion.action === "update"
+        ? "Update existing report"
+        : "Open report";
+
+  const approve = async () => {
+    if (busy) return;
+    if (openOnly && reportId) {
+      router.push(`/reports/${reportId}`);
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await onApproveReportSuggestion(messageId);
+      setApprovedReportId(result.report_id);
+      toast(
+        suggestion.action === "create" ? "Report created" : "Report updated",
+        "success",
+      );
+    } catch (error) {
+      toast(
+        error instanceof Error
+          ? error.message
+          : "Could not publish the report action",
+        "error",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="mt-4 rounded-xl border border-[var(--color-success)]/25 bg-[var(--color-bg-card)] p-4">
+      <div className="flex items-start gap-3">
+        <FileChartColumn className="mt-0.5 h-4 w-4 flex-none text-[var(--color-success)]" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm text-[var(--color-text)]">
+            {suggestion.action === "create"
+              ? `Save “${suggestion.title}” as a durable report?`
+              : `Matched “${suggestion.title}”`}
+          </p>
+          <p className="mt-1 text-xs leading-5 text-[var(--color-text-muted)]">
+            {suggestion.reason}
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {approvedReportId ? (
+              <button
+                type="button"
+                onClick={() => router.push(`/reports/${approvedReportId}`)}
+                className="rounded-lg bg-[var(--color-text)] px-3 py-2 text-xs text-[var(--color-bg)]"
+              >
+                Open report
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={busy || (!reportId && openOnly)}
+                onClick={() => void approve()}
+                className="inline-flex items-center gap-2 rounded-lg bg-[var(--color-text)] px-3 py-2 text-xs text-[var(--color-bg)] disabled:opacity-50"
+              >
+                {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {label}
+              </button>
+            )}
+            {!approvedReportId && !openOnly && (
+              <button
+                type="button"
+                onClick={() => setDismissed(true)}
+                className="rounded-lg px-3 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
+              >
+                Not now
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function messageReportSuggestion(
+  metadata: Record<string, unknown>,
+): ChatReportSuggestion | null {
+  const value = metadata.report_suggestion;
+  if (!value || typeof value !== "object") return null;
+  const suggestion = value as Partial<ChatReportSuggestion>;
+  if (
+    !["create", "update", "open"].includes(suggestion.action || "") ||
+    typeof suggestion.artifact_id !== "string" ||
+    typeof suggestion.title !== "string" ||
+    typeof suggestion.reason !== "string"
+  ) {
+    return null;
+  }
+  return suggestion as ChatReportSuggestion;
+}
+
 function AssistantMessage({ message }: { message: UiMessage }) {
   const runId =
     message.runId ??
@@ -546,6 +827,9 @@ function AssistantMessage({ message }: { message: UiMessage }) {
   const running = runStatus === "queued" || runStatus === "running";
   const runtimeArchiveAvailable =
     message.metadata.runtime_archive_available === true;
+  const reportSuggestion = successful
+    ? messageReportSuggestion(message.metadata)
+    : null;
   return (
     <article
       data-chat-message-id={message.id}
@@ -585,9 +869,19 @@ function AssistantMessage({ message }: { message: UiMessage }) {
           {attachedArtifacts.length > 0 && (
             <div className="mt-5 space-y-4">
               {attachedArtifacts.map((artifact) => (
-                <ArtifactPreview key={artifact.id} artifact={artifact} />
+                <ArtifactPreview
+                  key={artifact.id}
+                  artifact={artifact}
+                  canSaveAsReport={successful}
+                />
               ))}
             </div>
+          )}
+          {reportSuggestion && (
+            <ReportSuggestionCard
+              messageId={message.id}
+              suggestion={reportSuggestion}
+            />
           )}
           {runStatus === "failed" && (
             <p className="mt-3 text-xs text-[var(--color-error)]">
@@ -1045,6 +1339,15 @@ export function StandaloneDataChat({
     },
   );
   const requestedProject = searchParams.get("project");
+  const requestedReportId = searchParams.get("report");
+  const [selectedReport, setSelectedReport] =
+    useState<ChatReportMention | null>(null);
+  const attachedReportReference = selectedReport
+    ? {
+        report_id: selectedReport.report_id,
+        version_id: selectedReport.current_version_id,
+      }
+    : undefined;
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     null,
   );
@@ -1081,6 +1384,30 @@ export function StandaloneDataChat({
     setChatBudgetUsd(bootstrap.default_chat_budget_usd);
     selectedInitialized.current = true;
   }, [bootstrap, requestedProject]);
+
+  useEffect(() => {
+    if (!requestedReportId || selectedReport?.report_id === requestedReportId)
+      return;
+    let active = true;
+    void getSavedChatReport(requestedReportId)
+      .then((report) => {
+        if (!active) return;
+        setSelectedProjectId(report.project_id);
+        setSelectedReport({
+          report_id: report.id,
+          title: report.title,
+          kind: report.kind,
+          project_id: report.project_id,
+          current_version_id: report.current_version_id,
+        });
+      })
+      .catch(() => {
+        if (active) toast("The attached report is unavailable", "error");
+      });
+    return () => {
+      active = false;
+    };
+  }, [requestedReportId, selectedReport?.report_id, toast]);
 
   useEffect(() => {
     if (detail?.conversation.project_id) {
@@ -1380,7 +1707,9 @@ export function StandaloneDataChat({
             text,
             perQueryBudgetUsd,
             chatBudgetUsd,
+            attachedReportReference,
           );
+          setSelectedReport(null);
           await mutateCache(
             `standalone-chat-conversation:${created.conversation.id}`,
             created,
@@ -1410,7 +1739,14 @@ export function StandaloneDataChat({
         if (currentRun?.status === "waiting_for_user") {
           run = await clarifyStandaloneRun(currentRun.id, text);
         } else {
-          run = await createStandaloneRun(conversationId, text);
+          run = await createStandaloneRun(
+            conversationId,
+            text,
+            attachedReportReference,
+          );
+          if (attachedReportReference)
+            router.replace(`/chats/${conversationId}`);
+          setSelectedReport(null);
         }
         await mutateDetail(
           (current) =>
@@ -1494,6 +1830,7 @@ export function StandaloneDataChat({
       selectedProjectId,
       perQueryBudgetUsd,
       chatBudgetUsd,
+      attachedReportReference,
       toast,
     ],
   );
@@ -1565,12 +1902,27 @@ export function StandaloneDataChat({
     },
     [mutateDetail, mutateHistory, toast],
   );
+  const onApproveReportSuggestion = useCallback(
+    async (messageId: string) => {
+      const result = await approveChatReportSuggestion(messageId);
+      await mutateDetail();
+      await mutateCache(
+        (key) =>
+          typeof key === "string" &&
+          (key.startsWith("chat-report-library:") ||
+            key.startsWith("saved-chat-report:")),
+      );
+      return { report_id: result.report_id };
+    },
+    [mutateCache, mutateDetail],
+  );
 
   const loadConversation = useCallback(
     (id: string): Promise<StandaloneConversationDetail> => {
       const key = `standalone-chat-conversation:${id}`;
       const cached = cache.get(key) as
-        { data?: StandaloneConversationDetail } | undefined;
+        | { data?: StandaloneConversationDetail }
+        | undefined;
       if (cached?.data) return Promise.resolve(cached.data);
       const existing = conversationPrefetches.current.get(id);
       if (existing) return existing;
@@ -1782,6 +2134,7 @@ export function StandaloneDataChat({
         artifacts: detail?.artifacts ?? [],
         onStop,
         onRetry,
+        onApproveReportSuggestion,
       }}
     >
       <div className="h-screen min-w-[960px] overflow-hidden p-4">
@@ -1852,8 +2205,33 @@ export function StandaloneDataChat({
                 <ReadinessNotice
                   message={unreadyMessage}
                   showSetup={showSetupCta}
-                  onSetup={() => router.push(projectSettingsHref(selectedProjectId))}
+                  onSetup={() =>
+                    router.push(projectSettingsHref(selectedProjectId))
+                  }
                 />
+              </div>
+            )}
+            {selectedReport && (
+              <div className="flex-none px-6 pt-4">
+                <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 rounded-xl border border-[var(--color-success)]/25 bg-[var(--color-bg-card)] px-4 py-3 text-xs text-[var(--color-text-muted)]">
+                  <span>
+                    @{selectedReport.title} is attached to your next message.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedReport(null);
+                      router.replace(
+                        conversationId
+                          ? `/chats/${conversationId}`
+                          : `/chats?project=${encodeURIComponent(selectedProjectId || "")}`,
+                      );
+                    }}
+                    className="text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
+                  >
+                    Remove
+                  </button>
+                </div>
               </div>
             )}
             <div
@@ -1941,6 +2319,7 @@ export function StandaloneDataChat({
                             onChange={(event) => {
                               const projectId = event.target.value;
                               setSelectedProjectId(projectId);
+                              setSelectedReport(null);
                               void setDefaultStandaloneChatProject(projectId);
                               router.replace(
                                 `/chats?project=${encodeURIComponent(projectId)}`,
@@ -2003,6 +2382,9 @@ export function StandaloneDataChat({
                       </div>
                     ) : undefined
                   }
+                  projectId={selectedProjectId}
+                  selectedReport={selectedReport}
+                  onSelectedReportChange={setSelectedReport}
                 />
               </div>
             </div>

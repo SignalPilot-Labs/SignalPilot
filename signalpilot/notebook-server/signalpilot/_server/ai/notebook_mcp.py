@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ast
 import json
+import symtable
 import uuid
 from dataclasses import asdict, is_dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
@@ -72,6 +73,64 @@ def _graph_error_payload(
     return {"status": "rejected", "has_errors": True, "error": error}
 
 
+def _private_names(code: str) -> tuple[set[str], set[str]]:
+    table = symtable.symtable(code, "<notebook-cell>", "exec")
+    definitions = {
+        symbol.get_name()
+        for symbol in table.get_symbols()
+        if symbol.get_name().startswith("_")
+        and (
+            symbol.is_assigned()
+            or symbol.is_imported()
+            or symbol.is_namespace()
+        )
+    }
+    references: set[str] = set()
+
+    def collect_references(scope: symtable.SymbolTable, *, root: bool) -> None:
+        for symbol in scope.get_symbols():
+            if (
+                symbol.get_name().startswith("_")
+                and symbol.is_referenced()
+                and (root or symbol.is_global())
+            ):
+                references.add(symbol.get_name())
+        for child in scope.get_children():
+            collect_references(child, root=False)
+
+    collect_references(table, root=True)
+    return definitions, references
+
+
+def _validate_private_cross_cell_references(
+    cells: list[tuple[CellId_t, str]],
+) -> None:
+    private_by_cell = {
+        str(cell_id): _private_names(code) for cell_id, code in cells
+    }
+    defining_cells: dict[str, set[str]] = {}
+    for cell_id, (definitions, _references) in private_by_cell.items():
+        for name in definitions:
+            defining_cells.setdefault(name, set()).add(cell_id)
+
+    for cell_id, (definitions, references) in private_by_cell.items():
+        for name in sorted(references - definitions):
+            sources = defining_cells.get(name, set()) - {cell_id}
+            if sources:
+                raise NotebookToolError(
+                    _graph_error_payload(
+                        error_type="PrivateVariableCrossCellReference",
+                        variable=name,
+                        cell_ids=[cell_id, *sorted(sources)],
+                        message=(
+                            f"{name} is private to cell(s) {sorted(sources)} and "
+                            f"cannot be referenced from cell {cell_id}; rename it "
+                            "to one unique public name or keep its use in the defining cell"
+                        ),
+                    )
+                )
+
+
 def _validate_candidate_graph(cells: list[tuple[CellId_t, str]]) -> None:
     import linecache
 
@@ -99,6 +158,7 @@ def _validate_candidate_graph(cells: list[tuple[CellId_t, str]]) -> None:
                     )
                 ) from exc
 
+        _validate_private_cross_cell_references(cells)
         graph_errors = check_for_errors(graph)
         for cell_id in sorted(graph_errors, key=str):
             for error in graph_errors[cell_id]:
@@ -1128,7 +1188,13 @@ def _handle_start_notebook_session(
     auto_run = arguments.get("auto_run", False)
 
     if not file_path:
-        return [TextContent(type="text", text="Error: file_path is required")]
+        raise NotebookToolError(
+            _graph_error_payload(
+                error_type="InvalidRequest",
+                cell_ids=[],
+                message="file_path is required",
+            )
+        )
 
     import os
 
@@ -1136,11 +1202,13 @@ def _handle_start_notebook_session(
         file_path = os.path.abspath(file_path)
 
     if not os.path.exists(file_path):
-        return [
-            TextContent(
-                type="text", text=f"Error: File not found: {file_path}"
+        raise NotebookToolError(
+            _graph_error_payload(
+                error_type="NotebookFileNotFound",
+                cell_ids=[],
+                message="The requested notebook file does not exist",
             )
-        ]
+        )
 
     try:
         sm = context.session_manager
@@ -1259,6 +1327,8 @@ def _handle_start_notebook_session(
 
         if not instantiate_ok:
             LOGGER.error("[start_session] All instantiate attempts failed")
+            sm.close_session(new_session_id)
+            raise RuntimeError("Kernel instantiate failed")
 
         cell_data = list(session.app_file_manager.app.cell_manager.cell_data())
         return [
@@ -1279,14 +1349,13 @@ def _handle_start_notebook_session(
 
     except Exception as e:
         LOGGER.error(f"[start_session] Failed: {e}")
-        import traceback
-
-        return [
-            TextContent(
-                type="text",
-                text=f"Error starting session: {e}\n{traceback.format_exc()[:500]}",
+        raise NotebookToolError(
+            _graph_error_payload(
+                error_type="NotebookStartError",
+                cell_ids=[],
+                message=type(e).__name__,
             )
-        ]
+        ) from e
 
 
 async def _invoke_backend_tool(

@@ -1096,6 +1096,143 @@ class GatewayChatShareGrant(GatewayBase):
     )
 
 
+class GatewaySavedReport(GatewayBase):
+    """Stable, owner-scoped Data Chat report identity."""
+
+    __tablename__ = "gateway_saved_reports"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    owner_user_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    original_conversation_id: Mapped[str] = mapped_column(String, nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    current_version_id: Mapped[str | None] = mapped_column(String)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_gw_saved_reports_owner", "org_id", "owner_user_id", "updated_at"),
+        Index("ix_gw_saved_reports_conversation", "org_id", "owner_user_id", "original_conversation_id"),
+        Index("ix_gw_saved_reports_project", "org_id", "owner_user_id", "project_id"),
+    )
+
+
+class GatewaySavedReportVersion(GatewayBase):
+    """Immutable content publication for one Data Chat report."""
+
+    __tablename__ = "gateway_saved_report_versions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    report_id: Mapped[str] = mapped_column(String, nullable=False)
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    owner_user_id: Mapped[str] = mapped_column(String, nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_artifact_id: Mapped[str] = mapped_column(String, nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    freshness_state: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="unknown", server_default="unknown"
+    )
+    freshness_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+    freshness_checked_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
+    dbt_commit_sha: Mapped[str | None] = mapped_column(String(40))
+    schema_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    retention_pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    published_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("source_artifact_id", name="uq_gw_saved_report_version_artifact"),
+        UniqueConstraint(
+            "org_id",
+            "owner_user_id",
+            "kind",
+            "content_hash",
+            name="uq_gw_saved_report_version_owner_content",
+        ),
+        UniqueConstraint("report_id", "ordinal", name="uq_gw_saved_report_version_ordinal"),
+        Index("ix_gw_saved_report_versions_report", "report_id", "ordinal"),
+        Index("ix_gw_saved_report_versions_owner", "org_id", "owner_user_id", "published_at"),
+    )
+
+
+class GatewayReportRefresh(GatewayBase):
+    """Server-owned refresh lineage from a fixed version into one chat run."""
+
+    __tablename__ = "gateway_report_refreshes"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    report_id: Mapped[str] = mapped_column(String, nullable=False)
+    base_version_id: Mapped[str] = mapped_column(String, nullable=False)
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    owner_user_id: Mapped[str] = mapped_column(String, nullable=False)
+    original_conversation_id: Mapped[str] = mapped_column(String, nullable=False)
+    drift_state: Mapped[str] = mapped_column(String(20), nullable=False)
+    drift_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    run_id: Mapped[str | None] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    candidate_artifact_ids_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now(), onupdate=func.now())
+    confirmed_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+    completed_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_gw_report_refresh_run"),
+        Index("ix_gw_report_refresh_owner", "org_id", "owner_user_id", "report_id", "created_at"),
+        Index("ix_gw_report_refresh_status", "status", "updated_at"),
+    )
+
+
+class GatewayReportShareGrant(GatewayBase):
+    """Revocable same-organization link pinned to one immutable version."""
+
+    __tablename__ = "gateway_report_share_grants"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    version_id: Mapped[str] = mapped_column(String, nullable=False)
+    report_id: Mapped[str] = mapped_column(String, nullable=False)
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    owner_user_id: Mapped[str] = mapped_column(String, nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    state: Mapped[str] = mapped_column(String(20), nullable=False, default="active", server_default="active")
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
+    revoked_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+
+    __table_args__ = (
+        Index(
+            "uq_gw_report_share_active_version",
+            "version_id",
+            unique=True,
+            postgresql_where=text("state = 'active'"),
+            sqlite_where=text("state = 'active'"),
+        ),
+        Index("ix_gw_report_share_lookup", "org_id", "token_hash", "state"),
+        Index("ix_gw_report_share_owner", "org_id", "owner_user_id", "report_id", "state"),
+    )
+
+
+class GatewayReportShareAccess(GatewayBase):
+    """A recipient's remembered discovery of one active fixed-version grant."""
+
+    __tablename__ = "gateway_report_share_access"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    grant_id: Mapped[str] = mapped_column(String, nullable=False)
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    recipient_user_id: Mapped[str] = mapped_column(String, nullable=False)
+    first_opened_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
+    last_opened_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("grant_id", "recipient_user_id", name="uq_gw_report_share_access_recipient"),
+        Index("ix_gw_report_share_access_recipient", "org_id", "recipient_user_id", "last_opened_at"),
+    )
+
+
 class GatewayChatStarterCache(GatewayBase):
     """Four starter prompts cached by project metadata checksum."""
 

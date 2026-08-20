@@ -9,12 +9,13 @@ import time
 import uuid
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
-from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gateway.connectors.schema_cache import _schema_fingerprint, schema_cache
 from gateway.db.models import (
     GatewayChatArtifact,
     GatewayChatConversation,
@@ -27,7 +28,10 @@ from gateway.db.models import (
     GatewayGovernedQueryExecution,
     GatewayQueryApproval,
     GatewayQueryProposal,
+    GatewayReportRefresh,
     GatewayRuntimeDataset,
+    GatewaySavedReport,
+    GatewaySavedReportVersion,
     GatewayStructuredQueryResult,
     GatewayWorkspaceProject,
 )
@@ -170,7 +174,14 @@ def _event_info(row: GatewayChatRunEvent) -> ChatRunEventInfo:
     )
 
 
-def _artifact_info(row: GatewayChatArtifact) -> ChatArtifactInfo:
+def _artifact_info(
+    row: GatewayChatArtifact,
+    *,
+    saved_report_id: str | None = None,
+    saved_report_version_id: str | None = None,
+    saved_report_title: str | None = None,
+    report_action: Literal["create", "update", "open"] = "create",
+) -> ChatArtifactInfo:
     formats = {
         "table": ["csv"],
         "chart": ["png", "csv"],
@@ -190,6 +201,10 @@ def _artifact_info(row: GatewayChatArtifact) -> ChatArtifactInfo:
         exclusions=[str(value) for value in row.exclusions or []],
         caveats=[str(value) for value in row.caveats or []],
         parent_artifact_id=row.parent_artifact_id,
+        saved_report_id=saved_report_id,
+        saved_report_version_id=saved_report_version_id,
+        saved_report_title=saved_report_title,
+        report_action=report_action,
         created_at=row.created_at,
         download_formats=formats,
     )
@@ -276,6 +291,8 @@ async def create_conversation_with_run(
     commit_sha: str | None = None,
     per_query_budget_usd: float = 0.25,
     chat_budget_usd: float = 1.0,
+    message_metadata: dict[str, Any] | None = None,
+    commit: bool = True,
     origin: str = "user",
 ) -> tuple[GatewayChatConversation, GatewayChatRun]:
     """Atomically create the first conversation, message, and queued run."""
@@ -307,7 +324,7 @@ async def create_conversation_with_run(
         conversation_id=conversation.id,
         role="user",
         content=message.strip(),
-        metadata_json={"surface": "standalone"},
+        metadata_json={"surface": "standalone", **(message_metadata or {})},
         sequence=1,
         created_at=now,
     )
@@ -321,6 +338,9 @@ async def create_conversation_with_run(
         status=RunStatus.queued.value,
     )
     db.add_all([conversation, user_message, run])
+    if not commit:
+        await db.flush()
+        return conversation, run
     try:
         await db.commit()
     except Exception:
@@ -442,6 +462,81 @@ async def get_conversation_detail(
         .scalars()
         .all()
     )
+    artifact_ids = [artifact.id for artifact in artifacts]
+    saved_by_artifact: dict[str, tuple[str, str, str]] = {}
+    if artifact_ids:
+        saved_rows = (
+            await db.execute(
+                select(GatewaySavedReportVersion, GatewaySavedReport)
+                .join(GatewaySavedReport, GatewaySavedReport.id == GatewaySavedReportVersion.report_id)
+                .where(
+                    GatewaySavedReportVersion.source_artifact_id.in_(artifact_ids),
+                    GatewaySavedReport.org_id == org_id,
+                    GatewaySavedReport.owner_user_id == user_id,
+                )
+            )
+        ).all()
+        saved_by_artifact = {
+            version.source_artifact_id: (report.id, version.id, report.title) for version, report in saved_rows
+        }
+    refresh_by_artifact: dict[str, tuple[str, str, str]] = {}
+    run_ids = {artifact.run_id for artifact in artifacts}
+    if run_ids:
+        refreshes = (
+            await db.execute(
+                select(GatewayReportRefresh, GatewaySavedReport)
+                .join(GatewaySavedReport, GatewaySavedReport.id == GatewayReportRefresh.report_id)
+                .where(
+                    GatewayReportRefresh.run_id.in_(run_ids),
+                    GatewayReportRefresh.org_id == org_id,
+                    GatewayReportRefresh.owner_user_id == user_id,
+                    GatewayReportRefresh.status == "update_available",
+                )
+            )
+        ).all()
+        for refresh, report in refreshes:
+            for artifact_id in refresh.candidate_artifact_ids_json or []:
+                refresh_by_artifact[str(artifact_id)] = (
+                    refresh.report_id,
+                    refresh.base_version_id,
+                    report.title,
+                )
+    title_by_artifact: dict[str, tuple[str, str, str]] = {}
+    default_titles = {artifact.filename.rsplit(".", 1)[0].lower() for artifact in artifacts}
+    if default_titles:
+        title_rows = (
+            await db.execute(
+                select(GatewaySavedReport)
+                .where(
+                    GatewaySavedReport.org_id == org_id,
+                    GatewaySavedReport.owner_user_id == user_id,
+                    func.lower(GatewaySavedReport.title).in_(default_titles),
+                )
+                .order_by(GatewaySavedReport.updated_at, GatewaySavedReport.id)
+            )
+        ).scalars()
+        reports_by_title = {report.title.lower(): report for report in title_rows if report.current_version_id}
+        for artifact in artifacts:
+            report = reports_by_title.get(artifact.filename.rsplit(".", 1)[0].lower())
+            if report and report.kind == artifact.kind:
+                title_by_artifact[artifact.id] = (report.id, report.current_version_id or "", report.title)
+    artifact_infos: list[ChatArtifactInfo] = []
+    for artifact in artifacts:
+        refresh_target = refresh_by_artifact.get(artifact.id)
+        saved_target = saved_by_artifact.get(artifact.id)
+        title_target = title_by_artifact.get(artifact.id)
+        target = refresh_target or saved_target or title_target or (None, None, None)
+        artifact_infos.append(
+            _artifact_info(
+                artifact,
+                saved_report_id=target[0],
+                saved_report_version_id=target[1],
+                saved_report_title=target[2],
+                report_action=(
+                    "update" if refresh_target else "open" if saved_target else "update" if title_target else "create"
+                ),
+            )
+        )
     current_run = (
         await db.execute(
             select(GatewayChatRun)
@@ -479,7 +574,7 @@ async def get_conversation_detail(
             reserved_spend_usd=conversation.reserved_spend_usd,
         ),
         messages=[_message_info(row) for row in messages],
-        artifacts=[_artifact_info(row) for row in artifacts],
+        artifacts=artifact_infos,
         current_run=_run_info(current_run) if current_run else None,
         run_events=[_event_info(row) for row in events],
     )
@@ -994,6 +1089,7 @@ async def create_run(
     user_id: str,
     conversation_id: str,
     message: str,
+    message_metadata: dict[str, Any] | None = None,
 ) -> GatewayChatRun:
     conversation = await _owned_conversation_row(
         db,
@@ -1025,7 +1121,7 @@ async def create_run(
         conversation_id=conversation.id,
         role="user",
         content=message.strip(),
-        metadata_json={"surface": "standalone"},
+        metadata_json={"surface": "standalone", **(message_metadata or {})},
         sequence=sequence,
         created_at=now,
     )
@@ -1090,6 +1186,9 @@ async def request_cancellation(
             payload={"status": RunStatus.cancelled.value},
         )
         await _retain_runtime_datasets_after_terminal_run(db, run=run)
+        from gateway.store.chat_reports import finalize_refresh_for_run
+
+        await finalize_refresh_for_run(db, run=run, succeeded=False)
     await db.commit()
     return run
 
@@ -1186,6 +1285,9 @@ async def retry_run(
         retry_of_run_id=failed.id,
     )
     db.add(retry)
+    from gateway.store.chat_reports import rebind_refresh_retry
+
+    await rebind_refresh_retry(db, failed_run_id=failed.id, retry_run_id=retry.id)
     conversation.updated_at = time.time()
     await db.commit()
     await db.refresh(retry)
@@ -1525,6 +1627,19 @@ async def persist_artifact(
     else:
         snapshot = normalize_table_snapshot(snapshot)
     provenance = redact_public_payload(payload.get("provenance") or {})
+    # Lineage used by saved-report preflight is server-owned. The agent may
+    # supply other public provenance, but it cannot choose the frozen dbt
+    # commit or the schema fingerprint observed during this conversation.
+    conversation = await db.get(GatewayChatConversation, run.conversation_id)
+    if conversation is not None:
+        provenance["commit_sha"] = conversation.commit_sha
+    project = await db.get(GatewayWorkspaceProject, run.project_id)
+    if project is not None and project.connection_name:
+        try:
+            observed_schema = schema_cache.get(project.connection_name)
+        except Exception:
+            observed_schema = None
+        provenance["schema_fingerprint"] = _schema_fingerprint(observed_schema) if observed_schema is not None else None
     assumptions = _bounded_artifact_notes(payload.get("assumptions"))
     exclusions = _bounded_artifact_notes(payload.get("exclusions"))
     caveats = _bounded_artifact_notes(payload.get("caveats"))
@@ -1578,15 +1693,18 @@ async def persist_artifact(
         )
     ).scalar_one_or_none()
     if existing is not None:
-        if existing.content_hash and existing.content_hash != candidate_hash:
-            raise ValueError("Artifact filename is already bound to different content in this run")
+        # The publication key is idempotent and immutable. A retry cannot
+        # replace the first snapshot, even if a caller reconstructs different
+        # bytes for the same run/kind/filename tuple.
         return existing
     artifact_id = str(uuid.uuid4())
     storage_kind = "inline"
     object_key = None
     source_object_key = None
-    byte_size = None
-    content_hash = None
+    byte_size = len(object_bytes)
+    # Content identity is always the SHA-256 of the exact primary downloadable
+    # bytes, independently of whether those bytes are inline or object-backed.
+    content_hash = candidate_hash
     uploaded_keys: list[str] = []
     if enterprise_chat_feature_flags().runtime_artifacts:
         storage = chat_object_storage()
@@ -1626,6 +1744,10 @@ async def persist_artifact(
                     await storage.delete(uploaded_key)
             raise
         binary_data = None
+    elif kind == "table":
+        # Keep the exact governed CSV bytes alongside the bounded UI snapshot.
+        # This makes inline and object-backed content identity identical.
+        binary_data = object_bytes
     artifact = GatewayChatArtifact(
         id=artifact_id,
         org_id=run.org_id,
@@ -1695,6 +1817,8 @@ async def complete_run(
     run_id: str,
     worker_id: str,
     content: str,
+    report_proposal: dict[str, Any] | None = None,
+    report_action_outcome: dict[str, Any] | None = None,
 ) -> GatewayChatMessage | None:
     run = (
         await db.execute(
@@ -1726,6 +1850,9 @@ async def complete_run(
                 payload={"status": RunStatus.completed.value},
             )
             await _retain_runtime_datasets_after_terminal_run(db, run=run)
+            from gateway.store.chat_reports import finalize_refresh_for_run
+
+            await finalize_refresh_for_run(db, run=run, succeeded=True)
             await db.commit()
         return existing
 
@@ -1748,6 +1875,9 @@ async def complete_run(
             payload={"status": RunStatus.cancelled.value},
         )
         await _retain_runtime_datasets_after_terminal_run(db, run=run)
+        from gateway.store.chat_reports import finalize_refresh_for_run
+
+        await finalize_refresh_for_run(db, run=run, succeeded=False)
         await db.commit()
         return None
     conversation = (
@@ -1755,6 +1885,29 @@ async def complete_run(
             select(GatewayChatConversation).where(GatewayChatConversation.id == run.conversation_id).with_for_update()
         )
     ).scalar_one()
+    report_suggestion = None
+    if report_proposal:
+        from gateway.store.chat_reports import validate_report_proposal_for_run
+
+        try:
+            validated = await validate_report_proposal_for_run(
+                db,
+                run=run,
+                proposal=report_proposal,
+            )
+            report_suggestion = validated.model_dump(mode="json") if validated else None
+        except (LookupError, RuntimeError, ValueError):
+            report_suggestion = None
+    no_suggestion_outcome = None
+    if isinstance(report_action_outcome, dict) and report_action_outcome.get("action") == "no_suggestion":
+        no_suggestion_outcome = {
+            "action": "no_suggestion",
+            "artifact_kind": report_action_outcome.get("artifact_kind"),
+            "artifact_filename": report_action_outcome.get("artifact_filename"),
+            "reason": str(report_action_outcome.get("reason") or "")[:2000],
+            "source": report_action_outcome.get("source") or "agent",
+            "catalog_scan_complete": bool(report_action_outcome.get("catalog_scan_complete")),
+        }
     sequence = conversation.message_count + 1
     message = GatewayChatMessage(
         id=str(uuid.uuid4()),
@@ -1769,6 +1922,8 @@ async def complete_run(
             "run_id": run.id,
             "status": "completed",
             "runtime_archive_available": bool(run.runtime_archive_id),
+            **({"report_suggestion": report_suggestion} if report_suggestion else {}),
+            **({"report_action_outcome": no_suggestion_outcome} if no_suggestion_outcome else {}),
         },
         idempotency_key=f"chat-run:{run.id}:final",
         sequence=sequence,
@@ -1817,6 +1972,9 @@ async def complete_run(
     )
     for artifact in artifacts:
         artifact.assistant_message_id = message.id
+    from gateway.store.chat_reports import finalize_refresh_for_run
+
+    await finalize_refresh_for_run(db, run=run, succeeded=True)
     await db.commit()
     return message
 
@@ -1928,6 +2086,9 @@ async def fail_run(
         payload={"status": target},
     )
     await _retain_runtime_datasets_after_terminal_run(db, run=run)
+    from gateway.store.chat_reports import finalize_refresh_for_run
+
+    await finalize_refresh_for_run(db, run=run, succeeded=False)
     artifact_object_keys = list(
         (
             await db.execute(

@@ -839,6 +839,16 @@ async def init_db() -> None:
     await _ensure_eval_regression_change_columns(engine)
     await _ensure_conversation_origin_column(engine)
     await _ensure_improvement_slot_width(engine)
+    # Backfill a bounded batch on every startup. New artifacts are always
+    # hashed at publication; this converges older inline rows without making
+    # startup duration depend on library size.
+    from gateway.store.chat_reports import backfill_inline_artifact_hashes
+
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        backfilled = await backfill_inline_artifact_hashes(session, limit=200)
+    if backfilled:
+        logger.info("Backfilled canonical hashes for %d Data Chat artifacts", backfilled)
     logger.info("Gateway database tables initialized")
 
 

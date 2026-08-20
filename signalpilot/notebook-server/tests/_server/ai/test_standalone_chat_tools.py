@@ -255,7 +255,103 @@ async def test_report_tools_require_a_complete_catalog_scan_and_one_valid_propos
         )
     )
     assert repeated.root.isError is True
-    assert "Only one report action" in repeated.root.content[0].text
+    assert "Only one report action outcome" in repeated.root.content[0].text
+
+
+@pytest.mark.asyncio
+async def test_complete_publication_requires_a_catalog_backed_report_outcome():
+    collector = StandaloneArtifactCollector()
+
+    async def load_catalog(_cursor: str | None) -> dict[str, Any]:
+        return {
+            "items": [],
+            "next_cursor": None,
+            "catalog_revision": "revision-empty",
+            "total_reports": 0,
+            "proactive_creation_allowed": True,
+        }
+
+    server = build_standalone_chat_mcp_server(
+        collector,
+        report_catalog_loader=load_catalog,
+    )["instance"]
+    published = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="publish_report",
+                arguments={
+                    "filename": "revenue.html",
+                    "html": "<html><body>Revenue</body></html>",
+                },
+            )
+        )
+    )
+    publication = json.loads(published.root.content[0].text)
+    assert publication["published"] is True
+    assert publication["next_required_action"].startswith(
+        "REQUIRED BEFORE YOUR FINAL ANSWER"
+    )
+
+    unscanned = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="propose_report_action",
+                arguments={
+                    "action": "no_suggestion",
+                    "artifact_kind": "report",
+                    "artifact_filename": "revenue.html",
+                    "title": "Revenue",
+                    "reason": "This is a one-off diagnostic.",
+                },
+            )
+        )
+    )
+    assert unscanned.root.isError is True
+    assert "every saved report catalog page" in unscanned.root.content[0].text
+
+    await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="list_saved_report_catalog",
+                arguments={},
+            )
+        )
+    )
+    recorded = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="propose_report_action",
+                arguments={
+                    "action": "no_suggestion",
+                    "artifact_kind": "report",
+                    "artifact_filename": "revenue.html",
+                    "title": "Revenue",
+                    "reason": "This is a one-off diagnostic.",
+                },
+            )
+        )
+    )
+
+    assert recorded.root.isError is False
+    assert json.loads(recorded.root.content[0].text) == {
+        "recorded": True,
+        "proposed": False,
+        "action": "no_suggestion",
+    }
+    assert collector.report_proposal is None
+    assert collector.report_action_outcome == {
+        "action": "no_suggestion",
+        "artifact_kind": "report",
+        "artifact_filename": "revenue.html",
+        "title": "Revenue",
+        "reason": "This is a one-off diagnostic.",
+        "existing_report_id": None,
+        "catalog_revision": "revision-empty",
+        "catalog_scan_complete": True,
+        "proactive_creation_allowed": True,
+        "loaded_report_ids": [],
+        "attached_report_id": None,
+    }
 
 
 @pytest.mark.asyncio
@@ -333,10 +429,20 @@ async def test_report_update_requires_loaded_context_unless_the_report_is_attach
     async def load_context(report_id: str) -> dict[str, Any]:
         return {"report_id": report_id, "title": "Revenue"}
 
+    async def load_catalog(_cursor: str | None) -> dict[str, Any]:
+        return {
+            "items": [{"report_id": "report-a", "title": "Revenue"}],
+            "next_cursor": None,
+            "catalog_revision": "revision-a",
+            "total_reports": 1,
+            "proactive_creation_allowed": True,
+        }
+
     collector = StandaloneArtifactCollector(artifacts=[artifact])
     server = build_standalone_chat_mcp_server(
         collector,
         report_context_loader=load_context,
+        report_catalog_loader=load_catalog,
     )["instance"]
     blocked = await server.request_handlers[CallToolRequest](
         CallToolRequest(
@@ -354,6 +460,14 @@ async def test_report_update_requires_loaded_context_unless_the_report_is_attach
         )
     )
     assert blocked.root.isError is True
+    await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="list_saved_report_catalog",
+                arguments={},
+            )
+        )
+    )
     await server.request_handlers[CallToolRequest](
         CallToolRequest(
             params=CallToolRequestParams(
@@ -735,6 +849,9 @@ def test_agent_contract_excludes_mutating_and_external_tools():
         "scan every page from list_saved_report_catalog"
         in STANDALONE_SYSTEM_PROMPT
     )
+    assert "REQUIRED POST-PUBLICATION STEP" in STANDALONE_SYSTEM_PROMPT
+    assert "propose_report_action exactly once" in STANDALONE_SYSTEM_PROMPT
+    assert "no_suggestion with a concrete reason" in STANDALONE_SYSTEM_PROMPT
     assert "newer dates or warehouse data" in STANDALONE_SYSTEM_PROMPT
     assert (
         "formatting, visualization changes, additional breakdowns"

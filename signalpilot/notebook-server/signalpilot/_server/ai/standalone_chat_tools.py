@@ -35,6 +35,7 @@ MAX_PYTHON_SOURCE_CHARS = 12_000
 class StandaloneArtifactCollector:
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     report_proposal: dict[str, Any] | None = None
+    report_action_outcome: dict[str, Any] | None = None
     report_catalog_revision: str | None = None
     next_report_catalog_cursor: str | None = None
     report_catalog_scan_complete: bool = False
@@ -61,6 +62,11 @@ def _clean_metadata(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def _collected_artifact_is_complete(artifact: dict[str, Any]) -> bool:
+    if (
+        artifact.get("kind") not in {"table", "chart", "report"}
+        or not str(artifact.get("filename") or "").strip()
+    ):
+        return False
     payload = (
         artifact.get("payload")
         if isinstance(artifact.get("payload"), dict)
@@ -651,15 +657,21 @@ def build_standalone_chat_mcp_server(
         Tool(
             name="propose_report_action",
             description=(
-                "Store the single report action proposed for this completed run. Use open for exact saved content, "
-                "update for a semantically equivalent report, and create only after scanning every catalog page."
+                "Record the single catalog-backed report decision for this completed run. Use open for exact saved "
+                "content, update for a semantically equivalent report, create when no catalog match exists, or "
+                "no_suggestion when the artifact should not be promoted. Scan every catalog page first."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["create", "update", "open"],
+                        "enum": [
+                            "create",
+                            "update",
+                            "open",
+                            "no_suggestion",
+                        ],
                     },
                     "artifact_kind": {
                         "type": "string",
@@ -741,9 +753,9 @@ def build_standalone_chat_mcp_server(
                 collector.loaded_report_ids.add(report_id)
                 return [TextContent(type="text", text=json.dumps(context))]
             if name == "propose_report_action":
-                if collector.report_proposal is not None:
+                if collector.report_action_outcome is not None:
                     raise ValueError(
-                        "Only one report action may be proposed per run"
+                        "Only one report action outcome may be recorded per run"
                     )
                 action = str(arguments.get("action") or "")
                 artifact_kind = str(arguments.get("artifact_kind") or "")
@@ -785,11 +797,11 @@ def build_standalone_chat_mcp_server(
                     raise ValueError(
                         "Incomplete or truncated artifacts cannot become reports"
                     )
+                if not collector.report_catalog_scan_complete:
+                    raise ValueError(
+                        "Scan every saved report catalog page before recording a report action outcome"
+                    )
                 if action == "create":
-                    if not collector.report_catalog_scan_complete:
-                        raise ValueError(
-                            "Scan every saved report catalog page before proposing creation"
-                        )
                     if not collector.proactive_creation_allowed:
                         raise ValueError(
                             "Proactive report creation is unavailable for this catalog"
@@ -810,9 +822,14 @@ def build_standalone_chat_mcp_server(
                         raise ValueError(
                             "Load the matched report context before proposing an update"
                         )
+                elif action == "no_suggestion":
+                    if existing_report_id:
+                        raise ValueError(
+                            "A no-suggestion outcome cannot target an existing report"
+                        )
                 else:
                     raise ValueError("Unsupported report action")
-                collector.report_proposal = {
+                outcome = {
                     "action": action,
                     "artifact_kind": artifact_kind,
                     "artifact_filename": artifact_filename,
@@ -825,10 +842,19 @@ def build_standalone_chat_mcp_server(
                     "loaded_report_ids": sorted(collector.loaded_report_ids),
                     "attached_report_id": attached_report_id,
                 }
+                collector.report_action_outcome = outcome
+                if action != "no_suggestion":
+                    collector.report_proposal = outcome
                 return [
                     TextContent(
                         type="text",
-                        text=json.dumps({"proposed": True, "action": action}),
+                        text=json.dumps(
+                            {
+                                "recorded": True,
+                                "proposed": action != "no_suggestion",
+                                "action": action,
+                            }
+                        ),
                     )
                 ]
             if name == "start_analysis_notebook":
@@ -1105,6 +1131,7 @@ def build_standalone_chat_mcp_server(
             else:
                 return [TextContent(type="text", text=f"Unknown tool: {name}")]
             collector.artifacts.append(artifact)
+            complete = _collected_artifact_is_complete(artifact)
             return [
                 TextContent(
                     type="text",
@@ -1114,6 +1141,18 @@ def build_standalone_chat_mcp_server(
                             "artifact_index": len(collector.artifacts) - 1,
                             "kind": artifact["kind"],
                             "filename": artifact["filename"],
+                            **(
+                                {
+                                    "next_required_action": (
+                                        "REQUIRED BEFORE YOUR FINAL ANSWER: scan every page with "
+                                        "list_saved_report_catalog, then call propose_report_action exactly once "
+                                        "with create, update, open, or no_suggestion."
+                                    )
+                                }
+                                if complete
+                                and collector.report_action_outcome is None
+                                else {}
+                            ),
                         }
                     ),
                 )

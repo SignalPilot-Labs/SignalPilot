@@ -30,6 +30,7 @@ from signalpilot._server.ai.claude_agent import (
 from signalpilot._server.ai.standalone_chat_tools import (
     StandaloneArtifactCollector,
     StandaloneNotebookLifecycle,
+    _collected_artifact_is_complete,
     build_standalone_chat_mcp_server,
 )
 from signalpilot._server.files import project_sync
@@ -161,11 +162,11 @@ Rules:
 - Explicitly disclose incomplete, unknown-completeness, or display-limited results.
 - Use SignalPilot MCP for schema discovery and bounded pre-analysis. MCP row samples are context-limited and must never be treated as a complete dataset.
 - Prefer governed SDK structured-result IDs for substantial analysis and for every published artifact.
-- After publishing a complete artifact that could be durable, scan every page from list_saved_report_catalog before proposing creation. Catalog pages contain semantics, never result rows.
+- REQUIRED POST-PUBLICATION STEP: after publishing any complete non-truncated table, chart, or report, do not give the final answer yet; scan every page from list_saved_report_catalog and then call propose_report_action exactly once. Catalog pages contain semantics, never result rows.
 - Compare reports in this order: exact artifact content, normalized title, then semantic meaning across the complete catalog. Semantic equivalence requires the same business question, project/data domain, core metrics, entity or grain, and compatible dimensions and filters.
 - Treat newer dates or warehouse data, formatting, visualization changes, additional breakdowns, and small wording changes as updates. Treat changed metric definitions, entity or grain, business purpose, governed project, or incompatible populations as distinct reports.
 - Load the matched report with load_report_context before proposing an update, except when the user explicitly attached that report. Historical SQL is context only; plan every new execution normally.
-- Call propose_report_action at most once, only after its complete non-truncated artifact is successfully published. Use open for exact content, update for a semantic match, and create only when the full catalog has no match. Report creation or update always waits for the user's UI approval.
+- Call propose_report_action exactly once for an eligible completed artifact. Use open for exact content, update for a semantic match, create only when the full catalog has no match, or no_suggestion with a concrete reason when the artifact should not be promoted. Report creation or update always waits for the user's UI approval.
 - The dbt project is frozen at the supplied commit. Inspect it but never run dbt run, build, seed, or snapshot.
 - Never mention or expose confidence scores, hidden reasoning, chain-of-thought, credentials, or implementation internals.
 - Do not suggest follow-up questions.
@@ -1358,6 +1359,38 @@ async def execute(*, request: Request) -> StreamingResponse:
                     _ANALYSIS_SESSIONS_BY_RUN.pop(run_id, None)
                     lifecycle.session_id = None
                 accepted_text = (final_text or streamed_text).strip()
+                complete_artifacts = [
+                    artifact
+                    for artifact in collector.artifacts
+                    if _collected_artifact_is_complete(artifact)
+                ]
+                if (
+                    complete_artifacts
+                    and collector.report_action_outcome is None
+                ):
+                    artifact = complete_artifacts[-1]
+                    LOGGER.warning(
+                        "Completed standalone artifact had no report action outcome "
+                        "run_id=%s kind=%s filename=%s",
+                        run_id,
+                        artifact.get("kind"),
+                        artifact.get("filename"),
+                    )
+                    collector.report_action_outcome = {
+                        "action": "no_suggestion",
+                        "artifact_kind": artifact.get("kind"),
+                        "artifact_filename": artifact.get("filename"),
+                        "title": artifact.get("filename"),
+                        "reason": (
+                            "The analysis agent completed without recording the required "
+                            "catalog-backed report decision."
+                        ),
+                        "source": "completion_check",
+                        "catalog_revision": collector.report_catalog_revision,
+                        "catalog_scan_complete": (
+                            collector.report_catalog_scan_complete
+                        ),
+                    }
                 final_payload = {
                     "type": "final",
                     "content": accepted_text,
@@ -1366,6 +1399,10 @@ async def execute(*, request: Request) -> StreamingResponse:
                 if collector.report_proposal is not None:
                     final_payload["report_proposal"] = (
                         collector.report_proposal
+                    )
+                if collector.report_action_outcome is not None:
+                    final_payload["report_action_outcome"] = (
+                        collector.report_action_outcome
                     )
                 if archive_id is not None:
                     final_payload["archive_id"] = archive_id

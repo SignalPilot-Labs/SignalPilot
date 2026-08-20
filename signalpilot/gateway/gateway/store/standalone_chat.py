@@ -1818,6 +1818,7 @@ async def complete_run(
     worker_id: str,
     content: str,
     report_proposal: dict[str, Any] | None = None,
+    report_action_outcome: dict[str, Any] | None = None,
 ) -> GatewayChatMessage | None:
     run = (
         await db.execute(
@@ -1897,6 +1898,16 @@ async def complete_run(
             report_suggestion = validated.model_dump(mode="json") if validated else None
         except (LookupError, RuntimeError, ValueError):
             report_suggestion = None
+    no_suggestion_outcome = None
+    if isinstance(report_action_outcome, dict) and report_action_outcome.get("action") == "no_suggestion":
+        no_suggestion_outcome = {
+            "action": "no_suggestion",
+            "artifact_kind": report_action_outcome.get("artifact_kind"),
+            "artifact_filename": report_action_outcome.get("artifact_filename"),
+            "reason": str(report_action_outcome.get("reason") or "")[:2000],
+            "source": report_action_outcome.get("source") or "agent",
+            "catalog_scan_complete": bool(report_action_outcome.get("catalog_scan_complete")),
+        }
     sequence = conversation.message_count + 1
     message = GatewayChatMessage(
         id=str(uuid.uuid4()),
@@ -1912,6 +1923,7 @@ async def complete_run(
             "status": "completed",
             "runtime_archive_available": bool(run.runtime_archive_id),
             **({"report_suggestion": report_suggestion} if report_suggestion else {}),
+            **({"report_action_outcome": no_suggestion_outcome} if no_suggestion_outcome else {}),
         },
         idempotency_key=f"chat-run:{run.id}:final",
         sequence=sequence,

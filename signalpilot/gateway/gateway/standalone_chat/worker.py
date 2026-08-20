@@ -284,12 +284,11 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
     renewer = asyncio.create_task(_lease_renewer(run_id, worker_id, stop))
     worker_task = asyncio.current_task()
     assert worker_task is not None
-    cancellation = asyncio.create_task(
-        _cancellation_monitor(run_id, worker_id, stop, worker_task)
-    )
+    cancellation = asyncio.create_task(_cancellation_monitor(run_id, worker_id, stop, worker_task))
     final_text = ""
     streamed_text = ""
     report_proposal: dict[str, Any] | None = None
+    report_action_outcome: dict[str, Any] | None = None
     starts_new_text_block = False
     tool_names_by_id: dict[str, str] = {}
     try:
@@ -466,6 +465,10 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                         final_text = content or final_text or streamed_text
                         raw_report_proposal = event.get("report_proposal")
                         report_proposal = raw_report_proposal if isinstance(raw_report_proposal, dict) else None
+                        raw_report_action_outcome = event.get("report_action_outcome")
+                        report_action_outcome = (
+                            raw_report_action_outcome if isinstance(raw_report_action_outcome, dict) else None
+                        )
                         await _persist_artifacts(
                             run_id=run_id,
                             worker_id=worker_id,
@@ -525,6 +528,7 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                 worker_id=worker_id,
                 content=answer,
                 report_proposal=report_proposal,
+                report_action_outcome=report_action_outcome,
             )
         if message is not None:
             await _update_summary(run_id)

@@ -22,6 +22,8 @@ export default defineConfig({
       "lib/**/*.test.tsx",
       "components/**/*.test.ts",
       "components/**/*.test.tsx",
+      "dashboard/**/*.test.ts",
+      "dashboard/**/*.test.tsx",
     ],
     // Playwright specs under e2e/ are run by `npx playwright test`, not vitest.
     exclude: ["node_modules/**", ".next/**", "e2e/**"],

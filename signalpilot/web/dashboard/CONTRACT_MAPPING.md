@@ -1,0 +1,20 @@
+# Lightdash to SignalPilot dashboard contract mapping
+
+Baseline: Lightdash commit `b91bd2273f38fdc58702c71f538b6b5d5ae462c5` (local pinned fork, recorded 2026-08-24). License: MIT; see `LICENSE.lightdash`.
+
+| SignalPilot v1 field | Lightdash source | Support or deviation |
+| --- | --- | --- |
+| `name`, `description` | `DashboardAsCode` | Same names and meaning. |
+| `tiles[]` | `DashboardChartTileAsCode` | Narrowed to `saved_chart`; SQL, Markdown, Loom, heading, and data-app tiles fail as unsupported. |
+| `tiles[].uuid`, `tileSlug`, `type`, `x`, `y`, `h`, `w`, `properties` | `DashboardTileAsCodeBase`, `DashboardChartTileAsCode` | Same 36-column layout semantics. `chartId` is a SignalPilot reference to the embedded chart definition. |
+| `filters.dimensions`, `filters.metrics` | `DashboardFilters`, `DashboardFilterRule` | Table-calculation filters are unsupported. Operator subset is explicit. `tileTargets` preserves cross-model target mapping. |
+| semantic query fields | `MetricQuery` | Preserves `exploreName`, dimensions, metrics, filter groups, sorts, limit, timezone, and pivot dimensions. Table calculations and inline custom fields/metrics are unsupported. `kind`, `projectId`, and `commitSha` are SignalPilot governance extensions. |
+| sort fields | `SortField` | Preserves `fieldId`, `descending`, and `nullsFirst`; pivot sort anchors are unsupported. |
+| KPI | `BigNumberConfig` | `big_number` is preserved. SignalPilot narrows config to one output field and governed formatting. |
+| table | `TableChartConfig` | `table` is preserved. SignalPilot narrows config to declared columns and expandable groups. |
+| bar, line, area | `CartesianChartConfig`, `CartesianChartLayout` | `cartesian` and `xField`/`yField` are preserved. `seriesType` selects the supported renderer. ECharts options, dual axes, conditional formats, metadata, and arbitrary renderer config are forbidden. |
+| `DashboardVersion` | `DashboardVersion`, `DashboardHistory` | Same version vocabulary; SignalPilot versions are immutable and add a normalized content hash. |
+| `signalPilot` root block | No Lightdash equivalent | Governance extension: stable dashboard ID, project/connection, pinned commit, semantic fingerprint, timezone, fork lineage, and eval bindings. |
+| chart `signalPilot` block | No Lightdash equivalent | Governance extension: cross-filter/drill behavior, SQL output bindings, and provenance. |
+
+The compatibility adapter rejects unsupported tile and chart variants with `UnsupportedDashboardFeatureError`. Strict Zod and Pydantic models reject unknown properties so renderer-specific configuration cannot leak into durable definitions.

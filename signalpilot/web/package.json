@@ -84,6 +84,8 @@
     "dequal": "^2.0.3",
     "dnd-core": "^16.0.1",
     "dompurify": "^3.4.12",
+    "echarts": "5.6.0",
+    "echarts-for-react": "3.0.2",
     "htm": "^3.1.1",
     "html-react-parser": "^5.2.14",
     "html-to-image": "1.11.13",

@@ -1347,6 +1347,84 @@ class GatewayStructuredQueryResult(GatewayBase):
     __table_args__ = (Index("ix_gw_structured_result_owner", "org_id", "owner_user_id", "created_at"),)
 
 
+class GatewayDashboard(GatewayBase):
+    """Stable private dashboard identity; content lives in immutable versions."""
+
+    __tablename__ = "gateway_dashboards"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    owner_user_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    connection_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    timezone: Mapped[str] = mapped_column(String(100), nullable=False)
+    current_version_id: Mapped[str | None] = mapped_column(String)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    archived_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_gw_dashboards_private", "org_id", "owner_user_id", "updated_at"),
+        Index("ix_gw_dashboards_project", "org_id", "project_id"),
+    )
+
+
+class GatewayDashboardVersion(GatewayBase):
+    """Immutable, normalized DashboardDefinition publication."""
+
+    __tablename__ = "gateway_dashboard_versions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    dashboard_id: Mapped[str] = mapped_column(String, nullable=False)
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    owner_user_id: Mapped[str] = mapped_column(String, nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    definition_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    commit_sha: Mapped[str] = mapped_column(String(40), nullable=False)
+    semantic_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    connection_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("dashboard_id", "ordinal", name="uq_gw_dashboard_version_ordinal"),
+        UniqueConstraint("dashboard_id", "content_hash", name="uq_gw_dashboard_version_content"),
+        Index("ix_gw_dashboard_versions_dashboard", "org_id", "dashboard_id", "ordinal"),
+    )
+
+
+class GatewayDashboardResult(GatewayBase):
+    """Dashboard-authorized pointer to one governed structured query result."""
+
+    __tablename__ = "gateway_dashboard_results"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    dashboard_id: Mapped[str] = mapped_column(String, nullable=False)
+    version_id: Mapped[str] = mapped_column(String, nullable=False)
+    chart_id: Mapped[str] = mapped_column(String, nullable=False)
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    execution_id: Mapped[str] = mapped_column(String, nullable=False)
+    structured_result_id: Mapped[str] = mapped_column(String, nullable=False)
+    cache_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    sql_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    parameter_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    tables_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    semantic_definition_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    completeness: Mapped[str] = mapped_column(String(20), nullable=False)
+    freshness_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+    expires_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_gw_dashboard_result_cache", "org_id", "dashboard_id", "version_id", "cache_key"),
+        Index("ix_gw_dashboard_result_access", "org_id", "dashboard_id", "id"),
+    )
+
+
 class GatewayQueryPlan(GatewayBase):
     """Immutable route decision bound to SQL, policy, and one execution scope."""
 

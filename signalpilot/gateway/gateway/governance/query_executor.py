@@ -43,7 +43,7 @@ class GovernedQueryError(RuntimeError):
 
 @dataclass(frozen=True)
 class GovernedQueryContext:
-    path: Literal["direct_api", "mcp", "sdk"]
+    path: Literal["direct_api", "mcp", "sdk", "dashboard"]
     conversation_id: str | None = None
     run_id: str | None = None
     project_id: str | None = None
@@ -140,6 +140,7 @@ class GovernedQueryExecutor:
         row_limit: int,
         timeout_seconds: int,
         context: GovernedQueryContext,
+        parameters: list[Any] | None = None,
     ) -> GovernedQueryResult:
         org_id = store._require_org_id()
         plan = await get_org_limits(org_id)
@@ -155,12 +156,22 @@ class GovernedQueryExecutor:
         if settings.blocked_tables:
             blocked_tables.extend(table for table in settings.blocked_tables if table not in blocked_tables)
 
+        parameters = list(parameters or [])
+        if sql.count("%s") != len(parameters):
+            raise GovernedQueryError("invalid_parameters", "SQL parameter count does not match bound values")
+        # sqlglot and cost estimators cannot parse driver placeholders. Replace
+        # them only for governance analysis; the connector still receives the
+        # original template and separately bound values.
+        governance_sql = sql
+        parameter_sentinels = [f"918273645{i}" for i in range(len(parameters))]
+        for sentinel in parameter_sentinels:
+            governance_sql = governance_sql.replace("%s", sentinel, 1)
         dialect = sqlglot_dialect(info.db_type)
-        validation = validate_sql(sql, blocked_tables=blocked_tables or None, dialect=dialect)
+        validation = validate_sql(governance_sql, blocked_tables=blocked_tables or None, dialect=dialect)
         if not validation.ok:
             raise GovernedQueryError("query_blocked", validation.blocked_reason or "Query blocked")
 
-        normalized_sql = normalize_sql(sql, dialect)
+        normalized_sql = normalize_sql(governance_sql, dialect)
         sql_hash = hashlib.sha256(normalized_sql.encode()).hexdigest()
         persisted_plan = None
         if context.run_id and enterprise_chat_feature_flags().size_router:
@@ -260,7 +271,12 @@ class GovernedQueryExecutor:
         # user SQL remains unknown completeness unless the sentinel proves truncation.
         fetch_limit = min(100_001, row_limit + 1)
         try:
-            safe_sql = inject_limit(sql, fetch_limit, dialect=dialect)
+            safe_governance_sql = inject_limit(governance_sql, fetch_limit, dialect=dialect)
+            # inject_limit preserves the original expression while adding the
+            # row bound. Restore placeholders in their original order.
+            safe_sql = safe_governance_sql
+            for sentinel in parameter_sentinels:
+                safe_sql = safe_sql.replace(sentinel, "%s", 1)
         except ValueError as exc:
             await self._fail(store, execution, "query_blocked")
             raise GovernedQueryError("query_blocked", str(exc)) from exc
@@ -297,7 +313,7 @@ class GovernedQueryExecutor:
                         quality=persisted_plan.estimate_quality,
                     )
                     if persisted_plan is not None
-                    else await CostEstimator.estimate(connector, safe_sql, info.db_type)
+                    else await CostEstimator.estimate(connector, safe_governance_sql, info.db_type)
                 )
                 execution.estimated_cost_usd = max(0.0, estimate.estimated_usd)
                 await store.session.commit()
@@ -347,7 +363,7 @@ class GovernedQueryExecutor:
                         },
                     )
                 try:
-                    rows = await connector.execute(safe_sql, timeout=timeout_seconds)
+                    rows = await connector.execute(safe_sql, params=parameters, timeout=timeout_seconds)
                 except Exception:
                     with suppress(Exception):
                         await connector.cancel_current_query()

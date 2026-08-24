@@ -1,0 +1,173 @@
+.runtime {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  min-height: 100vh;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+.runtime main {
+  padding: 32px;
+  min-width: 0;
+}
+.header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+.header span {
+  color: var(--color-text-dim);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.header h1 {
+  font-size: 28px;
+  margin: 5px 0;
+}
+.header p {
+  color: var(--color-text-muted);
+  margin: 0;
+}
+.header code {
+  color: var(--color-text-dim);
+  font-size: 11px;
+}
+.headerActions {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-direction: column;
+}
+.headerActions button {
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.tileButton {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  min-width: 0;
+}
+.tile {
+  height: 360px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  overflow: hidden;
+}
+.tileHeader {
+  padding: 16px 18px 8px;
+}
+.tileHeader h2 {
+  font-size: 15px;
+  margin: 0;
+}
+.tileHeader p {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  margin: 5px 0 0;
+}
+.visual {
+  flex: 1;
+  min-height: 0;
+  padding: 12px 18px;
+  overflow: auto;
+}
+.visual table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.visual th,
+.visual td {
+  border-bottom: 1px solid var(--color-border);
+  padding: 7px;
+  text-align: left;
+  font-size: 12px;
+}
+.state {
+  color: var(--color-text-muted);
+  display: grid;
+  place-items: center;
+  height: 100%;
+}
+.receiptSummary {
+  display: flex;
+  justify-content: space-between;
+  padding: 9px 18px;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-dim);
+  font-size: 10px;
+}
+.inspector {
+  border-left: 1px solid var(--color-border);
+  background: var(--color-surface);
+  padding: 24px;
+  overflow: auto;
+}
+.inspector h2 {
+  font-size: 15px;
+  margin: 0 0 18px;
+}
+.inspector p,
+.inspector dt {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.inspector dl {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: 8px;
+}
+.inspector dd {
+  margin: 0;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.inspector details {
+  margin-top: 18px;
+}
+.inspector summary {
+  cursor: pointer;
+  font-size: 12px;
+}
+.inspector pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 10px;
+  padding: 10px;
+  background: var(--color-bg);
+  border-radius: 8px;
+}
+@media (max-width: 1000px) {
+  .runtime {
+    grid-template-columns: 1fr;
+  }
+  .inspector {
+    border-left: 0;
+    border-top: 1px solid var(--color-border);
+  }
+}
+@media (max-width: 700px) {
+  .runtime main {
+    padding: 18px;
+  }
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}

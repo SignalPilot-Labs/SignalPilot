@@ -48,12 +48,7 @@ export type DashboardFilterRule = {
   required?: boolean;
   disabled?: boolean;
   settings?: {
-    unitOfTime?:
-      | "days"
-      | "weeks"
-      | "months"
-      | "quarters"
-      | "years";
+    unitOfTime?: "days" | "weeks" | "months" | "quarters" | "years";
     completed?: boolean;
   };
 };
@@ -119,7 +114,15 @@ export type AdHocSqlQuery = {
 
 export type KpiChartConfig = {
   type: "big_number";
-  config: { field: string; format?: "integer" | "decimal" | "compact" | "percentage" | `currency:${string}` };
+  config: {
+    field: string;
+    format?:
+      | "integer"
+      | "decimal"
+      | "compact"
+      | "percentage"
+      | `currency:${string}`;
+  };
 };
 
 export type TableChartConfig = {
@@ -147,6 +150,7 @@ export type DashboardChartConfig =
 export type ChartDefinition = {
   id: string;
   title: string;
+  question?: string;
   description?: string;
   query: SemanticChartQuery | AdHocSqlQuery;
   visualization: DashboardChartConfig;

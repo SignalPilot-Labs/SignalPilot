@@ -65,6 +65,7 @@ def _authorities():
                     "column": "revenue",
                     "aggregation": "sum",
                     "label": "Revenue",
+                    "format": "currency:USD",
                     "approved": True,
                     "approval_source": "pilot-owner",
                 },
@@ -234,7 +235,16 @@ def test_compiler_normalizes_relative_date_in_dashboard_timezone() -> None:
     )
     assert compiled.parameters[0] == datetime(2026, 8, 1, 3, 0, tzinfo=UTC)
     assert compiled.parameters[1] == datetime(2026, 8, 24, 15, 0, tzinfo=UTC)
-    assert compiled.output_columns == [{"name": "orders.revenue", "logical_type": "number", "nullable": True}]
+    assert compiled.output_columns == [
+        {
+            "name": "orders.revenue",
+            "logical_type": "number",
+            "nullable": True,
+            "label": "Revenue",
+            "format": "currency:USD",
+            "currency_code": "USD",
+        }
+    ]
 
 
 def test_custom_sql_filters_only_declared_output_bindings_with_bound_values() -> None:
@@ -259,7 +269,16 @@ def test_custom_sql_filters_only_declared_output_bindings_with_bound_values() ->
     assert compiled.sql.endswith("WHERE ([sp_dashboard].[region] = %s)")
     assert "North" not in compiled.sql
     assert compiled.parameters == ["North"]
-    assert compiled.output_columns == [{"name": "region", "logical_type": "string", "nullable": True}]
+    assert compiled.output_columns == [
+        {
+            "name": "region",
+            "logical_type": "string",
+            "nullable": True,
+            "label": "Region",
+            "format": None,
+            "currency_code": None,
+        }
+    ]
 
 
 @pytest.mark.asyncio

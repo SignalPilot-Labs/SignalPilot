@@ -23,6 +23,8 @@ const resultsByChartId: Record<string, DashboardQueryResult> = {
     rows: [{ "orders.revenue": 1_595_000 }],
     completeness: "complete",
     freshnessAt: "2026-08-24T12:00:00Z",
+    timezone: "UTC",
+    locale: "en-US",
   },
   "chart-table": {
     resultId: "fixture-result-table",
@@ -49,6 +51,8 @@ const resultsByChartId: Record<string, DashboardQueryResult> = {
     ],
     completeness: "complete",
     freshnessAt: "2026-08-24T12:00:00Z",
+    timezone: "UTC",
+    locale: "en-US",
   },
   "chart-bar": chartResult("bar", "orders.region", [
     ["Northeast", 520_000],
@@ -98,6 +102,8 @@ function chartResult(
     })),
     completeness: "complete",
     freshnessAt: "2026-08-24T12:00:00Z",
+    timezone: "UTC",
+    locale: "en-US",
   };
 }
 

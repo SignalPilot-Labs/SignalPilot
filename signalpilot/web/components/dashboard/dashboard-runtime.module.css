@@ -1,6 +1,4 @@
 .runtime {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
   min-height: 100vh;
   background: var(--color-bg);
   color: var(--color-text);
@@ -34,6 +32,12 @@
   color: var(--color-text-dim);
   font-size: 11px;
 }
+.dashboardRefreshState {
+  color: var(--color-text-muted) !important;
+  font-size: 11px !important;
+  letter-spacing: normal !important;
+  text-transform: none !important;
+}
 .headerActions {
   display: flex;
   align-items: flex-end;
@@ -41,50 +45,68 @@
   flex-direction: column;
 }
 .headerActions button {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
   border: 1px solid var(--color-border);
-  border-radius: 7px;
+  border-radius: 9px;
   background: var(--color-bg-card);
   color: var(--color-text);
-  padding: 8px 10px;
+  padding: 0;
   cursor: pointer;
+}
+.headerActions button:disabled {
+  cursor: wait;
+  opacity: 0.6;
 }
 .grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(36, minmax(0, 1fr));
+  grid-auto-flow: row dense;
   gap: 16px;
 }
 .controlBar {
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  background: var(--color-bg-card);
-  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
   margin-bottom: 18px;
+}
+.filterIcon {
+  flex: none;
+  color: var(--color-text-muted);
 }
 .controls {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 8px;
 }
 .control {
-  display: grid;
-  gap: 5px;
-  min-width: 180px;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-bg-card);
+  overflow: hidden;
 }
 .control label {
-  color: var(--color-text-muted);
-  font-size: 11px;
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 0 7px 12px;
+  white-space: nowrap;
 }
 .control select,
 .control input {
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background: var(--color-bg);
-  color: var(--color-text);
-  padding: 6px;
-}
-.control select[multiple] {
-  min-height: 64px;
+  min-width: 120px;
+  max-width: 220px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  padding: 7px 28px 7px 6px;
 }
 .absoluteRange,
 .nullActions,
@@ -107,10 +129,10 @@
 }
 .filterChips {
   align-items: center;
-  margin-top: 10px;
+  flex: 1;
+  justify-content: flex-end;
 }
 .filterChips span {
-  margin-left: auto;
   color: var(--color-text-dim);
   font-size: 10px;
 }
@@ -122,9 +144,11 @@
   color: inherit;
   text-align: left;
   min-width: 0;
+  height: var(--dashboard-tile-height, 380px);
 }
 .tile {
-  height: 360px;
+  position: relative;
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--color-border);
@@ -132,28 +156,207 @@
   background: var(--color-bg-card);
   overflow: hidden;
 }
+.kpiTile {
+  height: 100%;
+}
+.chartTile {
+  height: 100%;
+}
 .tileHeader {
-  padding: 16px 18px 8px;
+  position: relative;
+  z-index: 5;
+  padding: 22px 24px 8px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+.drillBreadcrumb button {
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px;
+}
+.drillBreadcrumb button:focus-visible,
+.selectionActions button:focus-visible,
+.dataDialog button:focus-visible,
+.detailsDrawer button:focus-visible,
+.tileMenu summary:focus-visible,
+.tileMenu button:focus-visible,
+.questionWrap h2:focus-visible {
+  outline: 2px solid var(--color-border-active);
+  outline-offset: 2px;
+}
+.drillBreadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 0 18px 4px;
+}
+.drillBreadcrumb span {
+  display: flex;
+  gap: 5px;
+  color: var(--color-text-dim);
 }
 .tileHeader h2 {
-  font-size: 15px;
+  font-size: clamp(17px, 1.35vw, 24px);
+  font-weight: 600;
+  line-height: 1.25;
   margin: 0;
 }
-.tileHeader p {
+.questionWrap {
+  position: relative;
+  min-width: 0;
+}
+.questionTooltip {
+  position: absolute;
+  z-index: 8;
+  top: calc(100% + 9px);
+  left: 0;
+  width: max-content;
+  max-width: min(380px, calc(100vw - 80px));
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-elevated);
   color: var(--color-text-muted);
-  font-size: 12px;
-  margin: 5px 0 0;
+  box-shadow: 0 12px 36px rgb(0 0 0 / 32%);
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.45;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-3px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+.questionWrap:hover .questionTooltip,
+.questionWrap:focus-within .questionTooltip {
+  opacity: 1;
+  transform: translateY(0);
+}
+.tileMenu {
+  position: relative;
+  flex: none;
+}
+.tileMenu summary {
+  display: grid;
+  width: 32px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  list-style: none;
+  opacity: 0;
+  transition:
+    opacity 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease;
+}
+.tileMenu summary::-webkit-details-marker {
+  display: none;
+}
+.tile:hover .tileMenu summary,
+.tile:focus-within .tileMenu summary,
+.tileMenu[open] summary {
+  opacity: 1;
+}
+.tileMenu summary:hover,
+.tileMenu[open] summary {
+  border-color: var(--color-border);
+  background: var(--color-bg);
+}
+.tileMenuPanel {
+  position: absolute;
+  z-index: 10;
+  top: 35px;
+  right: 0;
+  display: grid;
+  width: 240px;
+  gap: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-elevated);
+  box-shadow: 0 18px 50px rgb(0 0 0 / 42%);
+  padding: 8px;
+}
+.tileMenuPanel button {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  padding: 8px 9px;
+  text-align: left;
+}
+.tileMenuPanel button:hover {
+  background: var(--color-bg);
+}
+.tileMenuPanel button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.tileMenuMeta {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-dim);
+  padding: 4px 9px 9px;
+  font-size: 10px;
 }
 .visual {
   position: relative;
   flex: 1;
   min-height: 0;
   padding: 12px 18px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.kpiTile .visual {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
 }
 .visual table {
   width: 100%;
   border-collapse: collapse;
+}
+.visual [data-dashboard-renderer="kpi"] {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  flex-direction: column;
+  gap: 7px;
+  text-align: center;
+}
+.visual [data-dashboard-renderer="kpi"] strong {
+  max-width: 100%;
+  color: var(--color-text);
+  font-size: clamp(24px, 5.5cqi, 44px);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  white-space: nowrap;
+}
+.visual [data-dashboard-renderer="kpi"] span {
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1.2;
 }
 .visual th,
 .visual td {
@@ -168,6 +371,57 @@
   place-items: center;
   height: 100%;
 }
+.loadingState {
+  display: flex;
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+.pageLoadingState {
+  min-height: 220px;
+}
+.loadingSpinner {
+  display: inline-block;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-text);
+  border-radius: 999px;
+  vertical-align: -0.25em;
+  animation: dashboardSpin 700ms linear infinite;
+}
+.loadingSpinnerSmall {
+  width: 14px;
+  height: 14px;
+  border-width: 1.5px;
+  margin-right: 3px;
+}
+.visual [data-dashboard-renderer] {
+  animation: dashboardChartReveal 360ms ease-out both;
+}
+@keyframes dashboardSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes dashboardChartReveal {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
 .errorState {
   border: 1px solid var(--color-danger, #b45a5a);
   border-radius: 7px;
@@ -176,35 +430,33 @@
   padding: 8px;
   margin-bottom: 8px;
 }
-.refreshState {
-  position: absolute;
-  z-index: 2;
-  right: 18px;
-  border-radius: 999px;
-  background: var(--color-bg);
-  color: var(--color-text-muted);
-  padding: 4px 8px;
-  font-size: 10px;
-}
-.receiptSummary {
+.selectionActions {
   display: flex;
-  justify-content: space-between;
-  padding: 9px 18px;
-  border-top: 1px solid var(--color-border);
-  color: var(--color-text-dim);
-  font-size: 10px;
-}
-.tileActions {
-  padding: 0 18px 10px;
   align-items: center;
+  gap: 7px;
+  padding: 8px 18px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-bg);
+  font-size: 11px;
 }
-.tileActions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
+.selectionActions span {
+  margin-right: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.drillContext {
-  color: var(--color-text-dim);
+.selectionActions button {
+  border: 1px solid var(--color-border-active);
+  border-radius: 999px;
+  background: var(--color-bg-card);
+  color: var(--color-text);
+  padding: 4px 8px;
+  cursor: pointer;
   font-size: 10px;
+}
+.selectionActions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 .dataDialog {
   position: fixed;
@@ -219,17 +471,52 @@
 .dataDialogPanel {
   width: 100%;
   max-height: 84vh;
-  overflow: auto;
+  overflow: hidden;
   border: 1px solid var(--color-border);
   border-radius: 12px;
   background: var(--color-bg-elevated);
   box-shadow: 0 20px 80px rgb(0 0 0 / 45%);
-  padding: 20px;
+  padding: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
 }
-.dataDialogPanel > div {
+.dataDialogHeader {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-elevated);
+}
+.dataDialogHeader span {
+  color: var(--color-text-dim);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.dataDialogHeader h3,
+.dataDialogHeader p {
+  margin: 3px 0 0;
+}
+.dataDialogHeader p {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.dataDialogHeader button,
+.detailsDrawer button {
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  padding: 7px 10px;
+  cursor: pointer;
+}
+.dataTableViewport {
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 .dataDialog table {
   width: 100%;
@@ -241,6 +528,19 @@
   padding: 8px;
   text-align: left;
   font-size: 12px;
+}
+.dataDialog th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-bg-card);
+  white-space: nowrap;
+}
+.dataDialog td {
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .authoringLauncher {
   position: fixed;
@@ -254,6 +554,9 @@
   padding: 10px 16px;
   box-shadow: 0 12px 40px rgb(0 0 0 / 35%);
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
 }
 .authoringPanel {
   position: fixed;
@@ -348,6 +651,11 @@
   background: var(--color-bg-card);
   padding: 12px;
 }
+.frozenChartCaption {
+  margin: 0;
+  color: var(--color-text-dim);
+  font-size: 10px;
+}
 .analysisChat {
   min-height: 0;
 }
@@ -361,39 +669,69 @@
   color: var(--color-text-muted);
   font-size: 12px;
 }
-.inspector {
-  border-left: 1px solid var(--color-border);
-  background: var(--color-bg-card);
-  padding: 24px;
+.drawerBackdrop {
+  position: fixed;
+  z-index: 90;
+  inset: 0;
+  background: rgb(0 0 0 / 48%);
+}
+.detailsDrawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(440px, 100vw);
   overflow: auto;
+  border-left: 1px solid var(--color-border);
+  background: var(--color-bg-elevated);
+  padding: 22px;
+  box-shadow: -18px 0 60px rgb(0 0 0 / 35%);
 }
-.inspector h2 {
-  font-size: 15px;
-  margin: 0 0 18px;
+.detailsDrawer > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
 }
-.inspector p,
-.inspector dt {
+.detailsDrawer header span {
+  color: var(--color-text-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.detailsDrawer h2 {
+  margin: 4px 0 0;
+  font-size: 18px;
+}
+.detailsDrawer section {
+  margin-top: 28px;
+}
+.detailsDrawer h3 {
+  font-size: 13px;
+}
+.detailsDrawer p,
+.detailsDrawer dt {
   color: var(--color-text-muted);
   font-size: 11px;
 }
-.inspector dl {
+.detailsDrawer dl {
   display: grid;
-  grid-template-columns: 100px 1fr;
+  grid-template-columns: 110px 1fr;
   gap: 8px;
 }
-.inspector dd {
+.detailsDrawer dd {
   margin: 0;
   font-size: 11px;
   overflow-wrap: anywhere;
 }
-.inspector details {
+.detailsDrawer details {
   margin-top: 18px;
 }
-.inspector summary {
+.detailsDrawer summary {
   cursor: pointer;
   font-size: 12px;
 }
-.inspector pre {
+.detailsDrawer pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-size: 10px;
@@ -401,20 +739,63 @@
   background: var(--color-bg);
   border-radius: 8px;
 }
+.technicalDetails {
+  border-top: 1px solid var(--color-border);
+  padding-top: 18px;
+}
 @media (max-width: 1000px) {
-  .runtime {
-    grid-template-columns: 1fr;
-  }
-  .inspector {
-    border-left: 0;
-    border-top: 1px solid var(--color-border);
+  .tileButton {
+    grid-column: span 18 !important;
   }
 }
 @media (max-width: 700px) {
   .runtime main {
     padding: 18px;
   }
-  .grid {
-    grid-template-columns: 1fr;
+  .header {
+    flex-direction: column;
+  }
+  .headerActions {
+    align-items: flex-start;
+    flex-direction: row;
+  }
+  .controlBar {
+    align-items: flex-start;
+  }
+  .controls {
+    flex: 1;
+  }
+  .control {
+    width: 100%;
+  }
+  .control select {
+    flex: 1;
+    max-width: none;
+  }
+  .filterChips span {
+    display: none;
+  }
+  .tileButton {
+    grid-column: span 36 !important;
+    height: auto;
+  }
+  .kpiTile {
+    height: 240px;
+  }
+  .chartTile {
+    height: 400px;
+  }
+  .dataDialog {
+    padding: 12px;
+  }
+  .dataDialogPanel {
+    max-height: calc(100vh - 24px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .loadingSpinner,
+  .visual [data-dashboard-renderer] {
+    animation-duration: 1ms;
+    animation-iteration-count: 1;
   }
 }

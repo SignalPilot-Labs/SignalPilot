@@ -62,19 +62,23 @@ def parse_approved_metrics(settings: dict | None) -> list[dict[str, Any]]:
             continue
         required = ("model", "column", "aggregation", "label")
         if any(not str(raw.get(key) or "").strip() for key in required):
-            raise DashboardSemanticError("Approved dashboard metric bindings require model, column, aggregation, and label")
+            raise DashboardSemanticError(
+                "Approved dashboard metric bindings require model, column, aggregation, and label"
+            )
         aggregation = str(raw["aggregation"]).lower()
         if aggregation not in SUPPORTED_AGGREGATIONS:
             raise DashboardSemanticError(f"Unsupported approved metric aggregation: {aggregation}")
-        parsed.append({
-            "model": str(raw["model"]),
-            "column": str(raw["column"]),
-            "aggregation": aggregation,
-            "label": str(raw["label"]),
-            "format": str(raw["format"]) if raw.get("format") else None,
-            "field_id": str(raw.get("field_id") or f"{raw['model']}.{raw['column']}"),
-            "approval_source": str(raw.get("approval_source") or "project_settings"),
-        })
+        parsed.append(
+            {
+                "model": str(raw["model"]),
+                "column": str(raw["column"]),
+                "aggregation": aggregation,
+                "label": str(raw["label"]),
+                "format": str(raw["format"]) if raw.get("format") else None,
+                "field_id": str(raw.get("field_id") or f"{raw['model']}.{raw['column']}"),
+                "approval_source": str(raw.get("approval_source") or "project_settings"),
+            }
+        )
     return parsed
 
 
@@ -86,7 +90,12 @@ def _project_projection(project_map: ProjectMap) -> dict[str, Any]:
                 "description": model.description,
                 "materialization": model.materialization,
                 "columns": [
-                    {"name": col.name, "type": col.data_type, "description": col.description, "tests": sorted(col.tests)}
+                    {
+                        "name": col.name,
+                        "type": col.data_type,
+                        "description": col.description,
+                        "tests": sorted(col.tests),
+                    }
                     for col in sorted(model.columns, key=lambda item: item.name)
                 ],
                 "refs": sorted(model.all_refs),
@@ -112,7 +121,9 @@ def _relation_for_model(model: ModelInfo, schema: dict[str, Any]) -> tuple[str, 
     if len(matches) == 1:
         key, table = matches[0]
         database = str(table.get("database") or "")
-        relation = ".".join(part for part in (database, str(table.get("schema") or ""), str(table.get("name") or alias)) if part)
+        relation = ".".join(
+            part for part in (database, str(table.get("schema") or ""), str(table.get("name") or alias)) if part
+        )
         return relation or key, table
     return None
 
@@ -128,13 +139,15 @@ def resolve_from_authorities(
     approved_metrics: list[dict[str, Any]],
 ) -> DashboardSemanticContext:
     physical_fingerprint = _schema_fingerprint(physical_schema)
-    fingerprint = _canonical_hash({
-        "project_commit_sha": commit_sha,
-        "project_map": _project_projection(project_map),
-        "physical_schema_fingerprint": physical_fingerprint,
-        "connection_semantic_model": semantic_model,
-        "approved_metrics": approved_metrics,
-    })
+    fingerprint = _canonical_hash(
+        {
+            "project_commit_sha": commit_sha,
+            "project_map": _project_projection(project_map),
+            "physical_schema_fingerprint": physical_fingerprint,
+            "connection_semantic_model": semantic_model,
+            "approved_metrics": approved_metrics,
+        }
+    )
     metrics_by_model: dict[str, list[dict[str, Any]]] = {}
     for binding in approved_metrics:
         metrics_by_model.setdefault(str(binding["model"]), []).append(binding)
@@ -149,10 +162,14 @@ def resolve_from_authorities(
         relation, table = resolved
         physical_columns = {str(col.get("name")): col for col in table.get("columns") or []}
         schema_check = compare_columns([column.name for column in model.columns], list(physical_columns))
-        verification_refs.append(
-            f"schema:{model_name}:{'verified' if schema_check.valid else 'changes_detected'}"
+        verification_refs.append(f"schema:{model_name}:{'verified' if schema_check.valid else 'changes_detected'}")
+        semantic_table = (
+            semantic_tables.get(relation)
+            or semantic_tables.get(
+                next((key for key in semantic_tables if key.endswith(f".{relation.split('.')[-1]}")), "")
+            )
+            or {}
         )
-        semantic_table = semantic_tables.get(relation) or semantic_tables.get(next((key for key in semantic_tables if key.endswith(f".{relation.split('.')[-1]}")), "")) or {}
         semantic_columns = semantic_table.get("columns") or {}
         dimensions: list[DashboardSemanticField] = []
         for column in model.columns:
@@ -160,38 +177,49 @@ def resolve_from_authorities(
             if physical is None:
                 continue
             semantic_column = semantic_columns.get(column.name) or {}
-            dimensions.append(DashboardSemanticField(
-                field_id=f"{model_name}.{column.name}",
-                column=column.name,
-                logical_type=_logical_type(str(physical.get("type") or column.data_type or "")),
-                description=semantic_column.get("description") or column.description,
-                tests=list(column.tests),
-                tags=list(model.tags),
-            ))
+            dimensions.append(
+                DashboardSemanticField(
+                    field_id=f"{model_name}.{column.name}",
+                    column=column.name,
+                    logical_type=_logical_type(str(physical.get("type") or column.data_type or "")),
+                    label=str(semantic_column.get("label") or column.name.replace("_", " ").title()),
+                    description=semantic_column.get("description") or column.description,
+                    tests=list(column.tests),
+                    tags=list(model.tags),
+                )
+            )
         metrics: list[DashboardSemanticMetric] = []
         for binding in metrics_by_model.get(model_name, []):
             column = next((item for item in dimensions if item.column == binding["column"]), None)
             if column is None:
-                raise DashboardSemanticError(f"Approved metric column does not resolve: {model_name}.{binding['column']}")
-            metrics.append(DashboardSemanticMetric(
-                **column.model_dump(exclude={"field_id"}),
-                field_id=str(binding["field_id"]),
-                aggregation=str(binding["aggregation"]),
-                label=str(binding["label"]),
-                format=binding.get("format"),
-                approval_source=str(binding["approval_source"]),
-                human_verified=True,
-            ))
-        joins = [join for join in semantic_model.get("joins") or [] if str(join.get("from") or "").startswith(f"{relation}.")]
-        explores.append(DashboardSemanticExplore(
-            name=model_name,
-            label=model_name.replace("_", " ").title(),
-            relation=relation,
-            description=semantic_table.get("description") or model.description,
-            dimensions=dimensions,
-            metrics=metrics,
-            joins=joins,
-        ))
+                raise DashboardSemanticError(
+                    f"Approved metric column does not resolve: {model_name}.{binding['column']}"
+                )
+            metrics.append(
+                DashboardSemanticMetric(
+                    **column.model_dump(exclude={"field_id", "label"}),
+                    field_id=str(binding["field_id"]),
+                    aggregation=str(binding["aggregation"]),
+                    label=str(binding["label"]),
+                    format=binding.get("format"),
+                    approval_source=str(binding["approval_source"]),
+                    human_verified=True,
+                )
+            )
+        joins = [
+            join for join in semantic_model.get("joins") or [] if str(join.get("from") or "").startswith(f"{relation}.")
+        ]
+        explores.append(
+            DashboardSemanticExplore(
+                name=model_name,
+                label=model_name.replace("_", " ").title(),
+                relation=relation,
+                description=semantic_table.get("description") or model.description,
+                dimensions=dimensions,
+                metrics=metrics,
+                joins=joins,
+            )
+        )
     return DashboardSemanticContext(
         project_id=project_id,
         commit_sha=commit_sha,
@@ -272,7 +300,10 @@ class DashboardSemanticResolver:
         physical_schema = {
             key: value
             for key, value in physical_schema.items()
-            if (not includes or any(fnmatch.fnmatch(str(value.get("schema") or "").lower(), item.lower()) for item in includes))
+            if (
+                not includes
+                or any(fnmatch.fnmatch(str(value.get("schema") or "").lower(), item.lower()) for item in includes)
+            )
             and not any(fnmatch.fnmatch(str(value.get("schema") or "").lower(), item.lower()) for item in excludes)
         }
         project_map = _scan_commit(project_id, commit_sha)

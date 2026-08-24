@@ -13,6 +13,7 @@ import type {
   DashboardQueryResult,
   DashboardRuntimeFilter,
 } from "~/lib/dashboard/contracts";
+import { formatDashboardTimestamp } from "~/lib/dashboard/semantic-formatter";
 
 import styles from "./dashboard-runtime.module.css";
 
@@ -70,6 +71,13 @@ export function DashboardAnalysisDialog({
         </header>
         <div className={styles.frozenChart} aria-label="Frozen selected chart">
           <DashboardRenderer chart={chart} result={result} />
+          <p className={styles.frozenChartCaption}>
+            {result.completeness === "complete"
+              ? "Complete result"
+              : "Result may be incomplete"}
+            {" · "}Updated{" "}
+            {formatDashboardTimestamp(result.freshnessAt, result)}
+          </p>
         </div>
         <div className={styles.analysisChat}>
           {conversationId ? (

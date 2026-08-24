@@ -118,6 +118,8 @@ describe("dashboard runtime state", () => {
       rows: [{ [dimension]: "value", "accounts.revenue": 10 }],
       completeness: "complete",
       freshnessAt: "2026-08-24T12:00:00Z",
+      timezone: "UTC",
+      locale: "en-US",
     });
 
     const parent = chartForAvailableResult(chart, result("accounts.brand"));

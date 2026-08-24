@@ -11,6 +11,8 @@ import type {
 const chart: ChartDefinition = {
   id: "accounts",
   title: "Accounts",
+  question: "Which accounts generate the most revenue?",
+  description: "Table showing account revenue ranked from highest to lowest.",
   query: {
     kind: "semantic",
     exploreName: "accounts",
@@ -37,11 +39,20 @@ const result: DashboardQueryResult = {
   executionId: "execution-1",
   columns: [
     { name: "accounts.brand", logicalType: "string", nullable: false },
-    { name: "accounts.revenue", logicalType: "number", nullable: false },
+    {
+      name: "accounts.revenue",
+      logicalType: "number",
+      nullable: false,
+      label: "Revenue",
+      format: "currency:USD",
+      currencyCode: "USD",
+    },
   ],
   rows: [{ "accounts.brand": "HaulPro", "accounts.revenue": 100 }],
   completeness: "complete",
   freshnessAt: "2026-08-24T12:00:00Z",
+  timezone: "America/Sao_Paulo",
+  locale: "en-US",
 };
 
 describe("DashboardChartTile interactions", () => {
@@ -71,28 +82,80 @@ describe("DashboardChartTile interactions", () => {
     const dialog = document.body.querySelector<HTMLElement>("[role='dialog']");
     expect(dialog).not.toBeNull();
     expect(dialog?.querySelector("section")).not.toBeNull();
+    expect(dialog?.textContent).toContain("$100.00");
+    expect(document.activeElement?.textContent).toBe("Close");
 
     await act(async () => dialog?.click());
     expect(document.body.querySelector("[role='dialog']")).toBeNull();
   });
 
-  it("explains the required mark selection and drills once a value is selected", async () => {
+  it("shows the business question and moves receipt metadata into the overflow menu", async () => {
+    await act(async () => {
+      root.render(<DashboardChartTile chart={chart} result={result} />);
+    });
+    expect(container.querySelector("h2")?.textContent).toBe(
+      "Which accounts generate the most revenue?",
+    );
+    expect(container.querySelector("[role='tooltip']")?.textContent).toContain(
+      "Table showing",
+    );
+    expect(container.querySelector("summary")?.getAttribute("aria-label")).toBe(
+      "More actions for Accounts",
+    );
+    expect(container.textContent).toContain("Complete result");
+    expect(container.textContent).toContain("View data");
+  });
+
+  it("centers a spinner in a chart while its governed data is loading", async () => {
+    await act(async () => {
+      root.render(<DashboardChartTile chart={chart} loading />);
+    });
+
+    const loadingState =
+      container.querySelector<HTMLElement>("[role='status']");
+    expect(loadingState?.textContent).toBe("");
+    expect(loadingState?.getAttribute("aria-label")).toBe(
+      "Loading governed data",
+    );
+    expect(loadingState?.querySelector("[aria-hidden='true']")).not.toBeNull();
+  });
+
+  it("closes View data with Escape", async () => {
+    await act(async () => {
+      root.render(<DashboardChartTile chart={chart} result={result} />);
+    });
+    const viewData = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "View data",
+    );
+    await act(async () => viewData?.click());
+    await act(async () =>
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })),
+    );
+    expect(document.body.querySelector("[role='dialog']")).toBeNull();
+  });
+
+  it("offers distinct filter and drill actions only after an explicit selection", async () => {
     const onDrill = vi.fn();
+    const onFilter = vi.fn();
     await act(async () => {
       root.render(
         <DashboardChartTile
           chart={chart}
           result={result}
           onDrill={onDrill}
+          onFilter={onFilter}
           canDrill={false}
+          canFilter={false}
         />,
       );
     });
     const disabled = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent === "Drill down",
+      (button) => button.textContent === "Drill into value",
     );
-    expect(disabled?.disabled).toBe(true);
-    expect(container.textContent).toContain("Select a chart mark to drill");
+    expect(disabled).toBeUndefined();
+    expect(container.textContent).not.toContain(
+      "Select a chart mark to filter or drill",
+    );
 
     await act(async () => {
       root.render(
@@ -100,16 +163,24 @@ describe("DashboardChartTile interactions", () => {
           chart={chart}
           result={result}
           onDrill={onDrill}
+          onFilter={onFilter}
           canDrill
-          drillSelection="HaulPro"
+          canFilter
+          selectionLabel="HaulPro"
         />,
       );
     });
     const enabled = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent === "Drill down",
+      (button) => button.textContent === "Drill into value",
     );
     await act(async () => enabled?.click());
     expect(onDrill).toHaveBeenCalledOnce();
     expect(container.textContent).toContain("Selected: HaulPro");
+
+    const filter = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Filter dashboard",
+    );
+    await act(async () => filter?.click());
+    expect(onFilter).toHaveBeenCalledOnce();
   });
 });

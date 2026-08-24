@@ -9,8 +9,24 @@ import { toLightdashCartesianInput } from "~/lib/dashboard/to-lightdash-results"
 const chart: ChartDefinition = {
   id: "revenue-by-region",
   title: "Revenue by region",
-  visualization: { type: "cartesian", config: { seriesType: "bar", layout: { xField: "region", yField: ["revenue"] } } },
-  query: { kind: "semantic", exploreName: "orders", dimensions: ["region"], metrics: ["revenue"], filters: {}, sorts: [], limit: 100, projectId: "project-1", commitSha: "b91bd22" },
+  visualization: {
+    type: "cartesian",
+    config: {
+      seriesType: "bar",
+      layout: { xField: "region", yField: ["revenue"] },
+    },
+  },
+  query: {
+    kind: "semantic",
+    exploreName: "orders",
+    dimensions: ["region"],
+    metrics: ["revenue"],
+    filters: {},
+    sorts: [],
+    limit: 100,
+    projectId: "project-1",
+    commitSha: "b91bd22",
+  },
   signalPilot: { crossFilter: true, provenanceRef: "provenance-1" },
 };
 
@@ -24,6 +40,8 @@ const result: DashboardQueryResult = {
   rows: [{ region: "Northeast", revenue: 520000 }],
   completeness: "complete",
   freshnessAt: "2026-08-21T12:00:00Z",
+  timezone: "UTC",
+  locale: "en-US",
 };
 
 describe("toLightdashCartesianInput", () => {

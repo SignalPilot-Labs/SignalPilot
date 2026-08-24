@@ -192,6 +192,7 @@ class ChartSignalPilot(ContractModel):
 class ChartDefinition(ContractModel):
     id: str = Field(min_length=1)
     title: str = Field(min_length=1)
+    question: str | None = Field(default=None, min_length=1, max_length=120)
     description: str | None = None
     query: Query
     visualization: Visualization

@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import { Sparkles } from "lucide-react";
 
 import { request } from "~/lib/api";
 import type { DashboardDefinition } from "~/lib/dashboard/contracts";
+import { DashboardSpinner } from "~/components/dashboard/dashboard-loading-state";
 
 import styles from "./dashboard-runtime.module.css";
 
@@ -46,6 +48,7 @@ export function DashboardAuthoringPanel({
         type="button"
         onClick={() => setOpen(true)}
       >
+        <Sparkles size={16} aria-hidden="true" />
         Edit with AI
       </button>
     );
@@ -142,7 +145,13 @@ export function DashboardAuthoringPanel({
                   .finally(() => setBusy(false));
               }}
             >
-              {busy ? "Applying…" : "Apply exact preview"}
+              {busy ? (
+                <>
+                  <DashboardSpinner size="small" /> Applying…
+                </>
+              ) : (
+                "Apply exact preview"
+              )}
             </button>
             <button type="button" disabled={busy} onClick={onDiscard}>
               Discard
@@ -196,7 +205,13 @@ export function DashboardAuthoringPanel({
         </p>
         {error ? <p className={styles.errorState}>{error}</p> : null}
         <button type="submit" disabled={busy || !prompt.trim()}>
-          {busy ? "Validating draft…" : "Preview governed change"}
+          {busy ? (
+            <>
+              <DashboardSpinner size="small" /> Validating draft…
+            </>
+          ) : (
+            "Preview governed change"
+          )}
         </button>
       </form>
     </aside>

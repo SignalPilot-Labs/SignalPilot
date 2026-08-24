@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 
 import { DashboardRuntimeProvider } from "~/components/dashboard/dashboard-runtime-provider";
+import { DashboardLoadingState } from "~/components/dashboard/dashboard-loading-state";
 import {
   DashboardAuthoringPanel,
   type DashboardAuthoringSession,
@@ -39,7 +40,11 @@ export default function DashboardDetailPage() {
   }, [params.dashboardId]);
   if (error) return <main style={{ padding: 32 }}>{error}</main>;
   if (!detail)
-    return <main style={{ padding: 32 }}>Loading immutable dashboard…</main>;
+    return (
+      <main style={{ padding: 32 }}>
+        <DashboardLoadingState label="Loading dashboard…" page />
+      </main>
+    );
   return (
     <>
       <DashboardRuntimeProvider

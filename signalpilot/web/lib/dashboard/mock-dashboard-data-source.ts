@@ -84,6 +84,8 @@ function resultFor(
     rows,
     completeness: "complete",
     freshnessAt: "2026-08-21T12:00:00Z",
+    timezone: "UTC",
+    locale: "en-US",
   };
 }
 

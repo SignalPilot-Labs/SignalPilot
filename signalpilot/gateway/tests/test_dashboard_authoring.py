@@ -133,6 +133,9 @@ async def test_agent_update_is_forced_through_typed_operations() -> None:
     assert materialized.name == "Executive revenue"
     assert client.request is not None
     assert client.request["tool_choice"] == {"type": "tool", "name": "submit_dashboard_draft"}
+    assert "question is a concise natural-language question" in client.request["system"]
+    chart_schema = client.request["tools"][0]["input_schema"]["$defs"]["ChartDefinition"]
+    assert "question" in chart_schema["properties"]
 
 
 @pytest.mark.asyncio

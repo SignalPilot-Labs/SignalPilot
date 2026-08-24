@@ -11,7 +11,16 @@ export type DashboardResultColumn = {
   logicalType: DashboardLogicalType;
   nullable: boolean;
   label?: string;
+  format?: DashboardValueFormat;
+  currencyCode?: string;
 };
+
+export type DashboardValueFormat =
+  | "integer"
+  | "decimal"
+  | "compact"
+  | "percentage"
+  | `currency:${string}`;
 
 export type DashboardQueryResult = {
   resultId: string;
@@ -20,6 +29,8 @@ export type DashboardQueryResult = {
   rows: Record<string, unknown>[];
   completeness: "complete" | "truncated" | "unknown";
   freshnessAt: string;
+  timezone: string;
+  locale: string;
   cacheState?: "fresh" | "stale" | "miss" | "refreshed";
 };
 
@@ -112,6 +123,8 @@ export type LightdashField = {
   label: string;
   type: DashboardLogicalType;
   role: "dimension" | "metric";
+  format?: DashboardValueFormat;
+  currencyCode?: string;
 };
 
 export type LightdashCartesianInput = {
@@ -121,6 +134,8 @@ export type LightdashCartesianInput = {
   yFields: string[];
   rows: LightdashResultRow[];
   fields: Record<string, LightdashField>;
+  locale: string;
+  timezone: string;
 };
 
 export type DashboardRuntimeDefinition = DashboardDefinition;

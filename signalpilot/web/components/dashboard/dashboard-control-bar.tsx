@@ -1,5 +1,6 @@
 "use client";
 
+import { Funnel } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { request } from "~/lib/api";
@@ -191,7 +192,15 @@ function DimensionControl({
       .catch(() => undefined);
     return () => controller.abort();
   }, [dashboardId, rule.id, versionId]);
-  const selected = (active?.values ?? []).map(String);
+  const selected = active?.values?.[0];
+  const selectValue =
+    active?.operator === "isNull"
+      ? "__is_null__"
+      : active?.operator === "notNull"
+        ? "__not_null__"
+        : selected === undefined
+          ? ""
+          : String(selected);
   return (
     <div className={styles.control}>
       <label htmlFor={`filter-${rule.id}`}>
@@ -199,46 +208,27 @@ function DimensionControl({
       </label>
       <select
         id={`filter-${rule.id}`}
-        multiple
-        value={selected}
+        value={selectValue}
         onChange={(event) => {
-          const selected = Array.from(
-            event.target.selectedOptions,
-            (option) => option.value,
-          );
-          const next = values.filter((value) =>
-            selected.includes(String(value)),
-          );
-          onChange(
-            next.length
-              ? { id: rule.id, operator: "equals", values: next }
-              : undefined,
-          );
+          const next = event.target.value;
+          if (!next) return onChange();
+          if (next === "__is_null__")
+            return onChange({ id: rule.id, operator: "isNull" });
+          if (next === "__not_null__")
+            return onChange({ id: rule.id, operator: "notNull" });
+          const original = values.find((value) => String(value) === next);
+          onChange({ id: rule.id, operator: "equals", values: [original] });
         }}
       >
+        <option value="">is any value</option>
         {values.map((value) => (
           <option key={String(value)} value={String(value)}>
             {String(value)}
           </option>
         ))}
+        <option value="__is_null__">is null</option>
+        <option value="__not_null__">is not null</option>
       </select>
-      <span className={styles.nullActions}>
-        <button
-          type="button"
-          onClick={() => onChange({ id: rule.id, operator: "isNull" })}
-        >
-          Is null
-        </button>
-        <button
-          type="button"
-          onClick={() => onChange({ id: rule.id, operator: "notNull" })}
-        >
-          Is not null
-        </button>
-        <button type="button" onClick={() => onChange()}>
-          All
-        </button>
-      </span>
     </div>
   );
 }
@@ -248,8 +238,10 @@ export function DashboardControlBar(props: Props) {
     () => new Map(props.filters.map((filter) => [filter.id, filter])),
     [props.filters],
   );
+  if (props.definition.filters.dimensions.length === 0) return null;
   return (
     <section className={styles.controlBar} aria-label="Dashboard filters">
+      <Funnel className={styles.filterIcon} size={17} aria-hidden="true" />
       <div className={styles.controls}>
         {props.definition.filters.dimensions.map((rule) => {
           const update = (next?: DashboardRuntimeFilter) =>
@@ -278,27 +270,11 @@ export function DashboardControlBar(props: Props) {
         })}
       </div>
       <div className={styles.filterChips}>
-        {props.filters.map((filter) => (
-          <button
-            key={filter.id}
-            type="button"
-            onClick={() =>
-              props.onChange(
-                props.filters.filter((item) => item.id !== filter.id),
-              )
-            }
-          >
-            {props.definition.filters.dimensions.find(
-              (rule) => rule.id === filter.id,
-            )?.label ?? filter.id}
-            : {filter.operator}
-            {filter.values?.length ? ` ${filter.values.join(", ")}` : ""} ×
+        {props.filters.length ? (
+          <button type="button" onClick={props.onReset}>
+            Reset filters
           </button>
-        ))}
-        <button type="button" onClick={props.onReset}>
-          Reset
-        </button>
-        <span>{props.definition.signalPilot.timezone}</span>
+        ) : null}
       </div>
     </section>
   );

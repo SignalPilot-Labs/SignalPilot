@@ -9,6 +9,10 @@ import type {
   DashboardQueryResult,
 } from "~/lib/dashboard/contracts";
 import { toLightdashCartesianInput } from "~/lib/dashboard/to-lightdash-results";
+import {
+  fieldLabel,
+  formatDashboardCell,
+} from "~/lib/dashboard/semantic-formatter";
 
 export type DashboardRendererKey = "kpi" | "table" | "bar" | "line" | "area";
 
@@ -19,58 +23,28 @@ type RendererProps = {
   onExpandRow?: (row: Record<string, unknown>) => Promise<DashboardQueryResult>;
 };
 
-function formatValue(
-  value: unknown,
-  format?: string,
-  logicalType?: string,
-): string {
-  if (value === null || value === undefined) return "—";
-  if (typeof value === "number") {
-    if (format === "integer")
-      return new Intl.NumberFormat(undefined, {
-        maximumFractionDigits: 0,
-      }).format(value);
-    if (format === "compact")
-      return new Intl.NumberFormat(undefined, {
-        notation: "compact",
-        maximumFractionDigits: 1,
-      }).format(value);
-    if (format === "percentage")
-      return new Intl.NumberFormat(undefined, {
-        style: "percent",
-        maximumFractionDigits: 1,
-      }).format(value);
-    if (format?.startsWith("currency:"))
-      return new Intl.NumberFormat(undefined, {
-        style: "currency",
-        currency: format.slice(9),
-      }).format(value);
-    return new Intl.NumberFormat(undefined, {
-      maximumFractionDigits: 2,
-    }).format(value);
-  }
-  if (
-    (logicalType === "date" || logicalType === "timestamp") &&
-    typeof value === "string"
-  ) {
-    const parsed = new Date(value);
-    if (!Number.isNaN(parsed.valueOf()))
-      return new Intl.DateTimeFormat(
-        undefined,
-        logicalType === "date"
-          ? { dateStyle: "medium" }
-          : { dateStyle: "medium", timeStyle: "short" },
-      ).format(parsed);
-  }
-  return String(value);
-}
-
 function KpiRenderer({ chart, result }: RendererProps) {
   if (chart.visualization.type !== "big_number") return null;
-  const value = result.rows[0]?.[chart.visualization.config.field];
+  const config = chart.visualization.config;
+  const value = result.rows[0]?.[config.field];
+  const column = result.columns.find((item) => item.name === config.field) ?? {
+    name: config.field,
+    logicalType: "number" as const,
+    nullable: true,
+  };
   return (
     <div data-dashboard-renderer="kpi">
-      {formatValue(value, chart.visualization.config.format)}
+      <strong>
+        {formatDashboardCell(
+          value,
+          {
+            ...column,
+            format: config.format ?? column.format,
+          },
+          result,
+        )}
+      </strong>
+      <span>{chart.title}</span>
     </div>
   );
 }
@@ -88,7 +62,10 @@ function TableRenderer({ chart, result, onExpandRow }: RendererProps) {
         <tr>
           {canExpand ? <th aria-label="Expand row" /> : null}
           {columns.map((column) => (
-            <th key={column}>{column}</th>
+            <th key={column} scope="col">
+              {result.columns.find((item) => item.name === column)?.label ??
+                fieldLabel(column)}
+            </th>
           ))}
         </tr>
       </thead>
@@ -133,11 +110,14 @@ function TableRenderer({ chart, result, onExpandRow }: RendererProps) {
               ) : null}
               {columns.map((column) => (
                 <td key={column}>
-                  {formatValue(
+                  {formatDashboardCell(
                     row[column],
-                    undefined,
-                    result.columns.find((item) => item.name === column)
-                      ?.logicalType,
+                    result.columns.find((item) => item.name === column) ?? {
+                      name: column,
+                      logicalType: "unknown",
+                      nullable: true,
+                    },
+                    result,
                   )}
                 </td>
               ))}
@@ -157,10 +137,10 @@ function TableRenderer({ chart, result, onExpandRow }: RendererProps) {
                               <tr key={childIndex}>
                                 {child.columns.map((column) => (
                                   <td key={column.name}>
-                                    {formatValue(
+                                    {formatDashboardCell(
                                       childRow[column.name],
-                                      undefined,
-                                      column.logicalType,
+                                      column,
+                                      child,
                                     )}
                                   </td>
                                 ))}

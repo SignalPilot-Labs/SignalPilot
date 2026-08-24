@@ -1,11 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { RefreshCw } from "lucide-react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 
 import { DashboardChartTile } from "~/components/dashboard/dashboard-chart-tile";
 import { DashboardAnalysisDialog } from "~/components/dashboard/dashboard-analysis-dialog";
 import { DashboardControlBar } from "~/components/dashboard/dashboard-control-bar";
-import { DashboardInspector } from "~/components/dashboard/dashboard-inspector";
+import { DashboardDetailsDrawer } from "~/components/dashboard/dashboard-inspector";
 import {
   DashboardApiDataSource,
   type DashboardQueryReceipt,
@@ -23,6 +30,15 @@ import {
   runtimeStateSearchParams,
   toggleCrossFilter,
 } from "~/lib/dashboard/runtime-state";
+import {
+  fieldLabel,
+  formatDashboardValue,
+  viewerLocale,
+} from "~/lib/dashboard/semantic-formatter";
+import {
+  normalizedTileSpan,
+  orderDashboardTiles,
+} from "~/lib/dashboard/dashboard-layout";
 
 import styles from "./dashboard-runtime.module.css";
 
@@ -70,10 +86,9 @@ export function DashboardRuntimeProvider({
   >({});
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const handledRefresh = useRef(0);
+  const refreshPending = useRef(false);
   const refreshedStaleKeys = useRef(new Set<string>());
-  const [selectedChartId, setSelectedChartId] = useState(
-    definition.charts[0]?.id,
-  );
+  const [detailsChartId, setDetailsChartId] = useState<string>();
   const [selectedMarks, setSelectedMarks] = useState<
     Record<string, Record<string, unknown>>
   >({});
@@ -87,8 +102,19 @@ export function DashboardRuntimeProvider({
         (chart, receipt) =>
           setReceipts((current) => ({ ...current, [chart.id]: receipt })),
         authoringSessionId,
+        definition.signalPilot.timezone,
+        viewerLocale(),
       ),
-    [authoringSessionId, dashboardId, versionId],
+    [
+      authoringSessionId,
+      dashboardId,
+      definition.signalPilot.timezone,
+      versionId,
+    ],
+  );
+  const layoutTiles = useMemo(
+    () => orderDashboardTiles(definition.tiles),
+    [definition.tiles],
   );
 
   useEffect(() => {
@@ -99,7 +125,7 @@ export function DashboardRuntimeProvider({
     setErrors({});
     setReceipts({});
     setSelectedMarks({});
-    setSelectedChartId(definition.charts[0]?.id);
+    setDetailsChartId(undefined);
   }, [definition]);
 
   useEffect(() => {
@@ -119,11 +145,13 @@ export function DashboardRuntimeProvider({
 
   useEffect(() => {
     const controller = new AbortController();
+    let pendingTiles = 0;
     const invalidateCache = refreshGeneration > handledRefresh.current;
     handledRefresh.current = refreshGeneration;
     for (const tile of definition.tiles) {
       const chart = definition.charts.find((item) => item.id === tile.chartId);
       if (!chart) continue;
+      pendingTiles += 1;
       setLoading((current) => ({ ...current, [chart.id]: true }));
       setErrors((current) => {
         const next = { ...current };
@@ -154,8 +182,11 @@ export function DashboardRuntimeProvider({
           }));
         })
         .finally(() => {
-          if (!controller.signal.aborted)
+          pendingTiles -= 1;
+          if (!controller.signal.aborted) {
             setLoading((current) => ({ ...current, [chart.id]: false }));
+            if (pendingTiles === 0) refreshPending.current = false;
+          }
         });
     }
     return () => controller.abort();
@@ -168,18 +199,27 @@ export function DashboardRuntimeProvider({
   ]);
 
   useEffect(() => {
+    if (Object.values(loading).some(Boolean)) return;
     const stale = Object.values(receipts).find(
       (receipt) => receipt.cache_state === "stale",
     );
     if (!stale || refreshedStaleKeys.current.has(stale.dashboard_result_id))
       return;
     refreshedStaleKeys.current.add(stale.dashboard_result_id);
+    refreshPending.current = true;
     setRefreshGeneration((value) => value + 1);
-  }, [receipts]);
+  }, [loading, receipts]);
 
   const reset = () => {
     setRuntimeState(initialDashboardRuntimeState(definition));
     setSelectedMarks({});
+  };
+  const dashboardLoading = Object.values(loading).some(Boolean);
+  const hasVisibleResults = Object.keys(results).length > 0;
+  const refreshDashboard = () => {
+    if (dashboardLoading || refreshPending.current) return;
+    refreshPending.current = true;
+    setRefreshGeneration((value) => value + 1);
   };
 
   return (
@@ -187,14 +227,31 @@ export function DashboardRuntimeProvider({
       <main>
         <header className={styles.header}>
           <div>
-            <span>Immutable version</span>
             <h1>{definition.name}</h1>
             <p>{definition.description}</p>
           </div>
           <div className={styles.headerActions}>
-            <code>{versionId}</code>
-            <button onClick={() => setRefreshGeneration((value) => value + 1)}>
-              Refresh governed data
+            {dashboardLoading || Object.keys(errors).length ? (
+              <span className={styles.dashboardRefreshState} role="status">
+                {dashboardLoading
+                  ? hasVisibleResults
+                    ? "Refreshing dashboard…"
+                    : "Loading dashboard…"
+                  : "Some charts need attention"}
+              </span>
+            ) : null}
+            <button
+              type="button"
+              disabled={dashboardLoading}
+              onClick={refreshDashboard}
+              aria-label={
+                dashboardLoading && hasVisibleResults
+                  ? "Refreshing dashboard"
+                  : "Refresh dashboard"
+              }
+              title="Refresh dashboard"
+            >
+              <RefreshCw size={17} aria-hidden="true" />
             </button>
           </div>
         </header>
@@ -210,11 +267,21 @@ export function DashboardRuntimeProvider({
           onReset={reset}
         />
         <div className={styles.grid}>
-          {definition.tiles.map((tile) => {
+          {layoutTiles.map((tile) => {
             const chart = definition.charts.find(
               (item) => item.id === tile.chartId,
             );
             if (!chart) return null;
+            const rowTiles = layoutTiles.filter(
+              (candidate) => candidate.y === tile.y,
+            );
+            const compactRow = rowTiles.every((candidate) =>
+              definition.charts.some(
+                (candidateChart) =>
+                  candidateChart.id === candidate.chartId &&
+                  candidateChart.visualization.type === "kpi",
+              ),
+            );
             const drillPath = runtimeState.drills[chart.id] ?? [];
             const hierarchy = hierarchyFor(chart);
             const activeDimension = hierarchy[drillPath.length];
@@ -224,15 +291,6 @@ export function DashboardRuntimeProvider({
               (rule) => rule.target.fieldId === activeDimension,
             );
             const selectedValue = selectedMark?.[activeDimension];
-            const singletonValue =
-              result?.rows.length === 1
-                ? result.rows[0]?.[activeDimension]
-                : undefined;
-            const drillValue = isRuntimeScalar(selectedValue)
-              ? selectedValue
-              : isRuntimeScalar(singletonValue)
-                ? singletonValue
-                : undefined;
             const supportsButtonDrill =
               chart.visualization.type === "cartesian" && hierarchy.length > 1;
             const unaffectedFilters = runtimeState.filters.filter((filter) => {
@@ -254,7 +312,12 @@ export function DashboardRuntimeProvider({
               <div
                 className={styles.tileButton}
                 key={tile.uuid}
-                onClick={() => setSelectedChartId(chart.id)}
+                style={
+                  {
+                    gridColumn: `span ${normalizedTileSpan(tile, rowTiles)}`,
+                    "--dashboard-tile-height": compactRow ? "260px" : "380px",
+                  } as CSSProperties
+                }
               >
                 <DashboardChartTile
                   chart={chartForAvailableResult(chart, result)}
@@ -262,40 +325,59 @@ export function DashboardRuntimeProvider({
                   error={errors[chart.id]}
                   loading={loading[chart.id]}
                   unaffectedFilters={unaffectedFilters}
-                  onMarkClick={
+                  onMarkSelect={(mark) =>
+                    setSelectedMarks((current) => ({
+                      ...current,
+                      [chart.id]: mark,
+                    }))
+                  }
+                  selectionLabel={
+                    isRuntimeScalar(selectedValue)
+                      ? formatDashboardValue(
+                          selectedValue,
+                          result?.columns.find(
+                            (column) => column.name === activeDimension,
+                          ),
+                          result,
+                        )
+                      : undefined
+                  }
+                  onFilter={
                     chart.signalPilot.crossFilter && savedFilter
-                      ? (mark, multiselect) => {
-                          const value = mark[activeDimension];
-                          if (!isRuntimeScalar(value)) return;
+                      ? () => {
+                          if (!isRuntimeScalar(selectedValue)) return;
                           const nextFilters = toggleCrossFilter(
                             runtimeState.filters,
                             savedFilter,
-                            value,
-                            multiselect,
+                            selectedValue,
+                            false,
                           );
-                          const remainsSelected = markRemainsSelected(
-                            nextFilters,
-                            savedFilter.id,
-                            mark,
-                            activeDimension,
-                          );
-                          setSelectedMarks((current) => {
-                            const next = { ...current };
-                            if (remainsSelected) next[chart.id] = mark;
-                            else delete next[chart.id];
-                            return next;
-                          });
                           setRuntimeState((current) => ({
                             ...current,
                             filters: nextFilters,
                           }));
+                          if (
+                            !markRemainsSelected(
+                              nextFilters,
+                              savedFilter.id,
+                              selectedMark,
+                              activeDimension,
+                            )
+                          ) {
+                            setSelectedMarks((current) => {
+                              const next = { ...current };
+                              delete next[chart.id];
+                              return next;
+                            });
+                          }
                         }
                       : undefined
                   }
+                  canFilter={isRuntimeScalar(selectedValue)}
                   onDrill={
                     supportsButtonDrill
                       ? () => {
-                          if (!isRuntimeScalar(drillValue)) return;
+                          if (!isRuntimeScalar(selectedValue)) return;
                           setRuntimeState((current) => ({
                             ...current,
                             drills: {
@@ -304,7 +386,7 @@ export function DashboardRuntimeProvider({
                                 ...(current.drills[chart.id] ?? []),
                                 {
                                   fieldId: activeDimension,
-                                  value: drillValue,
+                                  value: selectedValue,
                                 },
                               ],
                             },
@@ -313,33 +395,21 @@ export function DashboardRuntimeProvider({
                       : undefined
                   }
                   canDrill={
-                    isRuntimeScalar(drillValue) &&
+                    isRuntimeScalar(selectedValue) &&
                     drillPath.length < hierarchy.length - 1
                   }
-                  drillSelection={
-                    isRuntimeScalar(drillValue) ? String(drillValue) : undefined
-                  }
-                  drillContext={
-                    drillPath.length
-                      ? `Drilled: ${drillPath
-                          .map(
-                            (step) =>
-                              `${step.fieldId.split(".").at(-1)} = ${step.value}`,
-                          )
-                          .join(" / ")}`
-                      : undefined
-                  }
-                  onDrillUp={
-                    supportsButtonDrill && drillPath.length
-                      ? () =>
-                          setRuntimeState((current) => ({
-                            ...current,
-                            drills: {
-                              ...current.drills,
-                              [chart.id]: drillPath.slice(0, -1),
-                            },
-                          }))
-                      : undefined
+                  drillBreadcrumb={drillPath.map((step) => ({
+                    label: fieldLabel(step.fieldId),
+                    value: String(step.value),
+                  }))}
+                  onDrillTo={(depth) =>
+                    setRuntimeState((current) => ({
+                      ...current,
+                      drills: {
+                        ...current.drills,
+                        [chart.id]: drillPath.slice(0, depth),
+                      },
+                    }))
                   }
                   onExpandRow={
                     canExpand
@@ -370,15 +440,30 @@ export function DashboardRuntimeProvider({
                       ? () => setAnalysisChartId(chart.id)
                       : undefined
                   }
+                  onDetails={() => setDetailsChartId(chart.id)}
                 />
               </div>
             );
           })}
         </div>
       </main>
-      <DashboardInspector
-        receipt={selectedChartId ? receipts[selectedChartId] : undefined}
-      />
+      {detailsChartId
+        ? (() => {
+            const chart = definition.charts.find(
+              (item) => item.id === detailsChartId,
+            );
+            if (!chart) return null;
+            return (
+              <DashboardDetailsDrawer
+                chart={chart}
+                result={results[chart.id]}
+                receipt={receipts[chart.id]}
+                filters={runtimeState.filters}
+                onClose={() => setDetailsChartId(undefined)}
+              />
+            );
+          })()
+        : null}
       {analysisChartId
         ? (() => {
             const chart = definition.charts.find(

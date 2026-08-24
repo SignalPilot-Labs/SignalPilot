@@ -235,6 +235,13 @@ def compile_metric_query(
                 "name": field.field_id,
                 "logical_type": field.logical_type,
                 "nullable": True,
+                "label": field.label or field.field_id.rsplit(".", 1)[-1].replace("_", " ").title(),
+                "format": getattr(field, "format", None),
+                "currency_code": (
+                    field.format.split(":", 1)[1]
+                    if getattr(field, "format", None) and field.format.startswith("currency:")
+                    else None
+                ),
             }
             for field in [
                 *(dimensions[field_id] for field_id in selected_dimensions),
@@ -284,6 +291,9 @@ def compile_custom_sql_query(
                 "name": binding.outputColumn,
                 "logical_type": binding.logicalType,
                 "nullable": True,
+                "label": binding.outputColumn.replace("_", " ").title(),
+                "format": None,
+                "currency_code": None,
             }
             for binding in query.outputBindings
         ],

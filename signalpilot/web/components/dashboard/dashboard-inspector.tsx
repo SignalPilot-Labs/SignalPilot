@@ -1,49 +1,128 @@
 "use client";
 
+import { useEffect, useRef } from "react";
+
 import type { DashboardQueryReceipt } from "~/lib/dashboard/api-data-source";
+import type {
+  ChartDefinition,
+  DashboardQueryResult,
+  DashboardRuntimeFilter,
+} from "~/lib/dashboard/contracts";
+import {
+  fieldLabel,
+  formatDashboardTimestamp,
+} from "~/lib/dashboard/semantic-formatter";
 
 import styles from "./dashboard-runtime.module.css";
 
-export function DashboardInspector({
+export function DashboardDetailsDrawer({
+  chart,
+  result,
   receipt,
+  filters,
+  onClose,
 }: {
+  chart: ChartDefinition;
+  result?: DashboardQueryResult;
   receipt?: DashboardQueryReceipt;
+  filters: DashboardRuntimeFilter[];
+  onClose: () => void;
 }) {
+  const closeButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    closeButton.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+  const semantic = chart.query.kind === "semantic";
+  const source =
+    chart.query.kind === "semantic"
+      ? fieldLabel(chart.query.exploreName)
+      : "Confirmed custom query";
   return (
-    <aside className={styles.inspector} aria-label="Query inspector">
-      <h2>Definition & query receipt</h2>
-      {!receipt ? (
-        <p>Select a loaded chart to inspect its governed query.</p>
-      ) : (
-        <dl>
-          <dt>Execution</dt>
-          <dd>{receipt.execution_id}</dd>
-          <dt>Dashboard result</dt>
-          <dd>{receipt.dashboard_result_id}</dd>
-          <dt>Completeness</dt>
-          <dd>{receipt.completeness}</dd>
-          <dt>Cache</dt>
-          <dd>{receipt.cache_state}</dd>
-          <dt>Tables</dt>
-          <dd>{receipt.tables.join(", ")}</dd>
-          <dt>SQL hash</dt>
-          <dd>{receipt.sql_hash}</dd>
-          <dt>Parameter hash</dt>
-          <dd>{receipt.parameter_hash}</dd>
-        </dl>
-      )}
-      {receipt?.semantic_definition ? (
-        <details open>
-          <summary>Metric and attribute definition</summary>
-          <pre>{JSON.stringify(receipt.semantic_definition, null, 2)}</pre>
+    <div
+      className={styles.drawerBackdrop}
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <aside
+        className={styles.detailsDrawer}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={`details-${chart.id}`}
+      >
+        <header>
+          <div>
+            <span>Chart details</span>
+            <h2 id={`details-${chart.id}`}>{chart.title}</h2>
+          </div>
+          <button ref={closeButton} type="button" onClick={onClose}>
+            Close
+          </button>
+        </header>
+        <section>
+          <h3>Business definition</h3>
+          <p>
+            {chart.description ??
+              "No additional business definition was provided."}
+          </p>
+          <dl>
+            <dt>Source</dt>
+            <dd>{source}</dd>
+            <dt>Active filters</dt>
+            <dd>{filters.length ? `${filters.length} applied` : "None"}</dd>
+            <dt>Freshness</dt>
+            <dd>
+              {result
+                ? formatDashboardTimestamp(result.freshnessAt, result)
+                : "Not loaded"}
+            </dd>
+            <dt>Completeness</dt>
+            <dd>{result?.completeness ?? "Unknown"}</dd>
+            <dt>Confidence</dt>
+            <dd>
+              {semantic
+                ? "High — governed semantic definition"
+                : "Low — explicitly confirmed custom SQL"}
+            </dd>
+          </dl>
+        </section>
+        <details className={styles.technicalDetails}>
+          <summary>Technical details</summary>
+          {!receipt ? (
+            <p>Query diagnostics are available after this chart loads.</p>
+          ) : (
+            <>
+              <dl>
+                <dt>Execution ID</dt>
+                <dd>{receipt.execution_id}</dd>
+                <dt>Result ID</dt>
+                <dd>{receipt.dashboard_result_id}</dd>
+                <dt>SQL hash</dt>
+                <dd>{receipt.sql_hash}</dd>
+                <dt>Parameter hash</dt>
+                <dd>{receipt.parameter_hash}</dd>
+              </dl>
+              <details>
+                <summary>Semantic definition</summary>
+                <pre>
+                  {JSON.stringify(receipt.semantic_definition, null, 2)}
+                </pre>
+              </details>
+              {receipt.compiled_sql ? (
+                <details>
+                  <summary>Compiled MSSQL</summary>
+                  <pre>{receipt.compiled_sql}</pre>
+                </details>
+              ) : null}
+            </>
+          )}
         </details>
-      ) : null}
-      {receipt?.compiled_sql ? (
-        <details>
-          <summary>Compiled MSSQL</summary>
-          <pre>{receipt.compiled_sql}</pre>
-        </details>
-      ) : null}
-    </aside>
+      </aside>
+    </div>
   );
 }

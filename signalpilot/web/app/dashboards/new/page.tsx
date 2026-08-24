@@ -1,9 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Sparkles } from "lucide-react";
 
 import type { DashboardAuthoringSession } from "~/components/dashboard/dashboard-authoring-panel";
 import { DashboardRuntimeProvider } from "~/components/dashboard/dashboard-runtime-provider";
+import {
+  DashboardLoadingState,
+  DashboardSpinner,
+} from "~/components/dashboard/dashboard-loading-state";
 import { getWorkspaceProjects, request } from "~/lib/api";
 import type { DashboardQueryReceipt } from "~/lib/dashboard/api-data-source";
 import type { WorkspaceProjectInfo } from "~/lib/types";
@@ -18,6 +23,7 @@ export default function NewDashboardPage() {
   const [preview, setPreview] = useState<DashboardAuthoringSession>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [projectsLoading, setProjectsLoading] = useState(true);
   const [receipts, setReceipts] = useState<
     Record<string, DashboardQueryReceipt>
   >({});
@@ -32,7 +38,8 @@ export default function NewDashboardPage() {
         setError(
           cause instanceof Error ? cause.message : "Projects could not load",
         ),
-      );
+      )
+      .finally(() => setProjectsLoading(false));
   }, []);
   const selected = projects.find((project) => project.id === projectId);
 
@@ -41,7 +48,10 @@ export default function NewDashboardPage() {
       <span style={{ color: "var(--color-text-dim)", fontSize: 12 }}>
         Private governed dashboard
       </span>
-      <h1>Create with AI</h1>
+      <h1 style={{ display: "flex", alignItems: "center", gap: 9 }}>
+        <Sparkles size={24} aria-hidden="true" />
+        Create with AI
+      </h1>
       <p>
         One prompt produces a validated unsaved definition. Nothing becomes
         durable until you select Apply.
@@ -105,7 +115,13 @@ export default function NewDashboardPage() {
                 .finally(() => setBusy(false));
             }}
           >
-            {busy ? "Applying…" : "Apply private dashboard"}
+            {busy ? (
+              <>
+                <DashboardSpinner size="small" /> Applying…
+              </>
+            ) : (
+              "Apply private dashboard"
+            )}
           </button>
           {preview.requires_custom_sql_confirmation &&
           !preview.custom_sql_confirmed ? (
@@ -143,6 +159,8 @@ export default function NewDashboardPage() {
             Discard
           </button>
         </section>
+      ) : projectsLoading ? (
+        <DashboardLoadingState label="Loading available projects…" page />
       ) : (
         <form
           style={{ display: "grid", gap: 14, marginTop: 24 }}
@@ -226,7 +244,13 @@ export default function NewDashboardPage() {
             disabled={busy || !projectId || !prompt.trim()}
             style={{ padding: 10 }}
           >
-            {busy ? "Generating and validating…" : "Generate governed preview"}
+            {busy ? (
+              <>
+                <DashboardSpinner size="small" /> Generating and validating…
+              </>
+            ) : (
+              "Generate governed preview"
+            )}
           </button>
         </form>
       )}

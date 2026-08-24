@@ -105,6 +105,7 @@ class DashboardSemanticField(DashboardModel):
     field_id: str
     column: str
     logical_type: str
+    label: str | None = None
     description: str | None = None
     tests: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)

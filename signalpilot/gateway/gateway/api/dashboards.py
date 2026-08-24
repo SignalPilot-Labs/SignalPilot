@@ -293,9 +293,7 @@ async def confirm_dashboard_authoring_custom_sql(session_id: str, store: StoreD)
     status_code=201,
     dependencies=[RequireScope("write")],
 )
-async def apply_dashboard_authoring_session(
-    session_id: str, body: DashboardAuthoringApplyRequest, store: StoreD
-):
+async def apply_dashboard_authoring_session(session_id: str, body: DashboardAuthoringApplyRequest, store: StoreD):
     row = await dashboard_store.get_authoring_session(
         store.session,
         org_id=store._require_org_id(),
@@ -454,7 +452,10 @@ async def _execute_dashboard_chart(
     if chart.query.kind == "sql" and not custom_sql_confirmed:
         raise HTTPException(
             status_code=409,
-            detail={"code": "custom_sql_confirmation_required", "message": "Confirm custom SQL before preview execution"},
+            detail={
+                "code": "custom_sql_confirmation_required",
+                "message": "Confirm custom SQL before preview execution",
+            },
         )
     tile = _tile_for_chart(parsed, chart_id, body.tile_uuid)
     context = await _verified_context(store, parsed)
@@ -539,6 +540,8 @@ async def _execute_dashboard_chart(
             status_code=500,
             detail={"code": "dashboard_output_mismatch", "missing_fields": output_check.missing},
         )
+    output_metadata = {str(column["name"]): column for column in compiled.output_columns}
+    result_columns = [{**output_metadata.get(str(column.get("name")), {}), **column} for column in result_columns]
     stored.owner_user_id = None
     stored.result_origin = "dashboard"
     stored.columns_json = result_columns
@@ -879,9 +882,7 @@ async def analyze_dashboard_chart(
     ).scalar_one_or_none()
     if project is None:
         raise HTTPException(status_code=409, detail="Dashboard project is unavailable for Data Chat")
-    readiness = await evaluate_project_readiness(
-        store.session, org_id=org_id, user_id=user_id, project=project
-    )
+    readiness = await evaluate_project_readiness(store.session, org_id=org_id, user_id=user_id, project=project)
     if not readiness.ready or not readiness.branch:
         raise HTTPException(status_code=409, detail="Dashboard project is not ready for Data Chat")
     conversation, _ = await chat_store.create_conversation_with_run(

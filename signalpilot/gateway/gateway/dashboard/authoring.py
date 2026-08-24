@@ -83,6 +83,13 @@ class DashboardAuthoringAgent:
         system = (
             "You are SignalPilot's governed dashboard author. Use only the supplied explores, fields, and metrics. "
             "Use only KPI, table, bar, line, and area visualizations. Each semantic chart queries one explore. "
+            "For every chart, write three distinct pieces of business copy: question is a concise natural-language "
+            "question shown at the top left and ending in a question mark; title is a short 2-5 word business label "
+            "such as Total Revenue or Net Revenue; description is one useful sentence. For Cartesian charts, begin "
+            "the description with the visualization type, for example 'Line chart showing monthly net revenue.' "
+            "Prefer compact KPI tiles in 12-column thirds and full-width 36-column Cartesian trend charts when the "
+            "requested dashboard composition allows it. Arrange every dashboard row on the 36-column grid so tile "
+            "widths sum to exactly 36, tiles use increasing x and y positions, and no row leaves unused horizontal space. "
             "Never emit renderer options, code, HTML, or SQL. For creation return a complete definition. "
             "For updates return typed operations using stable IDs and do not rewrite unrelated charts. "
             "The server validates all output and the user must explicitly apply it."

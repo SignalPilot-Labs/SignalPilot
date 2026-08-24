@@ -6,34 +6,10 @@ import type {
   LightdashField,
   LightdashResultValue,
 } from "~/lib/dashboard/contracts";
-
-function formatValue(value: unknown, column: DashboardResultColumn): string {
-  if (value === null || value === undefined) return "—";
-
-  if (column.logicalType === "number" && typeof value === "number") {
-    return new Intl.NumberFormat("en-US", {
-      maximumFractionDigits: 2,
-    }).format(value);
-  }
-
-  if (
-    (column.logicalType === "date" || column.logicalType === "timestamp") &&
-    (typeof value === "string" || value instanceof Date)
-  ) {
-    const date = value instanceof Date ? value : new Date(value);
-    if (!Number.isNaN(date.valueOf())) {
-      return new Intl.DateTimeFormat("en-US", {
-        dateStyle: "medium",
-      }).format(date);
-    }
-  }
-
-  if (column.logicalType === "boolean" && typeof value === "boolean") {
-    return value ? "Yes" : "No";
-  }
-
-  return String(value);
-}
+import {
+  fieldLabel,
+  formatDashboardCell,
+} from "~/lib/dashboard/semantic-formatter";
 
 export function toLightdashCartesianInput(
   result: DashboardQueryResult,
@@ -61,9 +37,11 @@ export function toLightdashCartesianInput(
         field,
         {
           fieldId: field,
-          label: column.label ?? field,
+          label: column.label ?? fieldLabel(field),
           type: column.logicalType,
           role: field === layout.xField ? "dimension" : "metric",
+          format: column.format,
+          currencyCode: column.currencyCode,
         },
       ];
     }),
@@ -75,7 +53,7 @@ export function toLightdashCartesianInput(
         const column = columns.get(field)!;
         const value: LightdashResultValue = {
           raw: row[field],
-          formatted: formatValue(row[field], column),
+          formatted: formatDashboardCell(row[field], column, result),
         };
         return [field, { value }];
       }),
@@ -89,5 +67,7 @@ export function toLightdashCartesianInput(
     yFields: layout.yField,
     rows,
     fields,
+    locale: result.locale,
+    timezone: result.timezone,
   };
 }

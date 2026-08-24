@@ -808,6 +808,13 @@ async def init_db() -> None:
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(GatewayBase.metadata.create_all)
+        if conn.dialect.name == "postgresql":
+            await conn.execute(
+                text(
+                    "ALTER TABLE gateway_dashboard_versions "
+                    "ADD COLUMN IF NOT EXISTS authoring_provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb"
+                )
+            )
     await _ensure_key_version_column(engine)
     await _ensure_expires_at_column(engine)
     await _ensure_byok_columns(engine)

@@ -1388,12 +1388,46 @@ class GatewayDashboardVersion(GatewayBase):
     commit_sha: Mapped[str] = mapped_column(String(40), nullable=False)
     semantic_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     connection_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    authoring_provenance_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
 
     __table_args__ = (
         UniqueConstraint("dashboard_id", "ordinal", name="uq_gw_dashboard_version_ordinal"),
         UniqueConstraint("dashboard_id", "content_hash", name="uq_gw_dashboard_version_content"),
         Index("ix_gw_dashboard_versions_dashboard", "org_id", "dashboard_id", "ordinal"),
+    )
+
+
+class GatewayDashboardAuthoringSession(GatewayBase):
+    """Private unsaved agent draft; each prompt starts a fresh session."""
+
+    __tablename__ = "gateway_dashboard_authoring_sessions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    dashboard_id: Mapped[str | None] = mapped_column(String)
+    base_version_id: Mapped[str | None] = mapped_column(String)
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    owner_user_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    connection_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    commit_sha: Mapped[str] = mapped_column(String(40), nullable=False)
+    semantic_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    definition_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    operations_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    agent_run_id: Mapped[str] = mapped_column(String, nullable=False)
+    model: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="preview", server_default="preview")
+    requires_custom_sql_confirmation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    custom_sql_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    applied_version_id: Mapped[str | None] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
+    applied_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+
+    __table_args__ = (
+        Index("ix_gw_dashboard_authoring_owner", "org_id", "owner_user_id", "created_at"),
+        Index("ix_gw_dashboard_authoring_dashboard", "org_id", "dashboard_id", "created_at"),
     )
 
 

@@ -11,6 +11,48 @@ import pytest
 from gateway.standalone_chat import worker
 
 
+def test_dashboard_chart_reference_is_preloaded_into_existing_chat_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference = {
+        "dashboard_id": "dashboard-a",
+        "dashboard_version_id": "version-a",
+        "dashboard_result_id": "result-a",
+        "execution_id": "execution-a",
+    }
+    context = {
+        "conversation": SimpleNamespace(
+            branch="main",
+            commit_sha="a" * 40,
+            internal_summary=None,
+        ),
+        "project": SimpleNamespace(
+            id="project-a",
+            name="pilot",
+            display_name="Pilot",
+            description=None,
+            connection_name="production",
+        ),
+        "messages": [
+            SimpleNamespace(
+                role="user",
+                metadata_json={"dashboard_chart_reference": reference},
+            )
+        ],
+        "artifacts": [],
+        "query_approvals": [],
+        "query_proposals": [],
+        "query_executions": [],
+        "query_results": [],
+    }
+    monkeypatch.setattr(worker, "project_metadata_context", lambda *_args: {"models": []})
+
+    warm = worker._warm_context(context)
+
+    assert warm["dashboard_chart_reference"] == reference
+    assert warm["project"]["commit_sha"] == "a" * 40
+
+
 @pytest.mark.asyncio
 async def test_cancellation_monitor_interrupts_the_active_worker_task(
     monkeypatch: pytest.MonkeyPatch,

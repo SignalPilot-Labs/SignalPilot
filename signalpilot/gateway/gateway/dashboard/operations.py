@@ -1,0 +1,274 @@
+"""Typed dashboard authoring operations and semantic validation."""
+
+from __future__ import annotations
+
+from typing import Annotated, Literal
+
+from pydantic import Field, TypeAdapter
+
+from gateway.dashboard.compiler import compile_metric_query
+from gateway.dashboard.domain import (
+    ChartDefinition,
+    ContractModel,
+    DashboardDefinition,
+    DashboardFilterRule,
+    DashboardTileDefinition,
+    SemanticChartQuery,
+)
+from gateway.models.dashboards import DashboardSemanticContext
+
+
+class RenameDashboard(ContractModel):
+    operation: Literal["rename_dashboard"]
+    name: str = Field(min_length=1, max_length=200)
+
+
+class AddChart(ContractModel):
+    operation: Literal["add_chart"]
+    chart: ChartDefinition
+    tile: DashboardTileDefinition
+
+
+class RemoveChart(ContractModel):
+    operation: Literal["remove_chart"]
+    chart_id: str = Field(min_length=1)
+
+
+class ReplaceMetric(ContractModel):
+    operation: Literal["replace_metric"]
+    chart_id: str = Field(min_length=1)
+    old_metric: str = Field(min_length=1)
+    new_metric: str = Field(min_length=1)
+
+
+class DimensionOperation(ContractModel):
+    operation: Literal["add_dimension", "remove_dimension"]
+    chart_id: str = Field(min_length=1)
+    dimension: str = Field(min_length=1)
+
+
+class AddFilterControl(ContractModel):
+    operation: Literal["add_filter_control"]
+    filter: DashboardFilterRule
+
+
+class ChangeVisualization(ContractModel):
+    operation: Literal["change_visualization"]
+    chart_id: str = Field(min_length=1)
+    visualization: Literal["kpi", "table", "bar", "line", "area"]
+
+
+class MoveChart(ContractModel):
+    operation: Literal["move_chart"]
+    tile_uuid: str = Field(min_length=1)
+    x: int = Field(ge=0, le=35)
+    y: int = Field(ge=0)
+
+
+class ResizeChart(ContractModel):
+    operation: Literal["resize_chart"]
+    tile_uuid: str = Field(min_length=1)
+    w: int = Field(ge=1, le=36)
+    h: int = Field(ge=1)
+
+
+class DescribeChart(ContractModel):
+    operation: Literal["describe_chart"]
+    chart_id: str = Field(min_length=1)
+    description: str = Field(min_length=1, max_length=1000)
+
+
+DashboardOperation = Annotated[
+    RenameDashboard
+    | AddChart
+    | RemoveChart
+    | ReplaceMetric
+    | DimensionOperation
+    | AddFilterControl
+    | ChangeVisualization
+    | MoveChart
+    | ResizeChart
+    | DescribeChart,
+    Field(discriminator="operation"),
+]
+dashboard_operation_adapter = TypeAdapter(list[DashboardOperation])
+
+
+def _chart_index(definition: DashboardDefinition, chart_id: str) -> int:
+    index = next((index for index, chart in enumerate(definition.charts) if chart.id == chart_id), None)
+    if index is None:
+        raise ValueError(f"Unknown chart: {chart_id}")
+    return index
+
+
+def _tile_index(definition: DashboardDefinition, tile_uuid: str) -> int:
+    index = next((index for index, tile in enumerate(definition.tiles) if tile.uuid == tile_uuid), None)
+    if index is None:
+        raise ValueError(f"Unknown tile: {tile_uuid}")
+    return index
+
+
+def apply_dashboard_operations(
+    definition: DashboardDefinition,
+    operations: list[DashboardOperation] | list[dict],
+) -> DashboardDefinition:
+    """Apply stable-ID mutations while leaving unrelated charts untouched."""
+    parsed = dashboard_operation_adapter.validate_python(operations)
+    current = definition
+    for operation in parsed:
+        if isinstance(operation, RenameDashboard):
+            current = current.model_copy(update={"name": operation.name})
+            continue
+        if isinstance(operation, AddChart):
+            if operation.chart.id in {chart.id for chart in current.charts}:
+                raise ValueError(f"Chart already exists: {operation.chart.id}")
+            if operation.tile.uuid in {tile.uuid for tile in current.tiles}:
+                raise ValueError(f"Tile already exists: {operation.tile.uuid}")
+            if operation.tile.chartId != operation.chart.id:
+                raise ValueError("Added tile must reference the added chart")
+            current = current.model_copy(
+                update={"charts": [*current.charts, operation.chart], "tiles": [*current.tiles, operation.tile]}
+            )
+            continue
+        if isinstance(operation, RemoveChart):
+            _chart_index(current, operation.chart_id)
+            charts = [chart for chart in current.charts if chart.id != operation.chart_id]
+            tiles = [tile for tile in current.tiles if tile.chartId != operation.chart_id]
+            if not charts:
+                raise ValueError("A dashboard must retain at least one chart")
+            current = current.model_copy(update={"charts": charts, "tiles": tiles})
+            continue
+        if isinstance(operation, AddFilterControl):
+            filters = current.filters
+            if operation.filter.id in {item.id for item in filters.dimensions}:
+                raise ValueError(f"Filter already exists: {operation.filter.id}")
+            current = current.model_copy(
+                update={"filters": filters.model_copy(update={"dimensions": [*filters.dimensions, operation.filter]})}
+            )
+            continue
+        if isinstance(operation, (MoveChart, ResizeChart)):
+            index = _tile_index(current, operation.tile_uuid)
+            tile = current.tiles[index]
+            update = (
+                {"x": operation.x, "y": operation.y}
+                if isinstance(operation, MoveChart)
+                else {"w": operation.w, "h": operation.h}
+            )
+            tiles = list(current.tiles)
+            tiles[index] = tile.model_copy(update=update)
+            current = current.model_copy(update={"tiles": tiles})
+            continue
+
+        index = _chart_index(current, operation.chart_id)
+        chart = current.charts[index]
+        if isinstance(operation, DescribeChart):
+            updated_chart = chart.model_copy(update={"description": operation.description})
+        else:
+            if not isinstance(chart.query, SemanticChartQuery):
+                raise ValueError(f"{operation.operation} requires a semantic chart")
+            query = chart.query
+            visualization = chart.visualization.model_dump(mode="json", by_alias=True, exclude_none=True)
+            if isinstance(operation, ReplaceMetric):
+                if operation.old_metric not in query.metrics:
+                    raise ValueError(f"Metric is not used by chart: {operation.old_metric}")
+                metrics = [operation.new_metric if item == operation.old_metric else item for item in query.metrics]
+                query = query.model_copy(update={"metrics": metrics})
+                if visualization["type"] == "big_number":
+                    if visualization["config"]["field"] == operation.old_metric:
+                        visualization["config"]["field"] = operation.new_metric
+                elif visualization["type"] == "table":
+                    visualization["config"]["columns"] = [
+                        operation.new_metric if item == operation.old_metric else item
+                        for item in visualization["config"]["columns"]
+                    ]
+                else:
+                    visualization["config"]["layout"]["yField"] = [
+                        operation.new_metric if item == operation.old_metric else item
+                        for item in visualization["config"]["layout"]["yField"]
+                    ]
+            elif isinstance(operation, DimensionOperation):
+                dimensions = list(query.dimensions)
+                if operation.operation == "add_dimension" and operation.dimension not in dimensions:
+                    dimensions.append(operation.dimension)
+                elif operation.operation == "remove_dimension":
+                    if operation.dimension not in dimensions:
+                        raise ValueError(f"Dimension is not used by chart: {operation.dimension}")
+                    dimensions.remove(operation.dimension)
+                query = query.model_copy(update={"dimensions": dimensions})
+                if visualization["type"] == "table":
+                    columns = list(visualization["config"]["columns"])
+                    if operation.operation == "add_dimension" and operation.dimension not in columns:
+                        columns.insert(0, operation.dimension)
+                    elif operation.operation == "remove_dimension":
+                        columns = [item for item in columns if item != operation.dimension]
+                    visualization["config"]["columns"] = columns
+                elif (
+                    visualization["type"] == "cartesian"
+                    and operation.operation == "remove_dimension"
+                    and visualization["config"]["layout"]["xField"] == operation.dimension
+                ):
+                    if not dimensions:
+                        raise ValueError("Cannot remove the encoded Cartesian dimension")
+                    visualization["config"]["layout"]["xField"] = dimensions[0]
+            elif isinstance(operation, ChangeVisualization):
+                outputs = [*query.dimensions, *query.metrics]
+                if operation.visualization == "kpi":
+                    visualization = {"type": "big_number", "config": {"field": query.metrics[0]}}
+                elif operation.visualization == "table":
+                    visualization = {"type": "table", "config": {"columns": outputs}}
+                else:
+                    if not query.dimensions:
+                        raise ValueError("Cartesian charts require a dimension")
+                    visualization = {
+                        "type": "cartesian",
+                        "config": {
+                            "seriesType": operation.visualization,
+                            "layout": {"xField": query.dimensions[0], "yField": query.metrics},
+                        },
+                    }
+                updated_chart = chart.model_copy(update={"query": query, "visualization": visualization})
+                charts = list(current.charts)
+                charts[index] = ChartDefinition.model_validate(
+                    updated_chart.model_dump(mode="json", by_alias=True, exclude_none=True)
+                )
+                current = current.model_copy(update={"charts": charts})
+                continue
+            chart_payload = chart.model_dump(mode="json", by_alias=True, exclude_none=True)
+            chart_payload["query"] = query.model_dump(mode="json", by_alias=True, exclude_none=True)
+            chart_payload["visualization"] = visualization
+            updated_chart = ChartDefinition.model_validate(chart_payload)
+        charts = list(current.charts)
+        charts[index] = updated_chart
+        current = current.model_copy(update={"charts": charts})
+
+    return DashboardDefinition.model_validate(current.model_dump(mode="json", by_alias=True, exclude_none=True))
+
+
+def validate_dashboard_semantics(definition: DashboardDefinition, context: DashboardSemanticContext) -> None:
+    """Reject hallucinated explores, dimensions, and metrics before preview or save."""
+    fields_by_explore = {
+        explore.name: {
+            *(field.field_id for field in explore.dimensions),
+            *(metric.field_id for metric in explore.metrics),
+        }
+        for explore in context.explores
+    }
+    for chart in definition.charts:
+        if isinstance(chart.query, SemanticChartQuery):
+            compile_metric_query(chart.query, context)
+            valid_fields = fields_by_explore.get(chart.query.exploreName, set())
+            for field_id in chart.signalPilot.drillDimensions or []:
+                if field_id not in valid_fields:
+                    raise ValueError(f"Unknown drill field: {field_id}")
+            for field_id in chart.signalPilot.tableGroups or []:
+                if field_id not in valid_fields:
+                    raise ValueError(f"Unknown table group field: {field_id}")
+    for rule in definition.filters.dimensions:
+        targets = [rule.target, *(target for target in (rule.tileTargets or {}).values() if target is not False)]
+        for target in targets:
+            if target.tableName not in fields_by_explore or target.fieldId not in fields_by_explore[target.tableName]:
+                raise ValueError(f"Unknown dashboard filter target: {target.tableName}.{target.fieldId}")
+
+
+def has_custom_sql(definition: DashboardDefinition) -> bool:
+    return any(chart.query.kind == "sql" for chart in definition.charts)

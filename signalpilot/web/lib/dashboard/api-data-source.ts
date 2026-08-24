@@ -36,6 +36,7 @@ export class DashboardApiDataSource implements DashboardDataSource {
       chart: ChartDefinition,
       receipt: DashboardQueryReceipt,
     ) => void,
+    private readonly authoringSessionId?: string,
   ) {}
 
   async loadTile(
@@ -44,23 +45,25 @@ export class DashboardApiDataSource implements DashboardDataSource {
     options: DashboardQueryOptions,
     signal: AbortSignal,
   ): Promise<DashboardQueryResult> {
-    const receipt = await request<DashboardQueryReceipt>(
-      `/api/dashboards/${this.dashboardId}/charts/${chart.id}/query`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          version_id: this.versionId,
-          tile_uuid: tile.uuid,
-          refresh: options.invalidateCache ?? false,
-          dashboard_filters: options.dashboardFilters ?? [],
-          drill_path: (options.dashboardDrillPath ?? []).map((step) => ({
-            field_id: step.fieldId,
-            value: step.value,
-          })),
-        }),
-        signal,
-      },
-    );
+    const queryPath =
+      this.dashboardId.startsWith("draft:") && this.authoringSessionId
+        ? `/api/dashboard-authoring/sessions/${this.authoringSessionId}/charts/${chart.id}/query`
+        : `/api/dashboards/${this.dashboardId}/charts/${chart.id}/query`;
+    const receipt = await request<DashboardQueryReceipt>(queryPath, {
+      method: "POST",
+      body: JSON.stringify({
+        version_id: this.versionId,
+        authoring_session_id: this.authoringSessionId,
+        tile_uuid: tile.uuid,
+        refresh: options.invalidateCache ?? false,
+        dashboard_filters: options.dashboardFilters ?? [],
+        drill_path: (options.dashboardDrillPath ?? []).map((step) => ({
+          field_id: step.fieldId,
+          value: step.value,
+        })),
+      }),
+      signal,
+    });
     this.onReceipt?.(chart, receipt);
     return {
       resultId: receipt.dashboard_result_id,

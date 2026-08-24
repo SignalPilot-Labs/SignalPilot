@@ -142,6 +142,16 @@ def _warm_context(
         ),
         None,
     )
+    dashboard_chart_reference = next(
+        (
+            message.metadata_json.get("dashboard_chart_reference")
+            for message in reversed(context.get("messages", []))
+            if message.role == "user"
+            and isinstance(message.metadata_json, dict)
+            and isinstance(message.metadata_json.get("dashboard_chart_reference"), dict)
+        ),
+        None,
+    )
     return {
         "project": {
             "id": project.id,
@@ -157,6 +167,7 @@ def _warm_context(
         "query_decisions": query_decisions,
         "structured_results": result_refs,
         "report_reference": report_reference,
+        "dashboard_chart_reference": dashboard_chart_reference,
         "runtime": {
             "gateway_version": gateway_version,
             "plugin_version": os.getenv("SIGNALPILOT_PLUGIN_VERSION", "deployed"),

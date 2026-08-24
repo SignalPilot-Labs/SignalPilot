@@ -24,6 +24,7 @@ export function DashboardChartTile({
   drillContext,
   onDrillUp,
   onExpandRow,
+  onAnalyze,
 }: {
   chart: ChartDefinition;
   result?: DashboardQueryResult;
@@ -37,6 +38,7 @@ export function DashboardChartTile({
   drillContext?: string;
   onDrillUp?: () => void;
   onExpandRow?: (row: Record<string, unknown>) => Promise<DashboardQueryResult>;
+  onAnalyze?: () => void;
 }) {
   const [showData, setShowData] = useState(false);
   return (
@@ -93,6 +95,11 @@ export function DashboardChartTile({
         >
           View data
         </button>
+        {onAnalyze ? (
+          <button type="button" disabled={!result} onClick={onAnalyze}>
+            Analyze this change
+          </button>
+        ) : null}
         {onDrill ? (
           <button
             type="button"

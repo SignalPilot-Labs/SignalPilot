@@ -23,8 +23,19 @@ export default function DashboardsPage() {
   }, []);
   return (
     <main style={{ padding: 32, maxWidth: 1000, margin: "0 auto" }}>
-      <h1>Dashboards</h1>
-      <p>Private, governed, immutable dashboard versions.</p>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
+        <div>
+          <h1>Dashboards</h1>
+          <p>Private, governed, immutable dashboard versions.</p>
+        </div>
+        <Link href="/dashboards/new">Create with AI</Link>
+      </div>
       {error ? <p>{error}</p> : null}
       <div style={{ display: "grid", gap: 12, marginTop: 24 }}>
         {items.map((item) => (

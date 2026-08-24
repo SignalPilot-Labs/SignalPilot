@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { DashboardChartTile } from "~/components/dashboard/dashboard-chart-tile";
+import { DashboardAnalysisDialog } from "~/components/dashboard/dashboard-analysis-dialog";
 import { DashboardControlBar } from "~/components/dashboard/dashboard-control-bar";
 import { DashboardInspector } from "~/components/dashboard/dashboard-inspector";
 import {
@@ -41,10 +42,18 @@ export function DashboardRuntimeProvider({
   dashboardId,
   versionId,
   definition,
+  authoringSessionId,
+  onVisibleReceiptsChange,
+  analysisEnabled = true,
 }: {
   dashboardId: string;
   versionId: string;
   definition: DashboardDefinition;
+  authoringSessionId?: string;
+  onVisibleReceiptsChange?: (
+    receipts: Record<string, DashboardQueryReceipt>,
+  ) => void;
+  analysisEnabled?: boolean;
 }) {
   const [runtimeState, setRuntimeState] = useState(() =>
     typeof window === "undefined"
@@ -68,13 +77,34 @@ export function DashboardRuntimeProvider({
   const [selectedMarks, setSelectedMarks] = useState<
     Record<string, Record<string, unknown>>
   >({});
+  const [analysisChartId, setAnalysisChartId] = useState<string>();
+  const previousDefinition = useRef(definition);
   const dataSource = useMemo(
     () =>
-      new DashboardApiDataSource(dashboardId, versionId, (chart, receipt) =>
-        setReceipts((current) => ({ ...current, [chart.id]: receipt })),
+      new DashboardApiDataSource(
+        dashboardId,
+        versionId,
+        (chart, receipt) =>
+          setReceipts((current) => ({ ...current, [chart.id]: receipt })),
+        authoringSessionId,
       ),
-    [dashboardId, versionId],
+    [authoringSessionId, dashboardId, versionId],
   );
+
+  useEffect(() => {
+    if (previousDefinition.current === definition) return;
+    previousDefinition.current = definition;
+    setRuntimeState(initialDashboardRuntimeState(definition));
+    setResults({});
+    setErrors({});
+    setReceipts({});
+    setSelectedMarks({});
+    setSelectedChartId(definition.charts[0]?.id);
+  }, [definition]);
+
+  useEffect(() => {
+    onVisibleReceiptsChange?.(receipts);
+  }, [onVisibleReceiptsChange, receipts]);
 
   useEffect(() => {
     const next = runtimeStateSearchParams(definition, runtimeState);
@@ -335,6 +365,11 @@ export function DashboardRuntimeProvider({
                         }
                       : undefined
                   }
+                  onAnalyze={
+                    analysisEnabled && result && receipts[chart.id]
+                      ? () => setAnalysisChartId(chart.id)
+                      : undefined
+                  }
                 />
               </div>
             );
@@ -344,6 +379,33 @@ export function DashboardRuntimeProvider({
       <DashboardInspector
         receipt={selectedChartId ? receipts[selectedChartId] : undefined}
       />
+      {analysisChartId
+        ? (() => {
+            const chart = definition.charts.find(
+              (item) => item.id === analysisChartId,
+            );
+            const tile = definition.tiles.find(
+              (item) => item.chartId === analysisChartId,
+            );
+            const result = results[analysisChartId];
+            const receipt = receipts[analysisChartId];
+            if (!chart || !tile || !result || !receipt) return null;
+            return (
+              <DashboardAnalysisDialog
+                dashboardId={dashboardId}
+                versionId={versionId}
+                tileUuid={tile.uuid}
+                chart={chartForAvailableResult(chart, result)}
+                result={result}
+                dashboardResultId={receipt.dashboard_result_id}
+                filters={runtimeState.filters}
+                drillPath={runtimeState.drills[chart.id] ?? []}
+                selectedMark={selectedMarks[chart.id] ?? {}}
+                onClose={() => setAnalysisChartId(undefined)}
+              />
+            );
+          })()
+        : null}
     </div>
   );
 }

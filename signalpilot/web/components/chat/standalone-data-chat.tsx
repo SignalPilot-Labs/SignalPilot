@@ -1121,7 +1121,9 @@ function ConversationRail({
                   <span className="min-w-0 flex-1 truncate">
                     {conversation.title}
                   </span>
-                  {isImprovementConversation(conversation) && <AutomatedBadge />}
+                  {isImprovementConversation(conversation) && (
+                    <AutomatedBadge />
+                  )}
                   {loadingConversationId === conversation.id && (
                     <Loader2 className="h-3 w-3 flex-none animate-spin text-[var(--color-text-dim)]" />
                   )}
@@ -1304,8 +1306,10 @@ function ConversationMessagesSkeleton() {
 
 export function StandaloneDataChat({
   conversationId,
+  embedded = false,
 }: {
   conversationId?: string;
+  embedded?: boolean;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -1354,7 +1358,8 @@ export function StandaloneDataChat({
   const [perQueryBudgetUsd, setPerQueryBudgetUsd] = useState(0.25);
   const [chatBudgetUsd, setChatBudgetUsd] = useState(1);
   const [draft, setDraft] = useState("");
-  const [isConversationRailOpen, setIsConversationRailOpen] = useState(true);
+  const [isConversationRailOpen, setIsConversationRailOpen] =
+    useState(!embedded);
   const [pendingSubmission, setPendingSubmission] =
     useState<OptimisticUserMessage | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1921,8 +1926,7 @@ export function StandaloneDataChat({
     (id: string): Promise<StandaloneConversationDetail> => {
       const key = `standalone-chat-conversation:${id}`;
       const cached = cache.get(key) as
-        | { data?: StandaloneConversationDetail }
-        | undefined;
+        { data?: StandaloneConversationDetail } | undefined;
       if (cached?.data) return Promise.resolve(cached.data);
       const existing = conversationPrefetches.current.get(id);
       if (existing) return existing;
@@ -2137,24 +2141,32 @@ export function StandaloneDataChat({
         onApproveReportSuggestion,
       }}
     >
-      <div className="h-screen min-w-[960px] overflow-hidden p-4">
+      <div
+        className={
+          embedded
+            ? "h-full min-w-0 overflow-hidden"
+            : "h-screen min-w-[960px] overflow-hidden p-4"
+        }
+      >
         <div className="relative flex h-full overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)] shadow-2xl shadow-black/20">
-          <button
-            type="button"
-            aria-label={
-              isConversationRailOpen
-                ? "Collapse chat history"
-                : "Expand chat history"
-            }
-            aria-expanded={isConversationRailOpen}
-            onClick={() => setIsConversationRailOpen((isOpen) => !isOpen)}
-            className={`absolute top-3 z-30 flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-dim)] shadow-lg shadow-black/20 transition-[left,color,background-color] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] ${
-              isConversationRailOpen ? "left-[17rem]" : "left-3"
-            }`}
-          >
-            <PanelLeft className="h-4 w-4" />
-          </button>
-          {isConversationRailOpen && (
+          {!embedded && (
+            <button
+              type="button"
+              aria-label={
+                isConversationRailOpen
+                  ? "Collapse chat history"
+                  : "Expand chat history"
+              }
+              aria-expanded={isConversationRailOpen}
+              onClick={() => setIsConversationRailOpen((isOpen) => !isOpen)}
+              className={`absolute top-3 z-30 flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-dim)] shadow-lg shadow-black/20 transition-[left,color,background-color] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] ${
+                isConversationRailOpen ? "left-[17rem]" : "left-3"
+              }`}
+            >
+              <PanelLeft className="h-4 w-4" />
+            </button>
+          )}
+          {!embedded && isConversationRailOpen && (
             <ConversationRail
               conversations={conversations}
               activeId={conversationId}
@@ -2175,7 +2187,8 @@ export function StandaloneDataChat({
             />
           )}
           <main className="relative flex min-w-0 flex-1 flex-col">
-            {conversationId &&
+            {!embedded &&
+              conversationId &&
               detail &&
               bootstrap.enterprise_features.organization_sharing && (
                 <button

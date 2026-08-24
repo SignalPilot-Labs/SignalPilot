@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -42,6 +43,7 @@ class DashboardVersionInfo(DashboardModel):
     semantic_fingerprint: str
     created_at: datetime
     definition: DashboardDefinition
+    authoring_provenance: dict[str, Any] = Field(default_factory=dict)
 
 
 class DashboardDetail(DashboardModel):
@@ -51,6 +53,7 @@ class DashboardDetail(DashboardModel):
 
 class DashboardQueryRequest(DashboardModel):
     version_id: str | None = None
+    authoring_session_id: str | None = None
     refresh: bool = False
     tile_uuid: str | None = None
     dashboard_filters: list[DashboardRuntimeFilter] | None = None
@@ -135,3 +138,66 @@ class DashboardSemanticContext(DashboardModel):
     explores: list[DashboardSemanticExplore]
     verification_refs: list[str] = Field(default_factory=list)
     eval_refs: list[str] = Field(default_factory=list)
+
+
+class DashboardAuthoringRequest(DashboardModel):
+    prompt: str = Field(min_length=1, max_length=50_000)
+    dashboard_id: str | None = None
+    base_version_id: str | None = None
+    project_id: str | None = None
+    commit_sha: str | None = Field(default=None, min_length=40, max_length=40)
+    branch: str | None = Field(default=None, min_length=1, max_length=100)
+    timezone: str = Field(default="UTC", min_length=1, max_length=100)
+    confirm_custom_sql: bool = False
+
+
+class DashboardAuthoringSessionInfo(DashboardModel):
+    id: str
+    dashboard_id: str | None
+    base_version_id: str | None
+    definition: DashboardDefinition
+    operations: list[dict[str, Any]]
+    summary: str
+    agent_run_id: str
+    model: str
+    status: str
+    requires_custom_sql_confirmation: bool
+    custom_sql_confirmed: bool
+    created_at: datetime
+
+
+class DashboardAuthoringApplyRequest(DashboardModel):
+    expected_current_version_id: str | None = None
+    visible_complete_result_ids: list[str] = Field(default_factory=list, max_length=100)
+
+
+class DashboardChartReference(DashboardModel):
+    dashboard_id: str
+    dashboard_version_id: str
+    tile_uuid: str
+    chart_id: str
+    dashboard_result_id: str
+    execution_id: str
+    dashboard_filters: list[DashboardRuntimeFilter] = Field(default_factory=list)
+    date_window: dict[str, Any] | None = None
+    drill_path: list[DashboardDrillStep] = Field(default_factory=list)
+    selected_mark: dict[str, Any] = Field(default_factory=dict)
+    semantic_references: dict[str, Any]
+    receipt: dict[str, Any]
+    result: dict[str, Any]
+    provenance_ref: str
+
+
+class DashboardAnalyzeRequest(DashboardModel):
+    version_id: str
+    tile_uuid: str
+    dashboard_result_id: str
+    dashboard_filters: list[DashboardRuntimeFilter] = Field(default_factory=list)
+    drill_path: list[DashboardDrillStep] = Field(default_factory=list)
+    selected_mark: dict[str, Any] = Field(default_factory=dict)
+    message: str = Field(min_length=1, max_length=50_000)
+
+
+class DashboardAnalyzeResponse(DashboardModel):
+    conversation_id: str
+    chart_reference: DashboardChartReference

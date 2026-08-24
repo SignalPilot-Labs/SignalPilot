@@ -242,6 +242,125 @@
   text-align: left;
   font-size: 12px;
 }
+.authoringLauncher {
+  position: fixed;
+  z-index: 40;
+  right: 24px;
+  bottom: 24px;
+  border: 1px solid var(--color-border-active);
+  border-radius: 999px;
+  background: var(--color-bg-elevated);
+  color: var(--color-text);
+  padding: 10px 16px;
+  box-shadow: 0 12px 40px rgb(0 0 0 / 35%);
+  cursor: pointer;
+}
+.authoringPanel {
+  position: fixed;
+  z-index: 50;
+  top: 16px;
+  right: 16px;
+  bottom: 16px;
+  width: min(420px, calc(100vw - 32px));
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-bg-elevated);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 55%);
+  padding: 18px;
+}
+.authoringPanel header,
+.authoringPreview > div,
+.analysisDialogPanel > header,
+.analysisDialogPanel > header > div:last-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.authoringPanel header span,
+.analysisDialogPanel header span {
+  color: var(--color-text-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.authoringPanel h2,
+.analysisDialogPanel h2 {
+  margin: 4px 0 0;
+  font-size: 16px;
+}
+.authoringPanel button,
+.authoringPanel textarea,
+.analysisDialogPanel button,
+.analysisDialogPanel textarea,
+.analysisDialogPanel a {
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  padding: 8px 10px;
+}
+.authoringPanel form {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+.authoringPanel form label {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+.authoringPanel form p,
+.authoringPreview p {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.authoringPreview {
+  margin-top: 18px;
+  border: 1px solid var(--color-border-active);
+  border-radius: 10px;
+  padding: 12px;
+}
+.analysisDialog {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  padding: 3vh 4vw;
+  background: rgb(0 0 0 / 76%);
+  backdrop-filter: blur(5px);
+}
+.analysisDialogPanel {
+  display: grid;
+  grid-template-rows: auto 240px minmax(0, 1fr);
+  gap: 12px;
+  height: 94vh;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: var(--color-bg-elevated);
+  padding: 16px;
+}
+.frozenChart {
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-card);
+  padding: 12px;
+}
+.analysisChat {
+  min-height: 0;
+}
+.analysisChat form {
+  display: grid;
+  gap: 10px;
+  max-width: 760px;
+  margin: 24px auto;
+}
+.analysisChat form p {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
 .inspector {
   border-left: 1px solid var(--color-border);
   background: var(--color-bg-card);

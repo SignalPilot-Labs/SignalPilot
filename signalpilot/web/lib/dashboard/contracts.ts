@@ -1,5 +1,10 @@
 export type DashboardLogicalType =
-  "string" | "number" | "boolean" | "date" | "timestamp" | "unknown";
+  | "string"
+  | "number"
+  | "boolean"
+  | "date"
+  | "timestamp"
+  | "unknown";
 
 export type DashboardResultColumn = {
   name: string;
@@ -15,11 +20,13 @@ export type DashboardQueryResult = {
   rows: Record<string, unknown>[];
   completeness: "complete" | "truncated" | "unknown";
   freshnessAt: string;
+  cacheState?: "fresh" | "stale" | "miss" | "refreshed";
 };
 
 import type {
   ChartDefinition,
   DashboardDefinition,
+  DashboardFilterRule,
   DashboardTileDefinition,
 } from "~/dashboard/lightdash-contract";
 
@@ -51,6 +58,21 @@ export type DashboardFilter = {
 export type DashboardQueryOptions = {
   filters: DashboardFilter[];
   drillPath: Array<{ field: string; value: unknown }>;
+  dashboardFilters?: DashboardRuntimeFilter[];
+  dashboardDrillPath?: DashboardDrillStep[];
+  invalidateCache?: boolean;
+};
+
+export type DashboardRuntimeFilter = {
+  id: string;
+  operator: DashboardFilterRule["operator"];
+  values?: Array<string | number | boolean | null>;
+  settings?: DashboardFilterRule["settings"];
+};
+
+export type DashboardDrillStep = {
+  fieldId: string;
+  value: string | number | boolean | null;
 };
 
 export type DashboardChartReference = {

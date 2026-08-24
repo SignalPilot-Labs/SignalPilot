@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -325,10 +326,14 @@ class GovernedQueryExecutor:
                         normalized_sql=normalized_sql,
                         connection_name=connection_name,
                         query_path=context.path,
-                        purpose=(persisted_plan.purpose if persisted_plan is not None else "Run a governed analysis query"),
+                        purpose=(
+                            persisted_plan.purpose if persisted_plan is not None else "Run a governed analysis query"
+                        ),
                         timeout_seconds=timeout_seconds,
                         estimated_cost_usd=execution.estimated_cost_usd,
-                        estimate_quality=(persisted_plan.estimate_quality if persisted_plan is not None else estimate.quality),
+                        estimate_quality=(
+                            persisted_plan.estimate_quality if persisted_plan is not None else estimate.quality
+                        ),
                         estimate_json={
                             "estimated_scan_rows": estimate.estimated_scan_rows,
                             "estimated_scan_bytes": estimate.estimated_scan_bytes,
@@ -364,6 +369,10 @@ class GovernedQueryExecutor:
                     )
                 try:
                     rows = await connector.execute(safe_sql, params=parameters, timeout=timeout_seconds)
+                except asyncio.CancelledError:
+                    with suppress(Exception):
+                        await connector.cancel_current_query()
+                    raise
                 except Exception:
                     with suppress(Exception):
                         await connector.cancel_current_query()
@@ -372,6 +381,16 @@ class GovernedQueryExecutor:
                     self._active_connectors.pop(execution.id, None)
                 execution.warehouse_query_id = connector.get_last_query_id()
                 native_stats = connector.get_last_query_stats() or {}
+        except asyncio.CancelledError:
+            health_monitor.record(
+                connection_name, (time.monotonic() - started) * 1000, False, "CancelledError", info.db_type
+            )
+            with suppress(Exception):
+                execution.status = "cancelled"
+                execution.public_error_code = "query_cancelled"
+                execution.terminal_at = datetime.now(UTC)
+                await store.session.commit()
+            raise
         except GovernedQueryError:
             raise
         except Exception as exc:
@@ -400,9 +419,7 @@ class GovernedQueryExecutor:
                         store.session,
                         run_id=context.run_id,
                         event_type=(
-                            "query_cancelled"
-                            if code in {"query_timeout", "query_cancelled"}
-                            else "query_completed"
+                            "query_cancelled" if code in {"query_timeout", "query_cancelled"} else "query_completed"
                         ),
                         payload={
                             "execution_id": execution.id,

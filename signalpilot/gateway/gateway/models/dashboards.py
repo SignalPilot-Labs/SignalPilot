@@ -6,7 +6,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from gateway.dashboard.domain import DashboardDefinition
+from gateway.dashboard.domain import DashboardDefinition, FilterOperator, FilterSettings, Scalar
 
 
 class DashboardModel(BaseModel):
@@ -52,6 +52,32 @@ class DashboardDetail(DashboardModel):
 class DashboardQueryRequest(DashboardModel):
     version_id: str | None = None
     refresh: bool = False
+    tile_uuid: str | None = None
+    dashboard_filters: list[DashboardRuntimeFilter] | None = None
+    drill_path: list[DashboardDrillStep] = Field(default_factory=list)
+
+
+class DashboardRuntimeFilter(DashboardModel):
+    id: str = Field(min_length=1)
+    operator: FilterOperator
+    values: list[Scalar] | None = None
+    settings: FilterSettings | None = None
+
+
+class DashboardDrillStep(DashboardModel):
+    field_id: str = Field(min_length=1)
+    value: Scalar
+
+
+class DashboardDistinctValuesRequest(DashboardModel):
+    version_id: str | None = None
+    search: str | None = Field(default=None, max_length=200)
+    limit: int = Field(default=100, ge=1, le=100)
+
+
+class DashboardDistinctValuesResponse(DashboardModel):
+    values: list[Scalar]
+    execution_id: str
 
 
 class DashboardQueryReceipt(DashboardModel):

@@ -11,8 +11,13 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
 
 from gateway.dashboard import store as dashboard_store
-from gateway.dashboard.compiler import DashboardCompileError, compile_metric_query
-from gateway.dashboard.domain import DashboardDefinition, SemanticChartQuery
+from gateway.dashboard.compiler import (
+    DashboardCompileError,
+    compile_custom_sql_query,
+    compile_distinct_values_query,
+    compile_metric_query,
+)
+from gateway.dashboard.domain import DashboardDefinition, FieldTarget, FilterRule, SemanticChartQuery
 from gateway.dashboard.semantic_resolver import DashboardSemanticError, DashboardSemanticResolver
 from gateway.db.models import GatewayDashboardResult, GatewayStructuredQueryResult
 from gateway.governance.query_executor import (
@@ -24,6 +29,8 @@ from gateway.models.dashboards import (
     CreateDashboardRequest,
     CreateDashboardVersionRequest,
     DashboardDetail,
+    DashboardDistinctValuesRequest,
+    DashboardDistinctValuesResponse,
     DashboardListItem,
     DashboardQueryReceipt,
     DashboardQueryRequest,
@@ -60,6 +67,8 @@ async def _verified_context(store: StoreD, definition: DashboardDefinition) -> D
             chart.query.projectId != binding.projectId or chart.query.commitSha != binding.commitSha
         ):
             raise HTTPException(status_code=422, detail="Chart semantic binding does not match the dashboard")
+        if not isinstance(chart.query, SemanticChartQuery) and chart.query.connectionName != binding.connectionName:
+            raise HTTPException(status_code=422, detail="Custom SQL connection does not match the dashboard")
     return context
 
 
@@ -120,10 +129,13 @@ async def create_dashboard_version(dashboard_id: str, body: CreateDashboardVersi
     except dashboard_store.DashboardNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Dashboard not found") from exc
     except dashboard_store.DashboardConflictError as exc:
-        raise HTTPException(status_code=409, detail={
-            "code": "stale_dashboard_version",
-            "actual_current_version_id": exc.actual_current_version_id,
-        }) from exc
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "stale_dashboard_version",
+                "actual_current_version_id": exc.actual_current_version_id,
+            },
+        ) from exc
     except dashboard_store.DashboardValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -142,19 +154,23 @@ async def get_dashboard_semantic_context(project_id: str, commit_sha: str, store
 
 async def _cached_receipt(store: StoreD, *, dashboard_id: str, version_id: str, cache_key: str):
     now = datetime.now(UTC)
-    row = (await store.session.execute(
-        select(GatewayDashboardResult, GatewayStructuredQueryResult)
-        .join(GatewayStructuredQueryResult, GatewayStructuredQueryResult.id == GatewayDashboardResult.structured_result_id)
-        .where(
-            GatewayDashboardResult.org_id == store._require_org_id(),
-            GatewayDashboardResult.dashboard_id == dashboard_id,
-            GatewayDashboardResult.version_id == version_id,
-            GatewayDashboardResult.cache_key == cache_key,
-            GatewayDashboardResult.expires_at > now,
+    row = (
+        await store.session.execute(
+            select(GatewayDashboardResult, GatewayStructuredQueryResult)
+            .join(
+                GatewayStructuredQueryResult,
+                GatewayStructuredQueryResult.id == GatewayDashboardResult.structured_result_id,
+            )
+            .where(
+                GatewayDashboardResult.org_id == store._require_org_id(),
+                GatewayDashboardResult.dashboard_id == dashboard_id,
+                GatewayDashboardResult.version_id == version_id,
+                GatewayDashboardResult.cache_key == cache_key,
+            )
+            .order_by(GatewayDashboardResult.created_at.desc())
+            .limit(1)
         )
-        .order_by(GatewayDashboardResult.created_at.desc())
-        .limit(1)
-    )).one_or_none()
+    ).one_or_none()
     if row is None:
         return None
     dashboard_result, stored = row
@@ -173,8 +189,77 @@ async def _cached_receipt(store: StoreD, *, dashboard_id: str, version_id: str, 
         tables=dashboard_result.tables_json,
         semantic_definition=dashboard_result.semantic_definition_json,
         compiled_sql=None,
-        cache_state="fresh",
+        cache_state="fresh"
+        if dashboard_result.expires_at.replace(tzinfo=dashboard_result.expires_at.tzinfo or UTC) > now
+        else "stale",
     )
+
+
+def _tile_for_chart(definition: DashboardDefinition, chart_id: str, tile_uuid: str | None):
+    tile = next(
+        (
+            item
+            for item in definition.tiles
+            if item.chartId == chart_id and (tile_uuid is None or item.uuid == tile_uuid)
+        ),
+        None,
+    )
+    if tile is None:
+        raise HTTPException(status_code=422, detail="Chart tile does not match the dashboard version")
+    return tile
+
+
+def _runtime_filters_for_tile(definition: DashboardDefinition, tile_uuid: str, chart, requested) -> list[FilterRule]:
+    saved_by_id = {rule.id: rule for rule in definition.filters.dimensions}
+    runtime: list[FilterRule] = []
+    for override in requested:
+        saved = saved_by_id.get(override.id)
+        if saved is None:
+            raise HTTPException(status_code=422, detail=f"Unknown dashboard filter: {override.id}")
+        explicit_target = (saved.tileTargets or {}).get(tile_uuid)
+        if explicit_target is None:
+            if not isinstance(chart.query, SemanticChartQuery) or saved.target.tableName != chart.query.exploreName:
+                continue
+            target = saved.target
+        else:
+            target = explicit_target
+        if target is False:
+            continue
+        runtime.append(
+            FilterRule(
+                id=saved.id,
+                operator=override.operator,
+                values=override.values,
+                target=FieldTarget(fieldId=target.fieldId),
+                settings=override.settings,
+            )
+        )
+    return runtime
+
+
+def _drill_query_state(chart, drill_path):
+    if not drill_path:
+        return None, []
+    if not isinstance(chart.query, SemanticChartQuery):
+        raise HTTPException(status_code=422, detail="Custom SQL charts do not support semantic drill paths")
+    configured = chart.signalPilot.drillDimensions or chart.signalPilot.tableGroups or []
+    base = chart.query.dimensions[-1:]
+    hierarchy = [*base, *(field for field in configured if field not in base)]
+    if len(drill_path) >= len(hierarchy):
+        raise HTTPException(status_code=422, detail="Drill path exceeds the configured hierarchy")
+    filters: list[FilterRule] = []
+    for index, step in enumerate(drill_path):
+        if step.field_id != hierarchy[index]:
+            raise HTTPException(status_code=422, detail="Drill path does not match the configured hierarchy")
+        filters.append(
+            FilterRule(
+                id=f"drill-{index}",
+                operator="equals",
+                values=[step.value],
+                target=FieldTarget(fieldId=step.field_id),
+            )
+        )
+    return [hierarchy[len(drill_path)]], filters
 
 
 @router.post(
@@ -197,28 +282,51 @@ async def query_dashboard_chart(dashboard_id: str, chart_id: str, body: Dashboar
     chart = next((item for item in parsed.charts if item.id == chart_id), None)
     if chart is None:
         raise HTTPException(status_code=404, detail="Chart not found")
-    if not isinstance(chart.query, SemanticChartQuery):
-        raise HTTPException(status_code=422, detail="Custom SQL dashboards require the Phase 3 confirmation flow")
+    tile = _tile_for_chart(parsed, chart_id, body.tile_uuid)
     context = await _verified_context(store, parsed)
+    requested_filters = body.dashboard_filters
+    if requested_filters is None:
+        requested_filters = [
+            rule for rule in parsed.filters.dimensions if rule.values or rule.operator in {"isNull", "notNull"}
+        ]
+    runtime_filters = _runtime_filters_for_tile(parsed, tile.uuid, chart, requested_filters)
+    drill_dimensions, drill_filters = _drill_query_state(chart, body.drill_path)
     try:
-        compiled = compile_metric_query(chart.query, context)
+        compiled = (
+            compile_metric_query(
+                chart.query,
+                context,
+                runtime_filters=[*runtime_filters, *drill_filters],
+                drill_dimensions=drill_dimensions,
+            )
+            if isinstance(chart.query, SemanticChartQuery)
+            else compile_custom_sql_query(
+                chart.query,
+                runtime_filters=runtime_filters,
+                timezone=parsed.signalPilot.timezone,
+            )
+        )
     except DashboardCompileError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     parameter_hash = hashlib.sha256(
         json.dumps(compiled.parameters, sort_keys=True, separators=(",", ":"), default=str).encode()
     ).hexdigest()
     cache_key = hashlib.sha256(
-        json.dumps({
-            "version_id": version.id,
-            "chart_id": chart.id,
-            "sql": compiled.sql,
-            "parameters": compiled.parameters,
-        }, sort_keys=True, separators=(",", ":"), default=str).encode()
+        json.dumps(
+            {
+                "version_id": version.id,
+                "chart_id": chart.id,
+                "sql": compiled.sql,
+                "parameters": compiled.parameters,
+                "drill_path": [step.model_dump() for step in body.drill_path],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode()
     ).hexdigest()
     if not body.refresh:
-        cached = await _cached_receipt(
-            store, dashboard_id=dashboard.id, version_id=version.id, cache_key=cache_key
-        )
+        cached = await _cached_receipt(store, dashboard_id=dashboard.id, version_id=version.id, cache_key=cache_key)
         if cached is not None:
             return cached.model_copy(update={"compiled_sql": compiled.sql})
     try:
@@ -237,12 +345,22 @@ async def query_dashboard_chart(dashboard_id: str, chart_id: str, body: Dashboar
         )
     except GovernedQueryError as exc:
         raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)}) from exc
-    stored = (await store.session.execute(select(GatewayStructuredQueryResult).where(
-        GatewayStructuredQueryResult.id == result.result_id,
-        GatewayStructuredQueryResult.org_id == store._require_org_id(),
-    ))).scalar_one()
-    expected_outputs = [*chart.query.dimensions, *chart.query.metrics]
-    output_check = compare_columns(expected_outputs, [str(column.get("name")) for column in result.columns])
+    stored = (
+        await store.session.execute(
+            select(GatewayStructuredQueryResult).where(
+                GatewayStructuredQueryResult.id == result.result_id,
+                GatewayStructuredQueryResult.org_id == store._require_org_id(),
+            )
+        )
+    ).scalar_one()
+    expected_outputs = [str(column["name"]) for column in compiled.output_columns]
+    result_columns = result.columns
+    if result.row_count == 0 and not result_columns:
+        # Connectors expose rows rather than cursor metadata, so a valid empty
+        # result has no inferred columns. Preserve the compiler-known schema so
+        # the dashboard renders an empty state instead of a false mismatch.
+        result_columns = compiled.output_columns
+    output_check = compare_columns(expected_outputs, [str(column.get("name")) for column in result_columns])
     if not output_check.valid:
         raise HTTPException(
             status_code=500,
@@ -252,6 +370,7 @@ async def query_dashboard_chart(dashboard_id: str, chart_id: str, body: Dashboar
     # owner_user_id result endpoint. Only this dashboard-authorized join reads it.
     stored.owner_user_id = None
     stored.result_origin = "dashboard"
+    stored.columns_json = result_columns
     now = datetime.now(UTC)
     dashboard_result = GatewayDashboardResult(
         id=str(uuid.uuid4()),
@@ -277,7 +396,7 @@ async def query_dashboard_chart(dashboard_id: str, chart_id: str, body: Dashboar
         dashboard_result_id=dashboard_result.id,
         result_id=result.result_id,
         execution_id=result.execution_id,
-        columns=result.columns,
+        columns=result_columns,
         rows=result.rows,
         row_count=result.row_count,
         completeness=result.completeness,
@@ -289,6 +408,62 @@ async def query_dashboard_chart(dashboard_id: str, chart_id: str, body: Dashboar
         semantic_definition=compiled.semantic_definition,
         compiled_sql=compiled.sql,
         cache_state="miss" if not body.refresh else "refreshed",
+    )
+
+
+@router.post(
+    "/dashboards/{dashboard_id}/filters/{filter_id}/values",
+    response_model=DashboardDistinctValuesResponse,
+    dependencies=[RequireScope("query")],
+)
+async def get_dashboard_filter_values(
+    dashboard_id: str,
+    filter_id: str,
+    body: DashboardDistinctValuesRequest,
+    store: StoreD,
+):
+    rows = await dashboard_store.get_private_dashboard_rows(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=_user_id(store),
+        dashboard_id=dashboard_id,
+        version_id=body.version_id,
+    )
+    if rows is None:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    dashboard, version = rows
+    definition = DashboardDefinition.model_validate(version.definition_json)
+    saved = next((item for item in definition.filters.dimensions if item.id == filter_id), None)
+    if saved is None:
+        raise HTTPException(status_code=404, detail="Dashboard filter not found")
+    context = await _verified_context(store, definition)
+    try:
+        compiled = compile_distinct_values_query(
+            explore_name=saved.target.tableName,
+            field_id=saved.target.fieldId,
+            context=context,
+            search=body.search,
+            limit=body.limit,
+        )
+        result = await governed_query_executor.execute(
+            store,
+            connection_name=dashboard.connection_name,
+            sql=compiled.sql,
+            parameters=compiled.parameters,
+            row_limit=body.limit,
+            timeout_seconds=30,
+            context=GovernedQueryContext(
+                path="dashboard",
+                project_id=dashboard.project_id,
+                commit_sha=version.commit_sha,
+            ),
+        )
+    except (DashboardCompileError, GovernedQueryError) as exc:
+        detail = {"code": exc.code, "message": str(exc)} if isinstance(exc, GovernedQueryError) else str(exc)
+        raise HTTPException(status_code=422, detail=detail) from exc
+    return DashboardDistinctValuesResponse(
+        values=[row.get("value") for row in result.rows],
+        execution_id=result.execution_id,
     )
 
 

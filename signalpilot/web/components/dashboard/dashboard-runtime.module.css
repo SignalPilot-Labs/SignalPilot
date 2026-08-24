@@ -43,7 +43,7 @@
 .headerActions button {
   border: 1px solid var(--color-border);
   border-radius: 7px;
-  background: var(--color-surface);
+  background: var(--color-bg-card);
   color: var(--color-text);
   padding: 8px 10px;
   cursor: pointer;
@@ -52,6 +52,67 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+}
+.controlBar {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-card);
+  padding: 12px;
+  margin-bottom: 18px;
+}
+.controls {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.control {
+  display: grid;
+  gap: 5px;
+  min-width: 180px;
+}
+.control label {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.control select,
+.control input {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  padding: 6px;
+}
+.control select[multiple] {
+  min-height: 64px;
+}
+.absoluteRange,
+.nullActions,
+.filterChips,
+.tileActions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.nullActions button,
+.filterChips button,
+.tileActions button {
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 10px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.filterChips {
+  align-items: center;
+  margin-top: 10px;
+}
+.filterChips span {
+  margin-left: auto;
+  color: var(--color-text-dim);
+  font-size: 10px;
 }
 .tileButton {
   appearance: none;
@@ -68,7 +129,7 @@
   flex-direction: column;
   border: 1px solid var(--color-border);
   border-radius: 12px;
-  background: var(--color-surface);
+  background: var(--color-bg-card);
   overflow: hidden;
 }
 .tileHeader {
@@ -84,6 +145,7 @@
   margin: 5px 0 0;
 }
 .visual {
+  position: relative;
   flex: 1;
   min-height: 0;
   padding: 12px 18px;
@@ -106,6 +168,24 @@
   place-items: center;
   height: 100%;
 }
+.errorState {
+  border: 1px solid var(--color-danger, #b45a5a);
+  border-radius: 7px;
+  color: var(--color-text);
+  font-size: 11px;
+  padding: 8px;
+  margin-bottom: 8px;
+}
+.refreshState {
+  position: absolute;
+  z-index: 2;
+  right: 18px;
+  border-radius: 999px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  padding: 4px 8px;
+  font-size: 10px;
+}
 .receiptSummary {
   display: flex;
   justify-content: space-between;
@@ -114,9 +194,57 @@
   color: var(--color-text-dim);
   font-size: 10px;
 }
+.tileActions {
+  padding: 0 18px 10px;
+  align-items: center;
+}
+.tileActions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.drillContext {
+  color: var(--color-text-dim);
+  font-size: 10px;
+}
+.dataDialog {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 8vh 8vw;
+  background: rgb(0 0 0 / 72%);
+  backdrop-filter: blur(4px);
+}
+.dataDialogPanel {
+  width: 100%;
+  max-height: 84vh;
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg-elevated);
+  box-shadow: 0 20px 80px rgb(0 0 0 / 45%);
+  padding: 20px;
+}
+.dataDialogPanel > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.dataDialog table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.dataDialog th,
+.dataDialog td {
+  border-bottom: 1px solid var(--color-border);
+  padding: 8px;
+  text-align: left;
+  font-size: 12px;
+}
 .inspector {
   border-left: 1px solid var(--color-border);
-  background: var(--color-surface);
+  background: var(--color-bg-card);
   padding: 24px;
   overflow: auto;
 }

@@ -32,7 +32,6 @@ export class DashboardApiDataSource implements DashboardDataSource {
   constructor(
     private readonly dashboardId: string,
     private readonly versionId: string,
-    private readonly refresh = false,
     private readonly onReceipt?: (
       chart: ChartDefinition,
       receipt: DashboardQueryReceipt,
@@ -40,9 +39,9 @@ export class DashboardApiDataSource implements DashboardDataSource {
   ) {}
 
   async loadTile(
-    _tile: DashboardTileDefinition,
+    tile: DashboardTileDefinition,
     chart: ChartDefinition,
-    _options: DashboardQueryOptions,
+    options: DashboardQueryOptions,
     signal: AbortSignal,
   ): Promise<DashboardQueryResult> {
     const receipt = await request<DashboardQueryReceipt>(
@@ -51,7 +50,13 @@ export class DashboardApiDataSource implements DashboardDataSource {
         method: "POST",
         body: JSON.stringify({
           version_id: this.versionId,
-          refresh: this.refresh,
+          tile_uuid: tile.uuid,
+          refresh: options.invalidateCache ?? false,
+          dashboard_filters: options.dashboardFilters ?? [],
+          drill_path: (options.dashboardDrillPath ?? []).map((step) => ({
+            field_id: step.fieldId,
+            value: step.value,
+          })),
         }),
         signal,
       },
@@ -71,6 +76,7 @@ export class DashboardApiDataSource implements DashboardDataSource {
       rows: receipt.rows,
       completeness: receipt.completeness,
       freshnessAt: receipt.freshness_at ?? receipt.result_time,
+      cacheState: receipt.cache_state,
     };
   }
 }

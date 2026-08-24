@@ -23,7 +23,7 @@ export function LightdashCartesianChart({
   onMarkClick,
 }: {
   input: LightdashCartesianInput;
-  onMarkClick: (mark: Record<string, unknown>) => void;
+  onMarkClick: (mark: Record<string, unknown>, multiselect: boolean) => void;
 }) {
   const option = useMemo<EChartsOption>(() => {
     const categories = input.rows.map(
@@ -66,7 +66,9 @@ export function LightdashCartesianChart({
         name: input.fields[field]?.label ?? field,
         type: input.seriesType === "bar" ? "bar" : "line",
         ...(input.seriesType === "bar" ? { barMaxWidth: 52 } : {}),
-        ...(input.seriesType === "area" ? { areaStyle: { opacity: 0.28 } } : {}),
+        ...(input.seriesType === "area"
+          ? { areaStyle: { opacity: 0.28 } }
+          : {}),
         itemStyle:
           input.seriesType === "bar" ? { borderRadius: [4, 4, 0, 0] } : {},
         data: input.rows.map((row, rowIndex) => ({
@@ -88,6 +90,7 @@ export function LightdashCartesianChart({
         click: (event: {
           dataIndex?: number;
           data?: { rowIndex?: number; field?: string };
+          event?: { event?: { metaKey?: boolean; ctrlKey?: boolean } };
         }) => {
           const rowIndex = event.data?.rowIndex ?? event.dataIndex;
           if (typeof rowIndex !== "number") return;
@@ -100,6 +103,7 @@ export function LightdashCartesianChart({
                 value.value.raw,
               ]),
             ),
+            Boolean(event.event?.event?.metaKey || event.event?.event?.ctrlKey),
           );
         },
       }}

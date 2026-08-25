@@ -54,6 +54,8 @@ def _make_fs(handler) -> tuple[GatewayFileSystem, list[httpx.Request]]:
 class TestReadOnDemand:
     def test_open_file_pulls_from_gateway_with_branch_param(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == f"{BASE}/revisions":
+                return httpx.Response(200, json={"revisions": [{"revision": 4}]})
             assert request.method == "GET"
             assert request.url.path == f"{BASE}/files/models/stg_orders.sql"
             assert request.url.params["branch"] == BRANCH
@@ -70,6 +72,8 @@ class TestReadOnDemand:
 
     def test_get_details_returns_content_and_mime(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == f"{BASE}/revisions":
+                return httpx.Response(200, json={"revisions": [{"revision": 4}]})
             return httpx.Response(200, content=b"answer = 1")
 
         fs, _ = _make_fs(handler)
@@ -85,6 +89,8 @@ class TestReadOnDemand:
 
     def test_list_files_builds_immediate_children(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == f"{BASE}/revisions":
+                return httpx.Response(200, json={"revisions": [{"revision": 4}]})
             assert request.url.path == f"{BASE}/files:list"
             body = json.loads(request.content)
             assert body["branch"] == BRANCH
@@ -109,10 +115,16 @@ class TestReadOnDemand:
             ("dbt_project.yml", False),
         ]
 
-    def test_list_files_scopes_to_prefix(self) -> None:
+    def test_list_files_scopes_to_prefix_and_caches_the_manifest(self) -> None:
+        """The manifest is fetched once per revision and prefix-filtered
+        client-side; a second listing at the same head makes no list call."""
+        list_calls = {"n": 0}
+
         def handler(request: httpx.Request) -> httpx.Response:
-            body = json.loads(request.content)
-            assert body["prefix"] == "models"
+            if request.url.path == f"{BASE}/revisions":
+                return httpx.Response(200, json={"revisions": [{"revision": 4}]})
+            assert request.url.path == f"{BASE}/files:list"
+            list_calls["n"] += 1
             return httpx.Response(
                 200,
                 json={
@@ -120,6 +132,7 @@ class TestReadOnDemand:
                     "files": [
                         _entry("models/staging/stg_orders.sql"),
                         _entry("models/schema.yml"),
+                        _entry("README.md"),
                     ],
                 },
             )
@@ -130,9 +143,13 @@ class TestReadOnDemand:
             ("models/staging", True),
             ("models/schema.yml", False),
         ]
+        fs.list_files("models")  # same head revision → served from cache
+        assert list_calls["n"] == 1
 
     def test_search_hits_files_search_with_branch(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == f"{BASE}/revisions":
+                return httpx.Response(200, json={"revisions": [{"revision": 4}]})
             assert request.url.path == f"{BASE}/files:search"
             body = json.loads(request.content)
             assert body == {"branch": BRANCH, "query": "orders"}
@@ -156,6 +173,8 @@ class TestReadOnDemand:
 class TestWriteThrough:
     def test_update_file_is_a_put_with_branch_param(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == f"{BASE}/revisions":
+                return httpx.Response(200, json={"revisions": [{"revision": 4}]})
             assert request.method == "PUT"
             assert request.url.path == f"{BASE}/files/models/new.sql"
             assert request.url.params["branch"] == BRANCH
@@ -169,6 +188,8 @@ class TestWriteThrough:
 
     def test_create_file_puts_contents(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == f"{BASE}/revisions":
+                return httpx.Response(200, json={"revisions": [{"revision": 4}]})
             assert request.method == "PUT"
             assert request.url.path == f"{BASE}/files/models/created.sql"
             assert request.url.params["branch"] == BRANCH
@@ -188,6 +209,8 @@ class TestWriteThrough:
 
     def test_delete_file_is_a_delete_with_branch_param(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == f"{BASE}/revisions":
+                return httpx.Response(200, json={"revisions": [{"revision": 4}]})
             assert request.method == "DELETE"
             assert request.url.params["branch"] == BRANCH
             return httpx.Response(200, json={"revision": 7})
@@ -199,6 +222,8 @@ class TestWriteThrough:
         seen: list[tuple[str, dict]] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == f"{BASE}/revisions":
+                return httpx.Response(200, json={"revisions": [{"revision": 4}]})
             seen.append((request.url.path, json.loads(request.content)))
             return httpx.Response(200, json={"revision": 8})
 
@@ -221,6 +246,8 @@ class TestWriteThrough:
         caller sees — never a silent overwrite."""
 
         def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == f"{BASE}/revisions":
+                return httpx.Response(200, json={"revisions": [{"revision": 4}]})
             if request.method == "DELETE":
                 return httpx.Response(404, json={"detail": "File not found"})
             if request.url.path == f"{BASE}/files:list":

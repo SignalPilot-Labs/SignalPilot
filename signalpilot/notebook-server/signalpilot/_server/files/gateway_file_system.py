@@ -87,6 +87,11 @@ class GatewayFileSystem(FileSystem):
             timeout=timeout,
             transport=transport,
         )
+        # Manifest cache keyed by revision: listings dominate UI traffic and
+        # the manifest only changes when a commit lands, so a cheap
+        # head-revision probe replaces refetching thousands of entries per
+        # directory click.
+        self._entries_cache: tuple[int, list[dict[str, Any]]] | None = None
 
     @property
     def branch(self) -> str:
@@ -122,18 +127,34 @@ class GatewayFileSystem(FileSystem):
         )
         if resp.status_code != 200:
             raise _error_from_response(resp)
+        self._entries_cache = None
 
     def _post(self, op: str, body: dict[str, Any]) -> httpx.Response:
         return self._client.post(op, json={"branch": self._branch, **body})
 
-    def _list_entries(self, prefix: str = "") -> list[dict[str, Any]]:
-        body: dict[str, Any] = {}
-        if prefix:
-            body["prefix"] = prefix
-        resp = self._post("/files:list", body)
+    def _head_revision(self) -> int | None:
+        resp = self._client.get(
+            "/revisions", params={"branch": self._branch, "limit": 1}
+        )
         if resp.status_code != 200:
             raise _error_from_response(resp)
-        return list(resp.json().get("files", []))
+        revisions = resp.json().get("revisions", [])
+        return int(revisions[0]["revision"]) if revisions else None
+
+    def _list_entries(self, prefix: str = "") -> list[dict[str, Any]]:
+        head = self._head_revision()
+        if head is None:
+            return []
+        if self._entries_cache is None or self._entries_cache[0] != head:
+            resp = self._post("/files:list", {})
+            if resp.status_code != 200:
+                raise _error_from_response(resp)
+            self._entries_cache = (head, list(resp.json().get("files", [])))
+        entries = self._entries_cache[1]
+        if not prefix:
+            return list(entries)
+        wanted = prefix.rstrip("/") + "/"
+        return [e for e in entries if str(e["path"]).startswith(wanted)]
 
     def _batch(
         self,
@@ -142,18 +163,28 @@ class GatewayFileSystem(FileSystem):
         deletes: list[str] | None = None,
         message: str | None = None,
     ) -> int:
-        resp = self._post(
-            "/files:batch",
-            {
-                "base_revision": None,
-                "upserts": upserts or [],
-                "deletes": deletes or [],
-                "message": message,
-            },
-        )
-        if resp.status_code != 200:
-            raise _error_from_response(resp)
-        return int(resp.json()["revision"])
+        # base_revision is a CAS token: None means "first commit on the
+        # branch", so mutations must name the current head. One retry absorbs
+        # the (lease-guarded, therefore rare) race with a concurrent commit.
+        last: httpx.Response | None = None
+        for _ in range(2):
+            resp = self._post(
+                "/files:batch",
+                {
+                    "base_revision": self._head_revision(),
+                    "upserts": upserts or [],
+                    "deletes": deletes or [],
+                    "message": message,
+                },
+            )
+            if resp.status_code == 409:
+                last = resp
+                continue
+            if resp.status_code != 200:
+                raise _error_from_response(resp)
+            self._entries_cache = None
+            return int(resp.json()["revision"])
+        raise _error_from_response(last)
 
     def _make_file_info(
         self,

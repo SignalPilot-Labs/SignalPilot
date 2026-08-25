@@ -62,11 +62,9 @@ services:
       SP_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:${SP_WEB_PORT:-3200},http://localhost:${SP_GATEWAY_PORT:-3300},http://localhost:${SP_NOTEBOOK_PORT:-2718}
       # The notebook uses direct mode without Kubernetes.
       SP_NOTEBOOK_DIRECT_URL: http://notebook:2718
-      SP_NOTEBOOK_UPSTREAM_MODE: direct
       # The proxy sends this value to the shared notebook container with each request.
       # The notebook writes the value during startup.
       SP_NOTEBOOK_TOKEN_FILE: /notebook-token/token
-      SP_NOTEBOOK_IMAGE: signalpilot-notebook:latest
       SP_NOTEBOOK_NETWORK_POLICY: "false"
       SP_PUBLIC_GATEWAY_URL: http://localhost:${SP_GATEWAY_PORT:-3300}
       SP_PUBLIC_GATEWAY_PORT: "${SP_GATEWAY_PORT:-3300}"
@@ -96,7 +94,6 @@ services:
       # Gateway startup requires this value. Local mode does not use it.
       SP_K8S_HOST: ""
       KUBECONFIG: ""
-      SP_K8S_NAMESPACE: default
       SP_GATEWAY_NAMESPACE: signalpilot
       SP_GATEWAY_POD_SELECTOR: "app=signalpilot-gateway"
       # MinIO simulates S3 for local evaluation uploads.
@@ -108,6 +105,12 @@ services:
       SP_EVAL_UPLOADS_S3_ACCESS_KEY: minioadmin
       SP_EVAL_UPLOADS_S3_SECRET_KEY: minioadmin
       SP_EVAL_UPLOADS_NOTIFY_EMAIL: evals@signalpilot.dev
+      # Runtime v2 workspace store: the S3-backed file plane (MinIO locally).
+      SP_WORKSPACE_S3_BUCKET: ${SP_WORKSPACE_S3_BUCKET:-sp-workspace}
+      SP_WORKSPACE_S3_ENDPOINT: ${SP_WORKSPACE_S3_ENDPOINT-http://minio:9000}
+      SP_WORKSPACE_S3_REGION: ${SP_WORKSPACE_S3_REGION-}
+      SP_WORKSPACE_S3_ACCESS_KEY: ${SP_WORKSPACE_S3_ACCESS_KEY-minioadmin}
+      SP_WORKSPACE_S3_SECRET_KEY: ${SP_WORKSPACE_S3_SECRET_KEY-minioadmin}
       SP_EVAL_UPLOADS_SMTP_HOST: mailpit
       SP_EVAL_UPLOADS_SMTP_PORT: "1025"
       SP_EVAL_UPLOADS_MAX_MB: "500"
@@ -239,9 +242,7 @@ services:
       SP_CHAT_OBJECTS_S3_SECRET_KEY: ${SP_CHAT_OBJECTS_S3_SECRET_KEY-minioadmin}
       CHAT_WORKER_CONCURRENCY: "4"
       SP_NOTEBOOK_DIRECT_URL: http://notebook:2718
-      SP_NOTEBOOK_UPSTREAM_MODE: direct
       SP_NOTEBOOK_TOKEN_FILE: /notebook-token/token
-      SP_NOTEBOOK_IMAGE: signalpilot-notebook:latest
       SP_NOTEBOOK_NETWORK_POLICY: "false"
       SP_PUBLIC_GATEWAY_URL: http://gateway:3300
       SP_PUBLIC_GATEWAY_PORT: "3300"
@@ -249,7 +250,6 @@ services:
       SP_WEB_URL: http://localhost:${SP_WEB_PORT:-3200}
       SP_K8S_HOST: ""
       KUBECONFIG: ""
-      SP_K8S_NAMESPACE: default
       SP_GATEWAY_NAMESPACE: signalpilot
       SP_GATEWAY_POD_SELECTOR: "app=signalpilot-gateway"
     volumes:
@@ -301,6 +301,12 @@ services:
       SP_WEB_URL: http://localhost:${SP_WEB_PORT:-3200}
       CLAUDE_CONFIG_DIR: ${CLAUDE_CONFIG_DIR:-/home/notebook/.claude}
       SIGNALPILOT_ANALYSIS_AGENT_MODEL: ${SIGNALPILOT_ANALYSIS_AGENT_MODEL:-claude-sonnet-4-5-20250929}
+      # Runtime v2 file plane: set SP_NOTEBOOK_WORKSPACE_MODE=s3 (plus a project
+      # id) to serve files from the gateway's S3 workspace store instead of the
+      # local volume — the cloud behavior, testable locally.
+      SP_WORKSPACE_MODE: ${SP_NOTEBOOK_WORKSPACE_MODE:-}
+      SP_PROJECT_ID: ${SP_NOTEBOOK_PROJECT_ID:-}
+      SP_BRANCH: ${SP_NOTEBOOK_BRANCH:-main}
     volumes:
       - signalpilot-workspace:/workspace
       - signalpilot-shared:/shared:ro
@@ -376,6 +382,7 @@ services:
         mc mb --ignore-existing local/sp-eval-uploads &&
         mc mb --ignore-existing local/sp-eval-runs &&
         mc mb --ignore-existing local/sp-chat-runtime &&
+        mc mb --ignore-existing local/sp-workspace &&
         mc ilm rule add local/sp-eval-uploads --prefix "uploads/" --expire-days 7 || true
 
   mailpit:

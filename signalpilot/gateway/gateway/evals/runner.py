@@ -372,17 +372,28 @@ async def fetch_eval_repo(
         raise ValueError(f"local eval paths must live under {settings.projects_dir}")
     if not src.is_dir():
         raise FileNotFoundError(f"eval repo not found: {repo_url}")
-    shutil.copytree(src, dest, dirs_exist_ok=True)
-    digest = hashlib.sha256()
-    for p in sorted(src.rglob("*")):
-        if p.is_file():
-            digest.update(p.relative_to(src).as_posix().encode())
-            digest.update(p.read_bytes())
-    return f"local-{digest.hexdigest()[:16]}"
+    def _copy_and_digest() -> str:
+        # One pass over `src`: a local path is usually a bind mount, where every
+        # file operation is a slow host round-trip. Hash the fast local copy in
+        # `dest` (the caller clears it first, so the trees are identical), and
+        # keep the whole walk off the event loop — it can take many seconds and
+        # would otherwise stall every concurrent request.
+        shutil.copytree(src, dest, dirs_exist_ok=True)
+        digest = hashlib.sha256()
+        for p in sorted(dest.rglob("*")):
+            if p.is_file():
+                digest.update(p.relative_to(dest).as_posix().encode())
+                digest.update(p.read_bytes())
+        return f"local-{digest.hexdigest()[:16]}"
+
+    return await asyncio.to_thread(_copy_and_digest)
 
 
 # Refresh the GET /api/evals/tasks repository cache at most every five minutes.
 _REPO_CACHE_SECONDS = 300
+# Local (non-git) eval repos have no commit ref to invalidate on, so keep their
+# checkout only briefly — long enough to absorb page-load bursts.
+_LOCAL_REPO_CACHE_SECONDS = 15
 
 
 async def get_eval_set(org_id: str, cfg: dict, settings: EvalRunSettings) -> EvalSet:
@@ -399,13 +410,15 @@ async def get_eval_set(org_id: str, cfg: dict, settings: EvalRunSettings) -> Eva
     fresh = False
     ref = ""
     is_git = repo_url.startswith(("http://", "https://", "git@"))
-    if not is_git:
-        # Local paths can change without a new reference. Do not cache their manifests.
-        meta.unlink(missing_ok=True)
+    # Local paths can change without a new reference, so they get only a short
+    # freshness window: enough that repeated panel loads reuse one copy of the
+    # tree (a bind-mounted local repo costs a host round-trip per file), short
+    # enough that an edited manifest shows up within seconds.
+    ttl = _REPO_CACHE_SECONDS if is_git else _LOCAL_REPO_CACHE_SECONDS
     if meta.is_file():
         try:
             cached = json.loads(meta.read_text())
-            fresh = cached.get("key") == cache_key and time.time() - cached.get("at", 0) < _REPO_CACHE_SECONDS
+            fresh = cached.get("key") == cache_key and time.time() - cached.get("at", 0) < ttl
             ref = str(cached.get("ref", ""))
         except ValueError:
             fresh = False

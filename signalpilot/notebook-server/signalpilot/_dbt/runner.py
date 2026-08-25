@@ -151,8 +151,10 @@ def run_dbt_command_sync(
     profiles_dir: str | None = None,
     target: str | None = None,
     env_vars: dict[str, str] | None = None,
-    timeout: int = 300,
+    timeout: int | None = None,
 ) -> DbtCommandResult:
+    if timeout is None:
+        timeout = int(os.environ.get("SP_DBT_COMMAND_TIMEOUT", "1800"))
     # dbt executes project-supplied Jinja and run hooks, so the tree it is
     # pointed at must never be outside the workspace.
     confined_project = confine_optional(project_dir, label="projectDir")
@@ -246,7 +248,7 @@ async def run_dbt_command_async(
     profiles_dir: str | None = None,
     target: str | None = None,
     env_vars: dict[str, str] | None = None,
-    timeout: int = 300,
+    timeout: int | None = None,
 ) -> DbtCommandResult:
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(

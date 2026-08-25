@@ -351,6 +351,8 @@ class WorkspaceStore:
     ) -> tuple[int, str]:
         """Materialize (or reuse) the tarball of a revision and return
         (revision, object_key). Presigning is the caller's concern."""
+        import asyncio
+
         manifest = await self.load_manifest(
             db, org_id=org_id, project_id=project_id, branch=branch, revision=revision
         )
@@ -358,10 +360,22 @@ class WorkspaceStore:
         if await self.storage.exists(key):
             return manifest.revision, key
 
+        # Blob fetches dominate build time; identical content dedupes to one
+        # fetch, and the rest run concurrently (bounded so a 20k-file project
+        # doesn't stampede the store).
+        unique_digests = sorted({entry.sha256 for entry in manifest.entries})
+        semaphore = asyncio.Semaphore(32)
+
+        async def _fetch(digest: str) -> tuple[str, bytes | None]:
+            async with semaphore:
+                return digest, await self.storage.get_bytes(blob_key(org_id, project_id, digest))
+
+        blobs = dict(await asyncio.gather(*(_fetch(digest) for digest in unique_digests)))
+
         buffer = io.BytesIO()
         with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
             for entry in manifest.entries:
-                blob = await self.storage.get_bytes(blob_key(org_id, project_id, entry.sha256))
+                blob = blobs.get(entry.sha256)
                 if blob is None:
                     raise RevisionNotFound(f"Blob missing for {entry.path} at revision {manifest.revision}")
                 info = tarfile.TarInfo(name=entry.path)

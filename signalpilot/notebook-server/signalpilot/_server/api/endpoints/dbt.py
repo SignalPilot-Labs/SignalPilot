@@ -26,11 +26,28 @@ LOGGER = _loggers.sp_logger()
 router = APIRouter()
 
 
-def _resolve_start_dir(request: Any, body_dir: str | None) -> str | None:
-    """Resolve the dbt start directory."""
+async def _resolve_start_dir(request: Any, body_dir: str | None) -> str | None:
+    """Resolve the dbt start directory.
+
+    S3 workspace mode: dbt is a subprocess and needs real files, so the branch
+    head is materialized into execution scratch and the org-level
+    dbt_project_dir setting (gateway-resolved: explicit setting wins, manifest
+    auto-detect otherwise) names the directory inside it. Materialization is
+    network+disk work and runs off the event loop. An explicit projectDir in
+    the request body still overrides for local trees.
+    """
     del request
     if body_dir:
         return str(confine(body_dir, label="projectDir"))
+
+    from signalpilot._server.files.workspace import is_s3_workspace
+
+    if is_s3_workspace():
+        import asyncio
+
+        from signalpilot._dbt.materialize import materialized_dbt_start_dir
+
+        return await asyncio.to_thread(materialized_dbt_start_dir)
     return None
 
 
@@ -114,7 +131,7 @@ async def run_dbt_command(
         )
 
     # Resolve project dir: explicit > cloud project > cwd
-    project_dir = _resolve_start_dir(request, body.project_dir)
+    project_dir = await _resolve_start_dir(request, body.project_dir)
     profiles_dir = confine_optional(body.profiles_dir, label="profilesDir")
 
     result = await run_dbt_command_async(
@@ -161,7 +178,7 @@ async def get_project_info(
     )
 
     body = await request.json()
-    start_dir = _resolve_start_dir(request, body.get("projectDir") if body else None)
+    start_dir = await _resolve_start_dir(request, body.get("projectDir") if body else None)
 
     dbt_installed = find_dbt_executable() is not None
     project_dir = find_dbt_project(start_dir)
@@ -214,7 +231,7 @@ async def get_models(
     from signalpilot._dbt.runner import find_dbt_project, list_models
 
     body = await request.json()
-    start_dir = _resolve_start_dir(request, body.get("projectDir") if body else None)
+    start_dir = await _resolve_start_dir(request, body.get("projectDir") if body else None)
     project_dir = find_dbt_project(start_dir)
 
     if not project_dir:
@@ -255,7 +272,7 @@ async def get_artifact(
     )
 
     body = await parse_request(request, cls=DbtArtifactRequest)
-    project_dir = find_dbt_project(_resolve_start_dir(request, body.project_dir))
+    project_dir = find_dbt_project(await _resolve_start_dir(request, body.project_dir))
 
     if not project_dir:
         return DbtArtifactResponse(
@@ -397,7 +414,7 @@ async def scaffold_project(
         project_name = "."
     elif not parent_dir:
         # Fallback: check cloud project dir
-        cloud_dir = _resolve_start_dir(request, None)
+        cloud_dir = await _resolve_start_dir(request, None)
         if cloud_dir:
             parent_dir = cloud_dir
             project_name = "."

@@ -43,6 +43,9 @@ from signalpilot._server.api.endpoints.lsp import router as lsp_router
 from signalpilot._server.api.endpoints.mount_config import (
     router as mount_config_router,
 )
+from signalpilot._server.api.endpoints.agent_notebooks import (
+    router as agent_notebooks_router,
+)
 from signalpilot._server.api.endpoints.notebook_static import (
     router as notebook_static_router,
 )
@@ -133,6 +136,11 @@ def build_routes(base_url: str = "") -> list[BaseRoute]:
         notebook_static_router,
         prefix="/api/notebook",
         name="notebook_static",
+    )
+    app_router.include_router(
+        agent_notebooks_router,
+        prefix="/api/agent-notebooks",
+        name="agent_notebooks",
     )
     app_router.include_router(health_router, prefix="/api", name="health")
     app_router.include_router(root_health_router, name="root_health")

@@ -22,6 +22,38 @@ export type DashboardValueFormat =
   | "percentage"
   | `currency:${string}`;
 
+export type DashboardFailureCode =
+  | "data_source_unavailable"
+  | "authentication_rejected"
+  | "query_timeout"
+  | "query_invalid"
+  | "semantic_definition_invalid"
+  | "permission_denied"
+  | "rate_limited"
+  | "cancelled"
+  | "result_contract_mismatch"
+  | "stale_dashboard_version"
+  | "internal_error";
+
+export type DashboardFailure = {
+  code: DashboardFailureCode;
+  message: string;
+  retryable: boolean;
+  connectionName?: string;
+  scope: "connection" | "chart" | "dashboard";
+  correlationId: string;
+  occurredAt: string;
+  cacheFallbackAvailable: boolean;
+  cacheState?: "no_usable_cache";
+  retryAfterSeconds?: number;
+};
+
+export type DashboardResultState =
+  | "fresh"
+  | "stale_refreshing"
+  | "cached_source_unavailable"
+  | "cached_after_refresh_failure";
+
 export type DashboardQueryResult = {
   resultId: string;
   executionId: string;
@@ -31,7 +63,8 @@ export type DashboardQueryResult = {
   freshnessAt: string;
   timezone: string;
   locale: string;
-  cacheState?: "fresh" | "stale" | "miss" | "refreshed";
+  cacheState?: DashboardResultState;
+  refreshFailure?: DashboardFailure;
 };
 
 import type {
@@ -72,6 +105,7 @@ export type DashboardQueryOptions = {
   dashboardFilters?: DashboardRuntimeFilter[];
   dashboardDrillPath?: DashboardDrillStep[];
   invalidateCache?: boolean;
+  retryToken?: string;
 };
 
 export type DashboardRuntimeFilter = {

@@ -2,23 +2,37 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from gateway.api.dashboards import _reject_truncated_time_series
+from gateway.api.dashboards import (
+    _cached_receipt,
+    _dashboard_cache_key,
+    _dashboard_failure,
+    _DashboardConnectionRetryGate,
+    _DashboardFailureRaised,
+    _execute_dashboard_chart,
+    _failure_code,
+    _reject_truncated_time_series,
+    dashboard_connection_retry_gate,
+)
 from gateway.dashboard import store as dashboard_store
 from gateway.dashboard.compiler import compile_custom_sql_query, compile_metric_query
 from gateway.dashboard.confidence import dashboard_confidence_counts, semantic_query_signature
 from gateway.dashboard.domain import AdHocSqlQuery, DashboardDefinition, FieldTarget, FilterRule, SemanticChartQuery
 from gateway.dashboard.semantic_resolver import parse_approved_metrics, resolve_from_authorities
-from gateway.db.models import GatewayBase
+from gateway.db.models import GatewayBase, GatewayDashboardResult, GatewayStructuredQueryResult
 from gateway.dbt.types import ColumnSpec, ModelInfo, ModelStatus, ProjectMap
+from gateway.governance.query_executor import GovernedQueryError
+from gateway.models.dashboards import DashboardQueryRequest
 
 FIXTURE = Path(__file__).parents[2] / "web/dashboard/lightdash-contract/fixtures/five-components.json"
 
@@ -175,9 +189,7 @@ def test_truncated_time_series_fails_closed_without_breaking_ranked_charts() -> 
     line = cartesian.model_copy(
         update={
             "visualization": cartesian.visualization.model_copy(
-                update={
-                    "config": cartesian.visualization.config.model_copy(update={"seriesType": "line"})
-                }
+                update={"config": cartesian.visualization.config.model_copy(update={"seriesType": "line"})}
             )
         }
     )
@@ -189,6 +201,244 @@ def test_truncated_time_series_fails_closed_without_breaking_ranked_charts() -> 
 
     _reject_truncated_time_series(line, "complete")
     _reject_truncated_time_series(cartesian, "truncated")
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (RuntimeError("connection refused"), "data_source_unavailable"),
+        (GovernedQueryError("credentials_missing", "hidden"), "authentication_rejected"),
+        (GovernedQueryError("query_timeout", "hidden"), "query_timeout"),
+        (GovernedQueryError("query_blocked", "hidden"), "query_invalid"),
+        (HTTPException(status_code=422, detail="bad semantic field"), "semantic_definition_invalid"),
+        (HTTPException(status_code=403, detail="hidden"), "permission_denied"),
+        (HTTPException(status_code=429, detail="hidden"), "rate_limited"),
+        (asyncio.CancelledError(), "cancelled"),
+        (
+            HTTPException(status_code=500, detail={"code": "dashboard_output_mismatch"}),
+            "result_contract_mismatch",
+        ),
+        (
+            HTTPException(status_code=409, detail={"code": "stale_dashboard_version"}),
+            "stale_dashboard_version",
+        ),
+        (RuntimeError("unclassified failure"), "internal_error"),
+    ],
+)
+def test_dashboard_failure_taxonomy_is_stable_and_safe(error: BaseException, expected: str) -> None:
+    assert _failure_code(error) == expected
+    failure = _dashboard_failure(error, connection_name="warehouse")
+    assert failure.code == expected
+    assert "hidden" not in failure.message
+    assert "connection refused" not in failure.message
+
+
+def test_cache_request_identity_is_exact_and_does_not_need_semantic_context() -> None:
+    definition = _fixture_definition()
+    chart = definition.charts[1]
+    tile = definition.tiles[1]
+    first = DashboardQueryRequest.model_validate(
+        {
+            "version_id": "version-1",
+            "tile_uuid": tile.uuid,
+            "dashboard_filters": [
+                {"id": "b", "operator": "equals", "values": ["South"]},
+                {"id": "a", "operator": "equals", "values": ["North"]},
+            ],
+            "drill_path": [{"field_id": "orders.region", "value": "North"}],
+        }
+    )
+    reordered = first.model_copy(update={"dashboard_filters": list(reversed(first.dashboard_filters or []))})
+
+    def key(body: DashboardQueryRequest, *, version_id: str = "version-1") -> str:
+        return _dashboard_cache_key(
+            version_id=version_id,
+            chart=chart,
+            tile_uuid=tile.uuid,
+            requested_filters=body.dashboard_filters or [],
+            drill_path=body.drill_path,
+            dashboard_filters=definition.filters,
+        )
+
+    assert key(first) == key(reordered)
+    reordered_values = first.model_copy(
+        update={
+            "dashboard_filters": [
+                (first.dashboard_filters or [])[0].model_copy(update={"values": ["South", "North"]}),
+                (first.dashboard_filters or [])[1],
+            ]
+        }
+    )
+    same_values = first.model_copy(
+        update={
+            "dashboard_filters": [
+                (first.dashboard_filters or [])[0].model_copy(update={"values": ["North", "South"]}),
+                (first.dashboard_filters or [])[1],
+            ]
+        }
+    )
+    assert key(reordered_values) == key(same_values)
+    assert key(first) != key(first, version_id="version-2")
+    changed_filter = first.model_copy(
+        update={
+            "dashboard_filters": [
+                (first.dashboard_filters or [])[0].model_copy(update={"values": ["East"]}),
+                (first.dashboard_filters or [])[1],
+            ]
+        }
+    )
+    assert key(first) != key(changed_filter)
+    changed_drill = first.model_copy(update={"drill_path": []})
+    assert key(first) != key(changed_drill)
+
+
+@pytest.mark.asyncio
+async def test_exact_cached_result_returns_before_live_semantic_resolution(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dashboard_connection_retry_gate._states.clear()
+    definition = _fixture_definition()
+    chart = definition.charts[0]
+    tile = definition.tiles[0]
+    body = DashboardQueryRequest(version_id="version-1", tile_uuid=tile.uuid)
+    cache_key = _dashboard_cache_key(
+        version_id="version-1",
+        chart=chart,
+        tile_uuid=tile.uuid,
+        requested_filters=[],
+        drill_path=[],
+        dashboard_filters=definition.filters,
+    )
+    stored = GatewayStructuredQueryResult(
+        id="structured-1",
+        execution_id="execution-1",
+        org_id="org-a",
+        owner_user_id=None,
+        columns_json=[{"name": "orders.revenue", "logical_type": "number", "nullable": False}],
+        rows_json=[{"orders.revenue": 1250}],
+        preview_rows_json=[{"orders.revenue": 1250}],
+        saved_row_count=1,
+        source_completeness="complete",
+        result_completeness="complete",
+        display_completeness="complete",
+        freshness_at=datetime.now(UTC),
+    )
+    cached = GatewayDashboardResult(
+        id="dashboard-result-1",
+        dashboard_id="dashboard-1",
+        version_id="version-1",
+        chart_id=chart.id,
+        org_id="org-a",
+        execution_id="execution-1",
+        structured_result_id=stored.id,
+        cache_key=cache_key,
+        sql_hash="a" * 64,
+        parameter_hash="b" * 64,
+        tables_json=["dbo.orders"],
+        semantic_definition_json={},
+        completeness="complete",
+        freshness_at=datetime.now(UTC),
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    db_session.add_all([stored, cached])
+    await db_session.commit()
+    store = SimpleNamespace(session=db_session, user_id="user-a", _require_org_id=lambda: "org-a")
+
+    async def unexpected_resolve(*args, **kwargs):
+        raise AssertionError("live semantic resolution must not run on an exact cache hit")
+
+    monkeypatch.setattr("gateway.api.dashboards.resolver.resolve", unexpected_resolve)
+    receipt = await _execute_dashboard_chart(
+        dashboard=SimpleNamespace(id="dashboard-1", connection_name="warehouse", project_id="project-1"),
+        query_version_id="version-1",
+        query_commit_sha="a" * 40,
+        parsed=definition,
+        chart_id=chart.id,
+        body=body,
+        store=store,
+    )
+    assert receipt.dashboard_result_id == cached.id
+    assert receipt.cache_state == "fresh"
+
+    async def unavailable_resolve(*args, **kwargs):
+        raise RuntimeError("connection refused at warehouse.internal:1433 with token=must-not-leak")
+
+    monkeypatch.setattr("gateway.api.dashboards.resolver.resolve", unavailable_resolve)
+    degraded = await _execute_dashboard_chart(
+        dashboard=SimpleNamespace(id="dashboard-1", connection_name="warehouse", project_id="project-1"),
+        query_version_id="version-1",
+        query_commit_sha="a" * 40,
+        parsed=definition,
+        chart_id=chart.id,
+        body=body.model_copy(update={"refresh": True, "retry_token": "retry-1"}),
+        store=store,
+    )
+    assert degraded.rows == stored.rows_json
+    assert degraded.cache_state == "cached_source_unavailable"
+    assert degraded.refresh_failure is not None
+    assert degraded.refresh_failure.code == "data_source_unavailable"
+    assert "must-not-leak" not in degraded.refresh_failure.message
+
+    with pytest.raises(HTTPException) as cache_miss:
+        await _execute_dashboard_chart(
+            dashboard=SimpleNamespace(id="dashboard-1", connection_name="warehouse", project_id="project-1"),
+            query_version_id="version-2",
+            query_commit_sha="a" * 40,
+            parsed=definition,
+            chart_id=chart.id,
+            body=body.model_copy(update={"version_id": "version-2"}),
+            store=store,
+        )
+    assert cache_miss.value.status_code == 503
+    assert cache_miss.value.detail["code"] == "data_source_unavailable"
+    assert cache_miss.value.detail["cache_state"] == "no_usable_cache"
+    assert (
+        await _cached_receipt(
+            SimpleNamespace(session=db_session, _require_org_id=lambda: "org-b"),
+            dashboard_id="dashboard-1",
+            version_id="version-1",
+            chart_id=chart.id,
+            cache_key=cache_key,
+        )
+        is None
+    )
+    dashboard_connection_retry_gate._states.clear()
+
+
+@pytest.mark.asyncio
+async def test_connection_retry_gate_deduplicates_outages_and_allows_one_new_retry() -> None:
+    gate = _DashboardConnectionRetryGate()
+    calls = 0
+    source_failure = _dashboard_failure(RuntimeError("connection refused"), connection_name="warehouse")
+
+    async def fail():
+        nonlocal calls
+        calls += 1
+        raise _DashboardFailureRaised(source_failure)
+
+    with pytest.raises(_DashboardFailureRaised):
+        await gate.run(org_id="org-a", connection_name="warehouse", retry_token=None, operation=fail)
+    with pytest.raises(_DashboardFailureRaised):
+        await gate.run(org_id="org-a", connection_name="warehouse", retry_token=None, operation=fail)
+    assert calls == 1
+
+    with pytest.raises(_DashboardFailureRaised):
+        await gate.run(org_id="org-a", connection_name="warehouse", retry_token="retry-1", operation=fail)
+    with pytest.raises(_DashboardFailureRaised):
+        await gate.run(org_id="org-a", connection_name="warehouse", retry_token="retry-1", operation=fail)
+    assert calls == 2
+
+    async def recover():
+        return "fresh"
+
+    result, recovered = await gate.run(
+        org_id="org-a",
+        connection_name="warehouse",
+        retry_token="retry-2",
+        operation=recover,
+    )
+    assert (result, recovered) == ("fresh", True)
+    assert gate._states == {}
 
 
 def test_compiler_supports_multiselect_absolute_dates_and_drill() -> None:

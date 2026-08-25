@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DashboardChartTile } from "~/components/dashboard/dashboard-chart-tile";
 import type {
   ChartDefinition,
+  DashboardFailure,
   DashboardQueryResult,
 } from "~/lib/dashboard/contracts";
 
@@ -54,6 +55,21 @@ const result: DashboardQueryResult = {
   timezone: "America/Sao_Paulo",
   locale: "en-US",
 };
+
+function failure(overrides: Partial<DashboardFailure> = {}): DashboardFailure {
+  return {
+    code: "data_source_unavailable",
+    message: "The data source is temporarily unavailable.",
+    retryable: true,
+    connectionName: "mssql-pilot",
+    scope: "connection",
+    correlationId: "incident-1",
+    occurredAt: "2026-08-25T12:00:00Z",
+    cacheFallbackAvailable: false,
+    cacheState: "no_usable_cache",
+    ...overrides,
+  };
+}
 
 async function press(element: HTMLElement | null) {
   await act(async () => {
@@ -178,31 +194,57 @@ describe("DashboardChartTile interactions", () => {
 
   it("shows a compact business-facing message for a network failure", async () => {
     await act(async () => {
-      root.render(<DashboardChartTile chart={chart} error="Failed to fetch" />);
-    });
-
-    expect(container.textContent).toContain(
-      "The data source is temporarily unavailable",
-    );
-    expect(container.textContent).not.toContain("Failed to fetch");
-  });
-
-  it("does not expose a truncated time series as a usable chart", async () => {
-    await act(async () => {
       root.render(
         <DashboardChartTile
           chart={chart}
-          error={'422: {"detail":{"code":"dashboard_time_series_truncated"}}'}
+          failure={failure()}
+          onRetry={vi.fn()}
         />,
       );
     });
 
     expect(container.textContent).toContain(
-      "This time series exceeds its safe row limit",
+      "The data source is temporarily unavailable",
     );
-    expect(container.textContent).not.toContain(
-      "dashboard_time_series_truncated",
+    expect(container.textContent).toContain("No cached data is available");
+    expect(container.textContent).toContain("Last attempted");
+    expect(container.textContent).toContain("Retry");
+  });
+
+  it("does not expose a result-contract mismatch as a usable chart", async () => {
+    await act(async () => {
+      root.render(
+        <DashboardChartTile
+          chart={chart}
+          failure={failure({
+            code: "result_contract_mismatch",
+            message:
+              "The returned data does not match this chart's expected fields.",
+            retryable: false,
+            scope: "chart",
+          })}
+        />,
+      );
+    });
+
+    expect(container.textContent).toContain(
+      "does not match this chart's expected fields",
     );
+  });
+
+  it("keeps cached data visible without repeating a connection incident in the tile", async () => {
+    await act(async () => {
+      root.render(
+        <DashboardChartTile
+          chart={chart}
+          result={{ ...result, cacheState: "cached_source_unavailable" }}
+          failure={failure({ cacheFallbackAvailable: true })}
+        />,
+      );
+    });
+
+    expect(container.textContent).toContain("HaulPro");
+    expect(container.textContent).not.toContain("Latest refresh failed");
   });
 
   it("closes View data with Escape", async () => {

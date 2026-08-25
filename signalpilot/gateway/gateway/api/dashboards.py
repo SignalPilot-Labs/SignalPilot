@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import time
 import uuid
+from collections.abc import Awaitable, Callable
+from contextlib import suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import TypeVar
 
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
@@ -53,6 +58,8 @@ from gateway.models.dashboards import (
     DashboardDistinctValuesResponse,
     DashboardExportGrant,
     DashboardExportRequest,
+    DashboardFailure,
+    DashboardFailureCode,
     DashboardForkRequest,
     DashboardListItem,
     DashboardQueryReceipt,
@@ -72,6 +79,157 @@ from .deps import StoreD
 
 router = APIRouter(prefix="/api")
 resolver = DashboardSemanticResolver()
+
+DashboardResultT = TypeVar("DashboardResultT")
+
+
+@dataclass
+class _ConnectionFailureState:
+    failure: DashboardFailure
+    blocked_until: float
+    retry_token: str | None
+    consecutive_failures: int
+
+
+class _DashboardConnectionRetryGate:
+    """Deduplicate dashboard retries for one unavailable warehouse connection."""
+
+    def __init__(self) -> None:
+        self._locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._states: dict[tuple[str, str], _ConnectionFailureState] = {}
+
+    async def run(
+        self,
+        *,
+        org_id: str,
+        connection_name: str,
+        retry_token: str | None,
+        operation: Callable[[], Awaitable[DashboardResultT]],
+    ) -> tuple[DashboardResultT, bool]:
+        key = (org_id, connection_name)
+        lock = self._locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            state = self._states.get(key)
+            recovering = state is not None
+            now = time.monotonic()
+            if state and state.blocked_until > now:
+                is_new_manual_retry = retry_token is not None and retry_token != state.retry_token
+                if not is_new_manual_retry:
+                    raise _DashboardFailureRaised(state.failure)
+            try:
+                result = await operation()
+            except _DashboardFailureRaised as exc:
+                failure = exc.failure
+                if failure.scope == "connection" and failure.retryable:
+                    attempts = (state.consecutive_failures + 1) if state else 1
+                    backoff = min(30, 2 ** min(attempts - 1, 4))
+                    failure = failure.model_copy(update={"retry_after_seconds": backoff})
+                    self._states[key] = _ConnectionFailureState(
+                        failure=failure,
+                        blocked_until=time.monotonic() + backoff,
+                        retry_token=retry_token,
+                        consecutive_failures=attempts,
+                    )
+                    raise _DashboardFailureRaised(failure) from exc
+                raise
+            self._states.pop(key, None)
+            return result, recovering
+
+
+class _DashboardFailureRaised(RuntimeError):
+    def __init__(self, failure: DashboardFailure):
+        super().__init__(failure.message)
+        self.failure = failure
+
+
+dashboard_connection_retry_gate = _DashboardConnectionRetryGate()
+
+
+_FAILURE_MESSAGES: dict[DashboardFailureCode, str] = {
+    "data_source_unavailable": "The data source is temporarily unavailable.",
+    "authentication_rejected": "The data source rejected its saved credentials.",
+    "query_timeout": "The data source did not finish the query in time.",
+    "query_invalid": "This chart query is no longer valid for the data source.",
+    "semantic_definition_invalid": "This chart's semantic definition is no longer valid.",
+    "permission_denied": "You do not have permission to query this dashboard data.",
+    "rate_limited": "Dashboard queries are temporarily rate limited.",
+    "cancelled": "The dashboard query was cancelled.",
+    "result_contract_mismatch": "The returned data does not match this chart's expected fields.",
+    "stale_dashboard_version": "This dashboard version is no longer current.",
+    "internal_error": "SignalPilot could not complete this dashboard query.",
+}
+
+
+def _failure_code(exc: BaseException) -> DashboardFailureCode:
+    governed_code = exc.code if isinstance(exc, GovernedQueryError) else None
+    if governed_code == "query_timeout":
+        return "query_timeout"
+    if governed_code == "query_cancelled" or isinstance(exc, asyncio.CancelledError):
+        return "cancelled"
+    if governed_code in {"credentials_missing", "connection_not_found"}:
+        return "authentication_rejected"
+    if governed_code in {"query_blocked", "invalid_parameters"}:
+        return "query_invalid"
+    if governed_code in {"result_unavailable", "result_integrity_failed"}:
+        return "result_contract_mismatch"
+
+    status_code = exc.status_code if isinstance(exc, HTTPException) else None
+    detail = exc.detail if isinstance(exc, HTTPException) else None
+    detail_code = detail.get("code") if isinstance(detail, dict) else None
+    if detail_code in {"semantic_context_changed", "stale_dashboard_version"}:
+        return "stale_dashboard_version"
+    if detail_code in {"dashboard_output_mismatch", "dashboard_time_series_truncated"}:
+        return "result_contract_mismatch"
+    if status_code == 403:
+        return "permission_denied"
+    if status_code == 429:
+        return "rate_limited"
+    if status_code == 409:
+        return "stale_dashboard_version"
+    if isinstance(exc, (DashboardCompileError, DashboardSemanticError)) or status_code == 422:
+        return "semantic_definition_invalid"
+
+    internal = str(exc).lower()
+    if any(token in internal for token in ("login failed", "authentication", "password", "credentials")):
+        return "authentication_rejected"
+    if any(token in internal for token in ("permission denied", "access denied", "not authorized")):
+        return "permission_denied"
+    if "timeout" in internal or "timed out" in internal:
+        return "query_timeout"
+    if any(token in internal for token in ("connection refused", "unreachable", "network", "server is unavailable")):
+        return "data_source_unavailable"
+    if governed_code == "query_failed":
+        if any(token in internal for token in ("syntax", "invalid column", "invalid object", "unknown column")):
+            return "query_invalid"
+        return "data_source_unavailable"
+    return "internal_error"
+
+
+def _dashboard_failure(
+    exc: BaseException,
+    *,
+    connection_name: str,
+    cache_fallback_available: bool = False,
+) -> DashboardFailure:
+    code = _failure_code(exc)
+    retryable = code in {"data_source_unavailable", "query_timeout", "rate_limited", "internal_error"}
+    scope = (
+        "connection"
+        if code in {"data_source_unavailable", "authentication_rejected", "query_timeout", "rate_limited"}
+        else "dashboard"
+        if code in {"permission_denied", "stale_dashboard_version", "internal_error"}
+        else "chart"
+    )
+    return DashboardFailure(
+        code=code,
+        message=_FAILURE_MESSAGES[code],
+        retryable=retryable,
+        connection_name=connection_name,
+        scope=scope,
+        correlation_id=str(uuid.uuid4()),
+        occurred_at=datetime.now(UTC),
+        cache_fallback_available=cache_fallback_available,
+    )
 
 
 def _user_id(store: StoreD) -> str:
@@ -596,7 +754,121 @@ async def apply_dashboard_authoring_session(session_id: str, body: DashboardAuth
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-async def _cached_receipt(store: StoreD, *, dashboard_id: str, version_id: str, cache_key: str):
+def _canonical_scalar(value):
+    if isinstance(value, dict):
+        return {key: _canonical_scalar(value[key]) for key in sorted(value)}
+    if isinstance(value, list):
+        return [_canonical_scalar(item) for item in value]
+    return value
+
+
+def _dashboard_cache_key(
+    *,
+    version_id: str,
+    chart,
+    tile_uuid: str,
+    requested_filters,
+    drill_path,
+    dashboard_filters,
+) -> str:
+    """Build an exact request identity without touching the live warehouse."""
+
+    def normalized_filter(item) -> dict:
+        payload = _canonical_scalar(item.model_dump(mode="json", exclude_none=True))
+        if payload.get("operator") == "equals" and isinstance(payload.get("values"), list):
+            payload["values"] = sorted(payload["values"], key=lambda value: json.dumps(value, sort_keys=True))
+        return payload
+
+    normalized_filters = sorted(
+        (normalized_filter(item) for item in requested_filters),
+        key=lambda item: (str(item.get("id")), json.dumps(item, sort_keys=True)),
+    )
+    payload = {
+        "version_id": version_id,
+        "chart_id": chart.id,
+        "tile_uuid": tile_uuid,
+        "query_identity": chart.model_dump(mode="json", by_alias=True, exclude_none=True),
+        "dashboard_filter_identity": dashboard_filters.model_dump(mode="json", by_alias=True, exclude_none=True),
+        "filters": normalized_filters,
+        "drill_path": [item.model_dump(mode="json") for item in drill_path],
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+
+
+async def _record_dashboard_failure(
+    store: StoreD,
+    *,
+    dashboard_id: str,
+    version_id: str,
+    failure: DashboardFailure,
+    cached_result_time: datetime | None,
+) -> None:
+    cached_age_seconds = None
+    if cached_result_time is not None:
+        result_time = cached_result_time.replace(tzinfo=cached_result_time.tzinfo or UTC)
+        cached_age_seconds = max(0, int((datetime.now(UTC) - result_time).total_seconds()))
+    with suppress(Exception):
+        await append_audit(
+            store.session,
+            org_id=store._require_org_id(),
+            user_id=_user_id(store),
+            entry=AuditEntry(
+                id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                event_type="dashboard_query_failure",
+                connection_name=failure.connection_name,
+                metadata={
+                    "dashboard_id": dashboard_id,
+                    "version_id": version_id,
+                    "failure_code": failure.code,
+                    "incident_scope": failure.scope,
+                    "cache_fallback_used": failure.cache_fallback_available,
+                    "cached_age_seconds": cached_age_seconds,
+                    "retryable": failure.retryable,
+                    "retry_outcome": "failed",
+                    "retry_after_seconds": failure.retry_after_seconds,
+                    "correlation_id": failure.correlation_id,
+                },
+            ),
+        )
+
+
+async def _record_dashboard_recovery(
+    store: StoreD,
+    *,
+    dashboard_id: str,
+    version_id: str,
+    connection_name: str,
+    correlation_id: str,
+) -> None:
+    with suppress(Exception):
+        await append_audit(
+            store.session,
+            org_id=store._require_org_id(),
+            user_id=_user_id(store),
+            entry=AuditEntry(
+                id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                event_type="dashboard_query_recovery",
+                connection_name=connection_name,
+                metadata={
+                    "dashboard_id": dashboard_id,
+                    "version_id": version_id,
+                    "retry_outcome": "fresh_result",
+                    "correlation_id": correlation_id,
+                },
+            ),
+        )
+
+
+async def _cached_receipt(
+    store: StoreD,
+    *,
+    dashboard_id: str,
+    version_id: str,
+    chart_id: str,
+    cache_key: str,
+):
     now = datetime.now(UTC)
     row = (
         await store.session.execute(
@@ -609,6 +881,7 @@ async def _cached_receipt(store: StoreD, *, dashboard_id: str, version_id: str, 
                 GatewayDashboardResult.org_id == store._require_org_id(),
                 GatewayDashboardResult.dashboard_id == dashboard_id,
                 GatewayDashboardResult.version_id == version_id,
+                GatewayDashboardResult.chart_id == chart_id,
                 GatewayDashboardResult.cache_key == cache_key,
             )
             .order_by(GatewayDashboardResult.created_at.desc())
@@ -635,7 +908,7 @@ async def _cached_receipt(store: StoreD, *, dashboard_id: str, version_id: str, 
         compiled_sql=None,
         cache_state="fresh"
         if dashboard_result.expires_at.replace(tzinfo=dashboard_result.expires_at.tzinfo or UTC) > now
-        else "stale",
+        else "stale_refreshing",
     )
 
 
@@ -748,7 +1021,6 @@ async def _execute_dashboard_chart(
             },
         )
     tile = _tile_for_chart(parsed, chart_id, body.tile_uuid)
-    context = await _verified_context(store, parsed)
     requested_filters = body.dashboard_filters
     if requested_filters is None:
         requested_filters = [
@@ -756,125 +1028,178 @@ async def _execute_dashboard_chart(
         ]
     runtime_filters = _runtime_filters_for_tile(parsed, tile.uuid, chart, requested_filters)
     drill_dimensions, drill_filters = _drill_query_state(chart, body.drill_path)
-    try:
-        compiled = (
-            compile_metric_query(
-                chart.query,
-                context,
-                runtime_filters=[*runtime_filters, *drill_filters],
-                drill_dimensions=drill_dimensions,
-            )
-            if isinstance(chart.query, SemanticChartQuery)
-            else compile_custom_sql_query(
-                chart.query,
-                runtime_filters=runtime_filters,
-                timezone=parsed.signalPilot.timezone,
-            )
-        )
-    except DashboardCompileError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    parameter_hash = hashlib.sha256(
-        json.dumps(compiled.parameters, sort_keys=True, separators=(",", ":"), default=str).encode()
-    ).hexdigest()
-    cache_key = hashlib.sha256(
-        json.dumps(
-            {
-                "version_id": query_version_id,
-                "chart_id": chart.id,
-                "sql": compiled.sql,
-                "parameters": compiled.parameters,
-                "drill_path": [step.model_dump() for step in body.drill_path],
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        ).encode()
-    ).hexdigest()
-    if not body.refresh:
-        cached = await _cached_receipt(
-            store, dashboard_id=dashboard.id, version_id=query_version_id, cache_key=cache_key
-        )
-        if cached is not None:
-            _reject_truncated_time_series(chart, cached.completeness)
-            return cached.model_copy(update={"compiled_sql": compiled.sql})
-    try:
-        result = await governed_query_executor.execute(
-            store,
-            connection_name=dashboard.connection_name,
-            sql=compiled.sql,
-            parameters=compiled.parameters,
-            row_limit=chart.query.limit,
-            timeout_seconds=60,
-            context=GovernedQueryContext(
-                path="dashboard",
-                project_id=dashboard.project_id,
-                commit_sha=query_commit_sha,
-            ),
-        )
-    except GovernedQueryError as exc:
-        raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)}) from exc
-    _reject_truncated_time_series(chart, result.completeness)
-    stored = (
-        await store.session.execute(
-            select(GatewayStructuredQueryResult).where(
-                GatewayStructuredQueryResult.id == result.result_id,
-                GatewayStructuredQueryResult.org_id == store._require_org_id(),
-            )
-        )
-    ).scalar_one()
-    expected_outputs = [str(column["name"]) for column in compiled.output_columns]
-    result_columns = result.columns
-    if result.row_count == 0 and not result_columns:
-        result_columns = compiled.output_columns
-    output_check = compare_columns(expected_outputs, [str(column.get("name")) for column in result_columns])
-    if not output_check.valid:
-        raise HTTPException(
-            status_code=500,
-            detail={"code": "dashboard_output_mismatch", "missing_fields": output_check.missing},
-        )
-    output_metadata = {str(column["name"]): column for column in compiled.output_columns}
-    result_columns = [{**output_metadata.get(str(column.get("name")), {}), **column} for column in result_columns]
-    stored.owner_user_id = None
-    stored.result_origin = "dashboard"
-    stored.columns_json = result_columns
-    now = datetime.now(UTC)
-    dashboard_result = GatewayDashboardResult(
-        id=str(uuid.uuid4()),
+    cache_key = _dashboard_cache_key(
+        version_id=query_version_id,
+        chart=chart,
+        tile_uuid=tile.uuid,
+        requested_filters=requested_filters,
+        drill_path=body.drill_path,
+        dashboard_filters=parsed.filters,
+    )
+    cached = await _cached_receipt(
+        store,
         dashboard_id=dashboard.id,
         version_id=query_version_id,
         chart_id=chart.id,
-        org_id=store._require_org_id(),
-        execution_id=result.execution_id,
-        structured_result_id=result.result_id,
         cache_key=cache_key,
-        sql_hash=result.sql_hash,
-        parameter_hash=parameter_hash,
-        tables_json=result.tables,
-        semantic_definition_json=compiled.semantic_definition,
-        completeness=result.completeness,
-        freshness_at=stored.freshness_at,
-        expires_at=now + timedelta(minutes=5),
     )
-    store.session.add(dashboard_result)
-    await store.session.commit()
-    await store.session.refresh(dashboard_result)
-    return DashboardQueryReceipt(
-        dashboard_result_id=dashboard_result.id,
-        result_id=result.result_id,
-        execution_id=result.execution_id,
-        columns=result_columns,
-        rows=result.rows,
-        row_count=result.row_count,
-        completeness=result.completeness,
-        result_time=dashboard_result.created_at,
-        freshness_at=dashboard_result.freshness_at,
-        sql_hash=result.sql_hash,
-        parameter_hash=parameter_hash,
-        tables=result.tables,
-        semantic_definition=compiled.semantic_definition,
-        compiled_sql=compiled.sql,
-        cache_state="miss" if not body.refresh else "refreshed",
-    )
+    if not body.refresh:
+        if cached is not None:
+            _reject_truncated_time_series(chart, cached.completeness)
+            return cached
+
+    async def _run_live_query() -> DashboardQueryReceipt:
+        try:
+            context = await _verified_context(store, parsed)
+            compiled = (
+                compile_metric_query(
+                    chart.query,
+                    context,
+                    runtime_filters=[*runtime_filters, *drill_filters],
+                    drill_dimensions=drill_dimensions,
+                )
+                if isinstance(chart.query, SemanticChartQuery)
+                else compile_custom_sql_query(
+                    chart.query,
+                    runtime_filters=runtime_filters,
+                    timezone=parsed.signalPilot.timezone,
+                )
+            )
+            parameter_hash = hashlib.sha256(
+                json.dumps(compiled.parameters, sort_keys=True, separators=(",", ":"), default=str).encode()
+            ).hexdigest()
+            result = await governed_query_executor.execute(
+                store,
+                connection_name=dashboard.connection_name,
+                sql=compiled.sql,
+                parameters=compiled.parameters,
+                row_limit=chart.query.limit,
+                timeout_seconds=60,
+                context=GovernedQueryContext(
+                    path="dashboard",
+                    project_id=dashboard.project_id,
+                    commit_sha=query_commit_sha,
+                ),
+            )
+            _reject_truncated_time_series(chart, result.completeness)
+            stored = (
+                await store.session.execute(
+                    select(GatewayStructuredQueryResult).where(
+                        GatewayStructuredQueryResult.id == result.result_id,
+                        GatewayStructuredQueryResult.org_id == store._require_org_id(),
+                    )
+                )
+            ).scalar_one()
+            expected_outputs = [str(column["name"]) for column in compiled.output_columns]
+            result_columns = result.columns
+            if result.row_count == 0 and not result_columns:
+                result_columns = compiled.output_columns
+            output_check = compare_columns(expected_outputs, [str(column.get("name")) for column in result_columns])
+            if not output_check.valid:
+                raise HTTPException(
+                    status_code=500,
+                    detail={"code": "dashboard_output_mismatch", "missing_fields": output_check.missing},
+                )
+            output_metadata = {str(column["name"]): column for column in compiled.output_columns}
+            result_columns = [
+                {**output_metadata.get(str(column.get("name")), {}), **column} for column in result_columns
+            ]
+            stored.owner_user_id = None
+            stored.result_origin = "dashboard"
+            stored.columns_json = result_columns
+            now = datetime.now(UTC)
+            dashboard_result = GatewayDashboardResult(
+                id=str(uuid.uuid4()),
+                dashboard_id=dashboard.id,
+                version_id=query_version_id,
+                chart_id=chart.id,
+                org_id=store._require_org_id(),
+                execution_id=result.execution_id,
+                structured_result_id=result.result_id,
+                cache_key=cache_key,
+                sql_hash=result.sql_hash,
+                parameter_hash=parameter_hash,
+                tables_json=result.tables,
+                semantic_definition_json=compiled.semantic_definition,
+                completeness=result.completeness,
+                freshness_at=stored.freshness_at,
+                expires_at=now + timedelta(minutes=5),
+            )
+            store.session.add(dashboard_result)
+            await store.session.commit()
+            await store.session.refresh(dashboard_result)
+            return DashboardQueryReceipt(
+                dashboard_result_id=dashboard_result.id,
+                result_id=result.result_id,
+                execution_id=result.execution_id,
+                columns=result_columns,
+                rows=result.rows,
+                row_count=result.row_count,
+                completeness=result.completeness,
+                result_time=dashboard_result.created_at,
+                freshness_at=dashboard_result.freshness_at,
+                sql_hash=result.sql_hash,
+                parameter_hash=parameter_hash,
+                tables=result.tables,
+                semantic_definition=compiled.semantic_definition,
+                compiled_sql=compiled.sql,
+                cache_state="fresh",
+            )
+        except asyncio.CancelledError:
+            raise
+        except _DashboardFailureRaised:
+            raise
+        except Exception as exc:
+            raise _DashboardFailureRaised(_dashboard_failure(exc, connection_name=dashboard.connection_name)) from exc
+
+    try:
+        live, recovered = await dashboard_connection_retry_gate.run(
+            org_id=store._require_org_id(),
+            connection_name=dashboard.connection_name,
+            retry_token=body.retry_token,
+            operation=_run_live_query,
+        )
+        if recovered and body.retry_token:
+            await _record_dashboard_recovery(
+                store,
+                dashboard_id=dashboard.id,
+                version_id=query_version_id,
+                connection_name=dashboard.connection_name,
+                correlation_id=body.retry_token,
+            )
+        return live
+    except _DashboardFailureRaised as exc:
+        failure = exc.failure.model_copy(update={"cache_fallback_available": cached is not None})
+        await _record_dashboard_failure(
+            store,
+            dashboard_id=dashboard.id,
+            version_id=query_version_id,
+            failure=failure,
+            cached_result_time=cached.result_time if cached else None,
+        )
+        if cached is not None:
+            cache_state = (
+                "cached_source_unavailable" if failure.scope == "connection" else "cached_after_refresh_failure"
+            )
+            return cached.model_copy(update={"cache_state": cache_state, "refresh_failure": failure})
+        failure = failure.model_copy(update={"cache_state": "no_usable_cache"})
+        status_code = {
+            "permission_denied": 403,
+            "rate_limited": 429,
+            "stale_dashboard_version": 409,
+            "query_timeout": 504,
+            "data_source_unavailable": 503,
+            "authentication_rejected": 503,
+            "query_invalid": 422,
+            "semantic_definition_invalid": 422,
+            "result_contract_mismatch": 502,
+            "cancelled": 409,
+            "internal_error": 500,
+        }[failure.code]
+        raise HTTPException(
+            status_code=status_code,
+            detail=failure.model_dump(mode="json", exclude_none=True),
+        ) from exc
 
 
 @router.post(
@@ -1070,7 +1395,7 @@ async def get_dashboard_chart_data(
         tables=dashboard_result.tables_json,
         semantic_definition=dashboard_result.semantic_definition_json,
         compiled_sql=None,
-        cache_state="fresh" if expires_at > datetime.now(UTC) else "stale",
+        cache_state="fresh" if expires_at > datetime.now(UTC) else "stale_refreshing",
     )
 
 

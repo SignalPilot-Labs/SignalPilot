@@ -97,6 +97,7 @@ class DashboardQueryRequest(DashboardModel):
     version_id: str | None = None
     authoring_session_id: str | None = None
     refresh: bool = False
+    retry_token: str | None = Field(default=None, min_length=1, max_length=100)
     tile_uuid: str | None = None
     dashboard_filters: list[DashboardRuntimeFilter] | None = None
     drill_path: list[DashboardDrillStep] = Field(default_factory=list)
@@ -125,6 +126,34 @@ class DashboardDistinctValuesResponse(DashboardModel):
     execution_id: str
 
 
+type DashboardFailureCode = Literal[
+    "data_source_unavailable",
+    "authentication_rejected",
+    "query_timeout",
+    "query_invalid",
+    "semantic_definition_invalid",
+    "permission_denied",
+    "rate_limited",
+    "cancelled",
+    "result_contract_mismatch",
+    "stale_dashboard_version",
+    "internal_error",
+]
+
+
+class DashboardFailure(DashboardModel):
+    code: DashboardFailureCode
+    message: str
+    retryable: bool
+    connection_name: str | None = None
+    scope: Literal["connection", "chart", "dashboard"]
+    correlation_id: str
+    occurred_at: datetime
+    cache_fallback_available: bool = False
+    cache_state: Literal["no_usable_cache"] | None = None
+    retry_after_seconds: int | None = Field(default=None, ge=1, le=300)
+
+
 class DashboardQueryReceipt(DashboardModel):
     dashboard_result_id: str
     result_id: str
@@ -140,7 +169,13 @@ class DashboardQueryReceipt(DashboardModel):
     tables: list[str]
     semantic_definition: dict
     compiled_sql: str | None
-    cache_state: str
+    cache_state: Literal[
+        "fresh",
+        "stale_refreshing",
+        "cached_source_unavailable",
+        "cached_after_refresh_failure",
+    ]
+    refresh_failure: DashboardFailure | None = None
 
 
 class DashboardSemanticField(DashboardModel):

@@ -49,6 +49,48 @@
   gap: 10px;
   flex-direction: row;
 }
+.incidentBanner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin: -6px 0 18px;
+  border: 1px solid color-mix(in srgb, #d7a84f 48%, var(--color-border));
+  border-radius: 10px;
+  background: color-mix(in srgb, #d7a84f 8%, var(--color-bg-card));
+  color: var(--color-text-muted);
+  padding: 11px 13px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.incidentBanner strong {
+  color: var(--color-text);
+}
+.incidentBanner p {
+  margin: 5px 0 0;
+  color: var(--color-text-dim);
+  font-size: 11px;
+}
+.incidentActions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+.incidentActions button,
+.errorState button {
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  cursor: pointer;
+  padding: 5px 9px;
+  font-size: 11px;
+}
+.incidentActions button:disabled,
+.errorState button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
 .refreshButtonWrap > button {
   display: grid;
   width: 38px;
@@ -517,6 +559,15 @@
   font-size: 11px;
   padding: 8px;
   margin-bottom: 8px;
+}
+.failureAttemptedAt {
+  display: block;
+  margin-top: 5px;
+  color: var(--color-text-dim);
+}
+.errorState button {
+  display: block;
+  margin-top: 8px;
 }
 .selectionActions {
   display: flex;
@@ -1227,6 +1278,9 @@
   .headerActions {
     align-items: flex-start;
     flex-direction: row;
+  }
+  .incidentBanner {
+    flex-direction: column;
   }
   .controlBar {
     align-items: flex-start;

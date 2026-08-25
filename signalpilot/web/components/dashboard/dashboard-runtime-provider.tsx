@@ -16,12 +16,14 @@ import { DashboardControlBar } from "~/components/dashboard/dashboard-control-ba
 import { DashboardDetailsDrawer } from "~/components/dashboard/dashboard-inspector";
 import {
   DashboardApiDataSource,
+  dashboardFailureFromCause,
   isUnsafeTruncatedSeriesError,
   type DashboardQueryReceipt,
 } from "~/lib/dashboard/api-data-source";
 import type {
   ChartDefinition,
   DashboardDefinition,
+  DashboardFailure,
   DashboardQueryResult,
 } from "~/lib/dashboard/contracts";
 import {
@@ -55,6 +57,29 @@ function hierarchyFor(chart: ChartDefinition): string[] {
 
 function isRuntimeScalar(value: unknown): value is string | number | boolean {
   return ["string", "number", "boolean"].includes(typeof value);
+}
+
+function retryToken(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `dashboard-retry-${Date.now()}`;
+}
+
+function dashboardIncidentTitle(failure: DashboardFailure): string {
+  switch (failure.code) {
+    case "data_source_unavailable":
+      return "Database unavailable";
+    case "authentication_rejected":
+      return "Database connection needs attention";
+    case "query_timeout":
+      return "Database response timed out";
+    case "rate_limited":
+      return "Dashboard queries are temporarily limited";
+    case "permission_denied":
+      return "Dashboard access is restricted";
+    case "stale_dashboard_version":
+      return "Dashboard version changed";
+    default:
+      return "Dashboard refresh needs attention";
+  }
 }
 
 export function DashboardRuntimeProvider({
@@ -96,7 +121,9 @@ export function DashboardRuntimeProvider({
   const [results, setResults] = useState<Record<string, DashboardQueryResult>>(
     {},
   );
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [failures, setFailures] = useState<Record<string, DashboardFailure>>(
+    {},
+  );
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const [receipts, setReceipts] = useState<
     Record<string, DashboardQueryReceipt>
@@ -104,12 +131,14 @@ export function DashboardRuntimeProvider({
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const handledRefresh = useRef(0);
   const refreshPending = useRef(false);
+  const pendingRetryToken = useRef<string | undefined>(undefined);
   const refreshedStaleKeys = useRef(new Set<string>());
   const [detailsChartId, setDetailsChartId] = useState<string>();
   const [selectedMarks, setSelectedMarks] = useState<
     Record<string, Record<string, unknown>>
   >({});
   const [analysisChartId, setAnalysisChartId] = useState<string>();
+  const [incidentDetailsOpen, setIncidentDetailsOpen] = useState(false);
   const previousDefinition = useRef(definition);
   const dataSource = useMemo(
     () =>
@@ -121,11 +150,13 @@ export function DashboardRuntimeProvider({
         authoringSessionId,
         definition.signalPilot.timezone,
         viewerLocale(),
+        definition.signalPilot.connectionName,
       ),
     [
       authoringSessionId,
       dashboardId,
       definition.signalPilot.timezone,
+      definition.signalPilot.connectionName,
       versionId,
     ],
   );
@@ -139,7 +170,7 @@ export function DashboardRuntimeProvider({
     previousDefinition.current = definition;
     setRuntimeState(initialDashboardRuntimeState(definition));
     setResults({});
-    setErrors({});
+    setFailures({});
     setReceipts({});
     setSelectedMarks({});
     setDetailsChartId(undefined);
@@ -172,17 +203,16 @@ export function DashboardRuntimeProvider({
     const controller = new AbortController();
     let pendingTiles = 0;
     const invalidateCache = refreshGeneration > handledRefresh.current;
+    const currentRetryToken = invalidateCache
+      ? pendingRetryToken.current
+      : undefined;
+    pendingRetryToken.current = undefined;
     handledRefresh.current = refreshGeneration;
     for (const tile of definition.tiles) {
       const chart = definition.charts.find((item) => item.id === tile.chartId);
       if (!chart) continue;
       pendingTiles += 1;
       setLoading((current) => ({ ...current, [chart.id]: true }));
-      setErrors((current) => {
-        const next = { ...current };
-        delete next[chart.id];
-        return next;
-      });
       void dataSource
         .loadTile(
           tile,
@@ -193,12 +223,19 @@ export function DashboardRuntimeProvider({
             dashboardFilters: runtimeState.filters,
             dashboardDrillPath: runtimeState.drills[chart.id] ?? [],
             invalidateCache,
+            retryToken: currentRetryToken,
           },
           controller.signal,
         )
-        .then((result) =>
-          setResults((current) => ({ ...current, [chart.id]: result })),
-        )
+        .then((result) => {
+          setResults((current) => ({ ...current, [chart.id]: result }));
+          setFailures((current) => {
+            const next = { ...current };
+            if (result.refreshFailure) next[chart.id] = result.refreshFailure;
+            else delete next[chart.id];
+            return next;
+          });
+        })
         .catch((cause) => {
           if (controller.signal.aborted) return;
           if (isUnsafeTruncatedSeriesError(cause)) {
@@ -213,9 +250,12 @@ export function DashboardRuntimeProvider({
               return next;
             });
           }
-          setErrors((current) => ({
+          setFailures((current) => ({
             ...current,
-            [chart.id]: cause instanceof Error ? cause.message : "Query failed",
+            [chart.id]: dashboardFailureFromCause(
+              cause,
+              definition.signalPilot.connectionName,
+            ),
           }));
         })
         .finally(() => {
@@ -238,7 +278,7 @@ export function DashboardRuntimeProvider({
   useEffect(() => {
     if (Object.values(loading).some(Boolean)) return;
     const stale = Object.values(receipts).find(
-      (receipt) => receipt.cache_state === "stale",
+      (receipt) => receipt.cache_state === "stale_refreshing",
     );
     if (!stale || refreshedStaleKeys.current.has(stale.dashboard_result_id))
       return;
@@ -268,8 +308,16 @@ export function DashboardRuntimeProvider({
   const refreshDashboard = () => {
     if (dashboardLoading || refreshPending.current) return;
     refreshPending.current = true;
+    pendingRetryToken.current = retryToken();
     setRefreshGeneration((value) => value + 1);
   };
+  const incident =
+    Object.values(failures).find((failure) => failure.scope === "connection") ??
+    Object.values(failures).find((failure) => failure.scope === "dashboard");
+  const incidentTitle = incident ? dashboardIncidentTitle(incident) : undefined;
+  const incidentFreshness = dashboardFreshnessAt
+    ? formatDashboardTimestamp(dashboardFreshnessAt, formatContext)
+    : undefined;
 
   return (
     <div className={styles.runtime} data-dashboard-export-root>
@@ -285,7 +333,7 @@ export function DashboardRuntimeProvider({
             </div>
           </div>
           <div className={styles.headerActions}>
-            {dashboardLoading || Object.keys(errors).length ? (
+            {dashboardLoading || Object.keys(failures).length ? (
               <span
                 className={styles.dashboardRefreshState}
                 role="status"
@@ -329,6 +377,47 @@ export function DashboardRuntimeProvider({
           </div>
         </header>
         {lifecycleNotice}
+        {incident ? (
+          <section
+            className={styles.incidentBanner}
+            role="status"
+            data-dashboard-export-exclude
+          >
+            <div>
+              <strong>{incidentTitle}</strong>
+              <span>
+                {hasVisibleResults && incidentFreshness
+                  ? ` — showing cached data from ${incidentFreshness}`
+                  : ` — ${incident.message}`}
+              </span>
+              {incidentDetailsOpen ? (
+                <p>
+                  {incident.message} Reference {incident.correlationId}.
+                  {incident.retryAfterSeconds
+                    ? ` Automatic retries are paused for ${incident.retryAfterSeconds} seconds.`
+                    : ""}
+                </p>
+              ) : null}
+            </div>
+            <div className={styles.incidentActions}>
+              {incident.retryable ? (
+                <button
+                  type="button"
+                  onClick={refreshDashboard}
+                  disabled={dashboardLoading}
+                >
+                  Retry
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => setIncidentDetailsOpen((open) => !open)}
+              >
+                {incidentDetailsOpen ? "Hide details" : "Details"}
+              </button>
+            </div>
+          </section>
+        ) : null}
         <DashboardControlBar
           dashboardId={dashboardId}
           versionId={versionId}
@@ -396,8 +485,9 @@ export function DashboardRuntimeProvider({
                 <DashboardChartTile
                   chart={chartForAvailableResult(chart, result)}
                   result={result}
-                  error={errors[chart.id]}
+                  failure={failures[chart.id]}
                   loading={loading[chart.id]}
+                  onRetry={refreshDashboard}
                   unaffectedFilters={unaffectedFilters}
                   onMarkSelect={(mark) =>
                     setSelectedMarks((current) => ({

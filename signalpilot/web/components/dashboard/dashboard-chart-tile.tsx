@@ -12,6 +12,7 @@ import { DashboardLoadingState } from "~/components/dashboard/dashboard-loading-
 import { DashboardConfidenceFlag } from "~/components/dashboard/dashboard-confidence-flag";
 import type {
   ChartDefinition,
+  DashboardFailure,
   DashboardQueryResult,
 } from "~/lib/dashboard/contracts";
 import {
@@ -21,17 +22,6 @@ import {
 } from "~/lib/dashboard/semantic-formatter";
 
 import styles from "./dashboard-runtime.module.css";
-
-function displayErrorMessage(error: string): string {
-  if (error.includes("dashboard_time_series_truncated")) {
-    return "This time series exceeds its safe row limit. Narrow the date range or update the dashboard limit before using it.";
-  }
-  return /failed to fetch|networkerror|500:\s*internal server error/i.test(
-    error,
-  )
-    ? "The data source is temporarily unavailable. Try refreshing in a moment."
-    : error;
-}
 
 function ResultDialog({
   chart,
@@ -112,8 +102,9 @@ function ResultDialog({
 export function DashboardChartTile({
   chart,
   result,
-  error,
+  failure,
   loading,
+  onRetry,
   unaffectedFilters = 0,
   onMarkSelect,
   selectionLabel,
@@ -129,8 +120,9 @@ export function DashboardChartTile({
 }: {
   chart: ChartDefinition;
   result?: DashboardQueryResult;
-  error?: string;
+  failure?: DashboardFailure;
   loading?: boolean;
+  onRetry?: () => void;
   unaffectedFilters?: number;
   onMarkSelect?: (mark: Record<string, unknown>) => void;
   selectionLabel?: string;
@@ -153,6 +145,8 @@ export function DashboardChartTile({
   const question =
     chart.question ??
     (isKpi ? `What is our ${chart.title.toLowerCase()}?` : chart.title);
+  const tileFailure =
+    failure?.scope === "chart" || !result ? failure : undefined;
   return (
     <section
       className={`${styles.tile} ${isKpi ? styles.kpiTile : styles.chartTile}`}
@@ -229,8 +223,10 @@ export function DashboardChartTile({
                 <span>
                   Updated {formatDashboardTimestamp(result.freshnessAt, result)}
                 </span>
-                {result.cacheState === "stale" ? (
+                {result.cacheState === "stale_refreshing" ? (
                   <span>Updating cached result</span>
+                ) : result.cacheState === "cached_source_unavailable" ? (
+                  <span>Showing cached data</span>
                 ) : null}
                 {unaffectedFilters ? (
                   <span>
@@ -295,18 +291,29 @@ export function DashboardChartTile({
         </nav>
       ) : null}
       <div className={styles.visual}>
-        {error ? (
+        {tileFailure ? (
           <div className={styles.errorState} role="status">
             {result
               ? "Latest refresh failed; showing the previous result. "
-              : "This chart could not load. "}
-            {displayErrorMessage(error)}
+              : "No cached data is available for this chart. "}
+            {tileFailure.message}
+            {!result ? (
+              <span className={styles.failureAttemptedAt}>
+                Last attempted{" "}
+                {new Date(tileFailure.occurredAt).toLocaleString()}.
+              </span>
+            ) : null}
+            {!result && tileFailure.retryable && onRetry ? (
+              <button type="button" onClick={onRetry} disabled={loading}>
+                Retry
+              </button>
+            ) : null}
           </div>
         ) : null}
         {loading && !result ? (
           <DashboardLoadingState label="Loading governed data" hideLabel />
         ) : null}
-        {!loading && !error && result?.rows.length === 0 ? (
+        {!loading && !tileFailure && result?.rows.length === 0 ? (
           <div className={styles.state}>
             No data matches this dashboard state.
           </div>

@@ -88,11 +88,58 @@ test.describe.serial("Warm Pod", () => {
 
 // ─── 2. Cell Editing: cursor, typing, selection ──────────────────
 test.describe("Cell Editing", () => {
+  // The test types into the notebook, and autosave write-through would
+  // commit garbage to the shared intro.py fixture. Use a disposable scratch
+  // notebook instead — created straight in the workspace store, deleted
+  // after.
+  const SCRATCH = "notebooks/e2e_edit_scratch.py";
+  const SCRATCH_CONTENT = [
+    "import signalpilot as sp",
+    "",
+    '__generated_with = "0.1.0"',
+    "app = sp.App()",
+    "",
+    "",
+    "@app.cell",
+    "def _():",
+    "    x = 1",
+    "    return",
+    "",
+    "",
+    'if __name__ == "__main__":',
+    "    app.run()",
+    "",
+  ].join("\n");
+
+  test.beforeAll(async ({ request }) => {
+    const apiKey = await getApiKey();
+    const put = await request.put(
+      `${GATEWAY}/api/workspace-projects/${PROJECT_ID}/files/${SCRATCH}?branch=main`,
+      {
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/octet-stream" },
+        data: SCRATCH_CONTENT,
+      },
+    );
+    expect(put.ok(), `scratch create: ${put.status()}`).toBe(true);
+  });
+
+  test.afterAll(async ({ request }) => {
+    const apiKey = await getApiKey();
+    await request.delete(
+      `${GATEWAY}/api/workspace-projects/${PROJECT_ID}/files/${SCRATCH}?branch=main`,
+      { headers: { Authorization: `Bearer ${apiKey}` } },
+    ).catch(() => {});
+    await request.delete(
+      `${GATEWAY}/api/workspace-projects/${PROJECT_ID}/files/notebooks/__sp__/session/e2e_edit_scratch.py.json?branch=main`,
+      { headers: { Authorization: `Bearer ${apiKey}` } },
+    ).catch(() => {});
+  });
+
   test("CodeMirror editor is fully interactive", async ({ page }) => {
     test.setTimeout(90_000);
 
     await page.goto(
-      `/projects?project=${PROJECT_ID}&branch=main&file=notebooks%2Fintro.py`,
+      `/projects?project=${PROJECT_ID}&branch=main&file=${encodeURIComponent(SCRATCH)}`,
       { waitUntil: "domcontentloaded" }
     );
     await waitForNotebook(page);
@@ -117,12 +164,6 @@ test.describe("Cell Editing", () => {
     await page.keyboard.type("# E2E_TEST");
     await page.waitForTimeout(1000);
     expect(await cmContent.textContent()).toContain("E2E_TEST");
-    // Leave the fixture notebook as we found it.
-    for (let i = 0; i < "# E2E_TEST".length; i++) {
-      await page.keyboard.press("Backspace");
-    }
-    await page.waitForTimeout(500);
-    expect(await cmContent.textContent()).not.toContain("E2E_TEST");
 
     await page.keyboard.press("Home");
     await page.keyboard.down("Shift");

@@ -66,7 +66,7 @@ test("Trace boot sequence timing", async ({ page }) => {
   await check(".cm-content", ".cm-content", 5_000);
 
   // Check what phase indicators appeared
-  const phaseTexts = ["waiting for runtime", "syncing project", "clearing stale", "connecting"];
+  const phaseTexts = ["connecting to runtime", "loading editor", "connecting"];
   for (const phase of phaseTexts) {
     const appeared = logs.some((l) => l.toLowerCase().includes(phase));
     if (appeared) console.log(`  Phase seen: "${phase}"`);

@@ -8,13 +8,11 @@ import {
 } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
   branchListAtom,
   fetchBranches,
   gatewayBranchIdAtom,
-  hasUncommittedChanges,
   switchBranch,
 } from "@/core/branch/branch-state";
 import { cn } from "@/utils/cn";
@@ -40,7 +38,6 @@ const AgentBranchesPanel: React.FC = () => {
   const [branchId, setBranchId] = useAtom(gatewayBranchIdAtom);
   const [branches, setBranches] = useAtom(branchListAtom);
   const [loading, setLoading] = useState(false);
-  const { confirm, dialog: confirmDialog } = useConfirmDialog();
 
   const currentBranch = branchId || "main";
 
@@ -65,16 +62,8 @@ const AgentBranchesPanel: React.FC = () => {
 
   const handleSwitch = async (name: string) => {
     if (name === currentBranch) {return;}
-    const dirty = await hasUncommittedChanges();
-    if (dirty && dirty.length > 0) {
-      const ok = await confirm({
-        title: "Switch Branch",
-        description: `Switch to "${name}"? You have ${dirty.length} uncommitted file(s) that will be lost.`,
-        confirmLabel: "Discard & switch",
-        variant: "destructive",
-      });
-      if (!ok) {return;}
-    }
+    // Every save is a committed revision in the workspace store, so
+    // switching branches can never lose work — no dirty-state prompt.
     await switchBranch(name);
     setBranchId(name);
     const url = new URL(window.location.href);
@@ -84,7 +73,6 @@ const AgentBranchesPanel: React.FC = () => {
 
   return (
     <>
-    {confirmDialog}
     <div className="flex flex-col h-full overflow-hidden">
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         <span className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">

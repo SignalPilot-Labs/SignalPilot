@@ -63,7 +63,7 @@ test("kernel connection — open project file and check for errors", async ({
   // Create and wait for full scaffold
   await page.getByRole("button", { name: "Create", exact: true }).click();
   await page.waitForResponse(
-    (r) => r.url().includes("/git/push") && r.status() === 200,
+    (r) => r.url().includes("/dbt/scaffold_project") && r.status() === 200,
     { timeout: 60_000 }
   );
   console.log("[1] ✅ Project created and scaffolded");

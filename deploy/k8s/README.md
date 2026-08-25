@@ -1,7 +1,9 @@
 # SignalPilot Gateway — Kubernetes Deployment Notes
 
 This is the single source of truth for deploying the SignalPilot gateway and its
-sandboxed notebook pods to Kubernetes. All manifests live alongside this file:
+sandboxed **eval workload pods** to Kubernetes. (Notebook Runtime v2 moved notebook
+execution to Vercel Sandbox — nothing here launches notebook pods anymore.) All
+manifests live alongside this file:
 `gateway-rbac.yaml`, `gateway-runtime-rbac.yaml`, and the `admission/` policies.
 
 ## Deployment targets
@@ -18,11 +20,9 @@ RBAC (b), a sandbox RuntimeClass (c), the gateway env vars (d), IMDS hardening
 
 ## Workspace storage
 
-Workspaces are git-backed. Each notebook pod's entrypoint clones the project's
-bare git repository (managed by the gateway, mirrored from GitHub) into
-`/workspace` before starting `sp edit`; changes are pushed back over the same
-channel. Pod-local state is ephemeral — durability lives in git, so **no
-PersistentVolume or shared filesystem is required**.
+Notebook workspaces live in the S3-backed workspace store (content-addressed
+blobs + revisions; see `gateway/workspace_store/`). Eval pod-local state is
+ephemeral, so **no PersistentVolume or shared filesystem is required**.
 
 ## Prerequisites
 
@@ -101,7 +101,7 @@ The script deletes the legacy `clusterrole`/`clusterrolebinding
 signalpilot-gateway-runtime`, then per tenant namespace deletes
 `signalpilot-gateway-org-binding` **only if its `roleRef` is actually stale** plus the
 superseded `role/signalpilot-gateway-org-role`. The gateway recreates the binding on the
-next session in that namespace (`ensure_org_namespace`); running notebook pods are
+next session in that namespace (`ensure_org_namespace`); running eval pods are
 unaffected, but new pod/Secret writes in a namespace 403 until it is recreated. Roll a
 maintenance window if that matters.
 
@@ -141,7 +141,7 @@ Kyverno install **does not protect `kube-system`**.
 
 #### Threat model
 
-User notebook pods run arbitrary code supplied by LLM agents. Without a kernel-level sandbox, any container-escape primitive (CVE in the container runtime or kernel) lands the attacker as root on the EC2/k3s node. `runtimeClassName` routes the pod through an alternative OCI runtime (gVisor `runsc` or Kata Containers) that interposes a user-space kernel or a dedicated VM between the pod and the host kernel.
+Eval workload pods run arbitrary code supplied by LLM agents. Without a kernel-level sandbox, any container-escape primitive (CVE in the container runtime or kernel) lands the attacker as root on the EC2/k3s node. `runtimeClassName` routes the pod through an alternative OCI runtime (gVisor `runsc` or Kata Containers) that interposes a user-space kernel or a dedicated VM between the pod and the host kernel.
 
 #### Required: set SP_NOTEBOOK_RUNTIME_CLASS
 
@@ -235,9 +235,8 @@ kubectl apply -f deploy/k8s/gateway-runtime-rbac.yaml
 | `SP_GATEWAY_SERVICE_ACCOUNT` | `signalpilot-gateway` | SA name for per-namespace RoleBinding subjects. |
 | `SP_GATEWAY_RUNTIME_GROUPS` | `signalpilot-gateway-ec2` | **Required when the gateway runs off-cluster** (EC2 authenticating through an EKS access entry). Comma-separated Kubernetes Groups added as subjects of the per-namespace RoleBinding. That identity is a Group, not the ServiceAccount, so without this every pod/Secret write 403s. Leave empty for in-cluster deployments. `system:*` groups are rejected at startup. |
 | `SP_NOTEBOOK_NAMESPACE_PREFIX` | `sp-nb` | Prefix for org namespaces. **Set at bootstrap, never change** (see warning below). |
-| `SP_NOTEBOOK_EGRESS_CIDR` | `52.0.0.0/8` | (Optional) Allow notebook pods to reach this CIDR on port 443 (e.g. S3). **Validator hard-fails on startup if this CIDR contains AWS IMDS (`169.254.169.254` or `fd00:ec2::/32`). `0.0.0.0/0` and `169.254.0.0/16` are rejected.** |
-| `SP_NOTEBOOK_IMAGE` | `your-registry/notebook@sha256:<64-hex>` | Container image for notebook pods. **In cloud mode, must be a digest reference** (`@sha256:<64-hex>`). Floating tags like `:latest` are rejected at startup. Look up the digest with `crane digest <image>` or `docker buildx imagetools inspect <image>`. |
-| `SP_NOTEBOOK_RUNTIME_CLASS` | `gvisor` | **Required in cloud mode.** RuntimeClass name for notebook pod isolation. Empty in local mode. |
+| `SP_NOTEBOOK_EGRESS_CIDR` | `52.0.0.0/8` | (Optional) Allow eval workload pods to reach this CIDR on port 443 (e.g. S3). **Validator hard-fails on startup if this CIDR contains AWS IMDS (`169.254.169.254` or `fd00:ec2::/32`). `0.0.0.0/0` and `169.254.0.0/16` are rejected.** |
+| `SP_NOTEBOOK_RUNTIME_CLASS` | `gvisor` | **Required in cloud mode.** RuntimeClass name for eval workload pod isolation. Empty in local mode. |
 
 ### (e) IMDSv2 hop-limit enforcement at the EC2 node level
 

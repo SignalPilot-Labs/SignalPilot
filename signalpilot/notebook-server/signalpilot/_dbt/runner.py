@@ -803,48 +803,6 @@ if __name__ == "__main__":
 '''
 
 
-def clone_git_repo(
-    git_url: str,
-    target_dir: str | None = None,
-    branch: str | None = None,
-    timeout: int = 120,
-) -> tuple[bool, str, str]:
-    # http(s) only: blocks ext:: (arbitrary command execution), file://,
-    # ssh://, git://, and scp-style URLs.
-    if not git_url.strip().lower().startswith(("http://", "https://")):
-        return False, "", "Only http(s) git URLs are supported."
-
-    git_exe = shutil.which("git")
-    if not git_exe:
-        return False, "", "git executable not found. Install git first."
-
-    repo_name = git_url.rstrip("/").split("/")[-1].replace(".git", "")
-    if target_dir:
-        target_dir = str(confine(target_dir, label="targetDir"))
-    else:
-        target_dir = str(workspace_roots()[0] / Path(repo_name).name)
-
-    cmd = [git_exe, "clone", "--depth", "1"]
-    if branch:
-        cmd.extend(["--branch", branch])
-    cmd.extend([git_url, target_dir])
-
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        if result.returncode == 0:
-            return True, target_dir, ""
-        return False, "", result.stderr
-    except subprocess.TimeoutExpired:
-        return False, "", f"Clone timed out after {timeout}s"
-    except Exception as e:
-        return False, "", str(e)
-
-
 def get_manifest(project_dir: str) -> dict[str, Any] | None:
     manifest_path = (
         confine(project_dir, label="projectDir") / "target" / "manifest.json"

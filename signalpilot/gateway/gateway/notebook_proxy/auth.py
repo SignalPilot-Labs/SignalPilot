@@ -6,8 +6,8 @@ mirrored in scope_guard.py's docstring and routes.py's header comment.
 
 Auth model (the notebook proxy is hit by exactly two clients):
 - A browser user on the web app → Clerk JWT (cloud) or no auth (local dev).
-- (MCP/CLI never hit this proxy — run_notebook execs in the pod via the
-  gateway's k8s client, not /notebook HTTP.)
+- (MCP/CLI never hit this proxy — run_notebook goes through the sandbox
+  runtime primitives, not /notebook HTTP.)
 
 Auth chain (runs on every HTTP and WS request, before ws.accept()):
 1. Validate session_id against SESSION_ID_PATTERN — 404 otherwise.
@@ -25,7 +25,7 @@ Auth chain (runs on every HTTP and WS request, before ws.accept()):
    User identity alone is not enough — a user in two orgs keeps their user_id
    across an org switch, and losing membership of the owning org does not change
    it either.
-6. session.status == "running" and pod_ip_internal set — 409 otherwise.
+6. session.status == "running" and upstream_url set — 409 otherwise.
 
 resolve_user_id / resolve_org_id are re-exported for tests/back-compat.
 """
@@ -89,7 +89,7 @@ class ProxySession:
     user_id: str
     org_id: str
     upstream_base: str
-    # The notebook server's own auth token for this pod, presented upstream by the
+    # The notebook server's own auth token for this runtime, presented upstream by the
     # proxy. Never returned to the caller.
     upstream_token: str
 
@@ -147,7 +147,7 @@ async def resolve_proxy_session(
     connection: HTTPConnection,
     session_id: str,
 ) -> ProxySession:
-    """Authenticate the caller, verify session ownership, resolve the upstream pod.
+    """Authenticate the caller, verify session ownership, resolve the upstream runtime.
 
     See module docstring for the full chain. Used as a FastAPI dependency for both
     the HTTP and WebSocket proxy routes.

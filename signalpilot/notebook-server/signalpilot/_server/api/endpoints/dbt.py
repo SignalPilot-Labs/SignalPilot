@@ -337,19 +337,6 @@ class DbtScaffoldResponse(msgspec.Struct, rename="camel"):
     files_created: list[str] = msgspec.field(default_factory=list)
 
 
-class DbtCloneRequest(msgspec.Struct, rename="camel"):
-    git_url: str
-    target_dir: str | None = None
-    branch: str | None = None
-
-
-class DbtCloneResponse(msgspec.Struct, rename="camel"):
-    success: bool
-    project_dir: str | None = None
-    project_name: str | None = None
-    error: str | None = None
-
-
 @router.post("/discover_projects")
 @requires("edit")
 async def discover_projects(
@@ -413,17 +400,32 @@ async def scaffold_project(
     if parent_dir and (Path(parent_dir) / ".git").exists():
         project_name = "."
     elif not parent_dir:
-        # Fallback: check cloud project dir
-        cloud_dir = await _resolve_start_dir(request, None)
-        if cloud_dir:
-            parent_dir = cloud_dir
-            project_name = "."
+        from signalpilot._server.files.workspace import is_s3_workspace
+
+        if not is_s3_workspace():
+            # Local mode fallback: scaffold into the resolved project dir.
+            # S3 mode must NOT do this — _resolve_start_dir materializes the
+            # disposable exec scratch; scaffold lands in the workspace root
+            # and is committed through as a revision instead.
+            cloud_dir = await _resolve_start_dir(request, None)
+            if cloud_dir:
+                parent_dir = cloud_dir
+                project_name = "."
 
     try:
         project_dir, files_created = scaffold_dbt_project(
             project_name=project_name,
             parent_dir=parent_dir,
             adapter=body.adapter,
+        )
+        # S3 mode: commit the scaffolded tree as one revision so it outlives
+        # the disposable runtime.
+        from signalpilot._server.files.workspace import write_through_paths
+
+        write_through_paths(
+            files_created,
+            root=str(workspace_roots()[0]),
+            message=f"Scaffold dbt project {body.project_name}",
         )
         return DbtScaffoldResponse(
             success=True,
@@ -435,56 +437,6 @@ async def scaffold_project(
             success=False,
             error=str(e),
         )
-
-
-@router.post("/clone_project")
-@requires("edit")
-async def clone_project(
-    *,
-    request: Request,
-) -> DbtCloneResponse | JSONResponse:
-    import asyncio
-
-    from signalpilot._dbt.runner import clone_git_repo, find_dbt_project, parse_dbt_project_yml
-
-    body = await parse_request(request, cls=DbtCloneRequest)
-
-    # http(s) only: ext:: and file:// transports are code-exec/exfil vectors
-    if not body.git_url.strip().lower().startswith(("http://", "https://")):
-        return JSONResponse(
-            {"error": "Only http(s) git URLs are supported"},
-            status_code=400,
-        )
-
-    target_dir = confine_optional(body.target_dir, label="targetDir")
-
-    loop = asyncio.get_event_loop()
-    success, cloned_dir, error = await loop.run_in_executor(
-        None,
-        lambda: clone_git_repo(
-            git_url=body.git_url,
-            target_dir=str(target_dir) if target_dir else None,
-            branch=body.branch,
-        ),
-    )
-
-    if not success:
-        return DbtCloneResponse(
-            success=False,
-            error=error,
-        )
-
-    project_dir = find_dbt_project(cloned_dir)
-    project_name = None
-    if project_dir:
-        info = parse_dbt_project_yml(project_dir)
-        project_name = info.project_name
-
-    return DbtCloneResponse(
-        success=True,
-        project_dir=project_dir or cloned_dir,
-        project_name=project_name,
-    )
 
 
 # ── Model-scoped commands ────────────────────────────────────────

@@ -86,7 +86,7 @@ type RuntimeProduct = "projects" | "notebooks";
 const BOOT_PHASE_LABELS: Record<string, string> = {
   health: "connecting to runtime...",
   notion: "loading trail...",
-  sessions: "preparing workspace...",
+  editor: "loading editor...",
   ready: "running",
 };
 

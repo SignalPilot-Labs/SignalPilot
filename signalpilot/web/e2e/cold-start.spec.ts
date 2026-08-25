@@ -37,13 +37,13 @@ test("cold start — no pod, deep-link URL auto-launches and loads file", async 
 
   // ── Navigate to deep-link URL ──────────────────────────────────
   // With the fix, this should immediately show the loading overlay
-  // ("connecting to pod") — no "Open IDE" button at all.
+  // ("starting runtime") — no "Open IDE" button at all.
   const tNav = ts("Navigating to deep-link URL");
   await page.goto(URL, { waitUntil: "domcontentloaded" });
   const tPageLoad = ts("Page loaded");
 
   // Should show the starting overlay, NOT the landing page
-  const startingOverlay = page.getByText(/connecting|creating session|starting kernel|syncing/i);
+  const startingOverlay = page.getByText(/connecting|creating session|starting kernel/i);
   const hasOverlay = await startingOverlay.isVisible({ timeout: 5000 }).catch(() => false);
   ts(hasOverlay ? "Loading overlay visible (no landing page)" : "No overlay — checking state...");
 
@@ -74,7 +74,7 @@ test("cold start — no pod, deep-link URL auto-launches and loads file", async 
   console.log("COLD START TIMING REPORT");
   console.log("=".repeat(60));
   console.log(`  Page load:          ${(tPageLoad - tNav).toFixed(2)}s`);
-  console.log(`  Pod creation:       ${(tRunning - tNav).toFixed(2)}s`);
+  console.log(`  Session ready:       ${(tRunning - tNav).toFixed(2)}s`);
   console.log(`  Embed mount:        ${(tEmbed - tRunning).toFixed(2)}s`);
   console.log(`  Kernel spawn:       ${(tKernel - tEmbed).toFixed(2)}s`);
   console.log(`  File visible:       ${(tContent - tKernel).toFixed(2)}s`);

@@ -88,60 +88,6 @@ async def read_code(
     return ReadCodeResponse(contents=contents)
 
 
-@router.post("/load_notebook")
-@requires("edit")
-async def load_notebook(
-    *,
-    request: Request,
-) -> dict:
-    """Load a notebook file and return its cells for in-page switching."""
-    import msgspec
-
-    class LoadNotebookRequest(msgspec.Struct, rename="camel"):
-        path: str
-
-    body = await parse_request(request, cls=LoadNotebookRequest)
-    filepath = body.path
-
-    if not Path(filepath).exists():
-        raise HTTPException(
-            status_code=HTTPStatus.NOT_FOUND,
-            detail=f"File not found: {filepath}",
-        )
-
-    from signalpilot._ast.load import load_app
-
-    app = load_app(filepath)
-    if app is None:
-        raise HTTPException(
-            status_code=HTTPStatus.BAD_REQUEST,
-            detail=f"Could not parse notebook: {filepath}",
-        )
-
-    cells = []
-    cell_manager = app.cell_manager
-    for cell_id in cell_manager.cell_ids():
-        code = cell_manager.cell_code(cell_id)
-        name = cell_manager.cell_name(cell_id)
-        config = cell_manager.cell_config(cell_id)
-        cells.append({
-            "cellId": str(cell_id),
-            "code": code,
-            "name": name,
-            "config": {
-                "disabled": config.disabled,
-                "hideCode": config.hide_code,
-                "column": config.column,
-            },
-        })
-
-    return {
-        "success": True,
-        "cells": cells,
-        "filename": filepath,
-    }
-
-
 @router.post("/rename")
 @requires("edit")
 async def rename_file(
@@ -184,7 +130,10 @@ async def rename_file(
             Path(directory), Path(filename)
         )
 
-    app_state.require_current_session().put_control_request(
+    session = app_state.require_current_session()
+    old_path = session.app_file_manager.path
+
+    session.put_control_request(
         RenameNotebookCommand(filename=filename),
         from_consumer_id=ConsumerId(app_state.require_current_session_id()),
     )
@@ -192,6 +141,15 @@ async def rename_file(
     await app_state.session_manager.rename_session(
         app_state.require_current_session_id(), body.filename
     )
+
+    # S3 mode: commit the rename as revisions (new path added, old removed)
+    # so the workspace store — not the local cache — reflects it.
+    if old_path:
+        from signalpilot._server.files.workspace import (
+            rename_through_session_file,
+        )
+
+        rename_through_session_file(old_path, filename, root=directory)
 
     return SuccessResponse()
 
@@ -321,6 +279,15 @@ async def copy(
 
     session = app_state.require_current_session()
     contents = session.app_file_manager.copy(body)
+
+    # S3 mode: the copy destination must become a revision, not a cache-only
+    # file that evaporates with the sandbox.
+    if body.destination:
+        from signalpilot._server.files.workspace import (
+            write_through_session_file,
+        )
+
+        write_through_session_file(body.destination, root=directory)
 
     return PlainTextResponse(content=contents)
 

@@ -126,12 +126,36 @@ class GatewayFileSystem(FileSystem):
             raise _error_from_response(resp)
         return resp.content
 
+    @staticmethod
+    def _reject_if_read_only() -> None:
+        from signalpilot._server.files.workspace import is_read_only_workspace
+
+        if is_read_only_workspace():
+            raise GatewayFileSystemError(
+                "This session is read-only; changes are not saved.",
+                status_code=403,
+            )
+
     def write_bytes(self, path: str, content: bytes) -> None:
         """Write-through one file's exact bytes as a new revision."""
         self._put_file(self._rel(path), content)
         self._entries_cache = None
 
+    def write_many(self, files: dict[str, bytes], *, message: str | None = None) -> int:
+        """Write-through several files as ONE revision (batch commit)."""
+        import base64
+
+        upserts = [
+            {
+                "path": self._rel(path),
+                "content_b64": base64.b64encode(content).decode(),
+            }
+            for path, content in files.items()
+        ]
+        return self._batch(upserts=upserts, message=message)
+
     def _put_file(self, rel: str, content: bytes) -> None:
+        self._reject_if_read_only()
         resp = self._client.put(
             f"/files/{rel}",
             params={"branch": self._branch},
@@ -179,6 +203,7 @@ class GatewayFileSystem(FileSystem):
         deletes: list[str] | None = None,
         message: str | None = None,
     ) -> int:
+        self._reject_if_read_only()
         # base_revision is a CAS token: None means "first commit on the
         # branch", so mutations must name the current head. One retry absorbs
         # the (lease-guarded, therefore rare) race with a concurrent commit.

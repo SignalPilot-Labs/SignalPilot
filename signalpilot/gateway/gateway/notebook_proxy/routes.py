@@ -5,8 +5,8 @@ instead of RequireScope. This is the ONLY sanctioned bypass of scope_guard.py.
 See scope_guard.py docstring and notebook_proxy/auth.py for rationale.
 
 URL shape:
-    ANY  /notebook/{session_id}/{path:path}     → proxied HTTP to pod
-    WS   /notebook/{session_id}/{path:path}     → proxied WebSocket to pod
+    ANY  /notebook/{session_id}/{path:path}     → proxied HTTP to the runtime
+    WS   /notebook/{session_id}/{path:path}     → proxied WebSocket to the runtime
 
 Auth (resolve_proxy_session): Clerk JWT (cloud) / no-auth (local) + same-user
 session ownership. There is no /_init, no cookie, no handshake token — the

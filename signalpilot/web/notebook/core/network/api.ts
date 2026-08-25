@@ -80,7 +80,7 @@ function getBaseUriWithoutQueryParams(): string {
 /**
  * Build a full API URL respecting --base-url.
  * Use this for custom fetch() calls instead of hard-coded "/api/..." paths.
- * e.g. spApiUrl("/git/status") → "/notebook/{sid}/api/git/status"
+ * e.g. spApiUrl("/branches/list") → "/notebook/{sid}/api/branches/list"
  */
 export function spApiUrl(path: string): string {
   try {

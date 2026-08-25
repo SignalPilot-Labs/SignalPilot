@@ -118,12 +118,6 @@ def escapes(tmp_path: Path, workspace: Path) -> list[str]:
             id="scaffold_dbt_project.parent_dir",
         ),
         pytest.param(
-            lambda path: runner.clone_git_repo(
-                "https://example.invalid/o/r.git", target_dir=path
-            ),
-            id="clone_git_repo.target_dir",
-        ),
-        pytest.param(
             lambda path: runner.compile_model("m", project_dir=path),
             id="compile_model.project_dir",
         ),
@@ -282,51 +276,6 @@ def test_discover_defaults_to_the_workspace_root(workspace: Path) -> None:
     assert [p.project_dir for p in found] == [str(nested.resolve())]
 
 
-def test_clone_target_inside_workspace_reaches_git(
-    workspace: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    spawned: list[list[str]] = []
-
-    class _Result:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    monkeypatch.setattr(runner.shutil, "which", lambda _name: "/usr/bin/git")
-    monkeypatch.setattr(
-        runner.subprocess,
-        "run",
-        lambda cmd, **kwargs: (spawned.append(cmd), _Result())[1],
-    )
-
-    target = str(workspace / "repo")
-    success, path, error = runner.clone_git_repo(
-        "https://example.invalid/o/r.git", target_dir=target
-    )
-
-    assert success is True, error
-    assert Path(path) == Path(target).resolve()
-    assert len(spawned) == 1
-
-
-def test_clone_default_target_lands_in_the_workspace(
-    workspace: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    class _Result:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    monkeypatch.setattr(runner.shutil, "which", lambda _name: "/usr/bin/git")
-    monkeypatch.setattr(
-        runner.subprocess, "run", lambda cmd, **kwargs: _Result()
-    )
-
-    _success, path, _error = runner.clone_git_repo(
-        "https://example.invalid/o/analytics.git"
-    )
-
-    assert Path(path) == (workspace / "analytics").resolve()
 
 
 def test_run_dbt_command_accepts_in_workspace_dirs(

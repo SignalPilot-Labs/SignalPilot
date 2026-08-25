@@ -85,7 +85,6 @@ services:
       SP_CHAT_OBJECTS_S3_REGION: ${SP_CHAT_OBJECTS_S3_REGION-}
       SP_CHAT_OBJECTS_S3_ACCESS_KEY: ${SP_CHAT_OBJECTS_S3_ACCESS_KEY-minioadmin}
       SP_CHAT_OBJECTS_S3_SECRET_KEY: ${SP_CHAT_OBJECTS_S3_SECRET_KEY-minioadmin}
-      SIGNALPILOT_NOTEBOOK_INTERNAL_URL: http://notebook:2718
       SIGNALPILOT_NOTEBOOK_PUBLIC_URL: http://localhost:${SP_WEB_PORT:-3200}/notebook
       SIGNALPILOT_DELIVERY_MODEL: ${SIGNALPILOT_DELIVERY_MODEL:-claude-sonnet-4-5-20250929}
       # The following settings configure the sandbox.
@@ -209,7 +208,6 @@ services:
       - eval-runtime
     restart: unless-stopped
 
-  # Notebook server.
 
   # ─── Durable standalone-chat worker ───────────────────────────
   gateway-chat-worker:
@@ -294,7 +292,6 @@ services:
       # Set a notebook authentication token to access port 2718 directly.
       # The container generates a token during startup when this value is absent.
       SP_NOTEBOOK_TOKEN: ${SP_NOTEBOOK_TOKEN:-}
-      SP_LOG_DIR: /tmp/sp-logs
       SP_LOG_LEVEL: "10"
       SP_GATEWAY_URL: http://gateway:3300
       SP_GATEWAY_INTERNAL_URL: http://gateway:3300

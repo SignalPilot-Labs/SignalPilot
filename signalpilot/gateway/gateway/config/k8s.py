@@ -51,7 +51,9 @@ class K8sSettings(_GatewaySettingsBase):
     # This is the ONLY source of the gateway port for NetworkPolicy; never parsed from the URL.
     sp_public_gateway_port: int = Field(3300, alias="SP_PUBLIC_GATEWAY_PORT")
 
-    # Runtime sandbox class for user notebook pods.
+    # Runtime sandbox class for eval workload pods (consumed via os.environ
+    # in orchestrator/kubernetes.py; this field exists for the cloud-mode
+    # fail-fast validator below).
     # Empty string means no runtimeClassName is set (acceptable in local mode only).
     # In cloud mode SP_NOTEBOOK_RUNTIME_CLASS must be set explicitly (e.g. "gvisor").
     sp_notebook_runtime_class: str = Field("", alias="SP_NOTEBOOK_RUNTIME_CLASS")

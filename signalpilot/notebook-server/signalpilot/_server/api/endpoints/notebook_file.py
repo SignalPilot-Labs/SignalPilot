@@ -36,7 +36,15 @@ def resolve_notebook_file(
     """Resolve a workspace file and classify it without starting a kernel."""
     resolved = resolve_safe_file_path(raw_file, directory)
     if not resolved.is_file():
-        raise FileNotFoundError(resolved)
+        # S3 mode read-through: a cold runtime has an empty cache directory,
+        # so pull the file (and its session sidecar) from the workspace store
+        # before concluding it does not exist.
+        from signalpilot._server.files.workspace import materialize_for_session
+
+        materialized = materialize_for_session(raw_file, root=directory)
+        if materialized is None:
+            raise FileNotFoundError(resolved)
+        resolved = materialized
 
     raw_fallback = True
     if resolved.suffix.lower() in _SEMANTIC_NOTEBOOK_EXTENSIONS:

@@ -540,9 +540,8 @@ export function useSpKernelConnection(opts: {
     },
 
     /**
-     * Wait to connect. Gates on:
-     * 1. Runtime health check (pod is up and responding)
-     * 2. Project sync completion (files are on the pod)
+     * Wait to connect. Gates on the runtime health check (the runtime is
+     * up and responding); files pull on demand from the workspace store.
      *
      * All downstream connections (terminal, LSP) also wait for the
      * kernel to be OPEN, so this single gate protects everything.

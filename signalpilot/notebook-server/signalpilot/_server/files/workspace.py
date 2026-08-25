@@ -49,6 +49,16 @@ def is_s3_workspace() -> bool:
     return workspace_mode() == S3_WORKSPACE_MODE
 
 
+def is_read_only_workspace() -> bool:
+    """Whether this session may commit revisions.
+
+    Set by the gateway backend (SP_PROJECT_READ_ONLY=1) for viewer sessions.
+    Enforced at the GatewayFileSystem mutation funnel so every write path —
+    saves, batch ops, renames — fails closed with one error.
+    """
+    return os.environ.get("SP_PROJECT_READ_ONLY", "").strip() in {"1", "true", "yes", "on"}
+
+
 def current_branch() -> str:
     """The branch this session is working on (initially ``SP_BRANCH``)."""
     global _current_branch
@@ -158,6 +168,61 @@ def materialize_for_session(path: str | Path, *, root: str | Path | None = None)
         sidecar_local.parent.mkdir(parents=True, exist_ok=True)
         sidecar_local.write_bytes(sidecar)
     return local
+
+
+def write_through_paths(
+    paths: list[str],
+    *,
+    root: str | Path | None = None,
+    message: str | None = None,
+) -> None:
+    """Write-through several local files as one committed revision.
+
+    Used by generators (dbt scaffold) whose output must be durable, not a
+    cache-only tree that evaporates with the sandbox. No-op outside S3 mode.
+    """
+    if not is_s3_workspace():
+        return
+    base = Path(root) if root is not None else Path(os.getcwd())
+    files: dict[str, bytes] = {}
+    for path in paths:
+        rel = _session_rel(path, base)
+        if rel is None:
+            continue
+        local = base / rel
+        if local.is_file():
+            files[rel] = local.read_bytes()
+    if files:
+        create_file_system().write_many(files, message=message)
+
+
+def rename_through_session_file(
+    old_path: str | Path,
+    new_path: str | Path,
+    *,
+    root: str | Path | None = None,
+) -> None:
+    """Write-through a rename: commit the file at its new path and remove the
+    old one from the workspace store. No-op outside S3 mode."""
+    if not is_s3_workspace():
+        return
+    base = Path(root) if root is not None else Path(os.getcwd())
+    old_rel = _session_rel(old_path, base)
+    new_rel = _session_rel(new_path, base)
+    if new_rel is not None:
+        write_through_session_file(new_path, root=base)
+    if old_rel is not None and old_rel != new_rel:
+        fs = create_file_system()
+        try:
+            fs.delete_file_or_directory(old_rel)
+        except Exception:
+            # The old path may never have been committed (new unsaved file).
+            pass
+        sidecar = _sidecar_rel(old_rel)
+        try:
+            fs.delete_file_or_directory(sidecar)
+        except Exception:
+            pass
 
 
 def write_through_session_file(path: str | Path, *, root: str | Path | None = None) -> None:

@@ -8,7 +8,6 @@ Sync model:
 Called by:
 - git/http_server.py after a successful push (auto-mirror to GitHub)
 - api/github.py sync endpoint (manual trigger)
-- api/notebook_sessions.py on session creation (fetch before pod starts)
 """
 
 from __future__ import annotations

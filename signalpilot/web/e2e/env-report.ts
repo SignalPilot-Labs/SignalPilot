@@ -29,7 +29,6 @@ interface Session {
   project_id: string;
   branch: string;
   status: string;
-  pod_name: string;
   notebook_url: string;
 }
 
@@ -95,7 +94,6 @@ export function printEnvReport(report: EnvReport) {
   if (report.session) {
     console.log(`║   Project: ${report.session.project_id.slice(0, 12)}...`);
     console.log(`║   Branch:  ${report.session.branch}`);
-    console.log(`║   Pod:     ${report.session.pod_name}`);
   }
 
   console.log("╠══════════════════════════════════════════════════╣");

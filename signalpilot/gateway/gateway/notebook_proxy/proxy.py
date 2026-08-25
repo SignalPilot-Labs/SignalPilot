@@ -6,7 +6,7 @@ routes.py constructs upstream_base from the session row and delegates here.
 HTTP forwarding:
 - Streams response via httpx.AsyncClient.stream(); no aread(); no Content-Length override.
 - Strips outbound Cookie, Authorization, Host, and hop-by-hop headers, then re-sets
-  Authorization to the pod's own auth token (order matters — see _build_outbound_headers).
+  Authorization to the runtime's own auth token (order matters — see _build_outbound_headers).
 - Strips upstream Set-Cookie so the notebook server's session cookie does not leak to the gateway origin.
 - Per-chunk asyncio.wait_for idle watchdog (30 s) — NOT a total deadline.
 
@@ -88,7 +88,7 @@ def _build_inbound_headers(upstream_headers: httpx.Headers) -> dict[str, str]:
 class NotebookProxy:
     """HTTP and WebSocket proxy to a notebook pod.
 
-    upstream_base: in-cluster base URL of the pod (e.g. http://10.42.0.5:2718).
+    upstream_base: upstream base URL of the runtime (Vercel route URL or the direct container).
     Always passed in from the session row — never derived from request headers.
 
     upstream_token: the notebook server's own auth token for that pod. Presented as
@@ -108,7 +108,7 @@ class NotebookProxy:
         self._upstream_token = upstream_token
 
     async def forward_http(self, request: Request, upstream_path: str) -> StreamingResponse:
-        """Stream an HTTP request to the upstream pod and return the response.
+        """Stream an HTTP request to the upstream runtime and return the response.
 
         - Strips Cookie, Authorization, Host, and hop-by-hop headers from the outbound request.
         - Strips Set-Cookie and hop-by-hop headers from the upstream response.
@@ -186,7 +186,7 @@ class NotebookProxy:
         upstream_url: str,
         accept_subprotocol: str | None = None,
     ) -> None:
-        """Bridge a WebSocket connection to the upstream pod.
+        """Bridge a WebSocket connection to the upstream runtime.
 
         Auth must have already succeeded. ws.accept() is called inside this method
         after the upstream connection is established.
@@ -223,7 +223,7 @@ class NotebookProxy:
         t0 = time.monotonic()
 
         async def _client_to_upstream() -> None:
-            """Pump frames from the browser client to the upstream pod."""
+            """Pump frames from the browser client to the upstream runtime."""
             nonlocal client_frames
             try:
                 while True:
@@ -256,7 +256,7 @@ class NotebookProxy:
                 )
 
         async def _upstream_to_client() -> None:
-            """Pump frames from the upstream pod to the browser client.
+            """Pump frames from the upstream runtime to the browser client.
 
             recv() returns str for TEXT frames and bytes for BINARY frames —
             frame type is preserved automatically.

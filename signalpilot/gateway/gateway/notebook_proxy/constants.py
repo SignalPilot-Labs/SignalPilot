@@ -40,10 +40,10 @@ HOP_BY_HOP_HEADERS: frozenset[str] = frozenset(
 
 # Headers stripped from outbound (gateway → pod) requests.
 # In addition to HOP_BY_HOP_HEADERS, Cookie and Authorization are stripped:
-# - Cookie: forwarding Cookie would leak the Clerk __session cookie into pod logs.
-# - Authorization: the caller's Clerk bearer JWT must never reach the pod. The proxy
-#   re-sets Authorization AFTER this strip, to the pod's own auth token.
-# - sec-websocket-protocol: carries our auth sentinel + JWT; must not reach the pod.
+# - Cookie: forwarding Cookie would leak the Clerk __session cookie into the runtime logs.
+# - Authorization: the caller's Clerk bearer JWT must never reach the runtime. The proxy
+#   re-sets Authorization AFTER this strip, to the runtime's own auth token.
+# - sec-websocket-protocol: carries our auth sentinel + JWT; must not reach the runtime.
 # Host is also not forwarded (let httpx synthesize it from the URL).
 OUTBOUND_STRIP_HEADERS: frozenset[str] = HOP_BY_HOP_HEADERS | frozenset({
     "cookie", "authorization", "host",

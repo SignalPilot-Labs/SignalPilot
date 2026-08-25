@@ -781,7 +781,6 @@ class TestProxyActiveOrgAuthorization:
         assert exc_info.value.status_code == 503
 
 
-# Verify the pod_ip upstream mode.
 
 
 # Verify session ownership in API endpoints.
@@ -805,8 +804,6 @@ class TestSessionOwnershipCheck:
             user_id="user-owner",  # Owned by different user
             project_id="proj-1",
             branch="main",
-            pod_name="nb-test",
-            pod_ip="10.0.0.1",
             access_token=None,
             status="running",
             last_ping=time.time(),
@@ -842,8 +839,6 @@ class TestSessionOwnershipCheck:
             user_id="user-owner",
             project_id="proj-1",
             branch="main",
-            pod_name="nb-test",
-            pod_ip="10.0.0.1",
             access_token=None,
             status="running",
             last_ping=time.time(),
@@ -879,8 +874,6 @@ class TestSessionOwnershipCheck:
             user_id="user-owner",
             project_id="proj-1",
             branch="main",
-            pod_name="nb-test",
-            pod_ip="10.0.0.1",
             access_token=None,
             status="running",
             last_ping=time.time(),
@@ -913,8 +906,6 @@ class TestSessionOwnershipCheck:
             user_id="user-1",
             project_id="proj-1",
             branch="main",
-            pod_name="nb-test",
-            pod_ip="10.0.0.1",
             access_token=None,
             status="running",
             last_ping=time.time(),

@@ -35,7 +35,7 @@ def workspace_roots() -> list[Path]:
     if configured:
         roots.append(Path(configured))
 
-    # The pod entrypoint chdirs into the workspace before exec'ing the server,
+    # The sandbox boot command chdirs into the workspace before exec'ing the server,
     # and the container's WORKDIR is the workspace root.
     try:
         roots.append(Path.cwd())

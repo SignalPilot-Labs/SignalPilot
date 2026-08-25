@@ -519,8 +519,8 @@ def _gateway_org_role_binding(
     SP-SEC-009: roleRef is the cluster-scoped ClusterRole
     ``signalpilot-gateway-notebook-workload`` (see deploy/k8s/gateway-runtime-rbac.yaml)
     used purely as a permission template. A RoleBinding to a ClusterRole grants that
-    ClusterRole's rules **only inside this namespace**, so the pods, pods/exec, and
-    Secrets verbs never exist cluster-wide.
+    ClusterRole's rules **only inside this namespace**, so the pods and Secrets
+    verbs never exist cluster-wide.
 
     Why a ClusterRole and not a per-namespace Role: creating a Role requires the
     creator to already hold every rule it grants, or to hold the `escalate` verb.
@@ -530,13 +530,12 @@ def _gateway_org_role_binding(
     resourceNames (the name comes from roleRef), which is what makes the grant
     pinnable to exactly one ClusterRole.
 
-    The rules themselves are the same set the old per-namespace Role carried:
+    The rules (eval workloads only — Notebook Runtime v2 removed the notebook
+    pod machinery, including the pods/exec grant):
       - pods, resourcequotas, limitranges: create/get/list/delete/patch
       - pods/log, pods/status: get/list
-      - pods/exec: create (R4 workspace sync; narrowed by restrict-pod-exec-* admission,
-        since RBAC cannot prefix-match the dynamic nb-<12hex> pod names)
-      - secrets: create/get/list/patch/delete (F-6 per-session sp-jwt-<pod> staging,
-        F-13 GC list) — namespaced ONLY, never cluster-wide
+      - secrets: create/get/list/patch/delete — namespaced ONLY, never
+        cluster-wide
       - networking.k8s.io/networkpolicies: create/get/list/delete/patch
     """
     subjects: list[dict] = [

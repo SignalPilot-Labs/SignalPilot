@@ -115,6 +115,22 @@ class GatewayFileSystem(FileSystem):
     def _get_file(self, rel: str) -> httpx.Response:
         return self._client.get(f"/files/{rel}", params={"branch": self._branch})
 
+    # ── Raw byte access (session materialization / write-through) ────
+
+    def read_bytes(self, path: str) -> bytes | None:
+        """Fetch one file's exact bytes; None when it does not exist."""
+        resp = self._get_file(self._rel(path))
+        if resp.status_code == 404:
+            return None
+        if resp.status_code != 200:
+            raise _error_from_response(resp)
+        return resp.content
+
+    def write_bytes(self, path: str, content: bytes) -> None:
+        """Write-through one file's exact bytes as a new revision."""
+        self._put_file(self._rel(path), content)
+        self._entries_cache = None
+
     def _put_file(self, rel: str, content: bytes) -> None:
         resp = self._client.put(
             f"/files/{rel}",

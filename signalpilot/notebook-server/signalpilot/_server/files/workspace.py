@@ -105,3 +105,71 @@ def create_file_system(
     from signalpilot._server.files.os_file_system import OSFileSystem
 
     return OSFileSystem(root=root)
+
+
+# ── Session-file read-through / write-through (S3 mode) ─────────────────────
+#
+# The marimo session machinery (AppFileManager, session cache, kernels) opens
+# notebooks from disk paths. In S3 mode the workspace directory is a
+# read-through cache: opening a notebook materializes its bytes (and the
+# __sp__ session sidecar that powers reconnect) on demand, and every save
+# writes through as a new revision. Disk is never the truth.
+
+
+def _session_rel(path: str | Path, root: Path) -> str | None:
+    try:
+        return Path(path).resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        candidate = Path(path)
+        if not candidate.is_absolute():
+            return candidate.as_posix()
+        return None
+
+
+def _sidecar_rel(rel: str) -> str:
+    name = rel.rsplit("/", 1)[-1]
+    parent = rel.rsplit("/", 1)[0] if "/" in rel else ""
+    prefix = f"{parent}/" if parent else ""
+    return f"{prefix}__sp__/session/{name}.json"
+
+
+def materialize_for_session(path: str | Path, *, root: str | Path | None = None) -> Path | None:
+    """Read-through: pull one notebook (and its session sidecar) from the S3
+    workspace into the local cache directory. Returns the local path, or None
+    when the file does not exist in the workspace (or S3 mode is off)."""
+    if not is_s3_workspace():
+        return None
+    base = Path(root) if root is not None else Path(os.getcwd())
+    rel = _session_rel(path, base)
+    if rel is None:
+        return None
+
+    fs = create_file_system()
+    content = fs.read_bytes(rel)
+    if content is None:
+        return None
+    local = base / rel
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_bytes(content)
+
+    sidecar = fs.read_bytes(_sidecar_rel(rel))
+    if sidecar is not None:
+        sidecar_local = base / _sidecar_rel(rel)
+        sidecar_local.parent.mkdir(parents=True, exist_ok=True)
+        sidecar_local.write_bytes(sidecar)
+    return local
+
+
+def write_through_session_file(path: str | Path, *, root: str | Path | None = None) -> None:
+    """Write-through: push one locally written file to the S3 workspace.
+    A save either commits (durable revision) or raises — no silent loss."""
+    if not is_s3_workspace():
+        return
+    base = Path(root) if root is not None else Path(os.getcwd())
+    rel = _session_rel(path, base)
+    if rel is None:
+        return
+    local = base / rel
+    if not local.is_file():
+        return
+    create_file_system().write_bytes(rel, local.read_bytes())

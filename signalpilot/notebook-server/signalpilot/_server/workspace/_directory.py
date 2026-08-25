@@ -92,6 +92,17 @@ class DirectoryWorkspace(NotebookWorkspace):
         if filepath.exists():
             return str(filepath)
 
+        # S3 mode: the directory is a read-through cache — a miss means the
+        # notebook has not been materialized yet, not that it doesn't exist.
+        try:
+            from signalpilot._server.files.workspace import materialize_for_session
+
+            materialized = materialize_for_session(key, root=directory)
+            if materialized is not None:
+                return str(materialized)
+        except Exception:
+            LOGGER.warning("Read-through materialization failed for %s", key, exc_info=True)
+
         # Fallback: check execution scratch checkouts
         # (structured as ~/.sp/projects/{id}/{name}/)
         if not Path(key).is_absolute():

@@ -71,7 +71,14 @@ async def get_notebook_static(*, request: Request) -> JSONResponse:
     resolved = _resolve_and_validate(raw_file, directory)
 
     if not resolved.is_file():
-        raise HTTPException(HTTPStatus.NOT_FOUND, "file not found")
+        # S3 mode read-through: pull the notebook (and its session sidecar,
+        # which powers refresh-mid-edit rehydration) into the cache directory.
+        from signalpilot._server.files.workspace import materialize_for_session
+
+        materialized = materialize_for_session(raw_file, root=directory)
+        if materialized is None:
+            raise HTTPException(HTTPStatus.NOT_FOUND, "file not found")
+        resolved = materialized
 
     payload = await asyncio.to_thread(_build_static_payload, resolved, directory)
     return JSONResponse(payload)

@@ -260,6 +260,13 @@ async def save(
 
     contents = session.app_file_manager.save(body)
 
+    # S3 mode: a save is only real once it is a revision. Raises on failure so
+    # the editor surfaces it instead of silently holding a disk-only copy.
+    if session.app_file_manager.path:
+        from signalpilot._server.files.workspace import write_through_session_file
+
+        write_through_session_file(session.app_file_manager.path)
+
     return PlainTextResponse(content=contents)
 
 

@@ -1348,7 +1348,7 @@ class GatewayStructuredQueryResult(GatewayBase):
 
 
 class GatewayDashboard(GatewayBase):
-    """Stable private dashboard identity; content lives in immutable versions."""
+    """Stable dashboard identity; content lives in immutable versions."""
 
     __tablename__ = "gateway_dashboards"
 
@@ -1361,6 +1361,9 @@ class GatewayDashboard(GatewayBase):
     description: Mapped[str | None] = mapped_column(Text)
     timezone: Mapped[str] = mapped_column(String(100), nullable=False)
     current_version_id: Mapped[str | None] = mapped_column(String)
+    visibility: Mapped[str] = mapped_column(String(20), nullable=False, default="private", server_default="private")
+    parent_dashboard_id: Mapped[str | None] = mapped_column(String)
+    parent_version_id: Mapped[str | None] = mapped_column(String)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     archived_at: Mapped[datetime | None] = mapped_column(TZDateTime)
     created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
@@ -1368,6 +1371,7 @@ class GatewayDashboard(GatewayBase):
 
     __table_args__ = (
         Index("ix_gw_dashboards_private", "org_id", "owner_user_id", "updated_at"),
+        Index("ix_gw_dashboards_visibility", "org_id", "visibility", "updated_at"),
         Index("ix_gw_dashboards_project", "org_id", "project_id"),
     )
 

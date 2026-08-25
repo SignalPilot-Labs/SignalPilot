@@ -14,12 +14,6 @@
   gap: 24px;
   margin-bottom: 24px;
 }
-.header span {
-  color: var(--color-text-dim);
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
 .header h1 {
   font-size: 28px;
   margin: 5px 0;
@@ -40,11 +34,11 @@
 }
 .headerActions {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 10px;
-  flex-direction: column;
+  flex-direction: row;
 }
-.headerActions button {
+.refreshButtonWrap > button {
   display: grid;
   width: 38px;
   height: 38px;
@@ -56,7 +50,7 @@
   padding: 0;
   cursor: pointer;
 }
-.headerActions button:disabled {
+.refreshButtonWrap > button:disabled {
   cursor: wait;
   opacity: 0.6;
 }
@@ -203,6 +197,67 @@
   justify-content: space-between;
   gap: 12px;
   align-items: flex-start;
+}
+.confidenceWrap {
+  position: relative;
+  flex: none;
+  margin-left: auto;
+}
+.confidenceFlag {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  flex: none;
+  border-radius: 7px;
+  opacity: 0;
+  transition:
+    opacity 120ms ease,
+    background 120ms ease;
+}
+.tile:hover .confidenceFlag,
+.tile:focus-within .confidenceFlag,
+.confidenceFlag:focus-visible {
+  opacity: 1;
+}
+.highConfidence {
+  color: #63c991;
+}
+.lowConfidence {
+  color: #e3ae55;
+}
+.confidenceFlag:hover,
+.confidenceFlag:focus-visible {
+  background: var(--color-bg);
+  outline: 2px solid var(--color-border-active);
+  outline-offset: 2px;
+}
+.confidenceTooltip {
+  position: absolute;
+  z-index: 12;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 290px;
+  max-width: min(290px, calc(100vw - 64px));
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-elevated);
+  color: var(--color-text-muted);
+  box-shadow: 0 12px 36px rgb(0 0 0 / 32%);
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.45;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-3px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+.confidenceWrap:hover .confidenceTooltip,
+.confidenceWrap:focus-within .confidenceTooltip {
+  opacity: 1;
+  transform: translateY(0);
 }
 .drillBreadcrumb button {
   border: 0;
@@ -681,16 +736,59 @@
   padding: 16px;
 }
 .frozenChart {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
   min-height: 0;
   overflow: hidden;
   border: 1px solid var(--color-border);
   border-radius: 10px;
   background: var(--color-bg-card);
-  padding: 12px;
+}
+.frozenChartVisual {
+  min-height: 0;
+  overflow: hidden;
+  padding: 14px 18px;
+}
+.frozenChartVisual > [data-dashboard-renderer="bar"],
+.frozenChartVisual > [data-dashboard-renderer="line"],
+.frozenChartVisual > [data-dashboard-renderer="area"] {
+  height: 100%;
+}
+.frozenChartVisual [data-dashboard-renderer="kpi"] {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  text-align: center;
+}
+.frozenChartVisual [data-dashboard-renderer="kpi"] strong {
+  max-width: 100%;
+  color: var(--color-text);
+  font-size: clamp(32px, 4vw, 58px);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  white-space: nowrap;
+}
+.frozenChartVisual [data-dashboard-renderer="kpi"] span {
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.2;
 }
 .frozenChartCaption {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
   margin: 0;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-bg-elevated);
   color: var(--color-text-dim);
+  padding: 8px 14px;
   font-size: 10px;
 }
 .analysisChat {

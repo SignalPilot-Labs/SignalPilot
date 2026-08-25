@@ -6,10 +6,11 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gateway.dashboard.confidence import dashboard_confidence_counts
 from gateway.dashboard.domain import DashboardDefinition, dashboard_content_hash, normalize_dashboard_definition
 from gateway.db.models import (
     GatewayDashboard,
@@ -39,9 +40,22 @@ class DashboardConflictError(RuntimeError):
     actual_current_version_id: str
 
 
-def _list_item(row: GatewayDashboard) -> DashboardListItem:
+def _confidence_counts(version: GatewayDashboardVersion | None) -> tuple[int, int]:
+    if version is None:
+        return 0, 0
+    definition = DashboardDefinition.model_validate(version.definition_json)
+    return dashboard_confidence_counts(definition)
+
+
+def _list_item(
+    row: GatewayDashboard,
+    *,
+    viewer_user_id: str,
+    version: GatewayDashboardVersion | None = None,
+) -> DashboardListItem:
     if not row.current_version_id:
         raise DashboardValidationError("Dashboard has no current version")
+    high, low = _confidence_counts(version)
     return DashboardListItem(
         id=row.id,
         name=row.name,
@@ -51,6 +65,14 @@ def _list_item(row: GatewayDashboard) -> DashboardListItem:
         timezone=row.timezone,
         current_version_id=row.current_version_id,
         revision=row.revision,
+        visibility=row.visibility,
+        owner_user_id=row.owner_user_id,
+        is_owner=row.owner_user_id == viewer_user_id,
+        archived_at=row.archived_at,
+        parent_dashboard_id=row.parent_dashboard_id,
+        parent_version_id=row.parent_version_id,
+        high_confidence_charts=high,
+        low_confidence_charts=low,
         updated_at=row.updated_at,
     )
 
@@ -85,17 +107,44 @@ def _authoring_info(row: GatewayDashboardAuthoringSession) -> DashboardAuthoring
     )
 
 
-async def list_private_dashboards(
-    db: AsyncSession, *, org_id: str, user_id: str
+async def list_dashboards(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    scope: str = "mine",
+    search: str | None = None,
+    include_archived: bool = False,
 ) -> list[DashboardListItem]:
-    rows = list((await db.execute(
-        select(GatewayDashboard).where(
-            GatewayDashboard.org_id == org_id,
-            GatewayDashboard.owner_user_id == user_id,
-            GatewayDashboard.archived_at.is_(None),
-        ).order_by(GatewayDashboard.updated_at.desc())
-    )).scalars())
-    return [_list_item(row) for row in rows]
+    visibility_clause = (
+        GatewayDashboard.owner_user_id == user_id
+        if scope == "mine"
+        else GatewayDashboard.visibility == "organization"
+    )
+    conditions = [GatewayDashboard.org_id == org_id, visibility_clause]
+    if not include_archived or scope != "mine":
+        conditions.append(GatewayDashboard.archived_at.is_(None))
+    if search:
+        escaped = search.replace("%", r"\%").replace("_", r"\_")
+        conditions.append(
+            or_(
+                GatewayDashboard.name.ilike(f"%{escaped}%", escape="\\"),
+                GatewayDashboard.description.ilike(f"%{escaped}%", escape="\\"),
+            )
+        )
+    rows = (
+        await db.execute(
+            select(GatewayDashboard, GatewayDashboardVersion)
+            .outerjoin(GatewayDashboardVersion, GatewayDashboardVersion.id == GatewayDashboard.current_version_id)
+            .where(*conditions)
+            .order_by(GatewayDashboard.updated_at.desc())
+        )
+    ).all()
+    return [_list_item(row, viewer_user_id=user_id, version=version) for row, version in rows]
+
+
+async def list_private_dashboards(db: AsyncSession, *, org_id: str, user_id: str) -> list[DashboardListItem]:
+    return await list_dashboards(db, org_id=org_id, user_id=user_id)
 
 
 async def get_private_dashboard_rows(
@@ -106,21 +155,55 @@ async def get_private_dashboard_rows(
     dashboard_id: str,
     version_id: str | None = None,
 ) -> tuple[GatewayDashboard, GatewayDashboardVersion] | None:
-    dashboard = (await db.execute(select(GatewayDashboard).where(
+    return await get_dashboard_rows(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        dashboard_id=dashboard_id,
+        version_id=version_id,
+        require_owner=True,
+    )
+
+
+async def get_dashboard_rows(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    dashboard_id: str,
+    version_id: str | None = None,
+    require_owner: bool = False,
+    include_archived: bool = False,
+) -> tuple[GatewayDashboard, GatewayDashboardVersion] | None:
+    access = GatewayDashboard.owner_user_id == user_id
+    if not require_owner:
+        access = or_(access, GatewayDashboard.visibility == "organization")
+    conditions = [
         GatewayDashboard.id == dashboard_id,
         GatewayDashboard.org_id == org_id,
-        GatewayDashboard.owner_user_id == user_id,
-        GatewayDashboard.archived_at.is_(None),
-    ))).scalar_one_or_none()
+        access,
+    ]
+    if not include_archived:
+        conditions.append(GatewayDashboard.archived_at.is_(None))
+    dashboard = (
+        await db.execute(
+            select(GatewayDashboard).where(
+                *conditions,
+            )
+        )
+    ).scalar_one_or_none()
     if dashboard is None:
         return None
     selected_version_id = version_id or dashboard.current_version_id
-    version = (await db.execute(select(GatewayDashboardVersion).where(
-        GatewayDashboardVersion.id == selected_version_id,
-        GatewayDashboardVersion.dashboard_id == dashboard.id,
-        GatewayDashboardVersion.org_id == org_id,
-        GatewayDashboardVersion.owner_user_id == user_id,
-    ))).scalar_one_or_none()
+    version = (
+        await db.execute(
+            select(GatewayDashboardVersion).where(
+                GatewayDashboardVersion.id == selected_version_id,
+                GatewayDashboardVersion.dashboard_id == dashboard.id,
+                GatewayDashboardVersion.org_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
     return (dashboard, version) if version is not None else None
 
 
@@ -133,7 +216,25 @@ async def get_private_dashboard(
     if rows is None:
         return None
     dashboard, version = rows
-    return DashboardDetail(dashboard=_list_item(dashboard), version=_version_info(version))
+    return DashboardDetail(
+        dashboard=_list_item(dashboard, viewer_user_id=user_id, version=version),
+        version=_version_info(version),
+    )
+
+
+async def get_dashboard(
+    db: AsyncSession, *, org_id: str, user_id: str, dashboard_id: str, version_id: str | None = None
+) -> DashboardDetail | None:
+    rows = await get_dashboard_rows(
+        db, org_id=org_id, user_id=user_id, dashboard_id=dashboard_id, version_id=version_id
+    )
+    if rows is None:
+        return None
+    dashboard, version = rows
+    return DashboardDetail(
+        dashboard=_list_item(dashboard, viewer_user_id=user_id, version=version),
+        version=_version_info(version),
+    )
 
 
 async def create_private_dashboard(
@@ -143,10 +244,15 @@ async def create_private_dashboard(
     user_id: str,
     definition: DashboardDefinition,
     authoring_provenance: dict | None = None,
+    parent_dashboard_id: str | None = None,
+    parent_version_id: str | None = None,
 ) -> DashboardDetail:
     dashboard_id = str(uuid.uuid4())
     version_id = str(uuid.uuid4())
-    signalpilot = definition.signalPilot.model_copy(update={"dashboardId": dashboard_id})
+    binding_update = {"dashboardId": dashboard_id}
+    if parent_version_id:
+        binding_update["forkedFromVersionId"] = parent_version_id
+    signalpilot = definition.signalPilot.model_copy(update=binding_update)
     definition = definition.model_copy(update={"signalPilot": signalpilot})
     normalized = normalize_dashboard_definition(definition)
     dashboard = GatewayDashboard(
@@ -159,6 +265,9 @@ async def create_private_dashboard(
         description=definition.description,
         timezone=signalpilot.timezone,
         current_version_id=version_id,
+        visibility="private",
+        parent_dashboard_id=parent_dashboard_id,
+        parent_version_id=parent_version_id,
     )
     version = GatewayDashboardVersion(
         id=version_id,
@@ -178,7 +287,9 @@ async def create_private_dashboard(
     await db.commit()
     await db.refresh(dashboard)
     await db.refresh(version)
-    return DashboardDetail(dashboard=_list_item(dashboard), version=_version_info(version))
+    return DashboardDetail(
+        dashboard=_list_item(dashboard, viewer_user_id=user_id, version=version), version=_version_info(version)
+    )
 
 
 async def create_dashboard_version(
@@ -236,7 +347,69 @@ async def create_dashboard_version(
         raise DashboardConflictError(dashboard.id, dashboard.current_version_id or "") from exc
     await db.refresh(dashboard)
     await db.refresh(version)
-    return DashboardDetail(dashboard=_list_item(dashboard), version=_version_info(version))
+    return DashboardDetail(
+        dashboard=_list_item(dashboard, viewer_user_id=user_id, version=version), version=_version_info(version)
+    )
+
+
+async def set_dashboard_visibility(
+    db: AsyncSession, *, org_id: str, user_id: str, dashboard_id: str, visibility: str
+) -> DashboardDetail:
+    rows = await get_dashboard_rows(db, org_id=org_id, user_id=user_id, dashboard_id=dashboard_id, require_owner=True)
+    if rows is None:
+        raise DashboardNotFoundError
+    dashboard, version = rows
+    dashboard.visibility = visibility
+    dashboard.updated_at = datetime.now(UTC)
+    await db.commit()
+    await db.refresh(dashboard)
+    return DashboardDetail(
+        dashboard=_list_item(dashboard, viewer_user_id=user_id, version=version), version=_version_info(version)
+    )
+
+
+async def fork_dashboard(
+    db: AsyncSession, *, org_id: str, user_id: str, dashboard_id: str, version_id: str
+) -> DashboardDetail:
+    rows = await get_dashboard_rows(
+        db, org_id=org_id, user_id=user_id, dashboard_id=dashboard_id, version_id=version_id
+    )
+    if rows is None:
+        raise DashboardNotFoundError
+    source, version = rows
+    definition = DashboardDefinition.model_validate(version.definition_json)
+    return await create_private_dashboard(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        definition=definition.model_copy(update={"name": f"{definition.name} (fork)"}),
+        authoring_provenance={"forked_from_dashboard_id": source.id, "forked_from_version_id": version.id},
+        parent_dashboard_id=source.id,
+        parent_version_id=version.id,
+    )
+
+
+async def set_dashboard_archived(
+    db: AsyncSession, *, org_id: str, user_id: str, dashboard_id: str, archived: bool
+) -> DashboardDetail:
+    rows = await get_dashboard_rows(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        dashboard_id=dashboard_id,
+        require_owner=True,
+        include_archived=True,
+    )
+    if rows is None:
+        raise DashboardNotFoundError
+    dashboard, version = rows
+    dashboard.archived_at = datetime.now(UTC) if archived else None
+    dashboard.updated_at = datetime.now(UTC)
+    await db.commit()
+    await db.refresh(dashboard)
+    return DashboardDetail(
+        dashboard=_list_item(dashboard, viewer_user_id=user_id, version=version), version=_version_info(version)
+    )
 
 
 async def create_authoring_session(

@@ -31,6 +31,13 @@ export type DashboardQueryReceipt = {
   cache_state: "fresh" | "stale" | "miss" | "refreshed";
 };
 
+export function isUnsafeTruncatedSeriesError(cause: unknown): boolean {
+  return (
+    cause instanceof Error &&
+    cause.message.includes("dashboard_time_series_truncated")
+  );
+}
+
 type SemanticColumnMetadata = {
   label?: string;
   format?: DashboardQueryResult["columns"][number]["format"];

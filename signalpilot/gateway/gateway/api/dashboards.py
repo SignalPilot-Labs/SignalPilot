@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -19,16 +20,24 @@ from gateway.dashboard.compiler import (
     compile_distinct_values_query,
     compile_metric_query,
 )
+from gateway.dashboard.confidence import semantic_query_signature
 from gateway.dashboard.domain import DashboardDefinition, FieldTarget, FilterRule, SemanticChartQuery
 from gateway.dashboard.operations import has_custom_sql, validate_dashboard_semantics
 from gateway.dashboard.semantic_resolver import DashboardSemanticError, DashboardSemanticResolver
-from gateway.db.models import GatewayDashboardResult, GatewayStructuredQueryResult, GatewayWorkspaceProject
+from gateway.db.models import (
+    GatewayDashboard,
+    GatewayDashboardResult,
+    GatewayDashboardVersion,
+    GatewayStructuredQueryResult,
+    GatewayWorkspaceProject,
+)
 from gateway.git.repos import branch_head_sha
 from gateway.governance.query_executor import (
     GovernedQueryContext,
     GovernedQueryError,
     governed_query_executor,
 )
+from gateway.models.audit import AuditEntry
 from gateway.models.dashboards import (
     CreateDashboardRequest,
     CreateDashboardVersionRequest,
@@ -41,15 +50,21 @@ from gateway.models.dashboards import (
     DashboardDetail,
     DashboardDistinctValuesRequest,
     DashboardDistinctValuesResponse,
+    DashboardExportGrant,
+    DashboardExportRequest,
+    DashboardForkRequest,
     DashboardListItem,
     DashboardQueryReceipt,
     DashboardQueryRequest,
     DashboardSemanticContext,
+    DashboardSuggestion,
+    DashboardVisibilityRequest,
 )
 from gateway.security.scope_guard import RequireScope
 from gateway.standalone_chat.projects import evaluate_project_readiness
 from gateway.store import org_secrets as org_secrets_store
 from gateway.store import standalone_chat as chat_store
+from gateway.store.audit_log import append_audit
 from gateway.verification import compare_columns
 
 from .deps import StoreD
@@ -86,9 +101,21 @@ async def _verified_context(store: StoreD, definition: DashboardDefinition) -> D
 
 
 @router.get("/dashboards", response_model=list[DashboardListItem], dependencies=[RequireScope("read")])
-async def list_dashboards(store: StoreD):
-    return await dashboard_store.list_private_dashboards(
-        store.session, org_id=store._require_org_id(), user_id=_user_id(store)
+async def list_dashboards(
+    store: StoreD,
+    scope: str = "mine",
+    search: str | None = None,
+    include_archived: bool = False,
+):
+    if scope not in {"mine", "organization"}:
+        raise HTTPException(status_code=422, detail="Dashboard scope must be mine or organization")
+    return await dashboard_store.list_dashboards(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=_user_id(store),
+        scope=scope,
+        search=search,
+        include_archived=include_archived,
     )
 
 
@@ -110,7 +137,7 @@ async def create_dashboard(body: CreateDashboardRequest, store: StoreD):
 
 @router.get("/dashboards/{dashboard_id}", response_model=DashboardDetail, dependencies=[RequireScope("read")])
 async def get_dashboard(dashboard_id: str, store: StoreD, version_id: str | None = None):
-    detail = await dashboard_store.get_private_dashboard(
+    detail = await dashboard_store.get_dashboard(
         store.session,
         org_id=store._require_org_id(),
         user_id=_user_id(store),
@@ -120,6 +147,74 @@ async def get_dashboard(dashboard_id: str, store: StoreD, version_id: str | None
     if detail is None:
         raise HTTPException(status_code=404, detail="Dashboard not found")
     return detail
+
+
+@router.post(
+    "/dashboards/{dashboard_id}/visibility",
+    response_model=DashboardDetail,
+    dependencies=[RequireScope("write")],
+)
+async def set_dashboard_visibility(dashboard_id: str, body: DashboardVisibilityRequest, store: StoreD):
+    try:
+        return await dashboard_store.set_dashboard_visibility(
+            store.session,
+            org_id=store._require_org_id(),
+            user_id=_user_id(store),
+            dashboard_id=dashboard_id,
+            visibility=body.visibility,
+        )
+    except dashboard_store.DashboardNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Dashboard not found") from exc
+
+
+@router.post(
+    "/dashboards/{dashboard_id}/fork",
+    response_model=DashboardDetail,
+    status_code=201,
+    dependencies=[RequireScope("write")],
+)
+async def fork_dashboard(dashboard_id: str, body: DashboardForkRequest, store: StoreD):
+    try:
+        return await dashboard_store.fork_dashboard(
+            store.session,
+            org_id=store._require_org_id(),
+            user_id=_user_id(store),
+            dashboard_id=dashboard_id,
+            version_id=body.version_id,
+        )
+    except dashboard_store.DashboardNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Dashboard not found") from exc
+
+
+async def _set_archive(dashboard_id: str, archived: bool, store: StoreD):
+    try:
+        return await dashboard_store.set_dashboard_archived(
+            store.session,
+            org_id=store._require_org_id(),
+            user_id=_user_id(store),
+            dashboard_id=dashboard_id,
+            archived=archived,
+        )
+    except dashboard_store.DashboardNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Dashboard not found") from exc
+
+
+@router.post(
+    "/dashboards/{dashboard_id}/archive",
+    response_model=DashboardDetail,
+    dependencies=[RequireScope("write")],
+)
+async def archive_dashboard(dashboard_id: str, store: StoreD):
+    return await _set_archive(dashboard_id, True, store)
+
+
+@router.post(
+    "/dashboards/{dashboard_id}/restore",
+    response_model=DashboardDetail,
+    dependencies=[RequireScope("write")],
+)
+async def restore_dashboard(dashboard_id: str, store: StoreD):
+    return await _set_archive(dashboard_id, False, store)
 
 
 @router.post(
@@ -382,6 +477,25 @@ def _tile_for_chart(definition: DashboardDefinition, chart_id: str, tile_uuid: s
     return tile
 
 
+def _reject_truncated_time_series(chart, completeness: str) -> None:
+    visualization = chart.visualization
+    if (
+        completeness == "truncated"
+        and visualization.type == "cartesian"
+        and visualization.config.seriesType in {"line", "area"}
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "dashboard_time_series_truncated",
+                "message": (
+                    f"{chart.title} exceeds its {chart.query.limit:,}-row limit. "
+                    "Narrow the date range or publish a dashboard version with a higher limit."
+                ),
+            },
+        )
+
+
 def _runtime_filters_for_tile(definition: DashboardDefinition, tile_uuid: str, chart, requested) -> list[FilterRule]:
     saved_by_id = {rule.id: rule for rule in definition.filters.dimensions}
     runtime: list[FilterRule] = []
@@ -505,6 +619,7 @@ async def _execute_dashboard_chart(
             store, dashboard_id=dashboard.id, version_id=query_version_id, cache_key=cache_key
         )
         if cached is not None:
+            _reject_truncated_time_series(chart, cached.completeness)
             return cached.model_copy(update={"compiled_sql": compiled.sql})
     try:
         result = await governed_query_executor.execute(
@@ -522,6 +637,7 @@ async def _execute_dashboard_chart(
         )
     except GovernedQueryError as exc:
         raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)}) from exc
+    _reject_truncated_time_series(chart, result.completeness)
     stored = (
         await store.session.execute(
             select(GatewayStructuredQueryResult).where(
@@ -591,7 +707,7 @@ async def _execute_dashboard_chart(
     dependencies=[RequireScope("query")],
 )
 async def query_dashboard_chart(dashboard_id: str, chart_id: str, body: DashboardQueryRequest, store: StoreD):
-    rows = await dashboard_store.get_private_dashboard_rows(
+    rows = await dashboard_store.get_dashboard_rows(
         store.session,
         org_id=store._require_org_id(),
         user_id=_user_id(store),
@@ -678,7 +794,7 @@ async def get_dashboard_filter_values(
     body: DashboardDistinctValuesRequest,
     store: StoreD,
 ):
-    rows = await dashboard_store.get_private_dashboard_rows(
+    rows = await dashboard_store.get_dashboard_rows(
         store.session,
         org_id=store._require_org_id(),
         user_id=_user_id(store),
@@ -734,7 +850,7 @@ async def get_dashboard_chart_data(
     dashboard_result_id: str,
     store: StoreD,
 ):
-    authorized = await dashboard_store.get_private_dashboard_rows(
+    authorized = await dashboard_store.get_dashboard_rows(
         store.session,
         org_id=store._require_org_id(),
         user_id=_user_id(store),
@@ -796,7 +912,7 @@ async def analyze_dashboard_chart(
 ):
     org_id = store._require_org_id()
     user_id = _user_id(store)
-    rows = await dashboard_store.get_private_dashboard_rows(
+    rows = await dashboard_store.get_dashboard_rows(
         store.session,
         org_id=org_id,
         user_id=user_id,
@@ -899,3 +1015,131 @@ async def analyze_dashboard_chart(
         },
     )
     return DashboardAnalyzeResponse(conversation_id=conversation.id, chart_reference=chart_reference)
+
+
+@router.get(
+    "/dashboards/{dashboard_id}/suggestions",
+    response_model=list[DashboardSuggestion],
+    dependencies=[RequireScope("read")],
+)
+async def suggest_organization_dashboards(dashboard_id: str, store: StoreD):
+    org_id = store._require_org_id()
+    rows = await dashboard_store.get_dashboard_rows(
+        store.session, org_id=org_id, user_id=_user_id(store), dashboard_id=dashboard_id
+    )
+    if rows is None:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    _, target_version = rows
+    target = DashboardDefinition.model_validate(target_version.definition_json)
+    signatures = {
+        semantic_query_signature(chart.query) for chart in target.charts if isinstance(chart.query, SemanticChartQuery)
+    }
+    if not signatures:
+        return []
+    candidates = (
+        await store.session.execute(
+            select(GatewayDashboard, GatewayDashboardVersion)
+            .join(GatewayDashboardVersion, GatewayDashboardVersion.id == GatewayDashboard.current_version_id)
+            .where(
+                GatewayDashboard.org_id == org_id,
+                GatewayDashboard.id != dashboard_id,
+                GatewayDashboard.visibility == "organization",
+                GatewayDashboard.archived_at.is_(None),
+            )
+        )
+    ).all()
+    suggestions: list[DashboardSuggestion] = []
+    for dashboard, version in candidates:
+        definition = DashboardDefinition.model_validate(version.definition_json)
+        for chart in definition.charts:
+            if (
+                not isinstance(chart.query, SemanticChartQuery)
+                or semantic_query_signature(chart.query) not in signatures
+            ):
+                continue
+            freshness = (
+                await store.session.execute(
+                    select(GatewayDashboardResult.freshness_at)
+                    .where(
+                        GatewayDashboardResult.org_id == org_id,
+                        GatewayDashboardResult.dashboard_id == dashboard.id,
+                        GatewayDashboardResult.version_id == version.id,
+                        GatewayDashboardResult.chart_id == chart.id,
+                    )
+                    .order_by(GatewayDashboardResult.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            suggestions.append(
+                DashboardSuggestion(
+                    dashboard_id=dashboard.id,
+                    dashboard_name=dashboard.name,
+                    version_id=version.id,
+                    chart_id=chart.id,
+                    chart_title=chart.title,
+                    owner_user_id=dashboard.owner_user_id,
+                    freshness_at=freshness,
+                )
+            )
+    return suggestions
+
+
+@router.post(
+    "/dashboards/{dashboard_id}/exports/html",
+    response_model=DashboardExportGrant,
+    dependencies=[RequireScope("read")],
+)
+async def authorize_dashboard_html_export(dashboard_id: str, body: DashboardExportRequest, store: StoreD):
+    org_id = store._require_org_id()
+    rows = await dashboard_store.get_dashboard_rows(
+        store.session,
+        org_id=org_id,
+        user_id=_user_id(store),
+        dashboard_id=dashboard_id,
+        version_id=body.version_id,
+    )
+    if rows is None:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    if not body.acknowledge_sensitive_data:
+        raise HTTPException(
+            status_code=422,
+            detail="Confirm that the offline HTML contains the currently visible governed data",
+        )
+    result_ids = list(dict.fromkeys(body.dashboard_result_ids))
+    authorized = list(
+        (
+            await store.session.execute(
+                select(GatewayDashboardResult.id).where(
+                    GatewayDashboardResult.id.in_(result_ids),
+                    GatewayDashboardResult.org_id == org_id,
+                    GatewayDashboardResult.dashboard_id == dashboard_id,
+                    GatewayDashboardResult.version_id == body.version_id,
+                )
+            )
+        ).scalars()
+    )
+    if len(authorized) != len(result_ids):
+        raise HTTPException(status_code=404, detail="One or more dashboard results are not exportable")
+    await append_audit(
+        store.session,
+        org_id=org_id,
+        user_id=_user_id(store),
+        entry=AuditEntry(
+            id=str(uuid.uuid4()),
+            timestamp=time.time(),
+            event_type="dashboard_export",
+            connection_name=rows[0].connection_name,
+            metadata={
+                "dashboard_id": dashboard_id,
+                "version_id": body.version_id,
+                "result_count": len(authorized),
+                "format": "html",
+            },
+        ),
+    )
+    return DashboardExportGrant(
+        dashboard_id=dashboard_id,
+        version_id=body.version_id,
+        authorized_result_ids=authorized,
+        warning="This offline file contains governed result data. Store and share it appropriately.",
+    )

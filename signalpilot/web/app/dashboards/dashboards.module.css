@@ -1,0 +1,366 @@
+.indexPage {
+  width: min(1180px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 42px 0 64px;
+}
+
+.indexHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.indexHeader h1 {
+  margin: 0 0 5px;
+  font-size: 30px;
+  letter-spacing: -0.025em;
+}
+
+.indexHeader p {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.primaryIconButton,
+.iconButton,
+.cardIconButton {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  background: var(--color-bg-card);
+  color: var(--color-text);
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.primaryIconButton {
+  border-color: color-mix(in srgb, var(--color-border-active) 65%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--color-border-active) 18%,
+    var(--color-bg-card)
+  );
+}
+
+.primaryIconButton:hover,
+.iconButton:hover,
+.cardIconButton:hover {
+  border-color: var(--color-border-active);
+  background: var(--color-bg-elevated);
+}
+
+.primaryIconButton:focus-visible,
+.iconButton:focus-visible,
+.cardIconButton:focus-visible,
+.tabs button:focus-visible,
+.searchBox:focus-within {
+  outline: 2px solid var(--color-border-active);
+  outline-offset: 2px;
+}
+
+.iconButton:disabled,
+.cardIconButton:disabled {
+  cursor: wait;
+  opacity: 0.45;
+}
+
+.indexControls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 30px;
+}
+
+.tabs {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-card);
+}
+
+.tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-muted);
+  padding: 7px 11px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tabs button[aria-selected="true"] {
+  background: var(--color-bg-elevated);
+  color: var(--color-text);
+  box-shadow: 0 1px 0 rgb(255 255 255 / 4%);
+}
+
+.searchBox {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  max-width: 360px;
+  gap: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  background: var(--color-bg-card);
+  color: var(--color-text-muted);
+  padding: 0 11px;
+}
+
+.searchBox input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--color-text);
+  padding: 9px 0;
+}
+
+.archiveToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.cardGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 22px;
+}
+
+.dashboardCard {
+  position: relative;
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg-card);
+  overflow: hidden;
+  transition:
+    border-color 120ms ease,
+    transform 120ms ease;
+}
+
+.dashboardCard:hover {
+  border-color: color-mix(
+    in srgb,
+    var(--color-border-active) 60%,
+    var(--color-border)
+  );
+  transform: translateY(-1px);
+}
+
+.archivedCard {
+  opacity: 0.62;
+}
+
+.cardLink {
+  display: block;
+  min-height: 150px;
+  padding: 18px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.cardTitleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.cardTitleRow strong {
+  overflow: hidden;
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cardTitleRow svg {
+  flex: none;
+  color: var(--color-text-dim);
+}
+
+.cardLink p {
+  display: -webkit-box;
+  min-height: 40px;
+  margin: 12px 0 16px;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.cardMeta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--color-text-dim);
+  font-size: 11px;
+}
+
+.cardMeta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cardMeta span:first-child {
+  color: #63c991;
+}
+
+.cardMeta time {
+  margin-left: auto;
+}
+
+.cardIconButton {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  width: 30px;
+  height: 30px;
+}
+
+.iconActions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.actionMenu {
+  position: relative;
+}
+
+.actionMenu summary {
+  list-style: none;
+}
+
+.actionMenu summary::-webkit-details-marker {
+  display: none;
+}
+
+.actionMenuPanel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  right: 0;
+  display: grid;
+  width: min(240px, calc(100vw - 32px));
+  gap: 5px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-elevated);
+  box-shadow: 0 16px 48px rgb(0 0 0 / 38%);
+  padding: 8px;
+}
+
+.actionMenuPanel button,
+.actionMenuPanel a {
+  display: flex;
+  width: 100%;
+  height: auto;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 11px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  padding: 12px;
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 1.25;
+  text-decoration: none;
+}
+
+.actionMenuPanel button:hover:not(:disabled),
+.actionMenuPanel a:hover {
+  background: var(--color-bg-card);
+}
+
+.actionMenuPanel button:disabled {
+  color: var(--color-text-dim);
+  opacity: 1;
+}
+
+.menuGroup {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 3px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.menuGroup > span {
+  padding: 6px 12px 3px;
+  color: var(--color-text-dim);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.matchNotice {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: max-content;
+  max-width: 100%;
+  margin: -8px 0 18px;
+  border-radius: 999px;
+  background: color-mix(in srgb, #2da56b 11%, transparent);
+  color: #63c991;
+  padding: 6px 10px;
+  font-size: 11px;
+  text-decoration: none;
+}
+
+.error {
+  color: var(--color-danger, #ef6c6c);
+}
+
+@media (max-width: 760px) {
+  .indexPage {
+    width: min(100% - 28px, 1180px);
+    padding-top: 24px;
+  }
+
+  .indexControls {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .searchBox {
+    order: 2;
+    max-width: none;
+    flex-basis: 100%;
+  }
+
+  .cardGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .iconActions {
+    gap: 5px;
+  }
+
+  .iconButton {
+    width: 34px;
+    height: 34px;
+  }
+}

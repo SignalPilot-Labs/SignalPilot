@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -32,6 +32,14 @@ class DashboardListItem(DashboardModel):
     timezone: str
     current_version_id: str
     revision: int
+    visibility: Literal["private", "organization"]
+    owner_user_id: str
+    is_owner: bool
+    archived_at: datetime | None
+    parent_dashboard_id: str | None
+    parent_version_id: str | None
+    high_confidence_charts: int = 0
+    low_confidence_charts: int = 0
     updated_at: datetime
 
 
@@ -49,6 +57,40 @@ class DashboardVersionInfo(DashboardModel):
 class DashboardDetail(DashboardModel):
     dashboard: DashboardListItem
     version: DashboardVersionInfo
+
+
+class DashboardVisibilityRequest(DashboardModel):
+    visibility: Literal["private", "organization"]
+
+
+class DashboardForkRequest(DashboardModel):
+    version_id: str
+
+
+class DashboardExportRequest(DashboardModel):
+    version_id: str
+    dashboard_result_ids: list[str] = Field(min_length=1, max_length=100)
+    dashboard_filters: list[DashboardRuntimeFilter] = Field(default_factory=list)
+    drill_paths: dict[str, list[DashboardDrillStep]] = Field(default_factory=dict)
+    acknowledge_sensitive_data: bool = False
+
+
+class DashboardExportGrant(DashboardModel):
+    dashboard_id: str
+    version_id: str
+    authorized_result_ids: list[str]
+    warning: str
+
+
+class DashboardSuggestion(DashboardModel):
+    dashboard_id: str
+    dashboard_name: str
+    version_id: str
+    chart_id: str
+    chart_title: str
+    owner_user_id: str
+    confidence: Literal["high"] = "high"
+    freshness_at: datetime | None = None
 
 
 class DashboardQueryRequest(DashboardModel):

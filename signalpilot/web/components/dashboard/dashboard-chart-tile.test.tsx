@@ -104,6 +104,15 @@ describe("DashboardChartTile interactions", () => {
     );
     expect(container.textContent).toContain("Complete result");
     expect(container.textContent).toContain("View data");
+    const verification = container.querySelector<HTMLElement>(
+      "[aria-label^='High confidence']",
+    );
+    expect(verification).not.toBeNull();
+    expect(
+      container.querySelector(
+        `#${verification?.getAttribute("aria-describedby")}`,
+      )?.textContent,
+    ).toContain("approved semantic fields");
   });
 
   it("centers a spinner in a chart while its governed data is loading", async () => {
@@ -129,6 +138,24 @@ describe("DashboardChartTile interactions", () => {
       "The data source is temporarily unavailable",
     );
     expect(container.textContent).not.toContain("Failed to fetch");
+  });
+
+  it("does not expose a truncated time series as a usable chart", async () => {
+    await act(async () => {
+      root.render(
+        <DashboardChartTile
+          chart={chart}
+          error={'422: {"detail":{"code":"dashboard_time_series_truncated"}}'}
+        />,
+      );
+    });
+
+    expect(container.textContent).toContain(
+      "This time series exceeds its safe row limit",
+    );
+    expect(container.textContent).not.toContain(
+      "dashboard_time_series_truncated",
+    );
   });
 
   it("closes View data with Escape", async () => {

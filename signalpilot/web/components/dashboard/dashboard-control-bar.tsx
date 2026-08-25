@@ -217,6 +217,7 @@ function DimensionControl({
           if (next === "__not_null__")
             return onChange({ id: rule.id, operator: "notNull" });
           const original = values.find((value) => String(value) === next);
+          if (original === undefined) return;
           onChange({ id: rule.id, operator: "equals", values: [original] });
         }}
       >

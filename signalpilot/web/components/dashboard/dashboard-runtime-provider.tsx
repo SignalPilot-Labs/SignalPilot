@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactNode,
 } from "react";
 
 import { DashboardChartTile } from "~/components/dashboard/dashboard-chart-tile";
@@ -15,6 +16,7 @@ import { DashboardControlBar } from "~/components/dashboard/dashboard-control-ba
 import { DashboardDetailsDrawer } from "~/components/dashboard/dashboard-inspector";
 import {
   DashboardApiDataSource,
+  isUnsafeTruncatedSeriesError,
   type DashboardQueryReceipt,
 } from "~/lib/dashboard/api-data-source";
 import type {
@@ -61,7 +63,11 @@ export function DashboardRuntimeProvider({
   definition,
   authoringSessionId,
   onVisibleReceiptsChange,
+  onRuntimeFiltersChange,
+  onRuntimeDrillsChange,
   analysisEnabled = true,
+  lifecycleActions,
+  lifecycleNotice,
 }: {
   dashboardId: string;
   versionId: string;
@@ -70,7 +76,15 @@ export function DashboardRuntimeProvider({
   onVisibleReceiptsChange?: (
     receipts: Record<string, DashboardQueryReceipt>,
   ) => void;
+  onRuntimeFiltersChange?: (
+    filters: ReturnType<typeof initialDashboardRuntimeState>["filters"],
+  ) => void;
+  onRuntimeDrillsChange?: (
+    drills: ReturnType<typeof initialDashboardRuntimeState>["drills"],
+  ) => void;
   analysisEnabled?: boolean;
+  lifecycleActions?: ReactNode;
+  lifecycleNotice?: ReactNode;
 }) {
   const [runtimeState, setRuntimeState] = useState(() =>
     typeof window === "undefined"
@@ -134,6 +148,14 @@ export function DashboardRuntimeProvider({
   }, [onVisibleReceiptsChange, receipts]);
 
   useEffect(() => {
+    onRuntimeFiltersChange?.(runtimeState.filters);
+  }, [onRuntimeFiltersChange, runtimeState.filters]);
+
+  useEffect(() => {
+    onRuntimeDrillsChange?.(runtimeState.drills);
+  }, [onRuntimeDrillsChange, runtimeState.drills]);
+
+  useEffect(() => {
     const next = runtimeStateSearchParams(definition, runtimeState);
     const url = new URL(window.location.href);
     url.searchParams.delete("filters");
@@ -177,6 +199,18 @@ export function DashboardRuntimeProvider({
         )
         .catch((cause) => {
           if (controller.signal.aborted) return;
+          if (isUnsafeTruncatedSeriesError(cause)) {
+            setResults((current) => {
+              const next = { ...current };
+              delete next[chart.id];
+              return next;
+            });
+            setReceipts((current) => {
+              const next = { ...current };
+              delete next[chart.id];
+              return next;
+            });
+          }
           setErrors((current) => ({
             ...current,
             [chart.id]: cause instanceof Error ? cause.message : "Query failed",
@@ -236,7 +270,7 @@ export function DashboardRuntimeProvider({
   };
 
   return (
-    <div className={styles.runtime}>
+    <div className={styles.runtime} data-dashboard-export-root>
       <main>
         <header className={styles.header}>
           <div>
@@ -245,7 +279,11 @@ export function DashboardRuntimeProvider({
           </div>
           <div className={styles.headerActions}>
             {dashboardLoading || Object.keys(errors).length ? (
-              <span className={styles.dashboardRefreshState} role="status">
+              <span
+                className={styles.dashboardRefreshState}
+                role="status"
+                data-dashboard-export-exclude
+              >
                 {dashboardLoading
                   ? hasVisibleResults
                     ? "Refreshing dashboard…"
@@ -253,7 +291,13 @@ export function DashboardRuntimeProvider({
                   : "Some charts need attention"}
               </span>
             ) : null}
-            <div className={styles.refreshButtonWrap}>
+            {lifecycleActions ? (
+              <div data-dashboard-export-exclude>{lifecycleActions}</div>
+            ) : null}
+            <div
+              className={styles.refreshButtonWrap}
+              data-dashboard-export-exclude
+            >
               <button
                 type="button"
                 disabled={dashboardLoading}
@@ -277,6 +321,7 @@ export function DashboardRuntimeProvider({
             </div>
           </div>
         </header>
+        {lifecycleNotice}
         <DashboardControlBar
           dashboardId={dashboardId}
           versionId={versionId}
@@ -301,7 +346,7 @@ export function DashboardRuntimeProvider({
               definition.charts.some(
                 (candidateChart) =>
                   candidateChart.id === candidate.chartId &&
-                  candidateChart.visualization.type === "kpi",
+                  candidateChart.visualization.type === "big_number",
               ),
             );
             const drillPath = runtimeState.drills[chart.id] ?? [];

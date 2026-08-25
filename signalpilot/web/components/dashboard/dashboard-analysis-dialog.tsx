@@ -70,14 +70,16 @@ export function DashboardAnalysisDialog({
           </div>
         </header>
         <div className={styles.frozenChart} aria-label="Frozen selected chart">
-          <DashboardRenderer chart={chart} result={result} />
-          <p className={styles.frozenChartCaption}>
+          <div className={styles.frozenChartVisual}>
+            <DashboardRenderer chart={chart} result={result} />
+          </div>
+          <footer className={styles.frozenChartCaption}>
             {result.completeness === "complete"
               ? "Complete result"
               : "Result may be incomplete"}
             {" · "}Updated{" "}
             {formatDashboardTimestamp(result.freshnessAt, result)}
-          </p>
+          </footer>
         </div>
         <div className={styles.analysisChat}>
           {conversationId ? (

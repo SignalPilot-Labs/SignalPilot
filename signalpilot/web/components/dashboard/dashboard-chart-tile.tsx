@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 
 import { DashboardRenderer } from "~/components/dashboard/dashboard-renderer";
 import { DashboardLoadingState } from "~/components/dashboard/dashboard-loading-state";
+import { DashboardConfidenceFlag } from "~/components/dashboard/dashboard-confidence-flag";
 import type {
   ChartDefinition,
   DashboardQueryResult,
@@ -18,6 +19,9 @@ import {
 import styles from "./dashboard-runtime.module.css";
 
 function displayErrorMessage(error: string): string {
+  if (error.includes("dashboard_time_series_truncated")) {
+    return "This time series exceeds its safe row limit. Narrow the date range or update the dashboard limit before using it.";
+  }
   return /failed to fetch|networkerror|500:\s*internal server error/i.test(
     error,
   )
@@ -155,6 +159,7 @@ export function DashboardChartTile({
             </div>
           ) : null}
         </div>
+        <DashboardConfidenceFlag chart={chart} />
         <details className={styles.tileMenu}>
           <summary aria-label={`More actions for ${chart.title}`}>•••</summary>
           <div className={styles.tileMenuPanel}>

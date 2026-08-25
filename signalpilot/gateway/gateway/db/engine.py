@@ -815,6 +815,20 @@ async def init_db() -> None:
                     "ADD COLUMN IF NOT EXISTS authoring_provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb"
                 )
             )
+            await conn.execute(
+                text(
+                    "ALTER TABLE gateway_dashboards "
+                    "ADD COLUMN IF NOT EXISTS visibility VARCHAR(20) NOT NULL DEFAULT 'private', "
+                    "ADD COLUMN IF NOT EXISTS parent_dashboard_id VARCHAR, "
+                    "ADD COLUMN IF NOT EXISTS parent_version_id VARCHAR"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_gw_dashboards_visibility "
+                    "ON gateway_dashboards (org_id, visibility, updated_at)"
+                )
+            )
     await _ensure_key_version_column(engine)
     await _ensure_expires_at_column(engine)
     await _ensure_byok_columns(engine)

@@ -6,6 +6,7 @@
   "include": [
     "next-env.d.ts",
     "app/dashboard-prototype/**/*.tsx",
+    "app/dashboards/**/*.tsx",
     "components/dashboard/**/*.ts",
     "components/dashboard/**/*.tsx",
     "dashboard/**/*.ts",

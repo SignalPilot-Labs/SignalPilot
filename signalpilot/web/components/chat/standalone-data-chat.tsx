@@ -798,18 +798,31 @@ function AssistantMessageReplay({
 }) {
   const { events, artifacts, onStop, onRetry } = useChatUi();
   const replay = useChatReplay(events, artifacts, runId);
+  // Runs that streamed text carry text_delta events, and the blocks rebuild
+  // the message from the replayed deltas. Runs that only produced a final
+  // message have no deltas — for those, reveal the persisted content at the
+  // moment it actually appeared: when the run completed.
+  const runStreamedText = useMemo(
+    () =>
+      events.some(
+        (event) => event.run_id === runId && event.type === "text_delta",
+      ),
+    [events, runId],
+  );
   const replayMessage = useMemo<UiMessage>(
     () => ({
       ...message,
-      // Blocks reconstruct the text from replayed deltas; suppress the
-      // persisted content so it does not render ahead of the stream.
-      content: "",
+      content: runStreamedText
+        ? ""
+        : replay.finished
+          ? message.content
+          : "",
       runId,
       runStatus: replay.finished
         ? (message.runStatus ?? "completed")
         : "running",
     }),
-    [message, replay.finished, runId],
+    [message, replay.finished, runId, runStreamedText],
   );
   return (
     <div data-testid="chat-replay">

@@ -99,17 +99,30 @@ test.describe("Cell Editing", () => {
     await waitForEditor(page);
     await page.waitForTimeout(2000);
 
+    // Headless caveat: CodeMirror only applies .cm-focused when
+    // document.hasFocus() is true, which headless Chromium never reports.
+    // Assert the interaction itself — focus lands in the editor and typed
+    // text persists (i.e. CM accepted the edit rather than reverting it).
     const cmContent = page.locator(".cm-editor").first().locator(".cm-content");
     await cmContent.click();
     await page.waitForTimeout(500);
 
-    expect(await page.locator(".cm-focused").count()).toBeGreaterThan(0);
+    const focusedInEditor = await page.evaluate(() =>
+      Boolean(document.activeElement?.closest(".cm-editor")),
+    );
+    expect(focusedInEditor, "click should focus the cell editor").toBe(true);
     expect(await page.locator(".cm-cursorLayer").count()).toBeGreaterThan(0);
 
     await page.keyboard.press("End");
     await page.keyboard.type("# E2E_TEST");
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(1000);
     expect(await cmContent.textContent()).toContain("E2E_TEST");
+    // Leave the fixture notebook as we found it.
+    for (let i = 0; i < "# E2E_TEST".length; i++) {
+      await page.keyboard.press("Backspace");
+    }
+    await page.waitForTimeout(500);
+    expect(await cmContent.textContent()).not.toContain("E2E_TEST");
 
     await page.keyboard.press("Home");
     await page.keyboard.down("Shift");
@@ -132,17 +145,22 @@ test.describe("File Picker", () => {
     await waitForNotebook(page);
     await waitForEditor(page);
 
-    // The deep-link loaded intro.py — the tab bar or file tree should mention it
-    const introVisible = await page.locator(".sp-root").getByText("intro.py").first()
-      .isVisible({ timeout: 10_000 }).catch(() => false);
+    // The open-file selector shows the deep-linked file (combobox value,
+    // so getByText can't see it — assert on the accessible name/value).
+    const fileSelector = page.getByRole("combobox").filter({ hasText: "intro.py" });
+    await expect(fileSelector.first()).toBeVisible({ timeout: 10_000 });
 
-    // Also check for any other project files
-    const projectFiles = page.locator(".sp-root").getByText(/dbt_project|models|notebooks|schema/i);
+    // Open the file explorer panel and assert real project files load
+    // from the S3 workspace (dumpsters has notebooks/ + dbt trees).
+    await page.getByLabel("View files").first().click();
+    const tree = page.locator(".sp-root");
+    await expect(
+      tree.getByText(/^notebooks$/).first(),
+    ).toBeVisible({ timeout: 15_000 });
+    const projectFiles = tree.getByText(/dumpsters_dbt|dbt_project|models|notebooks/i);
     const fileCount = await projectFiles.count();
-    console.log(`File tree: intro.py=${introVisible}, other files=${fileCount}`);
-
-    // At minimum, intro.py should be visible (in tab bar or tree)
-    expect(introVisible || fileCount > 0).toBe(true);
+    console.log(`File tree entries matched: ${fileCount}`);
+    expect(fileCount).toBeGreaterThan(0);
   });
 
   test("switches from .py to .yml file", async ({ page }) => {

@@ -25,7 +25,6 @@ export interface NotebookStaticData {
 
 export interface BootResult {
   client: SignalpilotClient;
-  syncResult?: { localDir: string; fileCount: number };
   staticData: NotebookStaticData;
 }
 
@@ -243,5 +242,5 @@ export async function bootRuntime(
   }
 
   onPhase("ready");
-  return { client, syncResult, staticData };
+  return { client, staticData };
 }

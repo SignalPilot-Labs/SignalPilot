@@ -64,6 +64,8 @@ import {
 } from "~/lib/api";
 import { StandaloneArtifactContext } from "~/components/chat/standalone-artifact-context";
 import { StandaloneChatComposer } from "~/components/chat/standalone-chat-composer";
+import { LiveRunActivity, RunTimeline } from "~/components/chat/run-timeline";
+import { foldRunSteps } from "~/lib/chat-run-steps";
 import { useToast } from "~/components/ui/toast";
 import {
   appendOptimisticUserMessage,
@@ -80,7 +82,7 @@ import {
 } from "~/lib/standalone-chat-state";
 import { projectSettingsHref } from "~/lib/project-settings-route";
 
-type UiMessage = StandaloneChatMessage & {
+export type UiMessage = StandaloneChatMessage & {
   runId?: string;
   runStatus?: StandaloneChatRunStatus;
   activity?: StandaloneRunActivity;
@@ -94,7 +96,7 @@ type ChatUiContextValue = {
   onRetry: (runId: string) => Promise<void>;
 };
 
-const ChatUiContext = createContext<ChatUiContextValue | null>(null);
+export const ChatUiContext = createContext<ChatUiContextValue | null>(null);
 
 function useChatUi() {
   const value = useContext(ChatUiContext);
@@ -171,63 +173,8 @@ function eventText(
 
 function WorkTimeline({ runId }: { runId: string }) {
   const { events } = useChatUi();
-  const work = events.filter(
-    (event) => event.run_id === runId && event.type !== "text_delta",
-  );
-  if (!work.length) {
-    return (
-      <p className="text-xs text-[var(--color-text-dim)]">
-        Work details will appear as the analysis progresses.
-      </p>
-    );
-  }
-  return (
-    <ol className="space-y-2" aria-label="Analysis work">
-      {work.map((event) => {
-        const label =
-          eventText(event, "label") ||
-          eventText(event, "message") ||
-          eventText(event, "tool") ||
-          eventText(event, "filename") ||
-          event.type.replaceAll("_", " ");
-        const expandable =
-          event.type === "tool_started" ||
-          event.type === "tool_completed" ||
-          event.type === "source" ||
-          event.type === "intermediate_result" ||
-          event.type === "sql" ||
-          event.type === "error";
-        const summary = eventText(event, "summary");
-        return (
-          <li
-            key={`${event.run_id}-${event.sequence}`}
-            className="relative pl-5 text-xs text-[var(--color-text-muted)]"
-          >
-            <span className="absolute left-0 top-1.5 h-1.5 w-1.5 rounded-full bg-[var(--color-border-active)]" />
-            {expandable ? (
-              <details>
-                <summary className="select-none hover:text-[var(--color-text)]">
-                  {label}
-                </summary>
-                <pre className="mt-2 max-h-56 overflow-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-input)] p-3 text-[11px] leading-relaxed text-[var(--color-text-dim)]">
-                  {JSON.stringify(event.payload, null, 2)}
-                </pre>
-              </details>
-            ) : (
-              <span>
-                {label}
-                {summary && summary !== label && (
-                  <span className="mt-0.5 block text-[var(--color-text-dim)]">
-                    {summary}
-                  </span>
-                )}
-              </span>
-            )}
-          </li>
-        );
-      })}
-    </ol>
-  );
+  const steps = useMemo(() => foldRunSteps(events, runId), [events, runId]);
+  return <RunTimeline steps={steps} />;
 }
 
 export type ArtifactPreviewData = Pick<
@@ -536,8 +483,12 @@ function AssistantMessage({ message }: { message: UiMessage }) {
       ? (message.metadata.status as StandaloneChatRunStatus)
       : "completed");
   const [showWork, setShowWork] = useState(false);
-  const { artifacts, onRetry, onStop } = useChatUi();
+  const { artifacts, events, onRetry, onStop } = useChatUi();
   const { toast } = useToast();
+  const steps = useMemo(
+    () => (runId ? foldRunSteps(events, runId) : []),
+    [events, runId],
+  );
   const attachedArtifacts = artifacts.filter(
     (artifact) =>
       artifact.assistant_message_id === message.id || artifact.run_id === runId,
@@ -562,6 +513,11 @@ function AssistantMessage({ message }: { message: UiMessage }) {
           )}
         </div>
         <div className="min-w-0 flex-1">
+          {(running || steps.length > 0) && (
+            <div role="status" aria-live="polite">
+              <LiveRunActivity steps={steps} running={running} />
+            </div>
+          )}
           <div className="chat-markdown">
             {message.content && (
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -569,19 +525,6 @@ function AssistantMessage({ message }: { message: UiMessage }) {
               </ReactMarkdown>
             )}
           </div>
-          {running && message.activity && (
-            <p
-              role="status"
-              aria-live="polite"
-              aria-atomic="true"
-              className={`${message.content ? "mt-3" : ""} text-sm text-[var(--color-text-muted)]`}
-            >
-              <span className="font-medium text-[var(--color-text)]">
-                {message.activity.label}:
-              </span>{" "}
-              {message.activity.detail}
-            </p>
-          )}
           {attachedArtifacts.length > 0 && (
             <div className="mt-5 space-y-4">
               {attachedArtifacts.map((artifact) => (
@@ -614,7 +557,7 @@ function AssistantMessage({ message }: { message: UiMessage }) {
                 Copy
               </button>
             )}
-            {runId && (
+            {runId && (runtimeArchiveAvailable || steps.length === 0) && (
               <button
                 type="button"
                 onClick={() => {
@@ -682,7 +625,7 @@ function UserMessage({ message }: { message: UiMessage }) {
   );
 }
 
-function ChatMessage({ message }: { message: UiMessage }) {
+export function ChatMessage({ message }: { message: UiMessage }) {
   return message.role === "user" ? (
     <UserMessage message={message} />
   ) : (

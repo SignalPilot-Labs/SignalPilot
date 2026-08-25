@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 from pydantic import Field, model_validator
@@ -14,6 +15,18 @@ from gateway.dashboard.operations import DashboardOperation, apply_dashboard_ope
 from gateway.models.dashboards import DashboardSemanticContext
 
 DEFAULT_DASHBOARD_AUTHORING_MODEL = "claude-sonnet-4-5-20250929"
+
+FILTER_OPT_OUT_PATTERNS = (
+    r"\bwithout (?:any )?(?:dashboard )?filters?\b",
+    r"\bno (?:dashboard )?filters?\b",
+    r"\bdo not (?:add|include|create|generate|show|use) (?:any )?(?:dashboard )?filters?\b",
+    r"\bdon['’]t (?:add|include|create|generate|show|use) (?:any )?(?:dashboard )?filters?\b",
+    r"\bomit (?:all )?(?:dashboard )?filters?\b",
+    r"\bfilterless dashboard\b",
+    r"\bsem filtros?\b",
+    r"\bn[aã]o (?:adicione|inclua|crie|use) filtros?\b",
+    r"\bn[aã]o quero filtros?\b",
+)
 
 
 class DashboardAgentDraft(ContractModel):
@@ -90,6 +103,11 @@ class DashboardAuthoringAgent:
             "Prefer compact KPI tiles in 12-column thirds and full-width 36-column Cartesian trend charts when the "
             "requested dashboard composition allows it. Arrange every dashboard row on the 36-column grid so tile "
             "widths sum to exactly 36, tiles use increasing x and y positions, and no row leaves unused horizontal space. "
+            "Every dashboard must include useful global filter controls unless the user's request explicitly says to omit "
+            "filters. Prefer a date filter when a governed date or timestamp dimension is available, then add a small "
+            "number of business-relevant categorical controls. Use explicit per-tile targets across explores and mark "
+            "incompatible tiles as false. When updating a draft that has no controls, add them in the same typed operation "
+            "set unless the current request explicitly opts out. Do not treat silence about filters as an opt-out. "
             "Never emit renderer options, code, HTML, or SQL. For creation return a complete definition. "
             "For updates return typed operations using stable IDs and do not rewrite unrelated charts. "
             "The server validates all output and the user must explicitly apply it."
@@ -104,41 +122,71 @@ class DashboardAuthoringAgent:
                 else None
             ),
         }
-        response = await self.model_client.create_message(
-            {
-                "model": self.model,
-                "max_tokens": 16_000,
-                "system": system,
-                "messages": [{"role": "user", "content": json.dumps(payload, default=str)}],
-                "tools": [
-                    {
-                        "name": "submit_dashboard_draft",
-                        "description": "Return one validated dashboard draft or typed update operation list.",
-                        "input_schema": contract,
-                    }
-                ],
-                "tool_choice": {"type": "tool", "name": "submit_dashboard_draft"},
+        request_body = {
+            "model": self.model,
+            "max_tokens": 16_000,
+            "system": system,
+            "messages": [{"role": "user", "content": json.dumps(payload, default=str)}],
+            "tools": [
+                {
+                    "name": "submit_dashboard_draft",
+                    "description": "Return one validated dashboard draft or typed update operation list.",
+                    "input_schema": contract,
+                }
+            ],
+            "tool_choice": {"type": "tool", "name": "submit_dashboard_draft"},
+        }
+
+        async def request_draft(body: dict[str, Any]) -> DashboardAgentDraft:
+            response = await self.model_client.create_message(body)
+            content = response.get("content")
+            if not isinstance(content, list):
+                raise ValueError("Dashboard authoring model returned no tool result")
+            tool_input = next(
+                (
+                    block.get("input")
+                    for block in content
+                    if isinstance(block, dict)
+                    and block.get("type") == "tool_use"
+                    and block.get("name") == "submit_dashboard_draft"
+                ),
+                None,
+            )
+            return DashboardAgentDraft.model_validate(tool_input)
+
+        draft = await request_draft(request_body)
+        if not explicitly_omits_filters(prompt) and not draft_has_filters(draft, base_definition=base_definition):
+            repair_payload = {
+                **payload,
+                "rejected_draft": draft.model_dump(mode="json", by_alias=True, exclude_none=True),
+                "validation_feedback": (
+                    "The previous draft was rejected because it omitted dashboard filter controls. Add useful governed "
+                    "filters now. Prefer a date filter when available, include explicit per-tile targets, and preserve "
+                    "all otherwise valid chart and layout work."
+                ),
             }
-        )
-        content = response.get("content")
-        if not isinstance(content, list):
-            raise ValueError("Dashboard authoring model returned no tool result")
-        tool_input = next(
-            (
-                block.get("input")
-                for block in content
-                if isinstance(block, dict)
-                and block.get("type") == "tool_use"
-                and block.get("name") == "submit_dashboard_draft"
-            ),
-            None,
-        )
-        draft = DashboardAgentDraft.model_validate(tool_input)
+            request_body = {
+                **request_body,
+                "messages": [{"role": "user", "content": json.dumps(repair_payload, default=str)}],
+            }
+            draft = await request_draft(request_body)
+            if not draft_has_filters(draft, base_definition=base_definition):
+                raise ValueError("Dashboard authoring requires at least one governed filter control")
         if base_definition is None and draft.definition is None:
             raise ValueError("Dashboard creation requires a complete definition")
         if base_definition is not None and draft.definition is not None:
             raise ValueError("Dashboard updates require typed operations")
         return draft
+
+
+def explicitly_omits_filters(prompt: str) -> bool:
+    normalized = " ".join(prompt.casefold().split())
+    return any(re.search(pattern, normalized) for pattern in FILTER_OPT_OUT_PATTERNS)
+
+
+def draft_has_filters(draft: DashboardAgentDraft, *, base_definition: DashboardDefinition | None) -> bool:
+    definition = materialize_agent_draft(draft, base_definition=base_definition)
+    return bool(definition.filters.dimensions or definition.filters.metrics)
 
 
 def materialize_agent_draft(

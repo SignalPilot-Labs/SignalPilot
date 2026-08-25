@@ -194,6 +194,20 @@ class DashboardAuthoringRequest(DashboardModel):
     confirm_custom_sql: bool = False
 
 
+class DashboardAuthoringMessageRequest(DashboardModel):
+    prompt: str = Field(min_length=1, max_length=50_000)
+
+
+class DashboardAuthoringEvent(DashboardModel):
+    id: str
+    sequence: int
+    kind: Literal["user", "assistant", "progress", "validation", "confirmation", "system"]
+    status: Literal["info", "success", "error", "pending"] = "info"
+    message: str
+    created_at: datetime
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class DashboardAuthoringSessionInfo(DashboardModel):
     id: str
     dashboard_id: str | None
@@ -206,7 +220,11 @@ class DashboardAuthoringSessionInfo(DashboardModel):
     status: str
     requires_custom_sql_confirmation: bool
     custom_sql_confirmed: bool
+    custom_sql_chart_ids: list[str] = Field(default_factory=list)
+    draft_revision: int = 1
+    events: list[DashboardAuthoringEvent] = Field(default_factory=list)
     created_at: datetime
+    updated_at: datetime
 
 
 class DashboardAuthoringApplyRequest(DashboardModel):

@@ -17,10 +17,7 @@ import {
 
 import { DashboardRuntimeProvider } from "~/components/dashboard/dashboard-runtime-provider";
 import { DashboardLoadingState } from "~/components/dashboard/dashboard-loading-state";
-import {
-  DashboardAuthoringPanel,
-  type DashboardAuthoringSession,
-} from "~/components/dashboard/dashboard-authoring-panel";
+import { DashboardAuthoringPanel } from "~/components/dashboard/dashboard-authoring-panel";
 import type { DashboardQueryReceipt } from "~/lib/dashboard/api-data-source";
 import { request } from "~/lib/api";
 import type { DashboardDefinition } from "~/lib/dashboard/contracts";
@@ -58,7 +55,6 @@ export default function DashboardDetailPage() {
   const router = useRouter();
   const [detail, setDetail] = useState<DashboardDetail>();
   const [error, setError] = useState<string>();
-  const [preview, setPreview] = useState<DashboardAuthoringSession>();
   const [receipts, setReceipts] = useState<
     Record<string, DashboardQueryReceipt>
   >({});
@@ -98,15 +94,10 @@ export default function DashboardDetailPage() {
   return (
     <>
       <DashboardRuntimeProvider
-        key={
-          preview
-            ? `${preview.id}:${preview.custom_sql_confirmed}`
-            : detail.version.id
-        }
+        key={detail.version.id}
         dashboardId={detail.dashboard.id}
         versionId={detail.version.id}
-        definition={preview?.definition ?? detail.version.definition}
-        authoringSessionId={preview?.id}
+        definition={detail.version.definition}
         onVisibleReceiptsChange={setReceipts}
         onRuntimeFiltersChange={setFilters}
         onRuntimeDrillsChange={setDrills}
@@ -317,12 +308,12 @@ export default function DashboardDetailPage() {
         <DashboardAuthoringPanel
           dashboardId={detail.dashboard.id}
           versionId={detail.version.id}
-          preview={preview}
-          visibleCompleteResultIds={Object.values(receipts)
-            .filter((receipt) => receipt.completeness === "complete")
-            .map((receipt) => receipt.dashboard_result_id)}
-          onPreview={setPreview}
-          onDiscard={() => setPreview(undefined)}
+          baseDefinition={detail.version.definition}
+          onApplied={(applied) =>
+            window.location.assign(
+              `/dashboards/${applied.dashboard.id}?version=${applied.version.id}`,
+            )
+          }
         />
       ) : null}
     </>

@@ -829,6 +829,18 @@ async def init_db() -> None:
                     "ON gateway_dashboards (org_id, visibility, updated_at)"
                 )
             )
+            await conn.execute(
+                text(
+                    "ALTER TABLE gateway_dashboard_authoring_sessions "
+                    "ADD COLUMN IF NOT EXISTS events_json JSONB NOT NULL DEFAULT '[]'::jsonb, "
+                    "ADD COLUMN IF NOT EXISTS agent_runs_json JSONB NOT NULL DEFAULT '[]'::jsonb, "
+                    "ADD COLUMN IF NOT EXISTS confirmations_json JSONB NOT NULL DEFAULT '[]'::jsonb, "
+                    "ADD COLUMN IF NOT EXISTS pending_custom_sql_chart_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb, "
+                    "ADD COLUMN IF NOT EXISTS draft_revision INTEGER NOT NULL DEFAULT 1, "
+                    "ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), "
+                    "ADD COLUMN IF NOT EXISTS discarded_at TIMESTAMPTZ"
+                )
+            )
     await _ensure_key_version_column(engine)
     await _ensure_expires_at_column(engine)
     await _ensure_byok_columns(engine)

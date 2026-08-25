@@ -1,0 +1,97 @@
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import fiveComponents from "~/dashboard/lightdash-contract/fixtures/five-components.json";
+import { fromLightdashFixture } from "~/dashboard/lightdash-contract";
+
+vi.mock("~/components/dashboard/dashboard-runtime-provider", () => ({
+  DashboardRuntimeProvider: ({
+    definition,
+  }: {
+    definition: { name: string };
+  }) => <div data-testid="governed-preview">{definition.name}</div>,
+}));
+
+import {
+  DashboardAuthoringWorkspace,
+  type DashboardAuthoringSession,
+} from "~/components/dashboard/dashboard-authoring-panel";
+
+describe("DashboardAuthoringWorkspace", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+  });
+
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    document.body.replaceChildren();
+  });
+
+  it("keeps the durable transcript beside the current draft and gates custom SQL", async () => {
+    const definition = fromLightdashFixture(fiveComponents);
+    const session: DashboardAuthoringSession = {
+      id: "session-1",
+      dashboard_id: "dashboard-1",
+      base_version_id: "version-1",
+      definition,
+      operations: [],
+      summary: "Updated one chart.",
+      status: "preview",
+      requires_custom_sql_confirmation: true,
+      custom_sql_confirmed: false,
+      custom_sql_chart_ids: ["chart-sql"],
+      draft_revision: 2,
+      events: [
+        {
+          id: "event-1",
+          sequence: 1,
+          kind: "user",
+          status: "info",
+          message: "Make revenue a line chart",
+          metadata: {},
+        },
+        {
+          id: "event-2",
+          sequence: 2,
+          kind: "assistant",
+          status: "success",
+          message: "Updated one chart.",
+          metadata: {},
+        },
+      ],
+    };
+    await act(async () => {
+      root.render(
+        <DashboardAuthoringWorkspace
+          dashboardId="dashboard-1"
+          versionId="version-1"
+          baseDefinition={definition}
+          session={session}
+          onSession={vi.fn()}
+          onApplied={vi.fn()}
+          onDiscard={vi.fn()}
+        />,
+      );
+    });
+    expect(container.textContent).toContain("Make revenue a line chart");
+    expect(container.textContent).toContain("Updated one chart.");
+    expect(container.textContent).toContain("Draft 2");
+    expect(
+      container.querySelector("[data-testid='governed-preview']")?.textContent,
+    ).toBe(definition.name);
+    const apply = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Apply",
+    );
+    expect(apply?.disabled).toBe(true);
+    expect(container.textContent).toContain("chart-sql uses custom SQL");
+    expect(
+      container.querySelector("button[aria-pressed='true']")?.textContent,
+    ).toBe("Chat");
+  });
+});

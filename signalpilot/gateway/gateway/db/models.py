@@ -1403,7 +1403,7 @@ class GatewayDashboardVersion(GatewayBase):
 
 
 class GatewayDashboardAuthoringSession(GatewayBase):
-    """Private unsaved agent draft; each prompt starts a fresh session."""
+    """Private durable authoring conversation with one current unsaved draft."""
 
     __tablename__ = "gateway_dashboard_authoring_sessions"
 
@@ -1419,6 +1419,11 @@ class GatewayDashboardAuthoringSession(GatewayBase):
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     definition_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     operations_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    events_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    agent_runs_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    confirmations_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    pending_custom_sql_chart_ids_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    draft_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     agent_run_id: Mapped[str] = mapped_column(String, nullable=False)
     model: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -1427,7 +1432,9 @@ class GatewayDashboardAuthoringSession(GatewayBase):
     custom_sql_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     applied_version_id: Mapped[str | None] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now(), onupdate=func.now())
     applied_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+    discarded_at: Mapped[datetime | None] = mapped_column(TZDateTime)
 
     __table_args__ = (
         Index("ix_gw_dashboard_authoring_owner", "org_id", "owner_user_id", "created_at"),

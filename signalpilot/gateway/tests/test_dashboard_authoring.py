@@ -15,7 +15,7 @@ from gateway.dashboard import store as dashboard_store
 from gateway.dashboard.authoring import DashboardAuthoringAgent, materialize_agent_draft
 from gateway.dashboard.domain import DashboardDefinition
 from gateway.dashboard.operations import apply_dashboard_operations
-from gateway.db.models import GatewayBase, GatewayDashboardResult
+from gateway.db.models import GatewayBase, GatewayDashboardAuthoringSession, GatewayDashboardResult
 from gateway.models.dashboards import DashboardSemanticContext
 
 FIXTURE = Path(__file__).parents[2] / "web/dashboard/lightdash-contract/fixtures/five-components.json"
@@ -47,6 +47,21 @@ def _definition() -> DashboardDefinition:
             "signalPilot": fixture["signalPilot"],
         }
     )
+
+
+def _definition_with_filter() -> DashboardDefinition:
+    definition = _definition()
+    rule = {
+        "id": "date-filter",
+        "operator": "inThePast",
+        "values": [30],
+        "target": {"tableName": "orders", "fieldId": "orders.order_date"},
+        "label": "Order date",
+        "settings": {"unitOfTime": "days"},
+    }
+    payload = definition.model_dump(mode="json", by_alias=True)
+    payload["filters"]["dimensions"] = [rule]
+    return DashboardDefinition.model_validate(payload)
 
 
 @pytest_asyncio.fixture
@@ -98,18 +113,21 @@ def test_replace_metric_updates_query_and_visual_encoding_together() -> None:
 
 
 class _ModelClient:
-    def __init__(self, payload: dict) -> None:
-        self.payload = payload
+    def __init__(self, payload: dict | list[dict]) -> None:
+        self.payloads = payload if isinstance(payload, list) else [payload]
         self.request: dict | None = None
+        self.requests: list[dict] = []
 
     async def create_message(self, request_body: dict) -> dict:
         self.request = request_body
+        self.requests.append(request_body)
+        payload = self.payloads[min(len(self.requests) - 1, len(self.payloads) - 1)]
         return {
             "content": [
                 {
                     "type": "tool_use",
                     "name": "submit_dashboard_draft",
-                    "input": self.payload,
+                    "input": payload,
                 }
             ]
         }
@@ -127,15 +145,111 @@ async def test_agent_update_is_forced_through_typed_operations() -> None:
     draft = await agent.draft(
         prompt="Rename this dashboard",
         context=_context(),
-        base_definition=_definition(),
+        base_definition=_definition_with_filter(),
     )
-    materialized = materialize_agent_draft(draft, base_definition=_definition())
+    materialized = materialize_agent_draft(draft, base_definition=_definition_with_filter())
     assert materialized.name == "Executive revenue"
     assert client.request is not None
     assert client.request["tool_choice"] == {"type": "tool", "name": "submit_dashboard_draft"}
     assert "question is a concise natural-language question" in client.request["system"]
     chart_schema = client.request["tools"][0]["input_schema"]["$defs"]["ChartDefinition"]
     assert "question" in chart_schema["properties"]
+
+
+@pytest.mark.asyncio
+async def test_agent_repairs_filterless_creation_before_returning_the_draft() -> None:
+    empty = _definition()
+    repaired = _definition_with_filter()
+    client = _ModelClient(
+        [
+            {"summary": "Created the dashboard.", "definition": empty.model_dump(mode="json", by_alias=True)},
+            {
+                "summary": "Created the dashboard with filters.",
+                "definition": repaired.model_dump(mode="json", by_alias=True),
+            },
+        ]
+    )
+    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
+    draft = await agent.draft(
+        prompt="Create an executive revenue dashboard",
+        context=_context(),
+        base_definition=None,
+    )
+    assert draft.definition is not None
+    assert [rule.id for rule in draft.definition.filters.dimensions] == ["date-filter"]
+    assert len(client.requests) == 2
+    repair_payload = json.loads(client.requests[1]["messages"][0]["content"])
+    assert "validation_feedback" in repair_payload
+    assert "rejected_draft" in repair_payload
+
+
+@pytest.mark.asyncio
+async def test_agent_repairs_filterless_follow_up_with_typed_filter_operation() -> None:
+    filter_operation = {
+        "operation": "add_filter_control",
+        "filter": _definition_with_filter().filters.dimensions[0].model_dump(mode="json", by_alias=True),
+    }
+    client = _ModelClient(
+        [
+            {
+                "summary": "Renamed the dashboard.",
+                "operations": [{"operation": "rename_dashboard", "name": "Executive revenue"}],
+            },
+            {
+                "summary": "Renamed the dashboard and added a date filter.",
+                "operations": [
+                    {"operation": "rename_dashboard", "name": "Executive revenue"},
+                    filter_operation,
+                ],
+            },
+        ]
+    )
+    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
+    draft = await agent.draft(
+        prompt="Rename this dashboard",
+        context=_context(),
+        base_definition=_definition(),
+    )
+    materialized = materialize_agent_draft(draft, base_definition=_definition())
+    assert materialized.name == "Executive revenue"
+    assert [rule.id for rule in materialized.filters.dimensions] == ["date-filter"]
+    assert len(client.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_explicit_filter_opt_out_allows_a_filterless_draft() -> None:
+    empty = _definition()
+    client = _ModelClient(
+        {
+            "summary": "Created the dashboard without filters.",
+            "definition": empty.model_dump(mode="json", by_alias=True),
+        }
+    )
+    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
+    draft = await agent.draft(
+        prompt="Create an executive revenue dashboard without filters",
+        context=_context(),
+        base_definition=None,
+    )
+    assert draft.definition is not None
+    assert draft.definition.filters.dimensions == []
+    assert len(client.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_rejects_a_second_filterless_response() -> None:
+    empty = _definition()
+    client = _ModelClient(
+        {"summary": "Created the dashboard.", "definition": empty.model_dump(mode="json", by_alias=True)}
+    )
+    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
+    with pytest.raises(ValueError, match="requires at least one governed filter control"):
+        await agent.draft(
+            prompt="Create an executive revenue dashboard",
+            context=_context(),
+            base_definition=None,
+        )
+    assert len(client.requests) == 2
 
 
 @pytest.mark.asyncio
@@ -183,6 +297,15 @@ async def test_apply_is_explicit_and_records_authoring_provenance(db_session: As
     assert applied.version.definition.name == "Agent preview"
     assert applied.version.authoring_provenance["authoring_session_id"] == preview.id
     assert applied.version.authoring_provenance["agent_run_id"] == "agent-run-1"
+    with pytest.raises(dashboard_store.DashboardValidationError):
+        await dashboard_store.apply_authoring_session(
+            db_session,
+            org_id="org-a",
+            user_id="owner-a",
+            session_id=preview.id,
+            expected_current_version_id=created.version.id,
+            visible_complete_result_ids=[],
+        )
 
 
 @pytest.mark.asyncio
@@ -236,3 +359,101 @@ async def test_new_dashboard_apply_promotes_only_the_exact_complete_preview_resu
     ).scalar_one()
     assert promoted.dashboard_id == applied.dashboard.id
     assert promoted.version_id == applied.version.id
+
+
+@pytest.mark.asyncio
+async def test_follow_up_updates_the_current_unsaved_draft_and_preserves_conversation(
+    db_session: AsyncSession,
+) -> None:
+    created = await dashboard_store.create_private_dashboard(
+        db_session, org_id="org-a", user_id="owner-a", definition=_definition()
+    )
+    first_definition = created.version.definition.model_copy(update={"name": "First unsaved name"})
+    preview = await dashboard_store.create_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        dashboard_id=created.dashboard.id,
+        base_version_id=created.version.id,
+        definition=first_definition,
+        operations=[{"operation": "rename_dashboard", "name": "First unsaved name"}],
+        prompt="Rename it once",
+        summary="Renamed the dashboard.",
+        agent_run_id="run-1",
+        model="test-model",
+        requires_custom_sql_confirmation=False,
+        custom_sql_confirmed=False,
+    )
+    second_definition = first_definition.model_copy(update={"description": "Keep both unsaved changes."})
+    updated = await dashboard_store.update_authoring_session_draft(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        session_id=preview.id,
+        definition=second_definition,
+        operations=[{"operation": "describe_dashboard", "description": "Keep both unsaved changes."}],
+        prompt="Now update the description",
+        summary="Updated the description.",
+        agent_run_id="run-2",
+        model="test-model",
+        requires_custom_sql_confirmation=False,
+        pending_custom_sql_chart_ids=[],
+    )
+    assert updated.definition.name == "First unsaved name"
+    assert updated.definition.description == "Keep both unsaved changes."
+    assert updated.draft_revision == 2
+    assert [event.kind for event in updated.events].count("user") == 2
+    assert [event.kind for event in updated.events].count("assistant") == 2
+    assert (
+        await dashboard_store.get_authoring_session(
+            db_session,
+            org_id="org-a",
+            user_id="viewer-a",
+            session_id=preview.id,
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_failed_follow_up_retains_last_valid_draft_and_discard_creates_no_version(
+    db_session: AsyncSession,
+) -> None:
+    created = await dashboard_store.create_private_dashboard(
+        db_session, org_id="org-a", user_id="owner-a", definition=_definition()
+    )
+    preview = await dashboard_store.create_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        dashboard_id=created.dashboard.id,
+        base_version_id=created.version.id,
+        definition=created.version.definition,
+        operations=[],
+        prompt="Keep this draft",
+        summary="Kept the dashboard.",
+        agent_run_id="run-1",
+        model="test-model",
+        requires_custom_sql_confirmation=False,
+        custom_sql_confirmed=False,
+    )
+    await dashboard_store.record_authoring_failure(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        session_id=preview.id,
+        prompt="Use a metric that does not exist",
+        safe_message="That metric is not approved.",
+    )
+    restored = await dashboard_store.get_authoring_session(
+        db_session, org_id="org-a", user_id="owner-a", session_id=preview.id
+    )
+    assert restored is not None
+    assert restored.definition_json == preview.definition.model_dump(mode="json", by_alias=True, exclude_none=True)
+    discarded = await dashboard_store.discard_authoring_session(
+        db_session, org_id="org-a", user_id="owner-a", session_id=preview.id
+    )
+    assert discarded.status == "discarded"
+    assert created.dashboard.current_version_id == created.version.id
+    sessions = (await db_session.execute(select(GatewayDashboardAuthoringSession))).scalars().all()
+    assert len(sessions) == 1

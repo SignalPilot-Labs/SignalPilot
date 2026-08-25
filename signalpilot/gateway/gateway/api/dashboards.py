@@ -44,6 +44,7 @@ from gateway.models.dashboards import (
     DashboardAnalyzeRequest,
     DashboardAnalyzeResponse,
     DashboardAuthoringApplyRequest,
+    DashboardAuthoringMessageRequest,
     DashboardAuthoringRequest,
     DashboardAuthoringSessionInfo,
     DashboardChartReference,
@@ -363,6 +364,117 @@ async def create_dashboard_authoring_session(body: DashboardAuthoringRequest, st
     )
 
 
+@router.get(
+    "/dashboard-authoring/sessions/{session_id}",
+    response_model=DashboardAuthoringSessionInfo,
+    dependencies=[RequireScope("write")],
+)
+async def get_dashboard_authoring_session(session_id: str, store: StoreD):
+    row = await dashboard_store.get_authoring_session(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=_user_id(store),
+        session_id=session_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Dashboard authoring conversation not found")
+    return dashboard_store.authoring_info(row)
+
+
+@router.get(
+    "/dashboards/{dashboard_id}/active-authoring-session",
+    response_model=DashboardAuthoringSessionInfo | None,
+    dependencies=[RequireScope("write")],
+)
+async def get_active_dashboard_authoring_session(dashboard_id: str, store: StoreD):
+    rows = await dashboard_store.get_private_dashboard_rows(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=_user_id(store),
+        dashboard_id=dashboard_id,
+    )
+    if rows is None:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    row = await dashboard_store.get_active_authoring_session(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=_user_id(store),
+        dashboard_id=dashboard_id,
+    )
+    return dashboard_store.authoring_info(row) if row else None
+
+
+@router.post(
+    "/dashboard-authoring/sessions/{session_id}/messages",
+    response_model=DashboardAuthoringSessionInfo,
+    dependencies=[RequireScope("write")],
+)
+async def continue_dashboard_authoring_session(
+    session_id: str, body: DashboardAuthoringMessageRequest, store: StoreD
+):
+    org_id = store._require_org_id()
+    user_id = _user_id(store)
+    row = await dashboard_store.get_authoring_session(
+        store.session, org_id=org_id, user_id=user_id, session_id=session_id
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Dashboard authoring conversation not found")
+    if row.status != "preview":
+        raise HTTPException(status_code=409, detail="Dashboard authoring conversation is no longer active")
+    if row.requires_custom_sql_confirmation and not row.custom_sql_confirmed:
+        raise HTTPException(
+            status_code=409,
+            detail="Confirm or decline the pending custom SQL before refining this draft",
+        )
+    current_definition = DashboardDefinition.model_validate(row.definition_json)
+    try:
+        context = await _verified_context(store, current_definition)
+        api_key = await org_secrets_store.resolve_anthropic_key(store.session, org_id)
+        if not api_key:
+            raise HTTPException(status_code=409, detail="Dashboard authoring requires the organization Anthropic key")
+        agent = DashboardAuthoringAgent(api_key=api_key)
+        draft = await agent.draft(prompt=body.prompt, context=context, base_definition=current_definition)
+        definition = materialize_agent_draft(draft, base_definition=current_definition)
+        verified = await _verified_context(store, definition)
+        validate_dashboard_semantics(definition, verified)
+    except HTTPException:
+        raise
+    except (DashboardCompileError, ValueError) as exc:
+        await dashboard_store.record_authoring_failure(
+            store.session,
+            org_id=org_id,
+            user_id=user_id,
+            session_id=session_id,
+            prompt=body.prompt,
+            safe_message=f"That change could not be validated: {exc}",
+        )
+        raise HTTPException(status_code=422, detail=f"Agent draft rejected: {exc}") from exc
+    previous_sql = {
+        chart.id: chart.model_dump(mode="json")
+        for chart in current_definition.charts
+        if chart.query.kind == "sql"
+    }
+    changed_custom_sql_chart_ids = [
+        chart.id
+        for chart in definition.charts
+        if chart.query.kind == "sql" and previous_sql.get(chart.id) != chart.model_dump(mode="json")
+    ]
+    return await dashboard_store.update_authoring_session_draft(
+        store.session,
+        org_id=org_id,
+        user_id=user_id,
+        session_id=session_id,
+        definition=definition,
+        operations=[operation.model_dump(mode="json") for operation in draft.operations],
+        prompt=body.prompt,
+        summary=draft.summary,
+        agent_run_id=str(uuid.uuid4()),
+        model=agent.model,
+        requires_custom_sql_confirmation=bool(changed_custom_sql_chart_ids),
+        pending_custom_sql_chart_ids=changed_custom_sql_chart_ids,
+    )
+
+
 @router.post(
     "/dashboard-authoring/sessions/{session_id}/confirm-custom-sql",
     response_model=DashboardAuthoringSessionInfo,
@@ -371,6 +483,44 @@ async def create_dashboard_authoring_session(body: DashboardAuthoringRequest, st
 async def confirm_dashboard_authoring_custom_sql(session_id: str, store: StoreD):
     try:
         return await dashboard_store.confirm_authoring_custom_sql(
+            store.session,
+            org_id=store._require_org_id(),
+            user_id=_user_id(store),
+            session_id=session_id,
+        )
+    except dashboard_store.DashboardNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Dashboard authoring preview not found") from exc
+    except dashboard_store.DashboardValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post(
+    "/dashboard-authoring/sessions/{session_id}/decline-custom-sql",
+    response_model=DashboardAuthoringSessionInfo,
+    dependencies=[RequireScope("write")],
+)
+async def decline_dashboard_authoring_custom_sql(session_id: str, store: StoreD):
+    try:
+        return await dashboard_store.decline_authoring_custom_sql(
+            store.session,
+            org_id=store._require_org_id(),
+            user_id=_user_id(store),
+            session_id=session_id,
+        )
+    except dashboard_store.DashboardNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Dashboard authoring preview not found") from exc
+    except dashboard_store.DashboardValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post(
+    "/dashboard-authoring/sessions/{session_id}/discard",
+    response_model=DashboardAuthoringSessionInfo,
+    dependencies=[RequireScope("write")],
+)
+async def discard_dashboard_authoring_session(session_id: str, store: StoreD):
+    try:
+        return await dashboard_store.discard_authoring_session(
             store.session,
             org_id=store._require_org_id(),
             user_id=_user_id(store),

@@ -101,19 +101,33 @@ export default function DashboardDetailPage() {
         onVisibleReceiptsChange={setReceipts}
         onRuntimeFiltersChange={setFilters}
         onRuntimeDrillsChange={setDrills}
+        leadingAction={
+          <Link
+            href="/dashboards"
+            className={pageStyles.leadingBackButton}
+            aria-label="Back to dashboards"
+            title="Back to dashboards"
+          >
+            <ArrowLeft size={17} aria-hidden="true" />
+          </Link>
+        }
         lifecycleActions={
           <nav
             className={pageStyles.iconActions}
             aria-label="Dashboard actions"
           >
-            <Link
-              href="/dashboards"
-              className={pageStyles.iconButton}
-              aria-label="Back to dashboards"
-              title="Back to dashboards"
-            >
-              <ArrowLeft size={17} aria-hidden="true" />
-            </Link>
+            {detail.dashboard.is_owner ? (
+              <DashboardAuthoringPanel
+                dashboardId={detail.dashboard.id}
+                versionId={detail.version.id}
+                baseDefinition={detail.version.definition}
+                onApplied={(applied) =>
+                  window.location.assign(
+                    `/dashboards/${applied.dashboard.id}?version=${applied.version.id}`,
+                  )
+                }
+              />
+            ) : null}
             <details className={pageStyles.actionMenu}>
               <summary
                 className={pageStyles.iconButton}
@@ -304,18 +318,6 @@ export default function DashboardDetailPage() {
           ) : null
         }
       />
-      {detail.dashboard.is_owner ? (
-        <DashboardAuthoringPanel
-          dashboardId={detail.dashboard.id}
-          versionId={detail.version.id}
-          baseDefinition={detail.version.definition}
-          onApplied={(applied) =>
-            window.location.assign(
-              `/dashboards/${applied.dashboard.id}?version=${applied.version.id}`,
-            )
-          }
-        />
-      ) : null}
     </>
   );
 }

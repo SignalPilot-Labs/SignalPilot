@@ -55,6 +55,19 @@ const result: DashboardQueryResult = {
   locale: "en-US",
 };
 
+async function press(element: HTMLElement | null) {
+  await act(async () => {
+    element?.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, button: 0 }),
+    );
+    element?.dispatchEvent(
+      new MouseEvent("mouseup", { bubbles: true, button: 0 }),
+    );
+    element?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+  });
+}
+
 describe("DashboardChartTile interactions", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -74,10 +87,14 @@ describe("DashboardChartTile interactions", () => {
     await act(async () => {
       root.render(<DashboardChartTile chart={chart} result={result} />);
     });
-    const viewData = Array.from(container.querySelectorAll("button")).find(
+    const menu = container.querySelector<HTMLButtonElement>(
+      "[aria-label='More actions for Accounts']",
+    );
+    await press(menu);
+    const viewData = Array.from(document.body.querySelectorAll("button")).find(
       (button) => button.textContent === "View data",
     );
-    await act(async () => viewData?.click());
+    await press(viewData ?? null);
 
     const dialog = document.body.querySelector<HTMLElement>("[role='dialog']");
     expect(dialog).not.toBeNull();
@@ -96,23 +113,53 @@ describe("DashboardChartTile interactions", () => {
     expect(container.querySelector("h2")?.textContent).toBe(
       "Which accounts generate the most revenue?",
     );
-    expect(container.querySelector("[role='tooltip']")?.textContent).toContain(
-      "Table showing",
+    const questionTrigger = container.querySelector<HTMLElement>(
+      "[aria-label^='About Which accounts']",
     );
-    expect(container.querySelector("summary")?.getAttribute("aria-label")).toBe(
-      "More actions for Accounts",
+    await act(async () => {
+      questionTrigger?.dispatchEvent(
+        new MouseEvent("mouseenter", { bubbles: false }),
+      );
+      questionTrigger?.focus();
+      await new Promise((resolve) => setTimeout(resolve, 175));
+    });
+    const questionTooltip =
+      document.body.querySelector<HTMLElement>("[role='tooltip']");
+    expect(questionTooltip?.textContent).toContain("Table showing");
+    expect(container.contains(questionTooltip)).toBe(false);
+
+    const menu = container.querySelector<HTMLButtonElement>(
+      "[aria-label='More actions for Accounts']",
     );
-    expect(container.textContent).toContain("Complete result");
-    expect(container.textContent).toContain("View data");
+    await press(menu);
+    const actions = document.body.querySelector<HTMLElement>(
+      "[aria-label='Actions for Accounts']",
+    );
+    expect(actions).not.toBeNull();
+    expect(container.contains(actions)).toBe(false);
+    expect(document.body.querySelector("[data-testid='underlay']")).toBeNull();
+    expect(document.body.textContent).toContain("Complete result");
+    expect(document.body.textContent).toContain("View data");
     const verification = container.querySelector<HTMLElement>(
       "[aria-label^='High confidence']",
     );
     expect(verification).not.toBeNull();
-    expect(
-      container.querySelector(
-        `#${verification?.getAttribute("aria-describedby")}`,
-      )?.textContent,
-    ).toContain("approved semantic fields");
+  });
+
+  it("renders confidence help above the tile instead of clipping it inside the card", async () => {
+    await act(async () => {
+      root.render(<DashboardChartTile chart={chart} result={result} />);
+    });
+    const confidence = container.querySelector<HTMLElement>(
+      "[aria-label^='High confidence']",
+    );
+    await act(async () => confidence?.focus());
+
+    const tooltip = Array.from(
+      document.body.querySelectorAll<HTMLElement>("[role='tooltip']"),
+    ).find((candidate) => candidate.textContent?.includes("approved semantic"));
+    expect(tooltip).not.toBeNull();
+    expect(container.contains(tooltip ?? null)).toBe(false);
   });
 
   it("centers a spinner in a chart while its governed data is loading", async () => {
@@ -162,10 +209,14 @@ describe("DashboardChartTile interactions", () => {
     await act(async () => {
       root.render(<DashboardChartTile chart={chart} result={result} />);
     });
-    const viewData = Array.from(container.querySelectorAll("button")).find(
+    const menu = container.querySelector<HTMLButtonElement>(
+      "[aria-label='More actions for Accounts']",
+    );
+    await press(menu);
+    const viewData = Array.from(document.body.querySelectorAll("button")).find(
       (button) => button.textContent === "View data",
     );
-    await act(async () => viewData?.click());
+    await press(viewData ?? null);
     await act(async () =>
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })),
     );

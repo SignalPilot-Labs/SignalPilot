@@ -1408,6 +1408,7 @@ class GatewayDashboardAuthoringSession(GatewayBase):
     __tablename__ = "gateway_dashboard_authoring_sessions"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    thread_id: Mapped[str] = mapped_column(String, nullable=False, default=lambda: str(uuid.uuid4()))
     dashboard_id: Mapped[str | None] = mapped_column(String)
     base_version_id: Mapped[str | None] = mapped_column(String)
     org_id: Mapped[str] = mapped_column(String, nullable=False)
@@ -1439,6 +1440,7 @@ class GatewayDashboardAuthoringSession(GatewayBase):
     __table_args__ = (
         Index("ix_gw_dashboard_authoring_owner", "org_id", "owner_user_id", "created_at"),
         Index("ix_gw_dashboard_authoring_dashboard", "org_id", "dashboard_id", "created_at"),
+        Index("ix_gw_dashboard_authoring_thread", "org_id", "owner_user_id", "thread_id", "created_at"),
     )
 
 

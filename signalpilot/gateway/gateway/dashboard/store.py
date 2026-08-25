@@ -94,6 +94,7 @@ def _authoring_info(row: GatewayDashboardAuthoringSession) -> DashboardAuthoring
     definition = DashboardDefinition.model_validate(row.definition_json)
     return DashboardAuthoringSessionInfo(
         id=row.id,
+        thread_id=row.thread_id,
         dashboard_id=row.dashboard_id,
         base_version_id=row.base_version_id,
         definition=definition,
@@ -145,9 +146,7 @@ async def list_dashboards(
     include_archived: bool = False,
 ) -> list[DashboardListItem]:
     visibility_clause = (
-        GatewayDashboard.owner_user_id == user_id
-        if scope == "mine"
-        else GatewayDashboard.visibility == "organization"
+        GatewayDashboard.owner_user_id == user_id if scope == "mine" else GatewayDashboard.visibility == "organization"
     )
     conditions = [GatewayDashboard.org_id == org_id, visibility_clause]
     if not include_archived or scope != "mine":
@@ -455,11 +454,23 @@ async def create_authoring_session(
     model: str,
     requires_custom_sql_confirmation: bool,
     custom_sql_confirmed: bool,
+    thread_id: str | None = None,
+    prior_events: list[dict] | None = None,
+    pending_custom_sql_chart_ids: list[str] | None = None,
 ) -> DashboardAuthoringSessionInfo:
     binding = definition.signalPilot
     now = datetime.now(UTC)
     run = {"id": agent_run_id, "model": model, "draft_revision": 1, "created_at": now.isoformat()}
-    events: list[dict] = []
+    events = list(prior_events or [])
+    if prior_events:
+        events.append(
+            _authoring_event(
+                events,
+                kind="system",
+                status="success",
+                message="Started a new governed draft from the latest saved dashboard version",
+            )
+        )
     events.append(_authoring_event(events, kind="user", message=prompt))
     events.append(
         _authoring_event(events, kind="progress", status="success", message="Resolved governed semantic context")
@@ -470,6 +481,7 @@ async def create_authoring_session(
     events.append(_authoring_event(events, kind="assistant", status="success", message=summary))
     row = GatewayDashboardAuthoringSession(
         id=str(uuid.uuid4()),
+        thread_id=thread_id or str(uuid.uuid4()),
         dashboard_id=dashboard_id,
         base_version_id=base_version_id,
         org_id=org_id,
@@ -485,7 +497,9 @@ async def create_authoring_session(
         agent_runs_json=[run],
         confirmations_json=[],
         pending_custom_sql_chart_ids_json=(
-            [chart.id for chart in definition.charts if chart.query.kind == "sql"]
+            pending_custom_sql_chart_ids
+            if pending_custom_sql_chart_ids is not None
+            else [chart.id for chart in definition.charts if chart.query.kind == "sql"]
             if requires_custom_sql_confirmation and not custom_sql_confirmed
             else []
         ),
@@ -526,7 +540,9 @@ async def update_authoring_session_draft(
     events = list(session.events_json or [])
     events.append(_authoring_event(events, kind="user", message=prompt))
     events.append(
-        _authoring_event(events, kind="progress", status="success", message="Applied typed operations to the current draft")
+        _authoring_event(
+            events, kind="progress", status="success", message="Applied typed operations to the current draft"
+        )
     )
     events.append(
         _authoring_event(events, kind="validation", status="success", message="Validated the updated governed preview")
@@ -549,11 +565,7 @@ async def update_authoring_session_draft(
     session.requires_custom_sql_confirmation = requires_custom_sql_confirmation
     has_custom_sql = any(chart.query.kind == "sql" for chart in definition.charts)
     session.custom_sql_confirmed = (
-        False
-        if requires_custom_sql_confirmation
-        else session.custom_sql_confirmed
-        if has_custom_sql
-        else False
+        False if requires_custom_sql_confirmation else session.custom_sql_confirmed if has_custom_sql else False
     )
     session.pending_custom_sql_chart_ids_json = pending_custom_sql_chart_ids
     session.updated_at = datetime.now(UTC)
@@ -572,7 +584,7 @@ async def record_authoring_failure(
     safe_message: str,
 ) -> None:
     session = await get_authoring_session(db, org_id=org_id, user_id=user_id, session_id=session_id)
-    if session is None or session.status != "preview":
+    if session is None or session.status not in {"preview", "applied", "discarded"}:
         return
     events = list(session.events_json or [])
     events.append(_authoring_event(events, kind="user", message=prompt))
@@ -591,7 +603,9 @@ async def discard_authoring_session(
     if session.status != "preview":
         raise DashboardValidationError("Authoring conversation is no longer active")
     events = list(session.events_json or [])
-    events.append(_authoring_event(events, kind="system", status="success", message="Draft discarded; saved dashboard unchanged"))
+    events.append(
+        _authoring_event(events, kind="system", status="success", message="Draft discarded; saved dashboard unchanged")
+    )
     session.events_json = events
     session.status = "discarded"
     session.discarded_at = datetime.now(UTC)
@@ -672,7 +686,6 @@ async def get_active_authoring_session(
                 GatewayDashboardAuthoringSession.dashboard_id == dashboard_id,
                 GatewayDashboardAuthoringSession.org_id == org_id,
                 GatewayDashboardAuthoringSession.owner_user_id == user_id,
-                GatewayDashboardAuthoringSession.status == "preview",
             )
             .order_by(GatewayDashboardAuthoringSession.updated_at.desc())
             .limit(1)
@@ -781,6 +794,17 @@ async def apply_authoring_session(
             )
             .values(dashboard_id=detail.dashboard.id, version_id=detail.version.id)
         )
+    events = list(session.events_json or [])
+    events.append(
+        _authoring_event(
+            events,
+            kind="system",
+            status="success",
+            message=f"Applied dashboard version {detail.version.ordinal}",
+            metadata={"version_id": detail.version.id, "ordinal": detail.version.ordinal},
+        )
+    )
+    session.events_json = events
     session.status = "applied"
     session.applied_version_id = detail.version.id
     session.applied_at = datetime.now(UTC)

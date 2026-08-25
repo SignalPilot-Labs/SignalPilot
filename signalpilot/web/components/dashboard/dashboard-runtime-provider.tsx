@@ -66,6 +66,7 @@ export function DashboardRuntimeProvider({
   onRuntimeFiltersChange,
   onRuntimeDrillsChange,
   analysisEnabled = true,
+  leadingAction,
   lifecycleActions,
   lifecycleNotice,
 }: {
@@ -83,6 +84,7 @@ export function DashboardRuntimeProvider({
     drills: ReturnType<typeof initialDashboardRuntimeState>["drills"],
   ) => void;
   analysisEnabled?: boolean;
+  leadingAction?: ReactNode;
   lifecycleActions?: ReactNode;
   lifecycleNotice?: ReactNode;
 }) {
@@ -273,9 +275,14 @@ export function DashboardRuntimeProvider({
     <div className={styles.runtime} data-dashboard-export-root>
       <main>
         <header className={styles.header}>
-          <div>
-            <h1>{definition.name}</h1>
-            <p>{definition.description}</p>
+          <div className={styles.headerIdentity}>
+            {leadingAction ? (
+              <div data-dashboard-export-exclude>{leadingAction}</div>
+            ) : null}
+            <div>
+              <h1>{definition.name}</h1>
+              <p>{definition.description}</p>
+            </div>
           </div>
           <div className={styles.headerActions}>
             {dashboardLoading || Object.keys(errors).length ? (
@@ -290,9 +297,6 @@ export function DashboardRuntimeProvider({
                     : "Loading dashboard…"
                   : "Some charts need attention"}
               </span>
-            ) : null}
-            {lifecycleActions ? (
-              <div data-dashboard-export-exclude>{lifecycleActions}</div>
             ) : null}
             <div
               className={styles.refreshButtonWrap}
@@ -319,6 +323,9 @@ export function DashboardRuntimeProvider({
                 {refreshHelp}
               </span>
             </div>
+            {lifecycleActions ? (
+              <div data-dashboard-export-exclude>{lifecycleActions}</div>
+            ) : null}
           </div>
         </header>
         {lifecycleNotice}

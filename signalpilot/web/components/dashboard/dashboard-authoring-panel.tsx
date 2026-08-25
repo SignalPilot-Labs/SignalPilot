@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Check, MessageSquare, Sparkles, X } from "lucide-react";
 
 import { request } from "~/lib/api";
@@ -28,6 +29,7 @@ export type DashboardAuthoringEvent = {
 
 export type DashboardAuthoringSession = {
   id: string;
+  thread_id: string;
   dashboard_id: string | null;
   base_version_id: string | null;
   definition: DashboardDefinition;
@@ -324,7 +326,13 @@ export function DashboardAuthoringWorkspace({
               {visibleDefinition?.name ?? "Waiting for your first request"}
             </strong>
           </div>
-          {session ? <small>Draft {session.draft_revision}</small> : null}
+          {session ? (
+            <small>
+              {session.status === "preview"
+                ? `Draft ${session.draft_revision}`
+                : "Saved thread"}
+            </small>
+          ) : null}
           <div className={styles.authoringApplyActions}>
             <button
               type="button"
@@ -450,8 +458,12 @@ export function DashboardAuthoringPanel({
       </button>
     );
   }
-  return (
-    <div className={styles.authoringOverlay}>
+  if (typeof document === "undefined") return null;
+  return createPortal(
+    <div
+      className={styles.authoringOverlay}
+      data-testid="dashboard-authoring-overlay"
+    >
       <DashboardAuthoringWorkspace
         dashboardId={dashboardId}
         versionId={versionId}
@@ -462,6 +474,7 @@ export function DashboardAuthoringPanel({
         onDiscard={() => setOpen(false)}
         onClose={() => setOpen(false)}
       />
-    </div>
+    </div>,
+    document.body,
   );
 }

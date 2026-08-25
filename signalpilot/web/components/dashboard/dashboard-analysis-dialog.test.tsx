@@ -8,6 +8,22 @@ import type {
   DashboardQueryResult,
 } from "~/lib/dashboard/contracts";
 
+const requestMock = vi.hoisted(() => vi.fn());
+
+vi.mock("~/lib/api", () => ({
+  request: requestMock,
+  getChatReportMentions: vi.fn(),
+}));
+vi.mock("~/components/chat/standalone-data-chat-loader", () => ({
+  StandaloneDataChatLoader: ({
+    conversationId,
+  }: {
+    conversationId: string;
+  }) => (
+    <div data-testid="embedded-data-chat">Conversation {conversationId}</div>
+  ),
+}));
+
 const chart: ChartDefinition = {
   id: "gross-profit",
   title: "Gross Profit",
@@ -52,6 +68,8 @@ describe("DashboardAnalysisDialog frozen reference", () => {
   let root: Root;
 
   beforeEach(() => {
+    requestMock.mockReset();
+    requestMock.mockResolvedValue({ conversation_id: "conversation-1" });
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -62,7 +80,7 @@ describe("DashboardAnalysisDialog frozen reference", () => {
     document.body.replaceChildren();
   });
 
-  it("separates the KPI label and puts precise completeness below the visual", async () => {
+  it("waits for the user's prompt before creating the chart-linked conversation", async () => {
     await act(async () => {
       root.render(
         <DashboardAnalysisDialog
@@ -83,6 +101,43 @@ describe("DashboardAnalysisDialog frozen reference", () => {
     const frozen = document.body.querySelector<HTMLElement>(
       "[aria-label='Frozen selected chart']",
     );
+    const conversation = document.body.querySelector<HTMLElement>(
+      "[aria-label='Chart analysis conversation']",
+    );
+    expect(conversation?.nextElementSibling).toBe(frozen);
+    expect(document.body.querySelector("form")).toBeNull();
+    expect(requestMock).not.toHaveBeenCalled();
+    const composer = document.body.querySelector<HTMLTextAreaElement>(
+      "[data-chat-composer]",
+    );
+    expect(composer?.value).toBe("");
+    expect(composer?.placeholder).toBe("Ask a question about this chart…");
+
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )?.set;
+      setValue?.call(composer, "Why did revenue dip in the last quarter?");
+      composer?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      document.body
+        .querySelector<HTMLButtonElement>("[aria-label='Send message']")
+        ?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(
+      document.body.querySelector("[data-testid='embedded-data-chat']")
+        ?.textContent,
+    ).toContain("conversation-1");
+    expect(requestMock).toHaveBeenCalledOnce();
+    expect(JSON.parse(requestMock.mock.calls[0][1].body)).toMatchObject({
+      message: "Why did revenue dip in the last quarter?",
+      dashboard_result_id: "dashboard-result-1",
+    });
     expect(frozen?.children).toHaveLength(2);
     expect(frozen?.querySelector("strong")?.textContent).toBe("$77,814,557.66");
     expect(

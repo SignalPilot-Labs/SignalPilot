@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { createPortal } from "react-dom";
 
+import { StandaloneChatComposer } from "~/components/chat/standalone-chat-composer";
 import { StandaloneDataChatLoader } from "~/components/chat/standalone-data-chat-loader";
 import { DashboardRenderer } from "~/components/dashboard/dashboard-renderer";
 import { request } from "~/lib/api";
@@ -40,12 +41,41 @@ export function DashboardAnalysisDialog({
   selectedMark: Record<string, unknown>;
   onClose: () => void;
 }) {
-  const [message, setMessage] = useState(
-    "What changed here, and what are the most likely drivers?",
-  );
+  const [draft, setDraft] = useState("");
   const [conversationId, setConversationId] = useState<string>();
   const [error, setError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
+
+  const startAnalysis = (message: string) => {
+    if (submitting) return;
+    setSubmitting(true);
+    setError(undefined);
+    void request<{ conversation_id: string }>(
+      `/api/dashboards/${dashboardId}/charts/${chart.id}/analyze`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          version_id: versionId,
+          tile_uuid: tileUuid,
+          dashboard_result_id: dashboardResultId,
+          dashboard_filters: filters,
+          drill_path: drillPath.map((step) => ({
+            field_id: step.fieldId,
+            value: step.value,
+          })),
+          selected_mark: selectedMark,
+          message,
+        }),
+      },
+    )
+      .then((created) => setConversationId(created.conversation_id))
+      .catch((cause) => {
+        setError(
+          cause instanceof Error ? cause.message : "Analysis could not start",
+        );
+      })
+      .finally(() => setSubmitting(false));
+  };
 
   return createPortal(
     <div
@@ -69,76 +99,54 @@ export function DashboardAnalysisDialog({
             </button>
           </div>
         </header>
-        <div className={styles.frozenChart} aria-label="Frozen selected chart">
-          <div className={styles.frozenChartVisual}>
-            <DashboardRenderer chart={chart} result={result} />
-          </div>
-          <footer className={styles.frozenChartCaption}>
-            {result.completeness === "complete"
-              ? "Complete result"
-              : "Result may be incomplete"}
-            {" · "}Updated{" "}
-            {formatDashboardTimestamp(result.freshnessAt, result)}
-          </footer>
-        </div>
-        <div className={styles.analysisChat}>
-          {conversationId ? (
-            <StandaloneDataChatLoader
-              conversationId={conversationId}
-              embedded
-            />
-          ) : (
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                const trimmed = message.trim();
-                if (!trimmed || submitting) return;
-                setSubmitting(true);
-                setError(undefined);
-                void request<{ conversation_id: string }>(
-                  `/api/dashboards/${dashboardId}/charts/${chart.id}/analyze`,
-                  {
-                    method: "POST",
-                    body: JSON.stringify({
-                      version_id: versionId,
-                      tile_uuid: tileUuid,
-                      dashboard_result_id: dashboardResultId,
-                      dashboard_filters: filters,
-                      drill_path: drillPath.map((step) => ({
-                        field_id: step.fieldId,
-                        value: step.value,
-                      })),
-                      selected_mark: selectedMark,
-                      message: trimmed,
-                    }),
-                  },
-                )
-                  .then((created) => setConversationId(created.conversation_id))
-                  .catch((cause) =>
-                    setError(
-                      cause instanceof Error
-                        ? cause.message
-                        : "Analysis could not start",
-                    ),
-                  )
-                  .finally(() => setSubmitting(false));
-              }}
-            >
-              <p>
-                The exact result, receipt, filters, drill path, selected mark,
-                dbt commit, and semantic slice will be attached server-side.
-              </p>
-              <textarea
-                value={message}
-                onChange={(event) => setMessage(event.target.value)}
-                rows={4}
+        <div className={styles.analysisWorkspace}>
+          <div
+            className={styles.analysisChat}
+            aria-label="Chart analysis conversation"
+          >
+            {conversationId ? (
+              <StandaloneDataChatLoader
+                conversationId={conversationId}
+                embedded
               />
-              {error ? <p className={styles.errorState}>{error}</p> : null}
-              <button type="submit" disabled={submitting}>
-                {submitting ? "Starting private analysis…" : "Start analysis"}
-              </button>
-            </form>
-          )}
+            ) : (
+              <div className={styles.analysisChatDraft}>
+                <div className={styles.analysisChatIntro}>
+                  <h3>Ask about {chart.title}</h3>
+                  <p>
+                    Your first message will include this frozen result and its
+                    governed context.
+                  </p>
+                  {submitting ? (
+                    <span role="status">Opening chart analysis…</span>
+                  ) : null}
+                  {error ? <p role="alert">{error}</p> : null}
+                </div>
+                <StandaloneChatComposer
+                  value={draft}
+                  onValueChange={setDraft}
+                  onSubmit={startAnalysis}
+                  submitDisabled={submitting}
+                  placeholder="Ask a question about this chart…"
+                />
+              </div>
+            )}
+          </div>
+          <div
+            className={styles.frozenChart}
+            aria-label="Frozen selected chart"
+          >
+            <div className={styles.frozenChartVisual}>
+              <DashboardRenderer chart={chart} result={result} />
+            </div>
+            <footer className={styles.frozenChartCaption}>
+              {result.completeness === "complete"
+                ? "Complete result"
+                : "Result may be incomplete"}
+              {" · "}Updated{" "}
+              {formatDashboardTimestamp(result.freshnessAt, result)}
+            </footer>
+          </div>
         </div>
       </section>
     </div>,

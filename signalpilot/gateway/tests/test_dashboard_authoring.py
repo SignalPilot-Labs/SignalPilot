@@ -5,18 +5,20 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from gateway.api import dashboards as dashboard_api
 from gateway.dashboard import store as dashboard_store
-from gateway.dashboard.authoring import DashboardAuthoringAgent, materialize_agent_draft
+from gateway.dashboard.authoring import DashboardAgentDraft, DashboardAuthoringAgent, materialize_agent_draft
 from gateway.dashboard.domain import DashboardDefinition
-from gateway.dashboard.operations import apply_dashboard_operations
+from gateway.dashboard.operations import RenameDashboard, apply_dashboard_operations
 from gateway.db.models import GatewayBase, GatewayDashboardAuthoringSession, GatewayDashboardResult
-from gateway.models.dashboards import DashboardSemanticContext
+from gateway.models.dashboards import DashboardAuthoringMessageRequest, DashboardSemanticContext
 
 FIXTURE = Path(__file__).parents[2] / "web/dashboard/lightdash-contract/fixtures/five-components.json"
 
@@ -306,6 +308,92 @@ async def test_apply_is_explicit_and_records_authoring_provenance(db_session: As
             expected_current_version_id=created.version.id,
             visible_complete_result_ids=[],
         )
+
+
+@pytest.mark.asyncio
+async def test_applied_dashboard_reopens_the_same_authoring_thread_with_a_fresh_draft(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = await dashboard_store.create_private_dashboard(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        definition=_definition(),
+    )
+    first_definition = created.version.definition.model_copy(update={"name": "First edit"})
+    first = await dashboard_store.create_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        dashboard_id=created.dashboard.id,
+        base_version_id=created.version.id,
+        definition=first_definition,
+        operations=[{"operation": "rename_dashboard", "name": "First edit"}],
+        prompt="Rename the dashboard",
+        summary="Renamed the dashboard.",
+        agent_run_id="run-1",
+        model="test-model",
+        requires_custom_sql_confirmation=False,
+        custom_sql_confirmed=False,
+    )
+    applied = await dashboard_store.apply_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        session_id=first.id,
+        expected_current_version_id=created.version.id,
+        visible_complete_result_ids=[],
+    )
+    reopened = await dashboard_store.get_active_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        dashboard_id=created.dashboard.id,
+    )
+    assert reopened is not None
+    assert reopened.status == "applied"
+    assert reopened.events_json[-1]["message"] == "Applied dashboard version 2"
+
+    class ResumedAgent:
+        model = "test-model"
+
+        def __init__(self, *, api_key: str) -> None:
+            assert api_key == "test-key"
+
+        async def draft(self, **_kwargs) -> DashboardAgentDraft:
+            return DashboardAgentDraft(
+                summary="Renamed the dashboard again.",
+                operations=[RenameDashboard(operation="rename_dashboard", name="Second edit")],
+            )
+
+    async def verified_context(*_args, **_kwargs) -> DashboardSemanticContext:
+        return _context()
+
+    async def resolve_key(*_args, **_kwargs) -> str:
+        return "test-key"
+
+    monkeypatch.setattr(dashboard_api, "DashboardAuthoringAgent", ResumedAgent)
+    monkeypatch.setattr(dashboard_api, "_verified_context", verified_context)
+    monkeypatch.setattr(dashboard_api, "validate_dashboard_semantics", lambda *_args: None)
+    monkeypatch.setattr(dashboard_api.org_secrets_store, "resolve_anthropic_key", resolve_key)
+    store = SimpleNamespace(
+        session=db_session,
+        user_id="owner-a",
+        _require_org_id=lambda: "org-a",
+    )
+    second = await dashboard_api.continue_dashboard_authoring_session(
+        first.id,
+        DashboardAuthoringMessageRequest(prompt="Rename it again"),
+        store,
+    )
+    assert second.id != first.id
+    assert second.thread_id == first.thread_id
+    assert second.base_version_id == applied.version.id
+    assert second.definition.name == "Second edit"
+    assert [event.kind for event in second.events].count("user") == 2
+    assert [event.kind for event in second.events].count("assistant") == 2
+    assert any("latest saved dashboard version" in event.message for event in second.events)
 
 
 @pytest.mark.asyncio

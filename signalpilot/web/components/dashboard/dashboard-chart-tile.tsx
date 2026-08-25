@@ -2,6 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import {
+  Dialog as AriaDialog,
+  Popover as AriaPopover,
+} from "react-aria-components";
 
 import { DashboardRenderer } from "~/components/dashboard/dashboard-renderer";
 import { DashboardLoadingState } from "~/components/dashboard/dashboard-loading-state";
@@ -141,6 +145,10 @@ export function DashboardChartTile({
   onDetails?: () => void;
 }) {
   const [showData, setShowData] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [questionOpen, setQuestionOpen] = useState(false);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  const questionButton = useRef<HTMLButtonElement>(null);
   const isKpi = chart.visualization.type === "big_number";
   const question =
     chart.question ??
@@ -152,17 +160,65 @@ export function DashboardChartTile({
     >
       <header className={styles.tileHeader}>
         <div className={styles.questionWrap}>
-          <h2 tabIndex={chart.description ? 0 : undefined}>{question}</h2>
           {chart.description ? (
-            <div className={styles.questionTooltip} role="tooltip">
-              {chart.description}
-            </div>
-          ) : null}
+            <>
+              <h2>
+                <button
+                  ref={questionButton}
+                  type="button"
+                  className={styles.questionTrigger}
+                  aria-label={`About ${question}`}
+                  aria-describedby={`question-description-${chart.id}`}
+                  onMouseEnter={() => setQuestionOpen(true)}
+                  onMouseLeave={() => setQuestionOpen(false)}
+                  onFocus={() => setQuestionOpen(true)}
+                  onBlur={() => setQuestionOpen(false)}
+                >
+                  {question}
+                </button>
+              </h2>
+              <AriaPopover
+                className={styles.questionTooltip}
+                placement="bottom start"
+                triggerRef={questionButton}
+                isOpen={questionOpen}
+                onOpenChange={setQuestionOpen}
+                isNonModal
+              >
+                <div id={`question-description-${chart.id}`} role="tooltip">
+                  {chart.description}
+                </div>
+              </AriaPopover>
+            </>
+          ) : (
+            <h2>{question}</h2>
+          )}
         </div>
         <DashboardConfidenceFlag chart={chart} />
-        <details className={styles.tileMenu}>
-          <summary aria-label={`More actions for ${chart.title}`}>•••</summary>
-          <div className={styles.tileMenuPanel}>
+        <button
+          ref={menuButton}
+          type="button"
+          className={styles.tileMenuButton}
+          aria-label={`More actions for ${chart.title}`}
+          aria-expanded={menuOpen}
+          aria-haspopup="dialog"
+          onClick={() => setMenuOpen((open) => !open)}
+        >
+          •••
+        </button>
+        <AriaPopover
+          className={styles.tileMenuPanel}
+          placement="bottom end"
+          offset={7}
+          triggerRef={menuButton}
+          isOpen={menuOpen}
+          onOpenChange={setMenuOpen}
+          isNonModal
+        >
+          <AriaDialog
+            className={styles.tileMenuDialog}
+            aria-label={`Actions for ${chart.title}`}
+          >
             {result ? (
               <div className={styles.tileMenuMeta}>
                 <span>
@@ -187,22 +243,38 @@ export function DashboardChartTile({
             <button
               type="button"
               disabled={!result}
-              onClick={() => setShowData(true)}
+              onClick={() => {
+                setMenuOpen(false);
+                setShowData(true);
+              }}
             >
               View data
             </button>
             {onAnalyze ? (
-              <button type="button" disabled={!result} onClick={onAnalyze}>
+              <button
+                type="button"
+                disabled={!result}
+                onClick={() => {
+                  setMenuOpen(false);
+                  onAnalyze();
+                }}
+              >
                 Analyze this change
               </button>
             ) : null}
             {onDetails ? (
-              <button type="button" onClick={onDetails}>
+              <button
+                type="button"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onDetails();
+                }}
+              >
                 Details
               </button>
             ) : null}
-          </div>
-        </details>
+          </AriaDialog>
+        </AriaPopover>
       </header>
       {drillBreadcrumb.length ? (
         <nav

@@ -1,4 +1,8 @@
+"use client";
+
 import { BadgeAlert, BadgeCheck } from "lucide-react";
+import { useRef, useState } from "react";
+import { Popover as AriaPopover } from "react-aria-components";
 
 import type { ChartDefinition } from "~/lib/dashboard/contracts";
 import {
@@ -11,27 +15,39 @@ import styles from "./dashboard-runtime.module.css";
 export function DashboardConfidenceFlag({ chart }: { chart: ChartDefinition }) {
   const confidence = chartConfidence(chart);
   const explanation = confidenceExplanation(chart);
+  const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
   return (
-    <span className={styles.confidenceWrap}>
-      <span
+    <>
+      <button
+        ref={trigger}
+        type="button"
         className={`${styles.confidenceFlag} ${confidence === "high" ? styles.highConfidence : styles.lowConfidence}`}
-        tabIndex={0}
         aria-label={explanation}
-        aria-describedby={`confidence-${chart.id}`}
+        aria-describedby={`confidence-description-${chart.id}`}
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
       >
         {confidence === "high" ? (
           <BadgeCheck size={17} aria-hidden="true" />
         ) : (
           <BadgeAlert size={17} aria-hidden="true" />
         )}
-      </span>
-      <span
+      </button>
+      <AriaPopover
         className={styles.confidenceTooltip}
-        id={`confidence-${chart.id}`}
-        role="tooltip"
+        placement="bottom end"
+        triggerRef={trigger}
+        isOpen={open}
+        onOpenChange={setOpen}
+        isNonModal
       >
-        {explanation}
-      </span>
-    </span>
+        <div id={`confidence-description-${chart.id}`} role="tooltip">
+          {explanation}
+        </div>
+      </AriaPopover>
+    </>
   );
 }

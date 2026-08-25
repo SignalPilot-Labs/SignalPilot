@@ -755,7 +755,6 @@ async def _ensure_eval_config_repo_binding_columns(engine) -> None:
     logger.info("Ensured private repository binding columns on gateway_eval_configs")
 
 
-
 async def _ensure_conversation_origin_column(engine) -> None:
     """Add origin column to gateway_chat_conversations if it does not exist.
 
@@ -780,12 +779,7 @@ async def _ensure_improvement_slot_width(engine) -> None:
     unique tag. Idempotent for tables created before the widening.
     """
     async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                "ALTER TABLE gateway_improvement_runs "
-                "ALTER COLUMN started_et_date TYPE VARCHAR(40)"
-            )
-        )
+        await conn.execute(text("ALTER TABLE gateway_improvement_runs ALTER COLUMN started_et_date TYPE VARCHAR(40)"))
     logger.info("Ensured started_et_date width on gateway_improvement_runs")
 
 
@@ -832,6 +826,7 @@ async def init_db() -> None:
             await conn.execute(
                 text(
                     "ALTER TABLE gateway_dashboard_authoring_sessions "
+                    "ADD COLUMN IF NOT EXISTS thread_id VARCHAR, "
                     "ADD COLUMN IF NOT EXISTS events_json JSONB NOT NULL DEFAULT '[]'::jsonb, "
                     "ADD COLUMN IF NOT EXISTS agent_runs_json JSONB NOT NULL DEFAULT '[]'::jsonb, "
                     "ADD COLUMN IF NOT EXISTS confirmations_json JSONB NOT NULL DEFAULT '[]'::jsonb, "
@@ -839,6 +834,19 @@ async def init_db() -> None:
                     "ADD COLUMN IF NOT EXISTS draft_revision INTEGER NOT NULL DEFAULT 1, "
                     "ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), "
                     "ADD COLUMN IF NOT EXISTS discarded_at TIMESTAMPTZ"
+                )
+            )
+            await conn.execute(
+                text("UPDATE gateway_dashboard_authoring_sessions SET thread_id = id WHERE thread_id IS NULL")
+            )
+            await conn.execute(
+                text("ALTER TABLE gateway_dashboard_authoring_sessions ALTER COLUMN thread_id SET NOT NULL")
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_gw_dashboard_authoring_thread "
+                    "ON gateway_dashboard_authoring_sessions "
+                    "(org_id, owner_user_id, thread_id, created_at)"
                 )
             )
     await _ensure_key_version_column(engine)

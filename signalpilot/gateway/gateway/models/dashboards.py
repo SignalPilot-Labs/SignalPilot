@@ -210,6 +210,7 @@ class DashboardAuthoringEvent(DashboardModel):
 
 class DashboardAuthoringSessionInfo(DashboardModel):
     id: str
+    thread_id: str
     dashboard_id: str | None
     base_version_id: str | None
     definition: DashboardDefinition

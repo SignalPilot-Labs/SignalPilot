@@ -41,6 +41,33 @@
     color 120ms ease;
 }
 
+.leadingBackButton {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  place-items: center;
+  margin-top: 3px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-text-muted);
+  text-decoration: none;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.leadingBackButton:hover {
+  background: var(--color-bg-card);
+  color: var(--color-text);
+}
+
+.leadingBackButton:focus-visible {
+  outline: 2px solid var(--color-border-active);
+  outline-offset: 2px;
+}
+
 .primaryIconButton {
   border-color: color-mix(in srgb, var(--color-border-active) 65%, transparent);
   background: color-mix(

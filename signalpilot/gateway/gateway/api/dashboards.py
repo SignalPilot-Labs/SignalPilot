@@ -409,9 +409,7 @@ async def get_active_dashboard_authoring_session(dashboard_id: str, store: Store
     response_model=DashboardAuthoringSessionInfo,
     dependencies=[RequireScope("write")],
 )
-async def continue_dashboard_authoring_session(
-    session_id: str, body: DashboardAuthoringMessageRequest, store: StoreD
-):
+async def continue_dashboard_authoring_session(session_id: str, body: DashboardAuthoringMessageRequest, store: StoreD):
     org_id = store._require_org_id()
     user_id = _user_id(store)
     row = await dashboard_store.get_authoring_session(
@@ -419,14 +417,31 @@ async def continue_dashboard_authoring_session(
     )
     if row is None:
         raise HTTPException(status_code=404, detail="Dashboard authoring conversation not found")
-    if row.status != "preview":
+    if row.status not in {"preview", "applied", "discarded"}:
         raise HTTPException(status_code=409, detail="Dashboard authoring conversation is no longer active")
-    if row.requires_custom_sql_confirmation and not row.custom_sql_confirmed:
+    resuming_saved_thread = row.status in {"applied", "discarded"}
+    if not resuming_saved_thread and row.requires_custom_sql_confirmation and not row.custom_sql_confirmed:
         raise HTTPException(
             status_code=409,
             detail="Confirm or decline the pending custom SQL before refining this draft",
         )
-    current_definition = DashboardDefinition.model_validate(row.definition_json)
+    if resuming_saved_thread:
+        if not row.dashboard_id:
+            raise HTTPException(status_code=409, detail="Saved authoring thread has no dashboard")
+        dashboard_rows = await dashboard_store.get_private_dashboard_rows(
+            store.session,
+            org_id=org_id,
+            user_id=user_id,
+            dashboard_id=row.dashboard_id,
+        )
+        if dashboard_rows is None:
+            raise HTTPException(status_code=404, detail="Dashboard not found")
+        _, current_version = dashboard_rows
+        current_definition = DashboardDefinition.model_validate(current_version.definition_json)
+        base_version_id = current_version.id
+    else:
+        current_definition = DashboardDefinition.model_validate(row.definition_json)
+        base_version_id = row.base_version_id
     try:
         context = await _verified_context(store, current_definition)
         api_key = await org_secrets_store.resolve_anthropic_key(store.session, org_id)
@@ -450,27 +465,38 @@ async def continue_dashboard_authoring_session(
         )
         raise HTTPException(status_code=422, detail=f"Agent draft rejected: {exc}") from exc
     previous_sql = {
-        chart.id: chart.model_dump(mode="json")
-        for chart in current_definition.charts
-        if chart.query.kind == "sql"
+        chart.id: chart.model_dump(mode="json") for chart in current_definition.charts if chart.query.kind == "sql"
     }
     changed_custom_sql_chart_ids = [
         chart.id
         for chart in definition.charts
         if chart.query.kind == "sql" and previous_sql.get(chart.id) != chart.model_dump(mode="json")
     ]
+    authoring_kwargs = {
+        "db": store.session,
+        "org_id": org_id,
+        "user_id": user_id,
+        "definition": definition,
+        "operations": [operation.model_dump(mode="json") for operation in draft.operations],
+        "prompt": body.prompt,
+        "summary": draft.summary,
+        "agent_run_id": str(uuid.uuid4()),
+        "model": agent.model,
+        "requires_custom_sql_confirmation": bool(changed_custom_sql_chart_ids),
+    }
+    if resuming_saved_thread:
+        return await dashboard_store.create_authoring_session(
+            **authoring_kwargs,
+            dashboard_id=row.dashboard_id,
+            base_version_id=base_version_id,
+            custom_sql_confirmed=False,
+            thread_id=row.thread_id,
+            prior_events=list(row.events_json or []),
+            pending_custom_sql_chart_ids=changed_custom_sql_chart_ids,
+        )
     return await dashboard_store.update_authoring_session_draft(
-        store.session,
-        org_id=org_id,
-        user_id=user_id,
+        **authoring_kwargs,
         session_id=session_id,
-        definition=definition,
-        operations=[operation.model_dump(mode="json") for operation in draft.operations],
-        prompt=body.prompt,
-        summary=draft.summary,
-        agent_run_id=str(uuid.uuid4()),
-        model=agent.model,
-        requires_custom_sql_confirmation=bool(changed_custom_sql_chart_ids),
         pending_custom_sql_chart_ids=changed_custom_sql_chart_ids,
     )
 

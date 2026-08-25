@@ -13,7 +13,12 @@ vi.mock("~/components/dashboard/dashboard-runtime-provider", () => ({
   }) => <div data-testid="governed-preview">{definition.name}</div>,
 }));
 
+vi.mock("~/lib/api", () => ({
+  request: vi.fn(() => new Promise(() => undefined)),
+}));
+
 import {
+  DashboardAuthoringPanel,
   DashboardAuthoringWorkspace,
   type DashboardAuthoringSession,
 } from "~/components/dashboard/dashboard-authoring-panel";
@@ -37,6 +42,7 @@ describe("DashboardAuthoringWorkspace", () => {
     const definition = fromLightdashFixture(fiveComponents);
     const session: DashboardAuthoringSession = {
       id: "session-1",
+      thread_id: "thread-1",
       dashboard_id: "dashboard-1",
       base_version_id: "version-1",
       definition,
@@ -93,5 +99,33 @@ describe("DashboardAuthoringWorkspace", () => {
     expect(
       container.querySelector("button[aria-pressed='true']")?.textContent,
     ).toBe("Chat");
+    expect(container.querySelector("form textarea")?.id).toBe(
+      "dashboard-authoring-prompt",
+    );
+  });
+
+  it("mounts the edit overlay at the document root", async () => {
+    const definition = fromLightdashFixture(fiveComponents);
+    await act(async () => {
+      root.render(
+        <DashboardAuthoringPanel
+          dashboardId="dashboard-1"
+          versionId="version-1"
+          baseDefinition={definition}
+          onApplied={vi.fn()}
+        />,
+      );
+    });
+    const launcher = container.querySelector("button");
+    await act(async () => {
+      launcher?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    const overlay = document.querySelector(
+      "[data-testid='dashboard-authoring-overlay']",
+    );
+    expect(overlay?.parentElement).toBe(document.body);
+    expect(
+      overlay?.querySelector("#dashboard-authoring-prompt"),
+    ).not.toBeNull();
   });
 });

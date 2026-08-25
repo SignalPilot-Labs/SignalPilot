@@ -132,6 +132,90 @@ async def run_notebook(
     return "\n".join(parts)
 
 
+@audited_tool(mcp)
+async def read_notebook(
+    filename: str,
+) -> str:
+    """Read an agent notebook's code AND its latest run outputs (including
+    cell errors) from the workspace store — no runtime needed.
+
+    Use this to inspect or debug a notebook created with run_notebook. The
+    edit loop is: read_notebook -> modify the code -> run_notebook with the
+    SAME filename (it overwrites, re-executes, and commits a new revision).
+
+    Args:
+        filename: The notebook name (e.g. "analysis.py") or its stored path
+            ("signalpilot-agent/analysis.py").
+    """
+    org_id = mcp_org_id_var.get(None) or "local"
+
+    safe_path = PurePosixPath(filename)
+    if safe_path.is_absolute() or any(part in {"", ".", ".."} for part in safe_path.parts):
+        return "Error: filename must be a plain relative path"
+    rel = safe_path.as_posix()
+    if not rel.startswith("signalpilot-agent/"):
+        rel = f"signalpilot-agent/{rel}"
+
+    from gateway.api.workspace_files import get_workspace_store
+    from gateway.db.engine import get_session_factory
+    from gateway.store import Store
+    from gateway.workspace_store.store import RevisionNotFound
+
+    ws = get_workspace_store()
+    factory = get_session_factory()
+    async with factory() as session:
+        store = Store(session, allow_unscoped=True)
+        projects, _ = await store.list_workspace_projects(status="active", limit=100, offset=0)
+        for project in projects:
+            project_id = str(getattr(project, "id", None) or project.get("id"))
+            try:
+                manifest = await ws.load_manifest(
+                    session, org_id=org_id, project_id=project_id,
+                    branch="main", revision=None,
+                )
+            except RevisionNotFound:
+                continue
+            if not any(e.path == rel for e in manifest.entries):
+                continue
+            result = await ws.read_file(
+                session, org_id=org_id, project_id=project_id,
+                branch="main", path=rel, revision=None,
+            )
+            if result is None:
+                continue
+            _entry, code_bytes = result
+            code = code_bytes.decode("utf-8", errors="replace")
+
+            sidecar_rel = f"signalpilot-agent/__sp__/session/{rel.rsplit('/', 1)[-1]}.json"
+            outputs = ""
+            side = await ws.read_file(
+                session, org_id=org_id, project_id=project_id,
+                branch="main", path=sidecar_rel, revision=None,
+            )
+            if side is not None:
+                try:
+                    outputs = _format_cell_outputs(json.loads(side[1].decode("utf-8")))
+                except Exception:
+                    outputs = "(session snapshot unreadable)"
+
+            parts = [
+                f"# {rel} (project {project_id}, revision {manifest.revision})",
+                "",
+                "--- Code ---",
+                code,
+            ]
+            if outputs:
+                parts += ["", "--- Latest run outputs ---", outputs]
+            else:
+                parts += ["", "(no stored run outputs — run_notebook to execute)"]
+            return "\n".join(parts)
+
+    return (
+        f"Error: {rel} not found in any project's workspace store. "
+        "Use run_notebook to create it."
+    )
+
+
 def _upstream_token(internal) -> str | None:
     """Auth token the runtime accepts: per-session for sandboxes, the shared
     container token for the local direct backend (same resolution the
@@ -150,6 +234,10 @@ def _format_cell_outputs(session_data: dict) -> str:
 
     parts = []
     cells = session_data.get("cells", [])
+    error_count = 0
+
+    def _strip_tags(text: str) -> str:
+        return html.unescape(re.sub(r"<[^>]+>", "", text))
 
     for cell in cells:
         if not isinstance(cell, dict):
@@ -159,11 +247,25 @@ def _format_cell_outputs(session_data: dict) -> str:
         console = cell.get("console", [])
         cell_parts = []
 
-        # Console output (print statements)
+        # Errors first — an agent fixing a notebook needs these front and
+        # center, not buried under HTML-output placeholders.
+        for out in outputs:
+            if isinstance(out, dict) and out.get("type") == "error":
+                error_count += 1
+                cell_parts.append(
+                    f"ERROR ({out.get('ename', 'exception')}): {out.get('evalue', '')}"
+                )
+
+        # Console output (print statements; stderr tracebacks come as
+        # syntax-highlighted HTML — strip to plain text for the agent)
         for entry in console:
             if isinstance(entry, dict):
                 text = entry.get("text", "")
-                if text:
+                if not text:
+                    continue
+                if entry.get("name") == "stderr":
+                    cell_parts.append(_strip_tags(text).rstrip("\n")[:1500])
+                else:
                     cell_parts.append(text.rstrip("\n"))
 
         # Data outputs
@@ -203,4 +305,6 @@ def _format_cell_outputs(session_data: dict) -> str:
             parts.append(f"[Cell {cell_id}]")
             parts.extend(f"  {line}" for line in cell_parts)
 
+    if error_count:
+        parts.insert(0, f"!! {error_count} cell(s) raised errors — details below.")
     return "\n".join(parts) if parts else ""

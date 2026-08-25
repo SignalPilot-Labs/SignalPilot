@@ -461,6 +461,47 @@ export const fixtureArtifacts: FixtureArtifact[] = [
   },
 ];
 
+const REPORT_HTML = `<!doctype html><html><head><style>
+body { font-family: -apple-system, "Segoe UI", sans-serif; margin: 2rem; color: #1a1a1a; }
+h1 { font-size: 1.3rem; } h2 { font-size: 1rem; margin-top: 1.6rem; }
+table { border-collapse: collapse; margin-top: .8rem; }
+td, th { border: 1px solid #ddd; padding: .45rem .8rem; font-size: .85rem; text-align: right; }
+th:first-child, td:first-child { text-align: left; }
+.up { color: #0a7d33; } .flag { color: #b54708; font-weight: 600; }
+</style></head><body>
+<h1>Q3 2025 Regional Revenue Review</h1>
+<p>Q3 revenue reached <b>$16.1M</b>, up <b>10.4%</b> quarter over quarter. EMEA drove the
+growth in absolute terms; APAC grew fastest from a smaller base.</p>
+<h2>Per-region summary</h2>
+<table><tr><th>Region</th><th>Q2</th><th>Q3</th><th>Growth</th></tr>
+<tr><td>AMER</td><td>$8.93M</td><td>$9.20M</td><td class="up">+3.1%</td></tr>
+<tr><td>EMEA</td><td>$4.10M</td><td>$4.81M</td><td class="up">+17.3%</td></tr>
+<tr><td>APAC</td><td>$1.61M</td><td>$2.12M</td><td class="up">+31.5%</td></tr></table>
+<h2>Watch items</h2>
+<p class="flag">APAC growth is concentrated in two marketplace launches; retention after
+the launch quarter is not yet observable.</p>
+</body></html>`;
+
+export const fixtureReportArtifact: FixtureArtifact = {
+  at: 18_000,
+  id: "artifact-report-1",
+  run_id: FIXTURE_RUN_ID,
+  assistant_message_id: null,
+  kind: "report",
+  filename: "q3_regional_review.html",
+  mime_type: "text/html",
+  snapshot: { html: REPORT_HTML },
+  provenance: null,
+  freshness_at: "2026-01-15T06:10:00Z",
+  assumptions: [],
+  exclusions: [],
+  caveats: [],
+  parent_artifact_id: null,
+  created_at: "2026-01-15T17:30:18Z",
+  download_formats: ["html"],
+};
+fixtureArtifacts.push(fixtureReportArtifact);
+
 export const FIXTURE_TOTAL_MS = 21_200;
 
 export function fixtureEventCreatedAt(at: number): string {

@@ -9,6 +9,7 @@ import {
   Copy,
   FileChartColumn,
   Loader2,
+  Maximize2,
   MessageSquarePlus,
   MoreHorizontal,
   PanelLeft,
@@ -62,6 +63,7 @@ import {
   type StandaloneConversation,
   type StandaloneConversationDetail,
 } from "~/lib/api";
+import { ArtifactLightbox } from "~/components/chat/artifact-lightbox";
 import { StandaloneArtifactContext } from "~/components/chat/standalone-artifact-context";
 import { StandaloneChatComposer } from "~/components/chat/standalone-chat-composer";
 import { RunActivityBlocks, RunTimeline } from "~/components/chat/run-timeline";
@@ -209,6 +211,8 @@ function RuntimeChartPreview({
   filename: string;
 }) {
   const [url, setUrl] = useState<string | null>(null);
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [zoomed, setZoomed] = useState(false);
   useEffect(() => {
     let active = true;
     let objectUrl: string | null = null;
@@ -224,15 +228,70 @@ function RuntimeChartPreview({
     };
   }, [artifactId]);
   return url ? (
-    <img
-      src={url}
-      alt={filename}
-      className="mx-auto max-h-[520px] max-w-full"
-    />
+    <>
+      <button
+        type="button"
+        title="Click to view full size"
+        aria-label={`View ${filename} full size`}
+        onClick={() => {
+          setZoomed(false);
+          setViewerOpen(true);
+        }}
+        className="group relative mx-auto block cursor-zoom-in"
+      >
+        <img
+          src={url}
+          alt={filename}
+          className="mx-auto max-h-[520px] max-w-full"
+        />
+        <span className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)]/90 text-[var(--color-text-muted)] opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
+          <Maximize2 className="h-3.5 w-3.5" />
+        </span>
+      </button>
+      <ArtifactLightbox
+        open={viewerOpen}
+        title={filename}
+        onClose={() => setViewerOpen(false)}
+      >
+        <img
+          src={url}
+          alt={filename}
+          onClick={() => setZoomed((value) => !value)}
+          className={
+            zoomed
+              ? "max-w-none cursor-zoom-out"
+              : "max-h-full max-w-full cursor-zoom-in object-contain"
+          }
+        />
+      </ArtifactLightbox>
+    </>
   ) : (
     <div className="flex min-h-64 items-center justify-center text-xs text-[var(--color-text-dim)]">
       Loading chart preview…
     </div>
+  );
+}
+
+/** Header button that opens an artifact in the fullscreen viewer. */
+function ExpandButton({
+  label,
+  onClick,
+}: {
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      data-testid="artifact-expand"
+      onClick={onClick}
+      className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-text-muted)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)]"
+    >
+      <Maximize2 className="h-3 w-3" />
+      Expand
+    </button>
   );
 }
 
@@ -273,6 +332,7 @@ export function ArtifactPreview({
   onDownload?: ArtifactDownload;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [viewerOpen, setViewerOpen] = useState(false);
   const snapshot = artifact.snapshot;
   if (artifact.kind === "table") {
     const columns = Array.isArray(snapshot.columns)
@@ -395,7 +455,15 @@ export function ArtifactPreview({
               {artifact.filename}
             </span>
           </div>
-          <ArtifactDownloads artifact={artifact} onDownload={onDownload} />
+          <div className="flex items-center gap-2">
+            {snapshot.runtime_png !== true && (
+              <ExpandButton
+                label={`Expand ${artifact.filename}`}
+                onClick={() => setViewerOpen(true)}
+              />
+            )}
+            <ArtifactDownloads artifact={artifact} onDownload={onDownload} />
+          </div>
         </div>
         <div className="min-h-64 overflow-x-auto p-4">
           {snapshot.runtime_png === true ? (
@@ -412,6 +480,38 @@ export function ArtifactPreview({
             </div>
           )}
         </div>
+        {viewerOpen && snapshot.runtime_png !== true && (
+          <ArtifactLightbox
+            open={viewerOpen}
+            title={artifact.filename}
+            onClose={() => setViewerOpen(false)}
+          >
+            <div className="rounded-xl bg-[var(--color-bg-card)] p-6">
+              <VegaEmbed
+                spec={{
+                  ...spec,
+                  width: Math.max(
+                    640,
+                    Math.floor(
+                      (typeof window !== "undefined"
+                        ? window.innerWidth
+                        : 1280) * 0.78,
+                    ),
+                  ),
+                  height: Math.max(
+                    400,
+                    Math.floor(
+                      (typeof window !== "undefined"
+                        ? window.innerHeight
+                        : 800) * 0.66,
+                    ),
+                  ),
+                }}
+                options={{ actions: false, mode: "vega-lite", renderer: "svg" }}
+              />
+            </div>
+          </ArtifactLightbox>
+        )}
         {displayLimited && (
           <p className="border-t border-[var(--color-border)] px-3 py-2 text-[11px] text-[var(--color-text-muted)]">
             Preview shows up to {categoryLimit} categories and {legendLimit}{" "}
@@ -445,16 +545,39 @@ export function ArtifactPreview({
             {artifact.filename}
           </span>
         </div>
-        <ArtifactDownloads artifact={artifact} onDownload={onDownload} />
+        <div className="flex items-center gap-2">
+          {hasRenderableReport && (
+            <ExpandButton
+              label={`Expand ${artifact.filename}`}
+              onClick={() => setViewerOpen(true)}
+            />
+          )}
+          <ArtifactDownloads artifact={artifact} onDownload={onDownload} />
+        </div>
       </div>
       {hasRenderableReport ? (
-        <iframe
-          title={artifact.filename}
-          sandbox=""
-          referrerPolicy="no-referrer"
-          srcDoc={html}
-          className="h-[440px] w-full border-0 bg-white"
-        />
+        <>
+          <iframe
+            title={artifact.filename}
+            sandbox=""
+            referrerPolicy="no-referrer"
+            srcDoc={html}
+            className="h-[440px] w-full border-0 bg-white"
+          />
+          <ArtifactLightbox
+            open={viewerOpen}
+            title={artifact.filename}
+            onClose={() => setViewerOpen(false)}
+          >
+            <iframe
+              title={`${artifact.filename} (expanded)`}
+              sandbox=""
+              referrerPolicy="no-referrer"
+              srcDoc={html}
+              className="h-full max-h-[86vh] w-[92vw] rounded-xl border-0 bg-white"
+            />
+          </ArtifactLightbox>
+        </>
       ) : (
         <div className="flex min-h-48 items-center justify-center px-6 py-10 text-center">
           <div className="max-w-sm">

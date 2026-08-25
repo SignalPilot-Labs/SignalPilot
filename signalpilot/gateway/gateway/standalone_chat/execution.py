@@ -38,6 +38,26 @@ def _join_base_path(base: str, path: str) -> str:
     return f"{base.rstrip('/')}/{path.lstrip('/')}"
 
 
+def _notebook_auth_headers() -> dict[str, str]:
+    """Authenticate direct-mode notebook requests with the shared server token.
+
+    The shared notebook container runs with --token-password-file, so every
+    /api request needs the token. Kubernetes-mode pods resolve auth through
+    the notebook proxy instead, and the token file is absent there.
+    """
+    token_file = os.getenv("SP_NOTEBOOK_TOKEN_FILE", "")
+    if not token_file:
+        return {}
+    try:
+        with open(token_file, encoding="utf-8") as handle:
+            token = handle.read().strip()
+    except OSError:
+        return {}
+    if not token:
+        return {}
+    return {"Authorization": f"Bearer {token}"}
+
+
 @dataclass(frozen=True)
 class PreparedExecution:
     url: str
@@ -166,6 +186,7 @@ async def prepare_execution(
         "X-Gateway-Branch-Id": branch,
         "X-Gateway-Connection-Name": connection_name,
         "X-Gateway-Commit-Sha": commit_sha,
+        **_notebook_auth_headers(),
     }
     return PreparedExecution(
         url=_join_base_path(runtime.internal_base_url, "/api/standalone-chat/execute"),
@@ -211,7 +232,8 @@ async def cancel_execution_session(db: AsyncSession, run: GatewayChatRun) -> boo
                 _join_base_path(
                     runtime.internal_base_url,
                     f"/api/standalone-chat/cancel/{run.id}",
-                )
+                ),
+                headers=_notebook_auth_headers(),
             )
         return response.is_success
     except httpx.HTTPError:

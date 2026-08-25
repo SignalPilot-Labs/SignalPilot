@@ -147,8 +147,10 @@ test.describe("File Picker", () => {
 
     // The open-file selector shows the deep-linked file (combobox value,
     // so getByText can't see it — assert on the accessible name/value).
-    const fileSelector = page.getByRole("combobox").filter({ hasText: "intro.py" });
-    await expect(fileSelector.first()).toBeVisible({ timeout: 10_000 });
+    // The filename lives in the header's autocomplete input (its value —
+    // not text content — so getByText/hasText can't match it).
+    await expect(page.locator("#filename-input input, input#filename-input").first())
+      .toHaveValue(/intro\.py/, { timeout: 10_000 });
 
     // Open the file explorer panel and assert real project files load
     // from the S3 workspace (dumpsters has notebooks/ + dbt trees).

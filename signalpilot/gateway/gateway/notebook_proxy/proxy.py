@@ -209,6 +209,12 @@ class NotebookProxy:
             upstream_ws = await websockets.asyncio.client.connect(
                 upstream_url,
                 additional_headers=outbound_headers,
+                # The library default caps frames at 1 MiB and ABORTS the
+                # connection on excess. Kernel replay frames (session outputs,
+                # datasource schemas) legitimately run to tens of MB; the
+                # notebook server bounds its own messages, so the proxy only
+                # needs a DoS backstop, not a tight limit.
+                max_size=64 * 1024 * 1024,
             )
         except Exception as exc:
             logger.warning("WS PROXY upstream connect FAILED: %s: %s", type(exc).__name__, exc)

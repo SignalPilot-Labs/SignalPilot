@@ -462,6 +462,70 @@ export function foldRunSteps(
   return steps;
 }
 
+export type RunBlock =
+  | { kind: "text"; key: string; text: string }
+  | { kind: "steps"; key: string; steps: RunStep[] };
+
+/**
+ * Reconstructs the natural interleaving of an agent run: contiguous streamed
+ * text becomes a markdown block, contiguous tool work becomes a step group.
+ * A run that narrates between tool chains therefore renders as
+ * [steps] → [text] → [steps] → [text] in stream order.
+ */
+export function foldRunBlocks(
+  events: StandaloneChatEvent[],
+  runId: string,
+): RunBlock[] {
+  const steps = foldRunSteps(events, runId);
+  const stepsBySequence = new Map(steps.map((step) => [step.sequence, step]));
+  const runEvents = events
+    .filter((event) => event.run_id === runId)
+    .sort((a, b) => a.sequence - b.sequence);
+  const blocks: RunBlock[] = [];
+  let textBuffer = "";
+  let textKey = "";
+  const flushText = () => {
+    if (!textBuffer.trim()) {
+      textBuffer = "";
+      return;
+    }
+    blocks.push({ kind: "text", key: `text-${textKey}`, text: textBuffer });
+    textBuffer = "";
+  };
+  for (const event of runEvents) {
+    if (event.type === "text_delta") {
+      const delta = event.payload.delta;
+      if (typeof delta === "string") {
+        if (!textBuffer) textKey = `${event.run_id}-${event.sequence}`;
+        textBuffer += delta;
+      }
+      continue;
+    }
+    if (
+      event.type === "status" &&
+      event.payload.reset_text === true
+    ) {
+      // A retry restarted the answer: drop the streamed text so far.
+      textBuffer = "";
+      for (let index = blocks.length - 1; index >= 0; index -= 1) {
+        if (blocks[index].kind === "text") blocks.splice(index, 1);
+      }
+      continue;
+    }
+    const step = stepsBySequence.get(event.sequence);
+    if (!step) continue;
+    flushText();
+    const last = blocks[blocks.length - 1];
+    if (last?.kind === "steps") {
+      last.steps.push(step);
+    } else {
+      blocks.push({ kind: "steps", key: `steps-${step.key}`, steps: [step] });
+    }
+  }
+  flushText();
+  return blocks;
+}
+
 export function summarizeRunSteps(steps: RunStep[]): RunStepSummary {
   return {
     total: steps.length,

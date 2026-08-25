@@ -64,8 +64,8 @@ import {
 } from "~/lib/api";
 import { StandaloneArtifactContext } from "~/components/chat/standalone-artifact-context";
 import { StandaloneChatComposer } from "~/components/chat/standalone-chat-composer";
-import { LiveRunActivity, RunTimeline } from "~/components/chat/run-timeline";
-import { foldRunSteps } from "~/lib/chat-run-steps";
+import { RunActivityBlocks, RunTimeline } from "~/components/chat/run-timeline";
+import { foldRunBlocks, foldRunSteps } from "~/lib/chat-run-steps";
 import { useToast } from "~/components/ui/toast";
 import {
   appendOptimisticUserMessage,
@@ -485,10 +485,15 @@ function AssistantMessage({ message }: { message: UiMessage }) {
   const [showWork, setShowWork] = useState(false);
   const { artifacts, events, onRetry, onStop } = useChatUi();
   const { toast } = useToast();
-  const steps = useMemo(
-    () => (runId ? foldRunSteps(events, runId) : []),
+  const blocks = useMemo(
+    () => (runId ? foldRunBlocks(events, runId) : []),
     [events, runId],
   );
+  const steps = useMemo(
+    () => blocks.flatMap((block) => (block.kind === "steps" ? block.steps : [])),
+    [blocks],
+  );
+  const blocksHaveText = blocks.some((block) => block.kind === "text");
   const attachedArtifacts = artifacts.filter(
     (artifact) =>
       artifact.assistant_message_id === message.id || artifact.run_id === runId,
@@ -513,18 +518,18 @@ function AssistantMessage({ message }: { message: UiMessage }) {
           )}
         </div>
         <div className="min-w-0 flex-1">
-          {(running || steps.length > 0) && (
+          {(running || blocks.length > 0) && (
             <div role="status" aria-live="polite">
-              <LiveRunActivity steps={steps} running={running} />
+              <RunActivityBlocks blocks={blocks} running={running} />
             </div>
           )}
-          <div className="chat-markdown">
-            {message.content && (
+          {!blocksHaveText && message.content && (
+            <div className="chat-markdown">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {message.content}
               </ReactMarkdown>
-            )}
-          </div>
+            </div>
+          )}
           {attachedArtifacts.length > 0 && (
             <div className="mt-5 space-y-4">
               {attachedArtifacts.map((artifact) => (

@@ -81,7 +81,18 @@ const ANSWER_CHUNKS: { at: number; delta: string }[] = [
 export const FIXTURE_USER_PROMPT =
   "Which regions drove Q3 revenue growth compared to Q2?";
 
-export const fixtureEvents: FixtureEvent[] = [
+/**
+ * Streamed narration between the query chain and the notebook chain — the
+ * agent reporting mid-run before starting its next tool chain, which the UI
+ * renders as a natural split between two activity groups.
+ */
+const MID_RUN_CHUNKS: { at: number; delta: string }[] = [
+  { at: 7_460, delta: "The governed query came back clean — **AMER leads in absolute revenue**, " },
+  { at: 7_620, delta: "but the growth stories differ sharply by region.\n\n" },
+  { at: 7_780, delta: "I'll spin up the analysis runtime to compute exact growth rates from the query snapshot, then publish a table and a Q2-vs-Q3 comparison chart." },
+];
+
+const RAW_EVENTS: FixtureEvent[] = [
   {
     at: 400,
     run_id: FIXTURE_RUN_ID,
@@ -204,6 +215,13 @@ export const fixtureEvents: FixtureEvent[] = [
     type: "tool_completed",
     payload: { tool_call_id: "t4", summary: "The governed tool completed.", error: false },
   },
+  ...MID_RUN_CHUNKS.map((chunk) => ({
+    at: chunk.at,
+    run_id: FIXTURE_RUN_ID,
+    sequence: 0,
+    type: "text_delta" as const,
+    payload: { delta: chunk.delta },
+  })),
   {
     at: 7_900,
     run_id: FIXTURE_RUN_ID,
@@ -373,6 +391,11 @@ export const fixtureEvents: FixtureEvent[] = [
     payload: { status: "completed" },
   },
 ];
+
+/** Sequences are assigned from stream order so entries can be inserted freely. */
+export const fixtureEvents: FixtureEvent[] = RAW_EVENTS.map(
+  (event, index) => ({ ...event, sequence: index + 1 }),
+);
 
 const TABLE_ROWS = [
   { region: "AMER", revenue_q3: 9_204_100, revenue_q2: 8_930_600, growth_pct: 3.1 },

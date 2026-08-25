@@ -19,11 +19,14 @@ import {
   Waypoints,
 } from "lucide-react";
 import { memo, useEffect, useState, type ReactNode } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { format as formatSql } from "sql-formatter";
 import { ChatCode, CopyButton, type ChatCodeLanguage } from "~/components/chat/chat-code";
 import {
   formatStepDuration,
   summarizeRunSteps,
+  type RunBlock,
   type RunStep,
   type RunStepCategory,
 } from "~/lib/chat-run-steps";
@@ -458,27 +461,29 @@ export function RunTimeline({ steps }: { steps: RunStep[] }) {
 }
 
 /**
- * Live activity block shown inside a streaming assistant message: expanded
- * while the run works, collapsing to a one-line summary once it completes.
+ * One tool chain rendered as a collapsible group: expanded with a live
+ * shimmer header while any of its steps run, collapsing to a one-line
+ * summary once the chain completes and the agent moves on.
  */
-export function LiveRunActivity({
+export function ActivityGroup({
   steps,
-  running,
+  live,
 }: {
   steps: RunStep[];
-  running: boolean;
+  live: boolean;
 }) {
   const [userToggle, setUserToggle] = useState<boolean | null>(null);
-  // Reopen automatically if a new run starts streaming in the same message.
+  const active = live || steps.some((step) => step.status === "running");
+  // Reopen automatically if this group starts working again (e.g. retry).
   useEffect(() => {
-    if (running) setUserToggle(null);
-  }, [running]);
-  const open = userToggle ?? running;
+    if (active) setUserToggle(null);
+  }, [active]);
+  const open = userToggle ?? active;
   const latest = steps[steps.length - 1] ?? null;
-  if (!steps.length && !running) return null;
+  if (!steps.length && !active) return null;
   return (
     <section
-      data-testid="chat-live-activity"
+      data-testid="chat-activity-group"
       className="my-3 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)]/60"
     >
       <button
@@ -487,7 +492,7 @@ export function LiveRunActivity({
         onClick={() => setUserToggle(!open)}
         className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs hover:bg-[var(--color-bg-hover)]"
       >
-        {running ? (
+        {active ? (
           <>
             <span className="chat-dot-live h-1.5 w-1.5 flex-none rounded-full bg-[var(--color-success)]" />
             <span className="chat-live-label font-medium">
@@ -518,5 +523,47 @@ export function LiveRunActivity({
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * Full interleaved view of a run: markdown for streamed narration, an
+ * ActivityGroup per tool chain, in the order they actually happened. Only
+ * the trailing group is treated as live while the run streams.
+ */
+export function RunActivityBlocks({
+  blocks,
+  running,
+}: {
+  blocks: RunBlock[];
+  running: boolean;
+}) {
+  if (!blocks.length) {
+    return running ? <ActivityGroup steps={[]} live /> : null;
+  }
+  const lastStepsIndex = blocks.reduce(
+    (latest, block, index) => (block.kind === "steps" ? index : latest),
+    -1,
+  );
+  const trailingSteps =
+    lastStepsIndex === blocks.length - 1 && lastStepsIndex >= 0;
+  return (
+    <>
+      {blocks.map((block, index) =>
+        block.kind === "text" ? (
+          <div key={block.key} className="chat-markdown my-3">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {block.text}
+            </ReactMarkdown>
+          </div>
+        ) : (
+          <ActivityGroup
+            key={block.key}
+            steps={block.steps}
+            live={running && trailingSteps && index === lastStepsIndex}
+          />
+        ),
+      )}
+    </>
   );
 }

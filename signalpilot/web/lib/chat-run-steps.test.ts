@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  foldRunBlocks,
   foldRunSteps,
   formatStepDuration,
   normalizeToolName,
@@ -86,6 +87,42 @@ describe("foldRunSteps", () => {
     const last = partial[partial.length - 1];
     expect(last.tool).toBe("query_database");
     expect(last.status).toBe("running");
+  });
+});
+
+describe("foldRunBlocks", () => {
+  it("splits the run into tool chains separated by streamed narration", () => {
+    const blocks = foldRunBlocks(allEvents, FIXTURE_RUN_ID);
+    expect(blocks.map((block) => block.kind)).toEqual([
+      "steps",
+      "text",
+      "steps",
+      "text",
+    ]);
+    const [chain1, narration, chain2, answer] = blocks;
+    if (chain1.kind !== "steps" || chain2.kind !== "steps") throw new Error();
+    if (narration.kind !== "text" || answer.kind !== "text") throw new Error();
+    expect(chain1.steps).toHaveLength(5); // progress → todo → schema → validate → query
+    expect(chain1.steps.at(-1)?.tool).toBe("query_database");
+    expect(narration.text).toContain("analysis runtime");
+    expect(chain2.steps).toHaveLength(8); // notebook → write → bash → python → todo → edit → 2 publishes
+    expect(chain2.steps[0]?.tool).toBe("start_analysis_notebook");
+    expect(answer.text).toContain("EMEA drove the growth");
+  });
+
+  it("keeps a mid-stream narration attached to no group while the next chain runs", () => {
+    const blocks = foldRunBlocks(
+      materializeFixtureEvents(9_500),
+      FIXTURE_RUN_ID,
+    );
+    expect(blocks.map((block) => block.kind)).toEqual([
+      "steps",
+      "text",
+      "steps",
+    ]);
+    const tail = blocks[2];
+    if (tail.kind !== "steps") throw new Error();
+    expect(tail.steps.some((step) => step.status === "running")).toBe(true);
   });
 });
 

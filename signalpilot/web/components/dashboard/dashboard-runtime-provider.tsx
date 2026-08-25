@@ -32,6 +32,7 @@ import {
 } from "~/lib/dashboard/runtime-state";
 import {
   fieldLabel,
+  formatDashboardTimestamp,
   formatDashboardValue,
   viewerLocale,
 } from "~/lib/dashboard/semantic-formatter";
@@ -216,6 +217,18 @@ export function DashboardRuntimeProvider({
   };
   const dashboardLoading = Object.values(loading).some(Boolean);
   const hasVisibleResults = Object.keys(results).length > 0;
+  const formatContext = {
+    locale: viewerLocale(),
+    timezone: definition.signalPilot.timezone,
+  };
+  const dashboardFreshnessAt = Object.values(results)
+    .map((result) => result.freshnessAt)
+    .filter((value) => !Number.isNaN(new Date(value).valueOf()))
+    .sort((left, right) => new Date(left).valueOf() - new Date(right).valueOf())
+    .at(0);
+  const refreshHelp = dashboardFreshnessAt
+    ? `Data as of ${formatDashboardTimestamp(dashboardFreshnessAt, formatContext)}. Automatically refreshes when data is more than 5 minutes old.`
+    : "Refresh dashboard. Automatically refreshes when data is more than 5 minutes old.";
   const refreshDashboard = () => {
     if (dashboardLoading || refreshPending.current) return;
     refreshPending.current = true;
@@ -240,19 +253,28 @@ export function DashboardRuntimeProvider({
                   : "Some charts need attention"}
               </span>
             ) : null}
-            <button
-              type="button"
-              disabled={dashboardLoading}
-              onClick={refreshDashboard}
-              aria-label={
-                dashboardLoading && hasVisibleResults
-                  ? "Refreshing dashboard"
-                  : "Refresh dashboard"
-              }
-              title="Refresh dashboard"
-            >
-              <RefreshCw size={17} aria-hidden="true" />
-            </button>
+            <div className={styles.refreshButtonWrap}>
+              <button
+                type="button"
+                disabled={dashboardLoading}
+                onClick={refreshDashboard}
+                aria-label={
+                  dashboardLoading && hasVisibleResults
+                    ? "Refreshing dashboard"
+                    : "Refresh dashboard"
+                }
+                aria-describedby="dashboard-refresh-help"
+              >
+                <RefreshCw size={17} aria-hidden="true" />
+              </button>
+              <span
+                className={styles.refreshTooltip}
+                id="dashboard-refresh-help"
+                role="tooltip"
+              >
+                {refreshHelp}
+              </span>
+            </div>
           </div>
         </header>
         <DashboardControlBar

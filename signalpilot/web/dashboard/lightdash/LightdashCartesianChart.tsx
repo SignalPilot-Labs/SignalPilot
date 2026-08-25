@@ -124,10 +124,15 @@ export function buildLightdashCartesianOption(
       : { show: false },
     tooltip: {
       trigger: "axis",
+      renderMode: "html",
+      appendTo: "body",
+      confine: false,
       axisPointer: { type: horizontalBars ? "shadow" : "line" },
       backgroundColor: "#202024",
       borderColor: "#3B3B42",
       textStyle: { color: "#EDEDED", fontFamily: "DM Sans" },
+      extraCssText:
+        "max-width:min(320px,calc(100vw - 24px));white-space:normal;overflow-wrap:anywhere;z-index:1000;",
       formatter: (rawParameters) => {
         const parameters = Array.isArray(rawParameters)
           ? rawParameters

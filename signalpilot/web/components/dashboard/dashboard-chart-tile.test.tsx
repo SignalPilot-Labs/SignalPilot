@@ -120,6 +120,17 @@ describe("DashboardChartTile interactions", () => {
     expect(loadingState?.querySelector("[aria-hidden='true']")).not.toBeNull();
   });
 
+  it("shows a compact business-facing message for a network failure", async () => {
+    await act(async () => {
+      root.render(<DashboardChartTile chart={chart} error="Failed to fetch" />);
+    });
+
+    expect(container.textContent).toContain(
+      "The data source is temporarily unavailable",
+    );
+    expect(container.textContent).not.toContain("Failed to fetch");
+  });
+
   it("closes View data with Escape", async () => {
     await act(async () => {
       root.render(<DashboardChartTile chart={chart} result={result} />);

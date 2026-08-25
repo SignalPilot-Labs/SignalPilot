@@ -60,6 +60,9 @@ describe("Lightdash cartesian presentation defaults", () => {
       ),
     ) as Record<string, any>;
     expect(option.animation).toBe(false);
+    expect(option.tooltip.appendTo).toBe("body");
+    expect(option.tooltip.confine).toBe(false);
+    expect(option.tooltip.extraCssText).toContain("100vw - 24px");
     expect(option.legend.show).toBe(false);
     expect(option.series[0].showSymbol).toBe(false);
     expect(option.series[0].sampling).toBe("lttb");

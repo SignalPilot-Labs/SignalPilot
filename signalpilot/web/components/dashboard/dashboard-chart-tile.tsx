@@ -17,6 +17,14 @@ import {
 
 import styles from "./dashboard-runtime.module.css";
 
+function displayErrorMessage(error: string): string {
+  return /failed to fetch|networkerror|500:\s*internal server error/i.test(
+    error,
+  )
+    ? "The data source is temporarily unavailable. Try refreshing in a moment."
+    : error;
+}
+
 function ResultDialog({
   chart,
   result,
@@ -215,7 +223,7 @@ export function DashboardChartTile({
             {result
               ? "Latest refresh failed; showing the previous result. "
               : "This chart could not load. "}
-            {error}
+            {displayErrorMessage(error)}
           </div>
         ) : null}
         {loading && !result ? (

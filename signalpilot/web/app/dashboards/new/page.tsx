@@ -13,7 +13,7 @@ import type { WorkspaceProjectInfo } from "~/lib/types";
 export default function NewDashboardPage() {
   const [projects, setProjects] = useState<WorkspaceProjectInfo[]>([]);
   const [projectId, setProjectId] = useState("");
-  const [timezone, setTimezone] = useState(
+  const [timezone] = useState(
     Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
   );
   const [session, setSession] = useState<DashboardAuthoringSession>();
@@ -74,14 +74,6 @@ export default function NewDashboardPage() {
                   </option>
                 ))}
               </select>
-            </label>
-            <label>
-              Timezone
-              <input
-                value={session?.definition.signalPilot.timezone ?? timezone}
-                disabled={Boolean(session)}
-                onChange={(event) => setTimezone(event.target.value)}
-              />
             </label>
           </>
         }

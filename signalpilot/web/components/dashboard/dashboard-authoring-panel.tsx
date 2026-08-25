@@ -148,7 +148,6 @@ export function DashboardAuthoringWorkspace({
       <aside className={styles.authoringConversation}>
         <header>
           <div>
-            <span>Governed authoring</span>
             <h1>
               <MessageSquare size={18} aria-hidden="true" /> Dashboard author
             </h1>
@@ -321,7 +320,6 @@ export function DashboardAuthoringWorkspace({
       <div className={styles.authoringCanvas}>
         <header>
           <div>
-            <span>Live governed preview</span>
             <strong>
               {visibleDefinition?.name ?? "Waiting for your first request"}
             </strong>
@@ -335,6 +333,7 @@ export function DashboardAuthoringWorkspace({
           ) : null}
           <div className={styles.authoringApplyActions}>
             <button
+              className={styles.authoringToolbarButton}
               type="button"
               disabled={busy || !session || session.status !== "preview"}
               onClick={() => {
@@ -357,6 +356,7 @@ export function DashboardAuthoringWorkspace({
               Discard
             </button>
             <button
+              className={styles.authoringToolbarButton}
               type="button"
               disabled={
                 busy ||

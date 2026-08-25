@@ -58,6 +58,10 @@ def compact_semantic_projection(context: DashboardSemanticContext) -> dict[str, 
                         "field_id": field.field_id,
                         "logical_type": field.logical_type,
                         "description": field.description,
+                        "filter_target": {
+                            "tableName": explore.name,
+                            "fieldId": field.field_id,
+                        },
                     }
                     for field in explore.dimensions
                 ],
@@ -106,7 +110,9 @@ class DashboardAuthoringAgent:
             "Every dashboard must include useful global filter controls unless the user's request explicitly says to omit "
             "filters. Prefer a date filter when a governed date or timestamp dimension is available, then add a small "
             "number of business-relevant categorical controls. Use explicit per-tile targets across explores and mark "
-            "incompatible tiles as false. When updating a draft that has no controls, add them in the same typed operation "
+            "incompatible tiles as false. Copy each filter target exactly from the dimension's filter_target object; fieldId "
+            "must remain the complete supplied field_id, including its explore prefix. When updating a draft that has no "
+            "controls, add them in the same typed operation "
             "set unless the current request explicitly opts out. Do not treat silence about filters as an opt-out. "
             "Never emit renderer options, code, HTML, or SQL. For creation return a complete definition. "
             "For updates return typed operations using stable IDs and do not rewrite unrelated charts. "

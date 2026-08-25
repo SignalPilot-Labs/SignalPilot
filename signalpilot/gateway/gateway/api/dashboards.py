@@ -27,7 +27,11 @@ from gateway.dashboard.compiler import (
 )
 from gateway.dashboard.confidence import semantic_query_signature
 from gateway.dashboard.domain import DashboardDefinition, FieldTarget, FilterRule, SemanticChartQuery
-from gateway.dashboard.operations import has_custom_sql, validate_dashboard_semantics
+from gateway.dashboard.operations import (
+    canonicalize_dashboard_filter_targets,
+    has_custom_sql,
+    validate_dashboard_semantics,
+)
 from gateway.dashboard.semantic_resolver import DashboardSemanticError, DashboardSemanticResolver
 from gateway.db.models import (
     GatewayDashboard,
@@ -501,6 +505,7 @@ async def create_dashboard_authoring_session(body: DashboardAuthoringRequest, st
                 definition.model_copy(update={"signalPilot": binding, "charts": charts})
             )
         verified = await _verified_context(store, definition)
+        definition = canonicalize_dashboard_filter_targets(definition, verified)
         validate_dashboard_semantics(definition, verified)
     except (DashboardCompileError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=f"Agent draft rejected: {exc}") from exc
@@ -609,6 +614,7 @@ async def continue_dashboard_authoring_session(session_id: str, body: DashboardA
         draft = await agent.draft(prompt=body.prompt, context=context, base_definition=current_definition)
         definition = materialize_agent_draft(draft, base_definition=current_definition)
         verified = await _verified_context(store, definition)
+        definition = canonicalize_dashboard_filter_targets(definition, verified)
         validate_dashboard_semantics(definition, verified)
     except HTTPException:
         raise

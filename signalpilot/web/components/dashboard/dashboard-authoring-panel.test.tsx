@@ -4,13 +4,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import fiveComponents from "~/dashboard/lightdash-contract/fixtures/five-components.json";
 import { fromLightdashFixture } from "~/dashboard/lightdash-contract";
+import styles from "~/components/dashboard/dashboard-runtime.module.css";
 
 vi.mock("~/components/dashboard/dashboard-runtime-provider", () => ({
   DashboardRuntimeProvider: ({
     definition,
   }: {
     definition: { name: string };
-  }) => <div data-testid="governed-preview">{definition.name}</div>,
+  }) => (
+    <div data-testid="governed-preview">
+      {definition.name}
+      <button data-testid="preview-control" type="button">
+        Preview control
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("~/lib/api", () => ({
@@ -88,13 +96,21 @@ describe("DashboardAuthoringWorkspace", () => {
     expect(container.textContent).toContain("Make revenue a line chart");
     expect(container.textContent).toContain("Updated one chart.");
     expect(container.textContent).toContain("Draft 2");
+    expect(container.textContent).not.toContain("Governed authoring");
+    expect(container.textContent).not.toContain("Live governed preview");
     expect(
       container.querySelector("[data-testid='governed-preview']")?.textContent,
-    ).toBe(definition.name);
+    ).toContain(definition.name);
     const apply = Array.from(container.querySelectorAll("button")).find(
       (button) => button.textContent?.trim() === "Apply",
     );
     expect(apply?.disabled).toBe(true);
+    expect(apply?.classList.contains(styles.authoringToolbarButton)).toBe(true);
+    expect(
+      container
+        .querySelector("[data-testid='preview-control']")
+        ?.classList.contains(styles.authoringToolbarButton),
+    ).toBe(false);
     expect(container.textContent).toContain("chart-sql uses custom SQL");
     expect(
       container.querySelector("button[aria-pressed='true']")?.textContent,

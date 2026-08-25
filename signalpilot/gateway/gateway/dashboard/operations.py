@@ -11,6 +11,7 @@ from gateway.dashboard.domain import (
     ChartDefinition,
     ContractModel,
     DashboardDefinition,
+    DashboardFieldTarget,
     DashboardFilterRule,
     DashboardTileDefinition,
     SemanticChartQuery,
@@ -268,6 +269,55 @@ def validate_dashboard_semantics(definition: DashboardDefinition, context: Dashb
         for target in targets:
             if target.tableName not in fields_by_explore or target.fieldId not in fields_by_explore[target.tableName]:
                 raise ValueError(f"Unknown dashboard filter target: {target.tableName}.{target.fieldId}")
+
+
+def canonicalize_dashboard_filter_targets(
+    definition: DashboardDefinition,
+    context: DashboardSemanticContext,
+) -> DashboardDefinition:
+    """Resolve an unqualified governed column to its exact semantic field ID.
+
+    Model-authored filters occasionally preserve the explore name but shorten a
+    field such as ``orders.order_date`` to ``order_date``. Only that exact,
+    unambiguous column alias is recoverable; unknown explores and fields remain
+    unchanged so semantic validation still rejects them.
+    """
+    aliases_by_explore: dict[str, dict[str, str | None]] = {}
+    for explore in context.explores:
+        aliases: dict[str, str | None] = {}
+        for field in explore.dimensions:
+            if field.column in aliases and aliases[field.column] != field.field_id:
+                aliases[field.column] = None
+            else:
+                aliases[field.column] = field.field_id
+        aliases_by_explore[explore.name] = aliases
+
+    def canonicalize(target: DashboardFieldTarget) -> DashboardFieldTarget:
+        if target.isSqlColumn:
+            return target
+        canonical_field_id = aliases_by_explore.get(target.tableName, {}).get(target.fieldId)
+        if canonical_field_id is None or canonical_field_id == target.fieldId:
+            return target
+        return target.model_copy(update={"fieldId": canonical_field_id})
+
+    changed = False
+    dimensions: list[DashboardFilterRule] = []
+    for rule in definition.filters.dimensions:
+        target = canonicalize(rule.target)
+        tile_targets = None
+        if rule.tileTargets is not None:
+            tile_targets = {
+                tile_uuid: value if value is False else canonicalize(value)
+                for tile_uuid, value in rule.tileTargets.items()
+            }
+        if target != rule.target or tile_targets != rule.tileTargets:
+            changed = True
+            rule = rule.model_copy(update={"target": target, "tileTargets": tile_targets})
+        dimensions.append(rule)
+
+    if not changed:
+        return definition
+    return definition.model_copy(update={"filters": definition.filters.model_copy(update={"dimensions": dimensions})})
 
 
 def has_custom_sql(definition: DashboardDefinition) -> bool:

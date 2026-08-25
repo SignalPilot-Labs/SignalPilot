@@ -16,9 +16,18 @@ from gateway.api import dashboards as dashboard_api
 from gateway.dashboard import store as dashboard_store
 from gateway.dashboard.authoring import DashboardAgentDraft, DashboardAuthoringAgent, materialize_agent_draft
 from gateway.dashboard.domain import DashboardDefinition
-from gateway.dashboard.operations import RenameDashboard, apply_dashboard_operations
+from gateway.dashboard.operations import (
+    RenameDashboard,
+    apply_dashboard_operations,
+    canonicalize_dashboard_filter_targets,
+    validate_dashboard_semantics,
+)
 from gateway.db.models import GatewayBase, GatewayDashboardAuthoringSession, GatewayDashboardResult
-from gateway.models.dashboards import DashboardAuthoringMessageRequest, DashboardSemanticContext
+from gateway.models.dashboards import (
+    DashboardAuthoringMessageRequest,
+    DashboardAuthoringRequest,
+    DashboardSemanticContext,
+)
 
 FIXTURE = Path(__file__).parents[2] / "web/dashboard/lightdash-contract/fixtures/five-components.json"
 
@@ -64,6 +73,60 @@ def _definition_with_filter() -> DashboardDefinition:
     payload = definition.model_dump(mode="json", by_alias=True)
     payload["filters"]["dimensions"] = [rule]
     return DashboardDefinition.model_validate(payload)
+
+
+def _orders_context() -> DashboardSemanticContext:
+    definition = _definition()
+    return DashboardSemanticContext.model_validate(
+        {
+            "project_id": definition.signalPilot.projectId,
+            "commit_sha": definition.signalPilot.commitSha,
+            "connection_name": definition.signalPilot.connectionName,
+            "connection_type": "mssql",
+            "physical_schema_fingerprint": "physical",
+            "semantic_fingerprint": definition.signalPilot.semanticFingerprint,
+            "explores": [
+                {
+                    "name": "orders",
+                    "label": "Orders",
+                    "relation": "dbo.orders",
+                    "dimensions": [
+                        {
+                            "field_id": "orders.region",
+                            "column": "region",
+                            "logical_type": "string",
+                        },
+                        {
+                            "field_id": "orders.month",
+                            "column": "month",
+                            "logical_type": "date",
+                        },
+                        {
+                            "field_id": "orders.customer",
+                            "column": "customer",
+                            "logical_type": "string",
+                        },
+                        {
+                            "field_id": "orders.order_date",
+                            "column": "order_date",
+                            "logical_type": "date",
+                        },
+                    ],
+                    "metrics": [
+                        {
+                            "field_id": "orders.revenue",
+                            "column": "revenue",
+                            "logical_type": "number",
+                            "label": "Revenue",
+                            "aggregation": "sum",
+                            "approval_source": "test",
+                            "human_verified": True,
+                        }
+                    ],
+                }
+            ],
+        }
+    )
 
 
 @pytest_asyncio.fixture
@@ -114,6 +177,40 @@ def test_replace_metric_updates_query_and_visual_encoding_together() -> None:
     assert chart.visualization.config.layout.yField == ["orders.gross_margin"]
 
 
+def test_unqualified_dashboard_filter_targets_are_canonicalized_from_their_explore() -> None:
+    payload = _definition_with_filter().model_dump(mode="json", by_alias=True)
+    payload["filters"]["dimensions"][0]["target"]["fieldId"] = "order_date"
+    payload["filters"]["dimensions"][0]["tileTargets"] = {
+        "tile-line": {"tableName": "orders", "fieldId": "month"},
+        "tile-kpi": False,
+    }
+
+    canonical = canonicalize_dashboard_filter_targets(
+        DashboardDefinition.model_validate(payload),
+        _orders_context(),
+    )
+
+    rule = canonical.filters.dimensions[0]
+    assert rule.target.fieldId == "orders.order_date"
+    assert rule.tileTargets is not None
+    assert rule.tileTargets["tile-line"] is not False
+    assert rule.tileTargets["tile-line"].fieldId == "orders.month"
+    assert rule.tileTargets["tile-kpi"] is False
+    validate_dashboard_semantics(canonical, _orders_context())
+
+
+def test_unknown_dashboard_filter_target_still_fails_after_canonicalization() -> None:
+    payload = _definition_with_filter().model_dump(mode="json", by_alias=True)
+    payload["filters"]["dimensions"][0]["target"]["fieldId"] = "missing_date"
+    definition = canonicalize_dashboard_filter_targets(
+        DashboardDefinition.model_validate(payload),
+        _orders_context(),
+    )
+
+    with pytest.raises(ValueError, match="Unknown dashboard filter target: orders.missing_date"):
+        validate_dashboard_semantics(definition, _orders_context())
+
+
 class _ModelClient:
     def __init__(self, payload: dict | list[dict]) -> None:
         self.payloads = payload if isinstance(payload, list) else [payload]
@@ -146,7 +243,7 @@ async def test_agent_update_is_forced_through_typed_operations() -> None:
     agent = DashboardAuthoringAgent(api_key="test", model_client=client)
     draft = await agent.draft(
         prompt="Rename this dashboard",
-        context=_context(),
+        context=_orders_context(),
         base_definition=_definition_with_filter(),
     )
     materialized = materialize_agent_draft(draft, base_definition=_definition_with_filter())
@@ -154,6 +251,12 @@ async def test_agent_update_is_forced_through_typed_operations() -> None:
     assert client.request is not None
     assert client.request["tool_choice"] == {"type": "tool", "name": "submit_dashboard_draft"}
     assert "question is a concise natural-language question" in client.request["system"]
+    assert "Copy each filter target exactly" in client.request["system"]
+    request_payload = json.loads(client.request["messages"][0]["content"])
+    assert request_payload["semantic_context"]["explores"][0]["dimensions"][3]["filter_target"] == {
+        "tableName": "orders",
+        "fieldId": "orders.order_date",
+    }
     chart_schema = client.request["tools"][0]["input_schema"]["$defs"]["ChartDefinition"]
     assert "question" in chart_schema["properties"]
 
@@ -252,6 +355,54 @@ async def test_agent_rejects_a_second_filterless_response() -> None:
             base_definition=None,
         )
     assert len(client.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_create_authoring_session_canonicalizes_model_filter_targets(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _definition_with_filter().model_dump(mode="json", by_alias=True)
+    payload["filters"]["dimensions"][0]["target"]["fieldId"] = "order_date"
+    model_definition = DashboardDefinition.model_validate(payload)
+
+    class ShorthandFilterAgent:
+        model = "test-model"
+
+        def __init__(self, *, api_key: str) -> None:
+            assert api_key == "test-key"
+
+        async def draft(self, **_kwargs) -> DashboardAgentDraft:
+            return DashboardAgentDraft(
+                summary="Created a dashboard with a date filter.",
+                definition=model_definition,
+            )
+
+    async def resolve_context(*_args, **_kwargs) -> DashboardSemanticContext:
+        return _orders_context()
+
+    async def resolve_key(*_args, **_kwargs) -> str:
+        return "test-key"
+
+    monkeypatch.setattr(dashboard_api.resolver, "resolve", resolve_context)
+    monkeypatch.setattr(dashboard_api, "DashboardAuthoringAgent", ShorthandFilterAgent)
+    monkeypatch.setattr(dashboard_api.org_secrets_store, "resolve_anthropic_key", resolve_key)
+    store = SimpleNamespace(
+        session=db_session,
+        user_id="owner-a",
+        _require_org_id=lambda: "org-a",
+    )
+
+    session = await dashboard_api.create_dashboard_authoring_session(
+        DashboardAuthoringRequest(
+            prompt="Create an executive dashboard",
+            project_id=model_definition.signalPilot.projectId,
+            commit_sha=model_definition.signalPilot.commitSha,
+        ),
+        store,
+    )
+
+    assert session.definition.filters.dimensions[0].target.fieldId == "orders.order_date"
 
 
 @pytest.mark.asyncio

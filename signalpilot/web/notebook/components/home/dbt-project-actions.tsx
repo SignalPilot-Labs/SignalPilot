@@ -131,41 +131,17 @@ const CreateProjectForm: React.FC<{
       runtimeHeaders["X-Gateway-Project-Id"] = project.id;
       runtimeHeaders["X-Gateway-Branch-Id"] = project.default_branch || "main";
 
-      const syncResp = await fetch(spApiUrl("/project/sync-down"), {
-        method: "POST",
-        headers: runtimeHeaders,
-      });
-      const syncData = await syncResp.json() as { error?: string; local_dir: string };
-      if (syncData.error) {
-        throw new Error(`Sync failed: ${syncData.error}`);
-      }
-
+      // Scaffold into the workspace root; the runtime commits the tree to
+      // the workspace store, so no sync or git dance is needed.
       const scaffoldResp = await fetch(spApiUrl("/dbt/scaffold_project"), {
         method: "POST",
         headers: runtimeHeaders,
-        body: JSON.stringify({ projectName: slug, adapter, parentDir: syncData.local_dir }),
+        body: JSON.stringify({ projectName: slug, adapter }),
       });
       const scaffoldData = await scaffoldResp.json() as { success: boolean; error?: string };
-
-      if (scaffoldData.success) {
-        await fetch(spApiUrl("/git/stage"), {
-          method: "POST",
-          headers: runtimeHeaders,
-          body: JSON.stringify({ all: true }),
-        });
-        await fetch(spApiUrl("/git/commit"), {
-          method: "POST",
-          headers: runtimeHeaders,
-          body: JSON.stringify({ message: `Initialize ${name.trim()} dbt project` }),
-        });
-        await fetch(spApiUrl("/git/push"), {
-          method: "POST",
-          headers: runtimeHeaders,
-        });
+      if (!scaffoldData.success) {
+        throw new Error(scaffoldData.error || "Scaffold failed");
       }
-
-      // Brief pause to let git index and filesystem settle before navigating
-      await new Promise((r) => setTimeout(r, 1000));
 
       toast({
         title: "Project created",
@@ -368,39 +344,9 @@ const GitHubImportForm: React.FC<{
       setGatewayProjectId(project.id);
       setGatewayBranchId(repo.default_branch);
 
-      const runtimeHeaders = await getApiHeaders();
-      runtimeHeaders["X-Gateway-Project-Id"] = project.id;
-      runtimeHeaders["X-Gateway-Branch-Id"] = repo.default_branch;
-
-      // Retry sync-down — gateway may still be mirroring from GitHub
-      toast({ title: "Syncing", description: "Cloning repository from GitHub..." });
-      let synced = false;
-      for (let attempt = 0; attempt < 10; attempt++) {
-        try {
-          const syncResp = await fetch(spApiUrl("/project/sync-down"), {
-            method: "POST",
-            headers: runtimeHeaders,
-          });
-          const syncData = await syncResp.json() as { error?: string; local_dir?: string; file_count?: number };
-          if (syncData.local_dir && !syncData.error && syncData.file_count && syncData.file_count > 0) {
-            synced = true;
-            console.log(`[Import] Synced on attempt ${attempt + 1}: ${syncData.file_count} files`);
-            break;
-          }
-          console.warn(`[Import] Attempt ${attempt + 1}: ${syncData.error ?? `${syncData.file_count ?? 0} files`}`);
-        } catch (e) {
-          console.warn(`[Import] Attempt ${attempt + 1} failed:`, e);
-        }
-        await new Promise((r) => setTimeout(r, 2000));
-      }
-
-      if (!synced) {
-        toast({ title: "Warning", description: "Sync may still be in progress — refresh if the file tree is empty", variant: "danger" });
-      } else {
-        toast({ title: "Imported", description: `${repo.full_name} ready` });
-      }
-
-      await new Promise((r) => setTimeout(r, 500));
+      // The awaited gateway sync above already imported the repo into the
+      // workspace store as revisions; the runtime pulls files on demand.
+      toast({ title: "Imported", description: `${repo.full_name} ready` });
 
       localStorage.removeItem("sp:file-tree-cache");
       localStorage.removeItem("sp:file-tree-open-state");

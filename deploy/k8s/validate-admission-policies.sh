@@ -473,48 +473,15 @@ can no  "DENY get secrets in non-tenant ns"      get secrets -n plain-ns
 can no  "DENY delete rolebindings in tenant ns"  delete rolebindings -n sp-nb-org-alpha
 can yes "ALLOW get secrets in tenant ns"         get secrets -n sp-nb-org-alpha
 can yes "ALLOW create pods in tenant ns"         create pods -n sp-nb-org-alpha
-can yes "ALLOW create pods/exec in tenant ns"    create pods/exec -n sp-nb-org-alpha
+can no  "DENY create pods/exec (removed in v2)"  create pods/exec -n sp-nb-org-alpha
 can yes "ALLOW create netpols in tenant ns"      create networkpolicies -n sp-nb-org-alpha
 can yes "ALLOW create namespaces"                create namespaces
 can yes "ALLOW create rolebindings"              create rolebindings -A
 can yes "ALLOW list namespaces (jwt gc)"         list namespaces
 
-# --- B7: pods/exec restriction (F-21) — only provable on a live cluster --------------
-# `kyverno test` cannot evaluate this policy at all: it matches operations [CONNECT] and
-# the CLI only ever simulates CREATE, so every resource returns "Pass / Excluded".
-# See restrict-pod-exec.test.yaml for the full explanation.
-if [ "$RUN_KYVERNO_E2E" -eq 1 ] && command -v helm >/dev/null 2>&1; then
-  step "B7 — pods/exec restriction, live (F-21)"
-  # require-gvisor would block these plain test pods; keep it out of this cluster.
-  kubectl delete clusterpolicy require-gvisor-runtime-class --ignore-not-found >/dev/null 2>&1
-  if kubectl apply -f "$ADMISSION/restrict-pod-exec-kyverno.yaml" >/dev/null 2>&1; then
-    ok "restrict-pod-exec ClusterPolicy admitted (rule bodies are well-formed)"
-  else
-    bad "restrict-pod-exec ClusterPolicy REJECTED — pods/exec is entirely unrestricted:"
-    kubectl apply -f "$ADMISSION/restrict-pod-exec-kyverno.yaml" 2>&1 | grep -o 'path: spec\.rules.*' | head -2 | sed 's/^/          /'
-  fi
-  sleep 8
-  mkns sp-nb-exec
-  mkpod() {
-    kubectl run "$1" -n sp-nb-exec --image=busybox --restart=Never \
-      --overrides="{\"spec\":{\"containers\":[{\"name\":\"$2\",\"image\":\"busybox\",\"command\":[\"sleep\",\"3600\"]}]}}" \
-      >/dev/null 2>&1
-  }
-  mkpod nb-abc123def456 notebook
-  mkpod badname-pod notebook
-  mkpod nb-abc123def999 sidecar
-  kubectl wait --for=condition=Ready pod/nb-abc123def456 pod/badname-pod pod/nb-abc123def999 \
-    -n sp-nb-exec --timeout=120s >/dev/null 2>&1
-  execq() { # execq <want allow|deny> <desc> <pod> <container>
-    local want="$1" desc="$2" got=allow
-    kubectl exec -n sp-nb-exec "$3" -c "$4" -- true >/dev/null 2>&1 || got=deny
-    if [ "$got" = "$want" ]; then ok "$(printf '%-50s expect=%-5s got=%s' "$desc" "$want" "$got")"
-    else bad "$(printf '%-50s expect=%-5s got=%s' "$desc" "$want" "$got")"; fi
-  }
-  execq allow "exec nb-<12hex> container=notebook"  nb-abc123def456 notebook
-  execq deny  "exec non-conforming pod name"        badname-pod     notebook
-  execq deny  "exec wrong container name"           nb-abc123def999 sidecar
-fi
+# (B7, the pods/exec restriction check, was removed with Notebook Runtime v2:
+# the gateway no longer holds any pods/exec grant, and the restrict-pod-exec
+# admission policies were deleted along with it.)
 
 step "Result"
 printf '  %d passed, %d failed\n' "$PASS" "$FAIL"

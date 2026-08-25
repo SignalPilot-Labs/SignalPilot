@@ -12,10 +12,19 @@ import pytest
 _stubbed_signalpilot = sys.modules.get("signalpilot")
 if getattr(_stubbed_signalpilot, "__spec__", None) is None:
     del sys.modules["signalpilot"]
+    # Re-importing the root below does NOT re-run already-imported submodules,
+    # so their attribute linkage on the fresh root must be restored by hand —
+    # otherwise later string-based monkeypatch.setattr("signalpilot._server...")
+    # resolution breaks for every test that runs after this module.
 
 notion_analysis = importlib.import_module(
     "signalpilot._server.api.endpoints.notion_analysis"
 )
+
+import signalpilot as _sp_root
+
+if not hasattr(_sp_root, "_server") and "signalpilot._server" in sys.modules:
+    _sp_root._server = sys.modules["signalpilot._server"]
 
 
 def _body() -> notion_analysis.StartNotionAnalysisRequest:
@@ -126,13 +135,9 @@ def test_analysis_registry_round_trips_theme(tmp_path, monkeypatch) -> None:
         notion_analysis._records_by_discussion_id.update(old_discussions)
 
 
-def test_project_root_uses_existing_project_checkout(
-    tmp_path, monkeypatch
-) -> None:
-    from signalpilot._server.files import project_sync
-
-    project_root = tmp_path / "projects" / "project-1"
-    (project_root / ".git").mkdir(parents=True)
+def test_project_root_is_the_session_workspace(tmp_path) -> None:
+    """Runtime v2: no local git clone — analysis artifacts live in the
+    session workspace; durability comes from write-through saves."""
     app_state = SimpleNamespace(
         request=SimpleNamespace(
             headers={
@@ -145,130 +150,20 @@ def test_project_root_uses_existing_project_checkout(
         ),
     )
 
-    monkeypatch.setattr(
-        project_sync,
-        "local_project_dir",
-        lambda _project_id, _branch="": project_root,
-    )
-    monkeypatch.setattr(
-        project_sync,
-        "_current_git_branch",
-        lambda _repo: "analysis/slack/test",
-    )
-    monkeypatch.setattr(
-        project_sync,
-        "sync_down",
-        lambda *_args, **_kwargs: pytest.fail(
-            "sync_down should not run for existing checkout on target branch"
-        ),
-    )
-
-    assert notion_analysis._project_root(app_state) == project_root
+    assert notion_analysis._project_root(app_state) == tmp_path / "workspace"
 
 
-def test_project_root_syncs_when_existing_checkout_is_on_wrong_branch(
-    tmp_path, monkeypatch
-) -> None:
-    from signalpilot._server.files import project_sync
+def test_project_root_falls_back_to_cwd_without_workspace() -> None:
+    from pathlib import Path
 
-    project_root = tmp_path / "projects" / "project-1"
-    (project_root / ".git").mkdir(parents=True)
     app_state = SimpleNamespace(
-        request=SimpleNamespace(
-            headers={
-                "x-gateway-project-id": "project-1",
-                "x-gateway-branch-id": "analysis/notion/current-request",
-            }
-        ),
+        request=SimpleNamespace(headers={}),
         session_manager=SimpleNamespace(
-            workspace=SimpleNamespace(directory=str(tmp_path / "workspace"))
-        ),
-    )
-    calls: list[tuple[str, str]] = []
-
-    def sync_down(project_id: str, branch: str) -> dict[str, str]:
-        calls.append((project_id, branch))
-        return {"local_dir": str(project_root)}
-
-    monkeypatch.setattr(
-        project_sync,
-        "local_project_dir",
-        lambda _project_id, _branch="": project_root,
-    )
-    monkeypatch.setattr(
-        project_sync,
-        "_current_git_branch",
-        lambda _repo: "analysis/notion/previous-request",
-    )
-    monkeypatch.setattr(project_sync, "sync_down", sync_down)
-
-    assert notion_analysis._project_root(app_state) == project_root
-    assert calls == [("project-1", "analysis/notion/current-request")]
-
-
-def test_project_root_syncs_project_checkout_before_workspace_fallback(
-    tmp_path, monkeypatch
-) -> None:
-    from signalpilot._server.files import project_sync
-
-    project_root = tmp_path / "projects" / "project-1"
-    app_state = SimpleNamespace(
-        request=SimpleNamespace(
-            headers={
-                "x-gateway-project-id": "project-1",
-                "x-gateway-branch-id": "analysis/slack/test",
-            }
-        ),
-        session_manager=SimpleNamespace(
-            workspace=SimpleNamespace(directory=str(tmp_path / "workspace"))
+            workspace=SimpleNamespace(directory=None)
         ),
     )
 
-    def sync_down(_project_id: str, _branch: str) -> dict[str, str]:
-        (project_root / ".git").mkdir(parents=True)
-        return {"local_dir": str(project_root)}
-
-    monkeypatch.setattr(
-        project_sync,
-        "local_project_dir",
-        lambda _project_id, _branch="": project_root,
-    )
-    monkeypatch.setattr(project_sync, "sync_down", sync_down)
-
-    assert notion_analysis._project_root(app_state) == project_root
-
-
-def test_project_root_does_not_fallback_to_workspace_when_project_sync_fails(
-    tmp_path, monkeypatch
-) -> None:
-    from signalpilot._server.files import project_sync
-
-    project_root = tmp_path / "projects" / "project-1"
-    app_state = SimpleNamespace(
-        request=SimpleNamespace(
-            headers={
-                "x-gateway-project-id": "project-1",
-                "x-gateway-branch-id": "analysis/slack/test",
-            }
-        ),
-        session_manager=SimpleNamespace(
-            workspace=SimpleNamespace(directory=str(tmp_path / "workspace"))
-        ),
-    )
-
-    monkeypatch.setattr(
-        project_sync,
-        "local_project_dir",
-        lambda _project_id, _branch="": project_root,
-    )
-    monkeypatch.setattr(
-        project_sync,
-        "sync_down",
-        lambda _project_id, _branch: {"error": "clone failed"},
-    )
-
-    with pytest.raises(RuntimeError, match="Could not resolve project root"):
-        notion_analysis._project_root(app_state)
+    assert notion_analysis._project_root(app_state) == Path.cwd()
 
 
 def test_analysis_agent_runs_from_project_root(tmp_path, monkeypatch) -> None:
@@ -776,7 +671,6 @@ def test_missing_existing_notebook_is_restored_from_completion_artifacts(
     monkeypatch.setattr(notion_analysis, "_project_root", lambda _app_state: project_root)
     monkeypatch.setattr(notion_analysis, "_load_registry", lambda _app_state: None)
     monkeypatch.setattr(notion_analysis, "_save_registry", lambda _app_state: None)
-    monkeypatch.setattr(notion_analysis, "_checkpoint_analysis_files", lambda *_args, **_kwargs: None)
 
     old_records = dict(notion_analysis._records_by_request_id)
     old_discussions = dict(notion_analysis._records_by_discussion_id)
@@ -819,7 +713,6 @@ def test_missing_existing_notebook_without_artifacts_becomes_explicit_rerun(
     monkeypatch.setattr(notion_analysis, "_project_root", lambda _app_state: project_root)
     monkeypatch.setattr(notion_analysis, "_load_registry", lambda _app_state: None)
     monkeypatch.setattr(notion_analysis, "_save_registry", lambda _app_state: None)
-    monkeypatch.setattr(notion_analysis, "_checkpoint_analysis_files", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         notion_analysis,
         "_record_trail_url",
@@ -893,12 +786,24 @@ async def test_session_startup_failure_is_durable_and_pollable(monkeypatch) -> N
         monkeypatch.setattr(notion_analysis, "AppState", lambda _request: app_state)
         monkeypatch.setattr(notion_analysis, "_load_registry", lambda _app_state: None)
         monkeypatch.setattr(notion_analysis, "_refresh_trail_url", lambda *_args, **_kwargs: None)
-        response = await notion_analysis.notion_analysis_status(
-            request=SimpleNamespace(
-                path_params={"request_id": record.request_id},
-                base_url="https://notebook.test/",
-            )
+        from starlette.authentication import AuthCredentials, SimpleUser
+        from starlette.requests import Request
+
+        status_request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "scheme": "https",
+                "server": ("notebook.test", 443),
+                "root_path": "",
+                "path": f"/api/notion-analysis/status/{record.request_id}",
+                "headers": [],
+                "path_params": {"request_id": record.request_id},
+                "auth": AuthCredentials(["edit"]),
+                "user": SimpleUser("test-user"),
+            }
         )
+        response = await notion_analysis.notion_analysis_status(request=status_request)
         payload = json.loads(response.body)
         assert response.status_code == 200
         assert payload["status"] == "Failed"
@@ -908,39 +813,6 @@ async def test_session_startup_failure_is_durable_and_pollable(monkeypatch) -> N
         notion_analysis._records_by_request_id.update(old_records)
         notion_analysis._running_tasks.clear()
         notion_analysis._running_tasks.update(old_running)
-
-
-def test_refresh_completion_can_skip_branch_checkpoint(monkeypatch) -> None:
-    calls: list[str] = []
-
-    monkeypatch.setattr(
-        notion_analysis,
-        "_persist_record_session_cache",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        notion_analysis,
-        "_ensure_notion_chart_artifacts",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        notion_analysis,
-        "_save_registry",
-        lambda *_args, **_kwargs: calls.append("save_registry"),
-    )
-    monkeypatch.setattr(
-        notion_analysis,
-        "_checkpoint_analysis_files",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("checkpoint should not run")
-        ),
-    )
-
-    notion_analysis._persist_record_completion_artifacts(
-        SimpleNamespace(), _record(), checkpoint=False
-    )
-
-    assert calls == ["save_registry"]
 
 
 def test_status_recover_completed_refresh_from_trace(monkeypatch) -> None:

@@ -102,7 +102,6 @@ DBT_ROUTES: list[tuple[str, str, dict[str, object] | None]] = [
     ("POST", "/api/dbt/artifact", {"artifact": "manifest"}),
     ("POST", "/api/dbt/discover_projects", {"rootDir": "/workspace"}),
     ("POST", "/api/dbt/scaffold_project", {}),
-    ("POST", "/api/dbt/clone_project", {"gitUrl": "ext::sh -c whoami"}),
     ("POST", "/api/dbt/compile_model", {"modelName": ""}),
     ("POST", "/api/dbt/preview_model", {"modelName": ""}),
 ]
@@ -331,66 +330,6 @@ def test_allowlisted_dbt_command_passes_the_allowlist() -> None:
     assert "exitCode" in payload, (
         f"'parse' did not reach the dbt runner: {payload}"
     )
-
-
-# ── C. git URL scheme rejection over HTTP ────────────────────────
-
-
-MALICIOUS_GIT_URLS = [
-    "ext::sh -c whoami",  # git's ext:: transport == arbitrary command exec
-    "ext::sh -c 'touch /tmp/pwned'",
-    "file:///etc/passwd",  # local exfiltration
-    "ssh://git@example.com/x.git",
-    "git://example.com/x.git",
-    "git@example.com:owner/repo.git",  # scp-style
-    "  ext::sh -c whoami  ",  # whitespace padding
-    "EXT::sh -c whoami",  # case
-]
-
-
-@pytest.mark.parametrize("git_url", MALICIOUS_GIT_URLS)
-def test_clone_project_rejects_non_http_schemes(git_url: str) -> None:
-    try:
-        response = _request(
-            "POST",
-            "/api/dbt/clone_project",
-            {
-                "gitUrl": git_url,
-                "targetDir": f"e2e-clone-{uuid.uuid4().hex[:8]}",
-            },
-            token=TOKEN,
-            timeout=CLONE_TIMEOUT,
-        )
-    except httpx.TimeoutException:
-        pytest.fail(
-            f"clone_project did not answer within {CLONE_TIMEOUT}s for "
-            f"{git_url!r} -- the scheme guard is missing and git was spawned "
-            "(it is blocking on the transport)."
-        )
-    assert response.status_code == 400, (
-        f"{git_url!r} was not rejected ({response.status_code}): "
-        f"{response.text[:400]}"
-    )
-    assert "Only http(s) git URLs are supported" in response.text, response.text[:400]
-
-
-def test_clone_project_accepts_https_scheme_then_fails_in_git() -> None:
-    """A legitimate https URL must get past the scheme check.
-
-    Points at a closed local port so git fails fast; the distinguishing
-    signal is that the error comes from git, not from the scheme guard.
-    """
-    response = _request(
-        "POST",
-        "/api/dbt/clone_project",
-        {
-            "gitUrl": "https://127.0.0.1:1/nope.git",
-            "targetDir": f"e2e-clone-{uuid.uuid4().hex[:8]}",
-        },
-        token=TOKEN,
-    )
-    assert response.status_code != 400, response.text[:400]
-    assert "Only http(s) git URLs are supported" not in response.text
 
 
 # ── A (side-effect proof). Rejection means "did not execute" ─────

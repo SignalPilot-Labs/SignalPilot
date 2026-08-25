@@ -93,17 +93,6 @@ class WebSocketConnectionValidator:
         project_id = self.app_state.query_params("project")
         branch = self.app_state.query_params("branch") or "main"
         directory = self.app_state.session_manager.workspace.directory
-        if project_id:
-            try:
-                from signalpilot._server.files.project_sync import (
-                    local_project_dir,
-                )
-
-                local_dir = local_project_dir(project_id, branch)
-                if local_dir.exists():
-                    directory = str(local_dir)
-            except Exception:
-                pass
 
         if not file_key.startswith(NEW_FILE):
             try:

@@ -1,12 +1,30 @@
 """Schema exploration tool: explore_column (tool 13)."""
 
-import httpx
-
-from gateway.errors.mcp import sanitize_mcp_error, sanitize_proxy_response
+from gateway.errors.mcp import sanitize_mcp_error
 from gateway.mcp.audit import audited_tool
-from gateway.mcp.context import _gateway_url, _gw_headers
+from gateway.mcp.context import _store_session
 from gateway.mcp.server import mcp
+from gateway.mcp.tools.schema.exploration_columns import (
+    _identifier_quote_for,
+    _quote_ident,
+    _quote_table,
+    _resolve_table,
+)
 from gateway.mcp.validation import _validate_connection_name
+
+_PARAM_PLACEHOLDER = {
+    "postgres": "$1",
+    "redshift": "%s",
+    "mysql": "%s",
+    "mssql": "%s",
+    "snowflake": "%s",
+    "clickhouse": "%s",
+    "databricks": "%s",
+    "duckdb": "?",
+    "sqlite": "?",
+    # Trino's connector doesn't pass params to cursor.execute — fall back
+    # to manual escaping (backslash + quote-doubling) for safety.
+}
 
 
 @audited_tool(mcp)
@@ -26,7 +44,7 @@ async def explore_column(
 
     Args:
         connection_name: Database connection to query.
-        table: Full table name (e.g., 'public.users' or 'schema.table').
+        table: Table name, with or without schema prefix (e.g., 'users' or 'public.users').
         column: Column name to explore.
         limit: Max distinct values to return (default 20).
         filter_pattern: Optional LIKE pattern to filter values (e.g., '%active%').
@@ -35,37 +53,100 @@ async def explore_column(
     if err:
         return err
 
+    limit = max(1, min(int(limit), 100))
+
     try:
-        gw = _gateway_url()
-        params = {"table": table, "column": column, "limit": limit}
-        if filter_pattern:
-            params["filter_pattern"] = filter_pattern
+        from gateway.connectors.pool_manager import pool_manager
+        from gateway.connectors.schema_cache import schema_cache
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                f"{gw}/api/connections/{connection_name}/schema/explore",
-                params=params,
-                headers=_gw_headers(),
+        async with _store_session() as store:
+            conn_info = await store.get_connection(connection_name)
+            if not conn_info:
+                available = [c.name for c in await store.list_connections()]
+                return f"Error: Connection '{connection_name}' not found. Available: {available}"
+
+            conn_str = await store.get_connection_string(connection_name)
+            if not conn_str:
+                return "Error: No credentials stored for this connection"
+
+            extras = await store.get_credential_extras(connection_name)
+            db_type = conn_info.db_type
+
+            # Resolve the table against the cached schema, exactly like describe_table
+            # (optional schema prefix, case-insensitive). Fall back to the name as
+            # given if the schema cannot resolve it.
+            schema = schema_cache.get(connection_name)
+            if schema is None:
+                try:
+                    async with pool_manager.connection(
+                        db_type, conn_str, credential_extras=extras, connection_name=connection_name
+                    ) as connector:
+                        schema = await connector.get_schema()
+                    schema_cache.put(connection_name, schema)
+                except Exception:
+                    schema = {}
+            table_key, _table_info = _resolve_table(schema, table)
+            if table_key is None:
+                table_key = table
+
+            q = _identifier_quote_for(db_type)
+            q_col = _quote_ident(column, q)
+            q_table = _quote_table(table_key, q)
+
+            where_clause = ""
+            explore_params: list | None = None
+            if filter_pattern:
+                like_op = "ILIKE" if db_type in ("postgres", "redshift", "snowflake") else "LIKE"
+                placeholder = _PARAM_PLACEHOLDER.get(db_type)
+                if placeholder:
+                    where_clause = f"WHERE {q_col} {like_op} {placeholder}"
+                    explore_params = [filter_pattern]
+                else:
+                    # Manual escaping for connectors without param support (Trino).
+                    safe_pattern = filter_pattern.replace("\\", "\\\\").replace("'", "''")
+                    where_clause = f"WHERE {q_col} {like_op} '{safe_pattern}'"
+
+            if db_type == "mssql":
+                explore_sql = (
+                    f"SELECT TOP {limit} {q_col} AS value, COUNT(*) AS [count] "
+                    f"FROM {q_table} {where_clause} GROUP BY {q_col} ORDER BY [count] DESC"
+                )
+            else:
+                explore_sql = (
+                    f"SELECT {q_col} AS value, COUNT(*) AS count "
+                    f"FROM {q_table} {where_clause} GROUP BY {q_col} ORDER BY count DESC LIMIT {limit}"
+                )
+
+            null_sql = (
+                f"SELECT COUNT(*) AS total_rows, "
+                f"SUM(CASE WHEN {q_col} IS NULL THEN 1 ELSE 0 END) AS null_count, "
+                f"COUNT(DISTINCT {q_col}) AS distinct_count "
+                f"FROM {q_table}"
             )
-        if resp.status_code != 200:
-            return sanitize_proxy_response(resp.status_code, resp.text)
 
-        data = resp.json()
-        lines = [f"Column: {table}.{column}"]
+            async with pool_manager.connection(
+                db_type, conn_str, credential_extras=extras, connection_name=connection_name
+            ) as connector:
+                values_rows = await connector.execute(explore_sql, params=explore_params, timeout=30)
+                stats_rows = await connector.execute(null_sql, timeout=30)
 
-        stats = data.get("statistics", {})
-        lines.append(f"Total rows: {stats.get('total_rows', 0):,}")
-        lines.append(f"Distinct values: {stats.get('distinct_count', 0):,}")
-        lines.append(f"NULL: {stats.get('null_count', 0):,} ({stats.get('null_pct', 0)}%)")
+        stats = stats_rows[0] if stats_rows else {}
+        total_rows = stats.get("total_rows", 0) or 0
+        null_count = stats.get("null_count", 0) or 0
+        null_pct = round(null_count / max(total_rows, 1) * 100, 1)
 
-        if data.get("filter"):
-            lines.append(f"Filter: LIKE '{data['filter']}'")
+        lines = [f"Column: {table_key}.{column}"]
+        lines.append(f"Total rows: {total_rows:,}")
+        lines.append(f"Distinct values: {stats.get('distinct_count', 0) or 0:,}")
+        lines.append(f"NULL: {null_count:,} ({null_pct}%)")
+
+        if filter_pattern:
+            lines.append(f"Filter: LIKE '{filter_pattern}'")
 
         lines.append("")
-        values = data.get("values", [])
-        if values:
+        if values_rows:
             lines.append("Top values:")
-            for v in values:
+            for v in values_rows:
                 val_str = str(v.get("value")) if v.get("value") is not None else "NULL"
                 lines.append(f"  {val_str}: {v.get('count', 0):,}")
         else:

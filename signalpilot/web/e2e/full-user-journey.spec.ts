@@ -143,9 +143,9 @@ test("Full user journey: create project → file tree → expand → click files
   const apiKey = await getApiKey();
   const headers = { Authorization: `Bearer ${apiKey}` };
 
-  // Kill any existing notebook session (pod might be dead from previous crash)
+  // Kill any existing notebook session (runtime may be dead from a previous crash)
   await fetch(`${GATEWAY}/api/notebook-sessions`, { method: "DELETE", headers }).catch(() => {});
-  ts("Killed stale session — waiting for pod to terminate...");
+  ts("Killed stale session — waiting for runtime to terminate...");
   await page.waitForTimeout(15000);
 
   // Delete old project if it exists
@@ -194,15 +194,15 @@ test("Full user journey: create project → file tree → expand → click files
   ts(`Filled name: ${PROJECT_NAME}`);
   await page.screenshot({ path: "e2e-journey-02-form.png" });
 
-  // Click "Create" and wait for the full scaffold to complete (git push)
+  // Click "Create" and wait for the scaffold to commit to the workspace store
   await page.getByRole("button", { name: "Create", exact: true }).click();
   ts("Clicked Create — waiting for scaffold...");
 
   await page.waitForResponse(
-    (r) => r.url().includes("/git/push") && r.status() === 200,
-    { timeout: 10_000 },
-  ).catch(() => ts("WARN: scaffold git/push did not complete in 10s — continuing"));
-  ts("Scaffold complete (git push 200)");
+    (r) => r.url().includes("/dbt/scaffold_project") && r.status() === 200,
+    { timeout: 30_000 },
+  ).catch(() => ts("WARN: scaffold did not complete in 30s — continuing"));
+  ts("Scaffold complete");
   await page.waitForTimeout(3000);
 
   savedUrls["workspace"] = page.url();

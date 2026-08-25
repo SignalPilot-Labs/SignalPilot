@@ -151,8 +151,10 @@ def run_dbt_command_sync(
     profiles_dir: str | None = None,
     target: str | None = None,
     env_vars: dict[str, str] | None = None,
-    timeout: int = 300,
+    timeout: int | None = None,
 ) -> DbtCommandResult:
+    if timeout is None:
+        timeout = int(os.environ.get("SP_DBT_COMMAND_TIMEOUT", "1800"))
     # dbt executes project-supplied Jinja and run hooks, so the tree it is
     # pointed at must never be outside the workspace.
     confined_project = confine_optional(project_dir, label="projectDir")
@@ -246,7 +248,7 @@ async def run_dbt_command_async(
     profiles_dir: str | None = None,
     target: str | None = None,
     env_vars: dict[str, str] | None = None,
-    timeout: int = 300,
+    timeout: int | None = None,
 ) -> DbtCommandResult:
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
@@ -799,48 +801,6 @@ def _(sp):
 if __name__ == "__main__":
     app.run()
 '''
-
-
-def clone_git_repo(
-    git_url: str,
-    target_dir: str | None = None,
-    branch: str | None = None,
-    timeout: int = 120,
-) -> tuple[bool, str, str]:
-    # http(s) only: blocks ext:: (arbitrary command execution), file://,
-    # ssh://, git://, and scp-style URLs.
-    if not git_url.strip().lower().startswith(("http://", "https://")):
-        return False, "", "Only http(s) git URLs are supported."
-
-    git_exe = shutil.which("git")
-    if not git_exe:
-        return False, "", "git executable not found. Install git first."
-
-    repo_name = git_url.rstrip("/").split("/")[-1].replace(".git", "")
-    if target_dir:
-        target_dir = str(confine(target_dir, label="targetDir"))
-    else:
-        target_dir = str(workspace_roots()[0] / Path(repo_name).name)
-
-    cmd = [git_exe, "clone", "--depth", "1"]
-    if branch:
-        cmd.extend(["--branch", branch])
-    cmd.extend([git_url, target_dir])
-
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        if result.returncode == 0:
-            return True, target_dir, ""
-        return False, "", result.stderr
-    except subprocess.TimeoutExpired:
-        return False, "", f"Clone timed out after {timeout}s"
-    except Exception as e:
-        return False, "", str(e)
 
 
 def get_manifest(project_dir: str) -> dict[str, Any] | None:

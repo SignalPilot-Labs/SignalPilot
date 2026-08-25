@@ -39,47 +39,10 @@ export const gatewayBranchIdAtom = atomWithStorage<string | null>(
 export const branchListAtom = atom<BranchInfo[]>([]);
 export const branchLoadingAtom = atom(false);
 
-
-export async function hasUncommittedChanges(): Promise<string[]> {
-  try {
-    const resp = await fetch(spApiUrl("/git/status"), {
-      method: "POST",
-      headers: await getApiHeaders(),
-    });
-    if (!resp.ok) {return [];}
-    const data = await resp.json() as { staged?: Array<{ path: string }>; changed?: Array<{ path: string }>; untracked?: Array<{ path: string }> };
-    const files: string[] = [];
-    for (const f of [...(data.staged || []), ...(data.changed || []), ...(data.untracked || [])]) {
-      if (!files.includes(f.path)) {files.push(f.path);}
-    }
-    return files;
-  } catch {
-    return [];
-  }
-}
-
-export interface LocalBranchInfo {
-  name: string;
-  current: boolean;
-  has_remote: boolean;
-  track: string;
-  is_agent: boolean;
-}
-
-export interface FetchStatus {
-  branch: string;
-  has_remote: boolean;
-  ahead: number;
-  behind: number;
-}
-
-export const fetchStatusAtom = atom<FetchStatus | null>(null);
-
 export async function fetchBranches(): Promise<BranchInfo[]> {
   const projectId = getGatewayProjectId();
   if (!projectId) {return [];}
 
-  // All branches come from local git (which includes remote-tracking branches)
   try {
     const resp = await fetch(spApiUrl("/branches/list"), {
       method: "POST",
@@ -109,7 +72,6 @@ export async function fetchBranches(): Promise<BranchInfo[]> {
       created_by: b.is_agent ? "agent" : "local",
       created_at: 0,
       updated_at: 0,
-      // Extra fields from local git
       sha: b.sha || "",
       date: b.date || "",
       timestamp: b.timestamp || 0,
@@ -120,33 +82,6 @@ export async function fetchBranches(): Promise<BranchInfo[]> {
     }));
   } catch {
     return [];
-  }
-}
-
-export async function gitFetch(): Promise<FetchStatus | null> {
-  try {
-    const resp = await fetch(spApiUrl("/git/fetch"), {
-      method: "POST",
-      headers: await getApiHeaders(),
-    });
-    if (!resp.ok) {return null;}
-    const data = await resp.json() as FetchStatus;
-    store.set(fetchStatusAtom, data);
-    return data;
-  } catch {
-    return null;
-  }
-}
-
-export async function gitPull(): Promise<{ success: boolean; error?: string; conflict?: boolean; files?: string[] }> {
-  try {
-    const resp = await fetch(spApiUrl("/git/pull"), {
-      method: "POST",
-      headers: await getApiHeaders(),
-    });
-    return await resp.json();
-  } catch (e) {
-    return { success: false, error: String(e) };
   }
 }
 
@@ -170,20 +105,21 @@ export async function createBranch(name: string, fromBranch?: string): Promise<b
 }
 
 export async function switchBranch(branchName: string): Promise<boolean> {
-  // Run git checkout on the backend
+  // The workspace store holds every branch; switching just rebinds the
+  // session's file system. Saves are revisions, so nothing can be "lost".
   try {
-    const resp = await fetch(spApiUrl("/git/checkout"), {
+    const resp = await fetch(spApiUrl("/branches/switch"), {
       method: "POST",
       headers: await getApiHeaders(),
       body: JSON.stringify({ branch: branchName }),
     });
     if (!resp.ok) {
       const data = await resp.json().catch(() => ({})) as { error?: string };
-      console.error("[Branch] Checkout failed:", data.error);
+      console.error("[Branch] Switch failed:", data.error);
       return false;
     }
   } catch (e) {
-    console.error("[Branch] Checkout failed:", e);
+    console.error("[Branch] Switch failed:", e);
     return false;
   }
 

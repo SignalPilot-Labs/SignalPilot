@@ -1,0 +1,11 @@
+name: dbt_mini
+version: "1.0.0"
+config-version: 2
+
+profile: dbt_mini
+
+model-paths: ["models"]
+
+models:
+  dbt_mini:
+    +materialized: view

@@ -26,18 +26,28 @@ LOGGER = _loggers.sp_logger()
 router = APIRouter()
 
 
-def _resolve_start_dir(request: Any, body_dir: str | None) -> str | None:
-    """Resolve the dbt start directory, preferring cloud project sync dir."""
+async def _resolve_start_dir(request: Any, body_dir: str | None) -> str | None:
+    """Resolve the dbt start directory.
+
+    S3 workspace mode: dbt is a subprocess and needs real files, so the branch
+    head is materialized into execution scratch and the org-level
+    dbt_project_dir setting (gateway-resolved: explicit setting wins, manifest
+    auto-detect otherwise) names the directory inside it. Materialization is
+    network+disk work and runs off the event loop. An explicit projectDir in
+    the request body still overrides for local trees.
+    """
+    del request
     if body_dir:
         return str(confine(body_dir, label="projectDir"))
-    project_id = request.headers.get("x-gateway-project-id")
-    if project_id:
-        branch = request.headers.get("x-gateway-branch-id", "main")
-        from signalpilot._server.files.project_sync import local_project_dir
 
-        local_dir = local_project_dir(project_id, branch)
-        if local_dir.exists():
-            return str(local_dir)
+    from signalpilot._server.files.workspace import is_s3_workspace
+
+    if is_s3_workspace():
+        import asyncio
+
+        from signalpilot._dbt.materialize import materialized_dbt_start_dir
+
+        return await asyncio.to_thread(materialized_dbt_start_dir)
     return None
 
 
@@ -121,7 +131,7 @@ async def run_dbt_command(
         )
 
     # Resolve project dir: explicit > cloud project > cwd
-    project_dir = _resolve_start_dir(request, body.project_dir)
+    project_dir = await _resolve_start_dir(request, body.project_dir)
     profiles_dir = confine_optional(body.profiles_dir, label="profilesDir")
 
     result = await run_dbt_command_async(
@@ -168,7 +178,7 @@ async def get_project_info(
     )
 
     body = await request.json()
-    start_dir = _resolve_start_dir(request, body.get("projectDir") if body else None)
+    start_dir = await _resolve_start_dir(request, body.get("projectDir") if body else None)
 
     dbt_installed = find_dbt_executable() is not None
     project_dir = find_dbt_project(start_dir)
@@ -221,7 +231,7 @@ async def get_models(
     from signalpilot._dbt.runner import find_dbt_project, list_models
 
     body = await request.json()
-    start_dir = _resolve_start_dir(request, body.get("projectDir") if body else None)
+    start_dir = await _resolve_start_dir(request, body.get("projectDir") if body else None)
     project_dir = find_dbt_project(start_dir)
 
     if not project_dir:
@@ -262,7 +272,7 @@ async def get_artifact(
     )
 
     body = await parse_request(request, cls=DbtArtifactRequest)
-    project_dir = find_dbt_project(_resolve_start_dir(request, body.project_dir))
+    project_dir = find_dbt_project(await _resolve_start_dir(request, body.project_dir))
 
     if not project_dir:
         return DbtArtifactResponse(
@@ -325,19 +335,6 @@ class DbtScaffoldResponse(msgspec.Struct, rename="camel"):
     project_dir: str | None = None
     error: str | None = None
     files_created: list[str] = msgspec.field(default_factory=list)
-
-
-class DbtCloneRequest(msgspec.Struct, rename="camel"):
-    git_url: str
-    target_dir: str | None = None
-    branch: str | None = None
-
-
-class DbtCloneResponse(msgspec.Struct, rename="camel"):
-    success: bool
-    project_dir: str | None = None
-    project_name: str | None = None
-    error: str | None = None
 
 
 @router.post("/discover_projects")
@@ -403,17 +400,32 @@ async def scaffold_project(
     if parent_dir and (Path(parent_dir) / ".git").exists():
         project_name = "."
     elif not parent_dir:
-        # Fallback: check cloud project dir
-        cloud_dir = _resolve_start_dir(request, None)
-        if cloud_dir:
-            parent_dir = cloud_dir
-            project_name = "."
+        from signalpilot._server.files.workspace import is_s3_workspace
+
+        if not is_s3_workspace():
+            # Local mode fallback: scaffold into the resolved project dir.
+            # S3 mode must NOT do this — _resolve_start_dir materializes the
+            # disposable exec scratch; scaffold lands in the workspace root
+            # and is committed through as a revision instead.
+            cloud_dir = await _resolve_start_dir(request, None)
+            if cloud_dir:
+                parent_dir = cloud_dir
+                project_name = "."
 
     try:
         project_dir, files_created = scaffold_dbt_project(
             project_name=project_name,
             parent_dir=parent_dir,
             adapter=body.adapter,
+        )
+        # S3 mode: commit the scaffolded tree as one revision so it outlives
+        # the disposable runtime.
+        from signalpilot._server.files.workspace import write_through_paths
+
+        write_through_paths(
+            files_created,
+            root=str(workspace_roots()[0]),
+            message=f"Scaffold dbt project {body.project_name}",
         )
         return DbtScaffoldResponse(
             success=True,
@@ -425,56 +437,6 @@ async def scaffold_project(
             success=False,
             error=str(e),
         )
-
-
-@router.post("/clone_project")
-@requires("edit")
-async def clone_project(
-    *,
-    request: Request,
-) -> DbtCloneResponse | JSONResponse:
-    import asyncio
-
-    from signalpilot._dbt.runner import clone_git_repo, find_dbt_project, parse_dbt_project_yml
-
-    body = await parse_request(request, cls=DbtCloneRequest)
-
-    # http(s) only: ext:: and file:// transports are code-exec/exfil vectors
-    if not body.git_url.strip().lower().startswith(("http://", "https://")):
-        return JSONResponse(
-            {"error": "Only http(s) git URLs are supported"},
-            status_code=400,
-        )
-
-    target_dir = confine_optional(body.target_dir, label="targetDir")
-
-    loop = asyncio.get_event_loop()
-    success, cloned_dir, error = await loop.run_in_executor(
-        None,
-        lambda: clone_git_repo(
-            git_url=body.git_url,
-            target_dir=str(target_dir) if target_dir else None,
-            branch=body.branch,
-        ),
-    )
-
-    if not success:
-        return DbtCloneResponse(
-            success=False,
-            error=error,
-        )
-
-    project_dir = find_dbt_project(cloned_dir)
-    project_name = None
-    if project_dir:
-        info = parse_dbt_project_yml(project_dir)
-        project_name = info.project_name
-
-    return DbtCloneResponse(
-        success=True,
-        project_dir=project_dir or cloned_dir,
-        project_name=project_name,
-    )
 
 
 # ── Model-scoped commands ────────────────────────────────────────

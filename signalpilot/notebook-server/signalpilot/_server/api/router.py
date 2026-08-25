@@ -33,7 +33,6 @@ from signalpilot._server.api.endpoints.files import router as files_router
 from signalpilot._server.api.endpoints.fs_events import (
     router as fs_events_router,
 )
-from signalpilot._server.api.endpoints.git import router as git_router
 from signalpilot._server.api.endpoints.health import (
     root_health_router,
     router as health_router,
@@ -52,9 +51,6 @@ from signalpilot._server.api.endpoints.notion_analysis import (
 )
 from signalpilot._server.api.endpoints.packages import (
     router as packages_router,
-)
-from signalpilot._server.api.endpoints.project_sync import (
-    router as project_sync_router,
 )
 from signalpilot._server.api.endpoints.secrets import router as secrets_router
 from signalpilot._server.api.endpoints.sql import router as sql_router
@@ -111,10 +107,6 @@ def build_routes(base_url: str = "") -> list[BaseRoute]:
     app_router.include_router(
         branches_router, prefix="/api/branches", name="branches"
     )
-    app_router.include_router(
-        project_sync_router, prefix="/api/project", name="project_sync"
-    )
-    app_router.include_router(git_router, prefix="/api/git", name="git")
     app_router.include_router(
         notion_analysis_router,
         prefix="/api/notion-analysis",

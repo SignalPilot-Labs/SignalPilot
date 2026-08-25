@@ -35,7 +35,7 @@ const DbtPanel: React.FC = () => {
   const { runCommand, refreshProjectInfo, clearLogs } = useDbtActions();
 
   // Detect dbt project when the panel opens. Skips if already detected
-  // (pre-fetched by edit-app after sync-down). Retries with backoff if
+  // (pre-fetched by edit-app on project entry). Retries with backoff if
   // the kernel isn't ready yet.
   useEffect(() => {
     if (projectInfo?.found) return;

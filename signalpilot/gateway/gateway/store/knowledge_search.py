@@ -32,6 +32,7 @@ from gateway.db.models import (
 from gateway.models.knowledge import KnowledgeDoc, KnowledgeStatus
 from gateway.store.kb_rank import Bm25Index
 from gateway.store.knowledge import row_to_doc
+from gateway.util.tasks import fire_and_forget as fire_and_forget  # re-exported: store.py calls knowledge_search.fire_and_forget
 
 logger = logging.getLogger(__name__)
 

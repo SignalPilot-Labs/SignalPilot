@@ -16,48 +16,42 @@ test("full flow: projects page → click project → files load → go back → 
   });
   page.on("pageerror", (err) => errors.push(`PAGE: ${err.message.slice(0, 200)}`));
 
-  // ── Step 1: Go to /projects (no params) ────────────────────────
+  // ── Step 1: Go to /projects (no params) — current landing page ─
   ts("Navigate to /projects");
   await page.goto("/projects", { waitUntil: "domcontentloaded" });
 
-  // Should see running state (existing session) or landing page
   const spRoot = page.locator(".sp-root");
-  // Wait for either running (existing session) or Open IDE button
-  const runningText = page.getByText("running");
-  const openBtn = page.getByRole("button", { name: /open ide/i });
-  await Promise.race([
-    runningText.waitFor({ timeout: 30_000 }),
-    openBtn.waitFor({ timeout: 30_000 }),
-  ]);
-  if (await openBtn.isVisible().catch(() => false)) {
-    await openBtn.click();
-    ts("Clicked Open IDE");
-    await runningText.waitFor({ timeout: 60_000 });
-  }
-  ts("Session running");
-  await spRoot.waitFor({ timeout: 30_000 });
-  ts("Embed loaded");
+  const createBtn = page.getByRole("button", { name: /create new project/i });
+  await createBtn.waitFor({ timeout: 30_000 });
+  ts("Landing page rendered");
 
-  // Wait for notebook home to render
-  await page.waitForTimeout(3000);
+  // The projects list fetch is in flight while "Refresh projects" is disabled;
+  // wait for it to settle before judging whether cards exist.
+  const refreshBtn = page.getByRole("button", { name: /refresh projects/i });
+  await expect(refreshBtn).toBeEnabled({ timeout: 30_000 });
+  ts("Projects list settled");
   await page.screenshot({ path: "e2e-step1-projects.png" });
 
-  // ── Step 2: Click on "test" project ────────────────────────────
-  ts("Looking for 'test' project card...");
-  const projectCard = spRoot.locator("text=test").first();
-  const hasProject = await projectCard.isVisible({ timeout: 10_000 }).catch(() => false);
+  // ── Step 2: Click the first project card ───────────────────────
+  const projectCard = page.getByRole("button", { name: /settings for/i }).first();
+  let hasProject = await projectCard.isVisible({ timeout: 10_000 }).catch(() => false);
+  if (!hasProject) {
+    await refreshBtn.click();
+    hasProject = await projectCard.isVisible({ timeout: 10_000 }).catch(() => false);
+  }
 
   if (!hasProject) {
-    ts("'test' project not visible — checking what's shown");
-    const text = await spRoot.innerText().catch(() => "");
-    ts(`Content: ${text.slice(0, 200)}`);
+    ts("No project cards visible — nothing to open");
     await page.screenshot({ path: "e2e-step2-noproj.png" });
+    expect(hasProject, "at least one project card on the landing page").toBe(true);
     return;
   }
 
   const errsBefore = errors.length;
   await projectCard.click();
-  ts("Clicked 'test' project");
+  ts("Clicked first project card");
+  await spRoot.waitFor({ timeout: 120_000 });
+  ts("Notebook embed loaded");
 
   // ── Step 3: Wait for file tree / workspace to load ─────────────
   // After clicking a project, the notebook navigates to the workspace view

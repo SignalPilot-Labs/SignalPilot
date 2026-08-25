@@ -997,7 +997,7 @@ class TestI5NetworkPolicyOptOutCloud:
 
 
 class TestL6SessionMutationsOrgFilter:
-    """L-6: update_session_status and mark_stopped must pass org_id in the WHERE
+    """L-6: update_session_runtime and mark_stopped must pass org_id in the WHERE
     clause so a cross-org call is a silent no-op (defense-in-depth).
 
     We capture the SQLAlchemy Update clause passed to session.execute and verify
@@ -1024,17 +1024,17 @@ class TestL6SessionMutationsOrgFilter:
         return str(stmt.whereclause.compile(dialect=sqlite.dialect(), compile_kwargs={"literal_binds": True}))
 
     @pytest.mark.asyncio
-    async def test_update_session_status_includes_org_id_in_where(self) -> None:
-        from gateway.store.notebook_sessions import update_session_status
+    async def test_update_session_runtime_includes_org_id_in_where(self) -> None:
+        from gateway.store.notebook_sessions import update_session_runtime
 
         session, captured = self._make_async_session_capture()
 
-        await update_session_status(
+        await update_session_runtime(
             session,
             session_id="sess-1",
             org_id="org-b",
             status="running",
-            pod_ip="1.2.3.4",
+            upstream_url="http://10.0.0.9:2718",
         )
 
         assert len(captured) == 1
@@ -1043,17 +1043,17 @@ class TestL6SessionMutationsOrgFilter:
         assert "sess-1" in where_str
 
     @pytest.mark.asyncio
-    async def test_update_session_status_correct_org_in_where(self) -> None:
-        from gateway.store.notebook_sessions import update_session_status
+    async def test_update_session_runtime_correct_org_in_where(self) -> None:
+        from gateway.store.notebook_sessions import update_session_runtime
 
         session, captured = self._make_async_session_capture()
 
-        await update_session_status(
+        await update_session_runtime(
             session,
             session_id="sess-2",
             org_id="org-a",
             status="running",
-            pod_ip="10.0.0.1",
+            upstream_url="http://10.0.0.1:2718",
         )
 
         assert len(captured) == 1
@@ -1062,10 +1062,10 @@ class TestL6SessionMutationsOrgFilter:
         assert "sess-2" in where_str
 
     @pytest.mark.asyncio
-    async def test_update_session_status_retries_once_on_closed_connection(self) -> None:
+    async def test_update_session_runtime_retries_once_on_closed_connection(self) -> None:
         from sqlalchemy.exc import InterfaceError
 
-        from gateway.store.notebook_sessions import update_session_status
+        from gateway.store.notebook_sessions import update_session_runtime
 
         captured: list = []
 
@@ -1080,7 +1080,7 @@ class TestL6SessionMutationsOrgFilter:
         session.commit = AsyncMock()
         session.rollback = AsyncMock()
 
-        await update_session_status(
+        await update_session_runtime(
             session,
             session_id="sess-closed",
             org_id="org-a",

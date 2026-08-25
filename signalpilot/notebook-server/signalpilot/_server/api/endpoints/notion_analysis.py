@@ -22,6 +22,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 import msgspec
 import requests
+from starlette.authentication import requires
 from starlette.exceptions import HTTPException
 from starlette.responses import FileResponse, JSONResponse
 
@@ -158,7 +159,6 @@ class AnalysisRecord:
     output_mode: OutputMode = "answer"
     theme: dict[str, Any] | None = None
     data_snapshots: list[DataSnapshot] | None = None
-    latest_commit_sha: str | None = None
     error: str | None = None
     result: AnalysisResult | None = None
     recovery_mode: Literal["restored", "rerun"] | None = None
@@ -728,37 +728,12 @@ def _analysis_project_context(
 
 
 def _project_root(app_state: AppState) -> Path:
-    context = _analysis_project_context(app_state)
-    if context is not None:
-        project_id, branch = context
-        try:
-            from signalpilot._server.files.project_sync import (
-                _current_git_branch,
-                local_project_dir,
-                sync_down,
-            )
+    """The directory analysis artifacts are written under.
 
-            local_dir = local_project_dir(project_id, branch)
-            if (
-                (local_dir / ".git").exists()
-                and _current_git_branch(local_dir) == branch
-            ):
-                return local_dir
-
-            result = sync_down(project_id, branch)
-            if result.get("error"):
-                raise RuntimeError(result["error"])
-            synced_dir = Path(str(result.get("local_dir") or local_dir))
-            if (synced_dir / ".git").exists():
-                return synced_dir
-            raise RuntimeError(
-                f"Synced project checkout missing .git: {synced_dir}"
-            )
-        except Exception as e:
-            message = f"Could not resolve project root for analysis project {project_id}: {e}"
-            LOGGER.error(message)
-            raise RuntimeError(message) from e
-
+    Runtime v2: there is no local git clone. Analysis notebooks run in the
+    session workspace; durability comes from write-through saves to the S3
+    workspace store, not from a git checkpoint.
+    """
     root = app_state.session_manager.workspace.directory
     if root is None:
         return Path.cwd()
@@ -817,7 +792,6 @@ def _load_registry(app_state: AppState) -> None:
             data_snapshots=_parse_data_snapshot_list(
                 item.get("data_snapshots", item.get("dataSnapshots", []))
             ),
-            latest_commit_sha=item.get("latest_commit_sha"),
             error=item.get("error"),
             result=_analysis_result_from_dict(result) if result else None,
             recovery_mode=item.get("recovery_mode"),
@@ -838,7 +812,6 @@ def _save_registry(app_state: AppState) -> None:
         # The gateway DB stores the authoritative latest commit SHA. Persisting
         # it inside the committed registry would make the registry dirty after
         # every commit because the commit SHA changes when the registry changes.
-        item.pop("latest_commit_sha", None)
         records.append(item)
     path.write_text(
         json.dumps({"records": records}, indent=2, sort_keys=True),
@@ -970,7 +943,7 @@ def _write_refresh_notebook(
     notebook_path.write_text(body.base_notebook_code, encoding="utf-8")
     root = _project_root(app_state)
     return (
-        str(notebook_path.relative_to(root))
+        notebook_path.relative_to(root).as_posix()
         if notebook_path.is_relative_to(root)
         else str(notebook_path)
     )
@@ -1049,7 +1022,7 @@ def _existing_notebook_target(app_state: AppState, notebook_path: str) -> tuple[
     root = _project_root(app_state).resolve()
     target = _resolve_notebook_path(app_state, notebook_path).resolve(strict=False)
     try:
-        file_key = str(target.relative_to(root))
+        file_key = target.relative_to(root).as_posix()
     except ValueError:
         raise ValueError("existingNotebookPath must stay inside the project checkout") from None
     if target.suffix != ".py":
@@ -1109,81 +1082,6 @@ def _recover_missing_notebook(
     )
 
 
-def _checkpoint_analysis_files(
-    app_state: AppState,
-    record: AnalysisRecord,
-    message: str,
-    *,
-    include_parent_dir: bool = False,
-) -> str | None:
-    context = _analysis_project_context(app_state)
-    if context is None:
-        return None
-    project_id, branch = context
-    try:
-        from signalpilot._server.files.git_auth import run_git
-        from signalpilot._server.files.project_sync import (
-            local_project_dir,
-            sync_up,
-        )
-
-        repo = local_project_dir(project_id)
-        if not (repo / ".git").exists():
-            return None
-
-        notebook_path = _resolve_notebook_path(app_state, record.notebook_path)
-        targets = [
-            notebook_path.parent if include_parent_dir else notebook_path,
-            _registry_path(app_state),
-        ]
-        rel_targets: list[str] = []
-        for target in targets:
-            try:
-                resolved = target.resolve(strict=False)
-                resolved.relative_to(repo.resolve())
-            except (OSError, ValueError):
-                continue
-            rel_targets.append(str(resolved.relative_to(repo.resolve())))
-        if not rel_targets:
-            return None
-
-        code, _, err = run_git(repo, "add", "--", *rel_targets)
-        if code != 0:
-            LOGGER.warning("Could not stage analysis files: %s", err.strip())
-            return None
-
-        diff_code, _, _ = run_git(repo, "diff", "--cached", "--quiet")
-        if diff_code == 1:
-            code, out, err = run_git(
-                repo, "commit", "-m", message, timeout=120
-            )
-            if code != 0:
-                LOGGER.warning(
-                    "Could not commit analysis files: %s", (err or out).strip()
-                )
-                return None
-            sync_result = sync_up(project_id, branch)
-            if sync_result.get("error"):
-                LOGGER.warning(
-                    "Could not push analysis checkpoint: %s",
-                    sync_result["error"],
-                )
-        elif diff_code != 0:
-            LOGGER.warning("Could not inspect staged analysis diff")
-            return None
-
-        code, out, _ = run_git(repo, "rev-parse", "HEAD")
-        if code == 0 and out.strip():
-            record.latest_commit_sha = out.strip()
-            _save_registry(app_state)
-            return record.latest_commit_sha
-    except Exception as e:
-        LOGGER.warning(
-            "Analysis git checkpoint failed for %s: %s", record.request_id, e
-        )
-    return None
-
-
 def _ensure_record(
     app_state: AppState,
     body: StartNotionAnalysisRequest,
@@ -1207,9 +1105,6 @@ def _ensure_record(
             else:
                 _recover_missing_notebook(app_state, record, body)
                 _save_registry(app_state)
-            _checkpoint_analysis_files(
-                app_state, record, f"Append {record.source} analysis follow-up"
-            )
         return record
 
     source = _analysis_source(body.source)
@@ -1223,7 +1118,7 @@ def _ensure_record(
         notebook_path = _records_dir(app_state, source) / filename
         root = _project_root(app_state)
         file_key = (
-            str(notebook_path.relative_to(root))
+            notebook_path.relative_to(root).as_posix()
             if notebook_path.is_relative_to(root)
             else str(notebook_path)
         )
@@ -1258,9 +1153,6 @@ def _ensure_record(
     _records_by_request_id[record.request_id] = record
     _records_by_discussion_id[record.discussion_id] = record.request_id
     _save_registry(app_state)
-    _checkpoint_analysis_files(
-        app_state, record, f"Create {source} analysis notebook"
-    )
     return record
 
 
@@ -1664,7 +1556,7 @@ def _chart_file_from_project_registries(
     request_id: str, filename: str
 ) -> Path | None:
     try:
-        from signalpilot._server.files.project_sync import PROJECTS_ROOT
+        from signalpilot._server.files.workspace import PROJECTS_ROOT
     except Exception:
         return None
 
@@ -1707,7 +1599,7 @@ def _snapshot_file_from_project_registries(
     request_id: str, filename: str
 ) -> Path | None:
     try:
-        from signalpilot._server.files.project_sync import PROJECTS_ROOT
+        from signalpilot._server.files.workspace import PROJECTS_ROOT
     except Exception:
         return None
 
@@ -3327,8 +3219,6 @@ def _ensure_notion_chart_artifacts(
 def _persist_record_completion_artifacts(
     app_state: AppState,
     record: AnalysisRecord,
-    *,
-    checkpoint: bool = True,
 ) -> None:
     try:
         cache_path = _persist_record_session_cache(app_state, record)
@@ -3355,13 +3245,6 @@ def _persist_record_completion_artifacts(
         )
 
     _save_registry(app_state)
-    if checkpoint:
-        _checkpoint_analysis_files(
-            app_state,
-            record,
-            f"Checkpoint {record.source} analysis {record.request_id}",
-            include_parent_dir=True,
-        )
 
 
 def _analysis_startup_error(exc: Exception) -> str:
@@ -3393,7 +3276,6 @@ async def _run_analysis(
     *,
     new_chat: bool,
     allow_resume_session: bool = True,
-    checkpoint_completion: bool = True,
 ) -> None:
     from signalpilot._server.ai.chat_store import (
         ChatThread,
@@ -3593,7 +3475,7 @@ async def _run_analysis(
                     },
                 },
             )
-            _persist_record_completion_artifacts(app_state, record, checkpoint=checkpoint_completion)
+            _persist_record_completion_artifacts(app_state, record)
             await store.upsert_thread(
                 ChatThread(
                     thread_id=record.session_id,
@@ -3665,7 +3547,7 @@ async def _run_analysis(
             )
         record.status = "Done"
         record.error = None
-        _persist_record_completion_artifacts(app_state, record, checkpoint=checkpoint_completion)
+        _persist_record_completion_artifacts(app_state, record)
         await store.upsert_thread(
             ChatThread(
                 thread_id=record.session_id,
@@ -3725,7 +3607,7 @@ async def _run_analysis(
                 failed = True
                 record.status = "Failed"
                 record.error = _analysis_runtime_error(e)
-        _persist_record_completion_artifacts(app_state, record, checkpoint=checkpoint_completion)
+        _persist_record_completion_artifacts(app_state, record)
         if failed:
             await store.upsert_thread(
                 ChatThread(
@@ -3800,7 +3682,6 @@ def _record_response(record: AnalysisRecord, app_state: AppState | None = None) 
         "status": record.status,
         "recoveryMode": record.recovery_mode,
         "recoveryNotice": record.recovery_notice,
-        "latestCommitSha": record.latest_commit_sha,
         "summary": result.summary,
         "confidenceScore": result.confidence_score,
         "finalAnswer": result.final_answer,
@@ -3866,12 +3747,6 @@ def _mark_stale_analysis_failed(
     record.status = "Failed"
     record.error = "Analysis was interrupted before completion."
     _save_registry(app_state)
-    _checkpoint_analysis_files(
-        app_state,
-        record,
-        f"Checkpoint {record.source} analysis {record.request_id}",
-        include_parent_dir=True,
-    )
 
 
 def _trace_event_metadata(event: dict[str, Any]) -> dict[str, Any]:
@@ -3955,6 +3830,7 @@ async def _recover_completed_record_from_trace(
 
 
 @router.post("/start")
+@requires("edit")
 async def start_notion_analysis(*, request: Request) -> JSONResponse:
     app_state = AppState(request)
     body = await parse_request(request, cls=StartNotionAnalysisRequest)
@@ -3983,6 +3859,7 @@ async def start_notion_analysis(*, request: Request) -> JSONResponse:
 
 
 @router.post("/refresh")
+@requires("edit")
 async def refresh_notion_analysis(*, request: Request) -> JSONResponse:
     app_state = AppState(request)
     body = await parse_request(request, cls=RefreshNotionAnalysisRequest)
@@ -4028,7 +3905,6 @@ async def refresh_notion_analysis(*, request: Request) -> JSONResponse:
                 start_body,
                 new_chat=True,
                 allow_resume_session=False,
-                checkpoint_completion=False,
             )
         )
 
@@ -4036,6 +3912,7 @@ async def refresh_notion_analysis(*, request: Request) -> JSONResponse:
 
 
 @router.get("/chart/{request_id}/{filename:path}")
+@requires("edit")
 async def notion_analysis_chart(*, request: Request) -> FileResponse:
     app_state = AppState(request)
     _load_registry(app_state)
@@ -4069,6 +3946,7 @@ async def notion_analysis_chart(*, request: Request) -> FileResponse:
 
 
 @router.get("/snapshot/{request_id}/{filename:path}")
+@requires("edit")
 async def notion_analysis_snapshot(*, request: Request) -> FileResponse:
     app_state = AppState(request)
     _load_registry(app_state)
@@ -4101,6 +3979,7 @@ async def notion_analysis_snapshot(*, request: Request) -> FileResponse:
 
 
 @router.get("/status/{request_id}")
+@requires("edit")
 async def notion_analysis_status(*, request: Request) -> JSONResponse:
     app_state = AppState(request)
     _load_registry(app_state)

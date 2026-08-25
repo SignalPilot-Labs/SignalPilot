@@ -63,14 +63,25 @@ export class RequestingTree {
   private onChange: (data: FileInfo[]) => void = Functions.NOOP;
   private path = new PathBuilder("/");
 
+  // True once the server has shipped the full nested tree in one response;
+  // expand() is then purely local — no per-directory round trips.
+  private fullyLoaded = false;
+
   initialize = async (onChange: (data: FileInfo[]) => void): Promise<void> => {
     this.onChange = onChange;
 
     try {
-      const data = await this.callbacks.listFiles({ path: this.rootPath });
+      // One recursive listing instead of one request per open directory.
+      // Re-hydrating a fully expanded tree used to be O(directories) serial
+      // round trips (minutes on large projects); now it is a single call.
+      const data = await this.callbacks.listFiles({
+        path: this.rootPath,
+        recursive: true,
+      });
       this.delegate = new SimpleTree(data.files);
       this.rootPath = data.root as FilePath;
       this.path = PathBuilder.guessDeliminator(data.root);
+      this.fullyLoaded = true;
     } catch (error) {
       toast({
         title: "Failed to list files",
@@ -89,6 +100,11 @@ export class RequestingTree {
     }
     if (!node.data.isDirectory) {
       return false;
+    }
+
+    // Full tree already in memory (recursive initialize) — nothing to fetch.
+    if (this.fullyLoaded) {
+      return true;
     }
 
     // We may attempt to load empty directories multiple times
@@ -273,22 +289,17 @@ export class RequestingTree {
    */
   refresh = async (expandedIds: string[]): Promise<void> => {
     try {
-      const rootData = await this.callbacks.listFiles({ path: this.rootPath });
+      // One recursive listing replaces root + one request per expanded dir.
+      const rootData = await this.callbacks.listFiles({
+        path: this.rootPath,
+        recursive: true,
+      });
       this.delegate = new SimpleTree(rootData.files);
+      this.fullyLoaded = true;
     } catch (error) {
       toast({ title: "Failed to refresh files", description: prettyError(error) });
       return; // leave existing tree alone
     }
-    await mapWithConcurrency(expandedIds, FILE_OP_CONCURRENCY, async (id) => {
-      const node = this.delegate.find(id);
-      if (!node?.data.isDirectory) { return; } // folder collapsed/deleted — skip
-      try {
-        const data = await this.callbacks.listFiles({ path: node.data.path });
-        this.delegate.update({ id, changes: { children: data.files } });
-      } catch {
-        // keep existing children on error — DO NOT blank them out
-      }
-    });
     this.onChange(this.delegate.data);
   };
 

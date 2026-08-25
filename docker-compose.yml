@@ -46,6 +46,9 @@ services:
       # Local mode grants all scopes to requests without an API key.
       # Do not expose local mode to a network.
       - "${SP_GATEWAY_HOST:-127.0.0.1}:${SP_GATEWAY_PORT:-3300}:3300"
+      # Also bind IPv6 loopback: Windows resolves `localhost` to ::1 first, and
+      # an IPv4-only binding costs ~200ms of fallback on every new connection.
+      - "[::1]:${SP_GATEWAY_PORT:-3300}:3300"
     env_file:
       - path: ./.slack.local.env
         required: false
@@ -272,6 +275,8 @@ services:
       dockerfile: Dockerfile
     ports:
       - "127.0.0.1:${SP_NOTEBOOK_PORT:-2718}:2718"
+      # IPv6 loopback too — see the gateway ports note.
+      - "[::1]:${SP_NOTEBOOK_PORT:-2718}:2718"
     env_file:
       - path: ./.slack.local.env
         required: false
@@ -330,6 +335,8 @@ services:
       # Local mode grants all scopes to requests without an API key.
       # Do not expose local mode to a network.
       - "${SP_WEB_HOST:-127.0.0.1}:${SP_WEB_PORT:-3200}:3200"
+      # IPv6 loopback too — see the gateway ports note.
+      - "[::1]:${SP_WEB_PORT:-3200}:3200"
     environment:
       SP_GATEWAY_INTERNAL_URL: http://gateway:3300
     volumes:
@@ -354,6 +361,7 @@ services:
       MINIO_ROOT_PASSWORD: minioadmin
     ports:
       - "127.0.0.1:9000:9000"   # S3 API
+      - "[::1]:9000:9000"       # IPv6 loopback — see the gateway ports note
       - "127.0.0.1:9001:9001"   # console (minioadmin/minioadmin)
     volumes:
       - signalpilot-minio-data:/data

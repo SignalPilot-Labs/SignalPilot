@@ -87,7 +87,7 @@ async def list_files(
         root = body.path or directory or fs.get_root()
     else:
         root = body.path or fs.get_root()
-    files = fs.list_files(root)
+    files = fs.list_files(root, recursive=body.recursive)
     return FileListResponse(files=files, root=root)
 
 

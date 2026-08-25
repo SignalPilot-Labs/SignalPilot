@@ -43,7 +43,7 @@ class OSFileSystem(FileSystem):
     def get_root(self) -> str:
         return self._root or os.getcwd()
 
-    def list_files(self, path: str) -> list[FileInfo]:
+    def list_files(self, path: str, *, recursive: bool = False) -> list[FileInfo]:
         files: list[FileInfo] = []
         folders: list[FileInfo] = []
         try:
@@ -69,6 +69,10 @@ class OSFileSystem(FileSystem):
                         last_modified=entry_stat.st_mtime,
                     )
                     if is_directory:
+                        if recursive:
+                            info.children = self.list_files(
+                                entry.path, recursive=True
+                            )
                         folders.append(info)
                     else:
                         files.append(info)

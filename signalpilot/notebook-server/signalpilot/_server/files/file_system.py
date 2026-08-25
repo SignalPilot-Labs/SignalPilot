@@ -12,8 +12,12 @@ class FileSystem(ABC):
         """Get the root path."""
 
     @abstractmethod
-    def list_files(self, path: str) -> list[FileInfo]:
-        """List files and directories in a given path."""
+    def list_files(self, path: str, *, recursive: bool = False) -> list[FileInfo]:
+        """List files and directories in a given path.
+
+        With ``recursive=True`` every directory's ``children`` is populated
+        with the full subtree, so the whole tree ships in one response.
+        """
 
     @abstractmethod
     def get_details(

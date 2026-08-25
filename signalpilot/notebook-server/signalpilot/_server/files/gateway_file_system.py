@@ -273,14 +273,23 @@ class GatewayFileSystem(FileSystem):
     def get_root(self) -> str:
         return ""
 
-    def list_files(self, path: str) -> list[FileInfo]:
+    def list_files(self, path: str, *, recursive: bool = False) -> list[FileInfo]:
         prefix = self._rel(path)
         try:
             entries = self._list_entries(prefix)
         except GatewayFileSystemError as exc:
             LOGGER.error("Gateway list_files failed: %s", exc)
             return []
+        if recursive:
+            # The manifest is already fully in memory — build the whole
+            # nested tree in one pass so a fully expanded file tree costs
+            # ONE round trip instead of one per directory.
+            return self._build_tree(entries, prefix)
+        return self._list_one_level(entries, prefix)
 
+    def _list_one_level(
+        self, entries: list[dict[str, Any]], prefix: str
+    ) -> list[FileInfo]:
         strip = f"{prefix}/" if prefix else ""
         dirs: dict[str, float | None] = {}
         files: list[FileInfo] = []
@@ -310,6 +319,56 @@ class GatewayFileSystem(FileSystem):
         ]
         files.sort(key=lambda info: info.name.lower())
         return dir_infos + files
+
+    def _build_tree(
+        self, entries: list[dict[str, Any]], prefix: str
+    ) -> list[FileInfo]:
+        """Assemble the full nested subtree under ``prefix`` in one pass."""
+        strip = f"{prefix}/" if prefix else ""
+        dir_nodes: dict[str, FileInfo] = {}
+        root_children: list[FileInfo] = []
+
+        def parent_children(parent_rel: str) -> list[FileInfo]:
+            if not parent_rel:
+                return root_children
+            node = dir_nodes.get(parent_rel)
+            if node is None:
+                # Materialize missing ancestor directories bottom-up.
+                grand, _, name = parent_rel.rpartition("/")
+                full = f"{prefix}/{parent_rel}" if prefix else parent_rel
+                node = self._make_file_info(full, is_directory=True)
+                dir_nodes[parent_rel] = node
+                parent_children(grand).append(node)
+            return node.children
+
+        for entry in entries:
+            rel = str(entry.get("path", ""))
+            if strip:
+                if not rel.startswith(strip):
+                    continue
+                rel = rel[len(strip):]
+            if not rel:
+                continue
+            parts = rel.split("/")
+            if any(p in IGNORE_NAMES for p in parts):
+                continue
+            name = parts[-1]
+            if name == _DIR_PLACEHOLDER:
+                parent_children("/".join(parts[:-1]))
+                continue
+            full = f"{prefix}/{rel}" if prefix else rel
+            parent_children("/".join(parts[:-1])).append(
+                self._make_file_info(full, last_modified=entry.get("mtime") or None)
+            )
+
+        def sort_level(children: list[FileInfo]) -> None:
+            children.sort(key=lambda i: (not i.is_directory, i.name.lower()))
+            for c in children:
+                if c.is_directory:
+                    sort_level(c.children)
+
+        sort_level(root_children)
+        return root_children
 
     def get_details(
         self,

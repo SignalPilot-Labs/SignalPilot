@@ -24,7 +24,12 @@ function collectErrors(page: Page): string[] {
   const errors: string[] = [];
   page.on("pageerror", (err) => errors.push(`PAGE: ${err.message.slice(0, 300)}`));
   page.on("console", (msg) => {
-    if (msg.type() === "error") errors.push(`CONSOLE: ${msg.text().slice(0, 300)}`);
+    if (msg.type() !== "error") return;
+    const url = msg.location()?.url ?? "";
+    // Schema fetches for connections whose upstream DB is down legitimately
+    // fail; that is environment state, not a notebook defect.
+    if (/\/connections\/[^/]+\/schema/.test(url)) return;
+    errors.push(`CONSOLE: ${msg.text().slice(0, 300)} [${url.slice(-80)}]`);
   });
   return errors;
 }

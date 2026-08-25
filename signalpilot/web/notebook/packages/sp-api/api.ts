@@ -4220,6 +4220,11 @@ export interface components {
     FileListRequest: {
       /** @default null */
       path?: string | null;
+      /**
+       * Return the entire subtree in one response (children nested).
+       * @default false
+       */
+      recursive?: boolean;
     };
     /** FileListResponse */
     FileListResponse: {

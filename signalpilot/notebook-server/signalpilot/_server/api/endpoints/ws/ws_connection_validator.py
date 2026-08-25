@@ -94,6 +94,24 @@ class WebSocketConnectionValidator:
         branch = self.app_state.query_params("branch") or "main"
         directory = self.app_state.session_manager.workspace.directory
 
+        # S3 mode: this runtime is bound to exactly one project's workspace
+        # store (SP_PROJECT_ID). A session for any other project would silently
+        # read from and WRITE TO the wrong project's store — fail closed.
+        import os
+
+        from signalpilot._server.files.workspace import is_s3_workspace
+
+        pinned = os.environ.get("SP_PROJECT_ID", "").strip()
+        if is_s3_workspace() and project_id and pinned and project_id != pinned:
+            print(
+                f"[WS START] project mismatch: request={project_id} pinned={pinned}",
+                flush=True,
+            )
+            await self.websocket.close(
+                WebSocketCodes.FORBIDDEN, "SP_PROJECT_MISMATCH"
+            )
+            return None
+
         if not file_key.startswith(NEW_FILE):
             try:
                 resolved_file = resolve_notebook_file(file_key, directory)

@@ -105,7 +105,27 @@ class GatewayFileSystem(FileSystem):
 
     @staticmethod
     def _rel(path: str) -> str:
-        rel = posixpath.normpath(path.replace("\\", "/").strip("/"))
+        p = str(path).replace("\\", "/")
+        # Session machinery passes absolute OS paths rooted at the workspace
+        # directory (e.g. "/workspace/notebooks/intro.py", or the root itself
+        # from the file tree). Those map onto the store root — otherwise
+        # "/workspace" would be treated as a "workspace/" prefix filter and
+        # match nothing.
+        if p.startswith("/"):
+            from signalpilot._server.files.path_confinement import (
+                workspace_roots,
+            )
+
+            for root in workspace_roots():
+                root_p = str(root).replace("\\", "/").rstrip("/")
+                if not root_p.startswith("/"):
+                    continue
+                if p == root_p:
+                    return ""
+                if p.startswith(root_p + "/"):
+                    p = p[len(root_p) + 1 :]
+                    break
+        rel = posixpath.normpath(p.strip("/"))
         if rel in (".", ""):
             return ""
         if rel.startswith(".."):

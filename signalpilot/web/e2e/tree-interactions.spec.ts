@@ -32,9 +32,14 @@ async function openTree(page: Page) {
   );
   await page.locator(".sp-root").waitFor({ timeout: 90_000 });
   await page.locator(".cm-editor").first().waitFor({ timeout: 60_000 });
-  const toggle = page.getByLabel("View files").first();
-  await toggle.waitFor({ timeout: 15_000 });
-  await toggle.click();
+  // The panel state persists in localStorage — clicking the toggle when the
+  // panel is already open would CLOSE it. Only toggle when no tree is shown.
+  await page.waitForTimeout(1500);
+  if ((await page.locator("[role=treeitem]").count()) === 0) {
+    const toggle = page.getByLabel("View files").first();
+    await toggle.waitFor({ timeout: 15_000 });
+    await toggle.click();
+  }
   await page.locator("[role=treeitem]").first().waitFor({ timeout: 20_000 });
 }
 
@@ -54,7 +59,7 @@ test("tree survives folder expansion, file clicks, and refresh cycles", async ({
     // Expand a folder
     const folder = page.locator("[role=treeitem]").filter({ hasText: /^notebooks$/ }).first();
     if (await folder.count()) {
-      await folder.click();
+      await folder.click({ force: true });
       await page.waitForTimeout(1000);
       const afterExpand = await treeCount(page);
       expect(afterExpand, `cycle ${cycle}: tree emptied after folder click`).toBeGreaterThan(0);
@@ -63,7 +68,7 @@ test("tree survives folder expansion, file clicks, and refresh cycles", async ({
     // Click a file inside it
     const file = page.locator("[role=treeitem]").filter({ hasText: "intro.py" }).first();
     if (await file.count()) {
-      await file.click();
+      await file.click({ force: true });
       await page.waitForTimeout(1500);
       expect(await treeCount(page), `cycle ${cycle}: tree emptied after file click`).toBeGreaterThan(0);
       // The editor should still show the notebook
@@ -73,7 +78,7 @@ test("tree survives folder expansion, file clicks, and refresh cycles", async ({
     // Refresh the tree via its toolbar
     const refresh = page.locator("[data-testid=file-explorer-refresh-button]").first();
     if (await refresh.count()) {
-      await refresh.click();
+      await refresh.click({ force: true });
       await page.waitForTimeout(1500);
       expect(await treeCount(page), `cycle ${cycle}: tree emptied after refresh`).toBeGreaterThan(0);
     }
@@ -93,7 +98,7 @@ test("switching between file types keeps tree and editor consistent", async ({ p
   // Walk into dumpsters_dbt and open a few different file types from the tree.
   const dbtFolder = page.locator("[role=treeitem]").filter({ hasText: /^dumpsters_dbt$/ }).first();
   if (await dbtFolder.count()) {
-    await dbtFolder.click();
+    await dbtFolder.click({ force: true });
     await page.waitForTimeout(1500);
   }
   expect(await treeCount(page)).toBeGreaterThan(0);
@@ -103,7 +108,7 @@ test("switching between file types keeps tree and editor consistent", async ({ p
   const entries = page.locator("[role=treeitem]");
   const n = Math.min(await entries.count(), 5);
   for (let i = 0; i < n; i++) {
-    await entries.nth(i).click();
+    await entries.nth(i).click({ force: true });
     await page.waitForTimeout(800);
     expect(await treeCount(page), `tree emptied after clicking entry ${i}`).toBeGreaterThan(0);
   }

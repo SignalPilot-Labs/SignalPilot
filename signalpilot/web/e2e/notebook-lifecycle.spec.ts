@@ -1,5 +1,7 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
 
+import { resolveProject } from "./helpers";
+
 /**
  * The canonical end-to-end user journey on Runtime v2:
  *
@@ -34,29 +36,36 @@ test.describe.serial("Notebook lifecycle (hello world)", () => {
 
   test.beforeAll(async ({ request }) => {
     apiKey = await getApiKey(request);
-    // Fresh project per run — the whole point is exercising the cold path.
-    const resp = await request.post(`${GATEWAY}/api/workspace-projects`, {
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      data: {
-        name: `e2e-hello-${Date.now().toString(36)}`,
-        display_name: "E2E hello world",
-        description: "notebook-lifecycle.spec.ts",
-        source: "managed",
-        tags: ["e2e"],
-      },
-    });
-    expect(resp.ok(), `project create: ${resp.status()}`).toBe(true);
-    projectId = ((await resp.json()) as { id: string }).id;
+    // Direct mode binds the runtime to ONE project's workspace store
+    // (SP_PROJECT_ID) — sessions for other projects are refused
+    // (SP_PROJECT_MISMATCH), so this journey runs in the pinned project.
+    // Vercel mode launches a per-project sandbox and has no such pin.
+    projectId = (await resolveProject(request)).id;
+    // Clean slate: earlier suites leave kernel sessions (and their save
+    // dialogs / concurrent editors) behind, which races the __new__ boot.
+    await request.delete(`${GATEWAY}/api/notebook-sessions`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 3000));
   });
 
   test.afterAll(async ({ request }) => {
-    if (projectId) {
-      await request
-        .delete(`${GATEWAY}/api/workspace-projects/${projectId}`, {
-          headers: { Authorization: `Bearer ${apiKey}` },
-        })
-        .catch(() => {});
-    }
+    // Leave the shared fixture project as we found it.
+    if (!projectId) return;
+    const head = await request.get(
+      `${GATEWAY}/api/workspace-projects/${projectId}/revisions?branch=main&limit=1`,
+      { headers: { Authorization: `Bearer ${apiKey}` } },
+    );
+    const revs = ((await head.json()) as { revisions?: Array<{ revision: number }> }).revisions ?? [];
+    await request.post(`${GATEWAY}/api/workspace-projects/${projectId}/files:batch`, {
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      data: {
+        branch: "main",
+        base_revision: revs[0]?.revision ?? null,
+        deletes: [`${notebookName}.py`, `__sp__/session/${notebookName}.py.json`],
+        message: "e2e: remove lifecycle fixture notebook",
+      },
+    }).catch(() => {});
   });
 
   test("create notebook, run print('hello world'), see output", async ({ page }) => {
@@ -87,8 +96,14 @@ test.describe.serial("Notebook lifecycle (hello world)", () => {
     await expect(output.first()).toContainText("hello world", { timeout: 60_000 });
 
     // ── Save so it becomes a durable revision ──────────────────────
+    // A __new__ notebook has no name yet: Ctrl+S opens the Save dialog.
     await page.keyboard.press("Control+s");
-    await page.waitForTimeout(2500);
+    const dialog = page.getByText("Save notebook");
+    await dialog.waitFor({ timeout: 10_000 });
+    const nameInput = page.locator("dialog input, [role=dialog] input").first();
+    await nameInput.fill(`${notebookName}.py`);
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(3000);
 
     const fatal = errors.filter((e) => e.includes("TypeError") || e.includes("500 "));
     expect(fatal, `no fatal errors: ${fatal.join(" | ")}`).toHaveLength(0);
@@ -104,7 +119,7 @@ test.describe.serial("Notebook lifecycle (hello world)", () => {
     );
     expect(list.ok(), `files:list ${list.status()}`).toBe(true);
     const files = ((await list.json()) as { files?: Array<{ path: string }> }).files ?? [];
-    const notebooks = files.filter((f) => f.path.endsWith(".py"));
+    const notebooks = files.filter((f) => f.path.includes("hello_e2e"));
     expect(notebooks.length, `expected a saved .py notebook, got: ${files.map((f) => f.path).join(", ")}`).toBeGreaterThan(0);
   });
 
@@ -119,7 +134,7 @@ test.describe.serial("Notebook lifecycle (hello world)", () => {
       },
     );
     const files = ((await list.json()) as { files?: Array<{ path: string }> }).files ?? [];
-    const nb = files.find((f) => f.path.endsWith(".py"));
+    const nb = files.find((f) => f.path.includes("hello_e2e") && f.path.endsWith(".py"));
     expect(nb, "saved notebook must exist").toBeTruthy();
 
     const errors = collectErrors(page);

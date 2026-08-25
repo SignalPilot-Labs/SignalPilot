@@ -264,13 +264,18 @@ export const EditApp: React.FC<AppProps> = ({
         // Cloud project: no sync — files pull on demand from the workspace
         // store. Pre-detect the dbt project (org setting / auto-detect on
         // the server) so the dbt panel is ready when opened.
+        //
+        // Deliberately NOT setting dbtProjectDirAtom here: project_info
+        // reports the server's materialized exec path, and rooting the file
+        // tree (or later client requests) at a server-side scratch dir
+        // renders the workspace empty. v2 dbt endpoints resolve their own
+        // project dir server-side. Clear any stale persisted value so an
+        // old sync-era path can't root the tree either.
+        store.set(dbtProjectDirAtom, null);
         apiCall<DbtProjectInfo>("/dbt/project_info", {})
           .then((info) => {
             if (info?.found) {
               store.set(dbtProjectInfoAtom, info);
-              if (info.projectDir) {
-                store.set(dbtProjectDirAtom, info.projectDir);
-              }
             }
           })
           .catch(() => {});

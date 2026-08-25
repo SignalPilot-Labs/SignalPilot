@@ -1037,6 +1037,7 @@ async def execute(*, request: Request) -> StreamingResponse:
 
                 final_text = ""
                 streamed_text = ""
+                text_blocks: list[str] = []
                 tool_names_by_id: dict[str, str] = {}
                 successful_run_cells = False
                 agent_failed = False
@@ -1100,7 +1101,14 @@ async def execute(*, request: Request) -> StreamingResponse:
                         streamed_text += event.content
                         continue
                     if event.type == "text":
-                        final_text = event.content
+                        # A run interleaves narration and the closing summary
+                        # as separate text blocks. Overwriting would keep only
+                        # the LAST block, which silently dropped the rest of
+                        # the answer whenever the closing block did not arrive
+                        # complete. Accumulate every block instead.
+                        if event.content.strip():
+                            text_blocks.append(event.content)
+                            final_text = "\n\n".join(text_blocks)
                         continue
                     if event.type == "error":
                         agent_failed = True

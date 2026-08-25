@@ -75,6 +75,15 @@ def _definition_with_filter() -> DashboardDefinition:
     return DashboardDefinition.model_validate(payload)
 
 
+def _single_bar_definition(*, drill_dimensions: list[str] | None) -> DashboardDefinition:
+    definition = _definition_with_filter()
+    payload = definition.model_dump(mode="json", by_alias=True)
+    payload["charts"] = [chart for chart in payload["charts"] if chart["id"] == "chart-bar"]
+    payload["tiles"] = [tile for tile in payload["tiles"] if tile["chartId"] == "chart-bar"]
+    payload["charts"][0]["signalPilot"]["drillDimensions"] = drill_dimensions
+    return DashboardDefinition.model_validate(payload)
+
+
 def _orders_context() -> DashboardSemanticContext:
     definition = _definition()
     return DashboardSemanticContext.model_validate(
@@ -211,6 +220,23 @@ def test_unknown_dashboard_filter_target_still_fails_after_canonicalization() ->
         validate_dashboard_semantics(definition, _orders_context())
 
 
+@pytest.mark.parametrize(
+    ("drill_dimensions", "message"),
+    [
+        (["orders.region"], "repeats query dimension: orders.region"),
+        (["orders.customer", "orders.customer"], "repeats a drill level"),
+    ],
+)
+def test_dashboard_semantics_rejects_duplicate_or_self_drill_levels(
+    drill_dimensions: list[str],
+    message: str,
+) -> None:
+    definition = _single_bar_definition(drill_dimensions=drill_dimensions)
+
+    with pytest.raises(ValueError, match=message):
+        validate_dashboard_semantics(definition, _orders_context())
+
+
 class _ModelClient:
     def __init__(self, payload: dict | list[dict]) -> None:
         self.payloads = payload if isinstance(payload, list) else [payload]
@@ -252,6 +278,7 @@ async def test_agent_update_is_forced_through_typed_operations() -> None:
     assert client.request["tool_choice"] == {"type": "tool", "name": "submit_dashboard_draft"}
     assert "question is a concise natural-language question" in client.request["system"]
     assert "Copy each filter target exactly" in client.request["system"]
+    assert "meaningful lower-grain drill hierarchy" in client.request["system"]
     request_payload = json.loads(client.request["messages"][0]["content"])
     assert request_payload["semantic_context"]["explores"][0]["dimensions"][3]["filter_target"] == {
         "tableName": "orders",
@@ -286,6 +313,53 @@ async def test_agent_repairs_filterless_creation_before_returning_the_draft() ->
     repair_payload = json.loads(client.requests[1]["messages"][0]["content"])
     assert "validation_feedback" in repair_payload
     assert "rejected_draft" in repair_payload
+
+
+@pytest.mark.asyncio
+async def test_agent_repairs_creation_without_usable_drills() -> None:
+    missing = _single_bar_definition(drill_dimensions=None)
+    repaired = _single_bar_definition(drill_dimensions=["orders.customer"])
+    client = _ModelClient(
+        [
+            {"summary": "Created the dashboard.", "definition": missing.model_dump(mode="json", by_alias=True)},
+            {
+                "summary": "Created the dashboard with a region-to-customer drill.",
+                "definition": repaired.model_dump(mode="json", by_alias=True),
+            },
+        ]
+    )
+    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
+
+    draft = await agent.draft(
+        prompt="Create an executive revenue dashboard",
+        context=_orders_context(),
+        base_definition=None,
+    )
+
+    assert draft.definition is not None
+    assert draft.definition.charts[0].signalPilot.drillDimensions == ["orders.customer"]
+    assert len(client.requests) == 2
+    repair_payload = json.loads(client.requests[1]["messages"][0]["content"])
+    assert "chart-bar" in repair_payload["validation_feedback"]
+    assert "lower-grain drill hierarchy" in repair_payload["validation_feedback"]
+
+
+@pytest.mark.asyncio
+async def test_agent_rejects_a_second_creation_without_usable_drills() -> None:
+    missing = _single_bar_definition(drill_dimensions=None)
+    client = _ModelClient(
+        {"summary": "Created the dashboard.", "definition": missing.model_dump(mode="json", by_alias=True)}
+    )
+    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
+
+    with pytest.raises(ValueError, match="requires usable drill hierarchies for applicable charts"):
+        await agent.draft(
+            prompt="Create an executive revenue dashboard",
+            context=_orders_context(),
+            base_definition=None,
+        )
+
+    assert len(client.requests) == 2
 
 
 @pytest.mark.asyncio

@@ -258,7 +258,17 @@ def validate_dashboard_semantics(definition: DashboardDefinition, context: Dashb
         if isinstance(chart.query, SemanticChartQuery):
             compile_metric_query(chart.query, context)
             valid_fields = fields_by_explore.get(chart.query.exploreName, set())
-            for field_id in chart.signalPilot.drillDimensions or []:
+            drill_dimensions = chart.signalPilot.drillDimensions or []
+            repeated_query_dimensions = [
+                field_id for field_id in drill_dimensions if field_id in chart.query.dimensions
+            ]
+            if repeated_query_dimensions:
+                raise ValueError(
+                    f"Drill hierarchy for chart {chart.id} repeats query dimension: {repeated_query_dimensions[0]}"
+                )
+            if len(drill_dimensions) != len(set(drill_dimensions)):
+                raise ValueError(f"Drill hierarchy for chart {chart.id} repeats a drill level")
+            for field_id in drill_dimensions:
                 if field_id not in valid_fields:
                     raise ValueError(f"Unknown drill field: {field_id}")
             for field_id in chart.signalPilot.tableGroups or []:

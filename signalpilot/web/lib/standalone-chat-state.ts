@@ -12,6 +12,197 @@ export type OptimisticUserMessage = {
   createdAt: number;
 };
 
+export type StandaloneRunActivity = {
+  phase: "analyzing" | "running_cells" | "fixing_query";
+  label: string;
+  detail: string;
+};
+
+const DEFAULT_RUN_ACTIVITY: StandaloneRunActivity = {
+  phase: "analyzing",
+  label: "Analyzing project",
+  detail: "Finding the relevant models and data",
+};
+
+function eventString(event: StandaloneChatEvent, key: string): string {
+  const value = event.payload[key];
+  return typeof value === "string" ? value : "";
+}
+
+function toolSuffix(tool: string): string {
+  return tool.split("__").at(-1) ?? tool;
+}
+
+/**
+ * Convert low-level runtime events into the small set of stages shown in the
+ * live assistant bubble. The full event payload remains available in View work.
+ */
+export function deriveStandaloneRunActivity(
+  events: StandaloneChatEvent[],
+  runId: string,
+): StandaloneRunActivity {
+  let activity = DEFAULT_RUN_ACTIVITY;
+  let repairing = false;
+
+  for (const event of events
+    .filter((candidate) => candidate.run_id === runId)
+    .sort((left, right) => left.sequence - right.sequence)) {
+    if (
+      (event.type === "cell_executed" &&
+        eventString(event, "status") === "failed") ||
+      (event.type === "tool_completed" && event.payload.error === true)
+    ) {
+      repairing = true;
+      activity = {
+        phase: "fixing_query",
+        label: "Fixing query",
+        detail: "Reviewing an execution error",
+      };
+      continue;
+    }
+
+    if (event.type === "progress") {
+      const progress = eventString(event, "label");
+      if (/reconnect|restart|recover|repair|fix/i.test(progress)) {
+        repairing = true;
+        activity = {
+          phase: "fixing_query",
+          label: "Fixing query",
+          detail: progress,
+        };
+      }
+      continue;
+    }
+
+    if (event.type === "cell_executed") {
+      repairing = false;
+      activity = {
+        phase: "running_cells",
+        label: "Running cells",
+        detail: "Notebook analysis completed",
+      };
+      continue;
+    }
+
+    if (event.type === "notebook_started") {
+      activity = {
+        phase: "running_cells",
+        label: "Running cells",
+        detail: repairing
+          ? "Restarting notebook analysis"
+          : "Starting notebook analysis",
+      };
+      continue;
+    }
+
+    if (event.type !== "tool_started") continue;
+    const tool = toolSuffix(eventString(event, "tool"));
+
+    if (tool === "run_cells") {
+      activity = repairing
+        ? {
+            phase: "fixing_query",
+            label: "Fixing query",
+            detail: "Retrying notebook cells",
+          }
+        : {
+            phase: "running_cells",
+            label: "Running cells",
+            detail: "Executing notebook analysis",
+          };
+      continue;
+    }
+
+    if (tool === "edit_notebook") {
+      activity = repairing
+        ? {
+            phase: "fixing_query",
+            label: "Fixing query",
+            detail: "Updating notebook analysis",
+          }
+        : {
+            phase: "running_cells",
+            label: "Running cells",
+            detail: "Preparing notebook analysis",
+          };
+      continue;
+    }
+
+    if (tool === "get_notebook_errors") {
+      activity = repairing
+        ? {
+            phase: "fixing_query",
+            label: "Fixing query",
+            detail: "Checking the notebook error",
+          }
+        : {
+            phase: "running_cells",
+            label: "Running cells",
+            detail: "Checking notebook output",
+          };
+      continue;
+    }
+
+    if (
+      tool === "start_analysis_notebook" ||
+      tool === "get_lightweight_cell_map"
+    ) {
+      activity = {
+        phase: "running_cells",
+        label: "Running cells",
+        detail:
+          tool === "start_analysis_notebook"
+            ? "Starting notebook analysis"
+            : "Inspecting notebook cells",
+      };
+      continue;
+    }
+
+    if (
+      repairing &&
+      /debug|validate|explain|plan_query|query_database/.test(tool)
+    ) {
+      activity = {
+        phase: "fixing_query",
+        label: "Fixing query",
+        detail: "Validating the revised query",
+      };
+      continue;
+    }
+
+    const analysisDetails: Record<string, string> = {
+      inspect_dbt: "Inspecting dbt metadata",
+      list_tables: "Reviewing available tables",
+      list_semantic_metrics: "Reviewing available metrics",
+      schema_overview: "Reviewing the project schema",
+      schema_ddl: "Inspecting table definitions",
+      schema_link: "Tracing project relationships",
+      schema_statistics: "Reviewing schema statistics",
+      describe_table: "Inspecting relevant fields",
+      explore_table: "Exploring relevant data",
+      explore_column: "Inspecting relevant fields",
+      explore_columns: "Inspecting relevant fields",
+      get_relationships: "Tracing data relationships",
+      find_join_path: "Finding the right data relationships",
+      verify_metric_conformance: "Checking metric definitions",
+      get_date_boundaries: "Checking data freshness",
+      plan_query: "Planning a governed query",
+      estimate_query_cost: "Checking query scope",
+      explain_query: "Checking the query plan",
+      validate_sql: "Validating the query",
+      debug_cte_query: "Checking the query",
+      query_database: "Querying relevant data",
+    };
+    activity = {
+      phase: "analyzing",
+      label: "Analyzing project",
+      detail: analysisDetails[tool] ?? "Working with the relevant data",
+    };
+  }
+
+  return activity;
+}
+
 export function appendOptimisticUserMessage(
   detail: StandaloneConversationDetail,
   optimistic: OptimisticUserMessage,
@@ -31,6 +222,28 @@ export function appendOptimisticUserMessage(
   return {
     ...detail,
     messages: [...detail.messages, message],
+  };
+}
+
+export function markStandaloneRunStopped(
+  detail: StandaloneConversationDetail,
+  runId: string,
+  stoppedAt = new Date().toISOString(),
+): StandaloneConversationDetail {
+  if (detail.current_run?.id !== runId) return detail;
+  return {
+    ...detail,
+    conversation: {
+      ...detail.conversation,
+      run_status: "cancelled",
+      updated_at: Date.parse(stoppedAt) / 1_000,
+    },
+    current_run: {
+      ...detail.current_run,
+      status: "cancelled",
+      cancellation_requested_at: stoppedAt,
+      terminal_at: stoppedAt,
+    },
   };
 }
 

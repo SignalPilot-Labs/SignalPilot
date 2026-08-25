@@ -64,22 +64,30 @@ import {
 } from "~/lib/api";
 import { StandaloneArtifactContext } from "~/components/chat/standalone-artifact-context";
 import { StandaloneChatComposer } from "~/components/chat/standalone-chat-composer";
+import { RunActivityBlocks, RunTimeline } from "~/components/chat/run-timeline";
+import { ReplayControls } from "~/components/chat/replay-controls";
+import { foldRunBlocks, foldRunSteps } from "~/lib/chat-run-steps";
+import { useChatReplay } from "~/lib/chat-replay";
 import { useToast } from "~/components/ui/toast";
 import {
   appendOptimisticUserMessage,
   applyStandaloneChatEvent,
   assembleStandaloneRunText,
   containsStandaloneSubmission,
+  deriveStandaloneRunActivity,
   isStandaloneRunReconciled,
+  markStandaloneRunStopped,
   standaloneMessageKey,
   upsertStandaloneConversation,
   type OptimisticUserMessage,
+  type StandaloneRunActivity,
 } from "~/lib/standalone-chat-state";
 import { projectSettingsHref } from "~/lib/project-settings-route";
 
-type UiMessage = StandaloneChatMessage & {
+export type UiMessage = StandaloneChatMessage & {
   runId?: string;
   runStatus?: StandaloneChatRunStatus;
+  activity?: StandaloneRunActivity;
   synthetic?: boolean;
 };
 
@@ -90,7 +98,7 @@ type ChatUiContextValue = {
   onRetry: (runId: string) => Promise<void>;
 };
 
-const ChatUiContext = createContext<ChatUiContextValue | null>(null);
+export const ChatUiContext = createContext<ChatUiContextValue | null>(null);
 
 function useChatUi() {
   const value = useContext(ChatUiContext);
@@ -167,63 +175,8 @@ function eventText(
 
 function WorkTimeline({ runId }: { runId: string }) {
   const { events } = useChatUi();
-  const work = events.filter(
-    (event) => event.run_id === runId && event.type !== "text_delta",
-  );
-  if (!work.length) {
-    return (
-      <p className="text-xs text-[var(--color-text-dim)]">
-        Work details will appear as the analysis progresses.
-      </p>
-    );
-  }
-  return (
-    <ol className="space-y-2" aria-label="Analysis work">
-      {work.map((event) => {
-        const label =
-          eventText(event, "label") ||
-          eventText(event, "message") ||
-          eventText(event, "tool") ||
-          eventText(event, "filename") ||
-          event.type.replaceAll("_", " ");
-        const expandable =
-          event.type === "tool_started" ||
-          event.type === "tool_completed" ||
-          event.type === "source" ||
-          event.type === "intermediate_result" ||
-          event.type === "sql" ||
-          event.type === "error";
-        const summary = eventText(event, "summary");
-        return (
-          <li
-            key={`${event.run_id}-${event.sequence}`}
-            className="relative pl-5 text-xs text-[var(--color-text-muted)]"
-          >
-            <span className="absolute left-0 top-1.5 h-1.5 w-1.5 rounded-full bg-[var(--color-border-active)]" />
-            {expandable ? (
-              <details>
-                <summary className="select-none hover:text-[var(--color-text)]">
-                  {label}
-                </summary>
-                <pre className="mt-2 max-h-56 overflow-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-input)] p-3 text-[11px] leading-relaxed text-[var(--color-text-dim)]">
-                  {JSON.stringify(event.payload, null, 2)}
-                </pre>
-              </details>
-            ) : (
-              <span>
-                {label}
-                {summary && summary !== label && (
-                  <span className="mt-0.5 block text-[var(--color-text-dim)]">
-                    {summary}
-                  </span>
-                )}
-              </span>
-            )}
-          </li>
-        );
-      })}
-    </ol>
-  );
+  const steps = useMemo(() => foldRunSteps(events, runId), [events, runId]);
+  return <RunTimeline steps={steps} />;
 }
 
 export type ArtifactPreviewData = Pick<
@@ -520,7 +473,15 @@ export function ArtifactPreview({
   );
 }
 
-function AssistantMessage({ message }: { message: UiMessage }) {
+function AssistantMessage({
+  message,
+  onReplay,
+  replayMode = false,
+}: {
+  message: UiMessage;
+  onReplay?: () => void;
+  replayMode?: boolean;
+}) {
   const runId =
     message.runId ??
     (typeof message.metadata.run_id === "string"
@@ -532,8 +493,17 @@ function AssistantMessage({ message }: { message: UiMessage }) {
       ? (message.metadata.status as StandaloneChatRunStatus)
       : "completed");
   const [showWork, setShowWork] = useState(false);
-  const { artifacts, onRetry, onStop } = useChatUi();
+  const { artifacts, events, onRetry, onStop } = useChatUi();
   const { toast } = useToast();
+  const blocks = useMemo(
+    () => (runId ? foldRunBlocks(events, runId) : []),
+    [events, runId],
+  );
+  const steps = useMemo(
+    () => blocks.flatMap((block) => (block.kind === "steps" ? block.steps : [])),
+    [blocks],
+  );
+  const blocksHaveText = blocks.some((block) => block.kind === "text");
   const attachedArtifacts = artifacts.filter(
     (artifact) =>
       artifact.assistant_message_id === message.id || artifact.run_id === runId,
@@ -558,11 +528,18 @@ function AssistantMessage({ message }: { message: UiMessage }) {
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="chat-markdown">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {message.content}
-            </ReactMarkdown>
-          </div>
+          {(running || blocks.length > 0) && (
+            <div role="status" aria-live="polite">
+              <RunActivityBlocks blocks={blocks} running={running} />
+            </div>
+          )}
+          {!blocksHaveText && message.content && (
+            <div className="chat-markdown">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {message.content}
+              </ReactMarkdown>
+            </div>
+          )}
           {attachedArtifacts.length > 0 && (
             <div className="mt-5 space-y-4">
               {attachedArtifacts.map((artifact) => (
@@ -580,6 +557,7 @@ function AssistantMessage({ message }: { message: UiMessage }) {
               This run was stopped. Completed work remains available below.
             </p>
           )}
+          {!replayMode && (
           <div className="mt-3 flex flex-wrap items-center gap-1.5">
             {successful && (
               <button
@@ -595,7 +573,18 @@ function AssistantMessage({ message }: { message: UiMessage }) {
                 Copy
               </button>
             )}
-            {runId && (
+            {onReplay && successful && (
+              <button
+                type="button"
+                data-testid="chat-replay-button"
+                onClick={onReplay}
+                className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+              >
+                <Play className="h-3 w-3" />
+                Replay
+              </button>
+            )}
+            {runId && (runtimeArchiveAvailable || steps.length === 0) && (
               <button
                 type="button"
                 onClick={() => {
@@ -639,6 +628,7 @@ function AssistantMessage({ message }: { message: UiMessage }) {
               </button>
             )}
           </div>
+          )}
           {showWork && runId && !runtimeArchiveAvailable && (
             <div className="mt-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-input)] p-4">
               <WorkTimeline runId={runId} />
@@ -663,11 +653,99 @@ function UserMessage({ message }: { message: UiMessage }) {
   );
 }
 
-function ChatMessage({ message }: { message: UiMessage }) {
+function messageRunId(message: UiMessage): string {
+  return (
+    message.runId ??
+    (typeof message.metadata.run_id === "string" ? message.metadata.run_id : "")
+  );
+}
+
+/**
+ * Re-renders a completed message from its recorded events on the compressed
+ * replay clock: 4x speed, tool waits capped at 10s, text re-streamed.
+ */
+function AssistantMessageReplay({
+  message,
+  runId,
+  onExit,
+}: {
+  message: UiMessage;
+  runId: string;
+  onExit: () => void;
+}) {
+  const { events, artifacts, onStop, onRetry } = useChatUi();
+  const replay = useChatReplay(events, artifacts, runId);
+  const replayMessage = useMemo<UiMessage>(
+    () => ({
+      ...message,
+      // Blocks reconstruct the text from replayed deltas; suppress the
+      // persisted content so it does not render ahead of the stream.
+      content: "",
+      runId,
+      runStatus: replay.finished
+        ? (message.runStatus ?? "completed")
+        : "running",
+    }),
+    [message, replay.finished, runId],
+  );
+  return (
+    <div data-testid="chat-replay">
+      <div className="mx-auto w-full max-w-3xl px-6 pt-4">
+        <ReplayControls
+          elapsed={replay.elapsed}
+          totalMs={replay.totalMs}
+          playing={replay.playing}
+          onTogglePlay={replay.togglePlay}
+          onRestart={replay.restart}
+          onScrub={replay.scrub}
+          onExit={onExit}
+        />
+      </div>
+      <ChatUiContext.Provider
+        value={{
+          events: replay.visibleEvents,
+          artifacts: replay.visibleArtifacts,
+          onStop,
+          onRetry,
+        }}
+      >
+        <AssistantMessage message={replayMessage} replayMode />
+      </ChatUiContext.Provider>
+    </div>
+  );
+}
+
+function ReplayableAssistantMessage({ message }: { message: UiMessage }) {
+  const { events } = useChatUi();
+  const [replaying, setReplaying] = useState(false);
+  const runId = messageRunId(message);
+  const canReplay =
+    Boolean(runId) &&
+    events.some(
+      (event) => event.run_id === runId && event.type !== "status",
+    );
+  if (replaying && runId) {
+    return (
+      <AssistantMessageReplay
+        message={message}
+        runId={runId}
+        onExit={() => setReplaying(false)}
+      />
+    );
+  }
+  return (
+    <AssistantMessage
+      message={message}
+      onReplay={canReplay ? () => setReplaying(true) : undefined}
+    />
+  );
+}
+
+export function ChatMessage({ message }: { message: UiMessage }) {
   return message.role === "user" ? (
     <UserMessage message={message} />
   ) : (
-    <AssistantMessage message={message} />
+    <ReplayableAssistantMessage message={message} />
   );
 }
 
@@ -1272,16 +1350,15 @@ export function StandaloneDataChat({
         const error = [...runEvents]
           .reverse()
           .find((event) => event.type === "error");
-        const progress = [...runEvents]
-          .reverse()
-          .find((event) => event.type === "progress");
         const content =
           (clarification && eventText(clarification, "message")) ||
           streamed ||
           (error && eventText(error, "message")) ||
           (currentRun.status === "cancelled"
             ? "This run was stopped."
-            : eventText(progress, "label") || "Preparing your answer…");
+            : currentRun.status === "completed"
+              ? "Finalizing your answer…"
+              : "");
         messages.push({
           id: `run-${currentRun.id}`,
           role: "assistant",
@@ -1291,6 +1368,7 @@ export function StandaloneDataChat({
           metadata: { run_id: currentRun.id, optimistic: true },
           runId: currentRun.id,
           runStatus: currentRun.status,
+          activity: deriveStandaloneRunActivity(runEvents, currentRun.id),
           synthetic: true,
         });
       }
@@ -1316,11 +1394,12 @@ export function StandaloneDataChat({
       messages.push({
         id: `pending-assistant-${pendingSubmission.id}`,
         role: "assistant",
-        content: "Preparing your answer…",
+        content: "",
         sequence: Number.MAX_SAFE_INTEGER,
         created_at: pendingSubmission.createdAt,
         metadata: { optimistic: true },
         runStatus: "queued",
+        activity: deriveStandaloneRunActivity([], ""),
         synthetic: true,
       });
     }
@@ -1480,18 +1559,45 @@ export function StandaloneDataChat({
 
   const onStop = useCallback(
     async (runId: string) => {
+      const stoppedAt = new Date().toISOString();
+      await mutateDetail(
+        (current) =>
+          current
+            ? markStandaloneRunStopped(current, runId, stoppedAt)
+            : current,
+        { revalidate: false },
+      );
+      await mutateHistory(
+        (current) =>
+          current
+            ? {
+                conversations: current.conversations.map((conversation) =>
+                  conversation.id === conversationId
+                    ? {
+                        ...conversation,
+                        run_status: "cancelled" as const,
+                        updated_at: Date.parse(stoppedAt) / 1_000,
+                      }
+                    : conversation,
+                ),
+              }
+            : current,
+        { revalidate: false },
+      );
       try {
         await cancelStandaloneRun(runId);
-        await mutateDetail();
-        await mutateHistory();
+        void mutateDetail();
+        void mutateHistory();
       } catch (error) {
+        void mutateDetail();
+        void mutateHistory();
         toast(
           error instanceof Error ? error.message : "Could not stop the run",
           "error",
         );
       }
     },
-    [mutateDetail, mutateHistory, toast],
+    [conversationId, mutateDetail, mutateHistory, toast],
   );
   const onRetry = useCallback(
     async (runId: string) => {

@@ -1,7 +1,7 @@
 import { tableFromIPC } from "@uwdata/flechette";
 import { Logger } from "@/utils/Logger";
 import { Objects } from "@/utils/objects";
-import { batchedArrowLoader, createBatchedLoader } from "./batched";
+import { batchedArrowLoader, createBatchedLoader, isArrowUri } from "./batched";
 import type { DataFormat } from "./types";
 import { type DataType, read, typeParsers } from "./vega-loader";
 
@@ -144,8 +144,8 @@ export async function vegaLoadData<T = object>(
 ): Promise<T[]> {
   const { handleBigIntAndNumberLike = false, replacePeriod = false } = opts;
 
-  // Handle arrow data
-  if (url.endsWith(".arrow") || format?.type === "arrow") {
+  // Handle arrow data (file URLs, arrow-typed formats, or embedded data: URLs)
+  if (isArrowUri(url) || format?.type === "arrow") {
     const arrow = await batchedArrowLoader(url);
     return tableFromIPC(arrow, {
       useProxy: true,

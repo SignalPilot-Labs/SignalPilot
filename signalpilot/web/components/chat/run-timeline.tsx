@@ -336,8 +336,7 @@ function StatusDot({ status }: { status: RunStep["status"] }) {
 const StepRow = memo(function StepRow({ step }: { step: RunStep }) {
   const expandable = stepHasBody(step);
   const [userToggle, setUserToggle] = useState<boolean | null>(null);
-  const open =
-    userToggle ?? (step.status === "running" || step.status === "failed");
+  const open = userToggle ?? step.status === "running";
   const Icon = CATEGORY_ICONS[step.category] ?? Play;
   const duration = formatStepDuration(step.durationMs);
   const preview = stepPreview(step);

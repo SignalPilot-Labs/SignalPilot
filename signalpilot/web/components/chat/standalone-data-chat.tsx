@@ -65,7 +65,9 @@ import {
 import { StandaloneArtifactContext } from "~/components/chat/standalone-artifact-context";
 import { StandaloneChatComposer } from "~/components/chat/standalone-chat-composer";
 import { RunActivityBlocks, RunTimeline } from "~/components/chat/run-timeline";
+import { ReplayControls } from "~/components/chat/replay-controls";
 import { foldRunBlocks, foldRunSteps } from "~/lib/chat-run-steps";
+import { useChatReplay } from "~/lib/chat-replay";
 import { useToast } from "~/components/ui/toast";
 import {
   appendOptimisticUserMessage,
@@ -471,7 +473,15 @@ export function ArtifactPreview({
   );
 }
 
-function AssistantMessage({ message }: { message: UiMessage }) {
+function AssistantMessage({
+  message,
+  onReplay,
+  replayMode = false,
+}: {
+  message: UiMessage;
+  onReplay?: () => void;
+  replayMode?: boolean;
+}) {
   const runId =
     message.runId ??
     (typeof message.metadata.run_id === "string"
@@ -547,6 +557,7 @@ function AssistantMessage({ message }: { message: UiMessage }) {
               This run was stopped. Completed work remains available below.
             </p>
           )}
+          {!replayMode && (
           <div className="mt-3 flex flex-wrap items-center gap-1.5">
             {successful && (
               <button
@@ -560,6 +571,17 @@ function AssistantMessage({ message }: { message: UiMessage }) {
               >
                 <Copy className="h-3 w-3" />
                 Copy
+              </button>
+            )}
+            {onReplay && successful && (
+              <button
+                type="button"
+                data-testid="chat-replay-button"
+                onClick={onReplay}
+                className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+              >
+                <Play className="h-3 w-3" />
+                Replay
               </button>
             )}
             {runId && (runtimeArchiveAvailable || steps.length === 0) && (
@@ -606,6 +628,7 @@ function AssistantMessage({ message }: { message: UiMessage }) {
               </button>
             )}
           </div>
+          )}
           {showWork && runId && !runtimeArchiveAvailable && (
             <div className="mt-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-input)] p-4">
               <WorkTimeline runId={runId} />
@@ -630,11 +653,99 @@ function UserMessage({ message }: { message: UiMessage }) {
   );
 }
 
+function messageRunId(message: UiMessage): string {
+  return (
+    message.runId ??
+    (typeof message.metadata.run_id === "string" ? message.metadata.run_id : "")
+  );
+}
+
+/**
+ * Re-renders a completed message from its recorded events on the compressed
+ * replay clock: 4x speed, tool waits capped at 10s, text re-streamed.
+ */
+function AssistantMessageReplay({
+  message,
+  runId,
+  onExit,
+}: {
+  message: UiMessage;
+  runId: string;
+  onExit: () => void;
+}) {
+  const { events, artifacts, onStop, onRetry } = useChatUi();
+  const replay = useChatReplay(events, artifacts, runId);
+  const replayMessage = useMemo<UiMessage>(
+    () => ({
+      ...message,
+      // Blocks reconstruct the text from replayed deltas; suppress the
+      // persisted content so it does not render ahead of the stream.
+      content: "",
+      runId,
+      runStatus: replay.finished
+        ? (message.runStatus ?? "completed")
+        : "running",
+    }),
+    [message, replay.finished, runId],
+  );
+  return (
+    <div data-testid="chat-replay">
+      <div className="mx-auto w-full max-w-3xl px-6 pt-4">
+        <ReplayControls
+          elapsed={replay.elapsed}
+          totalMs={replay.totalMs}
+          playing={replay.playing}
+          onTogglePlay={replay.togglePlay}
+          onRestart={replay.restart}
+          onScrub={replay.scrub}
+          onExit={onExit}
+        />
+      </div>
+      <ChatUiContext.Provider
+        value={{
+          events: replay.visibleEvents,
+          artifacts: replay.visibleArtifacts,
+          onStop,
+          onRetry,
+        }}
+      >
+        <AssistantMessage message={replayMessage} replayMode />
+      </ChatUiContext.Provider>
+    </div>
+  );
+}
+
+function ReplayableAssistantMessage({ message }: { message: UiMessage }) {
+  const { events } = useChatUi();
+  const [replaying, setReplaying] = useState(false);
+  const runId = messageRunId(message);
+  const canReplay =
+    Boolean(runId) &&
+    events.some(
+      (event) => event.run_id === runId && event.type !== "status",
+    );
+  if (replaying && runId) {
+    return (
+      <AssistantMessageReplay
+        message={message}
+        runId={runId}
+        onExit={() => setReplaying(false)}
+      />
+    );
+  }
+  return (
+    <AssistantMessage
+      message={message}
+      onReplay={canReplay ? () => setReplaying(true) : undefined}
+    />
+  );
+}
+
 export function ChatMessage({ message }: { message: UiMessage }) {
   return message.role === "user" ? (
     <UserMessage message={message} />
   ) : (
-    <AssistantMessage message={message} />
+    <ReplayableAssistantMessage message={message} />
   );
 }
 

@@ -64,6 +64,7 @@ MCP_TOOL_SCOPES: dict[str, str] = {
     "notion_create_page": "write",
     "list_workspace_projects": "read",
     "run_notebook": "execute",
+    "read_notebook": "read",
     # Sandbox VM tools: additionally gated on the sandbox:execute JWT
     # capability inside the tool â€” only improvement runs receive it.
     "sandbox_exec": "execute",

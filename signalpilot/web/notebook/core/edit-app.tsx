@@ -260,45 +260,33 @@ export const EditApp: React.FC<AppProps> = ({
 
       const projectId = isNotionTrail ? null : urlProject || getGatewayProjectId();
 
-      if (projectId && !store.get(dbtProjectDirAtom)) {
-        // Cloud project: sync-down if not already synced by NotebookBoot.
-        // dbtProjectDirAtom being set means boot already synced.
-        try {
-          const result = await apiCall<{ local_dir?: string; file_count?: number }>("/project/sync-down", {});
-          if (result.local_dir) {
-            console.log(`[Sync] Synced ${result.file_count} files to ${result.local_dir}`);
-            store.set(dbtProjectDirAtom, result.local_dir);
-            store.set(fileTreeRefreshNonceAtom, (n: number) => n + 1);
-
-            // Pre-detect dbt project so the panel is ready when opened.
-            // Uses apiCall() which only needs the runtime health check — no kernel.
-            apiCall<DbtProjectInfo>("/dbt/project_info", { projectDir: result.local_dir })
-              .then((info) => {
-                if (info?.found) {
-                  store.set(dbtProjectInfoAtom, info);
-                }
-              })
-              .catch(() => {});
-          }
-        } catch (e) {
-          console.error("[Sync] Failed:", e);
-        }
-        // Sync complete — files are available on the pod.
-      } else {
-        // No cloud project — nothing to sync.
+      if (projectId) {
+        // Cloud project: no sync — files pull on demand from the workspace
+        // store. Pre-detect the dbt project (org setting / auto-detect on
+        // the server) so the dbt panel is ready when opened.
+        //
+        // Deliberately NOT setting dbtProjectDirAtom here: project_info
+        // reports the server's materialized exec path, and rooting the file
+        // tree (or later client requests) at a server-side scratch dir
+        // renders the workspace empty. v2 dbt endpoints resolve their own
+        // project dir server-side. Clear any stale persisted value so an
+        // old sync-era path can't root the tree either.
+        store.set(dbtProjectDirAtom, null);
+        apiCall<DbtProjectInfo>("/dbt/project_info", {})
+          .then((info) => {
+            if (info?.found) {
+              store.set(dbtProjectInfoAtom, info);
+            }
+          })
+          .catch(() => {});
       }
 
       const fileInUrl = currentSearchParams().get("file");
       const isRawFallback = store.get(rawFallbackAtom);
       const storedFilename = store.get(filenameAtom);
-      let filePath = isRawFallback && storedFilename ? storedFilename : fileInUrl;
-
-      // Resolve relative file paths to absolute using the synced project dir.
-      // URL has "models/schema.yml" but the pod needs the full path.
-      const projectDir = isNotionTrail ? null : store.get(dbtProjectDirAtom);
-      if (filePath && projectDir && !filePath.startsWith("/") && !filePath.startsWith("__new__")) {
-        filePath = `${projectDir.replace(/\/$/, "")}/${filePath}`;
-      }
+      // Workspace-relative paths go to the runtime as-is; it resolves them
+      // against the workspace root.
+      const filePath = isRawFallback && storedFilename ? storedFilename : fileInUrl;
 
       if (filePath && !filePath.startsWith("__new__")) {
         console.log("[EditApp.init] opening file tab:", filePath.slice(-50));

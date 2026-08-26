@@ -152,23 +152,29 @@ async def lifespan(app: FastAPI):
     if is_cloud_mode():
         logger.info("STARTUP: Cloud mode — sandbox, file browser, dbt projects disabled")
 
-    # Stop sessions whose pods do not exist after gateway startup.
-    # The next connection creates a new pod for the user.
+    # Stop running sessions whose compute no longer answers after a gateway
+    # restart. Handles are DB-backed, so live sandboxes reattach untouched;
+    # dead ones get marked stopped and the next connection recreates them.
     try:
-        from .orchestrator.kubernetes import KubernetesOrchestrator
+        from .notebooks.backends import get_notebook_backend
         from .store.notebook_sessions import list_stale_sessions, mark_stopped
-        orch = KubernetesOrchestrator()
+
+        backend = get_notebook_backend()
         factory = get_session_factory()
         async with factory() as db_session:
             stale = await list_stale_sessions(db_session, max_idle_seconds=0)
             for s in stale:
                 try:
-                    alive = await orch.is_pod_alive(s.pod_name, org_id=s.org_id or "")
+                    alive = bool(s.runtime_handle) and await backend.is_alive(s.runtime_handle)
                 except Exception:
                     alive = False
                 if not alive:
-                    await mark_stopped(db_session, session_id=s.id, org_id=s.org_id or "")
-                    logger.info("STARTUP: cleaned stale session %s (pod %s dead)", s.id, s.pod_name)
+                    await mark_stopped(db_session, session_id=s.session_id, org_id=s.org_id or "")
+                    logger.info(
+                        "STARTUP: cleaned stale session %s (runtime %s dead)",
+                        s.session_id,
+                        s.runtime_handle,
+                    )
             await db_session.commit()
     except Exception as e:
         logger.warning("STARTUP: stale session cleanup failed: %s", e)
@@ -313,43 +319,78 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("Schema refresh loop error: %s", e)
 
-    async def _notebook_cleanup_loop():
-        """Kill notebook pods with no ping for the configured idle timeout."""
-        from .config.k8s import get_k8s_settings
-        from .orchestrator.kubernetes import KubernetesOrchestrator
+    async def _notebook_lifecycle_loop():
+        """Runtime v2 session lifecycle, every 300 s:
+
+        - extend the execution grant of every session with a fresh ping (the
+          provider caps one grant; the loop keeps active sessions alive);
+        - flush-by-contract, snapshot, and release compute for idle sessions
+          (scale-to-zero — resume happens on the next request);
+        - destroy notebook-tagged sandboxes no live session row owns (the
+          crashed-gateway backstop the provider time limit only bounds).
+        """
+        import time as _time
+
+        from .config.notebooks import get_notebook_settings
+        from .notebooks.backends import VercelNotebookBackend, get_notebook_backend
+        from .notebooks.session_service import snapshot_idle_session
         from .store import notebook_sessions as ns
 
-        k8s_settings = get_k8s_settings()
-        orch = KubernetesOrchestrator()
         while True:
             await asyncio.sleep(300)
             try:
+                settings = get_notebook_settings()
+                if settings.resolved_backend() != "vercel":
+                    continue
+                backend = get_notebook_backend(settings)
                 factory = get_session_factory()
                 async with factory() as session:
-                    stale = await ns.list_stale_sessions(
-                        session, max_idle_seconds=k8s_settings.sp_notebook_idle_timeout
-                    )
-                    for s in stale:
-                        logger.info("Cleaning up stale notebook session %s (pod=%s)", s.id, s.pod_name)
-                        if s.pod_name:
-                            await orch.delete_pod(s.pod_name, org_id=s.org_id or "")
-                        await ns.mark_stopped(session, session_id=s.id, org_id=s.org_id or "")
+                    now = _time.time()
+                    for s in await ns.list_running_internal(session):
+                        if not s.runtime_handle:
+                            continue
+                        idle = now - (s.last_ping or 0)
+                        if idle < settings.idle_snapshot_seconds:
+                            try:
+                                await backend.extend(
+                                    s.runtime_handle, settings.session_grant_seconds
+                                )
+                                await ns.update_session_runtime(
+                                    session,
+                                    session_id=s.session_id,
+                                    org_id=s.org_id,
+                                    last_extend_at=now,
+                                )
+                            except Exception:
+                                logger.warning(
+                                    "Extend failed for session %s; snapshot backstop applies",
+                                    s.session_id,
+                                    exc_info=True,
+                                )
+                        else:
+                            logger.info(
+                                "Snapshotting idle notebook session %s (idle %.0fs)",
+                                s.session_id,
+                                idle,
+                            )
+                            await snapshot_idle_session(session, internal=s, backend=backend)
+                    if isinstance(backend, VercelNotebookBackend):
+                        keep = await ns.live_runtime_handles(session)
+                        reaped = await backend.reap_orphans(keep)
+                        if reaped:
+                            logger.info("Notebook sandbox reaper: destroyed %d orphan(s)", reaped)
             except Exception as e:
-                logger.warning("Notebook cleanup loop error: %s", e)
-            # F-13: reap sp-jwt-* Secrets orphaned by a gateway crash between
-            # Secret-create and ownerRef-patch. kube GC handles the happy path
-            # (ownerRef set); this catches leaks that survive a gateway restart.
-            try:
-                from .orchestrator.jwt_secret_gc import gc_orphan_jwt_secrets
+                logger.warning("Notebook lifecycle loop error: %s", e)
 
-                deleted = await gc_orphan_jwt_secrets(orch)
-                if deleted:
-                    logger.info("JWT-secret GC: deleted %d orphan Secret(s)", deleted)
-            except Exception as e:
-                logger.warning("JWT-secret GC error: %s", e)
-            # Eval pods stranded by a gateway restart mid-run: the run path
-            # deletes its pod in a finally, but bare pods have no TTL, so a
-            # crash leaves them Completed forever without this sweep.
+    async def _eval_pod_reaper_loop():
+        """Eval pods stranded by a gateway restart mid-run: the run path
+        deletes its pod in a finally, but bare pods have no TTL, so a crash
+        leaves them Completed forever without this sweep."""
+        from .orchestrator.kubernetes import KubernetesOrchestrator
+
+        orch = KubernetesOrchestrator()
+        while True:
+            await asyncio.sleep(300)
             try:
                 from .evals.backends import reap_terminal_eval_pods
 
@@ -451,7 +492,8 @@ async def lifespan(app: FastAPI):
     health_ping_task = asyncio.create_task(_health_ping_loop())
     cleanup_task = asyncio.create_task(_pool_cleanup_loop())
     refresh_task = asyncio.create_task(_schema_refresh_loop())
-    notebook_cleanup_task = asyncio.create_task(_notebook_cleanup_loop())
+    notebook_lifecycle_task = asyncio.create_task(_notebook_lifecycle_loop())
+    eval_pod_reaper_task = asyncio.create_task(_eval_pod_reaper_loop())
     knowledge_retention_task = asyncio.create_task(_knowledge_retention_loop())
     schema_watch_task = asyncio.create_task(_schema_watch_loop())
     eval_reaper_task = asyncio.create_task(_eval_reaper_loop())
@@ -507,7 +549,8 @@ async def lifespan(app: FastAPI):
         health_ping_task.cancel()
         cleanup_task.cancel()
         refresh_task.cancel()
-        notebook_cleanup_task.cancel()
+        notebook_lifecycle_task.cancel()
+        eval_pod_reaper_task.cancel()
         knowledge_retention_task.cancel()
         schema_watch_task.cancel()
         eval_reaper_task.cancel()

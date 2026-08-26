@@ -123,7 +123,15 @@ def delete_repo(project_id: str) -> bool:
         return False
 
     import shutil
-    shutil.rmtree(path)
+    import stat
+
+    def _clear_readonly_and_retry(func, target, exc):
+        # Git marks object files read-only; on Windows os.unlink refuses to
+        # delete them until the read-only bit is cleared.
+        os.chmod(target, stat.S_IWRITE)
+        func(target)
+
+    shutil.rmtree(path, onexc=_clear_readonly_and_retry)
     logger.info("Deleted bare repo: %s", path)
     return True
 
@@ -143,7 +151,17 @@ def clone_from_remote(project_id: str, clone_url: str) -> Path:
     """
     path = repo_path(project_id)
     if path.exists():
-        _run_git("fetch", "--all", cwd=path)
+        # Point the github remote at the provided URL before fetching: at
+        # repo-link time no remote exists yet, so a bare `fetch --all` is a
+        # silent no-op and the import "succeeds" without importing anything.
+        rc, _, _ = _run_git("remote", "get-url", _GITHUB_REMOTE, cwd=path)
+        if rc == 0:
+            _run_git("remote", "set-url", _GITHUB_REMOTE, clone_url, cwd=path)
+        else:
+            _run_git("remote", "add", _GITHUB_REMOTE, clone_url, cwd=path)
+        rc, _, err = _run_git("fetch", _GITHUB_REMOTE, cwd=path, timeout=120)
+        if rc != 0:
+            raise RuntimeError(f"git fetch {_GITHUB_REMOTE} failed: {err}")
         materialize_local_branches(project_id)
         return path
 
@@ -219,6 +237,19 @@ def _detect_remote_default_branch(path: Path) -> str | None:
     return None
 
 
+def _is_pristine_scaffold(path: Path, branch: str) -> bool:
+    """True when `branch` is the untouched "Initial empty project" commit.
+
+    Deliberately strict — exactly one commit AND a completely empty tree — so
+    a branch with any user content (or any history) is never overwritten.
+    """
+    rc, out, _ = _run_git("rev-list", "--count", f"refs/heads/{branch}", cwd=path)
+    if rc != 0 or out.strip() != "1":
+        return False
+    rc, out, _ = _run_git("ls-tree", "-r", f"refs/heads/{branch}", cwd=path)
+    return rc == 0 and not out.strip()
+
+
 def materialize_local_branches(project_id: str, default_branch: str | None = None) -> None:
     """Ensure local refs/heads/* + HEAD reflect the fetched github branches.
 
@@ -247,9 +278,14 @@ def materialize_local_branches(project_id: str, default_branch: str | None = Non
         branch = ref.removeprefix(f"refs/remotes/{_GITHUB_REMOTE}/")
         if not branch or branch == "HEAD":
             continue
-        # Skip branches that already have a local head — don't clobber local work.
+        # Skip branches that already have a local head — don't clobber local
+        # work. The one exception is the untouched project scaffold: a single
+        # empty commit created at project creation. It shares no ancestor with
+        # the fetched history, so the sync path can never reconcile the two
+        # (it refuses diverged branches), and without adopting the remote here
+        # a repo linked to a fresh project imports nothing, forever.
         exists, _, _ = _run_git("rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", cwd=path)
-        if exists != 0:
+        if exists != 0 or _is_pristine_scaffold(path, branch):
             _run_git("update-ref", f"refs/heads/{branch}", ref, cwd=path)
         created.append(branch)
 

@@ -4,7 +4,14 @@ FROM python:3.13-slim
 RUN groupadd -g 10001 notebook && \
     useradd -r -u 10001 -g notebook notebook && \
     mkdir -p /workspace /home/notebook/.sp && \
-    apt-get update && apt-get install -y git curl && rm -rf /var/lib/apt/lists/* && \
+    apt-get update && apt-get install -y git curl gnupg && \
+    # Microsoft ODBC driver for dbt-sqlserver (SQL Server customers). A prod
+    # sandbox is recreated constantly — anything not baked here does not exist.
+    curl -fsSL https://packages.microsoft.com/keys/microsoft.asc -o /usr/share/keyrings/microsoft.asc && \
+    echo "deb [signed-by=/usr/share/keyrings/microsoft.asc] https://packages.microsoft.com/debian/12/prod bookworm main" \
+      > /etc/apt/sources.list.d/mssql-release.list && \
+    apt-get update && ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc-dev && \
+    rm -rf /var/lib/apt/lists/* && \
     pip install --no-cache-dir uv
 
 WORKDIR /opt/sp-notebook
@@ -29,7 +36,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
       sqlglot altair matplotlib plotly pyyaml jinja2 python-dotenv \
       seaborn scikit-learn scipy \
       anthropic openai tiktoken \
-      dbt-postgres dbt-snowflake && \
+      dbt-postgres dbt-snowflake dbt-sqlserver && \
     # Bake dependency .pyc once. The runtime root is read-only, so imports should
     # read precompiled bytecode instead of trying to write it at startup.
     python -m compileall -q -j 0 /opt/sp-notebook/.venv/lib 2>/dev/null || true
@@ -57,8 +64,9 @@ ENV SP_API_KEY=""
 ENV SP_LOG_LEVEL="10"
 
 # Fallback for a bare `docker run` of this image: auth is always on, with a
-# self-provisioned token file (see _server/local_token.py). In Kubernetes the pod
-# spec replaces command+args entirely and supplies a per-pod token instead.
+# self-provisioned token file (see _server/local_token.py). In a Vercel
+# sandbox the gateway's boot command (notebooks/backends.py::_boot_command)
+# replaces this entirely and stages the per-session token itself.
 ENV SP_NOTEBOOK_TOKEN_FILE=/home/notebook/.sp/notebook_token
 
-CMD ["sh", "-c", "python -m signalpilot._server.local_token \"$SP_NOTEBOOK_TOKEN_FILE\" && exec python -m signalpilot._server.entrypoint --host 0.0.0.0 --port 2718 --headless --token-password-file \"$SP_NOTEBOOK_TOKEN_FILE\" --no-skew-protection /workspace"]
+CMD ["sh", "-c", "python -m signalpilot._server.local_token \"$SP_NOTEBOOK_TOKEN_FILE\" && exec python -m signalpilot edit --host 0.0.0.0 --port 2718 --headless --token-password-file \"$SP_NOTEBOOK_TOKEN_FILE\" --no-skew-protection /workspace"]

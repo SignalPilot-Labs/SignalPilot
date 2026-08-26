@@ -145,12 +145,6 @@ PATH_PARAMETERS = [
         id="scaffold.parentDir",
     ),
     pytest.param(
-        endpoints.clone_project,
-        {"gitUrl": "https://example.invalid/o/r.git"},
-        "targetDir",
-        id="clone.targetDir",
-    ),
-    pytest.param(
         endpoints.compile_model_endpoint,
         {"modelName": "m"},
         "projectDir",

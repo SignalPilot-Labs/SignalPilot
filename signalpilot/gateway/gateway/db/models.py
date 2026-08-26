@@ -858,6 +858,58 @@ class GatewayProjectBranch(GatewayBase):
     )
 
 
+class GatewayWorkspaceRevision(GatewayBase):
+    """One immutable manifest revision of a project branch.
+
+    The UNIQUE (project_id, branch, revision) constraint IS the compare-and-
+    swap: a commit inserts base+1 and a stale base loses with an integrity
+    error. Revision numbers are therefore strictly monotonic per branch.
+    """
+
+    __tablename__ = "gateway_workspace_revisions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    branch: Mapped[str] = mapped_column(String(100), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    parent_revision: Mapped[int | None] = mapped_column(Integer)
+    manifest_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    file_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    message: Mapped[str | None] = mapped_column(String(500))
+    created_by: Mapped[str | None] = mapped_column(String)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    # Export bookkeeping: the git commit this revision was exported as, if any.
+    export_commit_sha: Mapped[str | None] = mapped_column(String(64))
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "branch", "revision", name="uq_gw_wsrev_proj_branch_rev"),
+        Index("ix_gw_wsrev_org_project", "org_id", "project_id"),
+        Index("ix_gw_wsrev_proj_branch", "project_id", "branch"),
+    )
+
+
+class GatewayWorkspaceLease(GatewayBase):
+    """Single-writer lease per (project, branch). TTL-expired rows are
+    reclaimable; read-only sessions never take one."""
+
+    __tablename__ = "gateway_workspace_leases"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    branch: Mapped[str] = mapped_column(String(100), nullable=False)
+    holder: Mapped[str] = mapped_column(String, nullable=False)
+    session_id: Mapped[str | None] = mapped_column(String)
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "branch", name="uq_gw_wslease_proj_branch"),
+        Index("ix_gw_wslease_org", "org_id"),
+    )
+
+
 class GatewayUserSession(GatewayBase):
     """Tracks which branch a user is on per project."""
 
@@ -1768,7 +1820,13 @@ class GatewayAgentRun(GatewayBase):
 
 
 class GatewayNotebookSession(GatewayBase):
-    """One active notebook pod per user."""
+    """One notebook compute session per (org, user).
+
+    Runtime v2: compute is a sandbox VM (or the local direct container), never
+    a pod. `runtime_handle` is the provider handle (sandbox name), reattachable
+    by any gateway worker. `upstream_url` is the base URL the proxy dials.
+    Status: creating | running | snapshotted | stopped | error.
+    """
 
     __tablename__ = "gateway_notebook_sessions"
 
@@ -1777,14 +1835,14 @@ class GatewayNotebookSession(GatewayBase):
     user_id: Mapped[str] = mapped_column(String, nullable=False)
     project_id: Mapped[str | None] = mapped_column(String)
     branch: Mapped[str] = mapped_column(String(100), nullable=False, default="main")
-    pod_name: Mapped[str | None] = mapped_column(String)
-    pod_ip: Mapped[str | None] = mapped_column(String)
-    # pod_ip_internal is the cluster address that the gateway proxy uses.
-    # pod_ip is the external NodePort address.
-    pod_ip_internal: Mapped[str | None] = mapped_column(Text, nullable=True)
+    backend: Mapped[str] = mapped_column(String(20), nullable=False, default="vercel")
+    runtime_handle: Mapped[str | None] = mapped_column(String(200))
+    upstream_url: Mapped[str | None] = mapped_column(Text)
+    snapshot_id: Mapped[str | None] = mapped_column(String(200))
     access_token_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="creating")
     last_ping: Mapped[float | None] = mapped_column(Float)
+    last_extend_at: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
 
     __table_args__ = (

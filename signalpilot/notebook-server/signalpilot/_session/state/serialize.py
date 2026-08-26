@@ -475,6 +475,21 @@ class SessionCacheWriter(AsyncBackgroundTask):
                         await self.path.write_text(json.dumps(data, indent=2))
                     else:
                         self.path.write_text(json.dumps(data, indent=2))
+                    # S3 mode: the sidecar is the reconnect/refresh experience —
+                    # write it through so a fresh session (or another sandbox)
+                    # rehydrates outputs. Never fatal: the next tick retries.
+                    try:
+                        from signalpilot._server.files.workspace import (
+                            write_through_session_file,
+                        )
+
+                        await asyncio.to_thread(
+                            write_through_session_file, str(self.path)
+                        )
+                    except Exception:
+                        LOGGER.debug(
+                            "Session sidecar write-through failed", exc_info=True
+                        )
                 await asyncio.sleep(self.interval)
             except asyncio.CancelledError:
                 raise

@@ -51,7 +51,7 @@ class TestCorsRequestId:
         """Project notebook runtime calls send project/branch headers from the browser."""
         client = TestClient(app, raise_server_exceptions=False)
         response = client.options(
-            "/notebook/session-1/api/project/sync-down",
+            "/notebook/session-1/api/files/list_files",
             headers={
                 "Origin": _ALLOWED_ORIGIN,
                 "Access-Control-Request-Method": "POST",

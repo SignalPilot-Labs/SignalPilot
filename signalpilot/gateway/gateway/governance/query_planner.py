@@ -308,6 +308,12 @@ async def create_query_plan(
                 "sql_hash": sql_hash,
                 "estimate_quality": quality,
                 "shadow": shadow,
+                # Chat-visible context: what the agent wanted and the SQL it
+                # planned. The same user already sees raw SQL via `sql` events.
+                "purpose": (purpose or "")[:300],
+                "sql": (sql or "")[:4000],
+                "estimated_output_rows": estimate.estimated_output_rows,
+                "estimated_cost_usd": round(max(0.0, estimate.estimated_usd or 0.0), 6),
             },
         )
         await chat_store.append_event(

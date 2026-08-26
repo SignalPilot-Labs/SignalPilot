@@ -7,8 +7,10 @@ from fastapi import FastAPI
 from ..dbt_proxy.api import router as dbt_proxy_router
 from ..git.http_server import router as git_http_router
 from ..runtime.mode import is_cloud_mode
+from .agent_notebooks import router as agent_notebooks_router
 from .agent_runs import router as agent_runs_router
 from .analysis_trails import router as analysis_trails_router
+from .artifacts import router as artifacts_router
 from .audit import router as audit_router
 from .budget import router as budget_router
 from .byok import router as byok_router
@@ -44,6 +46,7 @@ from .slack import router as slack_router
 from .standalone_chat import router as standalone_chat_router
 from .uploads import router as uploads_router
 from .user_secrets import router as user_secrets_router
+from .workspace_files import router as workspace_files_router
 from .workspace_projects import router as workspace_projects_router
 
 logger = logging.getLogger(__name__)
@@ -78,12 +81,15 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(org_secrets_router)
     app.include_router(slack_router)
     app.include_router(workspace_projects_router)
+    app.include_router(workspace_files_router)
     app.include_router(standalone_chat_router)
     app.include_router(chat_reports_router)
     app.include_router(chat_router)
     app.include_router(chat_traces_router)
     app.include_router(agent_runs_router)
+    app.include_router(agent_notebooks_router, prefix="/api")
     app.include_router(analysis_trails_router)
+    app.include_router(artifacts_router)
     app.include_router(notebook_sessions_router)
     app.include_router(github_router)
     app.include_router(github_bot_router)

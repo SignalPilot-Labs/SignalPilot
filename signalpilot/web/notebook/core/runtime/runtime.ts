@@ -39,7 +39,14 @@ export class RuntimeManager {
   }
 
   get httpURL(): URL {
-    return new URL(this.config.url);
+    // Normalize to a trailing slash: relative paths like "./@file/x.arrow"
+    // resolve against the last path SEGMENT's parent, so a session base of
+    // ".../notebook/{sid}" (no slash) would silently drop the session id
+    // and 404 every virtual file.
+    const url = this.config.url.endsWith("/")
+      ? this.config.url
+      : `${this.config.url}/`;
+    return new URL(url);
   }
 
   get isSameOrigin(): boolean {

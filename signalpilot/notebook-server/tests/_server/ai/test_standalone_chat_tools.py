@@ -826,6 +826,21 @@ def test_agent_contract_excludes_mutating_and_external_tools():
         in STANDALONE_SYSTEM_PROMPT
     )
     assert (
+        "State the complete deliverable in every plan_query purpose"
+        in STANDALONE_SYSTEM_PROMPT
+    )
+    assert (
+        "Never call start_analysis_notebook with a plan whose route is mcp"
+        in STANDALONE_SYSTEM_PROMPT
+    )
+    assert (
+        'coerce every numeric column with `pd.to_numeric(..., errors="coerce")`'
+        in STANDALONE_SYSTEM_PROMPT
+    )
+    assert "Verify every chart before publishing it" in STANDALONE_SYSTEM_PROMPT
+    assert "chart rendered empty" in STANDALONE_SYSTEM_PROMPT
+    assert 'Close every completed answer with the "so what"' in STANDALONE_SYSTEM_PROMPT
+    assert (
         "top-level loop targets all define names" in STANDALONE_SYSTEM_PROMPT
     )
     assert (

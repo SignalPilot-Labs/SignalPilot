@@ -133,7 +133,7 @@ class TestNoPersistedHttpExtraHeader:
         """)
 
         fake_file = tmp_path / "fake_module.py"
-        fake_file.write_text(injected)
+        fake_file.write_text(injected, encoding="utf-8")
 
         # Build a fake scan root with just this file
         violations = _collect_violations(tmp_path)
@@ -156,7 +156,7 @@ class TestNoPersistedHttpExtraHeader:
         ''')
 
         fake_file = tmp_path / "docstring_module.py"
-        fake_file.write_text(docstring_only)
+        fake_file.write_text(docstring_only, encoding="utf-8")
 
         violations = _collect_violations(tmp_path)
         # Docstring content is not parsed as AST Call nodes — no violations
@@ -177,7 +177,7 @@ class TestNoPersistedHttpExtraHeader:
         """)
 
         fake_file = tmp_path / "safe_module.py"
-        fake_file.write_text(safe_code)
+        fake_file.write_text(safe_code, encoding="utf-8")
 
         violations = _collect_violations(tmp_path)
         assert not violations, f"Unexpected violations: {violations}"

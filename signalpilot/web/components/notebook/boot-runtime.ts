@@ -3,7 +3,7 @@ import type { SignalpilotClient } from "@/embed/types";
 import { Logger } from "@/utils/Logger";
 import type { NotebookConfig } from "./notebook-context";
 
-export type BootPhase = "health" | "notion" | "syncing" | "ready";
+export type BootPhase = "health" | "notion" | "ready";
 
 export class NotebookBootUserError extends Error {
   constructor(message: string) {
@@ -25,7 +25,6 @@ export interface NotebookStaticData {
 
 export interface BootResult {
   client: SignalpilotClient;
-  syncResult?: { localDir: string; fileCount: number };
   staticData: NotebookStaticData;
 }
 
@@ -179,68 +178,10 @@ export async function bootRuntime(
   }
   if (signal.aborted) throw new Error("Boot cancelled");
 
-  // ── Phase 2: Sync dbt project files (project product only) ────
-  let syncResult: { localDir: string; fileCount: number } | undefined;
-  if (config.project) {
-    onPhase("syncing");
-    try {
-      const resp = await fetch(`${runtimeUrl}/api/project/sync-down`, {
-        method: "POST",
-        headers: {
-          ...headers,
-          "X-Gateway-Project-Id": config.project,
-          ...(config.branch ? { "X-Gateway-Branch-Id": config.branch } : {}),
-        },
-        signal,
-      });
-      if (resp.ok) {
-        const data = (await resp.json()) as { local_dir?: string; file_count?: number };
-        if (data.local_dir) {
-          syncResult = { localDir: data.local_dir, fileCount: data.file_count ?? 0 };
-        }
-      }
-    } catch (err) {
-      if (!signal.aborted) Logger.warn("Project sync failed (non-fatal):", err);
-    }
-  }
-  if (signal.aborted) throw new Error("Boot cancelled");
-
-  // ── Phase 2b: Scaffold if project is empty (new project) ──────
-  if (config.project && syncResult && syncResult.fileCount === 0 && syncResult.localDir) {
-    onPhase("syncing");
-    try {
-      console.log("[boot] Empty project — scaffolding...");
-      await fetch(`${runtimeUrl}/api/dbt/scaffold_project`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          parentDir: syncResult.localDir,
-          projectName: ".",
-        }),
-        signal,
-      });
-      // Re-sync to pick up the scaffolded files
-      const resp = await fetch(`${runtimeUrl}/api/project/sync-down`, {
-        method: "POST",
-        headers: {
-          ...headers,
-          "X-Gateway-Project-Id": config.project,
-          ...(config.branch ? { "X-Gateway-Branch-Id": config.branch } : {}),
-        },
-        signal,
-      });
-      if (resp.ok) {
-        const data = (await resp.json()) as { local_dir?: string; file_count?: number };
-        if (data.local_dir) {
-          syncResult = { localDir: data.local_dir, fileCount: data.file_count ?? 0 };
-        }
-      }
-      console.log("[boot] Scaffold complete, files:", syncResult?.fileCount);
-    } catch (err) {
-      if (!signal.aborted) Logger.warn("Scaffold failed (non-fatal):", err);
-    }
-  }
-  if (signal.aborted) throw new Error("Boot cancelled");
+  // ── Phase 2 (Runtime v2): nothing to sync ──────────────────────
+  // The workspace is pulled on demand from the S3 store; there is no boot
+  // clone. Deleting the sync phase is what makes cold boots fast — the
+  // runtime is ready as soon as it is healthy.
 
   // ── Phase 3: Create client ────────────────────────────────────
   const client = createSignalpilotClient({
@@ -301,5 +242,5 @@ export async function bootRuntime(
   }
 
   onPhase("ready");
-  return { client, syncResult, staticData };
+  return { client, staticData };
 }

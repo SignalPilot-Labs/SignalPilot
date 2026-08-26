@@ -33,6 +33,12 @@ _PRELOAD_MODULES = [
     "signalpilot._runtime.app.kernel_runner",
     "signalpilot._messaging.notification",
     "signalpilot._ast.compiler",
+    # Analysis workhorses: almost every data notebook imports these, and they
+    # dominate first-cell latency (pandas ~1.5s, altair ~1s). Forked kernels
+    # get them for free via COW; the only cost is forkserver resident memory.
+    "numpy",
+    "pandas",
+    "altair",
 ]
 
 

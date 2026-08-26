@@ -168,19 +168,9 @@ function isMisroutedProjectEditorDocument(req: NextRequest): boolean {
   );
 }
 
-function isLegacyNotebooksPath(pathname: string): boolean {
-  return pathname === "/notebooks" || pathname.startsWith("/notebooks/");
-}
-
 function redirectMisroutedProjectEditor(req: NextRequest): NextResponse {
   const target = req.nextUrl.clone();
   target.pathname = "/projects";
-  return NextResponse.redirect(target, 307);
-}
-
-function redirectLegacyNotebooks(req: NextRequest): NextResponse {
-  const target = req.nextUrl.clone();
-  target.pathname = target.pathname.replace(/^\/notebooks/, "/projects");
   return NextResponse.redirect(target, 307);
 }
 
@@ -215,10 +205,6 @@ if (clerkEnabled) {
       return redirectMisroutedProjectEditor(req);
     }
 
-    if (isLegacyNotebooksPath(req.nextUrl.pathname)) {
-      return redirectLegacyNotebooks(req);
-    }
-
     // Notebook paths proxy to gateway — no Clerk auth needed (gateway handles it)
     if (isNotebookPath(req.nextUrl.pathname)) {
       return proxyNotebook(req);
@@ -238,10 +224,6 @@ if (clerkEnabled) {
   middlewareExport = (req: NextRequest) => {
     if (isMisroutedProjectEditorDocument(req)) {
       return redirectMisroutedProjectEditor(req);
-    }
-
-    if (isLegacyNotebooksPath(req.nextUrl.pathname)) {
-      return redirectLegacyNotebooks(req);
     }
 
     // Notebook paths proxy to gateway

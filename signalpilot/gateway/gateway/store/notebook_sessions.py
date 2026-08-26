@@ -1,4 +1,4 @@
-"""Notebook session CRUD operations."""
+"""Notebook session CRUD operations (Runtime v2)."""
 
 from __future__ import annotations
 
@@ -17,24 +17,33 @@ from .crypto import _decrypt_with_migration, _encrypt
 
 logger = logging.getLogger(__name__)
 
+ACTIVE_STATUSES = ("creating", "running", "snapshotted")
+
 
 @dataclass(frozen=True)
 class NotebookSessionInternal:
     """Internal-only session view that includes the real access_token.
 
     Do not serialize this object to JSON or include it in an API response.
-    Only the gateway proxy uses this object for upstream routing and token access.
-    The database row has two read paths:
-    - _to_info() -> NotebookSessionInfo  (FE-facing, access_token=None)
-    - get_session_internal() -> NotebookSessionInternal  (proxy-only, real token)
+    Only the gateway proxy and the lifecycle loop use it — the DB row has two
+    read paths:
+    - _to_info() -> NotebookSessionInfo  (FE-facing, no credentials)
+    - get_session_internal() -> NotebookSessionInternal  (server-only)
     """
 
     session_id: str
     org_id: str
     user_id: str
     status: str
-    pod_ip_internal: str | None
+    backend: str
+    runtime_handle: str | None
+    upstream_url: str | None
+    snapshot_id: str | None
     access_token: str | None
+    project_id: str | None = None
+    branch: str = "main"
+    last_ping: float | None = None
+    last_extend_at: float | None = None
 
 
 async def get_session_by_id(
@@ -56,12 +65,6 @@ async def get_session_by_id(
 async def get_session_internal(
     session: AsyncSession, *, session_id: str, org_id: str | None = None
 ) -> NotebookSessionInternal | None:
-    """Return the internal session view including the real access_token.
-
-    Used ONLY by the gateway proxy (resolve_proxy_session) to compare the
-    inbound cookie and determine the upstream address. Never expose to the FE.
-    When org_id is None, looks up by session_id only (cookie is the auth gate).
-    """
     q = select(GatewayNotebookSession).where(
         GatewayNotebookSession.id == session_id,
     )
@@ -71,14 +74,7 @@ async def get_session_internal(
     if row is None:
         return None
     access_token = await _get_internal_access_token(session, row)
-    return NotebookSessionInternal(
-        session_id=row.id,
-        org_id=row.org_id,
-        user_id=row.user_id,
-        status=row.status,
-        pod_ip_internal=row.pod_ip_internal,
-        access_token=access_token,
-    )
+    return _to_internal(row, access_token)
 
 
 async def get_active_session(
@@ -87,7 +83,7 @@ async def get_active_session(
     q = select(GatewayNotebookSession).where(
         GatewayNotebookSession.org_id == org_id,
         GatewayNotebookSession.user_id == user_id,
-        GatewayNotebookSession.status.in_(["creating", "running"]),
+        GatewayNotebookSession.status.in_(ACTIVE_STATUSES),
     )
     row = (await session.execute(q)).scalar_one_or_none()
     return _to_info(row) if row else None
@@ -98,10 +94,20 @@ async def list_active_sessions_for_org(
 ) -> list[NotebookSessionInfo]:
     q = select(GatewayNotebookSession).where(
         GatewayNotebookSession.org_id == org_id,
-        GatewayNotebookSession.status.in_(["creating", "running"]),
+        GatewayNotebookSession.status.in_(ACTIVE_STATUSES),
     )
     rows = (await session.execute(q)).scalars().all()
     return [_to_info(row) for row in rows]
+
+
+async def count_running_for_org(session: AsyncSession, *, org_id: str) -> int:
+    from sqlalchemy import func
+
+    q = select(func.count()).select_from(GatewayNotebookSession).where(
+        GatewayNotebookSession.org_id == org_id,
+        GatewayNotebookSession.status.in_(("creating", "running")),
+    )
+    return int((await session.execute(q)).scalar_one())
 
 
 async def create_session(
@@ -111,13 +117,13 @@ async def create_session(
     user_id: str,
     project_id: str | None,
     branch: str,
-    pod_name: str,
+    backend: str,
 ) -> NotebookSessionInfo:
     import secrets
 
     now = time.time()
-    # This is the notebook server's own auth token for the pod this session owns:
-    # injected into the pod and presented upstream by the proxy. 32 bytes.
+    # The notebook server's own auth token for this session's compute:
+    # injected at launch and presented upstream by the proxy. 32 bytes.
     token = secrets.token_urlsafe(32)
     row = GatewayNotebookSession(
         id=str(uuid.uuid4()),
@@ -125,9 +131,7 @@ async def create_session(
         user_id=user_id,
         project_id=project_id,
         branch=branch,
-        pod_name=pod_name,
-        pod_ip=None,
-        pod_ip_internal=None,
+        backend=backend,
         access_token_enc=_encrypt(token),
         status="creating",
         last_ping=now,
@@ -138,20 +142,33 @@ async def create_session(
     return _to_info(row)
 
 
-async def update_session_status(
+async def update_session_runtime(
     session: AsyncSession,
     *,
     session_id: str,
     org_id: str,
-    status: str,
-    pod_ip: str | None = None,
-    pod_ip_internal: str | None = None,
+    status: str | None = None,
+    runtime_handle: str | None = None,
+    upstream_url: str | None = None,
+    snapshot_id: str | None = None,
+    clear_upstream: bool = False,
+    last_extend_at: float | None = None,
 ) -> None:
-    values: dict = {"status": status}
-    if pod_ip is not None:
-        values["pod_ip"] = pod_ip
-    if pod_ip_internal is not None:
-        values["pod_ip_internal"] = pod_ip_internal
+    values: dict = {}
+    if status is not None:
+        values["status"] = status
+    if runtime_handle is not None:
+        values["runtime_handle"] = runtime_handle
+    if upstream_url is not None:
+        values["upstream_url"] = upstream_url
+    if snapshot_id is not None:
+        values["snapshot_id"] = snapshot_id
+    if clear_upstream:
+        values["upstream_url"] = None
+    if last_extend_at is not None:
+        values["last_extend_at"] = last_extend_at
+    if not values:
+        return
     stmt = (
         update(GatewayNotebookSession)
         .where(
@@ -160,33 +177,16 @@ async def update_session_status(
         )
         .values(**values)
     )
-    await _execute_and_commit_with_closed_connection_retry(session, stmt, "update notebook session status")
-
-
-async def ping_session(
-    session: AsyncSession, *, org_id: str, user_id: str
-) -> NotebookSessionInfo | None:
-    q = select(GatewayNotebookSession).where(
-        GatewayNotebookSession.org_id == org_id,
-        GatewayNotebookSession.user_id == user_id,
-        GatewayNotebookSession.status == "running",
-    )
-    row = (await session.execute(q)).scalar_one_or_none()
-    if not row:
-        return None
-    row.last_ping = time.time()
-    await session.commit()
-    return _to_info(row)
+    await _execute_and_commit_with_closed_connection_retry(session, stmt, "update notebook session runtime")
 
 
 async def ping_session_by_id(
     session: AsyncSession, *, session_id: str, org_id: str
 ) -> NotebookSessionInfo | None:
-    """Ping a specific session by id, scoped to org_id."""
     q = select(GatewayNotebookSession).where(
         GatewayNotebookSession.id == session_id,
         GatewayNotebookSession.org_id == org_id,
-        GatewayNotebookSession.status == "running",
+        GatewayNotebookSession.status.in_(("running", "snapshotted")),
     )
     row = (await session.execute(q)).scalar_one_or_none()
     if not row:
@@ -206,6 +206,48 @@ async def mark_stopped(session: AsyncSession, *, session_id: str, org_id: str) -
         .values(status="stopped")
     )
     await _execute_and_commit_with_closed_connection_retry(session, stmt, "mark notebook session stopped")
+
+
+async def delete_stopped(session: AsyncSession, *, org_id: str, user_id: str) -> None:
+    """Remove stopped sessions so the user can create a new one."""
+    q = select(GatewayNotebookSession).where(
+        GatewayNotebookSession.org_id == org_id,
+        GatewayNotebookSession.user_id == user_id,
+        GatewayNotebookSession.status.in_(["stopped", "error"]),
+    )
+    rows = (await session.execute(q)).scalars().all()
+    for row in rows:
+        await session.delete(row)
+    if rows:
+        await session.commit()
+
+
+async def list_running_internal(session: AsyncSession) -> list[NotebookSessionInternal]:
+    """Every running session, with handles — the lifecycle loop's read."""
+    q = select(GatewayNotebookSession).where(GatewayNotebookSession.status == "running")
+    rows = (await session.execute(q)).scalars().all()
+    return [_to_internal(row, None) for row in rows]
+
+
+async def list_stale_sessions(
+    session: AsyncSession, *, max_idle_seconds: int = 900, statuses: tuple[str, ...] = ("running",)
+) -> list[NotebookSessionInternal]:
+    cutoff = time.time() - max_idle_seconds
+    q = select(GatewayNotebookSession).where(
+        GatewayNotebookSession.status.in_(statuses),
+        GatewayNotebookSession.last_ping < cutoff,
+    )
+    rows = (await session.execute(q)).scalars().all()
+    return [_to_internal(row, None) for row in rows]
+
+
+async def live_runtime_handles(session: AsyncSession) -> set[str]:
+    """Handles owned by any non-terminal session — the reaper's keep-set."""
+    q = select(GatewayNotebookSession.runtime_handle).where(
+        GatewayNotebookSession.status.in_(ACTIVE_STATUSES),
+        GatewayNotebookSession.runtime_handle.is_not(None),
+    )
+    return {handle for handle in (await session.execute(q)).scalars() if handle}
 
 
 async def _execute_and_commit_with_closed_connection_retry(
@@ -239,41 +281,12 @@ def _looks_like_closed_connection(exc: BaseException) -> bool:
     )
 
 
-async def delete_stopped(session: AsyncSession, *, org_id: str, user_id: str) -> None:
-    """Remove stopped sessions so the user can create a new one."""
-    q = select(GatewayNotebookSession).where(
-        GatewayNotebookSession.org_id == org_id,
-        GatewayNotebookSession.user_id == user_id,
-        GatewayNotebookSession.status.in_(["stopped", "error"]),
-    )
-    rows = (await session.execute(q)).scalars().all()
-    for row in rows:
-        await session.delete(row)
-    if rows:
-        await session.commit()
-
-
-async def list_stale_sessions(
-    session: AsyncSession, *, max_idle_seconds: int = 7200
-) -> list[NotebookSessionInfo]:
-    cutoff = time.time() - max_idle_seconds
-    q = select(GatewayNotebookSession).where(
-        GatewayNotebookSession.status == "running",
-        GatewayNotebookSession.last_ping < cutoff,
-    )
-    rows = (await session.execute(q)).scalars().all()
-    return [_to_info(r) for r in rows]
-
-
 async def _get_internal_access_token(
     session: AsyncSession,
     row: GatewayNotebookSession,
 ) -> str | None:
-    """Return the plaintext token from encrypted storage.
-
-    Store tokens only in encrypted form.
-    Rewrite ciphertext with the primary key when decryption uses the secondary rotation key.
-    """
+    """Return the plaintext token from encrypted storage, rotating ciphertext
+    written under a retired key."""
     encrypted = getattr(row, "access_token_enc", None)
     if not encrypted:
         return None
@@ -284,27 +297,35 @@ async def _get_internal_access_token(
     return token
 
 
-def _to_info(row: GatewayNotebookSession) -> NotebookSessionInfo:
-    """FE-facing view of a session row.
+def _to_internal(row: GatewayNotebookSession, access_token: str | None) -> NotebookSessionInternal:
+    return NotebookSessionInternal(
+        session_id=row.id,
+        org_id=row.org_id,
+        user_id=row.user_id,
+        status=row.status,
+        backend=row.backend,
+        runtime_handle=row.runtime_handle,
+        upstream_url=row.upstream_url,
+        snapshot_id=row.snapshot_id,
+        access_token=access_token,
+        project_id=row.project_id,
+        branch=row.branch,
+        last_ping=row.last_ping,
+        last_extend_at=row.last_extend_at,
+    )
 
-    access_token is always None here: the secret never leaves the server.
-    notebook_url is the path-only proxy URL (no token, no host, no port); the
-    browser authenticates to the proxy with its Clerk JWT directly.
-    """
-    notebook_url = None
-    if row.status == "running" and row.pod_ip:
-        notebook_url = f"/notebook/{row.id}/"
+
+def _to_info(row: GatewayNotebookSession) -> NotebookSessionInfo:
+    """FE-facing view of a session row. No credentials, no upstream URL:
+    the browser only ever sees the proxy path."""
+    notebook_url = f"/notebook/{row.id}/" if row.status in ("running", "snapshotted") else None
     return NotebookSessionInfo(
         id=row.id,
         org_id=row.org_id,
         user_id=row.user_id,
         project_id=row.project_id,
         branch=row.branch,
-        pod_name=row.pod_name,
-        pod_ip=row.pod_ip,
-        # access_token is intentionally None in all FE-facing responses.
-        # The real token is only accessible via get_session_internal().
-        access_token=None,
+        backend=row.backend,
         status=row.status,
         notebook_url=notebook_url,
         last_ping=row.last_ping,

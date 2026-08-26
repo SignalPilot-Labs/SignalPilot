@@ -83,7 +83,7 @@
 .dash-quality-gauge circle { fill: none; stroke-width: 5; }
 .dash-quality-gauge .track { stroke: var(--color-border); }
 .dash-quality-gauge .value { stroke: var(--color-success); stroke-linecap: round; transition: stroke-dashoffset 500ms ease; }
-.dash-quality-gauge > div { position: absolute; inset: 0; display: inline-flex; align-items: baseline; justify-content: center; }
+.dash-quality-gauge > div { position: absolute; inset: 0; display: grid; grid-auto-flow: column; align-content: center; justify-content: center; align-items: baseline; }
 .dash-quality-gauge strong { display: inline; margin: 0; font-family: var(--font-mono, ui-monospace, monospace); font-size: 19px; font-weight: 500; line-height: 1; }
 .dash-quality-gauge span { display: inline; margin-left: 1px; font-size: 8px; line-height: 1; }
 .dash-surface-signal { gap: 0.7rem; padding: 0.9rem; transition: border-color 150ms ease, background 150ms ease; }

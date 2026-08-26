@@ -8,7 +8,6 @@ Sync model:
 Called by:
 - git/http_server.py after a successful push (auto-mirror to GitHub)
 - api/github.py sync endpoint (manual trigger)
-- api/notebook_sessions.py on session creation (fetch before pod starts)
 """
 
 from __future__ import annotations
@@ -21,6 +20,15 @@ from .repos import repo_path, repo_exists, _run_git, list_branches
 logger = logging.getLogger(__name__)
 
 GITHUB_REMOTE_NAME = "github"
+
+# Branch namespaces that are local-only working areas for agents. They are
+# never pushed to GitHub — reused by workspace_store/github_sync.py so the
+# exporter carries the same contract.
+AGENT_BRANCH_PREFIXES = ("signalpilot-agent/", "analysis/")
+
+
+def is_agent_branch(branch: str) -> bool:
+    return branch.startswith(AGENT_BRANCH_PREFIXES)
 
 
 def configure_github_remote(project_id: str, remote_url: str) -> None:
@@ -40,7 +48,7 @@ def push_branch(project_id: str, remote_url: str, branch: str) -> dict:
     If rejected, fetches remote and rebases local on top.
     If rebase fails, returns error (real conflict).
     """
-    if branch.startswith("signalpilot-agent/"):
+    if is_agent_branch(branch):
         return {"skipped": True, "reason": "Agent branches are local-only"}
 
     if not repo_exists(project_id):
@@ -202,7 +210,7 @@ async def sync_project_with_github(project_id: str, org_id: str) -> dict:
         push_results = {}
         errors = []
         for branch in branches:
-            if branch.startswith("signalpilot-agent/"):
+            if is_agent_branch(branch):
                 continue
             result = push_branch(project_id, remote_url, branch)
             push_results[branch] = result
@@ -243,7 +251,7 @@ async def mirror_push_to_github(project_id: str, org_id: str, branch: str) -> di
     from ..db.engine import get_session_factory
     from ..store import github as gh_store
 
-    if branch.startswith("signalpilot-agent/"):
+    if is_agent_branch(branch):
         return None
 
     factory = get_session_factory()

@@ -9,6 +9,7 @@ import {
   Copy,
   FileChartColumn,
   Loader2,
+  Maximize2,
   MessageSquarePlus,
   MoreHorizontal,
   PanelLeft,
@@ -68,8 +69,13 @@ import {
   type ChatReportMention,
   type ChatReportSuggestion,
 } from "~/lib/api";
+import { ArtifactLightbox } from "~/components/chat/artifact-lightbox";
 import { StandaloneArtifactContext } from "~/components/chat/standalone-artifact-context";
 import { StandaloneChatComposer } from "~/components/chat/standalone-chat-composer";
+import { RunActivityBlocks, RunTimeline } from "~/components/chat/run-timeline";
+import { ReplayControls } from "~/components/chat/replay-controls";
+import { foldRunBlocks, foldRunSteps } from "~/lib/chat-run-steps";
+import { useChatReplay } from "~/lib/chat-replay";
 import { useToast } from "~/components/ui/toast";
 import {
   appendOptimisticUserMessage,
@@ -86,7 +92,7 @@ import {
 } from "~/lib/standalone-chat-state";
 import { projectSettingsHref } from "~/lib/project-settings-route";
 
-type UiMessage = StandaloneChatMessage & {
+export type UiMessage = StandaloneChatMessage & {
   runId?: string;
   runStatus?: StandaloneChatRunStatus;
   activity?: StandaloneRunActivity;
@@ -103,7 +109,7 @@ type ChatUiContextValue = {
   ) => Promise<{ report_id: string }>;
 };
 
-const ChatUiContext = createContext<ChatUiContextValue | null>(null);
+export const ChatUiContext = createContext<ChatUiContextValue | null>(null);
 
 function useChatUi() {
   const value = useContext(ChatUiContext);
@@ -180,63 +186,8 @@ function eventText(
 
 function WorkTimeline({ runId }: { runId: string }) {
   const { events } = useChatUi();
-  const work = events.filter(
-    (event) => event.run_id === runId && event.type !== "text_delta",
-  );
-  if (!work.length) {
-    return (
-      <p className="text-xs text-[var(--color-text-dim)]">
-        Work details will appear as the analysis progresses.
-      </p>
-    );
-  }
-  return (
-    <ol className="space-y-2" aria-label="Analysis work">
-      {work.map((event) => {
-        const label =
-          eventText(event, "label") ||
-          eventText(event, "message") ||
-          eventText(event, "tool") ||
-          eventText(event, "filename") ||
-          event.type.replaceAll("_", " ");
-        const expandable =
-          event.type === "tool_started" ||
-          event.type === "tool_completed" ||
-          event.type === "source" ||
-          event.type === "intermediate_result" ||
-          event.type === "sql" ||
-          event.type === "error";
-        const summary = eventText(event, "summary");
-        return (
-          <li
-            key={`${event.run_id}-${event.sequence}`}
-            className="relative pl-5 text-xs text-[var(--color-text-muted)]"
-          >
-            <span className="absolute left-0 top-1.5 h-1.5 w-1.5 rounded-full bg-[var(--color-border-active)]" />
-            {expandable ? (
-              <details>
-                <summary className="select-none hover:text-[var(--color-text)]">
-                  {label}
-                </summary>
-                <pre className="mt-2 max-h-56 overflow-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-input)] p-3 text-[11px] leading-relaxed text-[var(--color-text-dim)]">
-                  {JSON.stringify(event.payload, null, 2)}
-                </pre>
-              </details>
-            ) : (
-              <span>
-                {label}
-                {summary && summary !== label && (
-                  <span className="mt-0.5 block text-[var(--color-text-dim)]">
-                    {summary}
-                  </span>
-                )}
-              </span>
-            )}
-          </li>
-        );
-      })}
-    </ol>
-  );
+  const steps = useMemo(() => foldRunSteps(events, runId), [events, runId]);
+  return <RunTimeline steps={steps} />;
 }
 
 export type ArtifactPreviewData = Pick<
@@ -273,6 +224,8 @@ function RuntimeChartPreview({
   filename: string;
 }) {
   const [url, setUrl] = useState<string | null>(null);
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [zoomed, setZoomed] = useState(false);
   useEffect(() => {
     let active = true;
     let objectUrl: string | null = null;
@@ -288,15 +241,70 @@ function RuntimeChartPreview({
     };
   }, [artifactId]);
   return url ? (
-    <img
-      src={url}
-      alt={filename}
-      className="mx-auto max-h-[520px] max-w-full"
-    />
+    <>
+      <button
+        type="button"
+        title="Click to view full size"
+        aria-label={`View ${filename} full size`}
+        onClick={() => {
+          setZoomed(false);
+          setViewerOpen(true);
+        }}
+        className="group relative mx-auto block cursor-zoom-in"
+      >
+        <img
+          src={url}
+          alt={filename}
+          className="mx-auto max-h-[520px] max-w-full"
+        />
+        <span className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)]/90 text-[var(--color-text-muted)] opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
+          <Maximize2 className="h-3.5 w-3.5" />
+        </span>
+      </button>
+      <ArtifactLightbox
+        open={viewerOpen}
+        title={filename}
+        onClose={() => setViewerOpen(false)}
+      >
+        <img
+          src={url}
+          alt={filename}
+          onClick={() => setZoomed((value) => !value)}
+          className={
+            zoomed
+              ? "max-w-none cursor-zoom-out"
+              : "max-h-full max-w-full cursor-zoom-in object-contain"
+          }
+        />
+      </ArtifactLightbox>
+    </>
   ) : (
     <div className="flex min-h-64 items-center justify-center text-xs text-[var(--color-text-dim)]">
       Loading chart preview…
     </div>
+  );
+}
+
+/** Header button that opens an artifact in the fullscreen viewer. */
+function ExpandButton({
+  label,
+  onClick,
+}: {
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      data-testid="artifact-expand"
+      onClick={onClick}
+      className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-text-muted)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)]"
+    >
+      <Maximize2 className="h-3 w-3" />
+      Expand
+    </button>
   );
 }
 
@@ -476,6 +484,7 @@ export function ArtifactPreview({
   canSaveAsReport?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [viewerOpen, setViewerOpen] = useState(false);
   const snapshot = artifact.snapshot;
   if (artifact.kind === "table") {
     const columns = Array.isArray(snapshot.columns)
@@ -602,11 +611,19 @@ export function ArtifactPreview({
               {artifact.filename}
             </span>
           </div>
-          <ArtifactDownloads
-            artifact={artifact}
-            onDownload={onDownload}
-            canSaveAsReport={canSaveAsReport}
-          />
+          <div className="flex items-center gap-2">
+            {snapshot.runtime_png !== true && (
+              <ExpandButton
+                label={`Expand ${artifact.filename}`}
+                onClick={() => setViewerOpen(true)}
+              />
+            )}
+            <ArtifactDownloads
+              artifact={artifact}
+              onDownload={onDownload}
+              canSaveAsReport={canSaveAsReport}
+            />
+          </div>
         </div>
         <div className="min-h-64 overflow-x-auto p-4">
           {snapshot.runtime_png === true ? (
@@ -623,6 +640,38 @@ export function ArtifactPreview({
             </div>
           )}
         </div>
+        {viewerOpen && snapshot.runtime_png !== true && (
+          <ArtifactLightbox
+            open={viewerOpen}
+            title={artifact.filename}
+            onClose={() => setViewerOpen(false)}
+          >
+            <div className="rounded-xl bg-[var(--color-bg-card)] p-6">
+              <VegaEmbed
+                spec={{
+                  ...spec,
+                  width: Math.max(
+                    640,
+                    Math.floor(
+                      (typeof window !== "undefined"
+                        ? window.innerWidth
+                        : 1280) * 0.78,
+                    ),
+                  ),
+                  height: Math.max(
+                    400,
+                    Math.floor(
+                      (typeof window !== "undefined"
+                        ? window.innerHeight
+                        : 800) * 0.66,
+                    ),
+                  ),
+                }}
+                options={{ actions: false, mode: "vega-lite", renderer: "svg" }}
+              />
+            </div>
+          </ArtifactLightbox>
+        )}
         {displayLimited && (
           <p className="border-t border-[var(--color-border)] px-3 py-2 text-[11px] text-[var(--color-text-muted)]">
             Preview shows up to {categoryLimit} categories and {legendLimit}{" "}
@@ -656,20 +705,43 @@ export function ArtifactPreview({
             {artifact.filename}
           </span>
         </div>
-        <ArtifactDownloads
-          artifact={artifact}
-          onDownload={onDownload}
-          canSaveAsReport={canSaveAsReport}
-        />
+        <div className="flex items-center gap-2">
+          {hasRenderableReport && (
+            <ExpandButton
+              label={`Expand ${artifact.filename}`}
+              onClick={() => setViewerOpen(true)}
+            />
+          )}
+          <ArtifactDownloads
+            artifact={artifact}
+            onDownload={onDownload}
+            canSaveAsReport={canSaveAsReport}
+          />
+        </div>
       </div>
       {hasRenderableReport ? (
-        <iframe
-          title={artifact.filename}
-          sandbox=""
-          referrerPolicy="no-referrer"
-          srcDoc={html}
-          className="h-[440px] w-full border-0 bg-white"
-        />
+        <>
+          <iframe
+            title={artifact.filename}
+            sandbox=""
+            referrerPolicy="no-referrer"
+            srcDoc={html}
+            className="h-[440px] w-full border-0 bg-white"
+          />
+          <ArtifactLightbox
+            open={viewerOpen}
+            title={artifact.filename}
+            onClose={() => setViewerOpen(false)}
+          >
+            <iframe
+              title={`${artifact.filename} (expanded)`}
+              sandbox=""
+              referrerPolicy="no-referrer"
+              srcDoc={html}
+              className="h-full max-h-[86vh] w-[92vw] rounded-xl border-0 bg-white"
+            />
+          </ArtifactLightbox>
+        </>
       ) : (
         <div className="flex min-h-48 items-center justify-center px-6 py-10 text-center">
           <div className="max-w-sm">
@@ -805,7 +877,15 @@ function messageReportSuggestion(
   return suggestion as ChatReportSuggestion;
 }
 
-function AssistantMessage({ message }: { message: UiMessage }) {
+function AssistantMessage({
+  message,
+  onReplay,
+  replayMode = false,
+}: {
+  message: UiMessage;
+  onReplay?: () => void;
+  replayMode?: boolean;
+}) {
   const runId =
     message.runId ??
     (typeof message.metadata.run_id === "string"
@@ -817,8 +897,17 @@ function AssistantMessage({ message }: { message: UiMessage }) {
       ? (message.metadata.status as StandaloneChatRunStatus)
       : "completed");
   const [showWork, setShowWork] = useState(false);
-  const { artifacts, onRetry, onStop } = useChatUi();
+  const { artifacts, events, onRetry, onStop } = useChatUi();
   const { toast } = useToast();
+  const blocks = useMemo(
+    () => (runId ? foldRunBlocks(events, runId) : []),
+    [events, runId],
+  );
+  const steps = useMemo(
+    () => blocks.flatMap((block) => (block.kind === "steps" ? block.steps : [])),
+    [blocks],
+  );
+  const blocksHaveText = blocks.some((block) => block.kind === "text");
   const attachedArtifacts = artifacts.filter(
     (artifact) =>
       artifact.assistant_message_id === message.id || artifact.run_id === runId,
@@ -846,25 +935,17 @@ function AssistantMessage({ message }: { message: UiMessage }) {
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="chat-markdown">
-            {message.content && (
+          {(running || blocks.length > 0) && (
+            <div role="status" aria-live="polite">
+              <RunActivityBlocks blocks={blocks} running={running} />
+            </div>
+          )}
+          {!blocksHaveText && message.content && (
+            <div className="chat-markdown">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {message.content}
               </ReactMarkdown>
-            )}
-          </div>
-          {running && message.activity && (
-            <p
-              role="status"
-              aria-live="polite"
-              aria-atomic="true"
-              className={`${message.content ? "mt-3" : ""} text-sm text-[var(--color-text-muted)]`}
-            >
-              <span className="font-medium text-[var(--color-text)]">
-                {message.activity.label}:
-              </span>{" "}
-              {message.activity.detail}
-            </p>
+            </div>
           )}
           {attachedArtifacts.length > 0 && (
             <div className="mt-5 space-y-4">
@@ -893,65 +974,78 @@ function AssistantMessage({ message }: { message: UiMessage }) {
               This run was stopped. Completed work remains available below.
             </p>
           )}
-          <div className="mt-3 flex flex-wrap items-center gap-1.5">
-            {successful && (
-              <button
-                type="button"
-                onClick={() =>
-                  void navigator.clipboard
-                    .writeText(message.content)
-                    .catch(() => toast("Could not copy answer", "error"))
-                }
-                className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
-              >
-                <Copy className="h-3 w-3" />
-                Copy
-              </button>
-            )}
-            {runId && (
-              <button
-                type="button"
-                onClick={() => {
-                  if (runtimeArchiveAvailable) {
-                    void openStandaloneNotebookArchive(runId).catch(() =>
-                      toast("Archived notebook is unavailable", "error"),
-                    );
-                  } else {
-                    setShowWork((value) => !value);
+          {!replayMode && (
+            <div className="mt-3 flex flex-wrap items-center gap-1.5">
+              {successful && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    void navigator.clipboard
+                      .writeText(message.content)
+                      .catch(() => toast("Could not copy answer", "error"))
                   }
-                }}
-                className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
-              >
-                <Wrench className="h-3 w-3" />
-                View work
-                {!runtimeArchiveAvailable && (
-                  <ChevronRight
-                    className={`h-3 w-3 transition-transform ${showWork ? "rotate-90" : ""}`}
-                  />
-                )}
-              </button>
-            )}
-            {running && runId && (
-              <button
-                type="button"
-                onClick={() => void onStop(runId)}
-                className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-error)]"
-              >
-                <CircleStop className="h-3 w-3" />
-                Stop
-              </button>
-            )}
-            {runStatus === "failed" && runId && (
-              <button
-                type="button"
-                onClick={() => void onRetry(runId)}
-                className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
-              >
-                <Play className="h-3 w-3" />
-                Retry
-              </button>
-            )}
-          </div>
+                  className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+                >
+                  <Copy className="h-3 w-3" />
+                  Copy
+                </button>
+              )}
+              {onReplay && successful && (
+                <button
+                  type="button"
+                  data-testid="chat-replay-button"
+                  onClick={onReplay}
+                  className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+                >
+                  <Play className="h-3 w-3" />
+                  Replay
+                </button>
+              )}
+              {runId && (runtimeArchiveAvailable || steps.length === 0) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (runtimeArchiveAvailable) {
+                      void openStandaloneNotebookArchive(runId).catch(() =>
+                        toast("Archived notebook is unavailable", "error"),
+                      );
+                    } else {
+                      setShowWork((value) => !value);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+                >
+                  <Wrench className="h-3 w-3" />
+                  View work
+                  {!runtimeArchiveAvailable && (
+                    <ChevronRight
+                      className={`h-3 w-3 transition-transform ${showWork ? "rotate-90" : ""}`}
+                    />
+                  )}
+                </button>
+              )}
+              {running && runId && (
+                <button
+                  type="button"
+                  onClick={() => void onStop(runId)}
+                  className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-error)]"
+                >
+                  <CircleStop className="h-3 w-3" />
+                  Stop
+                </button>
+              )}
+              {runStatus === "failed" && runId && (
+                <button
+                  type="button"
+                  onClick={() => void onRetry(runId)}
+                  className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+                >
+                  <Play className="h-3 w-3" />
+                  Retry
+                </button>
+              )}
+            </div>
+          )}
           {showWork && runId && !runtimeArchiveAvailable && (
             <div className="mt-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-input)] p-4">
               <WorkTimeline runId={runId} />
@@ -976,11 +1070,119 @@ function UserMessage({ message }: { message: UiMessage }) {
   );
 }
 
-function ChatMessage({ message }: { message: UiMessage }) {
+function messageRunId(message: UiMessage): string {
+  return (
+    message.runId ??
+    (typeof message.metadata.run_id === "string" ? message.metadata.run_id : "")
+  );
+}
+
+/**
+ * Re-renders a completed message from its recorded events on the compressed
+ * replay clock: 4x speed, tool waits capped at 10s, text re-streamed.
+ */
+function AssistantMessageReplay({
+  message,
+  runId,
+  onExit,
+}: {
+  message: UiMessage;
+  runId: string;
+  onExit: () => void;
+}) {
+  const {
+    events,
+    artifacts,
+    onStop,
+    onRetry,
+    onApproveReportSuggestion,
+  } = useChatUi();
+  const replay = useChatReplay(events, artifacts, runId);
+  // Runs that streamed text carry text_delta events, and the blocks rebuild
+  // the message from the replayed deltas. Runs that only produced a final
+  // message have no deltas — for those, reveal the persisted content at the
+  // moment it actually appeared: when the run completed.
+  const runStreamedText = useMemo(
+    () =>
+      events.some(
+        (event) => event.run_id === runId && event.type === "text_delta",
+      ),
+    [events, runId],
+  );
+  const replayMessage = useMemo<UiMessage>(
+    () => ({
+      ...message,
+      content: runStreamedText
+        ? ""
+        : replay.finished
+          ? message.content
+          : "",
+      runId,
+      runStatus: replay.finished
+        ? (message.runStatus ?? "completed")
+        : "running",
+    }),
+    [message, replay.finished, runId, runStreamedText],
+  );
+  return (
+    <div data-testid="chat-replay">
+      <div className="mx-auto w-full max-w-3xl px-6 pt-4">
+        <ReplayControls
+          elapsed={replay.elapsed}
+          totalMs={replay.totalMs}
+          playing={replay.playing}
+          onTogglePlay={replay.togglePlay}
+          onRestart={replay.restart}
+          onScrub={replay.scrub}
+          onExit={onExit}
+        />
+      </div>
+      <ChatUiContext.Provider
+        value={{
+          events: replay.visibleEvents,
+          artifacts: replay.visibleArtifacts,
+          onStop,
+          onRetry,
+          onApproveReportSuggestion,
+        }}
+      >
+        <AssistantMessage message={replayMessage} replayMode />
+      </ChatUiContext.Provider>
+    </div>
+  );
+}
+
+function ReplayableAssistantMessage({ message }: { message: UiMessage }) {
+  const { events } = useChatUi();
+  const [replaying, setReplaying] = useState(false);
+  const runId = messageRunId(message);
+  const canReplay =
+    Boolean(runId) &&
+    events.some(
+      (event) => event.run_id === runId && event.type !== "status",
+    );
+  if (replaying && runId) {
+    return (
+      <AssistantMessageReplay
+        message={message}
+        runId={runId}
+        onExit={() => setReplaying(false)}
+      />
+    );
+  }
+  return (
+    <AssistantMessage
+      message={message}
+      onReplay={canReplay ? () => setReplaying(true) : undefined}
+    />
+  );
+}
+
+export function ChatMessage({ message }: { message: UiMessage }) {
   return message.role === "user" ? (
     <UserMessage message={message} />
   ) : (
-    <AssistantMessage message={message} />
+    <ReplayableAssistantMessage message={message} />
   );
 }
 

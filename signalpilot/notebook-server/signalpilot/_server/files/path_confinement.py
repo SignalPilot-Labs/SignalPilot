@@ -35,7 +35,7 @@ def workspace_roots() -> list[Path]:
     if configured:
         roots.append(Path(configured))
 
-    # The pod entrypoint chdirs into the workspace before exec'ing the server,
+    # The sandbox boot command chdirs into the workspace before exec'ing the server,
     # and the container's WORKDIR is the workspace root.
     try:
         roots.append(Path.cwd())
@@ -47,9 +47,9 @@ def workspace_roots() -> list[Path]:
         if default_root.is_dir():
             roots.append(default_root)
 
-    # Cloud project clones live outside the editor's workspace directory.
+    # Execution scratch checkouts live outside the editor's workspace dir.
     try:
-        from signalpilot._server.files.project_sync import PROJECTS_ROOT
+        from signalpilot._server.files.workspace import PROJECTS_ROOT
 
         roots.append(PROJECTS_ROOT)
     except Exception:

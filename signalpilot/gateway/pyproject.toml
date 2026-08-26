@@ -43,6 +43,7 @@ dependencies = [
     "kubernetes-asyncio>=32,<33",
     # Vercel Sandbox runtime for automated improvement runs
     "vercel>=0.9.0,<1",
+    "alembic>=1.13",
 ]
 
 [project.optional-dependencies]

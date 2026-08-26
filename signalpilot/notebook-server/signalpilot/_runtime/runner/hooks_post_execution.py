@@ -533,6 +533,22 @@ def broadcast_gateway_connections(
     if not ctx.should_broadcast_data:
         return
 
+    import os
+    import time
+
+    # Headless agent runs (sp export via the agent-notebooks endpoint) have
+    # no frontend to broadcast to; serially fetching every connection's
+    # schema here stalled exports for minutes when connections were slow or
+    # dead.
+    if os.environ.get("SP_AGENT_MODE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        _gateway_connections_broadcasted = True
+        return
+
+    # Interactive kernels get the panel warm-up, but bounded: schemas are a
+    # nicety, not worth stalling post-execution. Connections that miss the
+    # budget ship as empty shells and hydrate lazily on demand.
+    _SCHEMA_BUDGET_SECONDS = 10.0
+
     try:
         from signalpilot._gateway import get_gateway_client
         from signalpilot._gateway.adapters import gateway_connection_to_datasource
@@ -547,9 +563,13 @@ def broadcast_gateway_connections(
             _gateway_connections_broadcasted = True
             return
 
+        deadline = time.monotonic() + _SCHEMA_BUDGET_SECONDS
         datasources = []
         for conn in connections:
             conn_name = conn.get("name", "")
+            if time.monotonic() > deadline:
+                datasources.append(gateway_connection_to_datasource(conn))
+                continue
             try:
                 schema_data = client.get_schema(conn_name)
                 ds = gateway_connection_to_datasource(conn, schema_data)

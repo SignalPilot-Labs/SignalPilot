@@ -60,9 +60,20 @@ async def test_agent_auth_status_checks_gateway_org_secrets(monkeypatch: pytest.
 
     monkeypatch.setattr("httpx.AsyncClient", AsyncClient)
 
+    from starlette.authentication import AuthCredentials, SimpleUser
+    from starlette.requests import Request
+
     from signalpilot._server.api.endpoints.agent import agent_auth_status
 
-    response = await agent_auth_status(request=object())
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/api/agent/auth-status",
+        "headers": [],
+        "auth": AuthCredentials(["edit"]),
+        "user": SimpleUser("test"),
+    }
+    response = await agent_auth_status(request=Request(scope))
     body = json.loads(response.body)
 
     assert calls == ["https://gateway.test/api/org/secrets/anthropic-key"]

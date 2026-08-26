@@ -27,11 +27,10 @@ def _resolve_workspace_root() -> Path:
 
     Resolution order:
       1. $SP_WORKSPACE_ROOT — explicit operator config (cloud + multi-tenant).
-      2. $SP_NOTEBOOK_ROOT — existing local-dev convention if present.
-      3. Path.cwd() — local fallback. Fail-closed for cloud deployments is enforced
+      2. Path.cwd() — local fallback. Fail-closed for cloud deployments is enforced
          in the caller by checking SP_DEPLOYMENT_MODE.
     """
-    raw = _os.environ.get("SP_WORKSPACE_ROOT") or _os.environ.get("SP_NOTEBOOK_ROOT")
+    raw = _os.environ.get("SP_WORKSPACE_ROOT")
     if raw:
         return Path(raw).resolve()
     return Path.cwd().resolve()
@@ -50,8 +49,8 @@ def _validated_project_dir(project_dir: str) -> tuple[Path | None, str | None]:
     """
     if not project_dir or len(project_dir) > _PROJECT_DIR_MAX_LEN:
         return None, f"Error: Invalid project_dir (empty or > {_PROJECT_DIR_MAX_LEN} chars)."
-    if _os.environ.get("SP_DEPLOYMENT_MODE") == "cloud" and not (
-        _os.environ.get("SP_WORKSPACE_ROOT") or _os.environ.get("SP_NOTEBOOK_ROOT")
+    if _os.environ.get("SP_DEPLOYMENT_MODE") == "cloud" and not _os.environ.get(
+        "SP_WORKSPACE_ROOT"
     ):
         return None, "Error: project_dir not permitted — SP_WORKSPACE_ROOT not configured."
     root = _resolve_workspace_root()

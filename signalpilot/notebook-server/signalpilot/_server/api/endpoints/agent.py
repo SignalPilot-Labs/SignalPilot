@@ -163,17 +163,6 @@ async def send_agent_message(*, request: Request) -> StreamingResponse:
     async def event_stream() -> AsyncGenerator[str, None]:
         try:
             idx = 0
-            # Resolve cloud project cwd if applicable.
-            agent_cwd = None
-            project_id = request.headers.get("x-gateway-project-id")
-            if project_id:
-                branch = request.headers.get("x-gateway-branch-id", "main")
-                from signalpilot._server.files.project_sync import local_project_dir
-
-                local_dir = local_project_dir(project_id, branch)
-                if local_dir.exists():
-                    agent_cwd = str(local_dir)
-
             async for event in manager.send_message(
                 instance_id=body.instance_id,
                 message=body.message,
@@ -181,7 +170,7 @@ async def send_agent_message(*, request: Request) -> StreamingResponse:
                 message_history=body.message_history if body.message_history else None,
                 app=request.app,
                 context_file=body.context_file,
-                cwd=agent_cwd,
+                cwd=None,
             ):
                 data = json.dumps({
                     "type": event.type,

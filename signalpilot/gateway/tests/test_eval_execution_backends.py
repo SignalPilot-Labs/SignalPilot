@@ -107,7 +107,6 @@ class TestBackendSelection:
     async def test_cloud_backend_does_not_fall_back_to_docker(self, monkeypatch):
         """A cluster the gateway cannot reach fails the run; it never opens the socket."""
         monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
-        monkeypatch.setenv("SP_NOTEBOOK_UPSTREAM_MODE", "pod_ip")
         backend = get_execution_backend(_settings(), org_id="org-1")
 
         orch = MagicMock()
@@ -128,7 +127,6 @@ class TestBackendSelection:
 @pytest.fixture
 def manifest(monkeypatch):
     monkeypatch.setenv("SP_NOTEBOOK_RUNTIME_CLASS", "gvisor")
-    monkeypatch.setenv("SP_NOTEBOOK_UPSTREAM_MODE", "pod_ip")
     import importlib
 
     import gateway.orchestrator.kubernetes as k8s_mod
@@ -158,7 +156,6 @@ class TestPodHardening:
 
     def test_runtime_class_omitted_when_unset(self, monkeypatch):
         monkeypatch.delenv("SP_NOTEBOOK_RUNTIME_CLASS", raising=False)
-        monkeypatch.setenv("SP_NOTEBOOK_UPSTREAM_MODE", "pod_ip")
         import importlib
 
         import gateway.orchestrator.kubernetes as k8s_mod
@@ -430,7 +427,6 @@ class TestKubernetesLifecycle:
 
     @pytest.mark.asyncio
     async def test_namespace_prefix_comes_from_the_eval_setting(self, monkeypatch):
-        monkeypatch.setenv("SP_NOTEBOOK_UPSTREAM_MODE", "pod_ip")
         backend = KubernetesBackend(_settings(SP_EVAL_K8S_NAMESPACE_PREFIX="sp-nb"), org_id="org-1")
 
         orch = MagicMock()

@@ -2008,16 +2008,16 @@ export const createBudget = (session_id: string, budget_usd: number) =>
 export const getBudget = (session_id: string) =>
   request<Record<string, unknown>>(`/api/budget/${session_id}`);
 
-// The following functions support notebook sessions.
-// The gateway issues an HttpOnly cookie at /_init.
-// The access_token field is absent from frontend JavaScript.
+// The following functions support notebook sessions (Runtime v2: compute is a
+// sandbox behind the gateway proxy; the browser only ever sees the proxy path).
+// Credentials and upstream URLs are absent from frontend JavaScript.
 export type NotebookSession = {
   id: string;
-  status: string;
+  status: string; // creating | running | snapshotted | stopped | error
   project_id: string | null;
   branch: string | null;
+  backend: string;
   notebook_url: string | null;
-  pod_ip: string | null;
   last_ping: number | null;
   created_at: number;
 };

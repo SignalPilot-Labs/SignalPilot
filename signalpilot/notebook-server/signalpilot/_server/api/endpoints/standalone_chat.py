@@ -10,11 +10,11 @@ import json
 import os
 import re
 import shutil
-import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
+from starlette.authentication import requires
 from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse, StreamingResponse
 
@@ -33,7 +33,7 @@ from signalpilot._server.ai.standalone_chat_tools import (
     _collected_artifact_is_complete,
     build_standalone_chat_mcp_server,
 )
-from signalpilot._server.files import project_sync
+from signalpilot._server.files.workspace import PROJECTS_ROOT
 from signalpilot._server.router import APIRouter
 from signalpilot._types.ids import SessionId
 from signalpilot._utils.requests import RequestError
@@ -142,22 +142,27 @@ Rules:
 - Query only the selected connection shown below. Queries must be read-only.
 - Do not modify a database, project, notebook, file, external system, or repository.
 - Call plan_query before every execution. Obey its route exactly.
+- State the complete deliverable in every plan_query purpose. If the answer needs charts, Python computation, or published artifacts, say so in the purpose so the router can select a notebook route up front.
 - Use query_database with the returned plan_id only when the plan route is mcp.
 - If the route is notebook_sdk or dataset_ref, call start_analysis_notebook with that plan_id, then use only the seeded notebook and the plan-bound SDK.
+- Never call start_analysis_notebook with a plan whose route is mcp — it will be refused. Re-plan with a purpose that names the notebook work first.
 - The analysis notebook is a marimo reactive notebook, not a Jupyter notebook. Before editing it, inspect the current cell map. Every non-private top-level name may be defined by exactly one live cell across the entire notebook. Imports, assignments, function and class names, and top-level loop targets all define names.
 - Define shared imports and reusable DataFrames once, then reference them from downstream cells. Prefix disposable cell-local names with one underscore (for example `_fig`, `_ax`, `_i`, `_row`, or `_segment`), or place scratch work inside a uniquely named function. Underscore-prefixed names are cell-local and must never be referenced from another cell; any cross-cell value needs one unique public name. Never repeat public helper names across cells.
 - If edit_notebook returns MultipleDefinitionError, use its variable and cell_ids to update, rename, or delete the conflicting definitions in one atomic edit batch. Do not add a replacement definition in a separate transaction while the old defining cell remains live.
 - Never edit, remove, or redefine the seeded hidden context/import cell or the seeded SDK setup cell. They already run `sp.init(...)` and define the plan-bound `db = sp.connect(...)` connection. `sp.init()` returns None, and there is no `signalpilot.db` export.
 - For notebook_sdk, first define `plan_id` from the exact ID returned by plan_query, then execute the exact planned SQL with `source = db.query_result(sql, plan_id=plan_id)` and build the in-kernel DataFrame from `source["rows"]`; retain `source["result_id"]` for publication. A plan ID authorizes only its exact planned SQL and execution scope. If you change the SQL, call plan_query again and use its new plan ID. There is no `db.read_plan` method.
+- `source["rows"]` is JSON transport: SQL DECIMAL/NUMERIC/MONEY values arrive as strings and DATE/DATETIME values arrive as ISO strings. In the same cell that builds the DataFrame, coerce every numeric column with `pd.to_numeric(..., errors="coerce")` and every date column with `pd.to_datetime(...)` before any arithmetic, comparison, grouping, or plotting. Get the dtypes right in the first version of the cell rather than fixing them after a failure.
 - If the route is aggregate_required, rewrite the work as a bounded warehouse aggregate. If it is refuse, stop.
 - Never copy MCP previews into notebook DataFrames, including as a fallback during recovery. MCP previews are model context, not a data transport.
 - Keep complete bounded DataFrames inside the kernel. Notebook cells may display only schema, completeness, statistics, checks, and a small preview.
 - Publish derived rows from the kernel with exactly `derived = sp.publish_result(dataframe, name="...", source_result_ids=[source["result_id"]], completeness="complete" | "truncated" | "unknown", reconciliation="...")`. The SDK computes the notebook code hash; do not pass `result=`, `code_hash=`, or `metadata=`.
 - Publish a runtime file with exactly `artifact = sp.publish_artifact(path, kind="table" | "chart" | "report", result_id=derived.id, assumptions=[...], exclusions=[...], caveats=[...])`. Create chart PNGs and other artifacts only under `SP_CHAT_SCRATCH_DIRECTORY`. Finalize every notebook cell before executing publication: the result and artifact must be published from the same unchanged notebook code hash. Do not edit the notebook between `sp.publish_result` and `sp.publish_artifact`; after any edit, publish both again from the final notebook version.
+- Verify every chart before publishing it. In the cell that renders the figure, assert the plotted DataFrame is non-empty, then assert the figure actually contains plotted marks — for matplotlib: `assert any(_ax.lines or _ax.patches or _ax.collections or _ax.images for _ax in _fig.axes), "chart rendered empty"` — and after saving assert the file exists with a plausible byte size (`os.path.getsize(path) > 10_000`). For publish_chart, assert the rows you pass are non-empty first. A blank or markless chart must never be published; fix the data or the chart and re-render until the verification cell passes.
 - PublishedResult exposes only `id`, `name`, `row_count`, `byte_size`, and `completeness`. PublishedArtifact exposes only `id`, `filename`, `kind`, and `byte_size`.
 - Do not catch or suppress publication exceptions. A failed `sp.publish_result` or `sp.publish_artifact` means the analysis is incomplete and must not be reported as successful.
 - Ask for clarification only when exploration leaves a material ambiguity that would change the answer. If needed, return exactly `CLARIFICATION_REQUESTED: <one conversational question>`.
 - Choose text, a table, a chart, or a report automatically. Publish every displayed table, chart, or report with the publication tools.
+- Close every completed answer with the "so what": the specific action the numbers support, with its quantified impact when the data allows (for example "prioritize X — it recovers roughly $Y per quarter"). If the data supports no action, say what to watch and when to re-check. Never end on a table alone.
 - Never guess. State freshness, assumptions, exclusions, truncation, and caveats explicitly.
 - Explicitly disclose incomplete, unknown-completeness, or display-limited results.
 - Use SignalPilot MCP for schema discovery and bounded pre-analysis. MCP row samples are context-limited and must never be treated as a complete dataset.
@@ -175,15 +180,18 @@ Rules:
 
 _NOTEBOOK_ONLY_RULE_PREFIXES = (
     "- If the route is notebook_sdk or dataset_ref",
+    "- Never call start_analysis_notebook with a plan whose route is mcp",
     "- The analysis notebook is a marimo reactive notebook",
     "- Define shared imports and reusable DataFrames once",
     "- If edit_notebook returns MultipleDefinitionError",
     "- Never edit, remove, or redefine the seeded",
     "- For notebook_sdk, first define `plan_id`",
+    '- `source["rows"]` is JSON transport',
     "- Never copy MCP previews into notebook DataFrames",
     "- Keep complete bounded DataFrames inside the kernel",
     "- Publish derived rows from the kernel",
     "- Publish a runtime file with exactly",
+    "- Verify every chart before publishing it",
     "- PublishedResult exposes only",
     "- Do not catch or suppress publication exceptions",
     "- Prefer governed SDK structured-result IDs",
@@ -726,15 +734,81 @@ def _start_analysis_kernel(app: Any, notebook_path: Path) -> str:
     return session_id
 
 
-def _frozen_project_directory(project_id: str) -> Path | None:
-    parent = project_sync.PROJECTS_ROOT / project_id
-    if not parent.exists():
-        return None
-    roots = sorted(
-        (path.parent for path in parent.rglob(".git") if path.is_dir()),
-        key=lambda path: len(path.parts),
+_CHECKOUT_ID_RE = re.compile(r"^[A-Za-z0-9-]{8,80}$")
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+
+def _checkout_directory(project_id: str, checkout_id: str) -> Path:
+    """Validated scratch location for one run's materialized checkout."""
+    if not _UUID_RE.fullmatch(project_id):
+        raise ValueError(f"Invalid project ID: {project_id!r}")
+    if not _CHECKOUT_ID_RE.fullmatch(checkout_id):
+        raise ValueError("Invalid frozen checkout id")
+    root = (PROJECTS_ROOT / ".standalone-chat" / project_id).resolve()
+    checkout = (root / checkout_id).resolve()
+    if root not in checkout.parents:
+        raise ValueError("Invalid frozen checkout path")
+    return checkout
+
+
+def _materialize_snapshot_checkout(
+    *,
+    project_id: str,
+    branch: str,
+    checkout_id: str,
+    gateway_url: str,
+    gateway_token: str,
+) -> Path:
+    """Materialize a disposable execution checkout from the S3 snapshot.
+
+    Disk is never the truth: the tarball is the branch head's revision,
+    pulled through the gateway Workspace Files API snapshot endpoint.
+    """
+    import tarfile
+    import tempfile
+
+    if not gateway_token:
+        raise ValueError("Scoped gateway identity required")
+    checkout = _checkout_directory(project_id, checkout_id)
+
+    response = httpx.get(
+        f"{gateway_url}/api/workspace-projects/{project_id}/snapshot",
+        params={"branch": branch},
+        headers={"Authorization": f"Bearer {gateway_token}"},
+        timeout=30.0,
     )
-    return roots[0] if roots else None
+    response.raise_for_status()
+    snapshot_url = str(response.json().get("url") or "")
+    if not snapshot_url:
+        raise ValueError("No snapshot URL available")
+
+    if checkout.exists():
+        shutil.rmtree(checkout)
+    checkout.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryFile() as spool:
+        with httpx.stream("GET", snapshot_url, timeout=120.0) as tarball:
+            tarball.raise_for_status()
+            for chunk in tarball.iter_bytes():
+                spool.write(chunk)
+        spool.seek(0)
+        with tarfile.open(fileobj=spool, mode="r:*") as tar:
+            for member in tar.getmembers():
+                name = member.name.replace("\\", "/")
+                if (
+                    name.startswith(("/", "../"))
+                    or "/../" in name
+                    or member.islnk()
+                    or member.issym()
+                ):
+                    raise ValueError(
+                        f"Unsafe member in snapshot tarball: {member.name!r}"
+                    )
+            tar.extractall(checkout, filter="data")
+    return checkout
 
 
 async def _execution_project_directory(
@@ -742,71 +816,53 @@ async def _execution_project_directory(
     run_id: str,
     project_id: str,
     branch: str,
-    commit_sha: str,
+    gateway_url: str,
     gateway_token: str,
 ) -> tuple[Path, bool]:
-    project_directory = _frozen_project_directory(project_id)
-    if project_directory is not None and _project_is_unchanged(
-        project_directory, commit_sha
-    ):
-        return project_directory, False
-    if os.getenv("SP_CHAT_RUN_ID"):
-        raise HTTPException(
-            status_code=409,
-            detail="Frozen project workspace is not reproducible",
-        )
+    """Return (checkout_path, created). Reuses this run's existing checkout
+    (follow-up messages in the same run); otherwise pulls a fresh snapshot."""
     try:
-        project_directory = await asyncio.to_thread(
-            project_sync.materialize_frozen_checkout,
+        checkout = _checkout_directory(project_id, run_id)
+        if checkout.is_dir() and any(checkout.iterdir()):
+            return checkout, False
+        checkout = await asyncio.to_thread(
+            _materialize_snapshot_checkout,
             project_id=project_id,
             branch=branch,
-            commit_sha=commit_sha,
             checkout_id=run_id,
+            gateway_url=gateway_url,
             gateway_token=gateway_token,
         )
-    except (
-        OSError,
-        subprocess.SubprocessError,
-        ValueError,
-        httpx.HTTPError,
-    ) as exc:
+    except (OSError, ValueError, httpx.HTTPError) as exc:
         raise HTTPException(
             status_code=409,
             detail="Frozen project workspace could not be prepared",
         ) from exc
-    if not _project_is_unchanged(project_directory, commit_sha):
-        shutil.rmtree(project_directory, ignore_errors=True)
-        raise HTTPException(
-            status_code=409,
-            detail="Frozen project workspace is not reproducible",
-        )
-    return project_directory, True
+    return checkout, True
 
 
-def _project_is_unchanged(project_directory: Path, commit_sha: str) -> bool:
-    try:
-        head = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=project_directory,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        status = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=all"],
-            cwd=project_directory,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return (
-        head.returncode == 0
-        and head.stdout.strip().lower() == commit_sha.lower()
-        and status.returncode == 0
-        and not status.stdout.strip()
-    )
+def _tree_digest(directory: Path) -> str:
+    """Content digest of a materialized checkout.
+
+    Replaces the git-status integrity check from the worktree era: the frozen
+    checkout has no git, so 'unchanged' means every file's bytes hash the same
+    as when the run started. Path order is normalized so the digest is stable
+    across platforms.
+    """
+    import hashlib
+
+    digest = hashlib.sha256()
+    for path in sorted(directory.rglob("*"), key=lambda p: p.as_posix()):
+        if not path.is_file():
+            continue
+        digest.update(path.relative_to(directory).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(hashlib.sha256(path.read_bytes()).digest())
+    return digest.hexdigest()
+
+
+def _project_is_unchanged(directory: Path, baseline_digest: str) -> bool:
+    return _tree_digest(directory) == baseline_digest
 
 
 def _runtime_auth_override(body: dict[str, Any]) -> dict[str, str] | None:
@@ -827,6 +883,7 @@ def _runtime_auth_override(body: dict[str, Any]) -> dict[str, str] | None:
 
 
 @router.post("/execute")
+@requires("edit")
 async def execute(*, request: Request) -> StreamingResponse:
     body = await request.json()
     run_id, project_id, branch, connection_name, commit_sha = (
@@ -978,12 +1035,18 @@ async def execute(*, request: Request) -> StreamingResponse:
             run_id=run_id,
             project_id=project_id,
             branch=branch,
-            commit_sha=commit_sha,
+            gateway_url=gateway_api_url,
             gateway_token=scoped_token,
         )
     except Exception:
         shutil.rmtree(scratch, ignore_errors=True)
         raise
+
+    project_baseline_digest = (
+        await asyncio.to_thread(_tree_digest, project_directory)
+        if project_directory is not None
+        else None
+    )
 
     async def stream() -> AsyncGenerator[bytes, None]:
         current_lifecycle: StandaloneNotebookLifecycle | None = None
@@ -1104,6 +1167,7 @@ async def execute(*, request: Request) -> StreamingResponse:
 
                 final_text = ""
                 streamed_text = ""
+                text_blocks: list[str] = []
                 tool_names_by_id: dict[str, str] = {}
                 successful_run_cells = False
                 agent_failed = False
@@ -1166,9 +1230,30 @@ async def execute(*, request: Request) -> StreamingResponse:
                         continue
                     if event.type == "text_delta":
                         streamed_text += event.content
+                        # Forward narration live so the gateway records it in
+                        # sequence with tool events — the chat UI interleaves
+                        # text with the tool chains it narrates. The accepted
+                        # ANSWER still ships only via the validated final
+                        # event; a rejected run never emits final.
+                        yield (
+                            json.dumps(
+                                {
+                                    "type": "text_delta",
+                                    "content": event.content,
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8")
                         continue
                     if event.type == "text":
-                        final_text = event.content
+                        # A run interleaves narration and the closing summary
+                        # as separate text blocks. Overwriting would keep only
+                        # the LAST block, which silently dropped the rest of
+                        # the answer whenever the closing block did not arrive
+                        # complete. Accumulate every block instead.
+                        if event.content.strip():
+                            text_blocks.append(event.content)
+                            final_text = "\n\n".join(text_blocks)
                         continue
                     if event.type == "error":
                         agent_failed = True
@@ -1208,8 +1293,8 @@ async def execute(*, request: Request) -> StreamingResponse:
                 if agent_failed:
                     return
 
-                if project_directory is not None and not _project_is_unchanged(
-                    project_directory, commit_sha
+                if project_directory is not None and not await asyncio.to_thread(
+                    _project_is_unchanged, project_directory, project_baseline_digest
                 ):
                     yield (
                         json.dumps(
@@ -1425,10 +1510,25 @@ async def execute(*, request: Request) -> StreamingResponse:
             if remove_project_directory:
                 shutil.rmtree(project_directory, ignore_errors=True)
 
-    return StreamingResponse(stream(), media_type="application/x-ndjson")
+    # The body is newline-delimited JSON and the gateway worker parses it
+    # line-by-line regardless of content type. It is declared as an event
+    # stream because intermediary proxies (the Vercel sandbox route URL in
+    # production) buffer generic streaming responses into multi-second
+    # bursts but exempt Server-Sent Events; the extra headers disable the
+    # remaining common proxy buffers. Do not "fix" the media type without
+    # re-verifying live event pacing through a sandbox route URL.
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/cancel/{run_id}")
+@requires("edit")
 async def cancel(*, request: Request) -> JSONResponse:
     run_id = request.path_params["run_id"]
     if not _RUN_ID_RE.fullmatch(run_id):

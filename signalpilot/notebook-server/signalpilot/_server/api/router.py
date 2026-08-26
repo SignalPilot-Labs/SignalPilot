@@ -33,7 +33,6 @@ from signalpilot._server.api.endpoints.files import router as files_router
 from signalpilot._server.api.endpoints.fs_events import (
     router as fs_events_router,
 )
-from signalpilot._server.api.endpoints.git import router as git_router
 from signalpilot._server.api.endpoints.health import (
     root_health_router,
     router as health_router,
@@ -44,6 +43,9 @@ from signalpilot._server.api.endpoints.lsp import router as lsp_router
 from signalpilot._server.api.endpoints.mount_config import (
     router as mount_config_router,
 )
+from signalpilot._server.api.endpoints.agent_notebooks import (
+    router as agent_notebooks_router,
+)
 from signalpilot._server.api.endpoints.notebook_static import (
     router as notebook_static_router,
 )
@@ -52,9 +54,6 @@ from signalpilot._server.api.endpoints.notion_analysis import (
 )
 from signalpilot._server.api.endpoints.packages import (
     router as packages_router,
-)
-from signalpilot._server.api.endpoints.project_sync import (
-    router as project_sync_router,
 )
 from signalpilot._server.api.endpoints.secrets import router as secrets_router
 from signalpilot._server.api.endpoints.sql import router as sql_router
@@ -112,10 +111,6 @@ def build_routes(base_url: str = "") -> list[BaseRoute]:
         branches_router, prefix="/api/branches", name="branches"
     )
     app_router.include_router(
-        project_sync_router, prefix="/api/project", name="project_sync"
-    )
-    app_router.include_router(git_router, prefix="/api/git", name="git")
-    app_router.include_router(
         notion_analysis_router,
         prefix="/api/notion-analysis",
         name="notion_analysis",
@@ -141,6 +136,11 @@ def build_routes(base_url: str = "") -> list[BaseRoute]:
         notebook_static_router,
         prefix="/api/notebook",
         name="notebook_static",
+    )
+    app_router.include_router(
+        agent_notebooks_router,
+        prefix="/api/agent-notebooks",
+        name="agent_notebooks",
     )
     app_router.include_router(health_router, prefix="/api", name="health")
     app_router.include_router(root_health_router, name="root_health")

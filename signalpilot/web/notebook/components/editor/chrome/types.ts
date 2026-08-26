@@ -6,7 +6,6 @@ import {
   FileTextIcon,
   FolderTreeIcon,
   GitBranchIcon,
-  GitCommitVerticalIcon,
   KeyRoundIcon,
   ListTreeIcon,
   type LucideIcon,
@@ -34,7 +33,6 @@ export type PanelType =
   | "ai"
   | "dbt"
   | "dbt-lineage"
-  | "git"
   | "agent-branches"
   // Developer panel defaults
   | "errors"
@@ -137,15 +135,6 @@ export const PANELS: PanelDescriptor[] = [
     defaultSection: "sidebar",
     products: ["projects"],
     additionalKeywords: ["sql", "models", "build", "run", "test", "compile"],
-  },
-  {
-    type: "git",
-    Icon: GitCommitVerticalIcon,
-    label: "Git",
-    tooltip: "Source control",
-    defaultSection: "sidebar",
-    products: ["projects"],
-    additionalKeywords: ["commit", "push", "pull", "branch", "sync", "vcs"],
   },
   {
     type: "agent-branches",

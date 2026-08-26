@@ -12,6 +12,7 @@ from signalpilot._server.api.utils import (
 )
 from signalpilot._server.files.file_system import FileSystem
 from signalpilot._server.files.os_file_system import OSFileSystem
+from signalpilot._server.files.workspace import create_file_system
 from signalpilot._server.models.files import (
     FileCopyRequest,
     FileCopyResponse,
@@ -46,32 +47,16 @@ LOGGER = _loggers.sp_logger()
 # Router for file system endpoints
 router = APIRouter()
 
-_local_fs = OSFileSystem()
-
-
-def _get_cloud_context(request: Request) -> tuple[str, str] | None:
-    """Return (project_id, branch) if this is a cloud project request."""
-    project_id = request.headers.get("x-gateway-project-id")
-    if not project_id:
-        return None
-    branch = request.headers.get("x-gateway-branch-id", "main")
-    return (project_id, branch)
-
-
 def _get_fs(request: Request) -> FileSystem:
-    """Return the appropriate file system.
+    """Return the workspace file system for this request.
 
-    For cloud projects, use OSFileSystem pointed at the local git clone.
+    SP_WORKSPACE_MODE=s3 → GatewayFileSystem (files pulled on demand from
+    S3 via the gateway; saves write through). Otherwise the local disk.
+    The branch may be overridden per request by the X-Gateway-Branch-Id
+    header; it defaults to the session's active branch.
     """
-    ctx = _get_cloud_context(request)
-    if ctx:
-        project_id, _ = ctx
-        from signalpilot._server.files.project_sync import local_project_dir
-
-        local_dir = local_project_dir(project_id)
-        if local_dir.exists():
-            return OSFileSystem(root=str(local_dir))
-    return _local_fs
+    branch = request.headers.get("x-gateway-branch-id") or None
+    return create_file_system(branch=branch)
 
 
 @router.post("/list_files")
@@ -97,13 +82,12 @@ async def list_files(
     app_state = AppState(request)
     body = await parse_request(request, cls=FileListRequest)
     fs = _get_fs(request)
-    is_cloud = _get_cloud_context(request) is not None
-    if isinstance(fs, OSFileSystem) and not is_cloud:
+    if isinstance(fs, OSFileSystem):
         directory = app_state.session_manager.workspace.directory
         root = body.path or directory or fs.get_root()
     else:
         root = body.path or fs.get_root()
-    files = fs.list_files(root)
+    files = fs.list_files(root, recursive=body.recursive)
     return FileListResponse(files=files, root=root)
 
 

@@ -1,7 +1,14 @@
 import { test, expect, type Page } from "@playwright/test";
 
-const PROJECT_ID = "3781d00d-3f10-4139-9b70-2e4cd9c42c63";
+import { resolveProject } from "./helpers";
+
+// Resolved at runtime — hardcoded ids rot when the database changes.
+let PROJECT_ID = "";
 const GATEWAY = "http://localhost:3300";
+
+test.beforeAll(async ({ request }) => {
+  PROJECT_ID = (await resolveProject(request)).id;
+});
 
 // ─── Helpers ─────────────────────────────────────────────────────
 async function getApiKey(): Promise<string> {
@@ -81,27 +88,81 @@ test.describe.serial("Warm Pod", () => {
 
 // ─── 2. Cell Editing: cursor, typing, selection ──────────────────
 test.describe("Cell Editing", () => {
+  // The test types into the notebook, and autosave write-through would
+  // commit garbage to the shared intro.py fixture. Use a disposable scratch
+  // notebook instead — created straight in the workspace store, deleted
+  // after.
+  const SCRATCH = "notebooks/e2e_edit_scratch.py";
+  const SCRATCH_CONTENT = [
+    "import signalpilot as sp",
+    "",
+    '__generated_with = "0.1.0"',
+    "app = sp.App()",
+    "",
+    "",
+    "@app.cell",
+    "def _():",
+    "    x = 1",
+    "    return",
+    "",
+    "",
+    'if __name__ == "__main__":',
+    "    app.run()",
+    "",
+  ].join("\n");
+
+  test.beforeAll(async ({ request }) => {
+    const apiKey = await getApiKey();
+    const put = await request.put(
+      `${GATEWAY}/api/workspace-projects/${PROJECT_ID}/files/${SCRATCH}?branch=main`,
+      {
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/octet-stream" },
+        data: SCRATCH_CONTENT,
+      },
+    );
+    expect(put.ok(), `scratch create: ${put.status()}`).toBe(true);
+  });
+
+  test.afterAll(async ({ request }) => {
+    const apiKey = await getApiKey();
+    await request.delete(
+      `${GATEWAY}/api/workspace-projects/${PROJECT_ID}/files/${SCRATCH}?branch=main`,
+      { headers: { Authorization: `Bearer ${apiKey}` } },
+    ).catch(() => {});
+    await request.delete(
+      `${GATEWAY}/api/workspace-projects/${PROJECT_ID}/files/notebooks/__sp__/session/e2e_edit_scratch.py.json?branch=main`,
+      { headers: { Authorization: `Bearer ${apiKey}` } },
+    ).catch(() => {});
+  });
+
   test("CodeMirror editor is fully interactive", async ({ page }) => {
     test.setTimeout(90_000);
 
     await page.goto(
-      `/projects?project=${PROJECT_ID}&branch=main&file=notebooks%2Fintro.py`,
+      `/projects?project=${PROJECT_ID}&branch=main&file=${encodeURIComponent(SCRATCH)}`,
       { waitUntil: "domcontentloaded" }
     );
     await waitForNotebook(page);
     await waitForEditor(page);
     await page.waitForTimeout(2000);
 
+    // Headless caveat: CodeMirror only applies .cm-focused when
+    // document.hasFocus() is true, which headless Chromium never reports.
+    // Assert the interaction itself — focus lands in the editor and typed
+    // text persists (i.e. CM accepted the edit rather than reverting it).
     const cmContent = page.locator(".cm-editor").first().locator(".cm-content");
     await cmContent.click();
     await page.waitForTimeout(500);
 
-    expect(await page.locator(".cm-focused").count()).toBeGreaterThan(0);
+    const focusedInEditor = await page.evaluate(() =>
+      Boolean(document.activeElement?.closest(".cm-editor")),
+    );
+    expect(focusedInEditor, "click should focus the cell editor").toBe(true);
     expect(await page.locator(".cm-cursorLayer").count()).toBeGreaterThan(0);
 
     await page.keyboard.press("End");
     await page.keyboard.type("# E2E_TEST");
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(1000);
     expect(await cmContent.textContent()).toContain("E2E_TEST");
 
     await page.keyboard.press("Home");
@@ -125,17 +186,24 @@ test.describe("File Picker", () => {
     await waitForNotebook(page);
     await waitForEditor(page);
 
-    // The deep-link loaded intro.py — the tab bar or file tree should mention it
-    const introVisible = await page.locator(".sp-root").getByText("intro.py").first()
-      .isVisible({ timeout: 10_000 }).catch(() => false);
+    // The open-file selector shows the deep-linked file (combobox value,
+    // so getByText can't see it — assert on the accessible name/value).
+    // The filename lives in the header's autocomplete input (its value —
+    // not text content — so getByText/hasText can't match it).
+    await expect(page.locator("#filename-input input, input#filename-input").first())
+      .toHaveValue(/intro\.py/, { timeout: 10_000 });
 
-    // Also check for any other project files
-    const projectFiles = page.locator(".sp-root").getByText(/dbt_project|models|notebooks|schema/i);
+    // Open the file explorer panel and assert real project files load
+    // from the S3 workspace (dumpsters has notebooks/ + dbt trees).
+    await page.getByLabel("View files").first().click();
+    const tree = page.locator(".sp-root");
+    await expect(
+      tree.getByText(/^notebooks$/).first(),
+    ).toBeVisible({ timeout: 15_000 });
+    const projectFiles = tree.getByText(/dumpsters_dbt|dbt_project|models|notebooks/i);
     const fileCount = await projectFiles.count();
-    console.log(`File tree: intro.py=${introVisible}, other files=${fileCount}`);
-
-    // At minimum, intro.py should be visible (in tab bar or tree)
-    expect(introVisible || fileCount > 0).toBe(true);
+    console.log(`File tree entries matched: ${fileCount}`);
+    expect(fileCount).toBeGreaterThan(0);
   });
 
   test("switches from .py to .yml file", async ({ page }) => {
@@ -216,26 +284,19 @@ test.describe("Project Navigation", () => {
 
     await page.goto("/projects", { waitUntil: "domcontentloaded" });
 
-    const openBtn = page.getByRole("button", { name: /open ide/i });
-    const runningText = page.getByText("running");
-    await Promise.race([
-      runningText.waitFor({ timeout: 30_000 }),
-      openBtn.waitFor({ timeout: 30_000 }),
-    ]);
+    // Current landing: project cards + "Create new project". Click the first
+    // project card (its accessible name includes its settings affordance).
+    const createBtn = page.getByRole("button", { name: /create new project/i });
+    await createBtn.waitFor({ timeout: 30_000 });
+    const projectCard = page.getByRole("button", { name: /settings for/i }).first();
+    await projectCard.waitFor({ timeout: 15_000 });
+    await projectCard.click();
 
-    if (await openBtn.isVisible().catch(() => false)) {
-      await openBtn.click();
-      await runningText.waitFor({ timeout: 60_000 });
-    }
-
-    await waitForNotebook(page);
+    await waitForNotebook(page, 120_000);
     console.log("Notebook loaded from landing page");
 
     await page.goto("/projects", { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(3000);
-
-    const stillRunning = await runningText.isVisible({ timeout: 10_000 }).catch(() => false);
-    expect(stillRunning).toBe(true);
+    await createBtn.waitFor({ timeout: 30_000 });
     expectNoFatalErrors(errors, "navigation");
   });
 });
@@ -337,7 +398,7 @@ test.describe("Cold Start", () => {
       { waitUntil: "domcontentloaded" }
     );
 
-    const loadingText = page.getByText(/creating session|connecting to pod|waiting for pod/i);
+    const loadingText = page.getByText(/creating session|connecting to|starting|preparing workspace|syncing/i);
     await loadingText.waitFor({ timeout: 15_000 }).catch(() => {});
 
     await waitForNotebook(page, 120_000);

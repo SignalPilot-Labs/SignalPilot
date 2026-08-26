@@ -852,3 +852,84 @@ kbd {
     opacity: 1 !important;
   }
 }
+
+/* ── Chat agent activity timeline ── */
+.chat-code {
+  font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  tab-size: 4;
+}
+.chat-code .tok-keyword { color: #c792ea; }
+.chat-code .tok-string,
+.chat-code .tok-string2 { color: #9ece8c; }
+.chat-code .tok-number { color: #f2b96d; }
+.chat-code .tok-comment { color: var(--color-text-dim); font-style: italic; }
+.chat-code .tok-operator,
+.chat-code .tok-punctuation { color: #8fa3b5; }
+.chat-code .tok-variableName { color: #d6e4f0; }
+.chat-code .tok-propertyName { color: #7fb4e0; }
+.chat-code .tok-function,
+.chat-code .tok-typeName,
+.chat-code .tok-className { color: #6fc3df; }
+.chat-code .tok-bool,
+.chat-code .tok-atom { color: #f2b96d; }
+
+@keyframes chat-step-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.chat-step-in { animation: chat-step-in 0.25s ease-out both; }
+
+@keyframes chat-live-sheen {
+  0% { background-position: 120% 0; }
+  100% { background-position: -20% 0; }
+}
+.chat-live-label {
+  background: linear-gradient(
+    90deg,
+    var(--color-text-dim) 0%,
+    var(--color-text) 50%,
+    var(--color-text-dim) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: chat-live-sheen 1.8s linear infinite;
+}
+
+.chat-step-rail {
+  position: relative;
+}
+.chat-step-rail::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  background: var(--color-border);
+}
+
+@keyframes chat-dot-ping {
+  0% { box-shadow: 0 0 0 0 rgba(0, 255, 136, 0.35); }
+  70% { box-shadow: 0 0 0 6px rgba(0, 255, 136, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 255, 136, 0); }
+}
+.chat-dot-live { animation: chat-dot-ping 1.6s ease-out infinite; }
+
+.chat-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.28s ease;
+}
+.chat-collapse[data-open="true"] { grid-template-rows: 1fr; }
+.chat-collapse > div { overflow: hidden; min-width: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-step-in,
+  .chat-live-label,
+  .chat-dot-live {
+    animation: none !important;
+  }
+  .chat-collapse { transition: none; }
+}

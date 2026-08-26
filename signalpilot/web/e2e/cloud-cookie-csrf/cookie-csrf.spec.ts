@@ -42,7 +42,44 @@ interface AdminRoute {
   guards: string[];
   admin_probe: boolean;
 }
-const ADMIN_ROUTES: AdminRoute[] = JSON.parse(process.env.SP_BROWSER_ADMIN_ROUTES ?? "[]");
+
+function parseJsonObject(text: string): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(text);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("Expected a JSON object");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function parseAdminRoutes(text: string): AdminRoute[] {
+  const parsed: unknown = JSON.parse(text);
+  if (!Array.isArray(parsed)) return [];
+  return parsed.flatMap((candidate): AdminRoute[] => {
+    if (typeof candidate !== "object" || candidate === null) return [];
+    const route = candidate as Record<string, unknown>;
+    if (
+      typeof route.method !== "string" ||
+      typeof route.path !== "string" ||
+      typeof route.url !== "string" ||
+      !Array.isArray(route.guards) ||
+      !route.guards.every((guard) => typeof guard === "string") ||
+      typeof route.admin_probe !== "boolean"
+    ) {
+      return [];
+    }
+    return [
+      {
+        method: route.method,
+        path: route.path,
+        url: route.url,
+        guards: route.guards,
+        admin_probe: route.admin_probe,
+      },
+    ];
+  });
+}
+
+const ADMIN_ROUTES = parseAdminRoutes(process.env.SP_BROWSER_ADMIN_ROUTES ?? "[]");
 
 const CONFIGURED = Boolean(GW && ATTACKER && ADMIN_SESSION && MEMBER_SESSION && CANARY);
 
@@ -526,7 +563,7 @@ test("A6 cross-site PUT never reaches the handler (CORS preflight) and the resou
   const ctx = await ctxWith(browser, ADMIN_SESSION);
   const before = await apiFromGatewayPage(await gatewayPage(ctx), "GET", "/api/settings");
   expect(before.status).toBe(200);
-  const beforeLimit = JSON.parse(before.text).default_row_limit;
+  const beforeLimit = parseJsonObject(before.text).default_row_limit;
 
   const page = await attackerPage(ctx);
   const r = await observedFetch(page, `${GW}/api/settings`, {
@@ -547,7 +584,7 @@ test("A6 cross-site PUT never reaches the handler (CORS preflight) and the resou
   ).not.toContain("PUT");
 
   const after = await apiFromGatewayPage(await gatewayPage(ctx), "GET", "/api/settings");
-  expect(JSON.parse(after.text).default_row_limit, "cross-site PUT mutated state").toBe(
+  expect(parseJsonObject(after.text).default_row_limit, "cross-site PUT mutated state").toBe(
     beforeLimit,
   );
   await ctx.close();
@@ -579,7 +616,7 @@ test("B1 same-origin cookie PUT /api/settings by an admin is allowed and takes e
 
   const before = await apiFromGatewayPage(page, "GET", "/api/settings");
   expect(before.status).toBe(200);
-  const original = JSON.parse(before.text);
+  const original = parseJsonObject(before.text);
   const target = (original.default_row_limit ?? 10000) === 7777 ? 8888 : 7777;
 
   const put = await apiFromGatewayPage(page, "PUT", "/api/settings", {
@@ -592,7 +629,7 @@ test("B1 same-origin cookie PUT /api/settings by an admin is allowed and takes e
   expect(put.status).toBe(200);
 
   const after = await apiFromGatewayPage(page, "GET", "/api/settings");
-  expect(JSON.parse(after.text).default_row_limit).toBe(target);
+  expect(parseJsonObject(after.text).default_row_limit).toBe(target);
 
   // restore
   await apiFromGatewayPage(page, "PUT", "/api/settings", original);

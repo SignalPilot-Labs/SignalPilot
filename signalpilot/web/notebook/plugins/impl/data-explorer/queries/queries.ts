@@ -9,7 +9,6 @@ import type { SpecQuery } from "compassql/build/src/query/spec";
 import { getTopResultTreeItem, isResultTree } from "compassql/build/src/result";
 import type { Schema } from "compassql/build/src/schema";
 import { contains } from "vega-lite";
-import type { NamedData } from "vega-lite/types_unstable/data.js";
 import { type EncodingChannel, fromFieldQuery } from "../encoding";
 import { toSpecQuery } from "../spec";
 import type { ChartSpec } from "../state/types";
@@ -31,7 +30,9 @@ import { hasWildcards, isQueryEmpty } from "./utils";
 
 // This code is adapted and simplified from https://github.com/vega/voyager
 
-const NAMED_DATA: NamedData = { name: "source" };
+type CompassData = Parameters<SpecQueryModel["toSpec"]>[0];
+
+const NAMED_DATA: CompassData = { name: "source" };
 
 function getFeaturesForRelatedViewRules(spec: SpecQuery) {
   let hasOpenPosition = false;
@@ -141,7 +142,7 @@ export function relatedViewResult(
 
 function fromSpecQueryModelGroup(
   modelGroup: SpecQueryModelGroup,
-  data: NamedData,
+  data: CompassData,
 ): ResultPlot[] {
   return modelGroup.items.map((item) => {
     if (isResultTree<SpecQueryModel>(item)) {
@@ -151,7 +152,7 @@ function fromSpecQueryModelGroup(
   });
 }
 
-function toPlot(data: NamedData, specQ: SpecQueryModel): ResultPlot {
+function toPlot(data: CompassData, specQ: SpecQueryModel): ResultPlot {
   const fieldInfos = specQ
     .getEncodings()
     .filter(isFieldQuery)

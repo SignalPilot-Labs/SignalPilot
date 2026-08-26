@@ -90,6 +90,47 @@ describe("foldRunSteps", () => {
   });
 });
 
+describe("plan and route step enrichment", () => {
+  const base = { run_id: "run-p", created_at: "2026-01-01T00:00:00Z" } as const;
+  const steps = foldRunSteps(
+    [
+      {
+        ...base,
+        sequence: 1,
+        type: "plan_created",
+        payload: {
+          plan_id: "p1",
+          purpose: "Rank accounts by revenue",
+          sql: "select 1",
+          estimated_output_rows: 120,
+        },
+      },
+      {
+        ...base,
+        sequence: 2,
+        type: "route_selected",
+        payload: {
+          plan_id: "p1",
+          route: "aggregate_required",
+          route_reason: "The projected output exceeds the direct-query row budget.",
+        },
+      },
+    ],
+    "run-p",
+  );
+
+  it("surfaces the plan purpose, SQL, and row estimate", () => {
+    expect(steps[0].title).toBe("Planned a governed query (~120 rows)");
+    expect(steps[0].detail).toBe("Rank accounts by revenue");
+    expect(steps[0].sql).toBe("select 1");
+  });
+
+  it("explains the chosen route with its reason", () => {
+    expect(steps[1].title).toContain("needs a bounded aggregate");
+    expect(steps[1].detail).toContain("row budget");
+  });
+});
+
 describe("foldRunBlocks", () => {
   it("splits the run into tool chains separated by streamed narration", () => {
     const blocks = foldRunBlocks(allEvents, FIXTURE_RUN_ID);

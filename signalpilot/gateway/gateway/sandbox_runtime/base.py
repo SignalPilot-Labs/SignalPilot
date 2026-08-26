@@ -75,6 +75,9 @@ class SandboxInfo:
     status: str
     tags: dict[str, str] = field(default_factory=dict)
     snapshot_id: str | None = None
+    # Epoch seconds; lets reapers grant newly created sandboxes a grace
+    # window while their launch is still in flight.
+    created_at_epoch: float | None = None
 
 
 class SandboxRuntime(Protocol):

@@ -1339,7 +1339,21 @@ async def execute(*, request: Request) -> StreamingResponse:
             if remove_project_directory:
                 shutil.rmtree(project_directory, ignore_errors=True)
 
-    return StreamingResponse(stream(), media_type="application/x-ndjson")
+    # The body is newline-delimited JSON and the gateway worker parses it
+    # line-by-line regardless of content type. It is declared as an event
+    # stream because intermediary proxies (the Vercel sandbox route URL in
+    # production) buffer generic streaming responses into multi-second
+    # bursts but exempt Server-Sent Events; the extra headers disable the
+    # remaining common proxy buffers. Do not "fix" the media type without
+    # re-verifying live event pacing through a sandbox route URL.
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/cancel/{run_id}")

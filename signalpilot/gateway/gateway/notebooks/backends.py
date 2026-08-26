@@ -128,7 +128,11 @@ def _boot_command(request: LaunchRequest) -> str:
         hydrate = f'curl -fsSL "$SP_SNAPSHOT_URL" | tar xz -C /workspace && '
     return (
         "set -e; "
-        'sudo mkdir -p /workspace && sudo chown "$(id -u):$(id -g)" /workspace; '
+        # The custom notebook image runs as its unprivileged user with
+        # /workspace already writable and no sudo installed; only fall back
+        # to sudo for stock sandbox images where /workspace needs root.
+        '{ mkdir -p /workspace && test -w /workspace ; } 2>/dev/null '
+        '|| { sudo mkdir -p /workspace && sudo chown "$(id -u):$(id -g)" /workspace; }; '
         f"{hydrate}"
         f"chmod 0400 {shlex.quote(_TOKEN_FILE)}; "
         "exec sp edit --host 0.0.0.0 --port 2718 --headless "
@@ -211,13 +215,22 @@ class VercelNotebookBackend:
             )
         return upstream.rstrip("/")
 
+    # The server mounts under --base-url /notebook/<session_id>, so the root
+    # /health path 404s. Only the launching code knows the session id (resume
+    # and is_alive have just the runtime handle), so probe path-agnostically:
+    # curl without -f exits 0 for ANY HTTP response (the notebook server is
+    # the only listener on the port) and non-zero when nothing listens yet.
+    _HEALTH_PROBE = (
+        f"curl -s -o /dev/null --max-time 2 http://localhost:{NOTEBOOK_PORT}/"
+    )
+
     async def _wait_healthy(self, sandbox_id: str) -> None:
         deadline = time.monotonic() + self._settings.start_timeout_seconds
         last_error = ""
         while time.monotonic() < deadline:
             result = await self._runtime.exec(
                 sandbox_id,
-                f"curl -sf --max-time 2 http://localhost:{NOTEBOOK_PORT}/health",
+                self._HEALTH_PROBE,
                 timeout_seconds=10,
             )
             if result.ok:
@@ -232,7 +245,7 @@ class VercelNotebookBackend:
         try:
             result = await self._runtime.exec(
                 runtime_handle,
-                f"curl -sf --max-time 2 http://localhost:{NOTEBOOK_PORT}/health",
+                self._HEALTH_PROBE,
                 timeout_seconds=10,
             )
         except SandboxNotFound:
@@ -275,8 +288,19 @@ class VercelNotebookBackend:
         except Exception:
             logger.warning("Notebook sandbox inventory failed; skipping reap", exc_info=True)
             return 0
+        # A launching sandbox is tagged before its session row carries the
+        # runtime handle (the handle is only persisted once launch returns),
+        # so a freshly created sandbox is indistinguishable from an orphan.
+        # Grant every sandbox a grace window covering the slowest launch.
+        grace_seconds = max(self._settings.start_timeout_seconds * 2, 900)
+        now = time.time()
         for info in rows:
             if info.sandbox_id in keep_handles:
+                continue
+            if (
+                info.created_at_epoch is not None
+                and now - info.created_at_epoch < grace_seconds
+            ):
                 continue
             try:
                 await self._runtime.destroy(info.sandbox_id)

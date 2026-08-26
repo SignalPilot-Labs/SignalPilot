@@ -1,0 +1,26 @@
+name: trigger-deploy
+
+# Fires a deployment for this commit. The deployment itself is managed elsewhere;
+# this workflow only reports back a success/failure status.
+#
+# Flow: merge PR -> staging branch => staging deploys.
+#       merge PR staging -> prod branch => prod deploys.
+on:
+  push:
+    branches: [staging, prod]
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch
+        env:
+          GH_TOKEN: ${{ secrets.DEPLOY_DISPATCH_TOKEN }}
+        run: |
+          gh api repos/SignalPilot-Labs/deployment/dispatches \
+            -f event_type="deploy-${GITHUB_REF_NAME}" \
+            -F 'client_payload[sha]=${{ github.sha }}' \
+            -F "client_payload[ref]=${GITHUB_REF_NAME}"

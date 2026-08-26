@@ -103,6 +103,18 @@ class DashboardQueryRequest(DashboardModel):
     drill_path: list[DashboardDrillStep] = Field(default_factory=list)
 
 
+class DashboardClientTelemetryRequest(DashboardModel):
+    event_type: Literal["dashboard_rendered", "dashboard_tile_render_failed"]
+    version_id: str = Field(min_length=1, max_length=200)
+    open_instance_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$")
+    duration_ms: float | None = Field(default=None, ge=0, le=3_600_000)
+    chart_id: str | None = Field(default=None, min_length=1, max_length=200)
+    failure_fingerprint: str | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$",
+    )
+
+
 class DashboardRuntimeFilter(DashboardModel):
     id: str = Field(min_length=1)
     operator: FilterOperator

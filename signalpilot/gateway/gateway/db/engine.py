@@ -292,6 +292,15 @@ async def _ensure_audit_indexes(engine) -> None:
     logger.info("Ensured performance indexes on gateway_audit_logs")
 
 
+async def _ensure_audit_event_type_width(engine) -> None:
+    """Allow explicit dashboard lifecycle event names on existing databases."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("ALTER TABLE gateway_audit_logs ALTER COLUMN event_type TYPE VARCHAR(64)")
+        )
+    logger.info("Ensured audit event_type supports bounded lifecycle names")
+
+
 async def _ensure_knowledge_columns(engine) -> None:
     """Create partial unique indexes and optional trigram index for knowledge docs.
 
@@ -858,6 +867,7 @@ async def init_db() -> None:
     await _ensure_audit_ip_columns(engine)
     await _ensure_audit_parent_id_column(engine)
     await _ensure_audit_user_id_nullable(engine)
+    await _ensure_audit_event_type_width(engine)
     await _ensure_audit_indexes(engine)
     await _ensure_knowledge_columns(engine)
     await _ensure_chat_columns(engine)

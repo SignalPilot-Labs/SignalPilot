@@ -211,7 +211,7 @@ class GatewayAuditLog(GatewayBase):
     org_id: Mapped[str] = mapped_column(String, nullable=False)
     user_id: Mapped[str | None] = mapped_column(String, nullable=True)
     timestamp: Mapped[float] = mapped_column(Float, nullable=False)
-    event_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
     connection_name: Mapped[str | None] = mapped_column(String(100))
     sandbox_id: Mapped[str | None] = mapped_column(String)
     sql_text: Mapped[str | None] = mapped_column(Text)

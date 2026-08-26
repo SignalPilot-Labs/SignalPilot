@@ -8,7 +8,6 @@ import json
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -19,6 +18,7 @@ from sqlalchemy import select
 
 from gateway.dashboard import store as dashboard_store
 from gateway.dashboard.authoring import DashboardAuthoringAgent, materialize_agent_draft
+from gateway.dashboard.cache import dashboard_query_cache_key
 from gateway.dashboard.compiler import (
     DashboardCompileError,
     compile_custom_sql_query,
@@ -31,8 +31,10 @@ from gateway.dashboard.operations import (
     canonicalize_dashboard_filter_targets,
     has_custom_sql,
     validate_dashboard_semantics,
+    validate_time_series_default_windows,
 )
 from gateway.dashboard.semantic_resolver import DashboardSemanticError, DashboardSemanticResolver
+from gateway.dashboard.telemetry import DashboardTelemetryEvent, record_dashboard_event
 from gateway.db.models import (
     GatewayDashboard,
     GatewayDashboardResult,
@@ -46,7 +48,6 @@ from gateway.governance.query_executor import (
     GovernedQueryError,
     governed_query_executor,
 )
-from gateway.models.audit import AuditEntry
 from gateway.models.dashboards import (
     CreateDashboardRequest,
     CreateDashboardVersionRequest,
@@ -57,6 +58,7 @@ from gateway.models.dashboards import (
     DashboardAuthoringRequest,
     DashboardAuthoringSessionInfo,
     DashboardChartReference,
+    DashboardClientTelemetryRequest,
     DashboardDetail,
     DashboardDistinctValuesRequest,
     DashboardDistinctValuesResponse,
@@ -76,7 +78,6 @@ from gateway.security.scope_guard import RequireScope
 from gateway.standalone_chat.projects import evaluate_project_readiness
 from gateway.store import org_secrets as org_secrets_store
 from gateway.store import standalone_chat as chat_store
-from gateway.store.audit_log import append_audit
 from gateway.verification import compare_columns
 
 from .deps import StoreD
@@ -85,6 +86,14 @@ router = APIRouter(prefix="/api")
 resolver = DashboardSemanticResolver()
 
 DashboardResultT = TypeVar("DashboardResultT")
+
+
+def _visualization_type(chart) -> str:
+    if chart.visualization.type == "big_number":
+        return "kpi"
+    if chart.visualization.type == "table":
+        return "table"
+    return chart.visualization.config.seriesType
 
 
 @dataclass
@@ -290,12 +299,25 @@ async def list_dashboards(
 )
 async def create_dashboard(body: CreateDashboardRequest, store: StoreD):
     await _verified_context(store, body.definition)
-    return await dashboard_store.create_private_dashboard(
+    detail = await dashboard_store.create_private_dashboard(
         store.session,
         org_id=store._require_org_id(),
         user_id=_user_id(store),
         definition=body.definition,
     )
+    await record_dashboard_event(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=_user_id(store),
+        event_type=DashboardTelemetryEvent.SAVED,
+        connection_name=detail.dashboard.connection_name,
+        metadata={
+            "dashboard_id": detail.dashboard.id,
+            "version_id": detail.version.id,
+            "chart_count": len(detail.version.definition.charts),
+        },
+    )
+    return detail
 
 
 @router.get("/dashboards/{dashboard_id}", response_model=DashboardDetail, dependencies=[RequireScope("read")])
@@ -309,7 +331,85 @@ async def get_dashboard(dashboard_id: str, store: StoreD, version_id: str | None
     )
     if detail is None:
         raise HTTPException(status_code=404, detail="Dashboard not found")
+    await record_dashboard_event(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=_user_id(store),
+        event_type=DashboardTelemetryEvent.OPENED,
+        connection_name=detail.dashboard.connection_name,
+        metadata={
+            "dashboard_id": detail.dashboard.id,
+            "version_id": detail.version.id,
+        },
+    )
     return detail
+
+
+@router.post(
+    "/dashboards/{dashboard_id}/telemetry",
+    status_code=204,
+    dependencies=[RequireScope("read")],
+)
+async def record_dashboard_client_telemetry(
+    dashboard_id: str,
+    body: DashboardClientTelemetryRequest,
+    store: StoreD,
+) -> None:
+    rows = await dashboard_store.get_dashboard_rows(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=_user_id(store),
+        dashboard_id=dashboard_id,
+        version_id=body.version_id,
+    )
+    if rows is None:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    dashboard, version = rows
+    definition = DashboardDefinition.model_validate(version.definition_json)
+    if body.event_type == DashboardTelemetryEvent.RENDERED:
+        if body.duration_ms is None or body.chart_id is not None or body.failure_fingerprint is not None:
+            raise HTTPException(status_code=422, detail="Invalid dashboard render telemetry")
+        dedupe_key = "render:" + hashlib.sha256(
+            f"{dashboard_id}:{version.id}:{body.open_instance_id}".encode()
+        ).hexdigest()
+        metadata = {
+            "dashboard_id": dashboard_id,
+            "version_id": version.id,
+            "open_instance_id": body.open_instance_id,
+            "duration_ms": body.duration_ms,
+            "chart_count": len(definition.charts),
+            "dedupe_key": dedupe_key,
+        }
+        event = DashboardTelemetryEvent.RENDERED
+    else:
+        chart = next((item for item in definition.charts if item.id == body.chart_id), None)
+        if chart is None or not body.failure_fingerprint or body.duration_ms is not None:
+            raise HTTPException(status_code=422, detail="Invalid dashboard tile telemetry")
+        dedupe_key = "tile:" + hashlib.sha256(
+            (
+                f"{dashboard_id}:{version.id}:{body.open_instance_id}:"
+                f"{chart.id}:{body.failure_fingerprint}"
+            ).encode()
+        ).hexdigest()
+        metadata = {
+            "dashboard_id": dashboard_id,
+            "version_id": version.id,
+            "open_instance_id": body.open_instance_id,
+            "chart_id": chart.id,
+            "visualization_type": _visualization_type(chart),
+            "failure_code": "render_error",
+            "failure_fingerprint": body.failure_fingerprint,
+            "dedupe_key": dedupe_key,
+        }
+        event = DashboardTelemetryEvent.TILE_RENDER_FAILED
+    await record_dashboard_event(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=_user_id(store),
+        event_type=event,
+        connection_name=dashboard.connection_name,
+        metadata=metadata,
+    )
 
 
 @router.post(
@@ -319,13 +419,26 @@ async def get_dashboard(dashboard_id: str, store: StoreD, version_id: str | None
 )
 async def set_dashboard_visibility(dashboard_id: str, body: DashboardVisibilityRequest, store: StoreD):
     try:
-        return await dashboard_store.set_dashboard_visibility(
+        detail = await dashboard_store.set_dashboard_visibility(
             store.session,
             org_id=store._require_org_id(),
             user_id=_user_id(store),
             dashboard_id=dashboard_id,
             visibility=body.visibility,
         )
+        await record_dashboard_event(
+            store.session,
+            org_id=store._require_org_id(),
+            user_id=_user_id(store),
+            event_type=DashboardTelemetryEvent.SHARED,
+            connection_name=detail.dashboard.connection_name,
+            metadata={
+                "dashboard_id": detail.dashboard.id,
+                "version_id": detail.version.id,
+                "visibility": body.visibility,
+            },
+        )
+        return detail
     except dashboard_store.DashboardNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Dashboard not found") from exc
 
@@ -338,26 +451,52 @@ async def set_dashboard_visibility(dashboard_id: str, body: DashboardVisibilityR
 )
 async def fork_dashboard(dashboard_id: str, body: DashboardForkRequest, store: StoreD):
     try:
-        return await dashboard_store.fork_dashboard(
+        detail = await dashboard_store.fork_dashboard(
             store.session,
             org_id=store._require_org_id(),
             user_id=_user_id(store),
             dashboard_id=dashboard_id,
             version_id=body.version_id,
         )
+        await record_dashboard_event(
+            store.session,
+            org_id=store._require_org_id(),
+            user_id=_user_id(store),
+            event_type=DashboardTelemetryEvent.FORKED,
+            connection_name=detail.dashboard.connection_name,
+            metadata={
+                "dashboard_id": dashboard_id,
+                "version_id": body.version_id,
+                "fork_dashboard_id": detail.dashboard.id,
+                "fork_version_id": detail.version.id,
+            },
+        )
+        return detail
     except dashboard_store.DashboardNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Dashboard not found") from exc
 
 
 async def _set_archive(dashboard_id: str, archived: bool, store: StoreD):
     try:
-        return await dashboard_store.set_dashboard_archived(
+        detail = await dashboard_store.set_dashboard_archived(
             store.session,
             org_id=store._require_org_id(),
             user_id=_user_id(store),
             dashboard_id=dashboard_id,
             archived=archived,
         )
+        await record_dashboard_event(
+            store.session,
+            org_id=store._require_org_id(),
+            user_id=_user_id(store),
+            event_type=(DashboardTelemetryEvent.ARCHIVED if archived else DashboardTelemetryEvent.RESTORED),
+            connection_name=detail.dashboard.connection_name,
+            metadata={
+                "dashboard_id": detail.dashboard.id,
+                "version_id": detail.version.id,
+            },
+        )
+        return detail
     except dashboard_store.DashboardNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Dashboard not found") from exc
 
@@ -389,7 +528,7 @@ async def restore_dashboard(dashboard_id: str, store: StoreD):
 async def create_dashboard_version(dashboard_id: str, body: CreateDashboardVersionRequest, store: StoreD):
     await _verified_context(store, body.definition)
     try:
-        return await dashboard_store.create_dashboard_version(
+        detail = await dashboard_store.create_dashboard_version(
             store.session,
             org_id=store._require_org_id(),
             user_id=_user_id(store),
@@ -397,6 +536,19 @@ async def create_dashboard_version(dashboard_id: str, body: CreateDashboardVersi
             expected_current_version_id=body.expected_current_version_id,
             definition=body.definition,
         )
+        await record_dashboard_event(
+            store.session,
+            org_id=store._require_org_id(),
+            user_id=_user_id(store),
+            event_type=DashboardTelemetryEvent.SAVED,
+            connection_name=detail.dashboard.connection_name,
+            metadata={
+                "dashboard_id": detail.dashboard.id,
+                "version_id": detail.version.id,
+                "chart_count": len(detail.version.definition.charts),
+            },
+        )
+        return detail
     except dashboard_store.DashboardNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Dashboard not found") from exc
     except dashboard_store.DashboardConflictError as exc:
@@ -507,7 +659,24 @@ async def create_dashboard_authoring_session(body: DashboardAuthoringRequest, st
         verified = await _verified_context(store, definition)
         definition = canonicalize_dashboard_filter_targets(definition, verified)
         validate_dashboard_semantics(definition, verified)
+        validate_time_series_default_windows(definition, verified)
     except (DashboardCompileError, ValueError) as exc:
+        await record_dashboard_event(
+            store.session,
+            org_id=org_id,
+            user_id=user_id,
+            event_type=DashboardTelemetryEvent.AGENT_VALIDATION_FAILED,
+            connection_name=context.connection_name,
+            metadata={
+                "dashboard_id": dashboard_id or "draft:new",
+                "version_id": base_version_id or "draft:new",
+                "failure_code": (
+                    "dashboard_time_series_window_required"
+                    if getattr(exc, "code", None) == "dashboard_time_series_window_required"
+                    else "dashboard_agent_draft_invalid"
+                ),
+            },
+        )
         raise HTTPException(status_code=422, detail=f"Agent draft rejected: {exc}") from exc
     custom_sql = has_custom_sql(definition)
     return await dashboard_store.create_authoring_session(
@@ -616,6 +785,7 @@ async def continue_dashboard_authoring_session(session_id: str, body: DashboardA
         verified = await _verified_context(store, definition)
         definition = canonicalize_dashboard_filter_targets(definition, verified)
         validate_dashboard_semantics(definition, verified)
+        validate_time_series_default_windows(definition, verified)
     except HTTPException:
         raise
     except (DashboardCompileError, ValueError) as exc:
@@ -626,6 +796,22 @@ async def continue_dashboard_authoring_session(session_id: str, body: DashboardA
             session_id=session_id,
             prompt=body.prompt,
             safe_message=f"That change could not be validated: {exc}",
+        )
+        await record_dashboard_event(
+            store.session,
+            org_id=org_id,
+            user_id=user_id,
+            event_type=DashboardTelemetryEvent.AGENT_VALIDATION_FAILED,
+            connection_name=current_definition.signalPilot.connectionName,
+            metadata={
+                "dashboard_id": row.dashboard_id or f"draft:{row.id}",
+                "version_id": base_version_id or f"draft:{row.id}",
+                "failure_code": (
+                    "dashboard_time_series_window_required"
+                    if getattr(exc, "code", None) == "dashboard_time_series_window_required"
+                    else "dashboard_agent_draft_invalid"
+                ),
+            },
         )
         raise HTTPException(status_code=422, detail=f"Agent draft rejected: {exc}") from exc
     previous_sql = {
@@ -741,7 +927,8 @@ async def apply_dashboard_authoring_session(session_id: str, body: DashboardAuth
     context = await _verified_context(store, definition)
     try:
         validate_dashboard_semantics(definition, context)
-        return await dashboard_store.apply_authoring_session(
+        validate_time_series_default_windows(definition, context)
+        detail = await dashboard_store.apply_authoring_session(
             store.session,
             org_id=store._require_org_id(),
             user_id=_user_id(store),
@@ -749,6 +936,20 @@ async def apply_dashboard_authoring_session(session_id: str, body: DashboardAuth
             expected_current_version_id=body.expected_current_version_id,
             visible_complete_result_ids=body.visible_complete_result_ids,
         )
+        await record_dashboard_event(
+            store.session,
+            org_id=store._require_org_id(),
+            user_id=_user_id(store),
+            event_type=DashboardTelemetryEvent.SAVED,
+            connection_name=detail.dashboard.connection_name,
+            metadata={
+                "dashboard_id": detail.dashboard.id,
+                "version_id": detail.version.id,
+                "chart_count": len(detail.version.definition.charts),
+                "authoring_session_id": session_id,
+            },
+        )
+        return detail
     except dashboard_store.DashboardNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Dashboard authoring preview not found") from exc
     except dashboard_store.DashboardConflictError as exc:
@@ -757,48 +958,23 @@ async def apply_dashboard_authoring_session(session_id: str, body: DashboardAuth
             detail={"code": "stale_dashboard_version", "actual_current_version_id": exc.actual_current_version_id},
         ) from exc
     except (DashboardCompileError, dashboard_store.DashboardValidationError) as exc:
+        await record_dashboard_event(
+            store.session,
+            org_id=store._require_org_id(),
+            user_id=_user_id(store),
+            event_type=DashboardTelemetryEvent.AGENT_VALIDATION_FAILED,
+            connection_name=definition.signalPilot.connectionName,
+            metadata={
+                "dashboard_id": row.dashboard_id or f"draft:{row.id}",
+                "version_id": row.base_version_id or f"draft:{row.id}",
+                "failure_code": (
+                    "dashboard_time_series_window_required"
+                    if getattr(exc, "code", None) == "dashboard_time_series_window_required"
+                    else "dashboard_apply_receipt_invalid"
+                ),
+            },
+        )
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
-def _canonical_scalar(value):
-    if isinstance(value, dict):
-        return {key: _canonical_scalar(value[key]) for key in sorted(value)}
-    if isinstance(value, list):
-        return [_canonical_scalar(item) for item in value]
-    return value
-
-
-def _dashboard_cache_key(
-    *,
-    version_id: str,
-    chart,
-    tile_uuid: str,
-    requested_filters,
-    drill_path,
-    dashboard_filters,
-) -> str:
-    """Build an exact request identity without touching the live warehouse."""
-
-    def normalized_filter(item) -> dict:
-        payload = _canonical_scalar(item.model_dump(mode="json", exclude_none=True))
-        if payload.get("operator") == "equals" and isinstance(payload.get("values"), list):
-            payload["values"] = sorted(payload["values"], key=lambda value: json.dumps(value, sort_keys=True))
-        return payload
-
-    normalized_filters = sorted(
-        (normalized_filter(item) for item in requested_filters),
-        key=lambda item: (str(item.get("id")), json.dumps(item, sort_keys=True)),
-    )
-    payload = {
-        "version_id": version_id,
-        "chart_id": chart.id,
-        "tile_uuid": tile_uuid,
-        "query_identity": chart.model_dump(mode="json", by_alias=True, exclude_none=True),
-        "dashboard_filter_identity": dashboard_filters.model_dump(mode="json", by_alias=True, exclude_none=True),
-        "filters": normalized_filters,
-        "drill_path": [item.model_dump(mode="json") for item in drill_path],
-    }
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
 
 
 async def _record_dashboard_failure(
@@ -806,6 +982,7 @@ async def _record_dashboard_failure(
     *,
     dashboard_id: str,
     version_id: str,
+    chart_id: str,
     failure: DashboardFailure,
     cached_result_time: datetime | None,
 ) -> None:
@@ -813,29 +990,56 @@ async def _record_dashboard_failure(
     if cached_result_time is not None:
         result_time = cached_result_time.replace(tzinfo=cached_result_time.tzinfo or UTC)
         cached_age_seconds = max(0, int((datetime.now(UTC) - result_time).total_seconds()))
-    with suppress(Exception):
-        await append_audit(
+    cache_state = "cached_after_refresh_failure" if failure.cache_fallback_available else "no_usable_cache"
+    await record_dashboard_event(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=_user_id(store),
+        event_type=DashboardTelemetryEvent.QUERY_FAILURE,
+        connection_name=failure.connection_name,
+        metadata={
+            "dashboard_id": dashboard_id,
+            "version_id": version_id,
+            "chart_id": chart_id,
+            "failure_code": failure.code,
+            "incident_scope": failure.scope,
+            "retryable": failure.retryable,
+            "correlation_id": failure.correlation_id,
+            "cache_state": cache_state,
+        },
+    )
+    await record_dashboard_event(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=_user_id(store),
+        event_type=DashboardTelemetryEvent.RETRY_OUTCOME,
+        connection_name=failure.connection_name,
+        metadata={
+            "dashboard_id": dashboard_id,
+            "version_id": version_id,
+            "outcome": "failed",
+            "failure_code": failure.code,
+            "correlation_id": failure.correlation_id,
+            "dedupe_key": f"retry:{failure.correlation_id}:failed",
+        },
+    )
+    if failure.cache_fallback_available:
+        await record_dashboard_event(
             store.session,
             org_id=store._require_org_id(),
             user_id=_user_id(store),
-            entry=AuditEntry(
-                id=str(uuid.uuid4()),
-                timestamp=time.time(),
-                event_type="dashboard_query_failure",
-                connection_name=failure.connection_name,
-                metadata={
-                    "dashboard_id": dashboard_id,
-                    "version_id": version_id,
-                    "failure_code": failure.code,
-                    "incident_scope": failure.scope,
-                    "cache_fallback_used": failure.cache_fallback_available,
-                    "cached_age_seconds": cached_age_seconds,
-                    "retryable": failure.retryable,
-                    "retry_outcome": "failed",
-                    "retry_after_seconds": failure.retry_after_seconds,
-                    "correlation_id": failure.correlation_id,
-                },
-            ),
+            event_type=DashboardTelemetryEvent.DEGRADED_FALLBACK,
+            connection_name=failure.connection_name,
+            metadata={
+                "dashboard_id": dashboard_id,
+                "version_id": version_id,
+                "chart_id": chart_id,
+                "failure_code": failure.code,
+                "cache_state": cache_state,
+                "cached_age_seconds": cached_age_seconds,
+                "correlation_id": failure.correlation_id,
+                "dedupe_key": f"fallback:{chart_id}:{failure.correlation_id}",
+            },
         )
 
 
@@ -847,24 +1051,20 @@ async def _record_dashboard_recovery(
     connection_name: str,
     correlation_id: str,
 ) -> None:
-    with suppress(Exception):
-        await append_audit(
-            store.session,
-            org_id=store._require_org_id(),
-            user_id=_user_id(store),
-            entry=AuditEntry(
-                id=str(uuid.uuid4()),
-                timestamp=time.time(),
-                event_type="dashboard_query_recovery",
-                connection_name=connection_name,
-                metadata={
-                    "dashboard_id": dashboard_id,
-                    "version_id": version_id,
-                    "retry_outcome": "fresh_result",
-                    "correlation_id": correlation_id,
-                },
-            ),
-        )
+    await record_dashboard_event(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=_user_id(store),
+        event_type=DashboardTelemetryEvent.RETRY_OUTCOME,
+        connection_name=connection_name,
+        metadata={
+            "dashboard_id": dashboard_id,
+            "version_id": version_id,
+            "outcome": "recovered",
+            "correlation_id": correlation_id,
+            "dedupe_key": f"retry:{correlation_id}:recovered",
+        },
+    )
 
 
 async def _cached_receipt(
@@ -1015,6 +1215,7 @@ async def _execute_dashboard_chart(
     store: StoreD,
     custom_sql_confirmed: bool = True,
 ) -> DashboardQueryReceipt:
+    query_started = time.monotonic()
     chart = next((item for item in parsed.charts if item.id == chart_id), None)
     if chart is None:
         raise HTTPException(status_code=404, detail="Chart not found")
@@ -1034,7 +1235,7 @@ async def _execute_dashboard_chart(
         ]
     runtime_filters = _runtime_filters_for_tile(parsed, tile.uuid, chart, requested_filters)
     drill_dimensions, drill_filters = _drill_query_state(chart, body.drill_path)
-    cache_key = _dashboard_cache_key(
+    cache_key = dashboard_query_cache_key(
         version_id=query_version_id,
         chart=chart,
         tile_uuid=tile.uuid,
@@ -1052,7 +1253,54 @@ async def _execute_dashboard_chart(
     if not body.refresh:
         if cached is not None:
             _reject_truncated_time_series(chart, cached.completeness)
+            await record_dashboard_event(
+                store.session,
+                org_id=store._require_org_id(),
+                user_id=_user_id(store),
+                event_type=DashboardTelemetryEvent.CACHE_HIT,
+                connection_name=dashboard.connection_name,
+                metadata={
+                    "dashboard_id": dashboard.id,
+                    "version_id": query_version_id,
+                    "chart_id": chart.id,
+                    "visualization_type": _visualization_type(chart),
+                    "cache_state": cached.cache_state,
+                },
+            )
+            await record_dashboard_event(
+                store.session,
+                org_id=store._require_org_id(),
+                user_id=_user_id(store),
+                event_type=DashboardTelemetryEvent.QUERY_COMPLETED,
+                connection_name=dashboard.connection_name,
+                metadata={
+                    "dashboard_id": dashboard.id,
+                    "version_id": query_version_id,
+                    "chart_id": chart.id,
+                    "visualization_type": _visualization_type(chart),
+                    "duration_ms": (time.monotonic() - query_started) * 1000,
+                    "row_count": cached.row_count,
+                    "completeness": cached.completeness,
+                    "cache_state": cached.cache_state,
+                    "execution_id": cached.execution_id,
+                },
+            )
             return cached
+    if cached is None:
+        await record_dashboard_event(
+            store.session,
+            org_id=store._require_org_id(),
+            user_id=_user_id(store),
+            event_type=DashboardTelemetryEvent.CACHE_MISS,
+            connection_name=dashboard.connection_name,
+            metadata={
+                "dashboard_id": dashboard.id,
+                "version_id": query_version_id,
+                "chart_id": chart.id,
+                "visualization_type": _visualization_type(chart),
+                "cache_state": "cache_miss",
+            },
+        )
 
     async def _run_live_query() -> DashboardQueryReceipt:
         try:
@@ -1173,6 +1421,25 @@ async def _execute_dashboard_chart(
                 connection_name=dashboard.connection_name,
                 correlation_id=body.retry_token,
             )
+        await record_dashboard_event(
+            store.session,
+            org_id=store._require_org_id(),
+            user_id=_user_id(store),
+            event_type=DashboardTelemetryEvent.QUERY_COMPLETED,
+            connection_name=dashboard.connection_name,
+            metadata={
+                "dashboard_id": dashboard.id,
+                "version_id": query_version_id,
+                "chart_id": chart.id,
+                "visualization_type": _visualization_type(chart),
+                "duration_ms": (time.monotonic() - query_started) * 1000,
+                "row_count": live.row_count,
+                "completeness": live.completeness,
+                "cache_state": live.cache_state,
+                "execution_id": live.execution_id,
+                "correlation_id": body.retry_token,
+            },
+        )
         return live
     except _DashboardFailureRaised as exc:
         failure = exc.failure.model_copy(update={"cache_fallback_available": cached is not None})
@@ -1180,6 +1447,7 @@ async def _execute_dashboard_chart(
             store,
             dashboard_id=dashboard.id,
             version_id=query_version_id,
+            chart_id=chart.id,
             failure=failure,
             cached_result_time=cached.result_time if cached else None,
         )
@@ -1521,6 +1789,19 @@ async def analyze_dashboard_chart(
             "dashboard_analysis_read_only": True,
         },
     )
+    await record_dashboard_event(
+        store.session,
+        org_id=org_id,
+        user_id=user_id,
+        event_type=DashboardTelemetryEvent.ANALYSIS_STARTED,
+        connection_name=dashboard.connection_name,
+        metadata={
+            "dashboard_id": dashboard_id,
+            "version_id": version.id,
+            "chart_id": chart.id,
+            "conversation_id": conversation.id,
+        },
+    )
     return DashboardAnalyzeResponse(conversation_id=conversation.id, chart_reference=chart_reference)
 
 
@@ -1627,22 +1908,18 @@ async def authorize_dashboard_html_export(dashboard_id: str, body: DashboardExpo
     )
     if len(authorized) != len(result_ids):
         raise HTTPException(status_code=404, detail="One or more dashboard results are not exportable")
-    await append_audit(
+    await record_dashboard_event(
         store.session,
         org_id=org_id,
         user_id=_user_id(store),
-        entry=AuditEntry(
-            id=str(uuid.uuid4()),
-            timestamp=time.time(),
-            event_type="dashboard_export",
-            connection_name=rows[0].connection_name,
-            metadata={
-                "dashboard_id": dashboard_id,
-                "version_id": body.version_id,
-                "result_count": len(authorized),
-                "format": "html",
-            },
-        ),
+        event_type=DashboardTelemetryEvent.EXPORTED,
+        connection_name=rows[0].connection_name,
+        metadata={
+            "dashboard_id": dashboard_id,
+            "version_id": body.version_id,
+            "result_count": len(authorized),
+            "format": "html",
+        },
     )
     return DashboardExportGrant(
         dashboard_id=dashboard_id,

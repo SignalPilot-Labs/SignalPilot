@@ -124,8 +124,15 @@ export function useDbtActions() {
           projectDir: dir || projectDir,
         });
         setProjectInfo(info);
-        if (info.found && info.projectDir) {
-          setProjectDir(info.projectDir);
+        // Deliberately NOT persisting info.projectDir: in cloud mode it is
+        // the runtime's materialized exec-scratch path (…/{branch}/rev-NNN),
+        // and dbtProjectDirAtom re-roots the FILE TREE — poisoning it makes
+        // every file open target a path that isn't in the workspace store
+        // (files render empty). Server-side dbt commands resolve their own
+        // project dir; only an explicit user setting should live in the atom.
+        if (info.found && info.projectDir && dir) {
+          // user explicitly chose a dir — keep their choice
+          setProjectDir(dir);
         }
         return info;
       } catch {

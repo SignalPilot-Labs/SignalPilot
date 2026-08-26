@@ -1,0 +1,21 @@
+@reference "../../../css/globals.css";
+
+.missing-filename {
+  text-align: center;
+  @apply shadow-md-solid shadow-stale;
+}
+
+.missing-filename:hover,
+.missing-filename:focus {
+  @apply shadow-lg-solid shadow-stale;
+}
+
+.filename {
+  text-align: center;
+  box-shadow: none;
+}
+
+.filename:hover,
+.filename:focus {
+  @apply border shadow-lg-solid;
+}

@@ -11,7 +11,7 @@ export function Skeleton({ className = "" }: { className?: string }) {
 
 export function CardSkeleton() {
   return (
-    <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] p-5">
+    <div className="rounded-[14px] bg-[var(--color-bg-card)] border border-[var(--color-border)] p-5">
       <div className="flex items-center gap-3 mb-3">
         <Skeleton className="w-3.5 h-3.5" />
         <Skeleton className="h-2 w-20" />
@@ -51,7 +51,7 @@ export function PageHeaderSkeleton() {
  */
 export function TerminalBarSkeleton() {
   return (
-    <div className="flex items-center gap-3 mb-6 px-4 py-2.5 border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+    <div className="flex items-center gap-3 mb-6 px-4 py-2.5 rounded-[12px] border border-[var(--color-border)] bg-[var(--color-bg-card)]">
       <Skeleton className="w-2 h-2" />
       <Skeleton className="h-2.5 w-48" />
       <div className="flex-1" />
@@ -70,13 +70,13 @@ export function DashboardSkeleton() {
       <TerminalBarSkeleton />
 
       {/* Metric cards */}
-      <div className="grid grid-cols-4 gap-px mb-px bg-[var(--color-border)] border border-[var(--color-border)]">
+      <div className="grid grid-cols-4 gap-3 mb-3">
         <CardSkeleton />
         <CardSkeleton />
         <CardSkeleton />
         <CardSkeleton />
       </div>
-      <div className="grid grid-cols-4 gap-px mb-8 bg-[var(--color-border)]">
+      <div className="grid grid-cols-4 gap-3 mb-8">
         <CardSkeleton />
         <CardSkeleton />
         <CardSkeleton />
@@ -85,14 +85,14 @@ export function DashboardSkeleton() {
 
       {/* Chart area */}
       <div className="grid grid-cols-3 gap-4 mb-8">
-        <div className="col-span-2 border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4">
+        <div className="col-span-2 rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4">
           <div className="flex items-center gap-2 mb-3">
             <Skeleton className="w-3 h-3" />
             <Skeleton className="h-2 w-24" />
           </div>
           <Skeleton className="h-20 w-full" />
         </div>
-        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4">
+        <div className="rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4">
           <div className="flex items-center gap-2 mb-3">
             <Skeleton className="w-3 h-3" />
             <Skeleton className="h-2 w-24" />
@@ -102,7 +102,7 @@ export function DashboardSkeleton() {
       </div>
 
       {/* Activity list */}
-      <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+      <div className="rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)]">
         <div className="px-4 py-3 border-b border-[var(--color-border)]">
           <Skeleton className="h-2.5 w-32" />
         </div>
@@ -141,7 +141,7 @@ export function ApiKeysSkeleton() {
       </div>
 
       {/* Keys table */}
-      <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
+      <div className="rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
         {/* Table header */}
         <div className="flex items-center gap-4 px-5 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg)]">
           <Skeleton className="flex-1 h-2" />
@@ -183,7 +183,7 @@ export function UsageSkeleton() {
       <TerminalBarSkeleton />
 
       {/* Rate limit card skeleton */}
-      <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 mb-6">
+      <div className="rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 mb-6">
         <div className="flex items-center gap-2 mb-3">
           <Skeleton className="w-3.5 h-3.5" />
           <Skeleton className="h-2.5 w-32" />
@@ -200,7 +200,7 @@ export function UsageSkeleton() {
         <Skeleton className="w-3.5 h-3.5" />
         <Skeleton className="h-2.5 w-28" />
       </div>
-      <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 mb-6">
+      <div className="rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 mb-6">
         <Skeleton className="h-[200px] w-full" />
       </div>
 
@@ -209,7 +209,7 @@ export function UsageSkeleton() {
         <Skeleton className="w-3.5 h-3.5" />
         <Skeleton className="h-2.5 w-28" />
       </div>
-      <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
+      <div className="rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
         {/* Header row */}
         <div className="flex items-center gap-4 px-5 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg)]">
           <Skeleton className="flex-1 h-2" />
@@ -250,7 +250,7 @@ export function BillingSkeleton() {
       </div>
 
       {/* Current plan card */}
-      <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 mb-8">
+      <div className="rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 mb-8">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
             <Skeleton className="h-5 w-12" />
@@ -272,7 +272,7 @@ export function BillingSkeleton() {
       {/* Two upgrade plan cards side by side */}
       <div className="flex gap-4">
         {Array.from({ length: 2 }, (_, i) => (
-          <div key={i} className="flex-1 border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5">
+          <div key={i} className="flex-1 rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5">
             {/* Plan header */}
             <div className="flex items-start justify-between mb-3">
               <div className="flex items-center gap-2">
@@ -312,7 +312,7 @@ export function ConnectionsSkeleton() {
       <TerminalBarSkeleton />
       <div className="space-y-2">
         {Array.from({ length: 3 }, (_, i) => (
-          <div key={i} className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4">
+          <div key={i} className="rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4">
             <div className="flex items-center gap-4">
               <Skeleton className="w-3 h-3" />
               <div className="flex-1 space-y-1.5">

@@ -2,6 +2,7 @@ from .correlation import RequestCorrelationMiddleware, get_request_id
 from .middleware import (
     PUBLIC_PATHS,
     APIKeyAuthMiddleware,
+    CookieAuthCsrfMiddleware,
     RateLimitMiddleware,
     RequestBodySizeLimitMiddleware,
     SecurityHeadersMiddleware,
@@ -11,6 +12,7 @@ from .middleware import (
 
 __all__ = [
     "APIKeyAuthMiddleware",
+    "CookieAuthCsrfMiddleware",
     "PUBLIC_PATHS",
     "RateLimitMiddleware",
     "RequestCorrelationMiddleware",

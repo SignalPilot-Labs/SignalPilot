@@ -1,0 +1,9 @@
+import { useCallback, useState } from "react";
+
+export function useNonce() {
+  // oxlint-disable-next-line react/hook-use-state
+  const [, setNonce] = useState(0);
+  return useCallback(() => {
+    setNonce((n) => n + 1);
+  }, []);
+}

@@ -19,6 +19,15 @@ def _build_connection_string(conn: ConnectionCreate) -> str:
         )
         ssl_param = f"?sslmode={ssl_mode}" if ssl_mode else ""
         return f"postgresql://{user}{pw}@{host}:{port}/{db}{ssl_param}"
+    if conn.db_type == DBType.xata:
+        # Each Xata branch has a separate host instead of a static URL.
+        # The connector resolves the host through the control-plane API key.
+        # Return a secret-free sentinel that produces a distinct pool key for each branch.
+        org = conn.xata_organization or conn.xata_org or ""
+        proj = conn.xata_project or ""
+        br = conn.branch or "main"
+        db = conn.xata_database or conn.database or "xata"
+        return f"xata://{org}/{proj}/{br}/{db}"
     if conn.db_type == DBType.mysql:
         user = url_quote(conn.username or "", safe="")
         pw = f":{url_quote(conn.password or '', safe='')}" if conn.password else ""
@@ -84,7 +93,10 @@ def _build_connection_string(conn: ConnectionCreate) -> str:
         pw = f":{url_quote(conn.password or '', safe='')}" if conn.password else ""
         host = conn.host or "localhost"
         port = conn.port or 1433
-        db = conn.database or "master"
+        # Empty database = multi-database mode: the connector signs in to master
+        # and discovers every accessible database. The trailing "/" keeps the
+        # pool key distinct from an explicit /master connection.
+        db = conn.database or ""
         return f"mssql://{user}{pw}@{host}:{port}/{db}"
     if conn.db_type == DBType.trino:
         user = url_quote(conn.username or "trino", safe="")
@@ -113,7 +125,7 @@ def _extract_credential_extras(conn: ConnectionCreate) -> dict:
                 extras[attr] = val
     if conn.access_token:
         extras["access_token"] = conn.access_token
-    # NOTE: password is intentionally excluded from extras — it is already
+    # NOTE: password is intentionally excluded from extras: it is already
     # embedded in the encrypted connection string.  Storing it twice doubles
     # the blast radius of a credential leak.  Consumers that need the raw
     # password (e.g. dbt profiles.yml generation) should extract it from
@@ -125,9 +137,43 @@ def _extract_credential_extras(conn: ConnectionCreate) -> dict:
             extras["private_key"] = conn.private_key
         if conn.private_key_passphrase:
             extras["private_key_passphrase"] = conn.private_key_passphrase
+        # auth method + host override (all account types). OAuth token rides in
+        # Map access_token to oauth_access_token for the connector.
+        if conn.access_token:
+            extras["oauth_access_token"] = conn.access_token
+        for attr in ("authenticator", "passcode", "snowflake_host", "snowflake_protocol"):
+            val = getattr(conn, attr, None)
+            if val:
+                extras[attr] = val
     if conn.db_type == DBType.databricks:
         for attr in ("http_path", "access_token", "catalog", "schema_name"):
             extras[attr] = getattr(conn, attr, None)
+    if conn.db_type == DBType.xata:
+        # New Xata (xata.tech): the connector resolves the branch endpoint from
+        # these (API key + org/project/branch). Keys must match what XataConnector
+        # ._resolve_endpoint reads.
+        if conn.xata_api_key:
+            extras["xata_api_key"] = conn.xata_api_key
+        # Shared demo warehouses store a *reference* to a gateway-held secret
+        # rather than the org key itself: resolved at use time by
+        # gateway.connectors.xata_creds.resolve_xata_extras(). Nothing secret
+        # goes to rest here.
+        if conn.xata_credential_ref:
+            extras["xata_credential_ref"] = conn.xata_credential_ref
+        if conn.xata_pinned:
+            extras["xata_pinned"] = True
+        if conn.xata_api_url:
+            extras["xata_api_url"] = conn.xata_api_url
+        org = conn.xata_organization or conn.xata_org
+        if org:
+            extras["xata_organization"] = org
+        if conn.xata_project:
+            extras["xata_project"] = conn.xata_project
+        db = conn.xata_database or conn.database
+        if db:
+            extras["xata_database"] = db
+        if conn.branch:
+            extras["branch"] = conn.branch
     if conn.db_type == DBType.duckdb and getattr(conn, "motherduck_token", None):
         extras["motherduck_token"] = conn.motherduck_token
     for attr in ("connection_timeout", "query_timeout", "keepalive_interval"):

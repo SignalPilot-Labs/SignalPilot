@@ -16,16 +16,16 @@ import {
   AlertTriangle,
   Plug,
 } from "lucide-react";
-import { DashboardSkeleton } from "@/components/ui/skeleton";
+import { DashboardSkeleton } from "~/components/ui/skeleton";
 import { useUser, useOrganization, useOrganizationList } from "@clerk/nextjs";
-import { useAppAuth } from "@/lib/auth-context";
-import type { ApiKeyCreatedResponse } from "@/lib/backend-client";
-import { createApiKey } from "@/lib/api";
-import { useOnboardingStatus } from "@/lib/onboarding";
-import { ALL_SCOPES } from "@/lib/api-key-scopes";
-import { CopyButton } from "@/components/ui/copy-button";
-import { CodeBlock } from "@/components/ui/code-block";
-import { useToast } from "@/components/ui/toast";
+import { useAppAuth } from "~/lib/auth-context";
+import type { ApiKeyCreatedResponse } from "~/lib/backend-client";
+import { createApiKey } from "~/lib/api";
+import { useOnboardingStatus } from "~/lib/onboarding";
+import { ALL_SCOPES } from "~/lib/api-key-scopes";
+import { CopyButton } from "~/components/ui/copy-button";
+import { CodeBlock } from "~/components/ui/code-block";
+import { useToast } from "~/components/ui/toast";
 import { TeamStep } from "./team-step";
 
 // ---------------------------------------------------------------------------
@@ -96,7 +96,7 @@ function StepIndicator({
           >
             <div className="flex flex-col items-center">
               <div
-                className={`w-6 h-6 flex items-center justify-center border text-[11px] tracking-wider transition-all ${
+                className={`w-6 h-6 flex items-center justify-center rounded-full border text-[11px] transition-colors duration-150 ${
                   isActive
                     ? "border-[var(--color-text)] bg-[var(--color-text)] text-[var(--color-bg)]"
                     : isDone
@@ -124,7 +124,7 @@ function StepIndicator({
             </div>
             {idx < labels.length - 1 && (
               <div
-                className={`h-px w-12 mx-2 mb-4 transition-all ${
+                className={`h-px w-12 mx-2 mb-4 transition-colors duration-150 ${
                   isDone
                     ? "bg-[var(--color-success)]/50"
                     : "bg-[var(--color-border)]"
@@ -146,10 +146,10 @@ function StepWelcome({ onNext }: { onNext: () => void }) {
   return (
     <div className="animate-fade-in">
       <div className="mb-8">
-        <h1 className="text-2xl font-light text-[var(--color-text)] tracking-wider mb-3">
+        <h1 className="text-2xl font-semibold text-[var(--color-text)] tracking-[-0.01em] mb-3">
           welcome to signalpilot
         </h1>
-        <p className="text-[13px] text-[var(--color-text-dim)] tracking-wider leading-relaxed max-w-lg">
+        <p className="text-[13px] text-[var(--color-text-dim)] leading-relaxed max-w-lg">
           signalpilot provides governed ai database access — letting ai agents
           query your databases through a secure, audited, policy-enforced
           gateway. this wizard will help you create an api key and connect your
@@ -157,7 +157,7 @@ function StepWelcome({ onNext }: { onNext: () => void }) {
         </p>
       </div>
 
-      <div className="grid grid-cols-3 gap-px mb-8 bg-[var(--color-border)] border border-[var(--color-border)]">
+      <div className="grid grid-cols-3 gap-3 mb-8">
         {[
           {
             icon: Key,
@@ -177,16 +177,16 @@ function StepWelcome({ onNext }: { onNext: () => void }) {
         ].map(({ icon: Icon, label, desc }) => (
           <div
             key={label}
-            className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all"
+            className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-[14px] p-5 hover:bg-[var(--color-bg-hover)] transition-colors duration-150"
           >
             <Icon
               className="w-4 h-4 text-[var(--color-text-dim)] mb-3"
               strokeWidth={1.5}
             />
-            <p className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em] mb-1.5">
+            <p className="text-[12px] text-[var(--color-text-muted)] font-medium mb-1.5">
               {label}
             </p>
-            <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+            <p className="text-[12px] text-[var(--color-text-dim)] leading-relaxed">
               {desc}
             </p>
           </div>
@@ -195,7 +195,7 @@ function StepWelcome({ onNext }: { onNext: () => void }) {
 
       <button
         onClick={onNext}
-        className="flex items-center gap-2 px-5 py-2.5 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] tracking-wider uppercase hover:opacity-90 transition-opacity"
+        className="flex items-center gap-2 px-5 py-2.5 rounded-[10px] bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] hover:opacity-90 transition-opacity duration-150"
       >
         get started
       </button>
@@ -260,10 +260,10 @@ function StepCreateApiKey({
   return (
     <div className="animate-fade-in">
       <div className="mb-6">
-        <h2 className="text-lg font-light text-[var(--color-text)] tracking-wider mb-2">
+        <h2 className="text-lg font-semibold text-[var(--color-text)] tracking-[-0.01em] mb-2">
           create an api key
         </h2>
-        <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+        <p className="text-[12px] text-[var(--color-text-dim)] leading-relaxed">
           api keys authenticate your mcp clients and programmatic access to
           signalpilot. you can manage keys anytime in settings.
         </p>
@@ -272,36 +272,36 @@ function StepCreateApiKey({
       {createdKey ? (
         <div
           role="alert"
-          className="border border-[var(--color-success)]/30 bg-[var(--color-success)]/5 p-5 mb-6 animate-fade-in"
+          className="border border-[var(--color-success)]/30 bg-[var(--color-success)]/5 rounded-[14px] p-5 mb-6 animate-fade-in"
         >
           <div className="flex items-start gap-2 mb-4">
             <AlertTriangle
               className="w-3.5 h-3.5 text-[var(--color-warning)] mt-0.5 flex-shrink-0"
               strokeWidth={1.5}
             />
-            <p className="text-[12px] text-[var(--color-warning)] tracking-wider leading-relaxed">
+            <p className="text-[12px] text-[var(--color-warning)] leading-relaxed">
               copy this key now. it will not be shown again.
             </p>
           </div>
           <div className="flex items-center gap-3 mb-4">
-            <code className="flex-1 px-3 py-2.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[13px] text-[var(--color-success)] tracking-wider break-all font-mono">
+            <code className="flex-1 px-3 py-2.5 rounded-[10px] bg-[var(--color-bg)] border border-[var(--color-border)] text-[13px] text-[var(--color-success)] break-all font-mono">
               {createdKey.raw_key}
             </code>
             <CopyButton text={createdKey.raw_key} />
           </div>
-          <div className="flex items-center gap-6 text-[11px] text-[var(--color-text-dim)] tracking-wider mb-4">
+          <div className="flex items-center gap-6 text-[11px] text-[var(--color-text-dim)] mb-4">
             <span>name: <span className="text-[var(--color-text-muted)]">{createdKey.name}</span></span>
             <span>prefix: <code className="text-[var(--color-text-muted)]">{createdKey.prefix}</code></span>
             <span>scopes: <span className="text-[var(--color-text-muted)]">{createdKey.scopes.join(", ")}</span></span>
           </div>
         </div>
       ) : (
-        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 mb-6">
+        <div className="border border-[var(--color-border)] rounded-[14px] bg-[var(--color-bg-card)] p-5 mb-6">
           <div className="space-y-4">
             <div>
               <label
                 htmlFor="onboarding-key-name"
-                className="block text-[12px] text-[var(--color-text-dim)] mb-1.5 tracking-wider"
+                className="block text-[12px] text-[var(--color-text-dim)] mb-1.5"
               >
                 key name
               </label>
@@ -313,18 +313,18 @@ function StepCreateApiKey({
                 onKeyDown={(e) => { if (e.key === "Enter") handleCreate(); }}
                 placeholder="e.g. production, ci-pipeline, local-dev"
                 autoFocus
-                className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+                className="w-full px-3 py-2 rounded-[10px] bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
               />
             </div>
             <div>
-              <span className="block text-[12px] text-[var(--color-text-dim)] mb-2 tracking-wider">scopes</span>
+              <span className="block text-[12px] text-[var(--color-text-dim)] mb-2">scopes</span>
               <div className="grid grid-cols-2 gap-2">
                 {ALL_SCOPES.map((s) => {
                   const checked = scopes.includes(s.value);
                   return (
                     <label
                       key={s.value}
-                      className={`flex items-start gap-2.5 px-3 py-2.5 border cursor-pointer transition-all ${
+                      className={`flex items-start gap-2.5 px-3 py-2.5 rounded-[10px] border cursor-pointer transition-colors duration-150 ${
                         checked
                           ? "border-[var(--color-success)]/40 bg-[var(--color-success)]/5"
                           : "border-[var(--color-border)] hover:border-[var(--color-border-hover)]"
@@ -337,8 +337,8 @@ function StepCreateApiKey({
                         className="mt-0.5 accent-[var(--color-success)]"
                       />
                       <div>
-                        <span className="text-[12px] text-[var(--color-text-muted)] tracking-wider">{s.label}</span>
-                        <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider mt-0.5">{s.description}</p>
+                        <span className="text-[12px] text-[var(--color-text-muted)]">{s.label}</span>
+                        <p className="text-[11px] text-[var(--color-text-dim)] mt-0.5">{s.description}</p>
                       </div>
                     </label>
                   );
@@ -346,12 +346,12 @@ function StepCreateApiKey({
               </div>
             </div>
             {error && (
-              <p className="text-[12px] text-[var(--color-error)] tracking-wider">{error}</p>
+              <p className="text-[12px] text-[var(--color-error)]">{error}</p>
             )}
             <button
               onClick={handleCreate}
               disabled={creating || !name.trim()}
-              className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
+              className="flex items-center gap-2 px-4 py-2 rounded-[10px] bg-[var(--color-text)] text-[var(--color-bg)] text-xs transition-opacity duration-150 hover:opacity-90 disabled:opacity-30"
             >
               {creating ? <L2 className="w-3 h-3 animate-spin" /> : <Key className="w-3 h-3" />}
               create key
@@ -364,13 +364,13 @@ function StepCreateApiKey({
         <button
           onClick={onNext}
           disabled={!createdKey}
-          className="flex items-center gap-2 px-5 py-2.5 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] tracking-wider uppercase hover:opacity-90 transition-opacity disabled:opacity-30"
+          className="flex items-center gap-2 px-5 py-2.5 rounded-[10px] bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] hover:opacity-90 transition-opacity duration-150 disabled:opacity-30"
         >
           continue
         </button>
         <button
           onClick={onSkip}
-          className="text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider underline underline-offset-2"
+          className="text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors duration-150 underline underline-offset-2"
         >
           skip for now
         </button>
@@ -399,54 +399,54 @@ function StepConnectMcp({
   return (
     <div className="animate-fade-in">
       <div className="mb-6">
-        <h2 className="text-lg font-light text-[var(--color-text)] tracking-wider mb-2">
+        <h2 className="text-lg font-semibold text-[var(--color-text)] tracking-[-0.01em] mb-2">
           connect an mcp client
         </h2>
-        <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+        <p className="text-[12px] text-[var(--color-text-dim)] leading-relaxed">
           add the signalpilot mcp server to your ai client. pick the method that fits your workflow.
         </p>
       </div>
 
       {/* Option 1: Claude Code one-liner */}
-      <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 mb-4">
+      <div className="border border-[var(--color-border)] rounded-[14px] bg-[var(--color-bg-card)] p-5 mb-4">
         <div className="flex items-center justify-between mb-2">
-          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">option 1 — claude code (one-liner)</p>
+          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">option 1 — claude code (one-liner)</p>
           <CopyButton text={claudeCodeCmd} />
         </div>
-        <pre className="px-3 py-2.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[11px] text-[var(--color-success)] tracking-wider font-mono overflow-x-auto whitespace-pre">
+        <pre className="px-3 py-2.5 rounded-[10px] bg-[var(--color-bg)] border border-[var(--color-border)] text-[11px] text-[var(--color-success)] font-mono overflow-x-auto whitespace-pre">
 {claudeCodeCmd}
         </pre>
       </div>
 
       {/* Option 2: Plugin (includes skills + agents) */}
-      <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 mb-4">
+      <div className="border border-[var(--color-border)] rounded-[14px] bg-[var(--color-bg-card)] p-5 mb-4">
         <div className="flex items-center justify-between mb-2">
-          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">option 2 — claude code plugin (includes skills + agents)</p>
+          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">option 2 — claude code plugin (includes skills + agents)</p>
           <CopyButton text={pluginCmd} />
         </div>
-        <pre className="px-3 py-2.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[11px] text-[var(--color-success)] tracking-wider font-mono overflow-x-auto whitespace-pre-wrap break-all">
+        <pre className="px-3 py-2.5 rounded-[10px] bg-[var(--color-bg)] border border-[var(--color-border)] text-[11px] text-[var(--color-success)] font-mono overflow-x-auto whitespace-pre-wrap break-all">
 {pluginCmd}
         </pre>
-        <p className="text-[10px] text-[var(--color-text-dim)] mt-1.5 tracking-wider opacity-60">
+        <p className="text-[10px] text-[var(--color-text-dim)] mt-1.5 opacity-60">
           adds 30+ mcp tools, 10 skills, and a dbt verification agent
         </p>
       </div>
 
       {/* Option 3: JSON config */}
-      <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 mb-4">
+      <div className="border border-[var(--color-border)] rounded-[14px] bg-[var(--color-bg-card)] p-5 mb-4">
         <div className="flex items-center justify-between mb-2">
-          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">option 3 — json config (any mcp client)</p>
+          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">option 3 — json config (any mcp client)</p>
           <CopyButton text={configSnippet} />
         </div>
         <CodeBlock code={configSnippet} language="json" maxHeight="12rem" showLineNumbers />
-        <p className="text-[10px] text-[var(--color-text-dim)] mt-1.5 tracking-wider opacity-60">
+        <p className="text-[10px] text-[var(--color-text-dim)] mt-1.5 opacity-60">
           paste into .mcp.json (Claude Code), .cursor/mcp.json (Cursor), or claude_desktop_config.json
         </p>
       </div>
 
       <button
         onClick={onNext}
-        className="flex items-center gap-2 px-5 py-2.5 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] tracking-wider uppercase hover:opacity-90 transition-opacity"
+        className="flex items-center gap-2 px-5 py-2.5 rounded-[10px] bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] hover:opacity-90 transition-opacity duration-150"
       >
         continue
       </button>
@@ -470,28 +470,28 @@ function StepDone({
       <div className="mb-8">
         <div className="flex items-center gap-3 mb-4">
           <CheckCircle2 className="w-6 h-6 text-[var(--color-success)]" strokeWidth={1.5} />
-          <h2 className="text-lg font-light text-[var(--color-text)] tracking-wider">you&apos;re all set</h2>
+          <h2 className="text-lg font-semibold text-[var(--color-text)] tracking-[-0.01em]">you&apos;re all set</h2>
         </div>
-        <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed mb-6">
+        <p className="text-[12px] text-[var(--color-text-dim)] leading-relaxed mb-6">
           signalpilot is ready to use. here&apos;s what you configured:
         </p>
-        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] divide-y divide-[var(--color-border)]">
+        <div className="border border-[var(--color-border)] rounded-[14px] bg-[var(--color-bg-card)] divide-y divide-[var(--color-border)] overflow-hidden">
           <div className="flex items-center gap-3 px-5 py-3">
             <Key className="w-3.5 h-3.5 text-[var(--color-text-dim)] flex-shrink-0" strokeWidth={1.5} />
-            <span className="flex-1 text-[12px] text-[var(--color-text-dim)] tracking-wider">api key</span>
+            <span className="flex-1 text-[12px] text-[var(--color-text-dim)]">api key</span>
             {createdKey ? (
-              <span className="flex items-center gap-1.5 text-[12px] text-[var(--color-success)] tracking-wider">
+              <span className="flex items-center gap-1.5 text-[12px] text-[var(--color-success)]">
                 <CheckCircle2 className="w-3 h-3" />
                 created ({createdKey.name})
               </span>
             ) : (
-              <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">skipped</span>
+              <span className="text-[12px] text-[var(--color-text-dim)]">skipped</span>
             )}
           </div>
           <div className="flex items-center gap-3 px-5 py-3">
             <Plug className="w-3.5 h-3.5 text-[var(--color-text-dim)] flex-shrink-0" strokeWidth={1.5} />
-            <span className="flex-1 text-[12px] text-[var(--color-text-dim)] tracking-wider">mcp config reviewed</span>
-            <span className="flex items-center gap-1.5 text-[12px] text-[var(--color-success)] tracking-wider">
+            <span className="flex-1 text-[12px] text-[var(--color-text-dim)]">mcp config reviewed</span>
+            <span className="flex items-center gap-1.5 text-[12px] text-[var(--color-success)]">
               <CheckCircle2 className="w-3 h-3" />
               done
             </span>
@@ -500,7 +500,7 @@ function StepDone({
       </div>
       <button
         onClick={onFinish}
-        className="flex items-center gap-2 px-5 py-2.5 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] tracking-wider uppercase hover:opacity-90 transition-opacity"
+        className="flex items-center gap-2 px-5 py-2.5 rounded-[10px] bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] hover:opacity-90 transition-opacity duration-150"
       >
         go to dashboard
       </button>
@@ -560,8 +560,8 @@ function OnboardingWizard({
     <div className="flex flex-col items-center justify-center min-h-screen relative">
     <div className="w-full max-w-2xl px-8 py-12 animate-fade-in">
       <div className="mb-8 text-center">
-        <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] mb-1">signalpilot</p>
-        <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider">setup wizard</p>
+        <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em] mb-1">signalpilot</p>
+        <p className="text-[12px] text-[var(--color-text-dim)]">setup wizard</p>
       </div>
       <StepIndicator currentStep={step} showTeamStep={false} />
       {step === 0 && <StepWelcome onNext={() => setStep(1)} />}
@@ -704,33 +704,33 @@ function CloudOnboardingInner() {
       <div className="flex flex-col items-center justify-center min-h-screen relative">
       <div className={`w-full max-w-2xl px-8 py-12 ${handoff ? "animate-slide-out-up" : "animate-fade-in"}`}>
         <div className="mb-8 text-center">
-          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] mb-1">signalpilot</p>
-          <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider">setup wizard</p>
+          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em] mb-1">signalpilot</p>
+          <p className="text-[12px] text-[var(--color-text-dim)]">setup wizard</p>
         </div>
         <StepIndicator currentStep={0} showTeamStep={true} />
 
         {/* Show pending invitations if any */}
         {pendingInvitations.length > 0 && (
           <div className="mb-6 animate-fade-in">
-            <div className="border border-[var(--color-success)]/30 bg-[var(--color-success)]/5 p-5">
-              <p className="text-[12px] text-[var(--color-text)] tracking-wider mb-3">
+            <div className="border border-[var(--color-success)]/30 bg-[var(--color-success)]/5 rounded-[14px] p-5">
+              <p className="text-[12px] text-[var(--color-text)] mb-3">
                 you&apos;ve been invited to join a team
               </p>
               <div className="space-y-2">
                 {pendingInvitations.map((inv) => (
-                  <div key={inv.id} className="flex items-center justify-between p-3 border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+                  <div key={inv.id} className="flex items-center justify-between p-3 rounded-[10px] border border-[var(--color-border)] bg-[var(--color-bg-card)]">
                     <div>
-                      <p className="text-[13px] text-[var(--color-text)] font-mono tracking-wider">
+                      <p className="text-[13px] text-[var(--color-text)] font-mono">
                         {inv.publicOrganizationData?.name || "Team"}
                       </p>
-                      <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
+                      <p className="text-[11px] text-[var(--color-text-dim)]">
                         role: {inv.role || "member"}
                       </p>
                     </div>
                     <button
                       onClick={() => handleAcceptInvitation(inv.id)}
                       disabled={acceptingInvite}
-                      className="px-4 py-2 bg-[var(--color-success)] text-[var(--color-bg)] text-[12px] font-medium tracking-wider uppercase hover:opacity-90 disabled:opacity-30 transition-all"
+                      className="px-4 py-2 rounded-[10px] bg-[var(--color-success)] text-[var(--color-bg)] text-[12px] font-medium hover:opacity-90 disabled:opacity-30 transition-opacity duration-150"
                     >
                       {acceptingInvite ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "join team"}
                     </button>
@@ -739,7 +739,7 @@ function CloudOnboardingInner() {
               </div>
               <div className="flex items-center gap-3 mt-3">
                 <div className="flex-1 h-px bg-[var(--color-border)]" />
-                <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">or create your own</span>
+                <span className="text-[11px] text-[var(--color-text-dim)]">or create your own</span>
                 <div className="flex-1 h-px bg-[var(--color-border)]" />
               </div>
             </div>

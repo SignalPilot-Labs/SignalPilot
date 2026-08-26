@@ -1,0 +1,50 @@
+/* This must be kept in sync with the fonts used in the static HTML download,
+but instead use the Google Fonts CDN.
+see frontend/src/core/static/download-html.ts */
+@font-face {
+  font-family: Lora;
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url("../../fonts/Lora/Lora-VariableFont_wght.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "PT Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url("../../fonts/PT_Sans/PTSans-Regular.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "PT Sans";
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url("../../fonts/PT_Sans/PTSans-Bold.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Fira Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url("../../fonts/Fira_Mono/FiraMono-Regular.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Fira Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: block;
+  src: url("../../fonts/Fira_Mono/FiraMono-Medium.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Fira Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url("../../fonts/Fira_Mono/FiraMono-Bold.woff2") format("woff2");
+}

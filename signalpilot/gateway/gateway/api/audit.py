@@ -17,6 +17,27 @@ from .deps import StoreD
 
 MAX_EXPORT_ROWS = get_governance_settings().sp_max_export_rows
 
+_CSV_FORMULA_TRIGGERS = frozenset({"=", "+", "-", "@", "\t", "\r"})
+
+
+def _csv_safe(value: object) -> str:
+    """OWASP-recommended CSV-injection mitigation.
+
+    Coerces value to str (None -> ""). If the resulting string starts with a
+    formula-trigger character, prepend a single apostrophe so spreadsheet apps
+    treat the cell as literal text rather than a formula.
+    """
+    if value is None:
+        s = ""
+    elif isinstance(value, str):
+        s = value
+    else:
+        s = str(value)
+    if s and s[0] in _CSV_FORMULA_TRIGGERS:
+        return "'" + s
+    return s
+
+
 router = APIRouter(prefix="/api")
 
 
@@ -126,18 +147,18 @@ async def export_audit(
             e = entry if isinstance(entry, dict) else entry.__dict__
             writer.writerow(
                 [
-                    e.get("id", ""),
-                    e.get("timestamp", ""),
-                    e.get("event_type", ""),
-                    e.get("connection_name", ""),
-                    e.get("sql", ""),
-                    ";".join(e.get("tables", [])),
-                    e.get("rows_returned", ""),
-                    e.get("duration_ms", ""),
-                    e.get("blocked", False),
-                    e.get("block_reason", ""),
-                    e.get("agent_id", ""),
-                    json.dumps(e.get("metadata", {})),
+                    _csv_safe(e.get("id", "")),
+                    _csv_safe(e.get("timestamp", "")),
+                    _csv_safe(e.get("event_type", "")),
+                    _csv_safe(e.get("connection_name", "")),
+                    _csv_safe(e.get("sql", "")),
+                    _csv_safe(";".join(e.get("tables", []))),
+                    _csv_safe(e.get("rows_returned", "")),
+                    _csv_safe(e.get("duration_ms", "")),
+                    _csv_safe(e.get("blocked", False)),
+                    _csv_safe(e.get("block_reason", "")),
+                    _csv_safe(e.get("agent_id", "")),
+                    _csv_safe(json.dumps(e.get("metadata", {}))),
                 ]
             )
         content = output.getvalue()

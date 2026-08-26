@@ -1,0 +1,60 @@
+import type { HTMLProps, PropsWithChildren } from "react";
+import type { SqlOutputType } from "@/core/config/config-schema";
+import { cn } from "@/utils/cn";
+
+export const formItemClasses = "flex flex-row items-center space-x-1 space-y-0";
+
+export const SettingTitle: React.FC<PropsWithChildren> = ({ children }) => {
+  return (
+    <div className="text-md font-semibold text-muted-foreground uppercase tracking-wide  mb-1">
+      {children}
+    </div>
+  );
+};
+
+export const SettingSubtitle: React.FC<HTMLProps<HTMLDivElement>> = ({
+  children,
+  className,
+  ...props
+}) => {
+  return (
+    <div
+      {...props}
+      className={cn(
+        "text-base font-semibold underline-offset-2 text-accent-foreground uppercase tracking-wide",
+        className,
+      )}
+    >
+      {children}
+    </div>
+  );
+};
+
+export const SettingDescription: React.FC<PropsWithChildren> = ({
+  children,
+}) => {
+  return <p className="text-sm text-muted-foreground">{children}</p>;
+};
+
+export const SettingGroup: React.FC<{
+  title: string;
+  children: React.ReactNode;
+}> = ({ title, children }) => {
+  return (
+    <div className="flex flex-col gap-4 pb-4">
+      <SettingSubtitle>{title}</SettingSubtitle>
+      {children}
+    </div>
+  );
+};
+
+export const SQL_OUTPUT_SELECT_OPTIONS: {
+  label: string;
+  value: SqlOutputType;
+}[] = [
+  { label: "Auto (Default)", value: "auto" },
+  { label: "Native", value: "native" },
+  { label: "Polars", value: "polars" },
+  { label: "Lazy Polars", value: "lazy-polars" },
+  { label: "Pandas", value: "pandas" },
+];

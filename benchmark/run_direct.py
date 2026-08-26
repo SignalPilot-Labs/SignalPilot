@@ -1,6 +1,6 @@
 """Entry point with suite routing for Spider2 benchmark runners.
 
-Kept so that existing invocations still work:
+Usage:
     python -m benchmark.run_direct chinook001
     python benchmark/run_direct.py chinook001
     python -m benchmark.run_direct --suite spider2-snowflake sf_tpch001
@@ -30,7 +30,11 @@ def main() -> None:
             sys.argv = [sys.argv[0]] + args
             break
 
-    if suite_value in ("spider2-snowflake", "spider2-lite"):
+    if suite_value == "ade-bench":
+        from benchmark.ade.runner import main as ade_main
+
+        ade_main()
+    elif suite_value in ("spider2-snowflake", "spider2-lite"):
         from benchmark.core.suite import BenchmarkSuite
         from benchmark.runners.sql_runner import main as sql_main
 

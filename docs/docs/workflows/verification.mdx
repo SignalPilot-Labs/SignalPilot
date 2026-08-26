@@ -1,0 +1,173 @@
+---
+sidebar_position: 3
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
+# Verification workflow
+
+Verification is the final step of the dbt build workflow (Step 8). It dispatches two read-only subagents in parallel, reads both reports, applies only the fixes for checks marked FAIL, then re-verifies. The loop stops only when every check in both reports passes.
+
+## Why verification matters
+
+A model that builds without error can still be wrong. The SQL compiles, `dbt run` succeeds, and the output table exists — but a JOIN silently fanned out, a `COUNT(DISTINCT)` under-counts a column named `total_*`, a LEFT JOIN dropped rows, or an aspirational YML column was never produced. These defects do not raise errors; they produce plausible-looking tables with wrong numbers.
+
+Verification catches them by measuring the built output against the source data with dedicated MCP tools, instead of trusting the SQL or the YML contract. The two verifier subagents discover the model's columns, grain, and aggregation semantics themselves — the main agent passes only the project directory, connection name, model names, the domain skill name, and the path to `technical_spec.md`. It does NOT pass column definitions, SQL logic, or its own interpretation, so the verifiers cannot inherit the main agent's mistakes.
+
+Both verifiers are strictly read-only. Neither edits files, runs dbt, nor modifies state.
+
+## The two verifiers
+
+| Subagent | `subagent_type` | Audits | Checks |
+|----------|-----------------|--------|--------|
+| Structure verifier | `verifier` | Tables, columns, row counts, fan-out, determinism, source preservation | CHECK 1–5 |
+| Value verifier | `value-verifier` | Sample values, aggregate semantics, status filtering | CHECK 1–3 |
+
+Both require parallel tool calls: when running a check across multiple models, the tool is called for ALL models in a single turn.
+
+## Structural checks (verifier)
+
+The structure verifier runs five checks on every model the main agent names.
+
+| Check | Verifies | Method | Tool |
+|-------|----------|--------|------|
+| CHECK 1 — Table Existence | Every model declared in `models/*.yml` is materialized as a table | Read each `name:` under `models:`, `Glob` `models/**/*.sql` (excluding `dbt_packages/`), call `list_tables`, report any model not materialized | `list_tables`, `Glob`, `Read` |
+| CHECK 2 — Column Completeness | Model outputs all required columns; YML names/types match | `map-columns` per model; for CREATED models report every `UNMAPPED-INCLUDE`; for MODIFIED models only confirm existing columns are intact; `check_model_schema` for YML name/type mismatches | `map-columns` (CLI), `check_model_schema` |
+| CHECK 3 — Row Count, Fan-Out, Cardinality | Model rows vs source rows, fan-out ratios, distinct counts, NULL fractions, grain | One `audit_model_sources` call with `sample_nulls=true` per model | `audit_model_sources`, `query_database` (fan-out dups only) |
+| CHECK 4 — Non-Deterministic SQL | Agent-written SQL has no nondeterministic ID generation | `Read` only the SQL the agent wrote or modified | `Read` |
+| CHECK 5 — Source Table Preservation | A MODIFIED model still reads from its original source table | `git show HEAD:<path>`, compare `FROM`/`ref()` tables old vs new | `git show`, `Read` |
+
+### CHECK 3 interpretation
+
+`audit_model_sources` returns model row count, source row counts, fan-out ratios, per-column distinct counts, and NULL fractions in one call. Do NOT write manual `SELECT COUNT(*)` — the tool returns the counts. Query manually only to identify fan-out duplicates.
+
+- **Row count:** ratio > 1.0 = possible fan-out; ratio < 0.9 = over-filtering.
+- **Fan-out:** if ratio > 1.0, identify the JOIN that multiplied, then query the lookup for duplicate keys:
+
+<MiniCopyBlock
+  label="fan-out duplicate probe"
+  plain
+  code={`SELECT * FROM <lookup>\nWHERE <key> IN (\n  SELECT <key> FROM <lookup> GROUP BY <key> HAVING COUNT(*) > 1\n)\nLIMIT 10`}
+/>
+
+  If duplicate rows differ in ANY column (even a label like "Brunei" vs "BruneiDarussalam"), the fan-out is CORRECT → CHECK 3 = PASS with a note. FAIL only when duplicate lookup rows are byte-identical across ALL columns.
+- **Cardinality:** the grain key's distinct count must equal the model row count; if not, the grain is wrong.
+- **NULLs/constants:** flag columns that are 100% NULL or 1 distinct value — EXCEPT all-NULL timestamp or 0/NULL count metrics in a parent-driven aggregation where parent rows have no matching child (a LEFT JOIN no-match yields a correct count of 0). Do NOT flag those.
+
+### CHECK 4 interpretation
+
+In agent-written SQL, search for `ORDER BY NULL` inside `ROW_NUMBER`/`RANK`, and `ROW_NUMBER()`/`RANK()` with no `ORDER BY`. Found in an agent-written model → FAIL; prescribe replacing with `ORDER BY <primary_key_column>`. Found in a pre-existing model the agent did NOT modify → WARN, no fix (modifying it destroys frozen surrogate keys).
+
+### CHECK 5 interpretation
+
+If the agent changed a MODIFIED model's source table (e.g. switched `standings` → `results`) → FAIL. Changing the source changes semantic meaning; allowed only if the task explicitly requires it.
+
+The verifier emits per-model PASS/FAIL/WARN lines per check plus a summary (PASS: N, FAIL: M with the primary issue). If a check cannot run, it reports SKIP with a reason.
+
+## Value / aggregate checks (value-verifier)
+
+If the main agent passes a domain skill name, the value verifier loads it FIRST with the Skill tool, because domain rules affect verification (for example, whether returns are excluded). It runs three checks.
+
+### CHECK 1 — Sample Value Spot-Check
+
+`SELECT * FROM <model> LIMIT 5` via `query_database`; record values and compare shared columns against a sibling model. Report a NULL grain key, an implausible date, or a value contradicting a sibling.
+
+- Negative values in `lifetime_value`, `net_amount`, `balance` are VALID in e-commerce (returns exceeded purchases) — do NOT flag.
+- NULL timestamps and 0/NULL count metrics are EXPECTED when the model aggregates a parent driving table whose rows have no matching child (LEFT JOIN no-match) — correct, not a defect. Do NOT FAIL or prescribe changing the driving table or JOIN.
+
+### CHECK 2 — Aggregate Cross-Validation
+
+The core MCP-driven check: a column's aggregation must match its name's implied semantics (total vs distinct), measured against actual source data. Manual aggregate queries are explicitly FORBIDDEN here.
+
+- **Step A (mandatory, first):** call `verify_model_values` with `connection_name` and `model_name`. It returns `COUNT(*)` and `COUNT(DISTINCT)` baselines that drive the analysis. On error, retry up to 2 times (verify exact `connection_name`/`model_name`); after 3 failed attempts → CHECK 2 = SKIP with the error.
+- **Step B (analyze):** the tool returns multiple candidate upstream tables, each with `COUNT(*)` and `COUNT(DISTINCT <key>)`. Read the model SQL to find the actual upstream (table in `FROM`/`ref()`) and use ONLY that candidate's numbers.
+
+| Column name pattern | Must match |
+|---------------------|-----------|
+| `total_X` | `COUNT(*)` (total = all rows) |
+| `unique_X` / `distinct_X` | `COUNT(DISTINCT)` |
+| `num_X` / `count_X` | check source grain |
+
+  Matches `COUNT(DISTINCT)` but the column says `total` and `COUNT(*)` is larger → FAIL (under-counting). Matches `COUNT(*)` on its actual upstream → PASS. `COUNT(*) == COUNT(DISTINCT)` → PASS (no ambiguity). Ignore candidates that are NOT the model's upstream. For date-spine models, scope the comparison to the model's date range; do NOT flag out-of-range source rows.
+- **Step C (prescribe fix, FAIL only):** read the model SQL, find the expression producing the failing column, determine the correct expression from tool output, and write `CHANGE: <old expression> → <new expression> in <filename> line <N>`. Do NOT editorialize about "intentional filtering" or "by design" — the tool measured source data.
+- **Step D (report):** include the tool's output numbers AND the prescribed fix.
+
+### CHECK 3 — Status Column Filtering
+
+Runs only if the loaded domain skill defines exclusion rules for returns/cancellations/refunds. Read the model SQL and its `FROM` table; `SELECT DISTINCT <status_col>` on that table. If status values include return/cancellation types and the SQL has no `WHERE` excluding them, compute:
+
+<MiniCopyBlock
+  label="status exclusion count"
+  plain
+  code={`SELECT COUNT(DISTINCT <key>) FROM <table> WHERE <status_col> != '<return_value>'`}
+/>
+
+Compare to the model row count. If they differ → FAIL; prescribe `CHANGE: add WHERE <col> != '<return_value>' in <file>`.
+
+The value verifier reports, per model, CHECK 1/2/3 PASS/FAIL with the metric, model value, `COUNT(*)`, `COUNT(DISTINCT <key>)`, implied aggregation, verdict, and the `CHANGE:` fix, plus a summary. It never writes manual aggregate queries for CHECK 2, and never rationalizes a mismatch as "intentional" or "by design."
+
+## Tools
+
+| Tool | Used by | Purpose |
+|------|---------|---------|
+| `list_tables` | verifier CHECK 1 | Table existence |
+| `check_model_schema` | verifier CHECK 2 | YML column name/type mismatches |
+| `audit_model_sources` (`sample_nulls=true`) | verifier CHECK 3 | Row count, fan-out, cardinality, distinct counts, NULL fractions in one call |
+| `verify_model_values` (`connection_name`, `model_name`) | value-verifier CHECK 2 | `COUNT(*)`/`COUNT(DISTINCT)` baselines — mandatory |
+| `query_database` | both verifiers | Value sampling/filtering; fan-out dup identification; `SELECT 1` readiness gate |
+| `map-columns "<project_dir>" "<model_name>"` | verifier CHECK 2 | Column mapping (Bash CLI, not MCP) |
+| `verify-values "<project_dir>" "<model_name>"` | value-verifier | Aggregate cross-validator CLI counterpart (Bash CLI, not MCP) |
+| `git show HEAD:<path>` | verifier CHECK 5 | Source-table preservation |
+
+`analyze_grain` and `validate_model_output` exist as MCP tools but are not referenced by name in the verifier or value-verifier agents; grain is checked inside `audit_model_sources` CHECK 3 via cardinality. `compare_join_types` is used during the build (dbt-write) to verify a JOIN drops no rows, not inside the verifier subagents.
+
+## The SQL-workflow structured verification loop
+
+When writing a SQL query (not a dbt model), run these six checks IN ORDER after every execution, before saving. The primary execution tool is `query_database`.
+
+1. **Row count sanity.** Does 0 rows make sense? Does 1M rows make sense for a "top 10" question? Judgment check against the expected output shape.
+2. **Column count.** Does the result have the right number of columns for the question?
+3. **NULL audit (per key column).** Unexpected NULLs indicate wrong JOINs.
+
+<MiniCopyBlock
+  label="null audit probe"
+  plain
+  code={`SELECT COUNT(*) - COUNT(col) AS nulls FROM (your_query) t`}
+/>
+
+4. **Sample inspection.** Look at 5 rows. Are values in expected ranges? Do string columns have meaningful values, not raw join keys?
+5. **Fan-out check (when JOINing).** Compare `COUNT(*)` vs `COUNT(DISTINCT primary_key)`.
+
+<MiniCopyBlock
+  label="fan-out check"
+  plain
+  code={`SELECT COUNT(*) AS total_rows, COUNT(DISTINCT <pk>) AS unique_keys\nFROM (your_query) t`}
+/>
+
+  If they differ, duplicate rows came from a fan-out JOIN.
+6. **Re-read the question.** Does the output actually answer what was asked?
+
+Verification here is continuous, not just final: build the query iteratively — write the innermost subquery, run it standalone with `query_database`, verify row count and sample, then add the next CTE and verify again. Never write a 50-line query and run it once. Supporting tools: `validate_sql` (catch syntax errors without burning a query turn), `debug_cte_query` (run each CTE independently to isolate the breaking step), and `compare_join_types` (confirm a JOIN drops no rows).
+
+## The verification loop and stop condition
+
+1. Run `query_database` with `SELECT 1`. If it errors, wait and retry (gateway readiness gate).
+2. Dispatch BOTH verifiers in parallel via the Agent tool — `subagent_type="verifier"` and `subagent_type="value-verifier"`. Pass each the project directory, connection name, model names, the domain skill name from Step 2 (e.g. `signalpilot-dbt:domain-ecommerce`), and the path to `technical_spec.md`. Do NOT pass column definitions, SQL logic, or your interpretation.
+3. Read BOTH reports. Act ONLY on checks marked FAIL. If a check is PASS or INFO, accept it — do NOT override the verifier or "fix" something it approved. If a model's row count differs from your spec but the verifier says CHECK 3 PASS, update the spec to match reality.
+
+### Per-FAIL fix mapping
+
+| FAIL | Fix |
+|------|-----|
+| Structure CHECK 1 (missing table) | `dbt run --select +<model>` |
+| Structure CHECK 2 (missing columns) | A column appearing ONLY in YML (no source counterpart, no sibling outputs it, not named by the task) is aspirational → do NOT add it (it would make the output one column too wide). Otherwise it is a real source column → add it and rebuild |
+| Structure CHECK 3 (row count) | Investigate SQL logic, pre-aggregate or add `GROUP BY`, rebuild |
+| Value CHECK 2 (aggregate mismatch) | Apply the verifier's prescribed fix exactly. Do NOT rationalize as intentional — the numbers are measured from source |
+
+For ANY fix: update `technical_spec.md` FIRST, then rewrite the SQL from the updated spec, then rebuild. After rebuilding, dispatch the verifiers again; the fix → rebuild → re-verify cycle repeats.
+
+### Stop condition
+
+STOP when BOTH reports show ALL checks PASS. Once verification passes, do NOT modify any model files — the task is complete. No further investigation, no "what if" queries, no source table changes. The verifiers are the final authority.
+
+If `dbt run` fails on any model (including `dbt_packages/` models) before verification, load the dbt-debugging skill and fix it first — broken upstream models block all downstream evaluation.

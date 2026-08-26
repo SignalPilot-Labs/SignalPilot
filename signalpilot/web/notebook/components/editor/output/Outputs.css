@@ -1,0 +1,102 @@
+@reference "../../../css/globals.css";
+
+.output,
+.media,
+.stdout,
+.stderr,
+.return,
+.sp-error {
+  width: 100%;
+}
+
+/* No margin in edit mode, where we already have separation
+ * between cells. */
+.sp-cell.published .output-area .output {
+  margin-top: 1rem;
+  margin-bottom: 1rem;
+}
+
+.sp-error a {
+  @apply text-link;
+}
+
+.output {
+  position: relative;
+}
+
+.output > * {
+  max-width: 100%;
+}
+
+.output {
+  /* Unset max-width on .markdown. Instead, we will apply
+  to individual elements so it does not affect UI elements in markdown. */
+  .markdown {
+    max-width: unset;
+  }
+}
+
+.stdout,
+.stderr,
+.sp-error {
+  font-family: var(--monospace-font);
+}
+
+.stdout,
+.stderr {
+  font-size: 0.813rem;
+}
+
+.stderr {
+  color: var(--amber-12);
+}
+
+.sp-error {
+  background: #ffc0cb30;
+  padding: 3%;
+  font-size: 0.8125rem;
+  font-weight: bold;
+  border-radius: 20px;
+  white-space: pre-wrap; /* respect newlines */
+
+  @apply text-error;
+}
+
+.sp-json-output {
+  padding-top: 2px;
+  padding-bottom: 2px;
+  /* content-visibility is set by material UI;
+   * when set on an element that has overflow auto, causes abrupt jumps when
+   * scrolling in Chrome */
+  content-visibility: unset;
+  /* Coarse hack to stop children from overflowing; doesn't seem to affect
+   * margin collapse. */
+  overflow: auto;
+  @apply text-xs;
+
+  .data-key-pair:not(:last-child) {
+    margin-top: 0.2rem;
+    margin-bottom: 0.2rem;
+  }
+
+  .copy-button {
+    @apply invisible;
+  }
+
+  .data-key-pair:hover > .copy-button {
+    @apply visible;
+  }
+
+  .data-key-pair:hover > .data-key > .copy-button {
+    @apply visible;
+  }
+}
+
+.traceback-cell-link {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.traceback-cell-link:hover {
+  font-weight: 500;
+}

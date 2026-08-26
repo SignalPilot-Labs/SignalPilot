@@ -1,0 +1,77 @@
+import { getCurrentRegistries } from "@/embed/client-binding";
+import type { CellId } from "../cells/ids";
+import type { CellMessage } from "../kernel/messages";
+
+// Virtual files are of the form /@file/<file-name>.<extension>
+const VIRTUAL_FILE_REGEX = /\/@file\/([^\s"&'/]+)\.([\dA-Za-z]+)/g;
+
+/**
+ * Tracks virtual files that are present on the page.
+ */
+export class VirtualFileTracker {
+  /**
+   * Active-client instance. Routes to the currently bound client's registry
+   * via the client-binding stack; standalone app uses the module singleton.
+   */
+  static get INSTANCE(): VirtualFileTracker {
+    return getCurrentRegistries().virtualFileTracker;
+  }
+
+  virtualFiles = new Map<CellId, Set<string>>();
+
+  // Public constructor — per-client instances are created by registries-factory.ts.
+
+  track(message: Pick<CellMessage, "cell_id" | "output">): void {
+    const output = message.output;
+    const cellId = message.cell_id;
+    if (!output) {
+      return;
+    }
+
+    switch (output.mimetype) {
+      case "application/json":
+      case "text/html": {
+        const prev = this.virtualFiles.get(cellId);
+        const matches = findVirtualFiles(output.data);
+        prev?.forEach((file) => matches.add(file));
+        this.virtualFiles.set(cellId, matches);
+        return;
+      }
+      default:
+        return;
+    }
+  }
+
+  filenames(): string[] {
+    const set = new Set<string>();
+    for (const files of this.virtualFiles.values()) {
+      files.forEach((file) => set.add(file));
+    }
+
+    return [...set];
+  }
+
+  removeForCellId(cellId: CellId): void {
+    this.virtualFiles.delete(cellId);
+  }
+}
+
+// @visibleForTesting
+export function findVirtualFiles(str: unknown): Set<string> {
+  if (!str) {
+    return new Set();
+  }
+
+  const files = new Set<string>();
+  const asString = typeof str === "string" ? str : JSON.stringify(str);
+  const matches = asString.match(VIRTUAL_FILE_REGEX);
+
+  // For each match, add the file to the set of virtual files
+  if (matches) {
+    for (const match of matches) {
+      files.add(match);
+    }
+  }
+
+  return files;
+}

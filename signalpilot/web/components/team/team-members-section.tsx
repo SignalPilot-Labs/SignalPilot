@@ -9,19 +9,19 @@
 
 import React, { useState } from "react";
 import { Users } from "lucide-react";
-import { TeamMemberListSkeleton } from "@/components/ui/list-skeletons";
-import { PendingButton } from "@/components/ui/pending-button";
+import { TeamMemberListSkeleton } from "~/components/ui/list-skeletons";
+import { PendingButton } from "~/components/ui/pending-button";
 import { useReverification, useOrganization } from "@clerk/nextjs";
 import { useUser } from "@clerk/nextjs";
 import type { OrganizationResource, OrganizationMembershipResource } from "@clerk/types";
-import { SectionHeader } from "@/components/ui/section-header";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { useToast } from "@/components/ui/toast";
-import { ERROR_CLASS, NEUTRAL_CLASS } from "@/components/auth/auth-primitives";
-import { isReverificationCancelledError } from "@/lib/security/use-reverify";
-import { formatClerkError } from "@/lib/security/clerk-errors";
-import type { TeamPermissions } from "@/lib/team/use-team-permissions";
-import type { TeamRole } from "@/lib/team/roles";
+import { SectionHeader } from "~/components/ui/section-header";
+import { ConfirmDialog } from "~/components/ui/confirm-dialog";
+import { useToast } from "~/components/ui/toast";
+import { ERROR_CLASS, NEUTRAL_CLASS } from "~/components/auth/auth-primitives";
+import { isReverificationCancelledError } from "~/lib/security/use-reverify";
+import { formatClerkError } from "~/lib/security/clerk-errors";
+import type { TeamPermissions } from "~/lib/team/use-team-permissions";
+import type { TeamRole } from "~/lib/team/roles";
 import { MemberRow } from "./member-row";
 
 export interface TeamMembersSectionProps {

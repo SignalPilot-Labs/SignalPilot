@@ -1,0 +1,3858 @@
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import dataclasses
+import io
+import itertools
+import os
+import pathlib
+import signal
+import sys
+import threading
+import time
+import traceback
+from copy import copy
+from functools import cached_property
+from multiprocessing import connection
+from pathlib import Path
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    cast,
+)
+from uuid import uuid4
+
+from signalpilot import _loggers
+from signalpilot._ast.cell import CellConfig, CellImpl, RuntimeStateType
+from signalpilot._ast.compiler import _build_source_position_map, compile_cell
+from signalpilot._ast.errors import ImportStarError
+from signalpilot._ast.names import SETUP_CELL_NAME
+from signalpilot._ast.variables import BUILTINS, is_local
+from signalpilot._ast.visitor import ImportData, Name, VariableData
+from signalpilot._config.config import (
+    ExecutionType,
+    SpConfig,
+    OnCellChangeType,
+)
+from signalpilot._config.settings import GLOBAL_SETTINGS
+from signalpilot._data._external_storage.models import StorageBackend, StorageEntry
+from signalpilot._data.preview_column import (
+    get_column_preview_for_dataframe,
+    get_column_preview_for_duckdb,
+)
+from signalpilot._dependencies.dependencies import DependencyManager
+from signalpilot._dependencies.errors import ManyModulesNotFoundError
+from signalpilot._entrypoints.registry import EntryPointRegistry
+from signalpilot._lint.validate_graph import check_for_errors
+from signalpilot._messaging.cell_output import CellChannel
+from signalpilot._messaging.context import (
+    http_request_context,
+    is_code_mode_request,
+    run_id_context,
+)
+from signalpilot._messaging.errors import (
+    Error,
+    ImportStarError as SpImportStarError,
+    SpInterruptionError,
+    SpStrictExecutionError,
+    SpSyntaxError,
+    UnknownError,
+)
+from signalpilot._messaging.notebook.changes import ReorderCells, Transaction
+from signalpilot._messaging.notebook.document import (
+    NotebookDocument,
+    notebook_document_context,
+)
+from signalpilot._messaging.notification import (
+    CacheClearedNotification,
+    CacheInfoNotification,
+    CompletedRunNotification,
+    DataColumnPreviewNotification,
+    DataSourceConnectionsNotification,
+    FunctionCallResultNotification,
+    HumanReadableStatus,
+    InstallingPackageAlertNotification,
+    MissingPackageAlertNotification,
+    NotebookDocumentTransactionNotification,
+    PackageStatusType,
+    RemoveUIElementsNotification,
+    SecretKeysResultNotification,
+    SQLDatabaseMetadata,
+    SQLMetadata,
+    SQLSchemaListPreviewNotification,
+    SQLTableListPreviewNotification,
+    SQLTablePreviewNotification,
+    StorageDownloadReadyNotification,
+    StorageEntriesNotification,
+    UIElementMessageNotification,
+    ValidateSQLResultNotification,
+    VariableDeclarationNotification,
+    VariablesNotification,
+    VariableValue,
+    VariableValuesNotification,
+)
+from signalpilot._messaging.notification_utils import (
+    CellNotificationUtils,
+    broadcast_notification,
+)
+from signalpilot._messaging.print_override import print_override
+from signalpilot._messaging.streams import (
+    QueuePipe,
+    ThreadSafeStderr,
+    ThreadSafeStdin,
+    ThreadSafeStdout,
+    ThreadSafeStream,
+)
+from signalpilot._messaging.tracebacks import write_traceback
+from signalpilot._messaging.types import (
+    KernelMessage,
+    Stderr,
+    Stdin,
+    Stdout,
+    Stream,
+)
+from signalpilot._messaging.variables import create_variable_value
+from signalpilot._output.rich_help import mddoc
+from signalpilot._plugins.core.web_component import JSONType
+from signalpilot._plugins.ui._core.ui_element import SpConvertValueException
+from signalpilot._plugins.ui._impl.anywidget.init import WIDGET_COMM_MANAGER
+from signalpilot._runtime import dataflow, handlers, sp_pdb, patches
+from signalpilot._runtime.app_meta import AppMeta
+from signalpilot._runtime.commands import (
+    AppMetadata,
+    BatchableCommand,
+    ClearCacheCommand,
+    CodeCompletionCommand,
+    CommandMessage,
+    CreateNotebookCommand,
+    DebugCellCommand,
+    DeleteCellCommand,
+    ExecuteCellCommand,
+    ExecuteCellsCommand,
+    ExecuteScratchpadCommand,
+    ExecuteStaleCellsCommand,
+    GetCacheInfoCommand,
+    InstallPackagesCommand,
+    InvokeFunctionCommand,
+    ListDataSourceConnectionCommand,
+    ListSecretKeysCommand,
+    ListSQLSchemasCommand,
+    ListSQLTablesCommand,
+    ModelCommand,
+    PreviewDatasetColumnCommand,
+    PreviewSQLTableCommand,
+    RefreshSecretsCommand,
+    RenameNotebookCommand,
+    StopKernelCommand,
+    StorageDownloadCommand,
+    StorageListEntriesCommand,
+    SyncGraphCommand,
+    UpdateCellConfigCommand,
+    UpdateUIElementCommand,
+    UpdateUserConfigCommand,
+    ValidateSQLCommand,
+)
+from signalpilot._runtime.context import (
+    ContextNotInitializedError,
+    ExecutionContext,
+    get_context,
+)
+from signalpilot._runtime.context.kernel_context import (
+    KernelRuntimeContext,
+)
+from signalpilot._runtime.context.utils import get_mode
+from signalpilot._runtime.control_flow import SpInterrupt
+from signalpilot._runtime.input_override import getpass_override
+from signalpilot._runtime.packages.import_error_extractors import (
+    extract_missing_module_from_cause_chain,
+    try_extract_packages_from_import_error_message,
+)
+from signalpilot._runtime.packages.module_registry import ModuleRegistry
+from signalpilot._runtime.packages.package_manager import (
+    LogCallback,
+    PackageManager,
+)
+from signalpilot._runtime.packages.package_managers import create_package_manager
+from signalpilot._runtime.packages.utils import (
+    PackageRequirement,
+    is_python_isolated,
+)
+from signalpilot._runtime.params import CLIArgs, QueryParams
+from signalpilot._runtime.parent_poller import (
+    start_parent_poller,
+)
+from signalpilot._runtime.redirect_streams import redirect_streams
+from signalpilot._runtime.reload.autoreload import ModuleReloader
+from signalpilot._runtime.reload.module_watcher import ModuleWatcher
+from signalpilot._runtime.runner import cell_runner, hook_context
+from signalpilot._runtime.runner.hooks import (
+    NotebookCellHooks,
+    Priority,
+)
+from signalpilot._runtime.scratch import SCRATCH_CELL_ID
+from signalpilot._runtime.state import State
+from signalpilot._runtime.virtual_file.virtual_file import VirtualFile
+from signalpilot._runtime.win32_interrupt_handler import Win32InterruptHandler
+from signalpilot._secrets.load_dotenv import (
+    load_dotenv_with_fallback,
+)
+from signalpilot._secrets.secrets import get_secret_keys
+from signalpilot._session.model import SessionMode
+from signalpilot._session.queue import QueueType
+from signalpilot._sql.engines.duckdb import INTERNAL_DUCKDB_ENGINE, DuckDBEngine
+from signalpilot._sql.engines.types import (
+    EngineCatalog,
+    QueryEngine,
+    SQLConnectionType,
+)
+from signalpilot._sql.get_engines import (
+    engine_to_data_source_connection,
+    get_engines_from_variables,
+)
+from signalpilot._sql.parse import SqlCatalogCheckResult, parse_sql
+from signalpilot._tracer import kernel_tracer
+from signalpilot._types.ids import CellId_t, UIElementId, VariableName
+from signalpilot._types.lifespan import Lifespan
+from signalpilot._utils.assert_never import assert_never
+from signalpilot._utils.lifespans import Lifespans
+from signalpilot._utils.paths import normalize_path
+from signalpilot._utils.platform import is_pyodide
+from signalpilot._utils.signals import restore_signals
+from signalpilot._utils.typed_connection import TypedConnection
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable, Iterator, Sequence
+    from types import ModuleType
+
+    from signalpilot._plugins.ui._core.ui_element import UIElement
+    from signalpilot._runtime.virtual_file import VirtualFileStorageType
+
+LOGGER = _loggers.sp_logger()
+
+_KERNEL_LIFESPAN_REGISTRY = EntryPointRegistry[Lifespan[None]](
+    "sp.kernel.lifespan",
+)
+
+
+@mddoc
+def defs() -> tuple[str, ...]:
+    """Get the definitions of the currently executing cell.
+
+    Returns:
+        tuple[str, ...]: A tuple of the currently executing cell's defs.
+    """
+    try:
+        ctx = get_context()
+    except ContextNotInitializedError:
+        return ()
+
+    if ctx.execution_context is not None:
+        return tuple(
+            sorted(
+                defn
+                for defn in ctx.graph.cells[ctx.execution_context.cell_id].defs
+            )
+        )
+    return ()
+
+
+@mddoc
+def refs() -> tuple[str, ...]:
+    """Get the references of the currently executing cell.
+
+    Returns:
+        tuple[str, ...]: A tuple of the currently executing cell's refs.
+    """
+    try:
+        ctx = get_context()
+    except ContextNotInitializedError:
+        return ()
+
+    # builtins that have not been shadowed by the user
+    unshadowed_builtins = BUILTINS.difference(
+        set(ctx.graph.definitions.keys())
+    )
+
+    if ctx.execution_context is not None:
+        return tuple(
+            sorted(
+                defn
+                for defn in ctx.graph.cells[ctx.execution_context.cell_id].refs
+                # exclude builtins that have not been shadowed
+                if defn not in unshadowed_builtins
+            )
+        )
+    return ()
+
+
+@mddoc
+def query_params() -> QueryParams:
+    """Get the query parameters of a sp app.
+
+    Examples:
+        Keep the text input in sync with the URL query parameters:
+
+        ```python3
+        # In its own cell
+        query_params = sp.query_params()
+
+        # In another cell
+        search = sp.ui.text(
+            value=query_params["search"] or "",
+            on_change=lambda value: query_params.set("search", value),
+        )
+        search
+        ```
+
+        You can also set the query parameters reactively:
+
+        ```python3
+        toggle = sp.ui.switch(label="Toggle me")
+        toggle
+
+        # In another cell
+        query_params["is_enabled"] = toggle.value
+        ```
+
+    Returns:
+        QueryParams: A QueryParams object containing the query parameters.
+            You can directly interact with this object like a dictionary.
+            If you mutate this object, changes will be persisted to the frontend
+            query parameters and any other cells referencing the query parameters
+            will automatically re-run.
+    """
+    return get_context().query_params
+
+
+@mddoc
+def app_meta() -> AppMeta:
+    """Get the metadata of a sp app.
+
+    The `AppMeta` class provides access to runtime metadata about a sp app,
+    such as its display theme and execution mode.
+
+    Examples:
+        Get the current theme and conditionally set a plotting library's theme:
+
+        ```python
+        import altair as alt
+
+        # Enable dark theme for Altair when sp is in dark mode
+        alt.themes.enable(
+            "dark" if sp.app_meta().theme == "dark" else "default"
+        )
+        ```
+
+        Show content only in edit mode:
+
+        ```python
+        # Only show this content when editing the notebook
+        sp.md("# Developer Notes") if sp.app_meta().mode == "edit" else None
+        ```
+
+        Get the current request headers or user info:
+
+        ```python
+        request = sp.app_meta().request
+        print(request.headers)
+        print(request.user)
+        ```
+
+    Returns:
+        AppMeta: An AppMeta object containing the app's metadata.
+    """
+    return AppMeta()
+
+
+@mddoc
+def cli_args() -> CLIArgs:
+    """Get the command line arguments of a sp notebook.
+
+    Examples:
+        `sp edit notebook.py -- -size 10`
+
+        ```python3
+        # Access the command line arguments
+        size = sp.cli_args().get("size") or 100
+
+        for i in range(size):
+            print(i)
+        ```
+
+    Returns:
+        CLIArgs: A dictionary containing the command line arguments.
+            This dictionary is read-only and cannot be mutated.
+    """
+    return get_context().cli_args
+
+
+@mddoc
+def notebook_dir() -> pathlib.Path | None:
+    """Get the directory of the currently executing notebook.
+
+    Returns:
+        pathlib.Path | None: A pathlib.Path object representing the directory of the current
+            notebook, or None if the notebook's directory cannot be determined.
+
+    Examples:
+        ```python
+        data_file = sp.notebook_dir() / "data" / "example.csv"
+        # Use the directory to read a file
+        if data_file.exists():
+            print(f"Found data file: {data_file}")
+        else:
+            print("No data file found")
+        ```
+    """
+    try:
+        ctx = get_context()
+    except ContextNotInitializedError:
+        # If we are not running in a notebook (e.g. exported to Jupyter),
+        # return the current working directory
+        return pathlib.Path().cwd()
+
+    # NB: __file__ is patched by runner, so always bound to be correct.
+    filename = ctx.globals.get("__file__", None) or ctx.filename
+    if filename is not None:
+        path = normalize_path(pathlib.Path(filename))
+        while not path.is_dir():
+            path = path.parent
+        return path
+
+    return None
+
+
+class URLPath(pathlib.PurePosixPath):
+    """
+    Wrapper around pathlib.Path that preserves the "://" in the URL protocol.
+    """
+
+    def __str__(self) -> str:
+        return super().__str__().replace(":/", "://")
+
+
+@mddoc
+def notebook_location() -> pathlib.PurePath | None:
+    """Get the location of the currently executing notebook.
+
+    In WASM, this is the URL of webpage, for example, `https://my-site.com`.
+    For nested paths, this is the URL including the origin and pathname.
+    `https://<my-org>.github.io/<my-repo>/folder`.
+
+    In non-WASM, this is the directory of the notebook, which is the same as
+    `sp.notebook_dir()`.
+
+    Examples:
+        In order to access data both locally and when a notebook runs via
+        WebAssembly (e.g. hosted on GitHub Pages), you can use this
+        approach to fetch data from the notebook's location.
+
+        ```python
+        import polars as pl
+
+        data_path = sp.notebook_location() / "public" / "data.csv"
+        df = pl.read_csv(str(data_path))
+        df.head()
+        ```
+
+    Returns:
+        Path | None: A Path object representing the URL or directory of the current
+            notebook, or None if the notebook's directory cannot be determined.
+    """
+    if is_pyodide():
+        from js import location  # type: ignore
+
+        path_location = pathlib.Path(str(location))
+        # The location looks like https://signalpilot-team.github.io/signalpilot-gh-pages-template/notebooks/assets/worker-BxJ8HeOy.js
+        # We want to crawl out of the assets/ folder
+        if "assets" in path_location.parts:
+            return URLPath(str(path_location.parent.parent))
+        return URLPath(str(path_location))
+
+    else:
+        return notebook_dir()
+
+
+@dataclasses.dataclass
+class CellMetadata:
+    """CellMetadata class for storing cell metadata.
+
+    Metadata the kernel needs to persist, even when a cell is removed
+    from the graph or when a cell can't be formed from user code due to syntax
+    errors.
+
+    Attributes:
+        config (CellConfig): Configuration for the cell.
+    """
+
+    config: CellConfig = dataclasses.field(default_factory=CellConfig)
+
+
+class Kernel:
+    """Kernel that manages the dependency graph and its execution.
+
+    Args:
+        cell_configs (dict[CellId_t, CellConfig]): Initial configuration for each cell.
+        app_metadata (AppMetadata): Metadata about the notebook.
+        user_config (SpConfig): The initial user configuration.
+        stream (Stream): Object used to communicate with the server/outside world.
+        stdout (Stdout | None): Replacement for sys.stdout.
+        stderr (Stderr | None): Replacement for sys.stderr.
+        stdin (Stdin | None): Replacement for sys.stdin.
+        module (ModuleType): Module in which to execute code.
+        enqueue_control_request (Callable[[ControlRequest], None]): Callback to enqueue control requests.
+        debugger_override (sp_pdb.SpPdb | None): A replacement for the built-in Pdb.
+    """
+
+    def __init__(
+        self,
+        *,
+        cell_configs: dict[CellId_t, CellConfig],
+        app_metadata: AppMetadata,
+        user_config: SpConfig,
+        stream: Stream,
+        stdout: Stdout | None,
+        stderr: Stderr | None,
+        stdin: Stdin | None,
+        module: ModuleType,
+        enqueue_control_request: Callable[[CommandMessage], None],
+        hooks: NotebookCellHooks,
+        debugger_override: sp_pdb.SpPdb | None = None,
+    ) -> None:
+        self.app_metadata = app_metadata
+        self.query_params = QueryParams(app_metadata.query_params)
+        self.cli_args = CLIArgs(app_metadata.cli_args)
+        self.argv = (
+            [app_metadata.filename or ""] + app_metadata.argv
+            if app_metadata.argv is not None
+            else sys.argv
+        )
+
+        # We update sys.argv to be [filename, args after '--'] so modules like
+        # argparse, simple-parser work out of the box.
+        #
+        # TODO(akshayka): The notebook globals share modules with the kernel
+        # process; if we ever isolate them, push this mutation down into the
+        # kernel globals.
+        sys.argv = self.argv
+
+        self.stream = stream
+        self.stdout = stdout
+        self.stderr = stderr
+        self.stdin = stdin
+        self.enqueue_control_request = enqueue_control_request
+        # timestamp at which most recently processed interrupt was seen;
+        # the kernel rejects run requests that were issued before that
+        # timestamp, to save the user from having to spam the interrupt button
+        self.last_interrupt_timestamp: float | None = None
+
+        # Callbacks
+        self.secrets_callbacks = SecretsCallbacks(self)
+        self.datasets_callbacks = DatasetCallbacks(self)
+        self.packages_callbacks = PackagesCallbacks(self)
+        self.sql_callbacks = SqlCallbacks(self)
+        self.cache_callbacks = CacheCallbacks(self)
+        self.external_storage_callbacks = ExternalStorageCallbacks(self)
+
+        # Apply pythonpath from config at initialization
+        pythonpath = user_config["runtime"].get("pythonpath")
+        if pythonpath:
+            for path in pythonpath:
+                if path not in sys.path:
+                    sys.path.insert(0, path)
+
+        self._hooks = hooks
+
+        self._original_environ = os.environ.copy()
+
+        self._globals_lock = threading.RLock()
+        self._state_lock = threading.RLock()
+        self._completion_worker_started = False
+
+        self.debugger = debugger_override
+        if self.debugger is not None:
+            patches.patch_pdb(self.debugger)
+
+        self._module = module
+        if self.app_metadata.filename is not None:
+            # TODO(akshayka): When a file is renamed / moved to another folder,
+            # we need to update sys.path.
+            try:
+                notebook_directory = str(
+                    normalize_path(
+                        pathlib.Path(self.app_metadata.filename).parent
+                    )
+                )
+                if notebook_directory not in sys.path:
+                    sys.path.insert(0, notebook_directory)
+            except Exception as e:
+                LOGGER.warning(
+                    "Failed to add directory to path (error %e)", str(e)
+                )
+        elif "" not in sys.path:
+            # an empty string represents ...
+            #   the current directory, when using
+            #      sp edit filename.py / sp run
+            #   the sp home directory, when using
+            #      sp edit (ie homepage)
+            sys.path.insert(0, "")
+
+        self.graph = dataflow.DirectedGraph()
+        # When autorun on startup is disabled, this holds cells that have
+        # not yet been run; these cells are removed when they or their
+        # descendants are run
+        self._uninstantiated_execution_requests: dict[
+            CellId_t, ExecuteCellCommand
+        ] = {}
+        self.cell_metadata: dict[CellId_t, CellMetadata] = {
+            cell_id: CellMetadata(config=config)
+            for cell_id, config in cell_configs.items()
+        }
+        self.module_registry = ModuleRegistry(
+            self.graph, excluded_modules=set()
+        )
+        self.module_reloader: ModuleReloader | None = None
+        self.module_watcher: ModuleWatcher | None = None
+
+        # Load runtime settings from user config
+        self.user_config = user_config
+        self.reactive_execution_mode: OnCellChangeType = user_config[
+            "runtime"
+        ]["on_cell_change"]
+        self.execution_type: ExecutionType = user_config.get(
+            "experimental", {}
+        ).get("execution_type", "relaxed")
+        self._update_runtime_from_user_config(user_config)
+
+        # initializers to override construction of ui elements
+        self.ui_initializers: dict[str, Any] = {}
+        # errored cells
+        self.errors: dict[CellId_t, tuple[Error, ...]] = {}
+        # Mapping from state to the cell when its setter
+        # was invoked. New state updates evict older ones.
+        self.state_updates: dict[State[Any], CellId_t] = {}
+
+        # Override getpass.getpass to route through sp's stdin with
+        # password masking, instead of trying /dev/tty or falling back
+        # to plaintext with warnings.
+        import getpass
+
+        getpass.getpass = getpass_override
+        # Webbrowser may not be set (e.g. docker container) or stubbed/broken
+        # (e.g. in pyodide). Set default to just inject an iframe of the
+        # expected page to output.
+        patches.patch_webbrowser()
+        # micropip only patched in non-pyodide environments.
+        if not is_pyodide():
+            patches.patch_micropip(self.globals)
+
+        exec("import signalpilot as __sp__", self.globals)
+
+        # Lifespans
+        lifespan = Lifespans(_KERNEL_LIFESPAN_REGISTRY.get_all())
+        self._lifespan: contextlib.AbstractAsyncContextManager[None] | None = (
+            None
+        )
+        if lifespan.has_lifespans():
+            self._lifespan = lifespan(None)
+
+    def teardown(self) -> None:
+        """Teardown resources owned by the kernel."""
+        if self.stdout is not None:
+            self.stdout._stop()
+        if self.stderr is not None:
+            self.stderr._stop()
+        if self.stdin is not None:
+            self.stdin._stop()
+        self.stream.stop()
+
+        if self.module_watcher is not None:
+            self.module_watcher.stop()
+
+        # TODO(akshayka): There's a memory leak in run mode, with memory
+        # usage increasing with each session creation. Somehow the kernel
+        # globals appear to leak, even though the thread exits. As a hack we
+        # manually clear kernel memory.
+        self._module.__dict__.clear()
+
+        # Teardown lifespans
+        if self._lifespan is not None:
+            asyncio.run(self._lifespan.__aexit__(None, None, None))
+
+    def lazy(self) -> bool:
+        return self.reactive_execution_mode == "lazy"
+
+    def _execute_stale_cells_callback(self) -> None:
+        return self.enqueue_control_request(ExecuteStaleCellsCommand())
+
+    def _update_runtime_from_user_config(self, config: SpConfig) -> None:
+        package_manager = config["package_management"]["manager"]
+        autoreload_mode = config["runtime"]["auto_reload"]
+        self.reactive_execution_mode = config["runtime"]["on_cell_change"]
+        self.user_config = config
+
+        self.packages_callbacks.update_package_manager(package_manager)
+
+        if (
+            (autoreload_mode == "lazy" or autoreload_mode == "autorun")
+            # Pyodide doesn't support hot module reloading
+            and not is_pyodide()
+        ):
+            if self.module_reloader is None:
+                self.module_reloader = ModuleReloader()
+
+            if (
+                self.module_watcher is not None
+                and self.module_watcher.mode != autoreload_mode
+            ):
+                self.module_watcher.stop()
+                self.module_watcher = None
+
+            if self.module_watcher is None:
+                self.module_watcher = ModuleWatcher(
+                    self.graph,
+                    reloader=self.module_reloader,
+                    enqueue_run_stale_cells=self._execute_stale_cells_callback,
+                    mode=autoreload_mode,
+                    stream=self.stream,
+                )
+        else:
+            self.module_reloader = None
+            if self.module_watcher is not None:
+                self.module_watcher.stop()
+                self.module_watcher = None
+
+    @property
+    def globals(self) -> dict[Any, Any]:
+        return self._module.__dict__
+
+    @contextlib.contextmanager
+    def lock_globals(self) -> Iterator[None]:
+        # The only other thread accessing globals is the completion worker. If
+        # we haven't started a completion worker, there's no need to lock
+        # globals.
+        if self._completion_worker_started:
+            with self._globals_lock:
+                yield
+        else:
+            yield
+
+    def start_completion_worker(
+        self, completion_queue: QueueType[CodeCompletionCommand]
+    ) -> None:
+        """Must be called after context is initialized"""
+        from signalpilot._runtime.complete import completion_worker
+
+        threading.Thread(
+            target=completion_worker,
+            args=(
+                completion_queue,
+                self.graph,
+                self.globals,
+                self._globals_lock,
+                get_context().stream,
+            ),
+            daemon=True,
+        ).start()
+        self._completion_worker_started = True
+
+    @kernel_tracer.start_as_current_span("code_completion")
+    def code_completion(
+        self, request: CodeCompletionCommand, docstrings_limit: int
+    ) -> None:
+        from signalpilot._runtime.complete import complete
+
+        complete(
+            request,
+            self.graph,
+            self.globals,
+            self._globals_lock,
+            get_context().stream,
+            docstrings_limit,
+        )
+
+    @contextlib.contextmanager
+    def _install_execution_context(
+        self, cell_id: CellId_t, setting_element_value: bool = False
+    ) -> Iterator[ExecutionContext]:
+        """NB: When installed, KeyboardInterrupts may be raised, which MUST be caught.
+
+        try:
+            with self._install_execution_context():
+                # Keyboard interrupts may be raised!
+                ...
+        except KeyboardInterrupt:
+            ...
+        """
+        ctx = get_context()
+        assert isinstance(ctx, KernelRuntimeContext)
+        ctx.execution_context = (
+            exec_ctx := ExecutionContext(cell_id, setting_element_value)
+        )
+        with (
+            get_context().provide_ui_ids(str(cell_id)),
+            redirect_streams(
+                cell_id,
+                stream=self.stream,
+                stdout=self.stdout,
+                stderr=self.stderr,
+                stdin=self.stdin,
+            ),
+        ):
+            modules = None
+            try:
+                if self.module_reloader is not None:
+                    # Reload modules if they have changed
+                    modules = set(sys.modules)
+                    self.module_reloader.check(
+                        modules=sys.modules, reload=True
+                    )
+                yield exec_ctx
+            finally:
+                ctx.execution_context = None
+                if self.module_reloader is not None and modules is not None:
+                    # Note timestamps for newly loaded modules
+                    new_modules = set(sys.modules) - modules
+                    self.module_reloader.check(
+                        modules={m: sys.modules[m] for m in new_modules},
+                        reload=False,
+                    )
+
+    def _register_cell(
+        self,
+        cell_id: CellId_t,
+        cell: CellImpl,
+        stale: bool,
+    ) -> None:
+        if cell_id in self.cell_metadata:
+            # If we already have a config for this cell id, restore it
+            # This can happen when a cell was previously deactivated (due to a
+            # syntax error or multiple definition error, for example) and then
+            # re-registered
+            cell.configure(self.cell_metadata[cell_id].config)
+        elif cell_id not in self.cell_metadata:
+            self.cell_metadata[cell_id] = CellMetadata()
+
+        self.graph.register_cell(cell_id, cell)
+        if stale:
+            self.graph.cells[cell_id].set_stale(stale=True, broadcast=False)
+        # leaky abstraction: the graph doesn't know about stale modules, so
+        # we have to check for them here.
+        module_reloader = self.module_reloader
+        if (
+            module_reloader is not None
+            and module_reloader.cell_uses_stale_modules(cell)
+        ):
+            self.graph.set_stale({cell.cell_id}, prune_imports=True)
+        LOGGER.debug("registered cell %s", cell_id)
+        LOGGER.debug("parents: %s", self.graph.parents[cell_id])
+        LOGGER.debug("children: %s", self.graph.children[cell_id])
+
+    def _try_compiling_cell(
+        self, cell_id: CellId_t, code: str, carried_imports: list[ImportData]
+    ) -> tuple[CellImpl | None, Error | None]:
+        error: Error | None = None
+        try:
+            # In run mode or debugpy, pass the notebook filename so
+            # tracebacks reference the real file instead of synthetic
+            # cell files.
+            filename = None
+            if get_mode() == "run" or os.environ.get("DEBUGPY_RUNNING"):
+                filename = self.app_metadata.filename
+            cell = compile_cell(
+                code,
+                cell_id=cell_id,
+                carried_imports=carried_imports,
+                filename=filename,
+            )
+        except Exception as e:
+            cell = None
+            if isinstance(e, SyntaxError):
+                tmpio = io.StringIO()
+                traceback.print_exc(file=tmpio, limit=0)
+                tmpio.seek(0)
+                syntax_error = tmpio.read().split("\n")
+                # first line has the form File XXX, line XXX
+                syntax_error[0] = syntax_error[0][
+                    syntax_error[0].find("line") :
+                ]
+
+                lineno = getattr(e, "lineno", None)
+                if isinstance(e, ImportStarError):
+                    error = SpImportStarError(msg=str(e), lineno=lineno)
+                else:
+
+                    def _get_syntax_hints(broken_line: str) -> str:
+                        if broken_line.startswith("!"):
+                            if "pip" in broken_line:
+                                return "\nTo install packages, use the package manager panel."
+                            return "\nTo run shell commands, use os.subprocess(...)"
+                        elif broken_line.startswith("%"):
+                            return (
+                                "\nIPython magic commands (starting with %) are not supported."
+                                "\nSee: https://docs.signalpilot.ai/docs/"
+                            )
+                        return ""
+
+                    hint = ""
+                    if len(syntax_error) > 1:
+                        hint = _get_syntax_hints(syntax_error[1].strip())
+                    error = SpSyntaxError(
+                        msg="\n".join(syntax_error) + hint, lineno=lineno
+                    )
+            else:
+                tmpio = io.StringIO()
+                traceback.print_exc(file=tmpio)
+                tmpio.seek(0)
+                error = UnknownError(msg=tmpio.read())
+        return cell, error
+
+    def _try_registering_cell(
+        self,
+        cell_id: CellId_t,
+        code: str,
+        carried_imports: list[ImportData],
+        stale: bool,
+    ) -> Error | None:
+        """Attempt to register a cell with given id and code.
+
+        Precondition: a cell with the supplied id must not already exist in the
+        graph.
+
+        If cell was unable to be registered, returns an Error object.
+        """
+        cell, error = self._try_compiling_cell(cell_id, code, carried_imports)
+
+        if cell is not None:
+            self._register_cell(cell_id, cell, stale)
+
+        return error
+
+    def _maybe_register_cell(
+        self, cell_id: CellId_t, code: str, stale: bool
+    ) -> tuple[set[CellId_t], Error | None]:
+        """Register a cell (given by id, code) if not already registered.
+
+        If a cell with id `cell_id` is already registered but with different
+        code, that cell is deleted from the graph and a new cell with the
+        same id but different code is registered.
+
+        Returns:
+        - a set of ids for cells that were previously children of `cell_id`
+          but are no longer children of `cell_id` after registration;
+          only non-empty when `cell-id` was already registered but with
+          different code.
+        - an `Error` if the cell couldn't be registered, `None` otherwise
+        """
+        previous_children: set[CellId_t] = set()
+        error = None
+        if not self.graph.is_cell_cached(cell_id, code):
+            previous_cell = self.graph.cells.get(cell_id, None)
+
+            if (
+                previous_cell is not None
+                and previous_cell.import_workspace.is_import_block
+            ):
+                # If the previous is being replaced by another import block,
+                # then the new cell should try to carry over the previous
+                # cell's imports to prevent unnecessary re-runs.
+                carried_imports = [
+                    import_data
+                    for import_data in previous_cell.imports
+                    if import_data.definition in self.globals
+                    and import_data.definition
+                    in previous_cell.import_workspace.imported_defs
+                ]
+            else:
+                carried_imports = []
+
+            if previous_cell is not None:
+                LOGGER.debug("Deleting cell %s", cell_id)
+                previous_children = self._deactivate_cell(cell_id)
+
+            error = self._try_registering_cell(
+                cell_id, code, carried_imports=carried_imports, stale=stale
+            )
+            if error is not None and previous_cell is not None:
+                # The frontend keeps the cell around in the case of a
+                # registration error; let the FE know the cell is no longer
+                # stale.
+                previous_cell.set_stale(False)
+
+            # For any newly imported namespaces, add them to the metadata
+            #
+            # TODO(akshayka): Consider using the module watcher to discover
+            # packages used by a notebook; that would have the benefit of
+            # discovering transitive dependencies, ie if a notebook used a
+            # local module that in turn used packages available on PyPI.
+            if self.packages_callbacks.should_update_script_metadata():
+                cell = self.graph.cells.get(cell_id, None)
+                if cell:
+                    prev_imports: set[Name] = (
+                        {im.namespace for im in previous_cell.imports}
+                        if previous_cell
+                        else set()
+                    )
+                    to_add = cell.imported_namespaces - prev_imports
+                    self.packages_callbacks.update_script_metadata(
+                        import_namespaces_to_add=list(to_add)
+                    )
+
+        LOGGER.debug(
+            "graph:\n\tcell id %s\n\tparents %s\n\tchildren %s",
+            cell_id,
+            self.graph.parents,
+            self.graph.children,
+        )
+
+        # We only return cells that were previously children of cell_id
+        # but are no longer children of the newly registered cell; these
+        # returned cells are stale.
+        children = self.graph.children.get(cell_id, set())
+        return previous_children - children, error
+
+    def _delete_variables(
+        self,
+        variables: dict[Name, list[VariableData]],
+        exclude_defs: set[Name],
+    ) -> None:
+        """Delete `names` from kernel, except for `exclude_defs`"""
+        for name, variable_data in variables.items():
+            # Take the last definition of the variable
+            variable = variable_data[-1]
+            if name in exclude_defs:
+                continue
+
+            if variable.kind == "table" and DependencyManager.duckdb.has():
+                import duckdb
+
+                # We only drop in-memory tables: we don't want to drop tables
+                # on databases!
+                try:
+                    duckdb.execute(f"DROP TABLE IF EXISTS memory.main.{name}")
+                except Exception as e:
+                    LOGGER.warning("Failed to drop table %s: %s", name, str(e))
+            elif variable.kind == "view" and DependencyManager.duckdb.has():
+                import duckdb
+
+                # We only drop in-memory views for the same reason.
+                try:
+                    duckdb.execute(f"DROP VIEW IF EXISTS memory.main.{name}")
+                except Exception as e:
+                    LOGGER.warning("Failed to drop view %s: %s", name, str(e))
+            elif variable.kind == "catalog" and DependencyManager.duckdb.has():
+                import duckdb
+
+                try:
+                    duckdb.execute(f"DETACH DATABASE IF EXISTS {name}")
+                except Exception as e:
+                    LOGGER.warning(
+                        "Failed to detach catalog %s: %s", name, str(e)
+                    )
+            else:
+                if name in self.globals:
+                    del self.globals[name]
+
+                # Restore module-level __doc__ so it doesn't fall
+                # through to builtins.__doc__
+                if name == "__doc__":
+                    self.globals["__doc__"] = (
+                        self.app_metadata.docstring
+                        or "Created for the sp kernel."
+                    )
+
+                if (
+                    "__annotations__" in self.globals
+                    and name in self.globals["__annotations__"]
+                ):
+                    del self.globals["__annotations__"][name]
+
+    def _invalidate_cell_state(
+        self,
+        cell_id: CellId_t,
+        exclude_defs: set[Name] | None = None,
+        deletion: bool = False,
+    ) -> None:
+        """Cleanup state associated with this cell.
+
+        Deletes a cell's defs from the kernel state, except for the names in
+        `exclude_defs`, and instructs the frontend to invalidate its UI
+        elements.
+        """
+        cell = self.graph.cells[cell_id]
+        cell.import_workspace.imported_defs = set()
+        missing_modules_before_deletion = (
+            self.module_registry.missing_modules()
+        )
+
+        temporaries = {
+            name: [VariableData(kind="variable")] for name in cell.temporaries
+        }
+        self._delete_variables(
+            {**cell.variable_data, **temporaries},
+            exclude_defs if exclude_defs is not None else set(),
+        )
+
+        missing_modules_after_deletion = (
+            missing_modules_before_deletion & self.module_registry.modules()
+        )
+        if missing_modules_after_deletion != missing_modules_before_deletion:
+            self.packages_callbacks.send_missing_packages_alert(
+                missing_modules_after_deletion
+            )
+
+        cell.set_output(None)
+        get_context().cell_lifecycle_registry.dispose(
+            cell_id, deletion=deletion
+        )
+        for descendent in self.graph.descendants(cell_id):
+            get_context().cell_lifecycle_registry.dispose(
+                descendent, deletion=deletion
+            )
+        broadcast_notification(RemoveUIElementsNotification(cell_id=cell_id))
+
+    def _deactivate_cell(self, cell_id: CellId_t) -> set[CellId_t]:
+        """Deactivate: remove from graph, invalidate state, but keep metadata
+
+        Keeps the cell's config, in case we see the same cell again.
+
+        In contrast to deleting a cell, which fully scrubs the cell
+        from the kernel and graph.
+        """
+        if cell_id not in self.errors:
+            self._invalidate_cell_state(cell_id, deletion=True)
+            return self.graph.delete_cell(cell_id)
+        else:
+            # An errored cell can be thought of as a cell that's in the graph
+            # but that has no state in the kernel (because it was never run).
+            # Its defs may overlap with defs of a non-errored cell, so we MUST
+            # NOT delete/cleanup its defs from the kernel (i.e., an errored
+            # cell shouldn't invalidate state of another cell).
+            self.graph.delete_cell(cell_id)
+            return set()
+
+    def _delete_cell(self, cell_id: CellId_t) -> set[CellId_t]:
+        """Delete a cell from the kernel and the graph.
+
+        Deletion from the kernel involves removing cell's defs and
+        de-registering its UI Elements.
+
+        Deletion from graph is forwarded to graph object.
+        """
+        del self.cell_metadata[cell_id]
+        cell = self.graph.cells[cell_id]
+        cell.import_workspace.imported_defs = set()
+
+        # Note: we don't remove packages from the inline script-metadata.
+
+        return self._deactivate_cell(cell_id)
+
+    def mutate_graph(
+        self,
+        execution_requests: Sequence[ExecuteCellCommand],
+        deletion_requests: Sequence[DeleteCellCommand],
+        cells_starting_stale: set[CellId_t] | None = None,
+    ) -> set[CellId_t]:
+        """Add and remove cells to/from the graph.
+
+        This method adds the cells in `execution_requests` to the kernel's
+        graph (deleting old versions of these cells, if any), and removes the
+        cells in `deletion_requests` from the kernel's graph.
+
+        The mutations that this method makes to the graph renders the
+        kernel inconsistent (stale).
+
+        This method does not register errors for cells that were previously
+        valid and are not descendants of any of the newly registered cells.
+        This is important for multiple definition errors, since a user may
+        absent-mindedly redefine an existing name when creating a new cell:
+        such a mistake shouldn't invalidate the program state.
+
+        Returns:
+        - set of cells that must be run to return kernel to consistent state
+        """
+        LOGGER.debug("Mutating graph.")
+        LOGGER.debug("Current set of errors: %s", self.errors)
+        # Invalidate the cached notebook→source position map so that
+        # recompiled cells pick up the current file contents. This
+        # matters for debugpy (edit mode) and `sp run --watch`
+        # where cells are recompiled after the file changes on disk.
+        _build_source_position_map.cache_clear()
+        cells_before_mutation = set(self.graph.cells.keys())
+        cells_with_errors_before_mutation = set(self.errors.keys())
+        cells_starting_stale = (
+            set() if cells_starting_stale is None else cells_starting_stale
+        )
+
+        # The set of cells that were successfully registered
+        registered_cell_ids: set[CellId_t] = set()
+
+        # The set of cells that need to be re-run due to cells being
+        # deleted/re-registered.
+        cells_that_were_children_of_mutated_cells: set[CellId_t] = set()
+
+        # Cells that were unable to be added to the graph due to syntax errors
+        syntax_errors: dict[CellId_t, Error] = {}
+
+        # Register and delete cells
+        for er in execution_requests:
+            old_children, error = self._maybe_register_cell(
+                er.cell_id, er.code, stale=er.cell_id in cells_starting_stale
+            )
+            cells_that_were_children_of_mutated_cells |= old_children
+            if error is None:
+                registered_cell_ids.add(er.cell_id)
+            else:
+                syntax_errors[er.cell_id] = error
+
+        for dr in deletion_requests:
+            if dr.cell_id not in cells_before_mutation:
+                continue
+            cells_that_were_children_of_mutated_cells |= self._delete_cell(
+                dr.cell_id
+            )
+        cells_in_graph = set(self.graph.cells.keys())
+
+        # Check for semantic errors, like multiple definition errors, cycle
+        # errors, and delete nonlocal errors.
+        semantic_errors = check_for_errors(self.graph)
+        LOGGER.debug("After mutation, syntax errors %s", syntax_errors)
+        LOGGER.debug("Semantic errors %s", semantic_errors)
+
+        # Prune semantic errors: we won't invalidate cells that were previously
+        # valid, except for cells we just tried to register
+        #
+        # We don't want "action at a distance": running
+        # a cell shouldn't invalidate cells that were previously valid
+        # and weren't requested for execution
+        previously_valid_cell_ids = (
+            cells_in_graph
+            # cells successfully registered
+            - registered_cell_ids
+            # cells that already had errors
+            - cells_with_errors_before_mutation
+        )
+
+        # defs that we shouldn't remove from the graph
+        keep_alive_defs: set[Name] = set()
+        for cid in list(semantic_errors.keys()):
+            # If a cell was previously valid, don't invalidate it unless
+            # we have to, ie, unless it is a descendant of a just-registered
+            # cell that has an error
+            #
+            # Handles the introduction of a multiple definition error, eg
+            #
+            # cell 1: x = 0
+            # cell 2 (requested for execution): x = 1
+            #
+            # cell 1 won't be invalidated because cell 1 was previously valid
+            # and there's no path from cell 2 to cell 1
+            if cid in previously_valid_cell_ids and not any(
+                self.graph.get_path(other_cid, cid)
+                for other_cid in registered_cell_ids
+            ):
+                del semantic_errors[cid]
+                keep_alive_defs |= self.graph.cells[cid].defs
+
+        all_errors = {**semantic_errors}
+        for cid, error in syntax_errors.items():
+            # No chance of collision because cells with syntax errors are not
+            # in the graph, so can't be in semantic errors
+            assert cid not in all_errors
+            all_errors[cid] = (error,)
+
+        LOGGER.debug(
+            "Final set of errors, after pruning valid cells: %s", all_errors
+        )
+        cells_with_errors_after_mutation = set(all_errors.keys())
+
+        # Construct sets of cells that will need to be re-run.
+
+        # Cells that previously had errors (eg, multiple definition or cycle)
+        # that no longer have errors need to be refreshed.
+        cells_that_no_longer_have_errors = (
+            cells_with_errors_before_mutation
+            - cells_with_errors_after_mutation
+        ) & cells_in_graph
+
+        if self.reactive_execution_mode == "autorun":
+            for cid in cells_that_no_longer_have_errors:
+                # clear error outputs before running
+                CellNotificationUtils.broadcast_output(
+                    channel=CellChannel.OUTPUT,
+                    mimetype="text/plain",
+                    data="",
+                    cell_id=cid,
+                    status=None,
+                )
+
+        # Cells that were successfully registered need to be run
+        cells_registered_without_error = (
+            registered_cell_ids - cells_with_errors_after_mutation
+        )
+
+        # Cells that didn't have errors associated with them before the
+        # run request but now have errors; these cells' descendants
+        # will need to be run. Handles the case where a cell was cached (cell's
+        # code didn't change), so its previous children were not added to
+        # cells_that_were_children_of_mutated_cells
+        cells_transitioned_to_error = (
+            cells_with_errors_after_mutation
+            - cells_with_errors_before_mutation
+        ) & cells_before_mutation
+
+        # Invalidate state defined by error-ed cells, with the exception of
+        # names that were defined by valid cells (relevant for multiple
+        # definition errors)
+        for cid in all_errors:
+            if cid not in self.graph.cells:
+                # error is a registration error
+                continue
+            self.graph.cells[cid].set_run_result_status("sp-error")
+            self._invalidate_cell_state(cid, exclude_defs=keep_alive_defs)
+
+        self.errors = all_errors
+        for cid in self.errors:
+            cell = self.graph.cells.get(cid, None)
+            if (
+                cell is not None
+                and not cell.config.disabled
+                and self.graph.is_disabled(cid)
+            ):
+                # this may be the first time we're seeing the cell: set its
+                # status
+                cell.set_runtime_state("disabled-transitively")
+
+            # The error is up-to-date, since we just processed the graph
+            if cell is not None:
+                cell.set_stale(False)
+            else:
+                # On syntax errors, we don't have a cell object.
+                CellNotificationUtils.broadcast_stale(cell_id=cid, stale=False)
+
+            CellNotificationUtils.broadcast_error(
+                data=self.errors[cid],
+                clear_console=True,
+                cell_id=cid,
+            )
+
+        # Always broadcast Variables message after graph mutation to ensure
+        # frontend has the latest dependency information
+        if not get_context().is_embedded():
+            broadcast_notification(
+                VariablesNotification(
+                    variables=[
+                        VariableDeclarationNotification(
+                            name=VariableName(variable),
+                            declared_by=list(declared_by),
+                            used_by=list(
+                                self.graph.get_referring_cells(
+                                    variable, language="python"
+                                )
+                            ),
+                        )
+                        for variable, declared_by in self.graph.definitions.items()
+                    ]
+                ),
+            )
+
+        stale_cells = (
+            set(
+                itertools.chain(
+                    cells_that_were_children_of_mutated_cells,
+                    set().union(
+                        *[
+                            self.graph.children[cid]
+                            for cid in cells_transitioned_to_error
+                            if cid in self.graph.children
+                        ]
+                    )
+                    - cells_with_errors_after_mutation,
+                    cells_that_no_longer_have_errors,
+                )
+            )
+            - cells_registered_without_error
+        ) & cells_in_graph
+
+        # If there is a setup cell and it is currently stale
+        if setup_cell := self.graph.cells.get(CellId_t(SETUP_CELL_NAME)):
+            # - then add it to the set of cells to run.
+            # This makes the setup cell like a "root" cell to everything.
+            if setup_cell.stale:
+                cells_registered_without_error.add(setup_cell.cell_id)
+        if self.reactive_execution_mode == "lazy":
+            self.graph.set_stale(stale_cells, prune_imports=True)
+            return cells_registered_without_error
+        else:
+            return cells_registered_without_error.union(stale_cells)
+
+    async def _run_cells(self, cell_ids: set[CellId_t]) -> None:
+        """Run cells and any state updates they trigger"""
+
+        with run_id_context():
+            # This patch is an attempt to mitigate problems caused by the fact
+            # that in run mode, kernels run in threads and share the same
+            # sys.modules. Races can still happen, but this should help in most
+            # common cases. We could also be more aggressive and run this before
+            # every cell, or even before pickle.dump/pickle.dumps()
+            with patches.patch_main_module_context(self._module):
+                # Snapshot disabled cells that are in an error/cancelled state
+                # BEFORE running, so we can clear them after the run if their
+                # ancestor recovered.
+                pre_run_errored_disabled = {
+                    cid
+                    for cid, cell in self.graph.cells.items()
+                    if self.graph.is_disabled(cid)
+                    and cell.run_result_status
+                    in ("exception", "sp-error", "cancelled")
+                }
+                while cell_ids := await self._run_cells_internal(cell_ids):
+                    LOGGER.debug("Running state updates ...")
+                    if self.lazy() and cell_ids:
+                        self.graph.set_stale(cell_ids, prune_imports=True)
+                        break
+                LOGGER.debug("Finished run.")
+                # Clear stale error state from disabled cells whose ancestor
+                # recovered. Uses pre-run snapshot since run_result_status is
+                # updated during the run.
+                for cid in pre_run_errored_disabled:
+                    cell_impl = self.graph.cells[cid]
+                    if not self.graph.is_any_ancestor_errored(cid):
+                        cell_impl.set_run_result_status("disabled")
+                        status = cast(
+                            RuntimeStateType,
+                            "idle"
+                            if cell_impl.config.disabled
+                            else "disabled-transitively",
+                        )
+                        cell_impl.set_runtime_state(status)
+                        CellNotificationUtils.broadcast_empty_output(
+                            cell_id=cid, status=status
+                        )
+
+    async def _if_autorun_then_run_cells(
+        self, cell_ids: set[CellId_t]
+    ) -> None:
+        if self.reactive_execution_mode == "autorun":
+            await self._run_cells(cell_ids)
+        else:
+            # We prune imports so that only cells depending on unimported
+            # modules are marked as stale
+            self.graph.set_stale(cell_ids, prune_imports=True)
+
+    def _propagate_kernel_errors(
+        self,
+        ctx: hook_context.OnFinishHookContext,
+    ) -> None:
+        for cell_id, error in ctx.exceptions.items():
+            if isinstance(error, SpStrictExecutionError):
+                self.errors[cell_id] = (error,)
+
+    async def _run_cells_internal(self, roots: set[CellId_t]) -> set[CellId_t]:
+        """Run cells, send outputs to frontends
+
+        Returns set of cells that need to be re-run due to state updates.
+        """
+
+        # Some hooks are leaky and require the kernel
+        # Free cell state ahead of running to relieve memory pressure
+        #
+        # NB: lazy kernels don't invalidate state of cancelled cells
+        # descendants (cancelled == cells that raise exceptions), whereas
+        # eager kernels do (since we clear all state ahead of time, and
+        # have the closure of the roots in cells to run)
+        def invalidate_state(ctx: hook_context.PreparationHookContext) -> None:
+            for cid in ctx.cells_to_run:
+                self._invalidate_cell_state(cid)
+
+        def note_time_of_interruption(
+            cell_impl: CellImpl,
+            ctx: hook_context.PostExecutionHookContext,
+            run_result: cell_runner.RunResult,
+        ) -> None:
+            del cell_impl
+            del ctx
+            if isinstance(run_result.exception, SpInterrupt):
+                self.last_interrupt_timestamp = time.time()
+
+        # Copy hooks and add run-specific hooks
+        run_hooks = self._hooks.copy()
+        run_hooks.add_preparation(invalidate_state)
+        run_hooks.add_post_execution(note_time_of_interruption, Priority.LATE)
+        run_hooks.add_on_finish(self.packages_callbacks.missing_packages_hook)
+        run_hooks.add_on_finish(self._propagate_kernel_errors)
+
+        # Rebuild graph with sourceful positions
+        # Note, this is relatively expensive, but a reasonable tradeoff
+        graph = self.graph
+        if os.getenv("DEBUGPY_RUNNING"):
+            graph = self.graph.copy(self.app_metadata.filename)
+
+        runner = cell_runner.Runner(
+            roots=roots,
+            graph=graph,
+            glbls=self.globals,
+            excluded_cells=set(self.errors.keys()),
+            debugger=self.debugger,
+            execution_mode=self.reactive_execution_mode,
+            execution_type=self.execution_type,
+            execution_context=self._install_execution_context,
+            hooks=run_hooks,
+            user_config=self.user_config,
+        )
+
+        # I/O
+        #
+        # TODO(akshayka): when no logger is configured, log output is not
+        #                 redirected to frontend (it's printed to console),
+        #                 which is incorrect
+        await runner.run_all()
+        with self._state_lock:
+            cells_with_stale_state = runner.resolve_state_updates(
+                self.state_updates
+            )
+            self.state_updates.clear()
+        return cells_with_stale_state
+
+    def register_state_update(self, state: State[Any]) -> None:
+        """Register a state object as having been updated.
+
+        Should be called when a state's setter is called
+        """
+        from signalpilot._runtime.threads import is_sp_thread
+
+        ctx = get_context()
+        if ctx.execution_context is not None:
+            setter_cell_id = ctx.execution_context.cell_id
+        else:
+            # Setter called outside cell execution (e.g. from a widget
+            # callback triggered by a frontend message, or an async
+            # task). Use a sentinel that won't match any real cell,
+            # so self-loop prevention is skipped.
+            setter_cell_id = CellId_t("__external__")
+
+        # When running in a sp.Thread, eagerly process state updates.
+        if is_sp_thread():
+            cells_with_stale_state = self._find_cells_for_state(
+                state, setter_cell_id
+            )
+            self.graph.set_stale(cells_with_stale_state, prune_imports=True)
+            if not self.lazy():
+                self._execute_stale_cells_callback()
+            return
+
+        # On the main thread, queue the update for the runner.
+        with self._state_lock:
+            self.state_updates[state] = setter_cell_id
+
+        # Outside cell execution (async task, widget callback), nothing
+        # else will flush the queue, so enqueue a run.
+        if ctx.execution_context is None and not self.lazy():
+            self._execute_stale_cells_callback()
+
+    def _find_cells_for_state(
+        self, state: State[Any], setter_cell_id: CellId_t
+    ) -> set[CellId_t]:
+        """Find cells that should re-run due to a state update.
+
+        Returns cell IDs whose refs include the given state object,
+        excluding the setter cell (unless allow_self_loops is True).
+        """
+        result: set[CellId_t] = set()
+        for cid, cell in self.graph.cells.items():
+            # No self-loops
+            if cid == setter_cell_id and not state.allow_self_loops:
+                continue
+            for ref in cell.refs:
+                # run this cell if any of its refs match the state object
+                # by object ID (via is operator)
+                if ref in self.globals and self.globals[ref] is state:
+                    result.add(cid)
+                    break  # cell already matched; skip remaining refs
+        return result
+
+    @kernel_tracer.start_as_current_span("delete_cell")
+    async def delete_cell(self, request: DeleteCellCommand) -> None:
+        """Delete a cell from kernel and graph."""
+        cell_id = request.cell_id
+        if cell_id in self._uninstantiated_execution_requests:
+            del self._uninstantiated_execution_requests[cell_id]
+
+        if cell_id in self.graph.cells:
+            await self._run_cells(
+                self.mutate_graph(
+                    execution_requests=[], deletion_requests=[request]
+                )
+            )
+
+    @kernel_tracer.start_as_current_span("sync_graph")
+    async def sync_graph(
+        self,
+        cells: dict[CellId_t, str],
+        run_ids: list[CellId_t],
+        delete_ids: list[CellId_t],
+    ) -> None:
+        """Synchronize kernel graph with file manager state.
+
+        File manager is the source of truth after a reload. This method
+        ensures the kernel graph matches file manager's state by:
+        1. Deleting cells that file manager doesn't know about (orphaned)
+        2. Deleting cells explicitly marked for deletion
+        3. Running/updating cells that changed
+
+        Args:
+            cells: All cells known to file manager (cell_id -> code)
+            run_ids: Cell IDs that should be executed/updated
+            delete_ids: Cell IDs that should be deleted
+        """
+        # Find orphaned cells: in graph but not known to file manager
+        orphaned_cells = set(self.graph.cells.keys()) - set(cells.keys())
+        all_delete_ids = set(delete_ids) | orphaned_cells
+
+        # Create execution requests for cells to run
+        execution_requests = [
+            ExecuteCellCommand(cell_id=cell_id, code=cells[cell_id])
+            for cell_id in run_ids
+        ]
+
+        # Create deletion requests for all cells to delete
+        deletion_requests = [
+            DeleteCellCommand(cell_id=cell_id) for cell_id in all_delete_ids
+        ]
+
+        # Clean up uninstantiated requests for deleted cells
+        for cell_id in all_delete_ids:
+            if cell_id in self._uninstantiated_execution_requests:
+                del self._uninstantiated_execution_requests[cell_id]
+
+        # Use existing mutate_graph infrastructure to update the graph
+        self.mutate_graph(execution_requests, deletion_requests)
+        await self.run(execution_requests)
+
+    @kernel_tracer.start_as_current_span("run")
+    async def run(
+        self, execution_requests: Sequence[ExecuteCellCommand]
+    ) -> None:
+        """Run cells and their descendants.
+
+
+        The cells may be cells already existing in the graph or new cells.
+        Adds the cells in `execution_requests` to the graph before running
+        them. If the cells have uninstantiated ancestors, these are also run,
+        allowing frontends to incrementally instantiate a notebook.
+
+        Cells may use top-level await, which is why this function is async.
+        """
+
+        async def _run_with_uninstantiated_requests(
+            execution_requests: Sequence[ExecuteCellCommand],
+        ) -> None:
+            if not self._uninstantiated_execution_requests:
+                await self._run_cells(
+                    self.mutate_graph(execution_requests, deletion_requests=[])
+                )
+                return
+
+            execution_requests_cell_ids = {
+                er.cell_id for er in execution_requests
+            }
+            graph = dataflow.DirectedGraph()
+            # cells in execution_requests that should be initially marked as
+            # stale:
+            cells_starting_stale: set[CellId_t] = set()
+            for cid, er in list(
+                self._uninstantiated_execution_requests.items()
+            ):
+                if cid in execution_requests_cell_ids:
+                    # Running a previously uninstantiated cell; just remove
+                    # it from our cache of uninstantiated execution requests.
+                    cells_starting_stale.add(cid)
+                    del self._uninstantiated_execution_requests[cid]
+                    continue
+
+                try:
+                    cell = compile_cell(er.code, cell_id=er.cell_id)
+                except Exception:
+                    # The cell was not parsable.
+                    continue
+                graph.register_cell(cell_id=cid, cell=cell)
+
+            # Collect uninstantiated ancestors
+            ancestors: set[CellId_t] = set()
+            for er in execution_requests:
+                try:
+                    cell = compile_cell(er.code, cell_id=er.cell_id)
+                except Exception:
+                    continue
+                graph.register_cell(cell_id=er.cell_id, cell=cell)
+                ancestors |= graph.ancestors(er.cell_id)
+
+            # We run all uninstantiated ancestors of the requested cells
+            previously_uninstantiated_requests: list[ExecuteCellCommand] = []
+            for ancestor_cid in ancestors:
+                if ancestor_cid in self._uninstantiated_execution_requests:
+                    previously_uninstantiated_requests.append(
+                        self._uninstantiated_execution_requests[ancestor_cid]
+                    )
+                    cells_starting_stale.add(ancestor_cid)
+                    del self._uninstantiated_execution_requests[ancestor_cid]
+
+            await self._run_cells(
+                self.mutate_graph(
+                    list(execution_requests)
+                    + previously_uninstantiated_requests,
+                    deletion_requests=[],
+                    cells_starting_stale=cells_starting_stale,
+                )
+            )
+
+        if self.last_interrupt_timestamp is None:
+            # No interruption has occurred, so we can run all requests
+            await _run_with_uninstantiated_requests(execution_requests)
+            return
+
+        # Filter out requests that were created before the last interruption
+        filtered_requests: list[ExecuteCellCommand] = []
+        for request in execution_requests:
+            if request.timestamp < self.last_interrupt_timestamp:
+                CellNotificationUtils.broadcast_error(
+                    data=[SpInterruptionError()],
+                    clear_console=False,
+                    cell_id=request.cell_id,
+                )
+
+                # TODO(akshayka): This hack is needed because the FE
+                # sets status to queued when a cell is manually run; remove
+                # once setting status to queued on receipt of request is moved
+                # to backend (which will require moving execution requests to
+                # a dedicated multiprocessing queue and processing execution
+                # requests in a background thread).
+                CellNotificationUtils.broadcast_status(
+                    cell_id=request.cell_id,
+                    status="idle",
+                )
+
+            else:
+                filtered_requests.append(request)
+
+        await _run_with_uninstantiated_requests(filtered_requests)
+
+    @kernel_tracer.start_as_current_span("pdb_request")
+    async def pdb_request(self, cell_id: CellId_t) -> None:
+        if (
+            self.debugger is None
+            or cell_id not in self.debugger._last_tracebacks
+            or cell_id not in self.graph.cells
+        ):
+            return
+
+        with self._install_execution_context(cell_id):
+            self.debugger.post_mortem_by_cell_id(cell_id)
+
+    @kernel_tracer.start_as_current_span("rename_file")
+    async def rename_file(self, filename: str) -> None:
+        self.globals["__file__"] = filename
+        self.app_metadata.filename = filename
+        roots: set[CellId_t] = set()
+        for cell in self.graph.cells.values():
+            if "__file__" in cell.refs:
+                roots.add(cell.cell_id)
+        await self._if_autorun_then_run_cells(roots)
+
+    @kernel_tracer.start_as_current_span("run_scratchpad")
+    async def run_scratchpad(self, code: str) -> None:
+        roots = {SCRATCH_CELL_ID}
+
+        # If cannot compile, don't run
+        cell, error = self._try_compiling_cell(SCRATCH_CELL_ID, code, [])
+        if error:
+            CellNotificationUtils.broadcast_error(
+                data=[error],
+                clear_console=True,
+                cell_id=SCRATCH_CELL_ID,
+            )
+            CellNotificationUtils.broadcast_status(
+                cell_id=SCRATCH_CELL_ID,
+                status="idle",
+            )
+            return
+        elif not cell:
+            return
+        cell.defs.clear()  # remove definitions
+        cell.refs.clear()  # remove references
+
+        # Create graph of just the scratchpad cell
+        graph = dataflow.DirectedGraph()
+        graph.register_cell(SCRATCH_CELL_ID, cell)
+
+        # Copy hooks and add scratchpad-specific hooks
+        scratchpad_hooks = self._hooks.copy()
+        scratchpad_hooks.add_on_finish(
+            self.packages_callbacks.missing_packages_hook
+        )
+
+        runner = cell_runner.Runner(
+            roots=roots,
+            graph=graph,
+            glbls=copy(self.globals),
+            excluded_cells=set(),
+            debugger=self.debugger,
+            execution_mode=self.reactive_execution_mode,
+            execution_type=self.execution_type,
+            execution_context=self._install_execution_context,
+            hooks=scratchpad_hooks,
+            user_config=self.user_config,
+        )
+
+        await runner.run_all()
+
+        # Flush any state updates queued during scratchpad execution
+        # (e.g., from widget .observe() callbacks that call sp.state
+        # setters). Without this, state updates are queued but never
+        # processed, so downstream cells don't re-run.
+        if self.state_updates:
+            await self._run_cells(set())
+
+    @kernel_tracer.start_as_current_span("run_stale_cells")
+    async def run_stale_cells(self) -> None:
+        cells_to_run: set[CellId_t] = set()
+        if self._uninstantiated_execution_requests:
+            cells_to_run |= set(self._uninstantiated_execution_requests.keys())
+            self.mutate_graph(
+                list(self._uninstantiated_execution_requests.values()),
+                deletion_requests=[],
+                cells_starting_stale=cells_to_run,
+            )
+            self._uninstantiated_execution_requests = {}
+
+        for cid, cell_impl in self.graph.cells.items():
+            if cell_impl.stale and not self.graph.is_disabled(cid):
+                cells_to_run.add(cid)
+
+        await self._run_cells(
+            dataflow.transitive_closure(
+                self.graph,
+                cells_to_run,
+                relatives=dataflow.get_import_block_relatives(self.graph),
+            )
+        )
+
+        if self.module_watcher is not None:
+            self.module_watcher.run_is_processed.set()
+
+    @kernel_tracer.start_as_current_span("set_cell_config")
+    async def set_cell_config(self, request: UpdateCellConfigCommand) -> None:
+        """Update cell configs.
+
+        Cells that are enabled (via config) but stale are run as a side-effect.
+        """
+        # Stale cells that are enabled will need to be run.
+        stale_cells: set[CellId_t] = set()
+        for cell_id, config in request.configs.items():
+            # store the config, regardless of whether we've seen the cell yet
+            self.cell_metadata[cell_id] = CellMetadata(
+                config=CellConfig.from_dict(config)
+            )
+            cell = self.graph.cells.get(cell_id)
+            if cell is None:
+                continue
+            cell.configure(config)
+            if not cell.config.disabled:
+                stale_cells = self.graph.enable_cell(cell_id)
+            elif cell.config.disabled:
+                self.graph.disable_cell(cell_id)
+
+        if stale_cells and self.reactive_execution_mode == "autorun":
+            await self._run_cells(stale_cells)
+
+    @kernel_tracer.start_as_current_span("set_user_config")
+    def set_user_config(self, request: UpdateUserConfigCommand) -> None:
+        self._update_runtime_from_user_config(request.config)
+
+    @kernel_tracer.start_as_current_span("set_ui_element_value")
+    async def set_ui_element_value(
+        self,
+        request: UpdateUIElementCommand,
+        *,
+        notify_frontend: bool,
+    ) -> bool:
+        """Set the value of a UI element bound to a global variable.
+
+        Runs cells that reference the UI element by name.
+
+        Args:
+            request: The UI element update command.
+            notify_frontend: Whether to broadcast the new value back to
+                the frontend via a ``sp-ui-value-update`` message.
+                Set ``False`` for user-initiated updates from the frontend
+                (the frontend already has the value locally;
+                re-broadcasting causes redundant traffic and, on transports
+                with non-negligible round-trip latency (LSP, remote
+                kernels), can visibly snap the rendered widget backward to
+                a stale value). Set ``True`` for genuinely
+                kernel-initiated changes (e.g. code_mode's
+                ``set_ui_value``) where the frontend has no other way to
+                learn about the update.
+
+        Returns True if any ui elements were set, False otherwise
+        """
+        updated_components: list[UIElement[Any, Any]] = []
+
+        # Resolve lenses on request, if any: any element that is a view
+        # of another parent element is resolved to its parent. In particular,
+        # interacting with a view triggers reactive execution through the
+        # source (parent).
+        ctx = get_context()
+        resolved_requests: dict[UIElementId, Any] = {}
+        referring_cells: set[CellId_t] = set()
+        ui_element_registry = ctx.ui_element_registry
+        for object_id, value in request.ids_and_values:
+            try:
+                resolved_id, resolved_value = ui_element_registry.resolve_lens(
+                    object_id, value
+                )
+            except (KeyError, RuntimeError):
+                # Attempt to set the UI element in a child context (app).
+                for child_context in ctx.children:
+                    if (
+                        child_context.app is not None
+                        and await child_context.app.set_ui_element_value(
+                            UpdateUIElementCommand(
+                                object_ids=[object_id],
+                                values=[value],
+                                request=request.request,
+                            ),
+                            notify_frontend=notify_frontend,
+                        )
+                    ):
+                        bindings = [
+                            name
+                            for name, value in self.globals.items()
+                            # child_context.app is an InternalApp object
+                            if value is child_context.app._app
+                        ]
+                        for binding in bindings:
+                            referring_cells.update(
+                                self.graph.get_referring_cells(
+                                    binding, language="python"
+                                )
+                            )
+
+                # KeyError: Trying to access an unnamed UIElement
+                # RuntimeError: UIElement was deleted somehow
+                LOGGER.debug(
+                    "Could not resolve UIElement with id%s", object_id
+                )
+                continue
+            resolved_requests[resolved_id] = resolved_value
+        del request
+
+        for object_id, value in resolved_requests.items():
+            try:
+                component = ui_element_registry.get_object(object_id)
+                LOGGER.debug(
+                    "Setting value on UIElement with id %s, value %s",
+                    object_id,
+                    value,
+                )
+            except KeyError:
+                # KeyError: A UI element may go out of scope if it was not
+                # assigned to a global variable
+                LOGGER.debug("Could not find UIElement with id %s", object_id)
+                continue
+
+            with self._install_execution_context(
+                ui_element_registry.get_cell(object_id),
+                setting_element_value=True,
+            ):
+                try:
+                    component._update(value)
+                except SpConvertValueException:
+                    # Internal sp error
+                    sys.stderr.write(
+                        "An exception was raised when updating a UIElement's "
+                        "value. This is a bug in sp. Please copy "
+                        "the below traceback and paste it in an "
+                        "issue: https://docs.signalpilot.ai/docs/"
+                    )
+                    tmpio = io.StringIO()
+                    traceback.print_exc(file=tmpio)
+                    tmpio.seek(0)
+                    write_traceback(tmpio.read())
+                    # Don't run referring elements of this UI element
+                    continue
+                except Exception:
+                    # User's on_change handler an exception ...
+                    sys.stderr.write(
+                        "An exception was raised by a "
+                        "UIElement's on_change handler:\n"
+                    )
+
+                    tmpio = io.StringIO()
+                    traceback.print_exc(file=tmpio)
+                    tmpio.seek(0)
+                    write_traceback(tmpio.read())
+                else:
+                    updated_components.append(component)
+                    if notify_frontend:
+                        broadcast_notification(
+                            UIElementMessageNotification(
+                                ui_element=object_id,
+                                message={
+                                    "type": "sp-ui-value-update",
+                                    "value": value,
+                                },
+                            ),
+                            self.stream,
+                        )
+
+            bound_names = {
+                name
+                for name in ctx.ui_element_registry.bound_names(object_id)
+                if not is_local(name)
+            }
+            variable_values: list[VariableValue] = []
+            for name in bound_names:
+                # TODO update variable values even for namespaces? lenses? etc
+                variable_values.append(
+                    create_variable_value(name=name, value=value)
+                )
+                try:
+                    # subtracting self.graph.definitions[name]: never rerun the
+                    # cell that created the name
+                    referring_cells |= self.graph.get_referring_cells(
+                        name, language="python"
+                    ) - self.graph.get_defining_cells(name)
+                except Exception:
+                    # This is a serious bug that should never be triggered;
+                    # it means that we couldn't find a UIElement object
+                    # that should exist.
+                    sys.stderr.write(
+                        "An exception was raised when finding cells that "
+                        f"refer to a UIElement value, for bound name {name}. "
+                        "This is a bug in sp. "
+                        "Please copy the below traceback and paste it in an "
+                        "issue: https://docs.signalpilot.ai/docs/"
+                    )
+                    tmpio = io.StringIO()
+                    traceback.print_exc(file=tmpio)
+                    tmpio.seek(0)
+                    write_traceback(tmpio.read())
+                    # Entering undefined behavior territory ...
+                    continue
+
+            if variable_values and not ctx.is_embedded():
+                broadcast_notification(
+                    VariableValuesNotification(variables=variable_values),
+                    self.stream,
+                )
+
+        if self.reactive_execution_mode == "autorun":
+            await self._run_cells(referring_cells)
+        else:
+            # Any cells referring to a UI element cannot be import cells,
+            # so not necessary to specify `prune_imports`.
+            self.graph.set_stale(referring_cells)
+            # Process any state updates that may have been queued by the
+            # on_change handlers.
+            await self._run_cells(set())
+
+        for component in updated_components:
+            try:
+                component._on_update_completion()
+            except Exception:
+                # Internal sp error
+                sys.stderr.write(
+                    "An exception was raised when completing a UIElement's"
+                    "update. This is a bug in sp. "
+                    "Please copy the below traceback and paste it in an "
+                    "issue: https://docs.signalpilot.ai/docs/"
+                )
+                tmpio = io.StringIO()
+                traceback.print_exc(file=tmpio)
+                tmpio.seek(0)
+                write_traceback(tmpio.read())
+
+        return bool(updated_components) or bool(referring_cells)
+
+    def get_ui_initial_value(self, object_id: str) -> Any:
+        """Get an initial value for a UIElement, if any.
+
+        Initial values are optionally populated during instantiation.
+
+        Args:
+            object_id (str): ID of UIElement.
+
+        Returns:
+            Any: Initial value of UI element, if any.
+
+        Raises:
+            KeyError: If object_id not found.
+        """
+        return self.ui_initializers[object_id]
+
+    def reset_ui_initializers(self) -> None:
+        self.ui_initializers = {}
+
+    @kernel_tracer.start_as_current_span("function_call_request")
+    async def function_call_request(
+        self, request: InvokeFunctionCommand
+    ) -> tuple[HumanReadableStatus, JSONType, bool]:
+        """Execute a function call.
+
+        If the function is not found, children contexts are also searched.
+
+        Args:
+            request (InvokeFunctionRequest): The function call request.
+
+        Returns:
+            tuple[HumanReadableStatus, JSONType, bool]: A tuple containing:
+                - status: Human readable status of the function call
+                - payload: The function return value
+                - found: True if the function was found, False otherwise
+        """
+        ctx = get_context()
+        function = ctx.function_registry.get_function(
+            request.namespace, request.function_name
+        )
+        error_title, error_message = "", ""
+
+        def debug(title: str, message: str) -> None:
+            LOGGER.debug("%s: %s", title, message)
+
+        if function is None:
+            for child_context in ctx.children:
+                if child_context.app is not None:
+                    (
+                        status,
+                        response,
+                        found,
+                    ) = await child_context.app.function_call(request)
+                    if found:
+                        return status, response, found
+            found = False
+            error_title = "Function not found"
+            error_message = f"Could not find function given request: {request}"
+            debug(error_title, error_message)
+        elif function.cell_id is None:
+            found = True
+            error_title = "Function not associated with cell"
+            error_message = (
+                f"Attempted to call a function without a cell id: {request}"
+            )
+            debug(error_title, error_message)
+        else:
+            found = True
+            LOGGER.debug("Executing RPC %s", request)
+            with (
+                self._install_execution_context(cell_id=function.cell_id),
+                ctx.provide_ui_ids(str(uuid4())),
+            ):
+                # Usually UI element IDs are deterministic, based on
+                # cell id, so that element values can be matched up
+                # with objects on notebook/app re-connection.
+                #
+                # We're using a non-deterministic ID prefix so that
+                # UI elements created in an RPC shouldn't evict UI
+                # elements associated with its owning cell. But that
+                # means we won't be able to restore their values
+                # on reconnection.
+                #
+                # TODO(akshayka): Do UI elements created in function calls
+                # get cleared from the FE registry? This could be a leak.
+                try:
+                    response = cast(JSONType, function(request.args))
+                    if asyncio.iscoroutine(response):
+                        response = await response
+                        return HumanReadableStatus(code="ok"), response, found
+                    return (
+                        HumanReadableStatus(code="ok"),
+                        response,
+                        found,
+                    )
+                except SpInterrupt:
+                    error_title = "Interrupted"
+                    error_message = f"Function call ({request.function_name}) was interrupted by the user"
+                    debug(error_title, error_message)
+                except Exception as e:
+                    error_title = "Exception"
+                    error_message = f"Function call (name: {request.function_name}, args: {request.args}) failed with exception {e!s}"
+                    LOGGER.info(error_message, exc_info=True)
+                    debug(error_title, error_message)
+
+        # Couldn't call function, or function call failed
+        return (
+            HumanReadableStatus(
+                code="error", title=error_title, message=error_message
+            ),
+            None,
+            found,
+        )
+
+    @kernel_tracer.start_as_current_span("instantiate")
+    async def instantiate(self, request: CreateNotebookCommand) -> None:
+        """Instantiate the kernel with cells and UIElement initial values
+
+        During instantiation, UIElements can check for an initial value
+        with `get_initial_value`
+        """
+        if self._lifespan is not None:
+            await self._lifespan.__aenter__()
+
+        self.load_dotenv()
+
+        if self.graph.cells:
+            del request
+            LOGGER.info("App is already instantiated, skipping instantiation.")
+            return
+
+        broadcast_notification(
+            NotebookDocumentTransactionNotification(
+                transaction=Transaction(
+                    changes=(ReorderCells(cell_ids=tuple(request.cell_ids)),),
+                    source="kernel",
+                )
+            )
+        )
+
+        # Handle markdown cells specially during kernel-ready initialization
+        execution_requests = {
+            er.cell_id: er for er in request.execution_requests
+        }
+        self._handle_markdown_cells_on_instantiate(execution_requests)
+
+        if request.auto_run:
+            self.reset_ui_initializers()
+            for (
+                object_id,
+                initial_value,
+            ) in request.set_ui_element_value_request.ids_and_values:
+                self.ui_initializers[object_id] = initial_value
+
+            await self.run(list(execution_requests.values()))
+            self.reset_ui_initializers()
+        else:
+            self._uninstantiated_execution_requests = execution_requests
+            for (
+                cell_id,
+                cell_request,
+            ) in self._uninstantiated_execution_requests.items():
+                # Only mark non-empty cells as stale
+                if cell_request.code.strip():
+                    CellNotificationUtils.broadcast_stale(
+                        cell_id=cell_id, stale=True
+                    )
+
+    def _handle_markdown_cells_on_instantiate(
+        self, execution_requests: dict[CellId_t, ExecuteCellCommand]
+    ) -> None:
+        """Handle markdown cells during kernel-ready initialization.
+        Mutates the execution_requests to remove markdown cells.
+
+        For cells that contain only markdown (sp.md calls), this method:
+        1. Compiles the cells to extract markdown content
+        2. Renders the markdown to HTML
+        3. Broadcasts the rendered output immediately
+        4. Marks the cells as completed (not stale)
+        5. Removes them from uninstantiated requests
+
+        NOTE: If 'mo' is not available in the graph definitions, all cells are
+        marked as stale. Regular cells are marked as stale as usual.
+        """
+        # If 'mo' is not available in the graph, mark all cells as stale
+        markdown_cells: dict[CellId_t, str] = {}
+        exports_mo = False
+        for cid, er in execution_requests.items():
+            # Check if cell already exists in graph (to avoid recompilation)
+            cell = self.graph.cells.get(cid)
+            error = None
+
+            # If cell doesn't exist in graph, try to compile it
+            if cell is None:
+                # TODO: Don't bother compiling whole cell.
+                # However, since we still need to extract defs
+                # for mo / sp, this is OK for now.
+                cell, error = self._try_compiling_cell(cid, er.code, [])
+
+            if cell is None or error is not None:
+                continue
+
+            # Check if this is a markdown cell
+            if cell.markdown is not None:
+                # Remove from uninstantiated requests since it's effectively "run"
+                markdown_cells[cid] = cell.markdown
+            else:
+                # Regular cell - mark as stale
+                exports_mo |= "mo" in cell.defs
+
+        # Handle as default if no cells export 'mo'
+        if not exports_mo:
+            return
+
+        # Since markdown cell, render and broadcast output
+        # Remove cell from outstanding requests
+        from signalpilot._output.md import md
+
+        # Remove markdown cells from uninstantiated requests
+        for cell_id, content in markdown_cells.items():
+            html_obj = md(content)
+            mimetype, html_content = html_obj._mime_()
+
+            # Broadcast the markdown output
+            CellNotificationUtils.broadcast_output(
+                channel=CellChannel.OUTPUT,
+                mimetype=mimetype,
+                data=html_content,
+                cell_id=cell_id,
+                status="idle",
+            )
+
+            # Mark the cell as not stale (already "run")
+            CellNotificationUtils.broadcast_stale(cell_id=cell_id, stale=False)
+            del execution_requests[cell_id]
+
+    def load_dotenv(self) -> None:
+        dotenvs = self.user_config["runtime"].get("dotenv", [])
+        if not isinstance(dotenvs, list):
+            LOGGER.warning("dotenv configuration is not a list")
+            return
+
+        for env in dotenvs:
+            if Path(env).exists():
+                try:
+                    load_dotenv_with_fallback(env)
+                except Exception as e:
+                    LOGGER.error(
+                        "Failed to load dotenv file %s", env, exc_info=e
+                    )
+
+    @cached_property
+    def request_handler(self) -> RequestHandler:
+        handler = RequestHandler()
+
+        async def handle_instantiate(request: CreateNotebookCommand) -> None:
+            with http_request_context(request.request):
+                await self.instantiate(request)
+            broadcast_notification(CompletedRunNotification())
+
+        async def handle_execute_multiple(
+            request: ExecuteCellsCommand,
+        ) -> None:
+            with http_request_context(request.request):
+                await self.run(request.execution_requests)
+            broadcast_notification(CompletedRunNotification())
+
+        async def handle_sync_graph(
+            request: SyncGraphCommand,
+        ) -> None:
+            with http_request_context(None):
+                await self.sync_graph(
+                    request.cells, request.run_ids, request.delete_ids
+                )
+            broadcast_notification(CompletedRunNotification())
+
+        async def handle_execute_scratchpad(
+            request: ExecuteScratchpadCommand,
+        ) -> None:
+            doc = (
+                NotebookDocument(list(request.notebook_cells))
+                if request.notebook_cells is not None
+                else None
+            )
+            with (
+                notebook_document_context(doc),
+                http_request_context(request.request),
+            ):
+                await self.run_scratchpad(request.code)
+            broadcast_notification(CompletedRunNotification())
+
+        async def handle_execute_stale(
+            request: ExecuteStaleCellsCommand,
+        ) -> None:
+            with http_request_context(request.request):
+                await self.run_stale_cells()
+            broadcast_notification(CompletedRunNotification())
+
+        async def handle_set_ui_element_value(
+            request: UpdateUIElementCommand,
+        ) -> None:
+            with http_request_context(request.request):
+                await self.set_ui_element_value(request, notify_frontend=False)
+            broadcast_notification(CompletedRunNotification())
+
+        async def handle_pdb_request(request: DebugCellCommand) -> None:
+            await self.pdb_request(request.cell_id)
+
+        async def handle_rename(request: RenameNotebookCommand) -> None:
+            await self.rename_file(request.filename)
+
+        async def handle_receive_model_message(
+            request: ModelCommand,
+        ) -> None:
+            ui_element_id, state = WIDGET_COMM_MANAGER.receive_comm_message(
+                request
+            )
+
+            # Directly handle the UI element update instead of
+            # re-enqueuing it as a separate command. Re-enqueuing
+            # caused Model+UI interleaving that the batch merger
+            # couldn't collapse (different types), leading to every
+            # drag tick getting its own full cell re-execution.
+            if ui_element_id and state:
+                await self.set_ui_element_value(
+                    UpdateUIElementCommand.from_ids_and_values(
+                        [(UIElementId(ui_element_id), state)]
+                    ),
+                    notify_frontend=False,
+                )
+                broadcast_notification(CompletedRunNotification())
+            elif self.state_updates:
+                # Callbacks during message processing (e.g. widget observe
+                # handlers) may have called sp.state setters. Process
+                # those pending state updates now.
+                await self._run_cells(set())
+                broadcast_notification(CompletedRunNotification())
+
+        async def handle_function_call(request: InvokeFunctionCommand) -> None:
+            status, ret, _ = await self.function_call_request(request)
+            LOGGER.debug("Function returned with status %s", status)
+            broadcast_notification(
+                FunctionCallResultNotification(
+                    function_call_id=request.function_call_id,
+                    return_value=ret,
+                    status=status,
+                ),
+            )
+
+        async def handle_set_user_config(
+            request: UpdateUserConfigCommand,
+        ) -> None:
+            self.set_user_config(request)
+
+        async def handle_install_missing_packages(
+            request: InstallPackagesCommand,
+        ) -> None:
+            await self.packages_callbacks.install_missing_packages(request)
+            broadcast_notification(CompletedRunNotification())
+
+        async def handle_stop(request: StopKernelCommand) -> None:
+            del request
+            return
+
+        handler.register(CreateNotebookCommand, handle_instantiate)
+        handler.register(DeleteCellCommand, self.delete_cell)
+        handler.register(ExecuteCellsCommand, handle_execute_multiple)
+        handler.register(SyncGraphCommand, handle_sync_graph)
+        handler.register(ExecuteScratchpadCommand, handle_execute_scratchpad)
+        handler.register(ExecuteStaleCellsCommand, handle_execute_stale)
+        handler.register(InvokeFunctionCommand, handle_function_call)
+        handler.register(
+            InstallPackagesCommand, handle_install_missing_packages
+        )
+        handler.register(DebugCellCommand, handle_pdb_request)
+        handler.register(RenameNotebookCommand, handle_rename)
+        handler.register(UpdateCellConfigCommand, self.set_cell_config)
+        handler.register(UpdateUIElementCommand, handle_set_ui_element_value)
+        handler.register(ModelCommand, handle_receive_model_message)
+        handler.register(UpdateUserConfigCommand, handle_set_user_config)
+        handler.register(StopKernelCommand, handle_stop)
+        # Datasets
+        handler.register(
+            PreviewDatasetColumnCommand,
+            self.datasets_callbacks.preview_dataset_column,
+        )
+        handler.register(
+            PreviewSQLTableCommand, self.datasets_callbacks.preview_sql_table
+        )
+        handler.register(
+            ListSQLTablesCommand,
+            self.datasets_callbacks.preview_sql_table_list,
+        )
+        handler.register(
+            ListSQLSchemasCommand,
+            self.datasets_callbacks.preview_sql_schema_list,
+        )
+        handler.register(
+            ListDataSourceConnectionCommand,
+            self.datasets_callbacks.preview_datasource_connection,
+        )
+        # SQL
+        handler.register(ValidateSQLCommand, self.sql_callbacks.validate_sql)
+        # External storage
+        handler.register(
+            StorageListEntriesCommand,
+            self.external_storage_callbacks.list_entries,
+        )
+        handler.register(
+            StorageDownloadCommand, self.external_storage_callbacks.download
+        )
+        # Secrets
+        handler.register(
+            ListSecretKeysCommand, self.secrets_callbacks.list_secrets
+        )
+        handler.register(
+            RefreshSecretsCommand, self.secrets_callbacks.refresh_secrets
+        )
+        # Cache
+        handler.register(ClearCacheCommand, self.cache_callbacks.clear_cache)
+        handler.register(
+            GetCacheInfoCommand, self.cache_callbacks.get_cache_info
+        )
+
+        return handler
+
+    async def handle_message(self, request: CommandMessage) -> None:
+        """Handle a message from the client.
+
+        The message is dispatched to the appropriate method based on its type.
+
+        Coarsely locks globals to avoid race conditions with code completion.
+        """
+        # acquiring and releasing an RLock takes ~100ns; the overhead is
+        # negligible because the lock is coarse.
+        LOGGER.debug("Acquiring globals lock to handle request %s", request)
+
+        with self.lock_globals():
+            LOGGER.debug("Handling control request: %s", request)
+            await self.request_handler.handle(request)
+            LOGGER.debug("Handled control request: %s", request)
+
+    def get_sql_connection(
+        self, variable_name: str
+    ) -> tuple[SQLConnectionType | None, str | None]:
+        """
+        Fetch the SQL connection associated with the given variable name.
+        Returns the connection if it supports query or catalog operations, or an error message if not.
+        """
+        variable_name = cast(VariableName, variable_name)
+
+        try:
+            engine_val = self.globals.get(variable_name)
+            engines = get_engines_from_variables([(variable_name, engine_val)])
+            if engines is None or len(engines) == 0:
+                return None, "Engine not found"
+            engine = engines[0][1]
+            if isinstance(engine, (QueryEngine, EngineCatalog)):
+                return engine, None
+            else:
+                return (
+                    None,
+                    "Connection does not support query or catalog operations",
+                )
+        except Exception as e:
+            LOGGER.warning(
+                "Failed to get engine %s", variable_name, exc_info=e
+            )
+            return None, str(e)
+
+
+class DatasetCallbacks:
+    def __init__(self, kernel: Kernel):
+        self._kernel = kernel
+
+    def get_engine_catalog(
+        self, variable_name: str
+    ) -> tuple[EngineCatalog[Any] | None, str | None]:
+        """Get engines that support catalog operations.
+        Returns an error if the connection does not support catalog operations."""
+        variable_name = cast(VariableName, variable_name)
+        connection, error = self._kernel.get_sql_connection(variable_name)
+        if error is not None or connection is None:
+            return None, error
+
+        if isinstance(connection, EngineCatalog):
+            return connection, None
+        else:
+            return None, "Connection does not support catalog operations"
+
+    @kernel_tracer.start_as_current_span("preview_dataset_column")
+    async def preview_dataset_column(
+        self, request: PreviewDatasetColumnCommand
+    ) -> None:
+        """Preview a column of a dataset.
+
+        The dataset is loaded, and the column is displayed in the frontend.
+
+        Args:
+            request (PreviewDatasetColumnRequest): The preview request containing:
+                - table_name: Name of the table
+                - column_name: Name of the column
+                - source_type: Type of data source ("duckdb" or "local")
+        """
+        table_name = request.table_name
+        column_name = request.column_name
+        source_type = request.source_type
+
+        try:
+            if source_type == "duckdb":
+                column_preview = get_column_preview_for_duckdb(
+                    fully_qualified_table_name=request.fully_qualified_table_name
+                    or table_name,
+                    column_name=column_name,
+                )
+            elif source_type == "local":
+                dataset = self._kernel.globals[table_name]
+                column_preview = get_column_preview_for_dataframe(
+                    dataset, request
+                )
+            elif source_type == "connection":
+                broadcast_notification(
+                    DataColumnPreviewNotification(
+                        error="Column preview for connection data sources is not supported",
+                        column_name=column_name,
+                        table_name=table_name,
+                    ),
+                )
+                return
+            elif source_type == "catalog":
+                broadcast_notification(
+                    DataColumnPreviewNotification(
+                        error="Column preview for catalog data sources is not supported",
+                        column_name=column_name,
+                        table_name=table_name,
+                    ),
+                )
+                return
+            else:
+                assert_never(source_type)
+
+            if column_preview is None:
+                broadcast_notification(
+                    DataColumnPreviewNotification(
+                        error=f"Column {column_name} not found",
+                        column_name=column_name,
+                        table_name=table_name,
+                    ),
+                )
+            else:
+                broadcast_notification(column_preview)
+        except Exception as e:
+            LOGGER.warning(
+                "Failed to get preview for column %s in table %s",
+                column_name,
+                table_name,
+                exc_info=e,
+            )
+            broadcast_notification(
+                DataColumnPreviewNotification(
+                    error=str(e),
+                    column_name=column_name,
+                    table_name=table_name,
+                ),
+            )
+        return
+
+    @kernel_tracer.start_as_current_span("preview_sql_table")
+    async def preview_sql_table(self, request: PreviewSQLTableCommand) -> None:
+        """Get table details for an SQL table via SignalPilot Gateway."""
+        connection_name = request.engine
+        schema_name = request.schema
+        table_name = request.table_name
+        sql_metadata = SQLMetadata(
+            connection=cast(VariableName, connection_name),
+            database=request.database,
+            schema=schema_name,
+        )
+
+        try:
+            from signalpilot._gateway import get_gateway_client
+            from signalpilot._gateway.adapters import gateway_column_to_datatable_column
+
+            client = get_gateway_client()
+            if client is None:
+                broadcast_notification(
+                    SQLTablePreviewNotification(
+                        request_id=request.request_id,
+                        table=None,
+                        error="Gateway not configured (set SP_API_KEY)",
+                        metadata=sql_metadata,
+                    ),
+                )
+                return
+
+            qualified = f"{schema_name}.{table_name}" if schema_name else table_name
+            result = client.explore_table(connection_name, qualified)
+            columns = [
+                gateway_column_to_datatable_column(c)
+                for c in result.get("columns", [])
+            ]
+            pk_cols = [
+                c.get("name", "")
+                for c in result.get("columns", [])
+                if c.get("primary_key")
+            ]
+            from signalpilot._data.models import DataTable
+
+            table = DataTable(
+                source_type="connection",
+                source=connection_name,
+                name=table_name,
+                num_rows=result.get("row_count"),
+                num_columns=len(columns),
+                variable_name=None,
+                columns=columns,
+                engine=connection_name,
+                type="view" if result.get("is_view") else "table",
+                primary_keys=pk_cols or None,
+                indexes=None,
+            )
+            broadcast_notification(
+                SQLTablePreviewNotification(
+                    request_id=request.request_id,
+                    table=table,
+                    metadata=sql_metadata,
+                ),
+            )
+        except Exception as e:
+            LOGGER.exception(
+                "Failed to get preview for table %s", table_name
+            )
+            broadcast_notification(
+                SQLTablePreviewNotification(
+                    request_id=request.request_id,
+                    table=None,
+                    error=f"Failed to get table details: {e}",
+                    metadata=sql_metadata,
+                ),
+            )
+
+    @kernel_tracer.start_as_current_span("preview_sql_table_list")
+    async def preview_sql_table_list(
+        self, request: ListSQLTablesCommand
+    ) -> None:
+        """Get a list of tables from an SQL schema via SignalPilot Gateway."""
+        connection_name = request.engine
+        schema_name = request.schema
+        sql_metadata = SQLMetadata(
+            connection=cast(VariableName, connection_name),
+            database=request.database,
+            schema=schema_name,
+        )
+
+        try:
+            from signalpilot._gateway import get_gateway_client
+            from signalpilot._gateway.adapters import gateway_column_to_datatable_column
+
+            client = get_gateway_client()
+            if client is None:
+                broadcast_notification(
+                    SQLTableListPreviewNotification(
+                        request_id=request.request_id,
+                        tables=[],
+                        error="Gateway not configured",
+                        metadata=sql_metadata,
+                    ),
+                )
+                return
+
+            schema_data = client.get_schema(connection_name)
+            from signalpilot._data.models import DataTable
+
+            tables = []
+            for qualified_name, info in schema_data.items():
+                t_schema = info.get("schema", "")
+                if schema_name and t_schema != schema_name:
+                    continue
+                columns = [
+                    gateway_column_to_datatable_column(c)
+                    for c in info.get("columns", [])
+                ]
+                tables.append(
+                    DataTable(
+                        source_type="connection",
+                        source=connection_name,
+                        name=info.get("name", qualified_name),
+                        num_rows=info.get("row_count"),
+                        num_columns=len(columns),
+                        variable_name=None,
+                        columns=columns,
+                        engine=connection_name,
+                        type="view" if info.get("is_view") else "table",
+                        primary_keys=None,
+                        indexes=None,
+                    )
+                )
+            broadcast_notification(
+                SQLTableListPreviewNotification(
+                    request_id=request.request_id,
+                    tables=tables,
+                    metadata=sql_metadata,
+                ),
+            )
+        except Exception as e:
+            LOGGER.exception(
+                "Failed to get table list for schema %s", schema_name
+            )
+            broadcast_notification(
+                SQLTableListPreviewNotification(
+                    request_id=request.request_id,
+                    tables=[],
+                    error=f"Failed to get table list: {e}",
+                    metadata=sql_metadata,
+                ),
+            )
+
+    @kernel_tracer.start_as_current_span("preview_sql_schema_list")
+    async def preview_sql_schema_list(
+        self, request: ListSQLSchemasCommand
+    ) -> None:
+        """Get a list of schemas from an SQL database via SignalPilot Gateway."""
+        connection_name = request.engine
+        sql_db_metadata = SQLDatabaseMetadata(
+            connection=cast(VariableName, connection_name),
+            database=request.database,
+        )
+
+        try:
+            from signalpilot._gateway import get_gateway_client
+            from signalpilot._gateway.adapters import gateway_schema_to_database
+
+            client = get_gateway_client()
+            if client is None:
+                broadcast_notification(
+                    SQLSchemaListPreviewNotification(
+                        request_id=request.request_id,
+                        schemas=[],
+                        error="Gateway not configured",
+                        metadata=sql_db_metadata,
+                    ),
+                )
+                return
+
+            schema_data = client.get_schema(connection_name)
+            conn_info = {"name": connection_name, "db_type": "unknown", "database": request.database}
+            try:
+                connections = client.list_connections()
+                for c in connections:
+                    if c.get("name") == connection_name:
+                        conn_info = c
+                        break
+            except Exception:
+                pass
+
+            db = gateway_schema_to_database(schema_data, conn_info)
+            broadcast_notification(
+                SQLSchemaListPreviewNotification(
+                    request_id=request.request_id,
+                    schemas=db.schemas,
+                    metadata=sql_db_metadata,
+                ),
+            )
+        except Exception as e:
+            LOGGER.exception(
+                "Failed to get schema list for %s", connection_name
+            )
+            broadcast_notification(
+                SQLSchemaListPreviewNotification(
+                    request_id=request.request_id,
+                    schemas=[],
+                    error=f"Failed to get schema list: {e}",
+                    metadata=sql_db_metadata,
+                ),
+            )
+
+    @kernel_tracer.start_as_current_span("preview_datasource_connection")
+    async def preview_datasource_connection(
+        self, request: ListDataSourceConnectionCommand
+    ) -> None:
+        """Broadcasts a datasource connection via SignalPilot Gateway."""
+        connection_name = request.engine
+
+        try:
+            from signalpilot._gateway import get_gateway_client
+            from signalpilot._gateway.adapters import gateway_connection_to_datasource
+
+            client = get_gateway_client()
+            if client is None:
+                LOGGER.debug("Gateway not configured, skipping datasource broadcast")
+                return
+
+            connections = client.list_connections()
+            target = None
+            for c in connections:
+                if c.get("name") == connection_name:
+                    target = c
+                    break
+
+            if target is None:
+                LOGGER.error("Connection %s not found in gateway", connection_name)
+                return
+
+            schema_data = client.get_schema(connection_name)
+            datasource = gateway_connection_to_datasource(target, schema_data)
+
+            LOGGER.debug(
+                "Broadcasting datasource connection for %s", connection_name
+            )
+            broadcast_notification(
+                DataSourceConnectionsNotification(
+                    connections=[datasource],
+                ),
+            )
+        except Exception:
+            LOGGER.exception(
+                "Failed to broadcast datasource for %s", connection_name
+            )
+
+
+class ExternalStorageCallbacks:
+    def __init__(self, kernel: Kernel):
+        self._kernel = kernel
+
+    def _get_storage_backend(
+        self, namespace: str
+    ) -> tuple[StorageBackend[Any] | None, str | None]:
+        """Look up a storage backend by variable name from kernel globals.
+
+        Returns (backend, error). If there is error, backend is None.
+        """
+        from signalpilot._data._external_storage.get_storage import STORAGE_BACKENDS
+
+        variable_name = VariableName(namespace)
+        if variable_name not in self._kernel.globals:
+            return None, f"Variable '{namespace}' not found"
+
+        var = self._kernel.globals[variable_name]
+
+        for backend in STORAGE_BACKENDS:
+            if backend.is_compatible(var):
+                return backend(var, variable_name), None
+        return None, (
+            f"Variable '{namespace}' is not a compatible "
+            "storage backend (expected obstore or fsspec)"
+        )
+
+    _VFILE_TTL_SECONDS = 60
+
+    def _schedule_vfile_cleanup(self, vfile: VirtualFile) -> None:
+        """Best-effort cleanup of a virtual file after a TTL."""
+        import asyncio
+
+        from signalpilot._runtime.context import get_context
+
+        try:
+            registry = get_context().virtual_file_registry
+            loop = asyncio.get_running_loop()
+            loop.call_later(self._VFILE_TTL_SECONDS, registry.remove, vfile)
+        except Exception:
+            LOGGER.debug(
+                "Could not schedule virtual file cleanup for %s",
+                vfile.filename,
+            )
+
+    @kernel_tracer.start_as_current_span("storage_list_entries")
+    async def list_entries(self, request: StorageListEntriesCommand) -> None:
+        """List storage entries at a given prefix."""
+        backend, error = self._get_storage_backend(request.namespace)
+        if error is not None or backend is None:
+            broadcast_notification(
+                StorageEntriesNotification(
+                    request_id=request.request_id,
+                    entries=[],
+                    namespace=request.namespace,
+                    prefix=request.prefix,
+                    error=error,
+                ),
+            )
+            return
+
+        # list_entries is synchronous, so we wrap it in asyncio.to_thread
+        def list_entries() -> list[StorageEntry]:
+            return backend.list_entries(
+                prefix=request.prefix, limit=request.limit
+            )
+
+        try:
+            entries = await asyncio.to_thread(list_entries)
+            broadcast_notification(
+                StorageEntriesNotification(
+                    request_id=request.request_id,
+                    entries=entries,
+                    namespace=request.namespace,
+                    prefix=request.prefix,
+                ),
+            )
+        except Exception as e:
+            LOGGER.exception(
+                "Failed to list entries for %s at prefix %s",
+                request.namespace,
+                request.prefix,
+            )
+            broadcast_notification(
+                StorageEntriesNotification(
+                    request_id=request.request_id,
+                    entries=[],
+                    namespace=request.namespace,
+                    prefix=request.prefix,
+                    error=f"Failed to list entries: {e}",
+                ),
+            )
+
+    _PREVIEW_MAX_BYTES = 1_000_000  # 1 MB
+
+    @kernel_tracer.start_as_current_span("storage_download")
+    async def download(self, request: StorageDownloadCommand) -> None:
+        """
+        Download a storage entry, preferring a signed URL.
+        If preview is true, downloads the first 1MB of the file and returns a same-origin virtual file URL.
+        """
+        backend, error = self._get_storage_backend(request.namespace)
+        if error is not None or backend is None:
+            broadcast_notification(
+                StorageDownloadReadyNotification(
+                    request_id=request.request_id,
+                    url=None,
+                    filename=None,
+                    error=error,
+                ),
+            )
+            return
+
+        filename = request.path.rsplit("/", 1)[-1] or "download"
+
+        try:
+            if request.preview:
+                await self._download_preview(backend, request, filename)
+            else:
+                await self._download_full(backend, request, filename)
+        except Exception as e:
+            LOGGER.exception(
+                "Failed to download %s from %s",
+                request.path,
+                request.namespace,
+            )
+            broadcast_notification(
+                StorageDownloadReadyNotification(
+                    request_id=request.request_id,
+                    url=None,
+                    filename=None,
+                    error=f"Failed to download: {e}",
+                ),
+            )
+
+    async def _download_full(
+        self,
+        backend: StorageBackend[Any],
+        request: StorageDownloadCommand,
+        filename: str,
+    ) -> None:
+        signed_url = await backend.sign_download_url(request.path)
+        if signed_url is not None:
+            broadcast_notification(
+                StorageDownloadReadyNotification(
+                    request_id=request.request_id,
+                    url=signed_url,
+                    filename=filename,
+                ),
+            )
+            return
+
+        # Signing not supported; fall back to virtual file with TTL
+        result = await backend.download_file(request.path)
+        vfile = VirtualFile.create_and_register(result.file_bytes, result.ext)
+        self._schedule_vfile_cleanup(vfile)
+
+        broadcast_notification(
+            StorageDownloadReadyNotification(
+                request_id=request.request_id,
+                url=vfile.url,
+                filename=result.filename,
+            ),
+        )
+
+    async def _download_preview(
+        self,
+        backend: StorageBackend[Any],
+        request: StorageDownloadCommand,
+        filename: str,
+    ) -> None:
+        """Read partial content and serve via a virtual file with TTL. This is useful to bypass CORS."""
+        data = await backend.read_range(
+            request.path, offset=0, length=self._PREVIEW_MAX_BYTES
+        )
+        _, ext = os.path.splitext(filename)
+        vfile = VirtualFile.create_and_register(data, ext.lstrip(".") or "txt")
+        self._schedule_vfile_cleanup(vfile)
+
+        broadcast_notification(
+            StorageDownloadReadyNotification(
+                request_id=request.request_id,
+                url=vfile.url,
+                filename=filename,
+            ),
+        )
+
+
+class SqlCallbacks:
+    def __init__(self, kernel: Kernel):
+        self._kernel = kernel
+
+    async def _validate_sql_query(self, request: ValidateSQLCommand) -> None:
+        """Validate an SQL query
+
+        This will validate:
+        - the syntax (parsing)
+        - the catalog (table and column names)
+        """
+        request_id = request.request_id
+
+        if request.only_parse:
+            if request.dialect is None:
+                broadcast_notification(
+                    ValidateSQLResultNotification(
+                        request_id=request_id,
+                        error="Dialect is required when only parsing",
+                    ),
+                )
+                return
+
+            # Just parse the query (no DB connection required)
+            parse_result, error = parse_sql(request.query, request.dialect)
+            broadcast_notification(
+                ValidateSQLResultNotification(
+                    request_id=request_id,
+                    parse_result=parse_result,
+                    error=error,
+                ),
+            )
+            return
+
+        # Validate against the database
+        # This can be cheap for in-memory engines (duckdb, sqlite)
+        # But potentially expensive and requires an active connection for remote engines
+        # For failed connections, we should not raise an error
+
+        if request.engine is None:
+            broadcast_notification(
+                ValidateSQLResultNotification(
+                    request_id=request_id,
+                    error="Engine is required for validating catalog",
+                ),
+            )
+            return
+
+        variable_name = cast(VariableName, request.engine)
+        engine: SQLConnectionType | None = None
+        if variable_name == INTERNAL_DUCKDB_ENGINE:
+            engine = DuckDBEngine(connection=None)
+            error = None
+        else:
+            engine, error = self._kernel.get_sql_connection(variable_name)
+
+        if error is not None or engine is None:
+            broadcast_notification(
+                ValidateSQLResultNotification(
+                    request_id=request_id,
+                    error="Failed to get engine " + variable_name,
+                ),
+            )
+            return
+
+        # Get the parse error for linting
+        parse_result, parse_error = parse_sql(request.query, engine.dialect)
+        if parse_error is not None:
+            # We don't want to fail the validation if there is a parse error
+            LOGGER.debug("Parse error: %s", parse_error)
+
+        if not isinstance(engine, QueryEngine):
+            broadcast_notification(
+                ValidateSQLResultNotification(
+                    request_id=request_id,
+                    error=f"Engine {variable_name} does not support catalog validation.",
+                    parse_result=parse_result,
+                ),
+            )
+            return
+
+        _, error_message = engine.execute_in_explain_mode(  # type: ignore
+            request.query, self._kernel.globals
+        )
+        validate_result = SqlCatalogCheckResult(
+            success=error_message is None,
+            error_message=error_message,
+        )
+        broadcast_notification(
+            ValidateSQLResultNotification(
+                request_id=request_id,
+                validate_result=validate_result,
+                parse_result=parse_result,
+                error=None,
+            ),
+        )
+
+    @kernel_tracer.start_as_current_span("validate_sql")
+    async def validate_sql(self, request: ValidateSQLCommand) -> None:
+        """Validate an SQL query"""
+
+        try:
+            await self._validate_sql_query(request)
+        except Exception as e:
+            LOGGER.exception("Failed to validate SQL query")
+            broadcast_notification(
+                ValidateSQLResultNotification(
+                    request_id=request.request_id,
+                    error="Failed to validate SQL query: " + str(e),
+                ),
+            )
+
+
+class SecretsCallbacks:
+    def __init__(self, kernel: Kernel):
+        self._kernel = kernel
+
+    async def list_secrets(self, request: ListSecretKeysCommand) -> None:
+        secrets = get_secret_keys(
+            self._kernel.user_config, self._kernel._original_environ
+        )
+        broadcast_notification(
+            SecretKeysResultNotification(
+                request_id=request.request_id, secrets=secrets
+            ),
+        )
+
+    async def refresh_secrets(self, request: RefreshSecretsCommand) -> None:
+        del request
+        self._kernel.load_dotenv()
+
+
+class PackagesCallbacks:
+    def __init__(self, kernel: Kernel):
+        self._kernel = kernel
+        self.package_manager: PackageManager | None = None
+
+    def update_package_manager(self, package_manager: str) -> None:
+        if (
+            self.package_manager is None
+            or package_manager != self.package_manager.name
+        ):
+            self.package_manager = create_package_manager(package_manager)
+
+            # All sp notebooks depend on the sp package; if the
+            # notebook already has sp as a dependency, or an optional
+            # dependency group with sp, such as sp[sql], this is a
+            # NOOP.
+            self._maybe_add_signalpilot_to_script_metadata()
+
+    def send_missing_packages_alert(self, missing_packages: set[str]) -> None:
+        if self.package_manager is None:
+            return
+
+        packages = sorted(
+            pkg
+            for mod in missing_packages
+            if not self.package_manager.attempted_to_install(
+                pkg := self.package_manager.module_to_package(mod)
+            )
+        )
+        # Deleting a cell can make the set of missing packages smaller
+        broadcast_notification(
+            MissingPackageAlertNotification(
+                packages=packages,
+                isolated=is_python_isolated(),
+            ),
+        )
+
+    def missing_packages_hook(
+        self, ctx: hook_context.OnFinishHookContext
+    ) -> None:
+        module_not_found_errors = [
+            e
+            for e in ctx.exceptions.values()
+            if isinstance(e, (ImportError, ManyModulesNotFoundError))
+        ]
+
+        if len(module_not_found_errors) == 0:
+            return
+
+        if self.package_manager is None:
+            return
+
+        missing_modules: set[str] = set()
+        missing_packages: set[str] = set()
+
+        # Populate missing_modules and missing_packages from the errors
+        for e in module_not_found_errors:
+            if isinstance(e, ManyModulesNotFoundError):
+                # filter out packages that we already attempted to install
+                # to prevent an infinite loop
+                missing_packages.update(
+                    {
+                        pkg
+                        for pkg in e.package_names
+                        if not self.package_manager.attempted_to_install(pkg)
+                    }
+                )
+                continue
+
+            maybe_missing_module = extract_missing_module_from_cause_chain(e)
+            if maybe_missing_module:
+                missing_modules.add(maybe_missing_module)
+                continue
+
+            maybe_missing_packages = (
+                try_extract_packages_from_import_error_message(str(e))
+            )
+            if maybe_missing_packages:
+                missing_packages.update(
+                    {
+                        pkg
+                        for pkg in maybe_missing_packages
+                        if not self.package_manager.attempted_to_install(pkg)
+                    }
+                )
+
+        # Grab missing modules from module registry and from module not found errors
+        missing_modules = (
+            self._kernel.module_registry.missing_modules() | missing_modules
+        )
+
+        # Convert modules to packages
+        for mod in missing_modules:
+            pkg = self.package_manager.module_to_package(mod)
+            # filter out packages that we already attempted to install
+            # to prevent an infinite loop
+            if not self.package_manager.attempted_to_install(pkg):
+                missing_packages.add(pkg)
+
+        if not missing_packages:
+            return
+
+        packages = sorted(missing_packages)
+        if self.package_manager.should_auto_install():
+            version = {pkg: "" for pkg in packages}
+            self._kernel.enqueue_control_request(
+                InstallPackagesCommand(
+                    manager=self.package_manager.name, versions=version
+                )
+            )
+        else:
+            if is_code_mode_request():
+                return
+
+            broadcast_notification(
+                MissingPackageAlertNotification(
+                    packages=packages,
+                    isolated=is_python_isolated(),
+                ),
+            )
+
+    async def install_missing_packages(
+        self, request: InstallPackagesCommand
+    ) -> None:
+        """Attempts to install packages for modules that cannot be imported
+
+        Runs cells affected by successful installation.
+        """
+        assert self.package_manager is not None, (
+            "Cannot install packages without a package manager"
+        )
+        if request.manager != self.package_manager.name:
+            # Swap out the package manager
+            self.package_manager = create_package_manager(request.manager)
+
+        if not self.package_manager.is_manager_installed():
+            self.package_manager.alert_not_installed()
+            return
+
+        resolved_packages: dict[str, PackageRequirement] = {}
+        for pkg in request.versions:
+            pkg_req = PackageRequirement.parse(pkg)
+            resolved_packages[pkg_req.name] = pkg_req
+
+        # Append all other missing packages from the notebook; the missing
+        # package request only contains the packages from the cell the user
+        # executed.
+        for module in self._kernel.module_registry.missing_modules():
+            pkg_req = PackageRequirement.parse(
+                self.package_manager.module_to_package(module)
+            )
+            if pkg_req.name not in resolved_packages:
+                resolved_packages[pkg_req.name] = pkg_req
+
+        # Convert back to list of package strings
+        missing_packages = [
+            str(pkg)
+            for pkg in sorted(resolved_packages.values(), key=lambda p: p.name)
+        ]
+
+        # Frontend shows package names, not module names
+        package_statuses: PackageStatusType = {
+            pkg: "queued" for pkg in missing_packages
+        }
+        broadcast_notification(
+            InstallingPackageAlertNotification(
+                packages=package_statuses, source=request.source
+            )
+        )
+
+        def create_log_callback(pkg: str) -> LogCallback:
+            def log_callback(log_line: str) -> None:
+                broadcast_notification(
+                    InstallingPackageAlertNotification(
+                        packages=package_statuses,
+                        logs={pkg: log_line},
+                        log_status="append",
+                        source=request.source,
+                    ),
+                )
+
+            return log_callback
+
+        for pkg in missing_packages:
+            if self.package_manager.attempted_to_install(package=pkg):
+                # Already attempted an installation; it must have failed.
+                # Skip the installation.
+                continue
+            package_statuses[pkg] = "installing"
+            broadcast_notification(
+                InstallingPackageAlertNotification(
+                    packages=package_statuses, source=request.source
+                )
+            )
+
+            # Send initial "start" log
+            broadcast_notification(
+                InstallingPackageAlertNotification(
+                    packages=package_statuses,
+                    logs={pkg: f"Installing {pkg}...\n"},
+                    log_status="start",
+                    source=request.source,
+                )
+            )
+
+            version = request.versions.get(pkg)
+            if await self.package_manager.install(
+                pkg, version=version, log_callback=create_log_callback(pkg)
+            ):
+                package_statuses[pkg] = "installed"
+                # Send final "done" log
+                broadcast_notification(
+                    InstallingPackageAlertNotification(
+                        packages=package_statuses,
+                        logs={pkg: f"Successfully installed {pkg}\n"},
+                        log_status="done",
+                        source=request.source,
+                    ),
+                )
+            else:
+                package_statuses[pkg] = "failed"
+                mod = self.package_manager.package_to_module(pkg)
+                self._kernel.module_registry.excluded_modules.add(mod)
+                # Send final "done" log with error
+                broadcast_notification(
+                    InstallingPackageAlertNotification(
+                        packages=package_statuses,
+                        logs={pkg: f"Failed to install {pkg}\n"},
+                        log_status="done",
+                        source=request.source,
+                    ),
+                )
+
+        installed_modules = [
+            self.package_manager.package_to_module(pkg)
+            for pkg in package_statuses
+            if package_statuses[pkg] == "installed"
+        ]
+
+        # If a package was not installed at cell registration time, it won't
+        # yet be in the script metadata.
+        if self.should_update_script_metadata():
+            self.update_script_metadata(installed_modules)
+
+        # All cells that depend on successfully installed modules are re-run.
+        #
+        # This consists of cells that either statically reference the installed
+        # module, or that previously failed with a ModuleNotFoundError matching
+        # an installed module.
+        cells_to_run = {
+            cid
+            for module in installed_modules
+            if (cid := self._kernel.module_registry.defining_cell(module))
+            is not None
+        }
+
+        for cid, cell in self._kernel.graph.cells.items():
+            if (
+                isinstance(cell.exception, ModuleNotFoundError)
+                and cell.exception.name in installed_modules
+            ):
+                cells_to_run.add(cid)
+
+        if cells_to_run:
+            await self._kernel._if_autorun_then_run_cells(cells_to_run)
+
+    def _maybe_add_signalpilot_to_script_metadata(self) -> None:
+        if self.should_update_script_metadata():
+            self.update_script_metadata(["signalpilot"])
+
+    def should_update_script_metadata(self) -> bool:
+        return (
+            GLOBAL_SETTINGS.MANAGE_SCRIPT_METADATA is True
+            and self._kernel.app_metadata.filename is not None
+            and self.package_manager is not None
+        )
+
+    def update_script_metadata(
+        self, import_namespaces_to_add: list[str]
+    ) -> None:
+        filename = self._kernel.app_metadata.filename
+
+        if not filename or not self.package_manager:
+            return
+
+        try:
+            LOGGER.debug(
+                "Updating script metadata: %s. Adding namespaces: %s.",
+                filename,
+                import_namespaces_to_add,
+            )
+            self.package_manager.update_notebook_script_metadata(
+                filepath=filename,
+                import_namespaces_to_add=import_namespaces_to_add,
+                upgrade=False,
+            )
+        except Exception as e:
+            LOGGER.error("Failed to add script metadata to notebook: %s", e)
+
+
+class CacheCallbacks:
+    def __init__(self, kernel: Kernel):
+        self._kernel = kernel
+
+    async def clear_cache(self, request: ClearCacheCommand) -> None:
+        del request
+        from signalpilot._save.cache import CacheContext
+        from signalpilot._save.loaders import BasePersistenceLoader
+
+        ctx = get_context()
+        saved = 0
+        for obj in ctx.globals.values():
+            if isinstance(obj, CacheContext):
+                if isinstance(obj.loader, BasePersistenceLoader):
+                    obj.loader.clear()
+
+        broadcast_notification(CacheClearedNotification(bytes_freed=saved))
+
+    async def get_cache_info(self, request: GetCacheInfoCommand) -> None:
+        del request
+        from signalpilot._save.cache import CacheContext
+
+        ctx = get_context()
+        total_hits = 0
+        total_misses = 0
+        total_time = 0
+        disk_to_free = -1  # TODO: sum up disk usage
+        disk_total = -1
+
+        for obj in ctx.globals.values():
+            if isinstance(obj, CacheContext):
+                hits, misses, _, _, time = obj.cache_info()
+                total_hits += hits
+                total_misses += misses
+                total_time += time
+                # d2f, dt = obj.loader.disk_usage()
+        broadcast_notification(
+            CacheInfoNotification(
+                hits=total_hits,
+                misses=total_misses,
+                time=total_time,
+                disk_to_free=disk_to_free,
+                disk_total=disk_total,
+            ),
+        )
+
+
+class RequestHandler:
+    def __init__(self) -> None:
+        self._handlers: dict[
+            type[CommandMessage],
+            Callable[[CommandMessage], Awaitable[None]],
+        ] = {}
+
+    def register(
+        self,
+        request_type: type[CommandMessage],
+        handler: Callable[[Any], Awaitable[None]],
+    ) -> None:
+        self._handlers[request_type] = handler
+
+    async def handle(self, request: CommandMessage) -> None:
+        handler = self._handlers.get(type(request))
+        if handler:
+            return await handler(request)
+        raise ValueError(f"Unknown request {request}")
+
+
+@dataclasses.dataclass
+class _KernelStreams:
+    stream: ThreadSafeStream
+    stdout: ThreadSafeStdout | None
+    stderr: ThreadSafeStderr | None
+    stdin: ThreadSafeStdin | None
+    debugger: sp_pdb.SpPdb | None
+    pipe: TypedConnection[KernelMessage] | None
+
+    def close(self, use_fd_redirect: bool) -> None:
+        if not use_fd_redirect:
+            from signalpilot._messaging.thread_local_streams import (
+                clear_thread_local_streams,
+            )
+
+            clear_thread_local_streams()
+
+        if isinstance(self.pipe, connection.Connection):
+            self.pipe.close()
+
+
+def _bootstrap_subprocess(
+    parent_pid: int | None,
+    log_level: int | None,
+    is_subprocess: bool,
+) -> Callable[[], asyncio.AbstractEventLoop] | None:
+    # Returns a loop factory only on Windows 3.14+; elsewhere either mutates
+    # the loop policy or does nothing.
+    if log_level is not None:
+        _loggers.set_level(log_level)
+
+    if not is_subprocess:
+        return None
+
+    restore_signals()
+
+    # Become the leader of a new session/process group before connecting
+    # back to the parent, to avoid race conditions with the parent
+    # process (which assumes its child is in another process group).
+    if sys.platform != "win32":
+        os.setsid()
+        start_parent_poller(parent_pid)
+
+    # The runtime process inherits the server's loop policy. On Windows, we
+    # restore the event loop policy to the default ProactorEventLoop, so
+    # user code can use asyncio.create_subprocess_exec and other APIs that
+    # the SelectorEventLoop does not implement.
+    if sys.platform == "win32":
+        if sys.version_info >= (3, 14):
+            # Event loop policies are deprecated in Python 3.14
+            return asyncio.ProactorEventLoop
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    return None
+
+
+@contextlib.contextmanager
+def _maybe_profile(profile_path: str | None) -> Iterator[None]:
+    if profile_path is None:
+        yield
+        return
+
+    import cProfile
+
+    profiler = cProfile.Profile()
+    profiler.enable()
+    try:
+        yield
+    finally:
+        profiler.disable()
+        profiler.dump_stats(profile_path)
+
+
+def _create_streams(
+    socket_addr: tuple[str, int] | None,
+    stream_queue: QueueType[KernelMessage] | None,
+    input_queue: QueueType[str],
+    is_edit_mode: bool,
+    should_redirect_stdio: bool,
+    use_fd_redirect: bool,
+) -> _KernelStreams | None:
+    # Returns None when the socket fails to connect; callers should bail out.
+    pipe: TypedConnection[KernelMessage] | None = None
+    if socket_addr is not None:
+        print(f"[KERNEL CHILD] connecting to parent socket {socket_addr}", flush=True)
+        n_tries = 0
+        last_error: BaseException | None = None
+        while n_tries < 100:
+            try:
+                pipe = TypedConnection[KernelMessage].of(
+                    connection.Client(socket_addr)
+                )
+                print(f"[KERNEL CHILD] connected to parent on attempt {n_tries + 1}", flush=True)
+                break
+            except Exception as e:
+                last_error = e
+                n_tries += 1
+                time.sleep(0.01)
+
+        if n_tries == 100 or pipe is None:
+            # The parent may still be waiting for this subprocess to connect,
+            # but startup now watches kernel liveness and will abort if the
+            # kernel exits. Log the cause so the failure is diagnosable
+            # instead of opaque.
+            LOGGER.error(
+                "sp kernel subprocess failed to connect to %s "
+                "after %d attempts",
+                socket_addr,
+                n_tries,
+                exc_info=last_error,
+            )
+            return None
+
+        stream = ThreadSafeStream(
+            pipe=pipe,
+            input_queue=input_queue,
+            redirect_console=should_redirect_stdio,
+        )
+    elif stream_queue is not None:
+        stream = ThreadSafeStream(
+            pipe=QueuePipe(stream_queue),
+            input_queue=input_queue,
+            redirect_console=should_redirect_stdio,
+        )
+    else:
+        raise RuntimeError(
+            "One of queue_pipe and socket_addr must be non None"
+        )
+
+    stdout = (
+        ThreadSafeStdout(stream, forward_os_streams=use_fd_redirect)
+        if should_redirect_stdio
+        else None
+    )
+    stderr = (
+        ThreadSafeStderr(stream, forward_os_streams=use_fd_redirect)
+        if should_redirect_stdio
+        else None
+    )
+    # TODO(akshayka): stdin in run mode? input(prompt) uses stdout, which
+    # isn't currently available in run mode.
+    stdin = ThreadSafeStdin(stream) if is_edit_mode else None
+    debugger = (
+        sp_pdb.SpPdb(stdout=stdout, stdin=stdin)
+        if is_edit_mode and not bool(os.getenv("DEBUGPY_RUNNING"))
+        else None
+    )
+    return _KernelStreams(
+        stream=stream,
+        stdout=stdout,
+        stderr=stderr,
+        stdin=stdin,
+        debugger=debugger,
+        pipe=pipe,
+    )
+
+
+def _install_subprocess_handlers(
+    kernel: Kernel,
+    ctx: KernelRuntimeContext,
+    user_config: SpConfig,
+    interrupt_queue: QueueType[bool] | None,
+) -> None:
+    # Subprocess kernels don't share state with the host, so they need
+    # their own formatter import hooks and signal handlers.
+    from signalpilot._output.formatters.formatters import register_formatters
+
+    register_formatters(theme=user_config["display"]["theme"])
+
+    signal.signal(signal.SIGINT, handlers.construct_interrupt_handler(ctx))
+
+    if sys.platform == "win32":
+        if interrupt_queue is not None:
+            Win32InterruptHandler(interrupt_queue).start()
+        # windows doesn't handle SIGTERM
+        signal.signal(
+            signal.SIGBREAK, handlers.construct_sigterm_handler(kernel)
+        )
+    else:
+        signal.signal(
+            signal.SIGTERM, handlers.construct_sigterm_handler(kernel)
+        )
+
+
+def launch_kernel(
+    control_queue: QueueType[CommandMessage],
+    set_ui_element_queue: QueueType[BatchableCommand],
+    completion_queue: QueueType[CodeCompletionCommand],
+    input_queue: QueueType[str],
+    stream_queue: QueueType[KernelMessage] | None,
+    socket_addr: tuple[str, int] | None,
+    is_edit_mode: bool,
+    configs: dict[CellId_t, CellConfig],
+    app_metadata: AppMetadata,
+    user_config: SpConfig,
+    virtual_file_storage: VirtualFileStorageType | None,
+    redirect_console_to_browser: bool,
+    interrupt_queue: QueueType[bool] | None = None,
+    profile_path: str | None = None,
+    log_level: int | None = None,
+    is_ipc: bool = False,
+    parent_pid: int | None = None,
+) -> None:
+    from signalpilot._runtime.kernel_lifecycle import (
+        create_kernel,
+        listen_messages,
+        teardown_kernel,
+        threaded_queue_reader,
+    )
+
+    import os as _os
+    print(
+        f"[KERNEL CHILD] launch_kernel entered (pid={_os.getpid()}, edit={is_edit_mode}, socket={socket_addr})",
+        flush=True,
+    )
+    is_subprocess = is_edit_mode or is_ipc
+    loop_factory = _bootstrap_subprocess(parent_pid, log_level, is_subprocess)
+    print("[KERNEL CHILD] bootstrap done, creating streams", flush=True)
+
+    with _maybe_profile(profile_path):
+        should_redirect_stdio = is_edit_mode or redirect_console_to_browser
+        use_fd_redirect = is_subprocess
+        streams = _create_streams(
+            socket_addr,
+            stream_queue,
+            input_queue,
+            is_edit_mode,
+            should_redirect_stdio,
+            use_fd_redirect,
+        )
+        if streams is None:
+            print("[KERNEL CHILD] _create_streams returned None — aborting", flush=True)
+            return
+        print("[KERNEL CHILD] streams created, building kernel", flush=True)
+
+        kernel, ctx = create_kernel(
+            stream=streams.stream,
+            stdout=streams.stdout,
+            stderr=streams.stderr,
+            stdin=streams.stdin,
+            debugger=streams.debugger,
+            configs=configs,
+            app_metadata=app_metadata,
+            user_config=user_config,
+            is_edit_mode=is_edit_mode,
+            control_queue=control_queue,
+            set_ui_element_queue=set_ui_element_queue,
+            virtual_file_storage=virtual_file_storage,
+            mode=SessionMode.EDIT if is_edit_mode else SessionMode.RUN,
+            print_override_fn=print_override,
+        )
+
+        if is_edit_mode:
+            kernel.start_completion_worker(completion_queue)
+
+        if is_subprocess:
+            _install_subprocess_handlers(
+                kernel, ctx, kernel.user_config, interrupt_queue
+            )
+
+        coro = listen_messages(
+            kernel,
+            control_queue,
+            set_ui_element_queue,
+            threaded_queue_reader,
+        )
+        if loop_factory is not None:
+            asyncio.run(coro, loop_factory=loop_factory)
+        else:
+            asyncio.run(coro)
+
+        teardown_kernel(kernel, ctx)
+        streams.close(use_fd_redirect)

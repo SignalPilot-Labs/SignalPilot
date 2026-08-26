@@ -8,22 +8,22 @@
 
 import React, { useState } from "react";
 import { Mail } from "lucide-react";
-import { InvitationListSkeleton } from "@/components/ui/list-skeletons";
-import { PendingButton } from "@/components/ui/pending-button";
+import { InvitationListSkeleton } from "~/components/ui/list-skeletons";
+import { PendingButton } from "~/components/ui/pending-button";
 import { useReverification, useOrganization } from "@clerk/nextjs";
 import type { OrganizationResource, OrganizationInvitationResource } from "@clerk/types";
-import { SectionHeader } from "@/components/ui/section-header";
-import { useToast } from "@/components/ui/toast";
+import { SectionHeader } from "~/components/ui/section-header";
+import { useToast } from "~/components/ui/toast";
 import {
   FIELD_INPUT_CLASS,
   LABEL_CLASS,
   ERROR_CLASS,
   NEUTRAL_CLASS,
-} from "@/components/auth/auth-primitives";
-import { isReverificationCancelledError } from "@/lib/security/use-reverify";
-import { formatClerkError } from "@/lib/security/clerk-errors";
-import type { TeamPermissions } from "@/lib/team/use-team-permissions";
-import { ROLE_MEMBER, type TeamRole } from "@/lib/team/roles";
+} from "~/components/auth/auth-primitives";
+import { isReverificationCancelledError } from "~/lib/security/use-reverify";
+import { formatClerkError } from "~/lib/security/clerk-errors";
+import type { TeamPermissions } from "~/lib/team/use-team-permissions";
+import { ROLE_MEMBER, type TeamRole } from "~/lib/team/roles";
 import { RoleSelect } from "./role-select";
 import { InvitationRow } from "./invitation-row";
 

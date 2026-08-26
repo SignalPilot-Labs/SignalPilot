@@ -1,0 +1,492 @@
+from __future__ import annotations
+
+import contextlib
+import io
+import os
+import sys
+import threading
+from collections import deque
+from typing import (
+    TYPE_CHECKING,
+    Protocol,
+)
+
+from signalpilot import _loggers
+from signalpilot._messaging.cell_output import CellChannel
+from signalpilot._messaging.console_output_worker import (
+    ConsoleMsg,
+    FlushMarker,
+    buffered_writer,
+)
+from signalpilot._messaging.mimetypes import ConsoleMimeType
+from signalpilot._messaging.types import (
+    KernelMessage,
+    Stderr,
+    Stdin,
+    Stdout,
+    Stream,
+)
+from signalpilot._session.queue import QueueType
+from signalpilot._types.ids import CellId_t
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Iterator
+
+LOGGER = _loggers.sp_logger()
+
+
+# Maximum time to block waiting for the buffered console writer to flush.
+# The flush hook runs on the hot path between cell execution and idle, so
+# we bound the wait even though flushes normally complete in <10ms.
+_FLUSH_CONSOLE_TIMEOUT_S = 5.0
+
+
+# Byte limits on outputs exist for two reasons
+#
+# 1. We use a multiprocessing.Connection object to send outputs from
+#    the kernel to the server (the server then sends the output to
+#    the frontend via a websocket). The Connection object has a limit
+#    of ~32MiB that it can send before it chokes
+#    (https://docs.python.org/3/library/multiprocessing.html#multiprocessing.connection.Connection.send).
+#
+#    TODO(akshayka): Get around this by breaking up the message sent
+#    over the Connection or plumbing the websocket into the kernel.
+#
+# 2. The frontend chokes when we send outputs that are too big, i.e.
+#    it freezes and sometimes even crashes. That can lead to lost work.
+#    It appears this is the bottleneck right now, compared to 1.
+#
+# Usually users only output gigantic things accidentally, so refusing
+# to show large outputs should in most cases not bother the user too much.
+# In any case, it's better than breaking the frontend/kernel.
+
+
+def output_max_bytes() -> int:
+    from signalpilot._runtime.context import ContextNotInitializedError, get_context
+
+    try:
+        return get_context().signalpilot_config["runtime"]["output_max_bytes"]
+    except ContextNotInitializedError:
+        return 5_000_000  # 5MB
+
+
+def std_stream_max_bytes() -> int:
+    from signalpilot._runtime.context import ContextNotInitializedError, get_context
+
+    try:
+        return get_context().signalpilot_config["runtime"]["std_stream_max_bytes"]
+    except ContextNotInitializedError:
+        return 1_000_000  # 1MB
+
+
+class PipeProtocol(Protocol):
+    def send(self, obj: KernelMessage) -> None:
+        pass
+
+
+class QueuePipe(PipeProtocol):
+    def __init__(self, queue: QueueType[KernelMessage]):
+        self._queue = queue
+
+    def send(self, obj: KernelMessage) -> None:
+        self._queue.put_nowait(obj)
+
+
+class ThreadSafeStream(Stream):
+    """A thread-safe wrapper around a pipe.
+
+    Does not own the pipe or queue.
+    """
+
+    def __init__(
+        self,
+        pipe: PipeProtocol,
+        input_queue: QueueType[str],
+        redirect_console: bool,
+        cell_id: CellId_t | None = None,
+    ):
+        self.pipe = pipe
+        self.cell_id = cell_id
+        self.redirect_console = redirect_console
+        # A single stream is shared by the kernel and the code completion
+        # worker. The lock should almost always be uncontended.
+        self.stream_lock = threading.Lock()
+
+        if self.redirect_console:
+            # Console outputs are buffered
+            self.console_msg_cv = threading.Condition(threading.Lock())
+            self.console_msg_queue: deque[ConsoleMsg | FlushMarker | None] = (
+                deque()
+            )
+            self.buffered_console_thread = threading.Thread(
+                target=buffered_writer,
+                args=(self.console_msg_queue, self, self.console_msg_cv),
+            )
+            self.buffered_console_thread.start()
+
+        # stdin messages are pulled from this queue
+        self.input_queue = input_queue
+
+    def write(self, data: KernelMessage) -> None:
+        with self.stream_lock:
+            try:
+                self.pipe.send(data)
+            except OSError as e:
+                from signalpilot._messaging.serde import (
+                    deserialize_kernel_notification_name,
+                )
+
+                # Most likely a BrokenPipeError, caused by the
+                # server process shutting down
+                LOGGER.debug(
+                    "Error when writing (op: %s) to pipe: %s",
+                    deserialize_kernel_notification_name(data),
+                    e,
+                )
+
+    def flush_console(self) -> None:
+        """Force the buffered console writer to flush immediately.
+
+        Blocks until all pending console messages have been sent to the
+        frontend, or until a short timeout elapses if the writer thread
+        is no longer alive.  This ensures that stderr/stdout output
+        produced during cell execution is delivered before the cell is
+        marked idle.
+        """
+        if not self.redirect_console:
+            return
+        # If the buffered writer isn't alive (e.g., shutdown in progress),
+        # enqueuing a marker would never be drained. Bail out early.
+        if not self.buffered_console_thread.is_alive():
+            return
+        marker = FlushMarker()
+        with self.console_msg_cv:
+            self.console_msg_queue.append(marker)
+            self.console_msg_cv.notify()
+        # Bounded wait: if the writer dies or stalls, don't block the
+        # caller indefinitely.
+        if not marker.done.wait(timeout=_FLUSH_CONSOLE_TIMEOUT_S):
+            LOGGER.warning(
+                "Timed out waiting for console flush after %ss",
+                _FLUSH_CONSOLE_TIMEOUT_S,
+            )
+
+    def stop(self) -> None:
+        """Teardown resources created by the stream."""
+        # Sending `None` through the queue signals the console thread to exit.
+        # We don't join the thread in case its processing outputs still; don't
+        # want to block the entire program.
+        if self.redirect_console:
+            with self.console_msg_cv:
+                self.console_msg_queue.append(None)
+                self.console_msg_cv.notify()
+
+
+def _forward_os_stream(
+    standard_stream: Stdout | Stderr, fd: int, should_exit: threading.Event
+) -> None:
+    """Watch a file descriptor and forward it to a stream object."""
+
+    # This coarse try/except block silences exceptions; a raised exception
+    # at this point could cause bad errors, such as an infinite stream of data
+    # to be written to the fd/routed through the stream.
+    #
+    # TODO(akshayka): Make this loop bomb-proof, so that exceptions raised are
+    # exceptions we actually want to pay attention to; then store the exception
+    # and print it to the terminal later (outside an execution context).
+    try:
+        while not should_exit.is_set():
+            data = os.read(fd, 1024)
+            if not data:
+                break
+            standard_stream.write(data.decode())
+    except Exception:
+        ...
+
+
+class _NoOpWatcher:
+    """A dummy watcher that does nothing, used when fd redirection is off."""
+
+    def start(self) -> None:
+        pass
+
+    def pause(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+
+_NOOP_WATCHER = _NoOpWatcher()
+
+
+class Watcher:
+    """Watches and redirects a standard stream."""
+
+    def __init__(
+        self, standard_stream: ThreadSafeStdout | ThreadSafeStderr
+    ) -> None:
+        self.standard_stream = standard_stream
+        self.fd = self.standard_stream._original_fd
+        self.read_fd, self.write_fd = os.pipe()
+        self._should_exit = threading.Event()
+        self.thread = threading.Thread(
+            target=_forward_os_stream,
+            args=(self.standard_stream, self.read_fd, self._should_exit),
+            daemon=True,
+        )
+        self.thread.start()
+
+    def start(self) -> None:
+        # Save the file for the standard stream by opening a new file
+        # descriptor for it
+        self.fd_dup = os.dup(self.fd)
+        self.standard_stream._set_fileno(self.fd_dup)
+        # Change the original file descriptor for the standard stream
+        # to refer to the write end of the pipe
+        os.dup2(self.write_fd, self.fd)
+
+    def pause(self) -> None:
+        # Restore the original file descriptor to point to the standard
+        # stream file
+        os.dup2(self.fd_dup, self.fd)
+        os.close(self.fd_dup)
+        self.standard_stream._set_fileno(None)
+
+    def stop(self) -> None:
+        os.close(self.write_fd)
+        os.close(self.read_fd)
+        self._should_exit.set()
+
+
+# NB: Python doesn't provide a standard out class to inherit from, so
+# we inherit from TextIOBase.
+class ThreadSafeStdout(Stdout):
+    encoding = sys.stdout.encoding
+    errors = sys.stdout.errors
+    _fileno: int | None = None
+
+    def __init__(
+        self, stream: ThreadSafeStream, forward_os_streams: bool = True
+    ):
+        self._stream = stream
+        self._original_fd = sys.stdout.fileno()
+        # Expose the underlying binary buffer so that code writing to
+        # sys.stdout.buffer (e.g. package installation logging) keeps working.
+        self.buffer: io.BufferedIOBase | None = getattr(
+            sys.stdout, "buffer", None
+        )
+        self._watcher: Watcher | _NoOpWatcher = (
+            Watcher(self) if forward_os_streams else _NOOP_WATCHER
+        )
+
+    def _stop(self) -> None:
+        self._watcher.stop()
+
+    def fileno(self) -> int:
+        if self._fileno is not None:
+            return self._fileno
+        raise io.UnsupportedOperation("Stream not redirected, no fileno.")
+
+    def _set_fileno(self, fileno: int | None) -> None:
+        self._fileno = fileno
+
+    def writable(self) -> bool:
+        return True
+
+    def readable(self) -> bool:
+        return False
+
+    def seekable(self) -> bool:
+        return False
+
+    def flush(self) -> None:
+        self._stream.flush_console()
+
+    def _write_with_mimetype(
+        self, data: str, mimetype: ConsoleMimeType
+    ) -> int:
+        assert self._stream.cell_id is not None
+        if not isinstance(data, str):
+            raise TypeError(
+                f"write() argument must be a str, not {type(data).__name__}"
+            )
+        max_bytes = std_stream_max_bytes()
+        if sys.getsizeof(data) > max_bytes:
+            sys.stderr.write(
+                "Warning: sp truncated a very large console output.\n"
+            )
+            data = data[: int(max_bytes)] + " ... "
+        with self._stream.console_msg_cv:
+            self._stream.console_msg_queue.append(
+                ConsoleMsg(
+                    stream=CellChannel.STDOUT,
+                    cell_id=self._stream.cell_id,
+                    data=data,
+                    mimetype=mimetype,
+                )
+            )
+            self._stream.console_msg_cv.notify()
+        return len(data)
+
+    # Buffer type not available python < 3.12, hence type ignore
+    def writelines(self, sequence: Iterable[str]) -> None:  # type: ignore[override]
+        for line in sequence:
+            self.write(line)
+
+
+class ThreadSafeStderr(Stderr):
+    encoding = sys.stderr.encoding
+    errors = sys.stderr.errors
+    _fileno: int | None = None
+
+    def __init__(
+        self, stream: ThreadSafeStream, forward_os_streams: bool = True
+    ):
+        self._stream = stream
+        self._original_fd = sys.stderr.fileno()
+        # Expose the underlying binary buffer so that code writing to
+        # sys.stderr.buffer keeps working.
+        self.buffer: io.BufferedIOBase | None = getattr(
+            sys.stderr, "buffer", None
+        )
+        self._watcher: Watcher | _NoOpWatcher = (
+            Watcher(self) if forward_os_streams else _NOOP_WATCHER
+        )
+
+    def _stop(self) -> None:
+        self._watcher.stop()
+
+    def fileno(self) -> int:
+        if self._fileno is not None:
+            return self._fileno
+        raise io.UnsupportedOperation("Stream not redirected, no fileno.")
+
+    def _set_fileno(self, fileno: int | None) -> None:
+        self._fileno = fileno
+
+    def writable(self) -> bool:
+        return True
+
+    def readable(self) -> bool:
+        return False
+
+    def seekable(self) -> bool:
+        return False
+
+    def flush(self) -> None:
+        self._stream.flush_console()
+
+    def _write_with_mimetype(
+        self, data: str, mimetype: ConsoleMimeType
+    ) -> int:
+        assert self._stream.cell_id is not None
+        if not isinstance(data, str):
+            raise TypeError(
+                f"write() argument must be a str, not {type(data).__name__}"
+            )
+        max_bytes = std_stream_max_bytes()
+        if sys.getsizeof(data) > max_bytes:
+            data = (
+                "Warning: sp truncated a very large console output.\n"
+                + data[: int(max_bytes)]
+                + " ... "
+            )
+
+        with self._stream.console_msg_cv:
+            self._stream.console_msg_queue.append(
+                ConsoleMsg(
+                    stream=CellChannel.STDERR,
+                    cell_id=self._stream.cell_id,
+                    data=data,
+                    mimetype=mimetype,
+                )
+            )
+            self._stream.console_msg_cv.notify()
+        return len(data)
+
+    def writelines(self, sequence: Iterable[str]) -> None:  # type: ignore[override]
+        for line in sequence:
+            self.write(line)
+
+
+class ThreadSafeStdin(Stdin):
+    """Implements a subset of stdin."""
+
+    encoding = sys.stdin.encoding
+    errors = sys.stdin.errors
+
+    def __init__(self, stream: ThreadSafeStream):
+        self._stream = stream
+
+    def fileno(self) -> int:
+        raise io.UnsupportedOperation(
+            "sp's stdin is a pseudofile, which has no fileno."
+        )
+
+    def writable(self) -> bool:
+        return False
+
+    def readable(self) -> bool:
+        return True
+
+    def _readline_with_prompt(
+        self, prompt: str = "", password: bool = False
+    ) -> str:
+        """Read input from the standard in stream, with an optional prompt."""
+        assert self._stream.cell_id is not None
+        if not isinstance(prompt, str):
+            raise TypeError(
+                f"prompt must be a str, not {type(prompt).__name__}"
+            )
+
+        max_bytes = std_stream_max_bytes()
+        if sys.getsizeof(prompt) > max_bytes:
+            prompt = (
+                "Warning: sp truncated a very large console output.\n"
+                + prompt[: int(max_bytes)]
+                + " ... "
+            )
+
+        mimetype: ConsoleMimeType = (
+            "text/password" if password else "text/plain"
+        )
+        with self._stream.console_msg_cv:
+            # This sends a prompt request to the frontend.
+            self._stream.console_msg_queue.append(
+                ConsoleMsg(
+                    stream=CellChannel.STDIN,
+                    cell_id=self._stream.cell_id,
+                    data=prompt,
+                    mimetype=mimetype,
+                )
+            )
+            self._stream.console_msg_cv.notify()
+
+        return self._stream.input_queue.get()
+
+    def readline(self, size: int | None = -1) -> str:  # type: ignore[override]
+        # size only included for compatibility with sys.stdin.readline API;
+        # we don't support it.
+        del size
+        return self._readline_with_prompt(prompt="")
+
+    def readlines(self, hint: int | None = -1) -> list[str]:  # type: ignore[override]
+        # Just an alias for readline.
+        #
+        # hint only included for compatibility with sys.stdin.readlines API;
+        # we don't support it.
+        del hint
+        return self._readline_with_prompt(prompt="").split("\n")
+
+
+@contextlib.contextmanager
+def redirect(standard_stream: Stdout | Stderr) -> Iterator[None]:
+    """Redirect a standard stream to the frontend."""
+    try:
+        if isinstance(standard_stream, (ThreadSafeStdout, ThreadSafeStderr)):
+            standard_stream._watcher.start()
+        yield
+    finally:
+        if isinstance(standard_stream, (ThreadSafeStdout, ThreadSafeStderr)):
+            standard_stream._watcher.pause()

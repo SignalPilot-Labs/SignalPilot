@@ -1,0 +1,102 @@
+---
+sidebar_position: 2
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
+# SignalPilot Cloud
+
+[SignalPilot Cloud](https://app.signalpilot.ai) is a hosted version of the gateway — no Docker, no self-managed infrastructure.
+
+## Get started
+
+1. Sign up at [app.signalpilot.ai](https://app.signalpilot.ai) — free tier available.
+2. Create an API key in Settings → API Keys.
+3. Add connections in the Connections UI (Snowflake, BigQuery, PostgreSQL, etc.).
+4. Point Claude Code at the cloud gateway.
+
+## Connect Claude Code to the cloud
+
+<MiniCopyBlock
+  label="connect claude code to the cloud"
+  code={`claude mcp add --transport http signalpilot https://gateway.signalpilot.ai/mcp \\\n  --header "Authorization: Bearer YOUR_API_KEY"`}
+/>
+
+Replace `YOUR_API_KEY` with the key from step 2.
+
+## MCP config for other clients
+
+<MiniCopyBlock
+  label="mcp config for other clients"
+  plain
+  code={`{\n  "mcpServers": {\n    "signalpilot": {\n      "type": "http",\n      "url": "https://gateway.signalpilot.ai/mcp",\n      "headers": {\n        "Authorization": "Bearer YOUR_API_KEY"\n      }\n    }\n  }\n}`}
+/>
+
+## Connect your repositories
+
+Open **Settings → GitHub** and install the SignalPilot GitHub App on the
+repositories you want the gateway to read — dbt projects, and eval sets. The
+gateway clones them with a short-lived installation token scoped to your
+organization; repositories your installation does not cover are refused rather
+than silently attempted. Public repositories need no setup.
+
+## Run evals
+
+[Evals](/docs/evals/overview) grade an agent against questions whose answers you
+already know, using your real warehouse in a sandbox. On Cloud the harness is
+already deployed — the feature is enabled per workspace, so ask us to turn it on
+for yours. After that:
+
+1. Add the warehouse under **Connections**.
+2. Open **Evals → Configure**, set the eval repo (a `https://github.com/…` URL)
+   and pin the connection.
+3. **Run all evals**, and read the per-task verdicts, transcripts, and coverage.
+
+Start from the public example set,
+[SignalPilot-Labs/eval-demo-repo](https://github.com/SignalPilot-Labs/eval-demo-repo),
+then see the [eval quickstart](/docs/evals/quickstart).
+
+## What cloud adds over self-host
+
+| Feature | Self-host | Cloud |
+|---------|-----------|-------|
+| Plan-enforced quotas | None | Yes — see below |
+| SSO (Clerk) | No | Yes |
+| Multi-tenant isolation | Manual | Automatic |
+| Managed history & dashboards | No | Yes |
+| Sandboxed eval runs (Kubernetes) | Bring your own Docker or cluster | Managed |
+| Encrypted credential storage | Local SQLite | Managed |
+| SLA / enterprise support | Community | Available |
+
+## Plan limits
+
+Cloud enforces per-plan quotas server-side. Exceeding the daily query cap
+returns `429` from `query_database`, and gated features are refused rather than
+degraded.
+
+| Limit | Free | Pro | Team | Enterprise |
+|---|---|---|---|---|
+| Connections | 2 | 10 | 100 | 100 |
+| Org members | 1 | 3 | 15 | 100 |
+| API keys | 1 | 10 | 100 | 100 |
+| Governed queries / day | 200 | 5,000 | 25,000 | 100,000 |
+| Audit retention (days) | 7 | 90 | 365 | 365 |
+| Knowledge storage | 50 MB | 250 MB | 1 GB | 5 GB |
+| Knowledge history versions | 5 | 5 | 25 | 50 |
+| Full PII redaction | — | Yes | Yes | Yes |
+| Budget controls | — | Yes | Yes | Yes |
+| Projects & notebooks | — | Yes | Yes | Yes |
+| Audit export | — | — | Yes | Yes |
+| BYOK encryption | — | — | Yes | Yes |
+| SSO (SAML/OIDC) | — | — | Yes | Yes |
+
+Self-hosted deployments enforce none of this.
+
+## Plugin with cloud
+
+The Claude Code plugin works with the cloud gateway without modification — the skills are local to Claude Code and the MCP tools call the cloud endpoint using your API key.
+
+<MiniCopyBlock
+  label="install the plugin"
+  code={`claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin\nclaude plugin install signalpilot-dbt@signalpilot`}
+/>

@@ -2,17 +2,20 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { TierBadge } from "@/components/branding/tier-badge";
+import { TierBadge } from "~/components/branding/tier-badge";
 
+// Mirrors the sidebar's grouped-nav bindings (components/layout/sidebar.tsx).
 const NAV_SHORTCUTS = [
   { key: "1", label: "dashboard", path: "/dashboard" },
-  { key: "2", label: "query", path: "/query" },
-  { key: "3", label: "schema", path: "/schema" },
-  { key: "4", label: "sandboxes", path: "/sandboxes" },
-  { key: "5", label: "connections", path: "/connections" },
-  { key: "6", label: "health", path: "/health" },
+  { key: "2", label: "connections", path: "/connections" },
+  { key: "3", label: "integrations", path: "/integrations" },
+  { key: "4", label: "schema", path: "/schema" },
+  { key: "5", label: "projects", path: "/projects" },
+  { key: "6", label: "query", path: "/query" },
   { key: "7", label: "audit", path: "/audit" },
-  { key: "8", label: "settings", path: "/settings" },
+  { key: "8", label: "knowledge base", path: "/knowledge" },
+  { key: "9", label: "reports", path: "/reports" },
+  { key: "0", label: "settings", path: "/settings" },
 ];
 
 const ACTION_SHORTCUTS = [
@@ -75,7 +78,7 @@ export function KeyboardShortcuts() {
               <rect x="1" y="1" width="12" height="12" rx="0" stroke="var(--color-text-dim)" strokeWidth="1" />
               <rect x="4" y="5" width="6" height="4" rx="0" fill="var(--color-text-dim)" opacity="0.4" />
             </svg>
-            <span className="text-[12px] uppercase tracking-[0.15em] text-[var(--color-text-dim)]">
+            <span className="text-[12px] uppercase tracking-[0.08em] text-[var(--color-text-dim)]">
               keyboard shortcuts
             </span>
             <TierBadge />
@@ -87,11 +90,11 @@ export function KeyboardShortcuts() {
 
         {/* Navigation */}
         <div className="px-5 py-3">
-          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] mb-2">navigation</p>
+          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em] mb-2">navigation</p>
           <div className="space-y-0.5">
             {NAV_SHORTCUTS.map((s) => (
               <div key={s.key} className="flex items-center justify-between py-1.5 group">
-                <span className="text-xs text-[var(--color-text-muted)] group-hover:text-[var(--color-text)] transition-colors tracking-wide">{s.label}</span>
+                <span className="text-xs text-[var(--color-text-muted)] group-hover:text-[var(--color-text)] transition-colors ">{s.label}</span>
                 <kbd className="px-2 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[12px] font-mono text-[var(--color-text-dim)] tabular-nums">
                   ctrl+{s.key}
                 </kbd>
@@ -102,11 +105,11 @@ export function KeyboardShortcuts() {
 
         {/* Actions */}
         <div className="px-5 py-3 border-t border-[var(--color-border)]">
-          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] mb-2">actions</p>
+          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em] mb-2">actions</p>
           <div className="space-y-0.5">
             {ACTION_SHORTCUTS.map((s) => (
               <div key={s.key} className="flex items-center justify-between py-1.5">
-                <span className="text-xs text-[var(--color-text-muted)] tracking-wide">{s.label}</span>
+                <span className="text-xs text-[var(--color-text-muted)] ">{s.label}</span>
                 <kbd className="px-2 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[12px] font-mono text-[var(--color-text-dim)]">
                   {s.modifier ? `${s.modifier}+` : ""}{s.key}
                 </kbd>
@@ -117,7 +120,7 @@ export function KeyboardShortcuts() {
 
         {/* Footer */}
         <div className="px-5 py-3 border-t border-[var(--color-border)]">
-          <p className="text-[11px] text-[var(--color-text-dim)] text-center tracking-wider">
+          <p className="text-[11px] text-[var(--color-text-dim)] text-center ">
             press <kbd className="px-1 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[11px] font-mono mx-0.5">?</kbd> or <kbd className="px-1 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] text-[11px] font-mono mx-0.5">esc</kbd> to close
           </p>
         </div>

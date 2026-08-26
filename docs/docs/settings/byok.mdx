@@ -1,0 +1,68 @@
+---
+sidebar_position: 3
+---
+
+# BYOK encryption
+
+By default SignalPilot encrypts stored credentials with a key the platform holds.
+**Bring your own key** moves that root of trust into a KMS you control, so
+credential ciphertext cannot be decrypted without an authorization you can revoke.
+
+Available on Team and Enterprise plans, and configurable per workspace from
+**Settings → BYOK**.
+
+## Supported providers
+
+| Provider | What you register | Permission the key policy must grant |
+|----------|-------------------|--------------------------------------|
+| **AWS KMS** | Key ARN | `kms:Encrypt`, `kms:Decrypt` for the gateway principal |
+| **GCP Cloud KMS** | CryptoKey resource name | `Cloud KMS CryptoKey Encrypter/Decrypter` |
+| **Azure Key Vault** | Key identifier | `Key Vault Crypto User` |
+
+The gateway never holds your key material. It calls your KMS to wrap and unwrap
+a data key; the KMS decides every time whether to allow it.
+
+## Registering a key
+
+1. Create the key in your KMS and grant the gateway principal encrypt/decrypt.
+2. **Settings → BYOK → Add key**: pick the provider, give the key a name, paste
+   the identifier.
+3. **Validate.** This performs a real encrypt/decrypt round-trip. Do not skip it —
+   a key that validates now is a key that will not lock you out later.
+4. **Migrate.** Existing credentials are re-encrypted under the new key. The page
+   reports migration status as `complete`, `partial`, or `invalid`; a `partial`
+   result means some credentials still depend on the previous key, so leave it in
+   place until migration finishes.
+
+## Revoking
+
+Revocation is deliberately two-stage: **revoke** stops the key being used for new
+encryption, and **destroy** is the irreversible step.
+
+:::danger Revocation is a kill switch, not a rotation
+Every credential still encrypted under a revoked-and-destroyed key becomes
+permanently unreadable, and every connection using those credentials stops
+working. Rotate by registering the new key, migrating, confirming `complete`, and
+only then retiring the old one.
+:::
+
+## API
+
+Every route requires the `admin` scope and is workspace-scoped from the session —
+never from a body or query parameter.
+
+| Route | Purpose |
+|-------|---------|
+| `POST /api/byok/keys` | Register a key |
+| `GET /api/byok/keys` · `GET /api/byok/keys/{id}` | List and inspect |
+| `PUT /api/byok/keys/{id}` | Update key metadata |
+| `POST /api/byok/keys/{id}/validate` | Encrypt/decrypt round-trip |
+| `POST /api/byok/migrate` | Re-encrypt existing credentials |
+| `DELETE /api/byok/keys/{id}` | Revoke / destroy |
+
+## Self-hosted alternative
+
+A self-hosted gateway can point at a provider through environment variables
+instead — `SP_BYOK_PROVIDER` and `SP_BYOK_PROVIDER_CONFIG` — which is the right
+shape when the whole deployment uses one key rather than one key per workspace.
+See [Configuration](/docs/setup/configuration#encryption).

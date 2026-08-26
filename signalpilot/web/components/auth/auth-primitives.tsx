@@ -14,7 +14,7 @@ export const PRIMARY_BTN_CLASS =
   "px-5 py-2.5 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] uppercase tracking-wider hover:opacity-90 transition-opacity disabled:opacity-40 font-mono w-full focus:outline-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-text)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-bg-card)]";
 
 export const LABEL_CLASS =
-  "text-[11px] uppercase tracking-[0.15em] text-[var(--color-text-dim)]";
+  "text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-dim)]";
 
 export const ERROR_CLASS =
   "text-[11px] text-[var(--color-error)] tracking-wider";

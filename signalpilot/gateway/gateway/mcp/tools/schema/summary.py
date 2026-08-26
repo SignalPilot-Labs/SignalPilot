@@ -1,14 +1,12 @@
 """Schema summary tool: schema_overview (tool 7)."""
 
-from __future__ import annotations
-
 import httpx
 
 from gateway.errors.mcp import sanitize_mcp_error, sanitize_proxy_response
 from gateway.mcp.audit import audited_tool
 from gateway.mcp.context import _gateway_url, _gw_headers, _store_session
 from gateway.mcp.server import mcp
-from gateway.mcp.validation import _CONN_NAME_RE
+from gateway.mcp.validation import _validate_connection_name
 
 
 @audited_tool(mcp)
@@ -22,8 +20,8 @@ async def schema_overview(connection_name: str) -> str:
     Args:
         connection_name: Name of the database connection
     """
-    if not _CONN_NAME_RE.match(connection_name):
-        return "Error: Invalid connection name"
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
 
     try:
         async with httpx.AsyncClient(base_url=_gateway_url(), timeout=30) as client:

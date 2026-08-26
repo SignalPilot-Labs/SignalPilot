@@ -110,11 +110,70 @@ def client():
     app.dependency_overrides.pop(get_store, None)
 
 
+class TestConnectionsAdminScope:
+    """The admin-scoped counterpart: an admin key still manages connections.
+
+    Guards against the OrgAdmin requirement over-correcting into a lockout.
+    """
+
+    def test_add_connection_allowed_with_admin_scope(self, client):
+        _set_scopes(["write", "admin"])
+        response = client.post(
+            "/api/connections",
+            json={
+                "name": "scope-test-admin",
+                "db_type": "postgres",
+                "host": "db.example.com",
+                "port": 5432,
+                "database": "testdb",
+                "username": "user",
+            },
+        )
+        assert response.status_code != 403
+
+    def test_edit_connection_allowed_with_admin_scope(self, client):
+        _set_scopes(["write", "admin"])
+        assert client.put("/api/connections/nonexistent-conn", json={}).status_code != 403
+
+    def test_remove_connection_allowed_with_admin_scope(self, client):
+        _set_scopes(["write", "admin"])
+        assert client.delete("/api/connections/nonexistent-conn").status_code != 403
+
+    def test_clone_connection_allowed_with_admin_scope(self, client):
+        _set_scopes(["write", "admin"])
+        response = client.post(
+            "/api/connections/nonexistent-conn/clone", params={"new_name": "clone-name"}
+        )
+        assert response.status_code != 403
+
+    def test_export_connections_allowed_with_admin_scope(self, client):
+        _set_scopes(["write", "admin"])
+        response = client.post(
+            "/api/connections/export",
+            json={"include_credentials": False, "confirm": True},
+        )
+        assert response.status_code != 403
+
+    def test_import_connections_allowed_with_admin_scope(self, client):
+        _set_scopes(["write", "admin"])
+        response = client.post("/api/connections/import", json={"connections": []})
+        assert response.status_code != 403
+
+
 # ─── TestConnectionsWriteScope ────────────────────────────────────────────────
 
 
 class TestConnectionsWriteScope:
-    """POST/PUT/DELETE connections require 'write' scope."""
+    """Connection management requires 'write' scope AND an org-admin role.
+
+    For an API key that role is derived from an explicit "admin" scope, so a
+    write-only key is refused: these routes expose and mutate credentials.
+    """
+
+    def _assert_write_only_key_refused(self, response):
+        assert response.status_code == 403, (
+            "a write-only API key must not manage connections — org-admin is required"
+        )
 
     def test_add_connection_returns_403_without_write_scope(self, client):
         _set_scopes([])
@@ -127,7 +186,7 @@ class TestConnectionsWriteScope:
         )
         assert response.status_code == 403
 
-    def test_add_connection_passes_with_write_scope(self, client):
+    def test_add_connection_refused_with_write_only_key(self, client):
         _set_scopes(["write"])
         response = client.post(
             "/api/connections",
@@ -140,37 +199,37 @@ class TestConnectionsWriteScope:
                 "username": "user",
             },
         )
-        assert response.status_code != 403
+        self._assert_write_only_key_refused(response)
 
     def test_edit_connection_returns_403_without_write_scope(self, client):
         _set_scopes([])
         response = client.put("/api/connections/my-conn", json={})
         assert response.status_code == 403
 
-    def test_edit_connection_passes_with_write_scope(self, client):
+    def test_edit_connection_refused_with_write_only_key(self, client):
         _set_scopes(["write"])
         response = client.put("/api/connections/nonexistent-conn", json={})
-        assert response.status_code != 403
+        self._assert_write_only_key_refused(response)
 
     def test_remove_connection_returns_403_without_write_scope(self, client):
         _set_scopes([])
         response = client.delete("/api/connections/my-conn")
         assert response.status_code == 403
 
-    def test_remove_connection_passes_with_write_scope(self, client):
+    def test_remove_connection_refused_with_write_only_key(self, client):
         _set_scopes(["write"])
         response = client.delete("/api/connections/nonexistent-conn")
-        assert response.status_code != 403
+        self._assert_write_only_key_refused(response)
 
     def test_clone_connection_returns_403_without_write_scope(self, client):
         _set_scopes([])
         response = client.post("/api/connections/my-conn/clone", params={"new_name": "clone-name"})
         assert response.status_code == 403
 
-    def test_clone_connection_passes_with_write_scope(self, client):
+    def test_clone_connection_refused_with_write_only_key(self, client):
         _set_scopes(["write"])
         response = client.post("/api/connections/nonexistent-conn/clone", params={"new_name": "clone-name"})
-        assert response.status_code != 403
+        self._assert_write_only_key_refused(response)
 
     def test_export_connections_returns_403_without_write_scope(self, client):
         _set_scopes([])
@@ -183,7 +242,7 @@ class TestConnectionsWriteScope:
         )
         assert response.status_code == 403
 
-    def test_export_connections_passes_with_write_scope(self, client):
+    def test_export_connections_refused_with_write_only_key(self, client):
         _set_scopes(["write"])
         response = client.post(
             "/api/connections/export",
@@ -192,17 +251,17 @@ class TestConnectionsWriteScope:
                 "confirm": True,
             },
         )
-        assert response.status_code != 403
+        self._assert_write_only_key_refused(response)
 
     def test_import_connections_returns_403_without_write_scope(self, client):
         _set_scopes([])
         response = client.post("/api/connections/import", json={"connections": []})
         assert response.status_code == 403
 
-    def test_import_connections_passes_with_write_scope(self, client):
+    def test_import_connections_refused_with_write_only_key(self, client):
         _set_scopes(["write"])
         response = client.post("/api/connections/import", json={"connections": []})
-        assert response.status_code != 403
+        self._assert_write_only_key_refused(response)
 
 
 # ─── TestSchemaRefreshWriteScope ──────────────────────────────────────────────
@@ -667,15 +726,20 @@ class TestAuditAdminScope:
 
 
 class TestFilesBrowseReadScope:
-    """GET /api/files/browse requires 'read' scope."""
+    """GET /api/files/browse requires 'write' scope — it enumerates host paths."""
 
-    def test_browse_files_returns_403_without_read_scope(self, client):
+    def test_browse_files_returns_403_without_write_scope(self, client):
         _set_scopes([])
         response = client.get("/api/files/browse")
         assert response.status_code == 403
 
-    def test_browse_files_passes_with_read_scope(self, client):
+    def test_browse_files_returns_403_with_only_read_scope(self, client):
         _set_scopes(["read"])
+        response = client.get("/api/files/browse")
+        assert response.status_code == 403
+
+    def test_browse_files_passes_with_write_scope(self, client):
+        _set_scopes(["write"])
         response = client.get("/api/files/browse")
         assert response.status_code != 403
 

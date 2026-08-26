@@ -187,7 +187,7 @@ class TestSecurityStatusOrgScoping:
             patch("gateway.store.crypto._validate_encryption_health", return_value=True),
             patch.dict(os.environ, {"SP_ENCRYPTION_KEY": "test-key"}),
         ):
-            result = await security_status(mock_store, "org1")
+            result = await security_status(mock_store, "org1", None)
 
         assert result["byok_keys_active"] == 2
         assert result["byok_keys_revoked"] == 0
@@ -227,7 +227,7 @@ class TestSecurityStatusOrgScoping:
                 patch("gateway.store.crypto._validate_encryption_health", return_value=True),
                 patch.dict(os.environ, {"SP_ENCRYPTION_KEY": "test-key"}),
             ):
-                return await security_status(mock_store, org_id)
+                return await security_status(mock_store, org_id, None)
 
         result_org1 = await _call_with_org("org1", active=3, revoked=1)
         result_org2 = await _call_with_org("org2", active=0, revoked=0)
@@ -277,7 +277,7 @@ class TestSecurityStatusOrgScoping:
             patch("gateway.store.crypto._validate_encryption_health", return_value=True),
             patch.dict(os.environ, {"SP_ENCRYPTION_KEY": "test-key"}),
         ):
-            result = await security_status(mock_store, "org-xyz")
+            result = await security_status(mock_store, "org-xyz", None)
 
         assert result["credentials_managed"] == 3
         assert result["credentials_byok"] == 1

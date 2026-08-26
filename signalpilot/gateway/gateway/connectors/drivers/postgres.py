@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from typing import Any
 
 from ..base import BaseConnector
@@ -19,18 +20,28 @@ class PostgresConnector(BaseConnector):
     def __init__(self):
         super().__init__()
         self._pool = None
-        self._command_timeout: int = 30
+        self._command_timeout: int = 150  # was 30 — large-warehouse schema pulls need headroom
         self._pool_min_size: int = 1
         self._pool_max_size: int = 5
         self._iam_auth: bool = False
         self._iam_region: str = "us-east-1"
         self._iam_access_key: str | None = None
         self._iam_secret_key: str | None = None
+        # Optional schema allowlist — restricts introspection to these schemas.
+        # Recommended for large enterprise DBs so schema discovery doesn't scan
+        # every schema in the instance.
+        self._schema_allowlist: list[str] = []
 
     def _set_connector_specific_extras(self, extras: dict) -> None:
         """Handle postgres-specific extras: pool sizes, IAM auth, command timeout."""
         if extras.get("query_timeout"):
             self._command_timeout = extras["query_timeout"]
+        schemas = extras.get("schemas") or extras.get("schema_allowlist")
+        if schemas:
+            if isinstance(schemas, str):
+                schemas = [s.strip() for s in schemas.split(",") if s.strip()]
+            # keep only safe identifiers (defensive: these are interpolated)
+            self._schema_allowlist = [s for s in schemas if s.replace("_", "").isalnum()]
         if extras.get("pool_min_size"):
             self._pool_min_size = max(1, min(extras["pool_min_size"], 20))
         if extras.get("pool_max_size"):
@@ -149,87 +160,192 @@ class PostgresConnector(BaseConnector):
         if self._pool is None:
             raise RuntimeError("Not connected")
         async with self._pool.acquire() as conn:
-            # Set statement timeout on the DB side (Feature #8)
-            # This cancels the query on the server, not just the client
-            if timeout:
-                await conn.execute(f"SET LOCAL statement_timeout = {timeout * 1000}")
-            # Wrap in read-only transaction (defense in depth)
-            async with conn.transaction(readonly=True):
-                rows = await conn.fetch(sql, *(params or []), timeout=timeout)
-                return [dict(r) for r in rows]
+            self._active_backend_pid = await conn.fetchval("SELECT pg_backend_pid()")
+            self._last_backend_pid = self._active_backend_pid
+            try:
+                # Wrap in read-only transaction (defense in depth) and set the
+                # server-side timeout inside that transaction.
+                async with conn.transaction(readonly=True):
+                    if timeout:
+                        await conn.execute(f"SET LOCAL statement_timeout = {timeout * 1000}")
+                    rows = await conn.fetch(sql, *(params or []), timeout=timeout)
+                    return [dict(r) for r in rows]
+            finally:
+                self._active_backend_pid = None
+
+    async def cancel_current_query(self) -> bool:
+        if self._pool is None or not getattr(self, "_active_backend_pid", None):
+            return False
+        async with self._pool.acquire() as connection:
+            return bool(
+                await connection.fetchval("SELECT pg_cancel_backend($1)", self._active_backend_pid)
+            )
+
+    async def stream_batches(
+        self,
+        sql: str,
+        *,
+        batch_size: int = 10_000,
+        timeout: int | None = None,
+    ) -> AsyncIterator[list[dict[str, Any]]]:
+        if self._pool is None:
+            raise RuntimeError("Not connected")
+        async with self._pool.acquire() as conn:
+            self._active_backend_pid = await conn.fetchval("SELECT pg_backend_pid()")
+            self._last_backend_pid = self._active_backend_pid
+            try:
+                async with conn.transaction(readonly=True):
+                    if timeout:
+                        await conn.execute(f"SET LOCAL statement_timeout = {timeout * 1000}")
+                    cursor = conn.cursor(sql, prefetch=batch_size, timeout=timeout)
+                    while records := await cursor.fetch(batch_size):
+                        yield [dict(record) for record in records]
+            finally:
+                self._active_backend_pid = None
+
+    def get_last_query_id(self) -> str | None:
+        pid = getattr(self, "_last_backend_pid", None)
+        return str(pid) if pid else None
 
     async def _get_schema_impl(self) -> dict[str, Any]:
         if self._pool is None:
             raise RuntimeError("Not connected")
 
-        # Single optimized query: columns + primary keys + comments in one pass
-        sql = """
+        # Columns + primary keys + comments in one pass.
+        #
+        # Reads pg_catalog DIRECTLY rather than information_schema. Rationale:
+        #   * Speed: the IS views apply per-row privilege functions and expand
+        #     key_column_usage/constraint_column_usage joins. On a warehouse with
+        #     hundreds of tables / thousands of columns this measured ~10.5 MINUTES;
+        #     the catalog form below returns in ~10ms.
+        #   * Defensible for ANY role: pg_catalog (pg_class/pg_attribute/...) is
+        #     world-readable, so the query never errors regardless of the connecting
+        #     user's grants — it just returns fewer rows.
+        #   * Security / PII: every column is gated by has_column_privilege(), so a
+        #     user only ever sees columns they can actually SELECT. A DBA who hides a
+        #     PII column via column-level GRANTs (e.g. GRANT SELECT (a,b) excluding
+        #     ssn) will NOT see that column appear in the schema map. We gate on
+        #     has_column_privilege (true for table- OR column-level grants), NOT
+        #     has_table_privilege (which is false for column-only grants and would
+        #     wrongly hide the whole table).
+        # Optional schema allowlist (extras["schemas"]) narrows the scan further.
+        schema_filter = ""  # for queries aliased as n.nspname
+        schema_filter_sn = ""  # for queries using the `schemaname` column
+        if self._schema_allowlist:
+            quoted = ", ".join(f"'{s}'" for s in self._schema_allowlist)
+            schema_filter = f"AND n.nspname IN ({quoted})"
+            schema_filter_sn = f"AND schemaname IN ({quoted})"
+        sql = f"""
             SELECT
-                t.table_schema,
-                t.table_name,
-                t.table_type,
-                c.column_name,
-                c.data_type,
-                c.is_nullable,
-                c.column_default,
-                CASE WHEN pk.column_name IS NOT NULL THEN true ELSE false END AS is_primary_key,
-                col_description(pgc.oid, c.ordinal_position) AS column_comment,
-                obj_description(pgc.oid) AS table_comment
-            FROM information_schema.tables t
-            JOIN information_schema.columns c
-                ON t.table_schema = c.table_schema
-                AND t.table_name = c.table_name
-            LEFT JOIN pg_catalog.pg_class pgc
-                ON pgc.relname = t.table_name
-                AND pgc.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = t.table_schema)
-            LEFT JOIN (
-                SELECT kcu.table_schema, kcu.table_name, kcu.column_name
-                FROM information_schema.table_constraints tc
-                JOIN information_schema.key_column_usage kcu
-                    ON tc.constraint_name = kcu.constraint_name
-                    AND tc.table_schema = kcu.table_schema
-                WHERE tc.constraint_type = 'PRIMARY KEY'
-            ) pk
-                ON c.table_schema = pk.table_schema
-                AND c.table_name = pk.table_name
-                AND c.column_name = pk.column_name
-            WHERE t.table_schema NOT IN ('pg_catalog', 'information_schema')
-                AND t.table_type IN ('BASE TABLE', 'VIEW')
-            ORDER BY t.table_schema, t.table_name, c.ordinal_position
+                n.nspname AS table_schema,
+                c.relname AS table_name,
+                CASE WHEN c.relkind IN ('v', 'm') THEN 'VIEW' ELSE 'BASE TABLE' END AS table_type,
+                a.attname AS column_name,
+                format_type(a.atttypid, a.atttypmod) AS data_type,
+                CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable,
+                pg_get_expr(ad.adbin, ad.adrelid) AS column_default,
+                COALESCE(a.attnum = ANY(pk.conkey), false) AS is_primary_key,
+                col_description(c.oid, a.attnum) AS column_comment,
+                obj_description(c.oid) AS table_comment
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            JOIN pg_attribute a
+                ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+            LEFT JOIN pg_attrdef ad
+                ON ad.adrelid = c.oid AND ad.adnum = a.attnum
+            LEFT JOIN pg_constraint pk
+                ON pk.conrelid = c.oid AND pk.contype = 'p'
+            WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')   -- table, partitioned, view, matview, foreign
+                AND NOT c.relispartition                    -- list the parent, not every child partition
+                AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+                AND n.nspname NOT LIKE 'pg_toast%'
+                AND n.nspname NOT LIKE 'pg_temp%'
+                AND has_schema_privilege(n.oid, 'USAGE')
+                AND has_column_privilege(c.oid, a.attnum, 'SELECT')
+                -- Hide monitoring VIEWS owned by an installed extension. Managed
+                -- Postgres hosts install these into public (Xata ships
+                -- pg_stat_statements there), and surfacing them as user tables
+                -- buries the real schema in instrumentation. Scoped to views and
+                -- matviews on purpose: extension-owned *tables* are often genuine
+                -- reference data an analyst queries (PostGIS spatial_ref_sys), so
+                -- those still show up.
+                AND NOT (
+                    c.relkind IN ('v', 'm')
+                    AND EXISTS (
+                        SELECT 1 FROM pg_depend d
+                        WHERE d.objid = c.oid
+                          AND d.classid = 'pg_class'::regclass
+                          AND d.deptype = 'e'
+                    )
+                )
+                {schema_filter}
+            ORDER BY n.nspname, c.relname, a.attnum
         """
 
-        # Foreign keys query — critical for Spider2.0 (join path discovery)
-        fk_sql = """
+        # Foreign keys — critical for join-path discovery. From pg_constraint
+        # directly (avoids the notoriously slow information_schema
+        # constraint_column_usage view). conkey/confkey are parallel column-number
+        # arrays; unnest WITH ORDINALITY pairs local <-> referenced columns.
+        # Only surface an FK when the user can read BOTH ends (no leaking the
+        # existence of tables/columns they can't access).
+        fk_sql = f"""
             SELECT
-                tc.table_schema,
-                tc.table_name,
-                kcu.column_name,
-                ccu.table_schema AS foreign_table_schema,
-                ccu.table_name AS foreign_table_name,
-                ccu.column_name AS foreign_column_name
-            FROM information_schema.table_constraints tc
-            JOIN information_schema.key_column_usage kcu
-                ON tc.constraint_name = kcu.constraint_name
-                AND tc.table_schema = kcu.table_schema
-            JOIN information_schema.constraint_column_usage ccu
-                ON tc.constraint_name = ccu.constraint_name
-                AND tc.table_schema = ccu.table_schema
-            WHERE tc.constraint_type = 'FOREIGN KEY'
-                AND tc.table_schema NOT IN ('pg_catalog', 'information_schema')
+                n.nspname AS table_schema,
+                c.relname AS table_name,
+                att.attname AS column_name,
+                fn.nspname AS foreign_table_schema,
+                fc.relname AS foreign_table_name,
+                fatt.attname AS foreign_column_name
+            FROM pg_constraint con
+            JOIN pg_class c ON c.oid = con.conrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            JOIN pg_class fc ON fc.oid = con.confrelid
+            JOIN pg_namespace fn ON fn.oid = fc.relnamespace
+            JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY
+                AS k(attnum, fattnum, ord) ON true
+            JOIN pg_attribute att
+                ON att.attrelid = con.conrelid AND att.attnum = k.attnum
+            JOIN pg_attribute fatt
+                ON fatt.attrelid = con.confrelid AND fatt.attnum = k.fattnum
+            WHERE con.contype = 'f'
+                AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+                AND has_table_privilege(con.conrelid, 'SELECT')
+                AND has_table_privilege(con.confrelid, 'SELECT')
+                {schema_filter}
+            ORDER BY n.nspname, c.relname, k.ord
         """
 
-        # Row count estimates and table sizes (fast, from pg_stat + pg_class)
+        # Row count estimates and table sizes. Gated by has_table_privilege so we
+        # don't expose row counts of tables the user can't read.
+        #
+        # n_live_tup comes from the cumulative statistics collector, which is
+        # per-instance and starts EMPTY on a server that was cloned, restored
+        # from a base backup, or had pg_stat_reset() called — a Xata
+        # copy-on-write branch is exactly this case, so every table on a fresh
+        # fork reports 0 rows while holding millions. pg_class.reltuples lives in
+        # the catalog itself, so it survives the clone; fall back to it when the
+        # collector has nothing. reltuples is -1 (PG14+) or 0 for a table that
+        # has never been analyzed, so treat those as unknown rather than as a
+        # real zero.
         row_count_sql = """
             SELECT
                 s.schemaname AS table_schema,
                 s.relname AS table_name,
-                s.n_live_tup AS estimated_row_count,
+                COALESCE(
+                    NULLIF(s.n_live_tup, 0),
+                    NULLIF(GREATEST(c.reltuples, 0)::bigint, 0),
+                    0
+                ) AS estimated_row_count,
                 pg_total_relation_size(s.relid) AS total_bytes
             FROM pg_stat_user_tables s
+            JOIN pg_class c ON c.oid = s.relid
+            WHERE has_table_privilege(s.relid, 'SELECT')
         """
 
-        # Index metadata — helps Spider2.0 agent plan optimal queries
-        index_sql = """
+        # Index metadata. Gated by has_table_privilege — index definitions contain
+        # column names (which could be PII column names), so never surface indexes
+        # for a table the user cannot read.
+        index_sql = f"""
             SELECT
                 schemaname AS table_schema,
                 tablename AS table_name,
@@ -237,11 +353,16 @@ class PostgresConnector(BaseConnector):
                 indexdef AS index_definition
             FROM pg_indexes
             WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+                AND has_table_privilege(
+                    format('%I.%I', schemaname, tablename)::regclass, 'SELECT')
+                {schema_filter_sn}
             ORDER BY schemaname, tablename, indexname
         """
 
-        # Column statistics from pg_stats — helps Spider2.0 understand data distribution
-        stats_sql = """
+        # Column statistics from pg_stats. pg_stats is already privilege-aware
+        # (it only returns rows for columns the caller may read), so this is
+        # consistent with the PII gating above; the allowlist just narrows scope.
+        stats_sql = f"""
             SELECT
                 schemaname AS table_schema,
                 tablename AS table_name,
@@ -250,6 +371,7 @@ class PostgresConnector(BaseConnector):
                 most_common_vals::text AS common_values
             FROM pg_stats
             WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+                {schema_filter_sn}
         """
 
         # Run queries concurrently using separate connections from pool

@@ -13,7 +13,10 @@ import asyncio
 import logging
 import random
 import re
+import urllib.parse
 
+from ..network.validation import validate_connection_host
+from ..runtime.mode import byok_custom_endpoint_allowed, is_cloud_mode
 from .provider import BYOKKeyError, BYOKProvider  # noqa: F401 (re-exported for clarity)
 
 logger = logging.getLogger(__name__)
@@ -31,6 +34,8 @@ _ERROR_KEY_DISABLED = "KMS key is disabled"
 _ERROR_KEY_NOT_FOUND = "KMS key not found"
 _ERROR_THROTTLED = "KMS request throttled after retries"
 _ERROR_GENERIC = "KMS operation failed"
+
+_ERROR_CODE_INVALID_CIPHERTEXT = "InvalidCiphertextException"
 
 _BOTO3_MISSING_MESSAGE = "boto3 is required for AWS KMS provider. Install with: pip install signalpilot-gateway[aws]"
 
@@ -70,7 +75,17 @@ class AWSKMSProvider:
             raise ValueError("provider_config must include 'kms_key_arn'")
 
         self._kms_key_arn: str = kms_key_arn
-        self._endpoint_url: str | None = provider_config.get("endpoint_url")
+
+        raw_endpoint_url: str | None = provider_config.get("endpoint_url")
+        if raw_endpoint_url is not None:
+            if not byok_custom_endpoint_allowed():
+                raise ValueError(
+                    "provider_config.endpoint_url is not permitted; set "
+                    "SP_BYOK_ALLOW_CUSTOM_ENDPOINT=1 to enable for testing"
+                )
+            self._endpoint_url: str | None = _validate_endpoint_url(raw_endpoint_url)
+        else:
+            self._endpoint_url = None
 
         region = provider_config.get("region")
         if not region:
@@ -89,9 +104,25 @@ class AWSKMSProvider:
             self._client = _boto3_module.client("kms", **kwargs)
         return self._client
 
+    def key_identifier(self) -> str:
+        """Return the KMS key ARN this provider wraps DEKs with."""
+        return self._kms_key_arn
+
+    def _encryption_context(self, org_id: str, key_alias: str) -> dict[str, str]:
+        return {"org_id": org_id, "key_alias": key_alias, "kms_key_id": self._kms_key_arn}
+
+    @staticmethod
+    def _legacy_encryption_context(org_id: str, key_alias: str) -> dict[str, str]:
+        """Context used before kms_key_id was bound into it.
+
+        DEKs wrapped by earlier releases only decrypt under this context; KMS
+        rejects a mismatch with InvalidCiphertextException.
+        """
+        return {"org_id": org_id, "key_alias": key_alias}
+
     async def wrap_dek(self, org_id: str, key_alias: str, dek_plaintext: bytes) -> bytes:
         """Encrypt a DEK using the KMS key. Returns the ciphertext blob."""
-        encryption_context = {"org_id": org_id, "key_alias": key_alias}
+        encryption_context = self._encryption_context(org_id, key_alias)
         client = self._get_client()
 
         for attempt in range(_MAX_RETRY_ATTEMPTS):
@@ -127,7 +158,24 @@ class AWSKMSProvider:
 
     async def unwrap_dek(self, org_id: str, key_alias: str, wrapped_dek: bytes) -> bytes:
         """Decrypt a wrapped DEK using the KMS key. Raises BYOKKeyError on failure."""
-        encryption_context = {"org_id": org_id, "key_alias": key_alias}
+        try:
+            return await self._unwrap_with_context(
+                org_id, key_alias, wrapped_dek, self._encryption_context(org_id, key_alias)
+            )
+        except BYOKKeyError as exc:
+            if getattr(exc, "kms_error_code", None) != _ERROR_CODE_INVALID_CIPHERTEXT:
+                raise
+        return await self._unwrap_with_context(
+            org_id, key_alias, wrapped_dek, self._legacy_encryption_context(org_id, key_alias)
+        )
+
+    async def _unwrap_with_context(
+        self,
+        org_id: str,
+        key_alias: str,
+        wrapped_dek: bytes,
+        encryption_context: dict[str, str],
+    ) -> bytes:
         client = self._get_client()
 
         for attempt in range(_MAX_RETRY_ATTEMPTS):
@@ -208,6 +256,32 @@ def _extract_region_from_arn(arn: str) -> str:
     return match.group(1)
 
 
+def _validate_endpoint_url(endpoint_url: str) -> str:
+    """Validate and return the endpoint_url for use in boto3 client construction.
+
+    Enforces scheme restrictions and passes the hostname through the SSRF
+    host-validation helper. Raises ValueError on any violation.
+    """
+    parsed = urllib.parse.urlparse(endpoint_url)
+
+    allowed_schemes = {"https"}
+    if not is_cloud_mode():
+        allowed_schemes = {"https", "http"}
+
+    if parsed.scheme not in allowed_schemes:
+        raise ValueError(
+            f"provider_config.endpoint_url scheme {parsed.scheme!r} is not permitted; "
+            f"allowed: {sorted(allowed_schemes)}"
+        )
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("provider_config.endpoint_url must include a non-empty host")
+
+    validate_connection_host(hostname)
+    return endpoint_url
+
+
 def _handle_kms_error(exc: Exception, org_id: str, key_alias: str) -> BYOKKeyError:
     """Map a boto3 ClientError to a BYOKKeyError with a sanitized message.
 
@@ -220,11 +294,17 @@ def _handle_kms_error(exc: Exception, org_id: str, key_alias: str) -> BYOKKeyErr
         return BYOKKeyError(org_id, key_alias, _ERROR_GENERIC)
 
     if error_code == "AccessDeniedException":
-        return BYOKKeyError(org_id, key_alias, _ERROR_ACCESS_DENIED)
-    if error_code == "DisabledException":
-        return BYOKKeyError(org_id, key_alias, _ERROR_KEY_DISABLED)
-    if error_code in ("NotFoundException", "InvalidArnException"):
-        return BYOKKeyError(org_id, key_alias, _ERROR_KEY_NOT_FOUND)
-    if error_code == "ThrottlingException":
-        return BYOKKeyError(org_id, key_alias, _ERROR_THROTTLED)
-    return BYOKKeyError(org_id, key_alias, _ERROR_GENERIC)
+        message = _ERROR_ACCESS_DENIED
+    elif error_code == "DisabledException":
+        message = _ERROR_KEY_DISABLED
+    elif error_code in ("NotFoundException", "InvalidArnException"):
+        message = _ERROR_KEY_NOT_FOUND
+    elif error_code == "ThrottlingException":
+        message = _ERROR_THROTTLED
+    else:
+        message = _ERROR_GENERIC
+
+    error = BYOKKeyError(org_id, key_alias, message)
+    # Consumed by unwrap_dek to decide whether to retry under the legacy context.
+    error.kms_error_code = error_code  # type: ignore[attr-defined]
+    return error

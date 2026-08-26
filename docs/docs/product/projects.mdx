@@ -1,0 +1,96 @@
+---
+sidebar_position: 2
+---
+
+# Projects and the IDE
+
+A **project** is a dbt project the platform manages for you: a git-backed
+workspace the agent can read and write, an editor you can open in the browser,
+and a sandboxed runtime to execute notebooks in.
+
+Two kinds:
+
+| Source | Created by | Backed by |
+|--------|-----------|-----------|
+| `managed` | **Create new dbt project** | A repo SignalPilot creates and hosts for you |
+| `github` | **Import from GitHub** | Your own repository, through the GitHub App |
+
+:::info Pro feature
+Projects and notebooks require a Pro, Team, or Enterprise plan on Cloud. On Free
+the page shows an upgrade prompt instead. Self-hosted deployments enforce no plan
+gating.
+:::
+
+## Creating a project
+
+**Projects → Create new dbt project** asks for two things:
+
+- **Project name** — free text; it is slugified into the project id, so
+  `My Sales Models` becomes `my_sales_models`. It needs at least one letter or
+  digit.
+- **Adapter** — `DuckDB` (default), `PostgreSQL`, `Snowflake`, `BigQuery`, or
+  `Redshift`. This sets the project's `profiles.yml` shape.
+
+DuckDB is the right default for exploration and for anything you plan to run in
+a notebook: it needs no warehouse credentials and runs entirely inside the
+sandbox. Pick the adapter that matches your warehouse when the project is meant
+to build real models.
+
+## Importing from GitHub
+
+**Import from GitHub** lists the installations of the SignalPilot GitHub App that
+your workspace can see, then the repositories inside the chosen installation.
+Pick one and it is linked as a project.
+
+If no installation appears, connect GitHub first — the flow offers **Connect
+GitHub** and takes you through the App install. See
+[GitHub](/docs/settings/github).
+
+Imported projects keep their own remote: the gateway clones them with a
+short-lived installation token, and pushes go back to your repository.
+
+## Working in a project
+
+Opening a project starts a workspace session and drops you into the editor. What
+you get:
+
+- **File explorer** over the project tree, with the dbt layout you would expect
+  (`models/`, `macros/`, `seeds/`, `dbt_project.yml`).
+- **Notebook editor** — reactive Python notebooks, the same `.py` format the
+  `run_notebook` MCP tool writes. See [Workspaces](/docs/workspaces) for the
+  format, the Data SDK, and the agent-driven path.
+- **Agent chat** in the side panel, with the project as its working directory.
+- **Terminal** for `dbt` commands and shell work inside the sandbox.
+- **Packages** panel to add Python dependencies to the runtime.
+- **Dependency graph** and **outline** for navigating a notebook's cell DAG.
+- **Secrets** panel for values the runtime needs that should not live in the
+  repo.
+- **Variables**, **logs**, and **tracing** panels for debugging a run.
+
+Everything the notebook runs against your warehouse goes through the governed
+gateway — the same LIMIT injection, DDL/DML blocking, and audit trail as any
+other query path.
+
+## Sessions and lifetimes
+
+A session is a pod. It starts when you open a project or when an agent calls
+`run_notebook`, and it is reaped after an idle period (2 hours by default,
+`SP_NOTEBOOK_IDLE_TIMEOUT`). Files are committed to the workspace git repo as you
+go, so a reaped session costs you a cold start, not your work.
+
+The same pod is reused across `run_notebook` calls for one org and user, which is
+why pod-local state persists inside a working session.
+
+## Deleting a project
+
+Deletion is permanent and asks you to type the project name to confirm. For a
+`github` project this unlinks and deletes the SignalPilot-side workspace; your
+GitHub repository is untouched.
+
+## Related
+
+- **[Workspaces](/docs/workspaces)** — notebook format, Data SDK, and the
+  `run_notebook` / `list_workspace_projects` tools.
+- **[The 8-step dbt build workflow](/docs/workflows/dbt-build)** — how the agent
+  works inside a project.
+- **[GitHub](/docs/settings/github)** — installing the App and linking repos.

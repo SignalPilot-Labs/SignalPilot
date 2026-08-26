@@ -1,4 +1,4 @@
-"""Connector registry — maps DBType to connector class."""
+"""Connector registry: maps DBType to connector class."""
 
 from __future__ import annotations
 
@@ -17,10 +17,14 @@ from .drivers.redshift import RedshiftConnector
 from .drivers.snowflake import SnowflakeConnector
 from .drivers.sqlite import SQLiteConnector
 from .drivers.trino import TrinoConnector
+from .drivers.xata import XataConnector
 
-# Local mode: use sandboxed connectors for file-based DBs
+# Use sandboxed connectors only when running inside Docker with the sandbox service.
+# SP_SANDBOX_ENABLED is the only switch: false (or unset) skips sandboxing so
+# file-based DBs open directly.
 _is_local = os.environ.get("SP_DEPLOYMENT_MODE", "local") != "cloud"
-if _is_local:
+_sandbox_enabled = os.environ.get("SP_SANDBOX_ENABLED", "false").lower() == "true"
+if _is_local and _sandbox_enabled:
     from .drivers.sandboxed_duckdb import SandboxedDuckDBConnector
     from .drivers.sandboxed_sqlite import SandboxedSQLiteConnector
 
@@ -43,6 +47,7 @@ _REGISTRY: dict[str, type[BaseConnector]] = {
     DBType.mssql: MSSQLConnector,
     DBType.trino: TrinoConnector,
     DBType.sqlite: _SQLite,
+    DBType.xata: XataConnector,
 }
 
 

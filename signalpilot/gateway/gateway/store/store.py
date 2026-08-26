@@ -1,13 +1,14 @@
-"""Store class — all DB-backed operations scoped by org_id."""
+"""Store class: all DB-backed operations scoped by org_id."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
 import uuid
 
-from sqlalchemy import delete, literal, select
+from sqlalchemy import and_, delete, literal, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,13 +16,19 @@ import gateway.store.api_keys as api_keys
 import gateway.store.audit_log as audit_log
 import gateway.store.byok_state as byok_state
 import gateway.store.endorsements as endorsements_mod
+import gateway.store.knowledge as knowledge_mod
+import gateway.store.knowledge_search as knowledge_search_mod
+import gateway.store.notion as notion_mod
 import gateway.store.paths as paths
 import gateway.store.projects as projects
 import gateway.store.settings as settings_mod
+import gateway.store.slack as slack_mod
 from gateway.byok import decrypt_envelope, encrypt_fields_envelope
+from gateway.common.credential_identity import CREDENTIAL_IDENTITY_KEY
 from gateway.db.models import (
     GatewayConnection,
     GatewayCredential,
+    strip_ssl_secrets,
 )
 from gateway.governance.context import current_org_id_var
 from gateway.models import (
@@ -35,9 +42,11 @@ from gateway.models import (
     SSHTunnelConfig,
     SSLConfig,
 )
+from gateway.models.knowledge import KnowledgeDoc, KnowledgeDocCreate, KnowledgeEdit, KnowledgeUsage
 from gateway.runtime.mode import is_cloud_mode
 from gateway.store._constants import CURRENT_KEY_VERSION
 from gateway.store.connection_strings import _build_connection_string, _extract_credential_extras
+from gateway.util.tasks import fire_and_forget
 from gateway.store.crypto import (
     CredentialEncryptionError,
     _decrypt_with_migration,
@@ -48,7 +57,7 @@ logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Store class — all DB-backed operations scoped by user_id
+# Store class: all DB-backed operations scoped by user_id
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -66,11 +75,15 @@ class Store:
         org_id: str | None = None,
         user_id: str | None = None,
         allow_unscoped: bool = False,
+        eval_connection: str | None = None,
+        allowed_connection_name: str | None = None,
     ):
         self.session = session
         self.org_id = org_id
         self.user_id = user_id
         self._allow_unscoped = allow_unscoped
+        self.eval_connection = eval_connection
+        self.allowed_connection_name = allowed_connection_name
         # Intentional: we do not store the token for reset. FastAPI runs each request in a
         # dedicated asyncio task whose contextvars copy is isolated; the var dies with the task.
         # Background task usage must set the var explicitly and reset (see main.py schema refresh loop).
@@ -87,7 +100,7 @@ class Store:
             )
         return "local"
 
-    # ─── Settings ────────────────────────────────────────────────────────
+    # Settings.
 
     async def load_settings(self) -> GatewaySettings:
         oid = self._require_org_id()
@@ -97,11 +110,17 @@ class Store:
         oid = self._require_org_id()
         await settings_mod.save_settings(self.session, org_id=oid, user_id=self.user_id, settings=settings)
 
-    # ─── Connections ─────────────────────────────────────────────────────
+    # Connections.
 
     def _conn_filter(self):
         if self.org_id is not None:
-            return GatewayConnection.org_id == self.org_id
+            predicate = GatewayConnection.org_id == self.org_id
+            if self.allowed_connection_name:
+                predicate = and_(
+                    predicate,
+                    GatewayConnection.name == self.allowed_connection_name,
+                )
+            return predicate
         if self._allow_unscoped:
             return literal(True)
         raise ValueError(
@@ -109,11 +128,21 @@ class Store:
             "Use allow_unscoped=True for background tasks that need cross-org access."
         )
 
+    def _require_allowed_connection(self, name: str) -> None:
+        if self.allowed_connection_name and name != self.allowed_connection_name:
+            raise ValueError("Connection is outside this execution's allowed scope")
+
     async def list_connections(self) -> list[ConnectionInfo]:
-        result = await self.session.execute(select(GatewayConnection).where(self._conn_filter()))
+        conditions = [self._conn_filter()]
+        if self.eval_connection:
+            conditions.append(GatewayConnection.name == self.eval_connection)
+        result = await self.session.execute(select(GatewayConnection).where(*conditions))
         return [ConnectionInfo(**row.to_info_dict()) for row in result.scalars()]
 
     async def get_connection(self, name: str) -> ConnectionInfo | None:
+        if self.eval_connection and name != self.eval_connection:
+            return None
+        self._require_allowed_connection(name)
         result = await self.session.execute(
             select(GatewayConnection).where(self._conn_filter(), GatewayConnection.name == name)
         )
@@ -159,7 +188,7 @@ class Store:
                     }
                 )
             except Exception:
-                pass  # URL parsing failed — keep original fields
+                pass  # URL parsing failed: keep original fields
 
         # Strip sensitive fields from SSH/SSL for metadata storage
         ssh_tunnel_safe = None
@@ -174,7 +203,7 @@ class Store:
 
         ssl_config_safe = None
         if conn.ssl_config and conn.ssl_config.enabled:
-            ssl_config_safe = conn.ssl_config.model_dump()
+            ssl_config_safe = strip_ssl_secrets(conn.ssl_config.model_dump())
 
         conn_id = str(uuid.uuid4())
         db_conn = GatewayConnection(
@@ -214,7 +243,7 @@ class Store:
 
         # Store encrypted credentials
         raw_cred = conn.connection_string or _build_connection_string(conn)
-        # Validate DuckDB/SQLite paths — but only for non-sandboxed modes.
+        # Validate DuckDB/SQLite paths: but only for non-sandboxed modes.
         # Local file paths (host paths like C:\Users\...) are executed via the
         # gVisor sandbox which provides its own isolation. Only in-DATA_DIR
         # paths (direct connector) need the traversal check.
@@ -231,7 +260,7 @@ class Store:
 
         if byok_key is not None and byok_state._byok_provider is not None:
             ciphertexts, wrapped_dek = await encrypt_fields_envelope(
-                byok_state._byok_provider,
+                byok_state.provider_for_key(byok_key),
                 oid,
                 byok_key.key_alias,
                 [raw_cred, json.dumps(extras)],
@@ -270,6 +299,7 @@ class Store:
         return ConnectionInfo(**db_conn.to_info_dict())
 
     async def delete_connection(self, name: str) -> bool:
+        self._require_allowed_connection(name)
         oid = self._require_org_id()
         result = await self.session.execute(
             select(GatewayConnection).where(GatewayConnection.org_id == oid, GatewayConnection.name == name)
@@ -288,6 +318,7 @@ class Store:
         return True
 
     async def update_connection(self, name: str, update_data: ConnectionUpdate) -> ConnectionInfo | None:
+        self._require_allowed_connection(name)
         oid = self._require_org_id()
         result = await self.session.execute(
             select(GatewayConnection).where(GatewayConnection.org_id == oid, GatewayConnection.name == name)
@@ -323,6 +354,9 @@ class Store:
             if key == "ssl_config" and value:
                 if isinstance(value, dict):
                     value = SSLConfig(**value).model_dump()
+                elif isinstance(value, SSLConfig):
+                    value = value.model_dump()
+                value = strip_ssl_secrets(value)
             if hasattr(row, key):
                 setattr(row, key, value)
 
@@ -347,10 +381,45 @@ class Store:
                 "catalog",
                 "ssl",
                 "ssl_config",
+                # Xata-specific fields stored only in encrypted extras
+                "branch",
+                "xata_api_url",
+                "xata_org",
+                # Extras-only credential fields: PATCH-only changes must still rewrite extras_enc
+                "private_key",
+                "private_key_passphrase",
+                "motherduck_token",
+                "connection_timeout",
+                "query_timeout",
+                "keepalive_interval",
+                "dataset",
+                "location",
+                "maximum_bytes_billed",
             )
         )
         if needs_cred_rebuild:
-            merged = {**row.to_info_dict(), **update_fields, "name": name}
+            existing_extras = await self.get_credential_extras(name)
+            # Back-translate stored extras keys into ConnectionCreate kwarg names.
+            # Two Xata fields are stored prefixed; the rest are stored identically.
+            _extras_key_map = {
+                "xata_database": "database",
+                "xata_branch": "branch",
+            }
+            from_extras: dict = {}
+            for stored_key, val in existing_extras.items():
+                if stored_key.startswith("_"):
+                    continue  # internal, non-persisted markers (see CREDENTIAL_IDENTITY_KEY)
+                kwarg_name = _extras_key_map.get(stored_key, stored_key)
+                from_extras[kwarg_name] = val
+            # Precedence: existing extras (lowest) < column snapshot < user patch (highest)
+            column_snapshot = row.to_info_dict()
+            # ssl_config/ssh_tunnel are redacted in the column snapshot, so letting it
+            # win over from_extras would drop the stored certs/keys on any PATCH that
+            # does not itself carry them.
+            for redacted_key in ("ssl_config", "ssh_tunnel"):
+                if from_extras.get(redacted_key) and redacted_key not in update_fields:
+                    column_snapshot.pop(redacted_key, None)
+            merged = {**from_extras, **column_snapshot, **update_fields, "name": name}
             for rm_key in (
                 "id",
                 "created_at",
@@ -358,7 +427,9 @@ class Store:
                 "status",
                 "last_schema_refresh",
                 "endorsements",
-                "location",
+                # NOTE: do NOT add 'location' here: it IS a valid ConnectionCreate kwarg;
+                # popping it wiped BQ location on every cred-rebuild PATCH after round-3
+                # from_extras backfill (round 4).
             ):
                 merged.pop(rm_key, None)
             try:
@@ -387,7 +458,7 @@ class Store:
 
                     if byok_key is not None and byok_state._byok_provider is not None:
                         ciphertexts, wrapped_dek = await encrypt_fields_envelope(
-                            byok_state._byok_provider,
+                            byok_state.provider_for_key(byok_key),
                             org_id,  # type: ignore[arg-type]
                             byok_key.key_alias,
                             [raw_cred, json.dumps(extras)],
@@ -403,6 +474,8 @@ class Store:
                         cred_row.connection_string_enc = _encrypt(raw_cred)
                         cred_row.extras_enc = _encrypt(json.dumps(extras))
                         cred_row.key_version = CURRENT_KEY_VERSION
+                    if byok_state._dek_cache is not None:
+                        byok_state._dek_cache.invalidate(cred_row.id)
             except Exception as e:
                 logger.error("Credential encryption failed for connection %s: %s", name, e)
                 raise CredentialEncryptionError(f"Failed to encrypt credentials for connection '{name}'") from e
@@ -412,6 +485,9 @@ class Store:
         return ConnectionInfo(**row.to_info_dict())
 
     async def get_connection_string(self, name: str) -> str | None:
+        if self.eval_connection and name != self.eval_connection:
+            return None
+        self._require_allowed_connection(name)
         oid = self._require_org_id()
         result = await self.session.execute(
             select(GatewayCredential, GatewayConnection)
@@ -440,8 +516,9 @@ class Store:
             key_alias = conn_row.byok_key_alias if conn_row else None
             if not org_id or not key_alias:
                 raise CredentialEncryptionError("Connection is missing BYOK configuration for decryption")
+            provider = await self._byok_decrypt_provider(org_id, cred_row.byok_key_id, key_alias)
             return await decrypt_envelope(
-                provider=byok_state._byok_provider,
+                provider=provider,
                 org_id=org_id,
                 key_alias=key_alias,
                 wrapped_dek=cred_row.wrapped_dek,
@@ -450,10 +527,11 @@ class Store:
                 credential_id=cred_row.id,
             )
 
-        # Managed (default) path — existing Fernet-based decryption
+        # Managed (default) path: existing Fernet-based decryption
         plaintext, needs_migration = _decrypt_with_migration(cred_row.connection_string_enc)
-        # Re-encrypt if using legacy key derivation OR if key_version is behind current.
-        # Concurrent reads may both re-encrypt — this is safe because re-encryption
+        # Re-encrypt if an explicitly configured rotation key was used or the
+        # stored key version is behind current.
+        # Concurrent reads may both re-encrypt: this is safe because re-encryption
         # with the same key is idempotent (same plaintext, same key version result).
         needs_version_upgrade = cred_row.key_version != CURRENT_KEY_VERSION
         if needs_migration or needs_version_upgrade:
@@ -467,6 +545,9 @@ class Store:
         return plaintext
 
     async def get_credential_extras(self, name: str) -> dict:
+        if self.eval_connection and name != self.eval_connection:
+            return {}
+        self._require_allowed_connection(name)
         oid = self._require_org_id()
         result = await self.session.execute(
             select(GatewayCredential, GatewayConnection)
@@ -497,8 +578,9 @@ class Store:
             key_alias = conn_row.byok_key_alias if conn_row else None
             if not org_id or not key_alias:
                 raise CredentialEncryptionError("Connection is missing BYOK configuration for decryption")
+            provider = await self._byok_decrypt_provider(org_id, cred_row.byok_key_id, key_alias)
             extras_json = await decrypt_envelope(
-                provider=byok_state._byok_provider,
+                provider=provider,
                 org_id=org_id,
                 key_alias=key_alias,
                 wrapped_dek=cred_row.wrapped_dek,
@@ -506,12 +588,14 @@ class Store:
                 cache=byok_state._dek_cache,
                 credential_id=cred_row.id,
             )
-            return json.loads(extras_json)
+            extras = json.loads(extras_json)
+            return self._with_pool_identity(extras, cred_row)
 
-        # Managed (default) path — existing Fernet-based decryption
+        # Managed (default) path: existing Fernet-based decryption
         plaintext, needs_migration = _decrypt_with_migration(cred_row.extras_enc)
-        # Re-encrypt if using legacy key derivation OR if key_version is behind current.
-        # Concurrent reads may both re-encrypt — this is safe because re-encryption
+        # Re-encrypt if an explicitly configured rotation key was used or the
+        # stored key version is behind current.
+        # Concurrent reads may both re-encrypt: this is safe because re-encryption
         # with the same key is idempotent (same plaintext, same key version result).
         needs_version_upgrade = cred_row.key_version != CURRENT_KEY_VERSION
         if needs_migration or needs_version_upgrade:
@@ -522,9 +606,30 @@ class Store:
                 cred_row.connection_string_enc = _encrypt(cs_plain)
             cred_row.key_version = CURRENT_KEY_VERSION
             await self.session.commit()
-        return json.loads(plaintext)
+        return self._with_pool_identity(json.loads(plaintext), cred_row)
 
-    # ─── Projects ────────────────────────────────────────────────────────
+    async def _byok_decrypt_provider(self, org_id: str, key_id: str | None, key_alias: str):
+        """Provider that wrapped this credential's DEK: never the process default."""
+        try:
+            return await byok_state.resolve_decrypt_provider(self.session, org_id, key_id, key_alias)
+        except byok_state.BYOKProviderUnavailable as exc:
+            raise CredentialEncryptionError(str(exc)) from exc
+
+    @staticmethod
+    def _with_pool_identity(extras: dict, cred_row: GatewayCredential) -> dict:
+        """Attach the non-secret credential identity consumed by the pool manager.
+
+        Derived from the credential row id plus a digest of the stored ciphertext:
+        never plaintext: so the value rotates whenever the credential is rewritten
+        and carries nothing sensitive.
+        """
+        if not isinstance(extras, dict):
+            return extras
+        material = (cred_row.connection_string_enc or b"") + (cred_row.extras_enc or b"")
+        digest = hashlib.sha256(material).hexdigest()[:16]
+        return {**extras, CREDENTIAL_IDENTITY_KEY: f"{cred_row.id}.{digest}"}
+
+    # Projects.
 
     async def list_projects(self) -> list[projects.ProjectInfo]:
         oid = self._require_org_id()
@@ -546,10 +651,10 @@ class Store:
         )
 
     def _create_new_project(self, proj: projects.ProjectCreate, connection: ConnectionInfo) -> projects.ProjectInfo:
-        return projects.create_new_project(proj, connection)
+        return projects.create_new_project(proj, connection, org_id=self._require_org_id())
 
     def _create_local_project(self, proj: projects.ProjectCreate, connection: ConnectionInfo) -> projects.ProjectInfo:
-        return projects.create_local_project(proj, connection)
+        return projects.create_local_project(proj, connection, org_id=self._require_org_id())
 
     def _generate_profiles_yml(self, project_name: str, connection: ConnectionInfo) -> str:
         return projects.generate_profiles_yml(project_name, connection)
@@ -562,7 +667,7 @@ class Store:
         oid = self._require_org_id()
         return await projects.delete_project(self.session, org_id=oid, name=name)
 
-    # ─── Audit ───────────────────────────────────────────────────────────
+    # Audit.
 
     async def append_audit(self, entry: AuditEntry) -> None:
         oid = self._require_org_id()
@@ -577,6 +682,8 @@ class Store:
         return_total: bool = False,
     ) -> list[AuditEntry] | tuple[list[AuditEntry], int]:
         oid = self._require_org_id()
+        if self.eval_connection:
+            connection_name = self.eval_connection
         return await audit_log.read_audit(
             self.session,
             org_id=oid,
@@ -587,7 +694,7 @@ class Store:
             return_total=return_total,
         )
 
-    # ─── Schema Endorsements ─────────────────────────────────────────────
+    # Schema Endorsements.
 
     async def get_schema_endorsements(self, name: str) -> dict:
         oid = self._require_org_id()
@@ -599,7 +706,7 @@ class Store:
             self.session, org_id=oid, name=name, endorsements=endorsements
         )
 
-    # ─── PII Redaction Config ──────────────────────────────────────────────
+    # PII Redaction Config.
 
     async def get_pii_config(self, name: str) -> dict:
         oid = self._require_org_id()
@@ -617,12 +724,207 @@ class Store:
         oid = self._require_org_id()
         return await endorsements_mod.apply_endorsement_filter(self.session, org_id=oid, name=name, schema=schema)
 
-    # ─── API Keys ───────────────────────────────────────────────────────
+    # Notion Integrations.
+
+    async def list_notion_integrations(self) -> list[notion_mod.NotionIntegrationInfo]:
+        """List all Notion integrations for this org."""
+        oid = self._require_org_id()
+        return await notion_mod.list_integrations(self.session, org_id=oid)
+
+    async def get_notion_integration(self, name: str) -> notion_mod.NotionIntegrationInfo | None:
+        """Get a Notion integration by name."""
+        oid = self._require_org_id()
+        return await notion_mod.get_integration(self.session, org_id=oid, name=name)
+
+    async def create_notion_integration(
+        self,
+        integration: notion_mod.NotionIntegrationCreate,
+    ) -> notion_mod.NotionIntegrationInfo:
+        """Create a Notion integration with encrypted API key."""
+        oid = self._require_org_id()
+        return await notion_mod.create_integration(self.session, org_id=oid, integration=integration)
+
+    async def update_notion_integration(
+        self,
+        name: str,
+        update: notion_mod.NotionIntegrationUpdate,
+    ) -> notion_mod.NotionIntegrationInfo | None:
+        """Update a Notion integration."""
+        oid = self._require_org_id()
+        return await notion_mod.update_integration(self.session, org_id=oid, name=name, update=update)
+
+    async def delete_notion_integration(self, name: str) -> bool:
+        """Delete a Notion integration."""
+        oid = self._require_org_id()
+        return await notion_mod.delete_integration(self.session, org_id=oid, name=name)
+
+    async def get_notion_api_key(self, name: str) -> str | None:
+        """Get the decrypted API key for a Notion integration."""
+        oid = self._require_org_id()
+        return await notion_mod.get_api_key(self.session, org_id=oid, name=name)
+
+    async def create_notion_oauth_state(self, redirect_after: str | None, ttl_seconds: int = 600) -> str:
+        """Create a short-lived Notion OAuth state value."""
+        oid = self._require_org_id()
+        return await notion_mod.create_oauth_state(
+            self.session,
+            org_id=oid,
+            user_id=self.user_id,
+            redirect_after=redirect_after,
+            ttl_seconds=ttl_seconds,
+        )
+
+    async def list_notion_oauth_installations(self) -> list[notion_mod.NotionOAuthInstallationInfo]:
+        """List Notion OAuth installations for this org."""
+        oid = self._require_org_id()
+        return await notion_mod.list_oauth_installations(self.session, org_id=oid)
+
+    async def get_notion_oauth_installation(
+        self,
+        installation_id: str,
+    ) -> notion_mod.NotionOAuthInstallationInfo | None:
+        """Get a Notion OAuth installation for this org."""
+        oid = self._require_org_id()
+        return await notion_mod.get_oauth_installation(self.session, org_id=oid, installation_id=installation_id)
+
+    async def get_notion_oauth_installation_token(self, installation_id: str) -> str | None:
+        """Get the decrypted Notion OAuth access token for this org."""
+        oid = self._require_org_id()
+        return await notion_mod.get_oauth_installation_token(
+            self.session,
+            org_id=oid,
+            installation_id=installation_id,
+        )
+
+    async def get_notion_oauth_installation_tokens(self, installation_id: str) -> tuple[str, str | None] | None:
+        """Get the decrypted Notion OAuth access and refresh tokens for this org."""
+        oid = self._require_org_id()
+        return await notion_mod.get_oauth_installation_tokens(
+            self.session,
+            org_id=oid,
+            installation_id=installation_id,
+        )
+
+    async def update_notion_oauth_installation_tokens(
+        self,
+        installation_id: str,
+        access_token: str,
+        refresh_token: str | None,
+    ) -> None:
+        """Update encrypted Notion OAuth tokens after refresh."""
+        oid = self._require_org_id()
+        await notion_mod.update_oauth_installation_tokens(
+            self.session,
+            org_id=oid,
+            installation_id=installation_id,
+            access_token=access_token,
+            refresh_token=refresh_token,
+        )
+
+    async def save_notion_oauth_installation_config(
+        self,
+        installation_id: str,
+        parent_page_id: str | None,
+        trigger_page_id: str,
+        requests_data_source_id: str,
+        requests_database_page_id: str,
+        enabled: bool = True,
+        default_project_id: str | None = None,
+        default_branch: str = "main",
+        analysis_branch_mode: str = "per_request",
+    ) -> notion_mod.NotionOAuthInstallationInfo | None:
+        """Save provisioned Notion resources for an OAuth installation."""
+        oid = self._require_org_id()
+        return await notion_mod.save_oauth_installation_config(
+            self.session,
+            org_id=oid,
+            installation_id=installation_id,
+            parent_page_id=parent_page_id,
+            trigger_page_id=trigger_page_id,
+            requests_data_source_id=requests_data_source_id,
+            requests_database_page_id=requests_database_page_id,
+            enabled=enabled,
+            default_project_id=default_project_id,
+            default_branch=default_branch,
+            analysis_branch_mode=analysis_branch_mode,
+        )
+
+    async def disable_notion_oauth_installation(self, installation_id: str) -> bool:
+        """Disable a Notion OAuth installation for this org."""
+        oid = self._require_org_id()
+        return await notion_mod.disable_oauth_installation(
+            self.session,
+            org_id=oid,
+            installation_id=installation_id,
+        )
+
+    # Slack Integrations.
+
+    async def create_slack_oauth_state(self, redirect_after: str | None, ttl_seconds: int = 600) -> str:
+        """Create a short-lived Slack OAuth state value."""
+        oid = self._require_org_id()
+        return await slack_mod.create_oauth_state(
+            self.session,
+            org_id=oid,
+            user_id=self.user_id,
+            redirect_after=redirect_after,
+            ttl_seconds=ttl_seconds,
+        )
+
+    async def list_slack_oauth_installations(self) -> list[slack_mod.SlackOAuthInstallationInfo]:
+        """List Slack OAuth installations for this org."""
+        oid = self._require_org_id()
+        return await slack_mod.list_oauth_installations(self.session, org_id=oid)
+
+    async def get_slack_oauth_installation(
+        self,
+        installation_id: str,
+    ) -> slack_mod.SlackOAuthInstallationInfo | None:
+        """Get a Slack OAuth installation for this org."""
+        oid = self._require_org_id()
+        return await slack_mod.get_oauth_installation(self.session, org_id=oid, installation_id=installation_id)
+
+    async def save_slack_oauth_installation_config(
+        self,
+        installation_id: str,
+        enabled: bool = True,
+        default_project_id: str | None = None,
+        default_branch: str = "main",
+        analysis_branch_mode: str = "per_request",
+        allowed_channel_ids: list[str] | None = None,
+    ) -> slack_mod.SlackOAuthInstallationInfo | None:
+        """Save setup defaults for a Slack OAuth installation."""
+        oid = self._require_org_id()
+        return await slack_mod.save_oauth_installation_config(
+            self.session,
+            org_id=oid,
+            installation_id=installation_id,
+            enabled=enabled,
+            default_project_id=default_project_id,
+            default_branch=default_branch,
+            analysis_branch_mode=analysis_branch_mode,
+            allowed_channel_ids=allowed_channel_ids,
+        )
+
+    async def disable_slack_oauth_installation(self, installation_id: str) -> bool:
+        """Disable a Slack OAuth installation for this org."""
+        oid = self._require_org_id()
+        return await slack_mod.disable_oauth_installation(
+            self.session,
+            org_id=oid,
+            installation_id=installation_id,
+        )
+
+    # API Keys.
     async def list_api_keys(self) -> list[ApiKeyRecord]:
         return await api_keys.list_api_keys(self.session, org_id=self.org_id, allow_unscoped=self._allow_unscoped)
 
     async def create_api_key(
-        self, name: str, scopes: list[str], expires_at: str | None = None
+        self,
+        name: str,
+        scopes: list[str],
+        expires_at: str | None = None,
+        eval_binding: dict | None = None,
     ) -> tuple[ApiKeyRecord, str]:
         oid = self._require_org_id()
         return await api_keys.create_api_key(
@@ -632,6 +934,7 @@ class Store:
             name=name,
             scopes=scopes,
             expires_at=expires_at,
+            eval_binding=eval_binding,
         )
 
     async def delete_api_key(self, key_id: str) -> bool:
@@ -641,12 +944,589 @@ class Store:
     async def validate_stored_api_key(self, raw_key: str) -> ApiKeyRecord | None:
         return await api_keys.validate_stored_api_key(self.session, raw_key)
 
-    # ─── Key Rotation ────────────────────────────────────────────────────
+    # Key Rotation.
 
-    async def get_credentials_needing_rotation(self) -> int:
+    async def get_credentials_needing_rotation(self, org_scoped: bool = True) -> int:
         """Return count of credentials encrypted with a key version below CURRENT_KEY_VERSION.
 
-        This is a global (non-user-scoped) query, intentionally, because it is
-        called from the admin-only security_status endpoint which needs a system-wide count.
+        ORG-SCOPED by default (org_scoped=True): filters to the current org via
+        _require_org_id(). Cross-org count is opt-in (org_scoped=False) and
+        intended only for future operator-only callers: no production caller
+        currently passes org_scoped=False.
         """
-        return await settings_mod.get_credentials_needing_rotation(self.session)
+        org_id = self._require_org_id() if org_scoped else None
+        return await settings_mod.get_credentials_needing_rotation(self.session, org_id=org_id)
+
+    # Knowledge Base.
+
+    async def _knowledge_limits(self):
+        """Resolve the org's plan limits for knowledge enforcement."""
+        from gateway.governance.plan_limits import get_org_limits
+
+        return await get_org_limits(self._require_org_id())
+
+    async def list_knowledge_docs(
+        self,
+        *,
+        scope: str | None = None,
+        scope_ref: str | None = None,
+        category: str | None = None,
+        status: str = "active",
+        include_body: bool = False,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[KnowledgeDoc]:
+        oid = self._require_org_id()
+        return await knowledge_mod.list_knowledge_docs(
+            self.session,
+            org_id=oid,
+            scope=scope,
+            scope_ref=scope_ref,
+            category=category,
+            status=status,
+            include_body=include_body,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def get_knowledge_doc(
+        self, doc_id: str, *, include_body: bool = True, bump_view: bool = False
+    ) -> KnowledgeDoc | None:
+        import asyncio
+
+        oid = self._require_org_id()
+        row = await knowledge_mod.get_knowledge_doc(self.session, org_id=oid, doc_id=doc_id, include_body=include_body)
+        if row is None:
+            return None
+        doc = knowledge_mod._row_to_doc(row, include_body=include_body)
+        if bump_view:
+            asyncio.create_task(self.increment_knowledge_view(doc_id))
+        return doc
+
+    async def get_knowledge_doc_by_key(
+        self,
+        *,
+        scope: str,
+        scope_ref: str | None,
+        category: str,
+        title: str,
+        bump_view: bool = False,
+    ) -> KnowledgeDoc | None:
+        import asyncio
+
+        oid = self._require_org_id()
+        row = await knowledge_mod.get_knowledge_doc_by_key(
+            self.session,
+            org_id=oid,
+            scope=scope,
+            scope_ref=scope_ref,
+            category=category,
+            title=title,
+        )
+        if row is None:
+            return None
+        doc = knowledge_mod._row_to_doc(row, include_body=True)
+        if bump_view:
+            asyncio.create_task(self.increment_knowledge_view(doc.id))
+        return doc
+
+    async def insert_knowledge_doc(
+        self, payload: KnowledgeDocCreate, *, user_id: str | None, agent: str | None = None
+    ) -> KnowledgeDoc:
+        oid = self._require_org_id()
+        limits = await self._knowledge_limits()
+        settings = await self.load_settings()
+        return await knowledge_mod.insert_knowledge_doc(
+            self.session,
+            org_id=oid,
+            payload=payload,
+            user_id=user_id,
+            agent=agent,
+            limits=limits,
+            settings=settings,
+        )
+
+    async def upsert_knowledge_doc(
+        self, payload: KnowledgeDocCreate, *, user_id: str | None, agent: str | None = None
+    ) -> KnowledgeDoc:
+        oid = self._require_org_id()
+        limits = await self._knowledge_limits()
+        settings = await self.load_settings()
+        return await knowledge_mod.upsert_knowledge_doc(
+            self.session,
+            org_id=oid,
+            payload=payload,
+            user_id=user_id,
+            agent=agent,
+            limits=limits,
+            settings=settings,
+        )
+
+    async def update_knowledge_body(
+        self,
+        doc_id: str,
+        *,
+        body: str,
+        user_id: str | None,
+        agent: str | None = None,
+    ) -> KnowledgeDoc:
+        oid = self._require_org_id()
+        limits = await self._knowledge_limits()
+        settings = await self.load_settings()
+        return await knowledge_mod.update_knowledge_body(
+            self.session,
+            org_id=oid,
+            doc_id=doc_id,
+            body=body,
+            user_id=user_id,
+            agent=agent,
+            limits=limits,
+            settings=settings,
+        )
+
+    async def archive_knowledge_doc(self, doc_id: str) -> bool:
+        oid = self._require_org_id()
+        return await knowledge_mod.archive_knowledge_doc(self.session, org_id=oid, doc_id=doc_id)
+
+    async def approve_knowledge_doc(self, doc_id: str, *, user_id: str | None) -> KnowledgeDoc:
+        oid = self._require_org_id()
+        return await knowledge_mod.approve_knowledge_doc(self.session, org_id=oid, doc_id=doc_id, user_id=user_id)
+
+    async def list_knowledge_edits(self, doc_id: str, *, limit: int = 20) -> list[KnowledgeEdit]:
+        oid = self._require_org_id()
+        return await knowledge_mod.list_knowledge_edits(self.session, org_id=oid, doc_id=doc_id, limit=limit)
+
+    async def search_knowledge(
+        self,
+        *,
+        query: str,
+        scope: str | None = None,
+        scope_ref: str | None = None,
+        category: str | None = None,
+        limit: int = 20,
+        bump_view: bool = True,
+    ) -> list[KnowledgeDoc]:
+        import asyncio
+
+        oid = self._require_org_id()
+        docs = await knowledge_mod.search_knowledge(
+            self.session,
+            org_id=oid,
+            query=query,
+            scope=scope,
+            scope_ref=scope_ref,
+            category=category,
+            limit=limit,
+        )
+        if bump_view:
+            for doc in docs:
+                asyncio.create_task(self.increment_knowledge_view(doc.id))
+        return docs
+
+    async def search_knowledge_hybrid(
+        self,
+        *,
+        query: str,
+        source: str,
+        scope: str | None = None,
+        scope_ref: str | None = None,
+        category: str | None = None,
+        limit: int = 20,
+        log_events: bool = True,
+        bump_view: bool = False,
+    ) -> list[knowledge_search_mod.SearchHit]:
+        """Hybrid (FTS + lexical + vector) search with retrieval-event logging.
+
+        Use plain ILIKE search when hybrid search fails.
+        One background task records retrieval events and view counts for all results.
+        """
+        oid = self._require_org_id()
+        try:
+            hits = await knowledge_search_mod.hybrid_search_knowledge(
+                self.session,
+                org_id=oid,
+                query=query,
+                scope=scope,
+                scope_ref=scope_ref,
+                category=category,
+                limit=limit,
+            )
+        except Exception as exc:
+            logger.warning("Hybrid knowledge search failed, falling back to ILIKE: %r", exc)
+            docs = await knowledge_mod.search_knowledge(
+                self.session,
+                org_id=oid,
+                query=query,
+                scope=scope,
+                scope_ref=scope_ref,
+                category=category,
+                limit=limit,
+            )
+            hits = [knowledge_search_mod.SearchHit(doc=d, score=0.0, arms=["lexical"]) for d in docs]
+
+        events = []
+        if log_events and hits:
+            events = [
+                knowledge_search_mod.RetrievalEvent(
+                    org_id=oid,
+                    doc_id=h.doc.id,
+                    source=source,
+                    query=query,
+                    user_id=self.user_id,
+                    rank=i + 1,
+                    score=h.score,
+                )
+                for i, h in enumerate(hits)
+            ]
+        bump_ids = [h.doc.id for h in hits] if bump_view else None
+        if events or bump_ids:
+            fire_and_forget(
+                knowledge_search_mod.log_retrieval_events(events, bump_view_ids=bump_ids)
+            )
+        return hits
+
+    async def log_knowledge_retrievals(
+        self, doc_ids: list[str], *, source: str, query: str | None = None, bump_view: bool = False
+    ) -> None:
+        """Fire-and-forget retrieval logging for non-search pulls (baseline docs)."""
+        oid = self._require_org_id()
+        events = [
+            knowledge_search_mod.RetrievalEvent(org_id=oid, doc_id=d, source=source, query=query, user_id=self.user_id)
+            for d in doc_ids
+        ]
+        fire_and_forget(
+            knowledge_search_mod.log_retrieval_events(events, bump_view_ids=doc_ids if bump_view else None)
+        )
+
+    async def knowledge_retrieval_stats(self, *, since_days: int = 30) -> dict:
+        oid = self._require_org_id()
+        return await knowledge_search_mod.retrieval_stats(self.session, org_id=oid, since_days=since_days)
+
+    async def get_knowledge_usage(self) -> KnowledgeUsage:
+        oid = self._require_org_id()
+        limits = await self._knowledge_limits()
+        return await knowledge_mod.get_knowledge_usage(self.session, org_id=oid, limits=limits)
+
+    async def increment_knowledge_view(self, doc_id: str) -> None:
+        """Best-effort fire-and-forget view counter increment."""
+        oid = self._require_org_id()
+        from gateway.db.engine import get_session_factory
+
+        factory = get_session_factory()
+        async with factory() as session:
+            await knowledge_mod.increment_knowledge_view(session, org_id=oid, doc_id=doc_id)
+
+    # Reports (rendered HTML).
+
+    async def insert_report(self, payload, *, user_id: str | None, agent: str | None = None):
+        from . import reports as reports_mod
+
+        oid = self._require_org_id()
+        return await reports_mod.insert_report(self.session, org_id=oid, payload=payload, user_id=user_id, agent=agent)
+
+    async def list_reports(self, *, scope_ref: str | None = None, limit: int = 200, offset: int = 0):
+        from . import reports as reports_mod
+
+        oid = self._require_org_id()
+        return await reports_mod.list_reports(self.session, org_id=oid, scope_ref=scope_ref, limit=limit, offset=offset)
+
+    async def get_report(self, report_id: str, *, bump_view: bool = False):
+        import asyncio
+
+        from . import reports as reports_mod
+
+        oid = self._require_org_id()
+        report = await reports_mod.get_report(self.session, org_id=oid, report_id=report_id)
+        if report is None:
+            return None
+        if bump_view:
+            asyncio.create_task(self.increment_report_view(report_id))
+        return report
+
+    async def delete_report(self, report_id: str) -> bool:
+        from . import reports as reports_mod
+
+        oid = self._require_org_id()
+        return await reports_mod.delete_report(self.session, org_id=oid, report_id=report_id)
+
+    async def update_report_html(self, report_id: str, payload):
+        from . import reports as reports_mod
+
+        oid = self._require_org_id()
+        return await reports_mod.update_report_html(self.session, org_id=oid, report_id=report_id, payload=payload)
+
+    async def increment_report_view(self, report_id: str) -> None:
+        from gateway.db.engine import get_session_factory
+
+        from . import reports as reports_mod
+
+        oid = self._require_org_id()
+        factory = get_session_factory()
+        async with factory() as session:
+            await reports_mod.increment_report_view(session, org_id=oid, report_id=report_id)
+
+    # Workspace Projects.
+
+    async def create_workspace_project(self, **kwargs):
+        from . import workspace_projects as wp
+
+        oid = self._require_org_id()
+        return await wp.create_project(self.session, org_id=oid, user_id=self.user_id, **kwargs)
+
+    async def list_workspace_projects(self, **kwargs):
+        from . import workspace_projects as wp
+
+        oid = self._require_org_id()
+        return await wp.list_projects(self.session, org_id=oid, **kwargs)
+
+    async def get_workspace_project(self, project_id: str):
+        from . import workspace_projects as wp
+
+        oid = self._require_org_id()
+        return await wp.get_project(self.session, org_id=oid, project_id=project_id)
+
+    async def update_workspace_project(self, project_id: str, updates: dict):
+        from . import workspace_projects as wp
+
+        oid = self._require_org_id()
+        return await wp.update_project(self.session, org_id=oid, project_id=project_id, updates=updates)
+
+    async def delete_workspace_project(self, project_id: str):
+        from . import workspace_projects as wp
+
+        oid = self._require_org_id()
+        return await wp.delete_project(self.session, org_id=oid, project_id=project_id)
+
+    # Upload Sessions.
+
+    async def reserve_upload_session(
+        self,
+        *,
+        user_id: str,
+        key: str,
+        size_bytes: int,
+        part_lengths: list[int],
+        max_open: int,
+        max_bytes: int,
+        ttl_s: float,
+    ) -> None:
+        from . import upload_sessions
+
+        oid = self._require_org_id()
+        await upload_sessions.reserve(
+            self.session,
+            org_id=oid,
+            user_id=user_id,
+            key=key,
+            size_bytes=size_bytes,
+            part_lengths=part_lengths,
+            max_open=max_open,
+            max_bytes=max_bytes,
+            ttl_s=ttl_s,
+        )
+
+    async def bind_upload_session(self, key: str, upload_id: str) -> None:
+        from . import upload_sessions
+
+        oid = self._require_org_id()
+        await upload_sessions.bind_upload_id(self.session, org_id=oid, key=key, upload_id=upload_id)
+
+    async def release_upload_session(self, key: str) -> None:
+        from . import upload_sessions
+
+        oid = self._require_org_id()
+        await upload_sessions.release(self.session, org_id=oid, key=key)
+
+    async def get_upload_session(self, *, user_id: str, key: str, upload_id: str):
+        from . import upload_sessions
+
+        oid = self._require_org_id()
+        return await upload_sessions.get_owned(
+            self.session, org_id=oid, user_id=user_id, key=key, upload_id=upload_id
+        )
+
+    # Chat.
+
+    async def create_conversation(self, **kwargs):
+        from . import chat
+
+        oid = self._require_org_id()
+        return await chat.create_conversation(self.session, org_id=oid, user_id=self.user_id or "local", **kwargs)
+
+    async def list_conversations(self, **kwargs):
+        from . import chat
+
+        oid = self._require_org_id()
+        return await chat.list_conversations(self.session, org_id=oid, user_id=self.user_id or "local", **kwargs)
+
+    async def get_conversation(self, conversation_id: str):
+        from . import chat
+
+        oid = self._require_org_id()
+        return await chat.get_conversation(
+            self.session, org_id=oid, user_id=self.user_id or "local", conversation_id=conversation_id
+        )
+
+    async def delete_conversation(self, conversation_id: str):
+        from . import chat
+
+        oid = self._require_org_id()
+        return await chat.delete_conversation(
+            self.session, org_id=oid, user_id=self.user_id or "local", conversation_id=conversation_id
+        )
+
+    async def append_message(self, conversation_id: str, **kwargs):
+        from . import chat
+
+        oid = self._require_org_id()
+        return await chat.append_message(
+            self.session, org_id=oid, user_id=self.user_id or "local", conversation_id=conversation_id, **kwargs
+        )
+
+    async def list_messages(self, conversation_id: str, **kwargs):
+        from . import chat
+
+        oid = self._require_org_id()
+        return await chat.list_messages(
+            self.session, org_id=oid, user_id=self.user_id or "local", conversation_id=conversation_id, **kwargs
+        )
+
+    # Chat Traces.
+
+    async def upsert_chat_trace_thread(self, thread):
+        from . import chat_traces
+
+        oid = self._require_org_id()
+        return await chat_traces.upsert_thread(self.session, org_id=oid, user_id=self.user_id or "local", thread=thread)
+
+    async def clear_chat_trace_events(self, thread_id: str):
+        from . import chat_traces
+
+        oid = self._require_org_id()
+        return await chat_traces.clear_events(
+            self.session, org_id=oid, user_id=self.user_id or "local", thread_id=thread_id
+        )
+
+    async def append_chat_trace_event(self, thread_id: str, event):
+        from . import chat_traces
+
+        oid = self._require_org_id()
+        return await chat_traces.append_event(
+            self.session, org_id=oid, user_id=self.user_id or "local", thread_id=thread_id, event=event
+        )
+
+    async def list_chat_trace_threads(self, **kwargs):
+        from . import chat_traces
+
+        oid = self._require_org_id()
+        return await chat_traces.list_threads(self.session, org_id=oid, user_id=self.user_id or "local", **kwargs)
+
+    async def get_chat_trace_thread(self, thread_id: str):
+        from . import chat_traces
+
+        oid = self._require_org_id()
+        return await chat_traces.get_thread(
+            self.session, org_id=oid, user_id=self.user_id or "local", thread_id=thread_id
+        )
+
+    async def get_chat_trace_events(self, thread_id: str, **kwargs):
+        from . import chat_traces
+
+        oid = self._require_org_id()
+        return await chat_traces.get_events(
+            self.session, org_id=oid, user_id=self.user_id or "local", thread_id=thread_id, **kwargs
+        )
+
+    # Agent Runs.
+
+    async def create_agent_run(self, **kwargs):
+        from . import agent_runs
+
+        oid = self._require_org_id()
+        return await agent_runs.create_run(self.session, org_id=oid, user_id=self.user_id, **kwargs)
+
+    async def list_agent_runs(self, **kwargs):
+        from . import agent_runs
+
+        oid = self._require_org_id()
+        return await agent_runs.list_runs(self.session, org_id=oid, **kwargs)
+
+    async def get_agent_run(self, run_id: str):
+        from . import agent_runs
+
+        oid = self._require_org_id()
+        return await agent_runs.get_run(self.session, org_id=oid, run_id=run_id)
+
+    async def update_agent_run(self, run_id: str, updates: dict):
+        from . import agent_runs
+
+        oid = self._require_org_id()
+        return await agent_runs.update_run(self.session, org_id=oid, run_id=run_id, updates=updates)
+
+    # Branches.
+
+    # Use the Git CLI to manage branch references.
+
+    # Evals.
+
+    async def get_eval_config(self) -> dict:
+        from . import evals
+
+        oid = self._require_org_id()
+        return await evals.get_config(self.session, org_id=oid)
+
+    async def save_eval_config(self, cfg: dict) -> dict:
+        from . import evals
+
+        oid = self._require_org_id()
+        return await evals.save_config(self.session, org_id=oid, cfg=cfg)
+
+    async def get_eval_run(self, run_id: str) -> dict | None:
+        from . import evals
+
+        oid = self._require_org_id()
+        return await evals.get_run(self.session, org_id=oid, run_id=run_id)
+
+    async def list_eval_runs(self, limit: int = 50) -> list[dict]:
+        from . import evals
+
+        oid = self._require_org_id()
+        return await evals.list_runs(self.session, org_id=oid, limit=limit)
+
+    async def list_live_eval_runs(self) -> list[dict]:
+        from . import evals
+
+        oid = self._require_org_id()
+        return await evals.list_live_runs(self.session, org_id=oid)
+
+    async def get_eval_tasks(self, run_id: str) -> list[dict]:
+        from . import evals
+
+        oid = self._require_org_id()
+        return await evals.get_tasks(self.session, org_id=oid, run_id=run_id)
+
+    async def eval_sandbox_index(self, limit_runs: int = 25) -> dict[str, dict]:
+        from . import evals
+
+        oid = self._require_org_id()
+        return await evals.tasks_with_live_sandboxes(self.session, org_id=oid, limit_runs=limit_runs)
+
+    async def list_eval_accuracy(self, limit: int = 500) -> list[dict]:
+        from . import evals
+
+        oid = self._require_org_id()
+        return await evals.list_accuracy(self.session, org_id=oid, limit=limit)
+
+    async def list_eval_regressions(self, limit: int = 100) -> list[dict]:
+        from . import evals
+
+        oid = self._require_org_id()
+        return await evals.list_regressions(self.session, org_id=oid, limit=limit)
+
+    async def list_eval_task_performance(self, limit_runs: int = 50) -> list[dict]:
+        from . import evals
+
+        oid = self._require_org_id()
+        return await evals.list_task_performance(
+            self.session, org_id=oid, limit_runs=limit_runs
+        )

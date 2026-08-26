@@ -31,13 +31,16 @@ from pathlib import Path
 from .types import ValidationResult
 
 # Regex patterns to extract semantic events from dbt output.
-# dbt prefixes log lines with ANSI escapes + timestamps like:
+# dbt-core prefixes log lines with ANSI escapes + timestamps like:
 #   "\x1b[0m14:56:54  [WARNING]: ..."
-# We strip ANSI first, then look for WARNING / ERROR markers.
+# dbt Fusion (Rust engine, v2.x) emits lowercase markers with error codes:
+#   "[error] [DependencyNotFound (dbt1048)]: Ref 'x' not found..."
+# We strip ANSI first; the marker regexes accept both shapes (case-insensitive,
+# optional code bracket, optional colon).
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
-_WARNING_LINE = re.compile(r"\[WARNING\]:\s*(.+)", re.IGNORECASE)
-_ERROR_LINE = re.compile(r"\[ERROR\]:\s*(.+)", re.IGNORECASE)
+_WARNING_LINE = re.compile(r"\[WARNING\]\s*(?:\[[^\]]+\])?:?\s*(.+)", re.IGNORECASE)
+_ERROR_LINE = re.compile(r"\[ERROR\]\s*(?:\[[^\]]+\])?:?\s*(.+)", re.IGNORECASE)
 
 # Orphan patch warnings tell us about missing-model yml entries —
 # these are the ghost entries where yml defines a model but no .sql exists.
@@ -47,9 +50,19 @@ _ORPHAN_PATCH = re.compile(
 )
 
 # Detection of specific failure modes — matched against raw output.
-_PATTERNS_NO_PROFILE = ("Could not find profile", "profiles.yml", "not find profile")
+# NOTE: no bare "profiles.yml" substring — dbt Fusion prints
+# "Loading ~/.dbt/profiles.yml" as a startup banner on EVERY run, which would
+# classify every Fusion failure as profile_missing.
+_PATTERNS_NO_PROFILE = ("Could not find profile", "not find profile", "InvalidProfile")
 _PATTERNS_NO_PACKAGE = ("Compilation Error", "could not find package", "not installed", "Missing package")
-_PATTERNS_PARSE_FAIL = ("Encountered an error", "Parsing Error", "Compilation Error")
+_PATTERNS_PARSE_FAIL = (
+    "Encountered an error",
+    "Parsing Error",
+    "Compilation Error",
+    # dbt Fusion parse-stage error-code families
+    "DependencyNotFound",
+    "InvalidConfig",
+)
 
 _DBT_TIMEOUT_DEFAULT = 60  # seconds
 

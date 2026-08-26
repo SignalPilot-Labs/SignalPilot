@@ -1,41 +1,74 @@
 "use client";
 
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+
 /**
- * Consistent page header with terminal-style breadcrumb.
+ * Consistent page header. Sans-serif chrome, optional tab row for sections
+ * that span multiple routes (e.g. Connections ↔ Health). See UX.md.
  */
 export function PageHeader({
   title,
   subtitle,
   description,
   actions,
+  tabs,
 }: {
   title: string;
   subtitle: string;
   description: string;
   actions?: React.ReactNode;
+  tabs?: { label: string; href: string }[];
 }) {
+  const pathname = usePathname();
   return (
     <div className="mb-8">
       {/* Title row */}
       <div className="flex items-center justify-between">
         <div>
-          <div className="flex items-center gap-3 mb-1">
-            <h1 className="text-xl font-light tracking-wide leading-none text-[var(--color-text)]">{title}</h1>
-            <span className="text-[12px] leading-none tracking-[0.15em] uppercase text-[var(--color-text-muted)]">{subtitle}</span>
+          <div className="flex items-center gap-3 mb-1.5">
+            <h1 className="text-[22px] font-semibold tracking-[-0.01em] leading-none text-[var(--color-text)]">
+              {title}
+            </h1>
+            <span className="px-2 py-0.5 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[10.5px] leading-4 uppercase tracking-[0.08em] text-[var(--color-text-dim)]">
+              {subtitle}
+            </span>
           </div>
-          <p className="text-sm text-[var(--color-text-muted)] tracking-wider">{description}</p>
+          <p className="text-[13px] text-[var(--color-text-muted)]">{description}</p>
         </div>
         {actions ? <div className="flex items-center gap-2">{actions}</div> : null}
       </div>
 
-      <div className="mt-4 h-px bg-gradient-to-r from-transparent via-[var(--color-border-hover)] to-transparent" />
+      {tabs && tabs.length > 0 && (
+        <div className="mt-5 flex items-center gap-1">
+          {tabs.map((t) => {
+            const active = pathname === t.href || pathname.startsWith(`${t.href}/`);
+            return (
+              <Link
+                key={t.href}
+                href={t.href}
+                className={`px-3.5 py-1.5 rounded-full text-[12.5px] font-medium transition-colors ${
+                  active
+                    ? "bg-[var(--color-bg-elevated)] border border-[var(--color-border-hover)] text-[var(--color-text)]"
+                    : "border border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
+                }`}
+              >
+                {t.label}
+              </Link>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="mt-4 h-px bg-[var(--color-border)]" />
     </div>
   );
 }
 
 /**
- * Terminal-style command bar shown at top of pages.
- * Gives the "developer console" feel.
+ * Context bar under the page header: quiet mono caption carrying the governed
+ * command context plus optional live status. (Formerly a terminal mock — the
+ * CRT chrome is gone, the evidence-in-mono voice stays.)
  */
 export function TerminalBar({
   path,
@@ -47,31 +80,26 @@ export function TerminalBar({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="mb-6 border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
-      <div className="px-4 py-2 flex items-center gap-3 border-b border-[var(--color-border)]">
-        {/* Terminal dots */}
-        <div className="flex items-center gap-1.5">
-          <span className="w-2 h-2 bg-[var(--color-text-dim)] opacity-30" />
-          <span className="w-2 h-2 bg-[var(--color-text-dim)] opacity-20" />
-          <span className="w-2 h-2 bg-[var(--color-text-dim)] opacity-10" />
-        </div>
-        {/* Path */}
-        <code className="text-[12px] text-[var(--color-text-dim)] tracking-wider flex-1">
+    <div className="mb-6 rounded-[12px] border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
+      <div className="px-4 py-2 flex items-center gap-3">
+        <code className="text-[11.5px] text-[var(--color-text-dim)] flex-1">
           <span className="text-[var(--color-success)]">$</span>
-          <span className="text-[var(--color-text-dim)]"> signalpilot </span>
+          <span> signalpilot </span>
           <span className="text-[var(--color-text-muted)]">{path}</span>
         </code>
         {status}
       </div>
       {children && (
-        <div className="px-4 py-2.5 flex items-center justify-between">
+        <div className="px-4 py-2.5 flex items-center justify-between border-t border-[var(--color-border)]">
           {children}
-          {/* Animated data flow indicator */}
-          <div className="w-8 h-px ml-4 overflow-hidden opacity-30">
-            <div className="h-full animate-data-flow" />
-          </div>
         </div>
       )}
     </div>
   );
 }
+
+/** Shared tab set for the Connections section (Connections ↔ Health). */
+export const CONNECTIONS_TABS = [
+  { label: "Connections", href: "/connections" },
+  { label: "Health", href: "/health" },
+];

@@ -1,22 +1,32 @@
 import type { Metadata } from "next";
+import { DM_Sans, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
-import Sidebar from "@/components/layout/sidebar";
 
-import { ErrorBoundary } from "@/components/ui/error-boundary";
-import { KeyboardShortcuts } from "@/components/ui/keyboard-shortcuts";
-import { TabTitle } from "@/components/layout/tab-title";
-import { TierFavicon } from "@/components/branding/tier-favicon";
-import { CommandPalette } from "@/components/ui/command-palette";
-import { ToastProvider } from "@/components/ui/toast";
-import { GridBackground } from "@/components/ui/grid-background";
-import { PageTransition } from "@/components/ui/page-transition";
-import { MainContent } from "@/components/layout/main-content";
-import { ConnectionProvider } from "@/lib/connection-context";
-import { AuthProvider } from "@/lib/auth-context";
-import { SWRProvider } from "@/lib/swr";
-import { SubscriptionProvider } from "@/lib/subscription-context";
-import { clerkAppearance } from "@/lib/clerk-theme";
-import TierUpgradeCelebration from "@/components/branding/tier-upgrade-celebration";
+const dmSans = DM_Sans({ subsets: ["latin"], variable: "--font-dm-sans", display: "swap" });
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-jetbrains-mono",
+  display: "swap",
+});
+const fontVars = `${dmSans.variable} ${jetbrainsMono.variable}`;
+
+import Sidebar from "~/components/layout/sidebar";
+
+import { ErrorBoundary } from "~/components/ui/error-boundary";
+import { KeyboardShortcuts } from "~/components/ui/keyboard-shortcuts";
+import { TabTitle } from "~/components/layout/tab-title";
+import { TierFavicon } from "~/components/branding/tier-favicon";
+import { CommandPalette } from "~/components/ui/command-palette";
+import { ToastProvider } from "~/components/ui/toast";
+import { GridBackground } from "~/components/ui/grid-background";
+import { PageTransition } from "~/components/ui/page-transition";
+import { MainContent } from "~/components/layout/main-content";
+import { ConnectionProvider } from "~/lib/connection-context";
+import { AuthProvider } from "~/lib/auth-context";
+import { SWRProvider } from "~/lib/swr";
+import { SubscriptionProvider } from "~/lib/subscription-context";
+import { clerkAppearance } from "~/lib/clerk-theme";
+import TierUpgradeCelebration from "~/components/branding/tier-upgrade-celebration";
 
 export const metadata: Metadata = {
   title: "SignalPilot",
@@ -68,7 +78,7 @@ export default async function RootLayout({
     const { ClerkProvider } = await import("@clerk/nextjs");
     return (
       <html lang="en" className="dark">
-        <body className="antialiased bg-noise">
+        <body className={`antialiased bg-noise ${fontVars}`}>
           <ClerkProvider
             signInUrl="/sign-in"
             signUpUrl="/sign-up"
@@ -86,7 +96,7 @@ export default async function RootLayout({
 
   return (
     <html lang="en" className="dark">
-      <body className="antialiased bg-noise">{content}</body>
+      <body className={`antialiased bg-noise ${fontVars}`}>{content}</body>
     </html>
   );
 }

@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import re
 import time
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ._helpers import _validate_string_list
 
+_XATA_BRANCH_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+_XATA_WORKSPACE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
-class DBType(str, Enum):  # noqa: UP042 — (str,Enum) keeps str(X.A)=='X.A'; StrEnum returns 'A' and breaks f-string/log output
+
+class DBType(str, Enum):  # noqa: UP042  # (str,Enum) keeps str(X.A)=='X.A'; StrEnum returns 'A' and breaks f-string/log output
     postgres = "postgres"
     duckdb = "duckdb"
     mysql = "mysql"
@@ -23,6 +27,7 @@ class DBType(str, Enum):  # noqa: UP042 — (str,Enum) keeps str(X.A)=='X.A'; St
     mssql = "mssql"
     trino = "trino"
     sqlite = "sqlite"
+    xata = "xata"
 
 
 class SSHTunnelConfig(BaseModel):
@@ -36,7 +41,7 @@ class SSHTunnelConfig(BaseModel):
     password: str | None = Field(default=None, max_length=1024)
     private_key: str | None = Field(default=None, max_length=16384)
     private_key_passphrase: str | None = Field(default=None, max_length=1024)
-    # HTTP proxy for SSH (HEX pattern) — for VPCs that block direct SSH
+    # HTTP proxy for SSH (HEX pattern): for VPCs that block direct SSH
     proxy_host: str | None = Field(default=None, max_length=255)
     proxy_port: int = Field(default=3128, ge=1, le=65535)
 
@@ -51,28 +56,77 @@ class SSLConfig(BaseModel):
     client_key: str | None = Field(default=None, max_length=32768)  # PEM-encoded client private key
 
 
+# Reject unsupported Xata fields instead of ignoring them.
+# These fields identify OIDC control-plane credentials or xata.sh endpoint forms.
+_REMOVED_XATA_FIELDS = (
+    "workspace",
+    "region",
+    "xata_token_url",
+    "xata_client_id",
+    "xata_client_secret",
+    "xata_username",
+    "xata_password",
+)
+
+
+def _reject_removed_xata_fields(data: Any) -> Any:
+    """Raise an error when the raw payload contains an unsupported Xata field."""
+    if not isinstance(data, dict):
+        return data
+    present = [f for f in _REMOVED_XATA_FIELDS if data.get(f) is not None]
+    if present:
+        raise ValueError(
+            f"Removed Xata fields are no longer accepted: {', '.join(present)}. "
+            "Use xata_api_key (or xata_credential_ref) with xata_organization "
+            "and xata_project."
+        )
+    return data
+
+
+def _validate_xata_field_shapes(
+    *,
+    branch: str | None,
+    xata_org: str | None,
+    xata_api_url: str | None,
+) -> None:
+    """Validate per-field shape rules (regex + SSRF). Raises ValueError.
+
+    Check only fields that are not None.
+    The create validator or update route checks required fields on the merged record.
+    """
+    # Lazy import to preserve existing import-cycle avoidance pattern.
+    from gateway.network.validation import validate_xata_control_url
+
+    if branch is not None and not _XATA_BRANCH_RE.match(branch):
+        raise ValueError("Xata 'branch' must match ^[A-Za-z0-9_.-]{1,64}$")
+    if xata_org is not None and not _XATA_WORKSPACE_RE.match(xata_org):
+        raise ValueError("Xata 'xata_org' must match ^[A-Za-z0-9_-]{1,64}$")
+    if xata_api_url is not None:
+        validate_xata_control_url(xata_api_url)
+
+
 class ConnectionCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
     db_type: DBType
-    # ─── Common fields (host/port style) ────────────────────────────
+    # Common fields (host/port style).
     host: str | None = Field(default=None, max_length=255)
     port: int | None = Field(default=None, ge=1, le=65535)
     database: str | None = Field(default=None, max_length=128)
     username: str | None = Field(default=None, max_length=128)
     password: str | None = Field(default=None, max_length=1024)
-    # ─── Connection string mode (alternative to individual fields) ──
+    # Connection string mode (alternative to individual fields).
     connection_string: str | None = Field(default=None, max_length=4096)
-    # ─── SSL/TLS ────────────────────────────────────────────────────
+    # SSL/TLS.
     ssl: bool = False
     ssl_config: SSLConfig | None = None
-    # ─── SSH tunnel ─────────────────────────────────────────────────
+    # SSH tunnel.
     ssh_tunnel: SSHTunnelConfig | None = None
-    # ─── Snowflake-specific ─────────────────────────────────────────
+    # Snowflake-specific.
     account: str | None = Field(default=None, max_length=255)  # Snowflake account identifier
     warehouse: str | None = Field(default=None, max_length=128)
     schema_name: str | None = Field(default=None, max_length=128)  # default schema
     role: str | None = Field(default=None, max_length=128)  # Snowflake role
-    # ─── BigQuery-specific ──────────────────────────────────────────
+    # BigQuery-specific.
     project: str | None = Field(default=None, max_length=255)  # GCP project ID
     dataset: str | None = Field(default=None, max_length=255)  # default dataset
     credentials_json: str | None = Field(default=None, max_length=65536)  # service account JSON
@@ -83,21 +137,52 @@ class ConnectionCreate(BaseModel):
         description="BigQuery safety limit: query fails if estimated scan exceeds this (bytes). "
         "Recommended: 10GB = 10737418240 for dev, 100GB for prod.",
     )
-    # ─── Databricks-specific ────────────────────────────────────────
+    # Databricks-specific.
     http_path: str | None = Field(default=None, max_length=512)  # SQL endpoint path
     access_token: str | None = Field(default=None, max_length=1024)  # PAT token
     catalog: str | None = Field(default=None, max_length=128)  # Unity Catalog
-    # ─── ClickHouse-specific ──────────────────────────────────────
+    # ClickHouse-specific.
     protocol: str | None = Field(default=None, pattern=r"^(native|http)$")  # ClickHouse: native TCP or HTTP
-    # ─── Snowflake key-pair auth ───────────────────────────────────
+    # Xata-specific.
+    # A Xata "connection" is a PROJECT, not a single DB. The per-branch Postgres
+    # endpoint is resolved server-side at connect time from the control-plane API
+    # key. Branches are addressed per-call, so one credential serves every branch
+    # in the project.
+    branch: str | None = Field(default=None, max_length=128)  # default branch (default: main)
+    # Control-plane (branch lifecycle). Auth is the control-plane API key sent as a
+    # Bearer token. Secrets ride in extras_enc (encrypted).
+    xata_api_url: str | None = Field(default=None, max_length=512)  # e.g. https://api.xata.io
+    xata_org: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")  # control-plane org id
+    # New Xata platform (xata.tech): org/project/branch + control-plane API key.
+    # Preferred model. The gateway resolves each branch's Postgres endpoint
+    # (<branchID>.<region>.xata.tech) server-side from the API key: no raw URL.
+    xata_api_key: str | None = Field(default=None, max_length=512, pattern=r"^[A-Za-z0-9_\-.]+$")  # control-plane key (xau_...)
+    xata_organization: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_-]{1,64}$")  # org id, e.g. 0psl2d
+    xata_project: str | None = Field(default=None, max_length=128, pattern=r"^[A-Za-z0-9_-]{1,128}$")      # project id, e.g. prj_...
+    xata_database: str | None = Field(default=None, max_length=128, pattern=r"^[A-Za-z0-9_-]{1,128}$")     # database name (default: xata)
+    # Server-held credentials for shared demo warehouses.
+    # A connection can reference a gateway secret instead of storing the control-plane key.
+    # xata_pinned limits the shared key to the connection project and branch.
+    xata_credential_ref: str | None = Field(default=None, max_length=32, pattern=r"^[a-z0-9_-]{1,32}$")
+    xata_pinned: bool = False
+    # Snowflake key-pair auth.
     private_key: str | None = Field(default=None, max_length=16384)  # PEM-encoded private key
     private_key_passphrase: str | None = Field(default=None, max_length=1024)
-    # ─── DuckDB / MotherDuck ──────────────────────────────────────
+    # Snowflake auth method + host override (supports all account types).
+    # authenticator: password | key_pair | oauth | pat | mfa, OR an Okta URL
+    # (https://<org>.okta.com). Empty = password.
+    authenticator: str | None = Field(default=None, max_length=512)
+    passcode: str | None = Field(default=None, max_length=16)  # MFA passcode (username_password_mfa)
+    # Explicit host override for PrivateLink / China (.cn) / SnowGov / VPS: when the
+    # account identifier alone does not produce the right <host>.snowflakecomputing.com.
+    snowflake_host: str | None = Field(default=None, max_length=255)
+    snowflake_protocol: str | None = Field(default=None, pattern=r"^https?$")  # default https
+    # DuckDB / MotherDuck.
     motherduck_token: str | None = Field(default=None, max_length=2048)  # MotherDuck personal access token
-    # ─── Metadata ───────────────────────────────────────────────────
+    # Metadata.
     description: str = Field(default="", max_length=500)
     tags: list[str] = Field(default_factory=list, max_length=50)  # organizational tags
-    # ─── Schema filtering (HEX pattern) ────────────────────────────
+    # Schema filtering (HEX pattern).
     schema_filter_include: list[str] = Field(
         default_factory=list,
         max_length=100,
@@ -128,14 +213,14 @@ class ConnectionCreate(BaseModel):
     def validate_schema_filters(cls, v: list[str]) -> list[str]:
         return _validate_string_list(v, 256, "schema_filter")
 
-    # ─── Scheduled schema refresh (HEX pattern) ───────────────────
+    # Scheduled schema refresh (HEX pattern).
     schema_refresh_interval: int | None = Field(
         default=None,
         ge=60,
         le=86400,
         description="Auto-refresh schema every N seconds (60-86400). None = disabled.",
     )
-    # ─── Timeout configuration ──────────────────────────────────────
+    # Timeout configuration.
     connection_timeout: int | None = Field(
         default=None,
         ge=1,
@@ -154,9 +239,43 @@ class ConnectionCreate(BaseModel):
         le=600,
         description="Keepalive ping interval in seconds. 0 = disabled.",
     )
-    # ─── BYOK ───────────────────────────────────────────────────────────
+    # BYOK.
     org_id: str | None = Field(default=None, max_length=100)
     byok_key_alias: str | None = Field(default=None, max_length=200, pattern=r"^[a-zA-Z0-9_-]+$")
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_removed_xata_fields(cls, data: Any) -> Any:
+        return _reject_removed_xata_fields(data)
+
+    @model_validator(mode="after")
+    def validate_xata_fields(self) -> ConnectionCreate:
+        if self.db_type != DBType.xata:
+            return self
+
+        # A pin is only meaningful alongside the project + branch it pins to.
+        if self.xata_pinned and not (self.xata_project and self.branch):
+            raise ValueError("'xata_pinned' requires both 'xata_project' and 'branch'")
+
+        # A Xata connection is an API key (inline, or a server-held credential
+        # ref) + org + project; region/database are resolved server-side.
+        if not (self.xata_api_key or self.xata_credential_ref):
+            raise ValueError(
+                "Xata connections require 'xata_api_key' or 'xata_credential_ref'"
+            )
+        if not self.xata_organization or not self.xata_organization.strip():
+            raise ValueError("Xata connections require 'xata_organization' and 'xata_project'")
+        if not self.xata_project or not self.xata_project.strip():
+            raise ValueError("Xata connections require 'xata_organization' and 'xata_project'")
+
+        # Per-field shape checks (regex + SSRF).
+        _validate_xata_field_shapes(
+            branch=self.branch,
+            xata_org=self.xata_org,
+            xata_api_url=self.xata_api_url,
+        )
+
+        return self
 
 
 class ConnectionUpdate(BaseModel):
@@ -186,10 +305,23 @@ class ConnectionUpdate(BaseModel):
     catalog: str | None = Field(default=None, max_length=128)
     private_key: str | None = Field(default=None, max_length=16384)
     private_key_passphrase: str | None = Field(default=None, max_length=1024)
+    # Snowflake auth method + host override
+    authenticator: str | None = Field(default=None, max_length=512)
+    passcode: str | None = Field(default=None, max_length=16)
+    snowflake_host: str | None = Field(default=None, max_length=255)
+    snowflake_protocol: str | None = Field(default=None, pattern=r"^https?$")
     description: str | None = Field(default=None, max_length=500)
     tags: list[str] | None = Field(default=None, max_length=50)
     schema_filter_include: list[str] | None = Field(default=None, max_length=100)
     schema_filter_exclude: list[str] | None = Field(default=None, max_length=100)
+    # Xata-specific.
+    branch: str | None = Field(default=None, max_length=128)
+    xata_api_url: str | None = Field(default=None, max_length=512)
+    xata_org: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    xata_api_key: str | None = Field(default=None, max_length=512, pattern=r"^[A-Za-z0-9_\-.]+$")
+    xata_organization: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    xata_project: str | None = Field(default=None, max_length=128, pattern=r"^[A-Za-z0-9_-]{1,128}$")
+    xata_database: str | None = Field(default=None, max_length=128, pattern=r"^[A-Za-z0-9_-]{1,128}$")
 
     @field_validator("tags")
     @classmethod
@@ -205,8 +337,26 @@ class ConnectionUpdate(BaseModel):
             return v
         return _validate_string_list(v, 256, "schema_filter")
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_removed_xata_fields(cls, data: Any) -> Any:
+        return _reject_removed_xata_fields(data)
+
+    @model_validator(mode="after")
+    def validate_xata_field_shapes(self) -> ConnectionUpdate:
+        # Per-field shape checks run whenever a Xata field is supplied, regardless
+        # of db_type (defense in depth: db_type may be omitted from the patch).
+        # Required-field checks are enforced at the route layer against the merged
+        # record, where the existing DB row is available.
+        _validate_xata_field_shapes(
+            branch=self.branch,
+            xata_org=self.xata_org,
+            xata_api_url=self.xata_api_url,
+        )
+        return self
+
     schema_refresh_interval: int | None = Field(default=None, ge=60, le=86400)
-    last_schema_refresh: float | None = None  # internal — set by scheduler
+    last_schema_refresh: float | None = None  # internal: set by scheduler
     connection_timeout: int | None = Field(default=None, ge=1, le=300)
     query_timeout: int | None = Field(default=None, ge=1, le=3600)
     keepalive_interval: int | None = Field(default=None, ge=0, le=600)
@@ -228,6 +378,9 @@ class ConnectionInfo(BaseModel):
     warehouse: str | None = None
     schema_name: str | None = None
     role: str | None = None
+    authenticator: str | None = None  # auth method or Okta URL (non-secret)
+    snowflake_host: str | None = None  # host override (PrivateLink/China/gov/VPS)
+    snowflake_protocol: str | None = None
     # BigQuery
     project: str | None = None
     dataset: str | None = None

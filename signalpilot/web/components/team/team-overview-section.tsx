@@ -7,20 +7,20 @@
 
 import React, { useState } from "react";
 import { Settings } from "lucide-react";
-import { PendingButton } from "@/components/ui/pending-button";
+import { PendingButton } from "~/components/ui/pending-button";
 import { useReverification } from "@clerk/nextjs";
 import type { OrganizationResource } from "@clerk/types";
-import { SectionHeader } from "@/components/ui/section-header";
-import { useToast } from "@/components/ui/toast";
+import { SectionHeader } from "~/components/ui/section-header";
+import { useToast } from "~/components/ui/toast";
 import {
   FIELD_INPUT_CLASS,
   LABEL_CLASS,
   ERROR_CLASS,
   NEUTRAL_CLASS,
-} from "@/components/auth/auth-primitives";
-import { isReverificationCancelledError } from "@/lib/security/use-reverify";
-import { formatClerkError } from "@/lib/security/clerk-errors";
-import type { TeamPermissions } from "@/lib/team/use-team-permissions";
+} from "~/components/auth/auth-primitives";
+import { isReverificationCancelledError } from "~/lib/security/use-reverify";
+import { formatClerkError } from "~/lib/security/clerk-errors";
+import type { TeamPermissions } from "~/lib/team/use-team-permissions";
 
 export interface TeamOverviewSectionProps {
   org: OrganizationResource;

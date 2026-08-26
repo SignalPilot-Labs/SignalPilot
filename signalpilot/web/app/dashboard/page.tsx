@@ -1,970 +1,486 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState, type ElementType } from "react";
+import useSWR from "swr";
 import {
-  Terminal,
+  Activity,
+  AlertTriangle,
+  ArrowUpRight,
+  BookOpenText,
+  Bot,
+  CheckCircle2,
+  CircleDollarSign,
+  Clock3,
   Database,
-  Cpu,
-  Server,
-  Shield,
-  DollarSign,
-  Clock,
+  FileChartColumn,
+  Gauge,
+  MessageSquareText,
+  Play,
+  ShieldCheck,
+  ShieldX,
   Zap,
-  BarChart3,
-  ArrowRight,
-  Loader2,
-  CreditCard,
-  Key,
-  Plug,
-  Plus,
 } from "lucide-react";
-import { subscribeMetrics } from "@/lib/api";
-import { useConnectionsHealth, useCacheStats, useBudgets, useAudit, usePlan, prefetchCommonData } from "@/lib/hooks/use-gateway-data";
-import type { MetricsSnapshot, AuditEntry, ConnectionHealthStats } from "@/lib/types";
-import { useConnection } from "@/lib/connection-context";
-import { useAppAuth } from "@/lib/auth-context";
-import { useSubscription } from "@/lib/subscription-context";
-import { useBackendClient } from "@/lib/backend-client";
-import type { UsageSummaryResponse, DailyUsagePoint } from "@/lib/backend-client";
-import { GovernancePipeline } from "@/components/ui/governance-pipeline";
-import { EmptyTerminal, EmptyState } from "@/components/ui/empty-states";
-import { RingGauge, Sparkline, StatusDot, MiniBar, StackedBar, ResponsiveAreaChart } from "@/components/ui/data-viz";
-import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { SystemDiagram } from "@/components/ui/system-diagram";
-import { SqlHighlight } from "@/components/ui/sql-highlight";
-import { TimeAgo } from "@/components/ui/time-ago";
-import { DashboardSkeleton } from "@/components/ui/skeleton";
-import { useOnboardingStatus } from "@/lib/onboarding";
-import { useTierBranding } from "@/lib/hooks/use-tier-branding";
-import { TierWordmark } from "@/components/branding/tier-wordmark";
-import { TierBadge } from "@/components/branding/tier-badge";
+import {
+  Bar,
+  CartesianGrid,
+  ComposedChart,
+  Line,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import {
+  getEvalAccuracy,
+  getEvalAvailability,
+  getProjects,
+  listStandaloneConversations,
+  subscribeMetrics,
+  type EvalAccuracyPoint,
+  type EvalRegression,
+} from "~/lib/api";
+import {
+  prefetchCommonData,
+  useAudit,
+  useAuditStats,
+  useBudgets,
+  useConnections,
+  useConnectionsHealth,
+  useKnowledgeUsage,
+  usePlan,
+  useReports,
+} from "~/lib/hooks/use-gateway-data";
+import type { AuditEntry, MetricsSnapshot } from "~/lib/types";
+import { useAppAuth } from "~/lib/auth-context";
+import { DashboardSkeleton } from "~/components/ui/skeleton";
+import { TimeAgo } from "~/components/ui/time-ago";
+import { useOnboardingStatus } from "~/lib/onboarding";
+import "./dashboard.css";
 
-/* ── Metric card ── */
-function MetricCard({
-  label,
-  value,
-  subtext,
-  icon: Icon,
-  accentColor,
-  sparkValues,
-  actionHref,
-  actionLabel,
-}: {
+type ActivityPoint = {
   label: string;
-  value: string | number;
-  subtext?: string;
-  icon: React.ElementType;
-  accentColor?: string;
-  sparkValues?: number[];
-  actionHref?: string;
-  actionLabel?: string;
-}) {
-  return (
-    <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top group relative overflow-hidden">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <Icon className={`w-4 h-4 ${accentColor || "text-[var(--color-text-dim)]"} transition-transform group-hover:scale-110`} strokeWidth={1.5} />
-          <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">{label}</span>
-        </div>
-        {actionHref && (
-          <Link href={actionHref} className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider">
-            <Plus className="w-2.5 h-2.5" />{actionLabel || "add"}
-          </Link>
-        )}
-      </div>
-      <p className="text-2xl font-light metric-value text-[var(--color-text)] animate-count-up">{value}</p>
-      {subtext && (
-        <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider">{subtext}</p>
-      )}
-      {/* Background sparkline on hover */}
-      {sparkValues && sparkValues.length >= 3 && (
-        <div className="absolute bottom-0 right-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
-          <Sparkline values={sparkValues} width={80} height={24} color={accentColor?.includes("success") ? "var(--color-success)" : accentColor?.includes("error") ? "var(--color-error)" : "var(--color-text-dim)"} fillOpacity={0.08} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ── Status badge ── */
-function StatusBadge({ ok }: { ok: boolean | null }) {
-  if (ok === null) return <Loader2 className="w-3 h-3 animate-spin text-[var(--color-text-dim)]" />;
-  return ok ? (
-    <span className="flex items-center gap-1.5 text-[12px] text-[var(--color-success)] tracking-wider">
-      <span className="w-1.5 h-1.5 bg-[var(--color-success)] pulse-dot" />
-      healthy
-    </span>
-  ) : (
-    <span className="flex items-center gap-1.5 text-[12px] text-[var(--color-error)] tracking-wider">
-      <span className="w-1.5 h-1.5 bg-[var(--color-error)]" />
-      offline
-    </span>
-  );
-}
-
-/* ── Helpers ── */
-
-const eventTypeConfig: Record<string, { label: string; color: string }> = {
-  query: { label: "QRY", color: "text-[var(--color-success)]" },
-  execute: { label: "EXE", color: "text-blue-400" },
-  connect: { label: "CON", color: "text-[var(--color-text-dim)]" },
-  block: { label: "BLK", color: "text-[var(--color-error)]" },
+  operations: number;
+  blocked: number;
+  cost: number;
 };
 
-/* ── Cloud status section ── */
+type AttentionItem = {
+  title: string;
+  detail: string;
+  href: string;
+  tone: "warning" | "critical";
+};
 
-/** Inner content for the subscription/keys/MCP grid.
- *  Receives keyCount as a prop — no internal fetch needed. */
-function CloudStatusContent({ keyCount }: { keyCount: number | null }) {
-  const { status } = useSubscription();
-  const { data: plan } = usePlan();
-  const planTier = plan?.tier ?? "free";
-  const maxApiKeys = plan?.limits.api_keys === "unlimited" ? "∞" : (plan?.limits.api_keys ?? 1);
-
-  const statusLabel = status === "past_due" ? "past due" : status;
-
-  // MCP endpoint detection — static check, no API call
-  const mcpUrl =
-    process.env.NEXT_PUBLIC_MCP_URL ||
-    process.env.NEXT_PUBLIC_GATEWAY_URL ||
-    null;
-  const mcpConfigured = Boolean(mcpUrl);
-  const mcpDisplay = mcpUrl
-    ? mcpUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")
-    : null;
-
-  const showUpgrade = planTier === "free" || planTier === "pro";
-
-  return (
-    <div className="grid grid-cols-3 gap-px mb-4 bg-[var(--color-border)] border border-[var(--color-border)]">
-      {/* Card 1: Subscription */}
-      <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
-        <div className="flex items-center gap-2 mb-3">
-          <CreditCard className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-          <span className="text-[12px] leading-none text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
-            subscription
-          </span>
-        </div>
-        <div className="mb-1.5">
-          {planTier === "free" ? (
-            <span className="inline-flex items-center gap-1.5">
-              <span className="inline-block w-[5px] h-[5px] flex-shrink-0 bg-[var(--color-text-dim)]" aria-hidden="true" />
-              <span className="text-[11px] leading-none tracking-[0.15em] uppercase text-[var(--color-text-dim)]">free</span>
-            </span>
-          ) : (
-            <TierBadge />
-          )}
-        </div>
-        <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider">
-          {statusLabel}
-        </p>
-        {showUpgrade && (
-          <Link
-            href="/settings/billing"
-            className="inline-flex items-center gap-1 mt-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
-          >
-            upgrade <ArrowRight className="w-3 h-3" />
-          </Link>
-        )}
-      </div>
-
-      {/* Card 2: API Keys */}
-      <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
-        <div className="flex items-center gap-2 mb-3">
-          <Key className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-          <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
-            api keys
-          </span>
-        </div>
-        <p className="text-2xl font-light metric-value text-[var(--color-text)]">
-          {keyCount === null ? (
-            <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)] inline-block" />
-          ) : keyCount === -1 ? (
-            "—"
-          ) : (
-            keyCount
-          )}
-        </p>
-        <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider">
-          of {maxApiKeys} allowed
-        </p>
-        <Link
-          href="/settings/api-keys"
-          className="inline-flex items-center gap-1 mt-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
-        >
-          manage <ArrowRight className="w-3 h-3" />
-        </Link>
-      </div>
-
-      {/* Card 3: MCP Endpoint */}
-      <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
-        <div className="flex items-center gap-2 mb-3">
-          <Plug className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-          <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
-            mcp endpoint
-          </span>
-        </div>
-        <div className="flex items-center gap-2 mb-1.5">
-          <StatusDot
-            status={mcpConfigured ? "healthy" : "error"}
-            size={4}
-            pulse={mcpConfigured}
-          />
-          <span className={`text-[12px] tracking-wider ${mcpConfigured ? "text-[var(--color-success)]" : "text-[var(--color-text-dim)]"}`}>
-            {mcpConfigured ? "configured" : "not configured"}
-          </span>
-        </div>
-        {mcpDisplay && (
-          <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider font-mono truncate">
-            {mcpDisplay}
-          </p>
-        )}
-        <Link
-          href="/settings/mcp-connect"
-          className="inline-flex items-center gap-1 mt-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
-        >
-          connect <ArrowRight className="w-3 h-3" />
-        </Link>
-      </div>
-    </div>
-  );
+function timestampMs(value: number): number {
+  return value < 10_000_000_000 ? value * 1000 : value;
 }
 
-/** Usage analytics card — receives summary and sparkPoints as props, no fetch of its own. */
-function UsageAnalyticsContent({
-  summary,
-  sparkPoints,
+function formatMoney(value: number): string {
+  if (value === 0) return "$0.00";
+  if (value < 0.01) return `$${value.toFixed(4)}`;
+  return `$${value.toFixed(2)}`;
+}
+
+function percentile(values: number[], ratio: number): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * ratio))];
+}
+
+function buildActivitySeries(entries: AuditEntry[]): ActivityPoint[] {
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+  const points = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(now);
+    date.setDate(now.getDate() - (6 - index));
+    return {
+      date,
+      key: date.toISOString().slice(0, 10),
+      label: date.toLocaleDateString("en-US", { weekday: "short" }),
+      operations: 0,
+      blocked: 0,
+      cost: 0,
+    };
+  });
+  const pointMap = new Map(points.map((point) => [point.key, point]));
+  entries.forEach((entry) => {
+    const key = new Date(timestampMs(entry.timestamp)).toISOString().slice(0, 10);
+    const point = pointMap.get(key);
+    if (!point) return;
+    point.operations += 1;
+    if (entry.blocked) point.blocked += 1;
+    point.cost += entry.cost_usd ?? 0;
+  });
+  return points.map(({ label, operations, blocked, cost }) => ({
+    label,
+    operations,
+    blocked,
+    cost: Number(cost.toFixed(4)),
+  }));
+}
+
+function Metric({
+  label,
+  value,
+  note,
+  icon: Icon,
+  tone = "neutral",
 }: {
-  summary: UsageSummaryResponse | null;
-  sparkPoints: DailyUsagePoint[] | null;
+  label: string;
+  value: string;
+  note: string;
+  icon: ElementType;
+  tone?: "neutral" | "good" | "warning" | "critical";
 }) {
-  const sparkValues = sparkPoints ? sparkPoints.map((d) => d.requests) : [];
-  const last7DaysTotal = summary?.total_requests_7d ?? null;
-  const activeKeys = summary?.active_keys ?? null;
-  const latestActivity = summary?.last_activity_at ?? null;
-
   return (
-    <div className="mb-4">
-      <div className="grid grid-cols-3 gap-px bg-[var(--color-border)] border border-[var(--color-border)]">
-        {/* Card 1: Total requests (7d) */}
-        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
-          <div className="flex items-center gap-2 mb-3">
-            <BarChart3 className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-            <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
-              requests (7d)
-            </span>
-          </div>
-          <p className="text-2xl font-light metric-value text-[var(--color-text)] tabular-nums">
-            {last7DaysTotal === null ? (
-              <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)] inline-block" />
-            ) : last7DaysTotal.toLocaleString()}
-          </p>
-          {sparkValues.length >= 2 && (
-            <div className="mt-2">
-              <Sparkline
-                values={sparkValues}
-                width={80}
-                height={20}
-                color="var(--color-success)"
-                fillOpacity={0.1}
-              />
-            </div>
-          )}
-        </div>
-
-        {/* Card 2: Active keys */}
-        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
-          <div className="flex items-center gap-2 mb-3">
-            <Key className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-            <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
-              active keys
-            </span>
-          </div>
-          <p className="text-2xl font-light metric-value text-[var(--color-text)] tabular-nums">
-            {activeKeys === null ? (
-              <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)] inline-block" />
-            ) : activeKeys}
-          </p>
-          <p className="text-[12px] text-[var(--color-text-muted)] mt-1.5 tracking-wider">
-            {summary !== null ? `of ${summary.active_keys} active (7d)` : ""}
-          </p>
-        </div>
-
-        {/* Card 3: Last activity */}
-        <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-all card-glow card-accent-top">
-          <div className="flex items-center gap-2 mb-3">
-            <Clock className="w-4 h-4 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-            <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
-              last activity
-            </span>
-          </div>
-          {summary === null ? (
-            <Loader2 className="w-4 h-4 animate-spin text-[var(--color-text-dim)]" />
-          ) : latestActivity ? (
-            <TimeAgo
-              timestamp={new Date(latestActivity).getTime()}
-              className="text-lg font-light text-[var(--color-text)] tracking-wider"
-            />
-          ) : (
-            <p className="text-lg font-light text-[var(--color-text-dim)] tracking-wider">—</p>
-          )}
-        </div>
-      </div>
-
-      {/* View details link */}
-      <div className="flex justify-end mt-2">
-        <Link
-          href="/settings/usage"
-          aria-label="view full usage analytics"
-          className="inline-flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider"
-        >
-          view details <ArrowRight className="w-3 h-3" />
-        </Link>
-      </div>
+    <div className={`dash-metric is-${tone}`}>
+      <div><Icon aria-hidden="true" /><span>{label}</span></div>
+      <strong>{value}</strong>
+      <p>{note}</p>
     </div>
   );
 }
 
-/** Shared content component that fetches keys + usage summary in parallel and
- *  passes them to CloudStatusContent and UsageAnalyticsContent. */
-function CloudAndUsageContent() {
-  const client = useBackendClient();
-  const [keyCount, setKeyCount] = useState<number | null>(null);
-  const [summary, setSummary] = useState<UsageSummaryResponse | null>(null);
-  const [sparkPoints, setSparkPoints] = useState<DailyUsagePoint[] | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    // Fetch keys for key count and usage summary + daily sparkline in parallel
-    Promise.all([
-      client.getApiKeys(),
-      client.getUsageSummary().catch(() => null),
-      client.getUsageDaily(7).catch(() => null),
-    ]).then(([keysData, summaryData, dailyRes]) => {
-      if (cancelled) return;
-      setKeyCount(keysData.length);
-
-      if (summaryData !== null) {
-        setSummary(summaryData);
-      } else {
-        // Fall back to mock summary derived from keys
-        import("@/lib/mock-usage").then(({ generateDailyUsage, generateKeyUsage, getRateLimitStatus }) => {
-          if (cancelled) return;
-          const mockKeyStats = keysData.map((k) => generateKeyUsage(k));
-          const mockRateLimit = getRateLimitStatus("free");
-          const mockSummary: UsageSummaryResponse = {
-            total_requests: mockKeyStats.reduce((sum, s) => sum + s.totalRequests, 0),
-            total_requests_today: mockRateLimit.used,
-            total_requests_7d: mockKeyStats.reduce((sum, s) => sum + s.last7Days, 0),
-            total_requests_30d: mockKeyStats.reduce((sum, s) => sum + s.totalRequests, 0),
-            daily_limit: mockRateLimit.limit,
-            daily_used: mockRateLimit.used,
-            daily_reset_at: mockRateLimit.resetAt,
-            active_keys: mockKeyStats.filter((s) => s.last7Days > 0).length,
-            last_activity_at: mockKeyStats.reduce<string | null>((latest, s) => {
-              if (!latest) return s.lastUsedAt;
-              return s.lastUsedAt > latest ? s.lastUsedAt : latest;
-            }, null),
-          };
-          setSummary(mockSummary);
-          const mockDaily = generateDailyUsage(keysData, 7);
-          setSparkPoints(mockDaily);
-        });
-        return;
-      }
-
-      if (dailyRes !== null) {
-        setSparkPoints(dailyRes.points);
-      } else {
-        import("@/lib/mock-usage").then(({ generateDailyUsage }) => {
-          if (cancelled) return;
-          setSparkPoints(generateDailyUsage(keysData, 7));
-        });
-      }
-    }).catch(() => {
-      if (!cancelled) {
-        setKeyCount(-1);
-        setSummary({
-          total_requests: 0,
-          total_requests_today: 0,
-          total_requests_7d: 0,
-          total_requests_30d: 0,
-          daily_limit: 1000,
-          daily_used: 0,
-          daily_reset_at: new Date(Date.now() + 86400000).toISOString(),
-          active_keys: 0,
-          last_activity_at: null,
-        });
-        setSparkPoints([]);
-      }
-    });
-
-    return () => { cancelled = true; };
-  }, [client]);
-
+function ActivityTooltip({ active, payload, label }: {
+  active?: boolean;
+  payload?: Array<{ dataKey: string; value: number; color: string }>;
+  label?: string;
+}) {
+  if (!active || !payload?.length) return null;
   return (
-    <>
-      <CloudStatusContent keyCount={keyCount} />
-      <UsageAnalyticsContent summary={summary} sparkPoints={sparkPoints} />
-    </>
+    <div className="dash-chart-tooltip">
+      <strong>{label}</strong>
+      {payload.map((item) => (
+        <span key={item.dataKey}>
+          <i style={{ background: item.color }} />
+          {item.dataKey === "cost" ? `${formatMoney(item.value)} estimated` : `${item.value} ${item.dataKey}`}
+        </span>
+      ))}
+    </div>
   );
 }
 
-/** Gate — calls useAppAuth() and conditionally renders CloudAndUsageContent.
- *  useBackendClient() is NEVER called here; it lives only in CloudAndUsageContent. */
-function CloudStatusSection() {
-  const { isCloudMode } = useAppAuth();
-  if (!isCloudMode) return null;
-  return <CloudAndUsageContent />;
-}
-
-/* ── Signed-in user greeting ── */
-function UserGreeting() {
-  const { isCloudMode, user } = useAppAuth();
-  const b = useTierBranding();
-
-  if (!isCloudMode || !user) return null;
-
-  const email = user.email ?? "—";
-
-  const showTierPrefix = b.enabled && b.tier !== "free";
-
+function QualityGauge({ value }: { value: number | null }) {
+  const score = Math.max(0, Math.min(100, value ?? 0));
+  const circumference = 2 * Math.PI * 34;
   return (
-    <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider mb-4">
-      {showTierPrefix && (
-        <>
-          <TierWordmark variant="header" />
-          <span className="mx-2 text-[var(--color-text-dim)]">·</span>
-        </>
-      )}
-      signed in as{" "}
-      <span className="text-[var(--color-text-muted)]">{email}</span>
-    </p>
+    <div className="dash-quality-gauge" aria-label={value == null ? "No accuracy data" : `${value.toFixed(0)} percent accuracy`}>
+      <svg viewBox="0 0 80 80" aria-hidden="true">
+        <circle cx="40" cy="40" r="34" className="track" />
+        <circle
+          cx="40"
+          cy="40"
+          r="34"
+          className="value"
+          strokeDasharray={circumference}
+          strokeDashoffset={circumference * (1 - score / 100)}
+        />
+      </svg>
+      <div><strong>{value == null ? "--" : value.toFixed(0)}</strong>{value != null && <span>%</span>}</div>
+    </div>
   );
 }
 
-/* ── DashboardOnboardingCheck — only rendered when isCloudMode is true ── */
+function SurfaceSignal({
+  href,
+  icon: Icon,
+  label,
+  value,
+  note,
+  tone = "neutral",
+}: {
+  href: string;
+  icon: ElementType;
+  label: string;
+  value: string;
+  note: string;
+  tone?: "neutral" | "good" | "warning";
+}) {
+  return (
+    <Link href={href} className={`dash-surface-signal is-${tone}`}>
+      <div className="dash-surface-icon"><Icon aria-hidden="true" /></div>
+      <div><span>{label}</span><strong>{value}</strong><p>{note}</p></div>
+      <ArrowUpRight aria-hidden="true" />
+    </Link>
+  );
+}
+
 function DashboardOnboardingCheck() {
   const router = useRouter();
   const { activeOrgId, isAuthenticated } = useAppAuth();
   const { isComplete, isLoading, markComplete } = useOnboardingStatus();
   const [autoCompleting, setAutoCompleting] = useState(false);
+  const triedRef = useRef(false);
 
   useEffect(() => {
-    if (isLoading) return;
-
-    // Not signed in — nothing to do, auth protection handled by middleware
-    if (!isAuthenticated) return;
-
-    if (isComplete === true) return; // already done
-
+    if (isLoading || autoCompleting || !isAuthenticated || isComplete === true || triedRef.current) return;
     if (activeOrgId) {
-      // User has an active org but onboarding flag not set.
-      // Auto-mark complete — they don't need the wizard.
+      triedRef.current = true;
       setAutoCompleting(true);
-      markComplete()
-        .catch(() => {})
-        .finally(() => setAutoCompleting(false));
+      markComplete().catch(() => {}).finally(() => setAutoCompleting(false));
     } else {
-      // No org — send to onboarding to create/join a team
       router.push("/onboarding");
     }
-  }, [isLoading, isComplete, activeOrgId, isAuthenticated, router, markComplete]);
+  }, [activeOrgId, autoCompleting, isAuthenticated, isComplete, isLoading, markComplete, router]);
 
-  if (isLoading || autoCompleting || (isComplete === false && !activeOrgId)) {
-    return <DashboardSkeleton />;
-  }
-
+  if (isLoading || autoCompleting || (isComplete === false && !activeOrgId)) return <DashboardSkeleton />;
   return <DashboardContent />;
 }
 
-/* ── DashboardGate — new default export ── */
 export default function DashboardGate() {
   const { isCloudMode, isLoaded } = useAppAuth();
-
-  if (!isLoaded) {
-    return <DashboardSkeleton />;
-  }
-
-  if (isCloudMode) {
-    return <DashboardOnboardingCheck />;
-  }
-
-  return <DashboardContent />;
+  if (!isLoaded) return <DashboardSkeleton />;
+  return isCloudMode ? <DashboardOnboardingCheck /> : <DashboardContent />;
 }
 
 function DashboardContent() {
-  const { isCloudMode } = useAppAuth();
+  const { isCloudMode, user } = useAppAuth();
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
-  const { connections } = useConnection();
-
-  // SWR data hooks
-  const { data: auditData } = useAudit({ limit: 50 });
+  const { data: auditData } = useAudit({ limit: 500 });
+  const { data: auditTotals } = useAuditStats();
   const { data: budgetData } = useBudgets();
-  const { data: cacheStats } = useCacheStats();
+  const { data: connectionData } = useConnections();
   const { data: healthData } = useConnectionsHealth();
+  const { data: plan } = usePlan();
+  const { data: knowledgeUsage } = useKnowledgeUsage();
+  const { data: reports } = useReports();
+  const { data: projects } = useSWR("dashboard-projects", getProjects, { dedupingInterval: 30_000 });
+  const { data: conversationsData } = useSWR(
+    "dashboard-conversations",
+    listStandaloneConversations,
+    { refreshInterval: 30_000, shouldRetryOnError: false },
+  );
+  const { data: evalAvailability } = useSWR("dashboard-eval-availability", getEvalAvailability, { dedupingInterval: 60_000 });
+  const { data: evalAccuracy } = useSWR(
+    evalAvailability?.enabled ? "dashboard-eval-accuracy" : null,
+    getEvalAccuracy,
+    { refreshInterval: 30_000 },
+  );
 
-  // Derive audit entries + stats from SWR data
-  const recentAudit: AuditEntry[] = auditData?.entries ?? [];
-  const auditStats = useMemo(() => {
-    const stats = { queries: 0, executions: 0, blocks: 0, total: recentAudit.length };
-    for (const e of recentAudit) {
-      if (e.event_type === "query") stats.queries++;
-      else if (e.event_type === "execute") stats.executions++;
-      if (e.blocked) stats.blocks++;
-    }
-    return stats;
-  }, [recentAudit]);
-
-  // Derive connection health map from SWR data
-  const connHealth = useMemo(() => {
-    const map: Record<string, ConnectionHealthStats> = {};
-    if (healthData?.connections) {
-      for (const h of healthData.connections) {
-        map[h.connection_name] = h;
-      }
-    }
-    return map;
-  }, [healthData]);
-
-  // Prefetch common data on mount for faster navigation to other pages
   useEffect(() => { prefetchCommonData(); }, []);
+  useEffect(() => subscribeMetrics(setMetrics), []);
 
-  // SSE metrics subscription — live stream, not a REST fetch
-  useEffect(() => {
-    const unsub = subscribeMetrics((data) => {
-      setMetrics(data);
-    });
-    return unsub;
-  }, []);
+  const entries = auditData?.entries ?? [];
+  const connections = connectionData ?? [];
+  const health = healthData?.connections ?? [];
+  const conversations = conversationsData?.conversations ?? [];
+  const activitySeries = useMemo(() => buildActivitySeries(entries), [entries]);
+  const latestAccuracy = useMemo<EvalAccuracyPoint | null>(() => {
+    const history = evalAccuracy?.history ?? [];
+    return [...history].sort((left, right) => right.created_at.localeCompare(left.created_at))[0] ?? null;
+  }, [evalAccuracy]);
+  const latestRegression = useMemo<EvalRegression | null>(() => {
+    const regressions = evalAccuracy?.regressions ?? [];
+    return [...regressions].sort((left, right) => right.created_at.localeCompare(left.created_at))[0] ?? null;
+  }, [evalAccuracy]);
 
-  const latencyValues = recentAudit
-    .filter(e => e.duration_ms != null)
-    .slice(0, 20)
-    .map(e => e.duration_ms || 0)
-    .reverse();
+  const healthyConnections = health.filter((item) => item.status === "healthy").length;
+  const unhealthyConnections = health.filter((item) => ["warning", "degraded", "unhealthy"].includes(item.status)).length;
+  const pendingConnections = Math.max(0, connections.length - healthyConnections - unhealthyConnections);
+  const durationValues = entries.flatMap((entry) => entry.duration_ms == null ? [] : [entry.duration_ms]);
+  const p95Latency = percentile(durationValues, 0.95);
+  const recentCost = entries.reduce((sum, entry) => sum + (entry.cost_usd ?? 0), 0);
+  const trackedSpend = budgetData?.total_spent_usd ?? 0;
+  const budgetSessions = (budgetData?.sessions ?? []) as Array<Record<string, unknown>>;
+  const activeBudgetTotal = budgetSessions.reduce((sum, session) => sum + Number(session.budget_usd ?? 0), 0);
+  const activeBudgetSpent = budgetSessions.reduce((sum, session) => sum + Number(session.spent_usd ?? 0), 0);
+  const budgetUtilization = activeBudgetTotal ? activeBudgetSpent / activeBudgetTotal * 100 : 0;
+  const chatActualSpend = conversations.reduce((sum, item) => sum + item.actual_spend_usd, 0);
+  const chatReservedSpend = conversations.reduce((sum, item) => sum + item.reserved_spend_usd, 0);
+  const runningChats = conversations.filter((item) => ["queued", "running", "waiting_for_user", "waiting_for_query_approval"].includes(item.run_status ?? "")).length;
+  const activeWorkloads = runningChats + (metrics?.running_sandboxes ?? 0);
+  const allTimeEvents = auditTotals?.total ?? auditData?.total ?? entries.length;
+  const blockedEvents = auditTotals?.blocked ?? entries.filter((entry) => entry.blocked).length;
+  const blockRate = allTimeEvents ? blockedEvents / allTimeEvents * 100 : 0;
+  const requestsToday = plan?.usage.queries_today ?? 0;
+  const dailyLimit = plan?.limits.queries_per_day;
+  const dailyUsagePct = typeof dailyLimit === "number" && dailyLimit > 0 ? requestsToday / dailyLimit * 100 : null;
+  const storagePct = knowledgeUsage?.storage_limit_bytes
+    ? knowledgeUsage.active_bytes / knowledgeUsage.storage_limit_bytes * 100
+    : 0;
+
+  const attentionItems = useMemo<AttentionItem[]>(() => {
+    const items: AttentionItem[] = [];
+    if (unhealthyConnections) {
+      items.push({
+        title: `${unhealthyConnections} connection${unhealthyConnections === 1 ? "" : "s"} need attention`,
+        detail: "Health checks report degraded or failing access.",
+        href: "/connections",
+        tone: "critical",
+      });
+    }
+    if (latestRegression) {
+      items.push({
+        title: `${latestRegression.drop_pct.toFixed(1)} point eval regression`,
+        detail: `${latestRegression.flipped_tasks.length} tasks changed outcome in the latest regression.`,
+        href: `/evals?run=${latestRegression.run_id}`,
+        tone: "critical",
+      });
+    }
+    if (latestAccuracy?.coverage_pct != null && latestAccuracy.coverage_pct < 80) {
+      items.push({
+        title: `${latestAccuracy.coverage_pct.toFixed(0)}% mart coverage`,
+        detail: "Production marts remain outside the current eval set.",
+        href: "/evals/accuracy",
+        tone: "warning",
+      });
+    }
+    if (budgetUtilization >= 80) {
+      items.push({
+        title: `${budgetUtilization.toFixed(0)}% of active budgets used`,
+        detail: "Review session limits before workloads are stopped.",
+        href: "/settings/usage",
+        tone: "warning",
+      });
+    }
+    if (dailyUsagePct != null && dailyUsagePct >= 80 && dailyLimit != null) {
+      items.push({
+        title: `${dailyUsagePct.toFixed(0)}% of daily query allowance used`,
+        detail: `${requestsToday.toLocaleString()} of ${dailyLimit.toLocaleString()} queries used today.`,
+        href: "/settings/usage",
+        tone: "warning",
+      });
+    }
+    return items.slice(0, 4);
+  }, [budgetUtilization, dailyLimit, dailyUsagePct, latestAccuracy, latestRegression, requestsToday, unhealthyConnections]);
+
+  const state = attentionItems.length
+    ? { label: "Attention required", tone: "warning", title: "Operating signals need review" }
+    : !connections.length
+      ? { label: "Setup required", tone: "neutral", title: "Connect a warehouse to activate your workspace" }
+      : { label: "Operating normally", tone: "good", title: "Agents are operating within policy" };
 
   return (
-    <div className="p-8 max-w-[1400px] animate-fade-in">
-      <PageHeader
-        title="dashboard"
-        subtitle="live overview"
-        description="signalpilot gateway status and metrics"
-      />
+    <main className="dash-page">
+      <header className="dash-header">
+        <div>
+          <span className="dash-eyebrow">Workspace command center</span>
+          <h1>Dashboard</h1>
+          <p>{isCloudMode && user?.email ? `${user.email} · ` : ""}Usage, cost, quality, and governance across every agent workflow.</p>
+        </div>
+        <div className="dash-actions">
+          <Link href="/chats" className="dash-action is-secondary"><MessageSquareText /> Ask data</Link>
+          {evalAvailability?.enabled && <Link href="/evals" className="dash-action is-primary"><Play /> Run eval</Link>}
+        </div>
+      </header>
 
-      {/* ── System status bar ── */}
-      <TerminalBar
-        path="dashboard --watch"
-        status={
-          <StatusDot
-            status={metrics?.sandbox_health === "healthy" && metrics?.sandbox_available ? "healthy" : metrics ? "error" : "unknown"}
-            size={4}
-            pulse={metrics?.sandbox_health === "healthy"}
-          />
-        }
-      >
-        <div className="flex items-center gap-8 text-xs">
-          {!isCloudMode && (
-            <div className="flex items-center gap-2">
-              <Server className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-              <span className="text-[var(--color-text-dim)]">sandbox_mgr:</span>
-              <code className="text-[12px] text-[var(--color-text)]">
-                {metrics?.sandbox_manager || "—"}
-              </code>
-              <StatusBadge ok={metrics ? metrics.sandbox_health === "healthy" : null} />
-            </div>
-          )}
-          {!isCloudMode && (
-            <div className="flex items-center gap-2">
-              <Cpu className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-              <span className="text-[var(--color-text-dim)]">sandbox:</span>
-              <StatusBadge ok={metrics ? metrics.sandbox_available : null} />
-            </div>
-          )}
-          {latencyValues.length > 3 && (
-            <div className="flex items-center gap-2 ml-auto">
-              <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">latency:</span>
-              <Sparkline values={latencyValues} color="var(--color-success)" width={60} height={16} />
-            </div>
-          )}
-          <div className={`${latencyValues.length <= 3 ? "ml-auto" : ""} flex items-center gap-2`}>
-            <Shield className="w-3 h-3 text-[var(--color-success)]" strokeWidth={1.5} />
-            <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
-              governance: active
-            </span>
+      <section className="dash-command-band">
+        <div className="dash-command-state">
+          <span className={`dash-state is-${state.tone}`}><i /> {state.label}</span>
+          <h2>{state.title}</h2>
+          <p>
+            {connections.length
+              ? `${healthyConnections} healthy · ${unhealthyConnections} unhealthy · ${pendingConnections} pending · ${allTimeEvents.toLocaleString()} governed events`
+              : "Add a governed connection to start measuring agent activity."}
+          </p>
+        </div>
+        <div className="dash-command-metrics">
+          <Metric label="Queries today" value={requestsToday.toLocaleString()} note={typeof dailyLimit === "number" ? `${dailyLimit.toLocaleString()} daily allowance` : "Unlimited plan"} icon={Zap} tone="good" />
+          <Metric label="Tracked spend" value={formatMoney(trackedSpend)} note={`${budgetSessions.length} active session budgets`} icon={CircleDollarSign} tone={budgetUtilization >= 80 ? "warning" : "neutral"} />
+          <Metric label="Eval accuracy" value={latestAccuracy ? `${latestAccuracy.accuracy_pct.toFixed(0)}%` : "--"} note={latestAccuracy ? `${latestAccuracy.tasks_passed}/${latestAccuracy.tasks_total} tasks passed` : "No completed eval run"} icon={Gauge} tone={latestAccuracy && latestAccuracy.accuracy_pct >= 85 ? "good" : latestAccuracy ? "warning" : "neutral"} />
+          <Metric label="Policy blocks" value={blockedEvents.toLocaleString()} note={`${blockRate.toFixed(1)}% of governed events`} icon={ShieldX} tone={blockedEvents ? "warning" : "good"} />
+          <Metric label="Active workloads" value={activeWorkloads.toLocaleString()} note={`${runningChats} chats · ${metrics?.running_sandboxes ?? 0} sandboxes`} icon={Bot} />
+        </div>
+      </section>
+
+      <section className="dash-operations-grid">
+        <div className="dash-panel dash-activity-panel">
+          <div className="dash-panel-head">
+            <div><span className="dash-eyebrow">Governed usage</span><h2>Operations and estimated cost</h2><p>Latest 500-event window, grouped across the last seven days.</p></div>
+            <div className="dash-chart-legend"><span><i className="ops" /> operations</span><span><i className="blocks" /> blocked</span><span><i className="cost" /> estimated cost</span></div>
+          </div>
+          <div className="dash-chart-wrap">
+            <ResponsiveContainer width="100%" height={260}>
+              <ComposedChart data={activitySeries} margin={{ top: 16, right: 4, left: -24, bottom: 0 }}>
+                <CartesianGrid vertical={false} stroke="var(--color-border)" strokeDasharray="2 6" />
+                <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: "var(--color-text-dim)", fontSize: 10 }} />
+                <YAxis yAxisId="events" allowDecimals={false} axisLine={false} tickLine={false} tick={{ fill: "var(--color-text-dim)", fontSize: 10 }} />
+                <YAxis yAxisId="cost" orientation="right" axisLine={false} tickLine={false} tick={{ fill: "var(--color-text-dim)", fontSize: 10 }} tickFormatter={(value) => `$${value}`} />
+                <Tooltip content={<ActivityTooltip />} cursor={{ fill: "var(--color-bg-hover)" }} />
+                <Bar yAxisId="events" dataKey="operations" fill="#4f9d8d" radius={[3, 3, 0, 0]} maxBarSize={34} />
+                <Bar yAxisId="events" dataKey="blocked" fill="#d76166" radius={[3, 3, 0, 0]} maxBarSize={12} />
+                <Line yAxisId="cost" type="monotone" dataKey="cost" stroke="#d1a54a" strokeWidth={2} dot={{ r: 2, fill: "#d1a54a" }} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="dash-chart-footer">
+            <span><strong>{allTimeEvents.toLocaleString()}</strong> lifetime events</span>
+            <span><strong>{p95Latency == null ? "--" : `${Math.round(p95Latency)}ms`}</strong> p95 latency</span>
+            <span><strong>{formatMoney(recentCost)}</strong> recent estimated cost</span>
           </div>
         </div>
-      </TerminalBar>
 
-      {/* ── Metric cards — top row ── */}
-      <div className={`grid ${isCloudMode ? "grid-cols-2" : "grid-cols-4"} gap-px mb-px bg-[var(--color-border)] border border-[var(--color-border)] stagger-fade-in`}>
-        {!isCloudMode && (
-          <MetricCard
-            label="active sandboxes"
-            value={metrics?.active_sandboxes ?? "—"}
-            subtext={metrics ? `${metrics.running_sandboxes} running` : undefined}
-            icon={Terminal}
-          />
-        )}
-        {!isCloudMode && (
-          <MetricCard
-            label="sandbox instances"
-            value={metrics ? `${metrics.active_sandbox_instances} / ${metrics.max_sandbox_instances}` : "—"}
-            icon={Cpu}
-          />
-        )}
-        <MetricCard
-          label="connections"
-          value={connections.length}
-          subtext={connections.length > 0 ? connections.map(c => c.db_type).filter((v, i, a) => a.indexOf(v) === i).join(", ") : undefined}
-          icon={Database}
-          actionHref="/connections?action=new"
-        />
-        <MetricCard
-          label="total spent"
-          value={budgetData ? `$${budgetData.total_spent_usd.toFixed(4)}` : "$0.00"}
-          subtext={budgetData ? `${budgetData.sessions.length} sessions` : undefined}
-          icon={DollarSign}
-          accentColor="text-[var(--color-warning)]"
-        />
-      </div>
-
-      {/* ── Stats cards — second row ── */}
-      <div className="grid grid-cols-4 gap-px mb-8 bg-[var(--color-border)] stagger-fade-in">
-        <MetricCard
-          label="queries"
-          value={auditStats.queries}
-          icon={BarChart3}
-          accentColor="text-[var(--color-success)]"
-        />
-        <MetricCard
-          label="executions"
-          value={auditStats.executions}
-          icon={Zap}
-          accentColor="text-blue-400"
-        />
-        <MetricCard
-          label="blocked"
-          value={auditStats.blocks}
-          icon={Shield}
-          accentColor={auditStats.blocks > 0 ? "text-[var(--color-error)]" : undefined}
-        />
-        <MetricCard
-          label="avg latency"
-          value={
-            recentAudit.filter(e => e.duration_ms != null).length > 0
-              ? `${Math.round(recentAudit.filter(e => e.duration_ms != null).reduce((sum, e) => sum + (e.duration_ms || 0), 0) / recentAudit.filter(e => e.duration_ms != null).length)}ms`
-              : "—"
-          }
-          icon={Clock}
-        />
-      </div>
-
-      {/* ── Latency + Distribution row ── */}
-      {latencyValues.length > 3 && (
-        <div className="grid grid-cols-3 gap-4 mb-8 stagger-fade-in">
-          <div className="col-span-2 border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 card-accent-top">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <Clock className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-                <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">query latency</span>
-              </div>
-              <span className="text-[12px] tabular-nums text-[var(--color-text-dim)]">last {latencyValues.length} ops</span>
-            </div>
-            <ResponsiveAreaChart values={latencyValues} height={80} color="var(--color-success)" />
+        <aside className="dash-panel dash-cost-panel">
+          <div className="dash-panel-head"><div><span className="dash-eyebrow">Cost control</span><h2>Spend and budget position</h2><p>Persisted gateway and data-chat cost signals.</p></div></div>
+          <div className="dash-cost-total"><span>Total tracked spend</span><strong>{formatMoney(trackedSpend)}</strong><small>Across all governed budget sessions</small></div>
+          <div className="dash-budget-meter">
+            <div><span>Active budget use</span><strong>{activeBudgetTotal ? `${budgetUtilization.toFixed(0)}%` : "--"}</strong></div>
+            <div className="dash-meter"><i style={{ width: `${Math.min(100, budgetUtilization)}%` }} /></div>
+            <p>{formatMoney(activeBudgetSpent)} used of {formatMoney(activeBudgetTotal)} allocated</p>
           </div>
-          <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 card-accent-top">
-            <div className="flex items-center gap-2 mb-3">
-              <BarChart3 className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-              <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">operation mix</span>
-            </div>
-            <div className="space-y-3">
-              <StackedBar
-                segments={[
-                  { value: auditStats.queries, color: "var(--color-success)", label: "queries" },
-                  { value: auditStats.executions, color: "#60a5fa", label: "executions" },
-                  { value: auditStats.blocks, color: "var(--color-error)", label: "blocked" },
-                ]}
-                width={200}
-                height={8}
-              />
-              <div className="flex items-center gap-4 text-[11px] text-[var(--color-text-dim)] tracking-wider">
-                <span className="flex items-center gap-1"><span className="w-2 h-2 bg-[var(--color-success)]" />queries</span>
-                <span className="flex items-center gap-1"><span className="w-2 h-2 bg-blue-400" />exec</span>
-                <span className="flex items-center gap-1"><span className="w-2 h-2 bg-[var(--color-error)]" />blocked</span>
+          <dl className="dash-cost-breakdown">
+            <div><dt>Recent query estimate</dt><dd>{formatMoney(recentCost)}</dd></div>
+            <div><dt>Data chat actual</dt><dd>{formatMoney(chatActualSpend)}</dd></div>
+            <div><dt>Data chat reserved</dt><dd>{formatMoney(chatReservedSpend)}</dd></div>
+          </dl>
+          <Link href="/settings/usage" className="dash-panel-link">Usage details <ArrowUpRight /></Link>
+        </aside>
+      </section>
+
+      <section className="dash-surface-grid" aria-label="Product signals">
+        <div className="dash-quality-signal">
+          <QualityGauge value={latestAccuracy?.accuracy_pct ?? null} />
+          <div><span>Agent quality</span><strong>{latestAccuracy ? `${latestAccuracy.tasks_passed} of ${latestAccuracy.tasks_total} tasks passed` : "Awaiting first eval"}</strong><p>{latestAccuracy?.coverage_pct == null ? "No mart coverage baseline" : `${latestAccuracy.coverage_pct.toFixed(0)}% mart coverage`}</p></div>
+          <Link href="/evals/accuracy" aria-label="Open accuracy"><ArrowUpRight /></Link>
+        </div>
+        <SurfaceSignal href="/connections" icon={Database} label="Data access" value={`${connections.length} connections`} note={pendingConnections ? `${pendingConnections} awaiting health samples · ${projects?.length ?? 0} projects` : `${healthyConnections} healthy · ${projects?.length ?? 0} projects`} tone={unhealthyConnections ? "warning" : healthyConnections ? "good" : "neutral"} />
+        <SurfaceSignal href="/knowledge" icon={BookOpenText} label="Knowledge" value={`${knowledgeUsage?.active_docs ?? 0} active entries`} note={`${storagePct.toFixed(1)}% of storage used`} tone={knowledgeUsage?.active_docs ? "good" : "neutral"} />
+        <SurfaceSignal href="/chats" icon={MessageSquareText} label="Data chat" value={`${conversations.length} conversations`} note={`${runningChats} active · ${formatMoney(chatActualSpend)} spent`} tone={runningChats ? "good" : "neutral"} />
+        <SurfaceSignal href="/reports" icon={FileChartColumn} label="Reports" value={`${reports?.length ?? 0} published`} note="Reusable governed outputs" />
+      </section>
+
+      <section className="dash-lower-grid">
+        <div className="dash-panel dash-feed-panel">
+          <div className="dash-panel-head">
+            <div><span className="dash-eyebrow">Audit stream</span><h2>Recent governed activity</h2><p>Queries, tool calls, and policy decisions across the workspace.</p></div>
+            <Link href="/audit" className="dash-panel-link">Full audit <ArrowUpRight /></Link>
+          </div>
+          <div className="dash-activity-feed">
+            {!entries.length && <div className="dash-feed-empty"><Activity /><strong>No activity yet</strong><span>Run a governed query to start the audit stream.</span></div>}
+            {entries.slice(0, 8).map((entry) => (
+              <div className="dash-activity-row" key={entry.id}>
+                <span className={`dash-event-mark${entry.blocked ? " is-blocked" : ""}`}><i /></span>
+                <div>
+                  <strong>{entry.blocked ? "Policy blocked an operation" : entry.event_type.replaceAll("_", " ")}</strong>
+                  <span>{entry.connection_name ?? entry.agent_id ?? "workspace"}</span>
+                </div>
+                <code>{entry.sql?.slice(0, 72) ?? String(entry.metadata?.tool_name ?? entry.metadata?.code_preview ?? "governed operation")}</code>
+                <span className="dash-row-metric">{entry.duration_ms == null ? "--" : `${Math.round(entry.duration_ms)}ms`}</span>
+                <TimeAgo timestamp={entry.timestamp} live />
               </div>
-              <div className="pt-2 border-t border-[var(--color-border)] space-y-1.5">
-                {[
-                  { label: "queries", value: auditStats.queries, total: auditStats.total, color: "text-[var(--color-success)]" },
-                  { label: "executions", value: auditStats.executions, total: auditStats.total, color: "text-blue-400" },
-                  { label: "blocked", value: auditStats.blocks, total: auditStats.total, color: "text-[var(--color-error)]" },
-                ].map(row => (
-                  <div key={row.label} className="flex items-center justify-between">
-                    <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">{row.label}</span>
-                    <span className={`text-[12px] tabular-nums ${row.color}`}>
-                      {row.value} <span className="text-[var(--color-text-dim)]">/ {row.total > 0 ? ((row.value / row.total) * 100).toFixed(0) : 0}%</span>
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
+            ))}
           </div>
         </div>
-      )}
 
-      {/* ── Governance Pipeline ── */}
-      <div className="mb-8">
-        <GovernancePipeline />
-      </div>
-
-      {/* ── System topology ── */}
-      <div className="mb-8">
-        <SystemDiagram
-          connections={connections.length}
-          activeSandboxes={isCloudMode ? 0 : (metrics?.active_sandboxes ?? 0)}
-          governanceActive={true}
-        />
-      </div>
-
-      {/* ── Two-column layout ── */}
-      <div className="grid grid-cols-3 gap-4">
-        {/* Recent activity — takes 2 cols */}
-        <div className="col-span-2 border border-[var(--color-border)] bg-[var(--color-bg-card)] card-radial-glow">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
-            <div className="flex items-center gap-2">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path d="M2 6h2l1.5-3 1.5 6 1.5-3H11" stroke="var(--color-text-dim)" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
-                recent activity
-              </span>
-            </div>
-            <Link href="/audit" className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
-              view all <ArrowRight className="w-3 h-3" />
-            </Link>
-          </div>
-          <div className="divide-y divide-[var(--color-border)]">
-            {recentAudit.length === 0 ? (
-              <EmptyState
-                icon={EmptyTerminal}
-                title="no activity yet"
-                description="connect a database and run queries to see the activity feed"
-              />
-            ) : (
-              recentAudit.slice(0, 12).map((entry) => {
-                const cfg = eventTypeConfig[entry.event_type] || eventTypeConfig.query;
-                return (
-                  <div
-                    key={entry.id}
-                    className="group/row hover:bg-[var(--color-bg-hover)] transition-all"
-                  >
-                    <div className="flex items-center gap-3 px-4 py-2.5">
-                      <span className={`text-[11px] font-medium uppercase tracking-[0.15em] w-8 ${
-                        entry.blocked ? "text-[var(--color-error)]" : cfg.color
-                      }`}>
-                        {cfg.label}
-                      </span>
-                      <span className="flex-1 text-xs truncate overflow-hidden">
-                        {entry.sql
-                          ? <SqlHighlight sql={entry.sql.slice(0, 80)} className="text-xs" />
-                          : <span className="text-[var(--color-text-muted)]">{entry.metadata?.code_preview
-                            ? String(entry.metadata.code_preview).slice(0, 80)
-                            : entry.connection_name || "—"}</span>}
-                      </span>
-                      {entry.blocked && (
-                        <span className="text-[11px] px-1.5 py-0.5 border border-[var(--color-error)]/30 text-[var(--color-error)] tracking-wider uppercase">
-                          blocked
-                        </span>
-                      )}
-                      {entry.rows_returned != null && (
-                        <span className="text-[12px] tabular-nums text-[var(--color-text-dim)]">
-                          {entry.rows_returned}r
-                        </span>
-                      )}
-                      {entry.duration_ms != null && (
-                        <span className="text-[12px] tabular-nums text-[var(--color-text-dim)]">
-                          {entry.duration_ms.toFixed(0)}ms
-                        </span>
-                      )}
-                      <TimeAgo
-                        timestamp={entry.timestamp}
-                        live
-                        className="text-[12px] text-[var(--color-text-dim)] w-10 text-right flex-shrink-0"
-                      />
-                    </div>
-                    {/* Hover-reveal detail row */}
-                    <div className="grid grid-cols-[2rem_1fr] gap-3 px-4 max-h-0 overflow-hidden opacity-0 group-hover/row:max-h-16 group-hover/row:opacity-100 group-hover/row:pb-2.5 transition-all duration-200 ease-out">
-                      <span />
-                      <div className="flex items-center gap-4 text-[11px] text-[var(--color-text-dim)] tracking-wider">
-                        {entry.connection_name && (
-                          <span className="flex items-center gap-1">
-                            <span className="w-1 h-1 bg-[var(--color-text-dim)] opacity-40" />
-                            {entry.connection_name}
-                          </span>
-                        )}
-                        {entry.sandbox_id && (
-                          <span className="flex items-center gap-1 font-mono tabular-nums">
-                            sbx:{entry.sandbox_id.slice(0, 8)}
-                          </span>
-                        )}
-                        {entry.metadata?.governance_latency_ms != null && (
-                          <span>gov: {Number(entry.metadata.governance_latency_ms).toFixed(1)}ms</span>
-                        )}
-                        {entry.metadata?.stages_applied != null && (
-                          <span className="flex items-center gap-1">
-                            stages: {String(entry.metadata.stages_applied)}
-                          </span>
-                        )}
-                        {entry.blocked && entry.block_reason && (
-                          <span className="text-[var(--color-error)]">
-                            reason: {entry.block_reason}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })
+        <aside className="dash-panel dash-attention-panel">
+          <div className="dash-panel-head"><div><span className="dash-eyebrow">Attention queue</span><h2>What needs action</h2><p>Operational and quality signals above their thresholds.</p></div></div>
+          <div className="dash-attention-list">
+            {!attentionItems.length && (
+              <div className="dash-all-clear"><CheckCircle2 /><strong>No critical issues</strong><span>Current operating signals are within policy.</span></div>
             )}
+            {attentionItems.map((item) => (
+              <Link href={item.href} key={item.title} className={`dash-attention-item is-${item.tone}`}>
+                {item.tone === "critical" ? <AlertTriangle /> : <Clock3 />}
+                <div><strong>{item.title}</strong><span>{item.detail}</span></div>
+                <ArrowUpRight />
+              </Link>
+            ))}
           </div>
-        </div>
-
-        {/* Right column — Connections + Cache */}
-        <div className="space-y-4">
-          {/* Connections overview */}
-          <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] card-radial-glow">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
-              <div className="flex items-center gap-2">
-                <Database className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-                <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
-                  connections
-                </span>
-              </div>
-              <div className="flex items-center gap-3">
-                <Link href="/connections?action=new" className="flex items-center gap-1 px-2 py-0.5 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider">
-                  <Plus className="w-3 h-3" /> add
-                </Link>
-                <Link href="/connections" className="flex items-center gap-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
-                  manage <ArrowRight className="w-3 h-3" />
-                </Link>
-              </div>
-            </div>
-            <div className="divide-y divide-[var(--color-border)]">
-              {connections.length === 0 ? (
-                <div className="px-4 py-10 text-center">
-                  <Database className="w-5 h-5 mx-auto mb-2 text-[var(--color-text-dim)] opacity-20" strokeWidth={1} />
-                  <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
-                    no connections
-                  </p>
-                </div>
-              ) : (
-                connections.map((conn) => {
-                  const health = connHealth[conn.name];
-                  return (
-                    <div
-                      key={conn.id}
-                      className="flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--color-bg-hover)] transition-colors group"
-                    >
-                      <StatusDot
-                        status={
-                          health?.status === "healthy" ? "healthy" :
-                          health?.status === "warning" ? "warning" :
-                          health?.status === "degraded" || health?.status === "unhealthy" ? "error" :
-                          "unknown"
-                        }
-                        size={4}
-                        pulse={health?.status === "healthy"}
-                      />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs text-[var(--color-text-muted)] truncate">{conn.name}</p>
-                        <p className="text-[12px] text-[var(--color-text-dim)] truncate">
-                          {conn.host}:{conn.port}/{conn.database}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {health?.latency_p50_ms != null && (
-                          <div className="flex items-center gap-1.5">
-                            <MiniBar
-                              value={health.latency_p50_ms}
-                              max={200}
-                              width={24}
-                              height={3}
-                              color={health.latency_p50_ms < 50 ? "var(--color-success)" : health.latency_p50_ms < 150 ? "var(--color-warning)" : "var(--color-error)"}
-                            />
-                            <span className="text-[12px] tabular-nums text-[var(--color-text-dim)]">
-                              {health.latency_p50_ms.toFixed(0)}ms
-                            </span>
-                          </div>
-                        )}
-                        <span className="text-[11px] px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-dim)] tracking-wider">
-                          {conn.db_type}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
-
-          {/* Query Cache Stats */}
-          <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] card-radial-glow">
-            <div className="px-4 py-3 border-b border-[var(--color-border)]">
-              <div className="flex items-center gap-2">
-                <Zap className="w-3 h-3 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-                <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
-                  query cache
-                </span>
-              </div>
-            </div>
-            <div className="p-4 space-y-3">
-              {cacheStats ? (
-                <>
-                  <div className="flex items-center gap-3">
-                    <RingGauge
-                      value={cacheStats.hit_rate * 100}
-                      max={100}
-                      size={36}
-                      strokeWidth={3}
-                      color={cacheStats.hit_rate > 0.7 ? "var(--color-success)" : cacheStats.hit_rate > 0.3 ? "var(--color-warning)" : "var(--color-error)"}
-                    />
-                    <div>
-                      <p className={`text-lg font-light tabular-nums ${
-                        cacheStats.hit_rate > 0.7 ? "text-[var(--color-success)]" :
-                        cacheStats.hit_rate > 0.3 ? "text-[var(--color-warning)]" : "text-[var(--color-text)]"
-                      }`}>
-                        {(cacheStats.hit_rate * 100).toFixed(1)}%
-                      </p>
-                      <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider">hit rate</p>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-3 gap-3 pt-1">
-                    <div>
-                      <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">hits</p>
-                      <p className="text-xs font-light tabular-nums text-[var(--color-success)]">{cacheStats.hits}</p>
-                    </div>
-                    <div>
-                      <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">miss</p>
-                      <p className="text-xs font-light tabular-nums text-[var(--color-text-muted)]">{cacheStats.misses}</p>
-                    </div>
-                    <div>
-                      <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">size</p>
-                      <p className="text-xs font-light tabular-nums">{cacheStats.entries}/{cacheStats.max_entries}</p>
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <div className="w-full h-1 animate-shimmer" />
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+          <div className="dash-governance-state"><ShieldCheck /><div><strong>Governance active</strong><span>SQL policy, PII controls, audit, and budget enforcement</span></div></div>
+        </aside>
+      </section>
+    </main>
   );
 }

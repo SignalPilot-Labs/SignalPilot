@@ -44,29 +44,29 @@ export default function NotFound() {
           <path d="M6 139H1V134" stroke="var(--color-border-hover)" strokeWidth="1" />
         </svg>
 
-        <h2 className="text-lg font-light text-[var(--color-text)] tracking-wide mb-2">
+        <h2 className="text-lg font-semibold text-[var(--color-text)] tracking-[-0.01em] mb-2">
           path not found
         </h2>
-        <p className="text-xs text-[var(--color-text-dim)] tracking-wider mb-8">
+        <p className="text-xs text-[var(--color-text-dim)] mb-8">
           the route you requested doesn&apos;t exist in this instance
         </p>
 
         <div className="flex items-center justify-center gap-4">
           <Link
             href="/dashboard"
-            className="flex items-center gap-2 px-5 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase transition-all hover:opacity-90"
+            className="flex items-center gap-2 px-5 py-2 rounded-[10px] bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium transition-opacity duration-150 hover:opacity-90"
           >
             dashboard
           </Link>
           <Link
             href="/query"
-            className="flex items-center gap-2 px-5 py-2 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider"
+            className="flex items-center gap-2 px-5 py-2 rounded-[10px] text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-colors duration-150"
           >
             query explorer
           </Link>
         </div>
 
-        <p className="mt-8 text-[11px] text-[var(--color-text-dim)] tracking-wider">
+        <p className="mt-8 text-[11px] text-[var(--color-text-dim)]">
           <code className="text-[var(--color-text-dim)]">signalpilot v0.1.0</code>
         </p>
       </div>

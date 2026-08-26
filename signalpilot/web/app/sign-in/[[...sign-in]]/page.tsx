@@ -3,15 +3,15 @@
 import { useState, useEffect } from "react";
 import { useSignIn, useAuth, useClerk } from "@clerk/nextjs";
 import { useRouter } from "next/navigation";
-import { AuthShell } from "@/components/auth/auth-shell";
+import { AuthShell } from "~/components/auth/auth-shell";
 import { Loader2 } from "lucide-react";
 
 const INPUT_CLASS =
   "w-full px-3 py-2.5 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-[13px] text-[var(--color-text)] font-mono tracking-wide focus:outline-none focus:border-[var(--color-text-dim)] placeholder:text-[var(--color-text-dim)]/40";
 const LABEL_CLASS =
-  "block text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em] mb-1.5";
+  "block text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em] mb-1.5";
 const BTN_PRIMARY =
-  "w-full px-4 py-2.5 bg-[var(--color-success)] text-[var(--color-bg)] text-[12px] font-medium tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30";
+  "w-full px-4 py-2.5 bg-[var(--color-success)] text-[var(--color-bg)] text-[12px] font-medium rounded-[10px] transition-colors duration-150 hover:opacity-90 disabled:opacity-30";
 const BTN_SOCIAL =
   "flex items-center justify-center gap-2 w-full px-4 py-2.5 border border-[var(--color-border)] bg-[var(--color-bg-card)] hover:bg-[var(--color-bg-hover)] hover:border-[var(--color-border-hover)] text-[12px] text-[var(--color-text-muted)] tracking-wider transition-all font-mono";
 const ERROR_CLASS = "text-[12px] text-[var(--color-error)] tracking-wider";

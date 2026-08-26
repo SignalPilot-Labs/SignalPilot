@@ -1,4 +1,4 @@
-"""Tests for the governance layer — budget, cost estimation, PII redaction."""
+"""Tests for the governance layer. budget, cost estimation, PII redaction."""
 
 import pytest
 
@@ -127,26 +127,33 @@ class TestPIIRedactor:
         assert "@test.com" in result[0]["email"]
         assert "john" not in result[0]["email"]
 
-    def test_drop_rule(self):
+    def test_hide_rule(self):
         redactor = PIIRedactor()
-        redactor.add_rule("ssn", PIIRule.drop)
+        redactor.add_rule("ssn", PIIRule.hide)
         rows = [{"name": "John", "ssn": "123-45-6789"}]
         result = redactor.redact_rows(rows)
-        assert "ssn" not in result[0]
+        assert result[0]["ssn"] == "*****"
         assert result[0]["name"] == "John"
+
+    def test_legacy_drop_rule_is_rejected(self):
+        """Verify that the annotation parser rejects the drop action."""
+        redactor = PIIRedactor()
+        with pytest.raises(ValueError, match="hash, mask, hide"):
+            redactor.add_rule("ssn", "drop")
+        assert redactor.rule_count == 0
 
     def test_multiple_rules(self):
         redactor = PIIRedactor()
         redactor.add_rule("email", PIIRule.hash)
         redactor.add_rule("phone", PIIRule.mask)
-        redactor.add_rule("ssn", PIIRule.drop)
+        redactor.add_rule("ssn", PIIRule.hide)
         rows = [
             {"name": "John", "email": "j@t.com", "phone": "555-1234", "ssn": "999"},
         ]
         result = redactor.redact_rows(rows)
         assert result[0]["name"] == "John"
         assert result[0]["email"].startswith("sha256:")
-        assert "ssn" not in result[0]
+        assert result[0]["ssn"] == "*****"
         assert "1234" in result[0]["phone"]
 
     def test_case_insensitive_column_matching(self):
@@ -159,7 +166,7 @@ class TestPIIRedactor:
     def test_last_redacted_columns_tracked(self):
         redactor = PIIRedactor()
         redactor.add_rule("email", PIIRule.hash)
-        redactor.add_rule("ssn", PIIRule.drop)
+        redactor.add_rule("ssn", PIIRule.hide)
         rows = [{"name": "John", "email": "j@t.com", "ssn": "999"}]
         redactor.redact_rows(rows)
         assert set(redactor.last_redacted_columns) == {"email", "ssn"}
@@ -172,7 +179,7 @@ class TestPIIRedactor:
                     "columns": {
                         "email": {"pii": "hash"},
                         "phone": {"pii": "mask"},
-                        "ssn": {"pii": "drop"},
+                        "ssn": {"pii": "hide"},
                         "name": {},  # No PII rule
                     }
                 }
@@ -180,6 +187,13 @@ class TestPIIRedactor:
         }
         redactor.add_rules_from_annotations(annotations)
         assert redactor.rule_count == 3
+
+    def test_load_from_annotations_rejects_legacy_drop(self):
+        """A stored annotation that still says "drop" fails loudly."""
+        redactor = PIIRedactor()
+        annotations = {"tables": {"users": {"columns": {"ssn": {"pii": "drop"}}}}}
+        with pytest.raises(ValueError, match="Invalid PII rule 'drop'"):
+            redactor.add_rules_from_annotations(annotations)
 
     def test_empty_rows(self):
         redactor = PIIRedactor()

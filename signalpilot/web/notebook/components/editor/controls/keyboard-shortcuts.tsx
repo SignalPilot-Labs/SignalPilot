@@ -1,0 +1,334 @@
+import { atom, useAtom, useAtomValue } from "jotai";
+import { AlertTriangleIcon, EditIcon, XIcon } from "lucide-react";
+import { useState } from "react";
+import { useConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Kbd } from "@/components/ui/kbd";
+import { hotkeysAtom, useResolvedSpConfig } from "@/core/config/config";
+import type { UserConfig } from "@/core/config/config-schema";
+import {
+  getDefaultHotkey,
+  type HotkeyAction,
+  type HotkeyGroup,
+} from "@/core/hotkeys/hotkeys";
+import { isPlatformMac } from "@/core/hotkeys/shortcuts";
+import { useRequestClient } from "@/core/network/requests";
+import { useDuplicateShortcuts } from "../../../hooks/useDuplicateShortcuts";
+import { useHotkey } from "../../../hooks/useHotkey";
+import { KeyboardHotkeys } from "../../shortcuts/renderShortcut";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+} from "../../ui/dialog";
+import { DuplicateShortcutBanner } from "./duplicate-shortcut-banner";
+
+export const keyboardShortcutsAtom = atom(false);
+
+export const KeyboardShortcuts: React.FC = () => {
+  const [isOpen, setIsOpen] = useAtom(keyboardShortcutsAtom);
+  const [editingShortcut, setEditingShortcut] = useState<HotkeyAction | null>(
+    null,
+  );
+  const { confirm, dialog: confirmDialog } = useConfirmDialog();
+  const [newShortcut, setNewShortcut] = useState<string[]>([]);
+  const [config, setConfig] = useResolvedSpConfig();
+  const hotkeys = useAtomValue(hotkeysAtom);
+  const { saveUserConfig } = useRequestClient();
+  const { duplicates, hasDuplicate, getDuplicatesFor } = useDuplicateShortcuts(
+    hotkeys,
+    "Markdown",
+  );
+
+  useHotkey("global.showHelp", () => setIsOpen((v) => !v));
+
+  const saveConfigOptimistic = async (newConfig: Partial<UserConfig>) => {
+    const prevConfig = { ...config };
+    setConfig((prev) => ({ ...prev, ...newConfig }));
+    await saveUserConfig({ config: newConfig }).catch((error) => {
+      setConfig(prevConfig);
+      throw error;
+    });
+  };
+
+  const handleNewShortcut = async (shortcut: string[]) => {
+    if (!editingShortcut) {
+      return;
+    }
+
+    const shortcutString = shortcut.join("-");
+    const newConfig = {
+      keymap: {
+        ...config.keymap,
+        overrides: {
+          ...config.keymap.overrides,
+          [editingShortcut]: shortcutString,
+        },
+      },
+    };
+
+    setEditingShortcut(null);
+    setNewShortcut([]);
+    await saveConfigOptimistic(newConfig);
+  };
+
+  const handleResetShortcut = async () => {
+    if (!editingShortcut) {
+      return;
+    }
+
+    const newConfig = {
+      keymap: {
+        ...config.keymap,
+        overrides: {
+          ...config.keymap.overrides,
+        },
+      },
+    };
+
+    // oxlint-disable-next-line typescript/no-dynamic-delete
+    delete newConfig.keymap.overrides[editingShortcut];
+
+    setEditingShortcut(null);
+    setNewShortcut([]);
+    await saveConfigOptimistic(newConfig);
+  };
+
+  const handleResetAllShortcuts = async () => {
+    const ok = await confirm({
+      title: "Reset Shortcuts",
+      description: "Are you sure you want to reset all shortcuts to their default values?",
+      confirmLabel: "Reset all",
+      variant: "destructive",
+    });
+    if (!ok) {return;}
+
+    const newConfig: Partial<UserConfig> = {
+      keymap: {
+        ...config.keymap,
+        overrides: {},
+      },
+    };
+
+    setEditingShortcut(null);
+    setNewShortcut([]);
+    await saveConfigOptimistic(newConfig);
+  };
+
+  if (!isOpen) {
+    return null;
+  }
+
+  const renderItem = (action: HotkeyAction) => {
+    const hotkey = hotkeys.getHotkey(action);
+
+    if (editingShortcut === action) {
+      const defaultHotkey = getDefaultHotkey(action);
+      return (
+        <div key={action}>
+          <Input
+            defaultValue={newShortcut.join("+")}
+            placeholder={hotkey.name}
+            onKeyDown={(e) => {
+              e.preventDefault();
+              const next: string[] = [];
+
+              // Skip if the key is a modifier key
+              if (
+                e.key === "Meta" ||
+                e.key === "Control" ||
+                e.key === "Alt" ||
+                e.key === "Shift"
+              ) {
+                return;
+              }
+
+              if (e.metaKey) {
+                next.push(isPlatformMac() ? "Cmd" : "Meta");
+              }
+              if (e.ctrlKey) {
+                next.push("Ctrl");
+              }
+              if (e.altKey) {
+                next.push("Alt");
+              }
+              if (e.shiftKey) {
+                next.push("Shift");
+              }
+
+              // We don't allow `-` to be a shortcut key, since it's used to
+              // separate keys in the shortcut string
+              if (e.key === "-") {
+                return;
+              }
+              // If escape is pressed, without any modifier keys, cancel editing
+              // We don't allow escape to be a shortcut key along, since it's used to
+              // remove focus from many elements
+              if (e.key === "Escape" && next.length === 0) {
+                setEditingShortcut(null);
+                setNewShortcut([]);
+                return;
+              }
+
+              // Single character keys are always lowercase (e.g. "a", "b", "c")
+              // But we should preserve the original case for other keys (e.g. "Enter", "Escape")
+              let key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+              // Handle edge cases
+              if (e.key === " ") {
+                key = "Space";
+              }
+
+              next.push(key);
+
+              handleNewShortcut(next);
+            }}
+            autoFocus={true}
+            endAdornment={
+              <Button
+                variant="text"
+                size="xs"
+                className="mb-0"
+                onClick={() => {
+                  setEditingShortcut(null);
+                  setNewShortcut([]);
+                }}
+              >
+                <XIcon className="w-4 h-4" />
+              </Button>
+            }
+          />
+          <div className="flex items-center justify-between w-full">
+            <span className="text-muted-foreground text-xs">
+              Press a key combination
+            </span>
+            {defaultHotkey.key !== hotkey.key && (
+              <span
+                className="text-xs cursor-pointer text-primary"
+                onClick={handleResetShortcut}
+              >
+                Reset to default:{" "}
+                <span className="font-mono">{defaultHotkey.key}</span>
+              </span>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    const isDuplicate = hasDuplicate(action);
+    const duplicateActions = isDuplicate ? getDuplicatesFor(action) : [];
+
+    return (
+      <div
+        key={action}
+        className="grid grid-cols-[auto_2fr_3fr] gap-2 items-center"
+      >
+        {hotkeys.isEditable(action) ? (
+          <EditIcon
+            className="cursor-pointer opacity-60 hover:opacity-100 text-muted-foreground w-3 h-3"
+            onClick={() => {
+              setNewShortcut([]);
+              setEditingShortcut(action);
+            }}
+          />
+        ) : (
+          <div className="w-3 h-3" />
+        )}
+        <KeyboardHotkeys className="justify-end" shortcut={hotkey.key} />
+        <div className="flex items-center gap-1">
+          <span>{hotkey.name.toLowerCase()}</span>
+          {isDuplicate && (
+            <div className="group relative inline-flex">
+              <AlertTriangleIcon className="w-3 h-3 text-(--yellow-11)" />
+              <div className="invisible group-hover:visible absolute left-0 top-5 z-10 w-max max-w-xs rounded-md bg-(--yellow-2) border border-(--yellow-7) p-2 text-xs text-(--yellow-11) shadow-md">
+                Also used by:{" "}
+                {duplicateActions
+                  .map((a) => hotkeys.getHotkey(a).name.toLowerCase())
+                  .join(", ")}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const groups = hotkeys.getHotkeyGroups();
+  const renderGroup = (group: HotkeyGroup, subHeader?: React.ReactNode) => {
+    const items = groups[group];
+    return (
+      <div className="mb-[40px] gap-2 flex flex-col">
+        <div>
+          <h3 className="text-lg font-medium">{group}</h3>
+          {subHeader}
+        </div>
+        {items.map(renderItem)}
+      </div>
+    );
+  };
+
+  const renderCommandGroup = (group: HotkeyGroup) =>
+    renderGroup(
+      group,
+      <p className="text-xs text-muted-foreground flex items-center gap-1">
+        Press{" "}
+        {config.keymap.preset === "vim" ? (
+          <>
+            <KeyboardHotkeys shortcut={isPlatformMac() ? "Cmd" : "Ctrl"} />
+            <Kbd>Esc</Kbd>
+          </>
+        ) : (
+          <Kbd>Esc</Kbd>
+        )}{" "}
+        in a cell to enter command mode
+      </p>,
+    );
+
+  return (
+    <>
+    {confirmDialog}
+    <Dialog open={isOpen} onOpenChange={(open) => setIsOpen(open)}>
+      {/* Manually portal so we can adjust positioning: shortcuts modal is too large to offset from top for some screens. */}
+      <DialogPortal className="sm:items-center sm:top-0">
+        <DialogOverlay />
+        <DialogContent
+          usePortal={false}
+          className="max-h-screen sm:max-h-[90vh] overflow-y-auto sm:max-w-[850px]"
+        >
+          <DialogHeader>
+            <DialogTitle>Shortcuts</DialogTitle>
+          </DialogHeader>
+          <DuplicateShortcutBanner duplicates={duplicates} />
+          <div className="flex flex-row gap-3">
+            <div className="w-1/2">
+              {renderGroup("Editing")}
+              {renderGroup("Markdown")}
+            </div>
+
+            <div className="w-1/2">
+              {renderGroup("Navigation")}
+              {renderGroup("Running Cells")}
+              {renderGroup("Creation and Ordering")}
+              {renderCommandGroup("Command")}
+              {renderGroup("Other")}
+              <Button
+                className="mt-4 hover:bg-destructive/10 border-destructive hover:border-destructive"
+                variant="outline"
+                size="xs"
+                onClick={handleResetAllShortcuts}
+                tabIndex={-1}
+              >
+                <span className="text-destructive">Reset all to default</span>
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </DialogPortal>
+    </Dialog>
+    </>
+  );
+};

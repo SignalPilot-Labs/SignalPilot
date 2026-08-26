@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import os
 import sys
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 # Ensure the gateway package is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+os.environ.setdefault("SP_DEPLOYMENT_MODE", "local")
 
 
 @pytest.fixture
@@ -34,6 +37,36 @@ def _set_governance_org(test_org_id: str):
 @pytest.fixture
 def test_user_id() -> str:
     return "test-user"
+
+
+@pytest.fixture
+def fake_k8s_core_api() -> MagicMock:
+    """Fake CoreV1Api stub for namespace bootstrap tests."""
+    api = MagicMock()
+    api.create_namespace = AsyncMock()
+    api.create_namespaced_resource_quota = AsyncMock()
+    api.create_namespaced_limit_range = AsyncMock()
+    api.create_namespaced_pod = AsyncMock()
+    api.delete_namespaced_pod = AsyncMock()
+    api.read_namespaced_pod = AsyncMock()
+    return api
+
+
+@pytest.fixture
+def fake_k8s_networking_api() -> MagicMock:
+    """Fake NetworkingV1Api stub for namespace bootstrap tests."""
+    api = MagicMock()
+    api.create_namespaced_network_policy = AsyncMock()
+    return api
+
+
+@pytest.fixture
+def fake_k8s_rbac_api() -> MagicMock:
+    """Fake RbacAuthorizationV1Api stub for namespace bootstrap tests."""
+    api = MagicMock()
+    api.create_namespaced_role = AsyncMock()
+    api.create_namespaced_role_binding = AsyncMock()
+    return api
 
 
 def pytest_runtest_setup(item):

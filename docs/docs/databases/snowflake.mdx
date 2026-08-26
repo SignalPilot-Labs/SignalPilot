@@ -1,0 +1,76 @@
+---
+sidebar_position: 4
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
+# Snowflake
+
+`snowflake-connector-python`-backed connector. `db_type` is `snowflake`. Tier 1.
+
+## Connection config
+
+<MiniCopyBlock
+  label="snowflake"
+  plain
+  code={`{\n  "name": "prod-snowflake",\n  "db_type": "snowflake",\n  "account": "xy12345.us-east-1",\n  "database": "ANALYTICS",\n  "warehouse": "COMPUTE_WH",\n  "schema_name": "PUBLIC",\n  "role": "ANALYST",\n  "username": "...",\n  "password": "..."\n}`}
+/>
+
+## Connection fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Connection name. `[a-zA-Z0-9_-]`, max 64 chars. |
+| `db_type` | Yes | `snowflake`. |
+| `account` | Yes | Snowflake account identifier (e.g. `xy12345.us-east-1`). |
+| `username` | Yes | User. |
+| `password` | One of | Password auth. |
+| `private_key` / `private_key_passphrase` | One of | PEM-encoded key for key-pair auth. |
+| `database` | No | Default database. |
+| `warehouse` | No | Compute warehouse. |
+| `schema_name` | No | Default schema (mapped to `schema`). |
+| `role` | No | Role to assume. |
+| `connection_timeout` | No | Login timeout, seconds. |
+| `query_timeout` | No | Network timeout, seconds. |
+| `keepalive_interval` | No | Session keep-alive heartbeat seconds (default 900). |
+
+**Auth priority:** OAuth (`oauth_access_token` / `auth_method: oauth`) is tried first, then key-pair (`private_key`), then password.
+
+## Capabilities
+
+| Capability | Supported | Notes |
+|------------|-----------|-------|
+| Query | Yes | Server-side timeout via `ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS`. |
+| Schema introspection | Yes (full) | `INFORMATION_SCHEMA` columns/tables; `SHOW TABLES IN DATABASE` for clustering keys. |
+| FK discovery | Yes | `INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS` joined to `KEY_COLUMN_USAGE`. |
+| EXPLAIN | Yes | Returns estimated cost, not actual execution stats. |
+| Cost estimation | Yes (estimated) | Estimated credits based on bytes scanned. |
+| Schema stats | Yes | `ROW_COUNT` and `BYTES` from `INFORMATION_SCHEMA.TABLES`; clustering keys; table/column comments. |
+
+Tier 1.
+
+## Dialect notes / gotchas
+
+- Identifiers are quoted with double quotes (`"COL"`).
+- Use `QUALIFY` to filter on window functions, `LATERAL FLATTEN` to expand arrays, `ILIKE` for case-insensitive matching, and `VARIANT` for semi-structured data.
+- Metadata queries raise the statement timeout to 120s — large databases can exceed the default.
+- The `snowflake-connector-python` connection is not thread-safe; metadata queries run sequentially in one thread.
+
+## Blocked functions
+
+These Snowflake system functions are blocked inside `SELECT` (plus all DDL/DML):
+
+- `system$execute_program`
+- `system$stream_get`
+- `system$pipe_force_resume`
+- `system$cancel_all_queries`
+
+The universal `load_extension` / `install_extension` block also applies.
+
+## Recommended plugin skill
+
+`snowflake-sql` — QUALIFY, LATERAL FLATTEN, VARIANT, time travel, and Snowflake date functions.
+
+## Cloud vs local
+
+Cloud-only warehouse. In cloud mode, hostnames are validated against the SSRF allow-list (`*.snowflakecomputing.com` is allowed by default).

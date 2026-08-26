@@ -1,0 +1,12 @@
+{
+  "name": "signalpilot-dbt",
+  "version": "1.0.0",
+  "description": "Governed AI database access for dbt and SQL — sandboxed queries, schema discovery, and intelligent model building powered by SignalPilot",
+  "author": {
+    "name": "SignalPilot Labs",
+    "url": "https://github.com/SignalPilot-Labs"
+  },
+  "repository": "https://github.com/SignalPilot-Labs/signalpilot-plugin",
+  "license": "Apache-2.0",
+  "keywords": ["dbt", "sql", "database", "analytics", "data-engineering", "mcp"]
+}

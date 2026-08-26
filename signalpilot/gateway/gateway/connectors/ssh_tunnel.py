@@ -10,8 +10,11 @@ HTTP proxy support for corporate VPCs that block direct SSH (HEX pattern).
 
 from __future__ import annotations
 
+import contextlib
 import io
 import logging
+import re
+from collections.abc import Iterator
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -23,16 +26,102 @@ try:
 except ImportError:
     HAS_SSHTUNNEL = False
 
+# Hostname character allowlist for socat address-spec injection prevention.
+# socat uses ',', ':', '=', '!!', '|', and whitespace as special characters in
+# address specs. This regex admits only DNS-name and bare IPv4 characters, which
+# excludes every socat metacharacter. Do NOT relax without re-evaluating socat's
+# address-spec parser.
+_HOSTNAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,253}$")
 
-def _build_proxy_command(proxy_host: str, proxy_port: int, ssh_host: str, ssh_port: int) -> str:
+# Valid port range.
+_PORT_MIN = 1
+_PORT_MAX = 65535
+
+
+def _validate_socat_host(label: str, value: str) -> str:
+    """Validate a hostname for safe use in a socat ProxyCommand string.
+
+    Strips whitespace, asserts non-empty, and asserts the value matches
+    _HOSTNAME_RE (A-Z, a-z, 0-9, '.', '_', '-', 1-253 chars).
+
+    Raises:
+        ValueError: with a generic message that does NOT echo the raw value.
+
+    Returns:
+        The stripped hostname string.
+    """
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError(f"Invalid {label}: must not be empty")
+    if not _HOSTNAME_RE.fullmatch(stripped):
+        raise ValueError(
+            f"Invalid {label}: contains disallowed characters "
+            f"(only A-Z, a-z, 0-9, '.', '_', '-' allowed)"
+        )
+    return stripped
+
+
+def _validate_socat_port(label: str, value: Any) -> int:
+    """Validate a port value for safe use in a socat ProxyCommand string.
+
+    Coerces via int(), then asserts the result is in range 1..65535.
+
+    Raises:
+        ValueError: with a generic message that does NOT echo the raw value.
+
+    Returns:
+        The port as an int.
+    """
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"Invalid {label}: must be an integer")
+    if not (_PORT_MIN <= port <= _PORT_MAX):
+        raise ValueError(f"Invalid {label}: must be in range {_PORT_MIN}..{_PORT_MAX}")
+    return port
+
+
+def _build_proxy_command(proxy_host: str, proxy_port: Any, ssh_host: str, ssh_port: Any) -> str:
     """Build a ProxyCommand string for HTTP CONNECT proxy tunneling.
 
     This enables SSH through corporate HTTP proxies (e.g. Squid) that support
     the CONNECT method — common in VPC environments where direct SSH is blocked.
+
+    Inputs are regex-validated and integer-clamped to prevent socat address-spec
+    injection (',', ':', '=', 'OPEN:', 'EXEC:', etc.). Do NOT relax the regex
+    without re-evaluating socat's address-spec parser.
+
+    Note: the design intentionally keeps this string-based ProxyCommand rather
+    than restructuring away from it — the regex-reject is sufficient and minimal.
     """
-    # Use socat or nc (netcat) to tunnel through the HTTP proxy
-    # socat is preferred because it handles the CONNECT handshake properly
-    return f"socat - PROXY:{proxy_host}:{ssh_host}:{ssh_port},proxyport={proxy_port}"
+    safe_proxy_host = _validate_socat_host("proxy_host", proxy_host)
+    safe_proxy_port = _validate_socat_port("proxy_port", proxy_port)
+    safe_ssh_host = _validate_socat_host("ssh_host", ssh_host)
+    safe_ssh_port = _validate_socat_port("ssh_port", ssh_port)
+    return f"socat - PROXY:{safe_proxy_host}:{safe_ssh_host}:{safe_ssh_port},proxyport={safe_proxy_port}"
+
+
+@contextlib.contextmanager
+def _validated_hop(host: str, port: int) -> Iterator[None]:
+    """Validate an SSH hop against the SSRF denylist and pin it while connecting.
+
+    Only the hop we dial from here can be checked. The warehouse endpoint behind
+    the tunnel is resolved by the bastion, in the bastion's DNS view, so it is not
+    observable locally and remains outside this control.
+
+    Gated on cloud mode to match network.validation.validate_connection_params —
+    local deployments legitimately tunnel through loopback/RFC1918 bastions.
+    """
+    from ..network.validation import pinned_resolution, resolve_and_validate
+    from ..runtime.mode import is_cloud_mode
+
+    if not is_cloud_mode():
+        yield
+        return
+
+    ips = resolve_and_validate(host, port, "ssh")
+    with pinned_resolution(host, ips):
+        yield
 
 
 class SSHTunnel:
@@ -58,6 +147,11 @@ class SSHTunnel:
         if not ssh_host or not ssh_username:
             raise ValueError("SSH tunnel requires host and username")
 
+        # Defense-in-depth: validate host/port shape before touching paramiko or
+        # socat — cheap regex check that also covers the no-proxy path.
+        ssh_host = _validate_socat_host("ssh_host", ssh_host)
+        ssh_port = _validate_socat_port("ssh_port", ssh_port)
+
         tunnel_kwargs: dict[str, Any] = {
             "ssh_address_or_host": (ssh_host, ssh_port),
             "ssh_username": ssh_username,
@@ -72,6 +166,10 @@ class SSHTunnel:
         if proxy_host:
             import paramiko
 
+            # Validate proxy host/port — _build_proxy_command validates again
+            # internally, but validate here too so errors surface before import.
+            proxy_host = _validate_socat_host("proxy_host", proxy_host)
+            proxy_port = _validate_socat_port("proxy_port", proxy_port)
             proxy_cmd = _build_proxy_command(proxy_host, proxy_port, ssh_host, ssh_port)
             sock = paramiko.ProxyCommand(proxy_cmd)
             tunnel_kwargs["ssh_proxy"] = sock
@@ -112,8 +210,17 @@ class SSHTunnel:
                 raise ValueError("SSH tunnel with password auth requires a password")
             tunnel_kwargs["ssh_password"] = password
 
-        self._tunnel = SSHTunnelForwarder(**tunnel_kwargs)
-        self._tunnel.start()
+        # Validate the hop we actually dial. With an HTTP proxy that is the proxy
+        # (socat runs out-of-process, so it re-resolves and only the validation,
+        # not the pin, applies to it); otherwise it is the bastion itself.
+        if proxy_host:
+            hop_host, hop_port = proxy_host, proxy_port
+        else:
+            hop_host, hop_port = ssh_host, ssh_port
+
+        with _validated_hop(hop_host, hop_port):
+            self._tunnel = SSHTunnelForwarder(**tunnel_kwargs)
+            self._tunnel.start()
 
         local_host = self._tunnel.local_bind_host
         local_port = self._tunnel.local_bind_port

@@ -25,9 +25,13 @@ def load_mcp_servers() -> dict:
     result: dict = {}
     for name, config in servers.items():
         entry = dict(config)
-        # Inject gateway URL into env
+        # Inject runtime env into MCP subprocess
         env = dict(entry.get("env", {}))
         env["SP_GATEWAY_URL"] = gateway_url
+        # Share the Postgres DB so the subprocess sees registered connections
+        db_url = os.environ.get("DATABASE_URL", "")
+        if db_url:
+            env["DATABASE_URL"] = db_url
         entry["env"] = env
         # Convert cwd to a shell wrapper since SDK doesn't support cwd
         cwd = entry.pop("cwd", None)
@@ -40,62 +44,96 @@ def load_mcp_servers() -> dict:
     return result
 
 
+def _gateway_url() -> str:
+    return os.environ.get("SP_GATEWAY_URL", "http://localhost:3300")
+
+
 def register_local_connection(instance_id: str, db_path: str) -> bool:
-    """Register the task's DuckDB in the local SignalPilot store.
+    """Register the task's DuckDB in the shared gateway Postgres store.
 
-    Always deletes and re-creates to ensure the path matches the current workdir.
+    Uses the gateway store directly (same DB the MCP subprocess reads from)
+    so connections are visible to MCP tools with the correct encryption key.
+    Falls back to HTTP API if direct access fails.
     """
-    try:
-        sys.path.insert(0, str(GATEWAY_SRC))
-        from gateway.store import create_connection, delete_connection, get_connection
+    import asyncio as _aio
+
+    async def _register():
+        from gateway.db.engine import get_session_factory
         from gateway.models import ConnectionCreate, DBType
+        from gateway.store import Store
 
-        existing = get_connection(instance_id)
-        if existing:
-            delete_connection(instance_id)
-            log(f"Deleted stale connection '{instance_id}'")
-
-        create_connection(
-            ConnectionCreate(
+        factory = get_session_factory()
+        async with factory() as session:
+            store = Store(session, org_id=os.environ.get("SP_ORG_ID", "local"))
+            try:
+                await store.delete_connection(instance_id)
+            except Exception:
+                pass
+            await store.create_connection(ConnectionCreate(
                 name=instance_id,
                 db_type=DBType.duckdb,
                 database=db_path,
                 description=f"Spider2-DBT benchmark: {instance_id}",
-            )
-        )
+            ))
+            await session.commit()
+
+    try:
+        sys.path.insert(0, str(GATEWAY_SRC))
+        _aio.run(_register())
         log(f"Registered connection '{instance_id}' -> {db_path}")
         return True
     except Exception as e:
-        log(f"Failed to register local connection: {e}", "WARN")
-        return False
+        log(f"Failed to register connection via store: {e}", "WARN")
+        # Fallback: try HTTP API
+        import httpx
+        base = _gateway_url()
+        try:
+            httpx.delete(f"{base}/api/connections/{instance_id}", timeout=5)
+            resp = httpx.post(f"{base}/api/connections", json={
+                "name": instance_id,
+                "db_type": "duckdb",
+                "database": db_path,
+                "description": f"Spider2-DBT benchmark: {instance_id}",
+            }, timeout=5)
+            resp.raise_for_status()
+            log(f"Registered connection '{instance_id}' -> {db_path} (via HTTP fallback)")
+            return True
+        except Exception as e2:
+            log(f"Failed to register connection via HTTP: {e2}", "WARN")
+            return False
 
 
 def delete_local_connection(instance_id: str) -> bool:
-    """Delete the registered SignalPilot connection for this instance (best effort)."""
-    try:
-        sys.path.insert(0, str(GATEWAY_SRC))
-        from gateway.store import delete_connection
+    """Delete the registered SignalPilot connection (best effort)."""
+    import httpx
 
-        delete_connection(instance_id)
+    try:
+        httpx.delete(
+            f"{_gateway_url()}/api/connections/{instance_id}",
+            timeout=5,
+            headers={"x-org-id": os.environ.get("SP_ORG_ID", "local")},
+        )
         return True
     except Exception:
         return False
 
 
 def clear_all_connections() -> int:
-    """Delete ALL registered connections. Call at task start to ensure a clean slate.
+    """Delete ALL registered connections via gateway HTTP API.
 
     Returns the number of connections deleted.
     """
-    try:
-        sys.path.insert(0, str(GATEWAY_SRC))
-        from gateway.store import list_connections, delete_connection
+    import httpx
 
-        conns = list_connections()
+    base = _gateway_url()
+    try:
+        resp = httpx.get(f"{base}/api/connections", timeout=5)
+        resp.raise_for_status()
+        conns = resp.json()
         for conn in conns:
-            name = conn.name if hasattr(conn, "name") else conn.get("name", "")
+            name = conn.get("name", "")
             if name:
-                delete_connection(name)
+                httpx.delete(f"{base}/api/connections/{name}", timeout=5)
                 log(f"Cleared stale connection '{name}'")
         return len(conns)
     except Exception as e:

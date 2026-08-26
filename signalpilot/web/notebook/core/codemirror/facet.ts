@@ -1,0 +1,21 @@
+import { Facet } from "@codemirror/state";
+
+/**
+ * A facet that combines a single value.
+ *
+ * This is useful for creating a facet that can be used to store a single value.
+ *
+ * @example
+ * ```ts
+ * const myFacet = singleFacet<string>();
+ * const myValue = myFacet.of("hello");
+ * ```
+ */
+export function singleFacet<T>() {
+  return Facet.define<T, T>({
+    combine: (values) => {
+      // oxlint-disable-next-line typescript/no-non-null-assertion
+      return values.find((v) => v !== undefined)!;
+    },
+  });
+}

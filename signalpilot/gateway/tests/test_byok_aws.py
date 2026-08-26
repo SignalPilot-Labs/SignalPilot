@@ -394,7 +394,7 @@ class TestSecurityStatusBYOKFields:
             patch("gateway.store.crypto._validate_encryption_health", return_value=True),
             patch.dict(os.environ, {"SP_ENCRYPTION_KEY": "test-key"}),
         ):
-            result = await security_status(mock_store, "test-org")
+            result = await security_status(mock_store, "test-org", None)
 
         required_fields = {
             "byok_provider",
@@ -413,6 +413,67 @@ class TestSecurityStatusBYOKFields:
         assert result["byok_keys_total"] == 3
         assert result["credentials_managed"] == 3
         assert result["credentials_byok"] == 1
+
+    @pytest.mark.asyncio
+    async def test_security_status_pending_rotation_is_org_scoped(self):
+        """total_credentials_pending_rotation must reflect the org-scoped count.
+
+        The handler calls store.get_credentials_needing_rotation() with no
+        explicit org_id argument; scoping happens inside Store via
+        _require_org_id(). The mock returns an org-specific value and we assert
+        it flows through to the response unchanged.
+        """
+        from gateway.api.security import security_status
+        from gateway.byok import DEKCache, LocalBYOKProvider
+        from gateway.store import configure_byok
+
+        provider = LocalBYOKProvider()
+        cache = DEKCache(ttl_seconds=300)
+        configure_byok(provider, cache)
+
+        mock_store = MagicMock()
+        mock_store.user_id = "local"
+        mock_store.org_id = "org-A"
+
+        # Simulate an org-scoped count of 5 credentials pending rotation
+        mock_store.get_credentials_needing_rotation = AsyncMock(return_value=5)
+
+        def _make_result(value: int = 0) -> MagicMock:
+            r = MagicMock()
+            r.scalar_one = MagicMock(return_value=value)
+            return r
+
+        execute_results = [
+            _make_result(10),  # credentials_encrypted
+            _make_result(3),   # byok_keys_active
+            _make_result(1),   # byok_keys_revoked
+            _make_result(8),   # credentials_managed
+            _make_result(2),   # credentials_byok
+        ]
+        execute_index = [0]
+
+        async def _mock_execute(query):
+            idx = execute_index[0]
+            execute_index[0] += 1
+            if idx < len(execute_results):
+                return execute_results[idx]
+            return _make_result(0)
+
+        mock_store.session = MagicMock()
+        mock_store.session.execute = _mock_execute
+
+        with (
+            patch("gateway.store.crypto._validate_encryption_health", return_value=True),
+            patch.dict(os.environ, {"SP_ENCRYPTION_KEY": "test-key"}),
+        ):
+            result = await security_status(mock_store, "org-A", None)
+
+        # Assert the handler invoked get_credentials_needing_rotation with no
+        # org_id argument (self-scoping via _require_org_id() inside Store)
+        mock_store.get_credentials_needing_rotation.assert_called_once_with()
+
+        # Assert the org-scoped count flows through to the response key
+        assert result["total_credentials_pending_rotation"] == 5
 
 
 # ─── main.py lifespan env var integration test ───────────────────────────────

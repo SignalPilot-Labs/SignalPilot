@@ -1,7 +1,5 @@
 """Schema catalog tools: describe_table, list_tables (tools 1, 2)."""
 
-from __future__ import annotations
-
 from gateway.errors.mcp import sanitize_mcp_error
 from gateway.governance.context import current_org_id_var
 from gateway.mcp.audit import audited_tool

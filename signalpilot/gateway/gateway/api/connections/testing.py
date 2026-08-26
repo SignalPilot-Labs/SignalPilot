@@ -105,18 +105,46 @@ async def test_credentials(_: UserID, request: Request):
         try:
             parsed = urlparse(conn_str if "://" in conn_str else f"dummy://{conn_str}")
             host = parsed.hostname or conn.host or "localhost"
-            port = parsed.port or conn.port or 5432
+            # Default TCP port per engine — do NOT fall back to 5432 for everything
+            # (that probed Snowflake's account identifier on the Postgres port).
+            _default_ports = {
+                "postgres": 5432, "mysql": 3306, "mssql": 1433, "redshift": 5439,
+                "snowflake": 443, "databricks": 443, "clickhouse": 9000, "trino": 8080,
+            }
+            port = parsed.port or conn.port or _default_ports.get(db_type, 5432)
+            # Snowflake's "host" in the URL is an account identifier (e.g. org-account),
+            # not a resolvable name. The real endpoint is <account>.snowflakecomputing.com:443.
+            # An explicit host override (PrivateLink / China / gov / VPS) wins verbatim.
+            if db_type == "snowflake":
+                if getattr(conn, "snowflake_host", None):
+                    host = conn.snowflake_host
+                elif host and "snowflakecomputing.com" not in host:
+                    host = f"{host}.snowflakecomputing.com"
 
             # Resolve DNS and validate IPs in one step, then connect to the
             # validated IP directly. This prevents DNS rebinding TOCTOU attacks
             # where the hostname could resolve to a different (internal) IP
             # between the SSRF check and the actual socket connect.
+            # Fail closed: a rejection here is the SSRF decision itself, so falling
+            # back to the raw hostname would turn the denylist into a bypass.
             try:
                 validated_ips = resolve_and_validate(host, int(port), db_type)
-            except ValueError:
-                # If resolve_and_validate fails (e.g. non-TCP type or
-                # cloud mode disabled), fall back to the hostname.
-                validated_ips = [host]
+            except ValueError as exc:
+                logger.warning("Connection test rejected for host %r: %s", host, exc)
+                phases.append(
+                    {
+                        "phase": "network",
+                        "status": "error",
+                        "message": f"Address for {host}:{port} was rejected by network policy",
+                        "duration_ms": round((time.monotonic() - t1) * 1000, 1),
+                    }
+                )
+                return {
+                    "status": "error",
+                    "message": f"Host not permitted: {host}:{port}",
+                    "phases": phases,
+                    "total_duration_ms": round((time.monotonic() - t0) * 1000, 1),
+                }
 
             connect_ip = validated_ips[0]
 
@@ -383,7 +411,7 @@ async def test_connection(name: str, store: StoreD):
                     }
                 )
         finally:
-            await pool_manager.release(info.db_type, conn_str)
+            await pool_manager.release(info.db_type, conn_str, credential_extras=extras)
     except Exception as e:
         phases.append(
             {

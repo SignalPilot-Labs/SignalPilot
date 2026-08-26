@@ -1,0 +1,9 @@
+version: 2
+
+models:
+  - name: example
+    description: Single-row example model for workspace-import tests.
+    columns:
+      - name: id
+        tests:
+          - not_null

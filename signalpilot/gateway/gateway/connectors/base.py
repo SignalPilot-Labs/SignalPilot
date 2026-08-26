@@ -17,6 +17,7 @@ import contextvars
 import os
 import tempfile
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from typing import Any
 
 # Context var for the active connection name — set by REST API deps or MCP tools
@@ -38,7 +39,9 @@ class BaseConnector(ABC):
         self._ssl_config: dict | None = None
         self._temp_files: list[str] = []
         self._connection_timeout: int = 15
-        self._query_timeout: int = 30
+        # Default per-query/introspection timeout. Schema pulls on large warehouses
+        # (thousands of tables) can exceed 30s, so the floor is 150s.
+        self._query_timeout: int = 150
 
     # ─── Abstract methods (must implement) ────────────────────────────
 
@@ -77,6 +80,31 @@ class BaseConnector(ABC):
             pass
 
         return rows
+
+    async def cancel_current_query(self) -> bool:
+        """Cancel active warehouse work when the driver exposes cancellation."""
+        return False
+
+    async def stream_batches(
+        self,
+        sql: str,
+        *,
+        batch_size: int = 10_000,
+        timeout: int | None = None,
+    ) -> AsyncIterator[list[dict[str, Any]]]:
+        """Stream rows without list materialization; unsupported by default."""
+        del sql, batch_size, timeout
+        if False:  # pragma: no cover - preserves the async-generator contract
+            yield []
+        raise NotImplementedError(f"{type(self).__name__} does not support governed batch streaming")
+
+    def get_last_query_id(self) -> str | None:
+        """Return the warehouse-native ID for the most recent query, if any."""
+        return None
+
+    def get_last_query_stats(self) -> dict[str, Any] | None:
+        """Return connector-native actual usage without result rows."""
+        return None
 
     async def _audit_sql(self, sql: str, rows_returned: int, duration_ms: float) -> None:
         """Log SQL execution to gateway_audit_logs. Best-effort, never fails the query."""
@@ -147,6 +175,14 @@ class BaseConnector(ABC):
         """Quote a possibly schema-qualified table name (e.g., 'schema.table')."""
         parts = table.split(".")
         return ".".join(self._quote_identifier(p) for p in parts)
+
+    def quote_identifier(self, name: str) -> str:
+        """Public alias for _quote_identifier — use in external callers."""
+        return self._quote_identifier(name)
+
+    def quote_table(self, key: str) -> str:
+        """Public alias for _quote_table — use in external callers."""
+        return self._quote_table(key)
 
     # ─── SSL temp file management ─────────────────────────────────────
 

@@ -46,6 +46,8 @@ gcp-service-account.json
 .env.*
 !.env.example
 !.env.local.example
+!.env.evalprod.example
+.slack.local.env
 
 # SignalPilot web
 signalpilot/web/.next/
@@ -78,3 +80,98 @@ build/
 .gstack/
 autocode-auth/.next/
 autocode-auth/node_modules/
+test_notebook_e2e.py
+test_cloud_notebook.py
+
+# Scratch / working files
+*.png
+!signalpilot/web/public/**/*.png
+!signalpilot/web/app/**/*.png
+!signalpilot/web/e2e/*-snapshots/*.png
+!docs/docs/**/*.png
+!docs/static/img/**/*.png
+handoff*.md
+agent-notebooks.md
+blog-post.md
+bm-prompting.md
+knowledge-base-spec.md
+local-instructions.md
+marimo-ref.md
+security-audit.md
+dashboard_products.py
+dashboard.py
+Dockerfile.web.dockerignore
+signalpilot/web/e2e-*.png
+signalpilot/web/e2e-journey-*.png
+signalpilot/web/test-results/
+simulate-notebook-ws-connection.py
+empty.env
+
+# Runtime state / generated data
+analysis_outputs/
+signalpilot/gateway/data/local_api_key
+signalpilot/notebook-server/signalpilot/_server/ai/.chat_sessions.json
+*.bak
+
+# Internal documents are not part of the public repository.
+# This group includes roadmaps, work logs, and customer, vendor, or operational material.
+/docs/
+signalpilot/web/clerk-research.md
+signalpilot/web/enterprise-connections.md
+signalpilot/web/UX.md
+writeups/
+# Security audit reports can contain findings, credential names, deployment locations, and customer details.
+# Keep these reports outside the repository.
+security/
+
+# Vendored GitHub Copilot LSP binaries (~81MB, disabled by default; install at build if needed)
+signalpilot/notebook-server/signalpilot/_lsp/copilot/
+
+# Local demo / scratch content (not part of the product)
+demo/
+demo-2/
+demo-2.zip
+demo-3/
+demo-4/
+demo-5/
+demo-6/
+demo-7/
+demo-8/
+demo-9/
+benchmark-demo-1/
+dbt-playground/
+*.zip
+
+# Default host directory for local eval project sets (see SP_EVAL_PROJECTS_HOST_DIR).
+.eval-projects/
+
+# Planning / research / customer docs (never commit)
+# Default-deny for root-level markdown: scratch planning notes land here and
+# their filenames alone can name customers or partners, so the allowlist below
+# is the public part rather than an inventory of internal work.
+/*.md
+!/README.md
+!/CONTRIBUTING.md
+!/SECURITY.md
+research-7-20/
+research-7-24/
+presentations/
+AGENTS.md
+cc.md
+dh.json
+eval-format.md
+eval-upload-spec.md
+knowledge-base-redesign.md
+/.vscode/settings.json
+.codex/
+codex-signalpilot-plugin/
+redshift_export/
+redshift_*.py
+
+# Never commit credentials.
+# Match all credential filenames because their names can identify an environment.
+/*creds*
+/*credentials*
+/.*creds*
+/.*credentials*
+e2e-eval/project-repo/

@@ -1,7 +1,5 @@
 """Schema relationships tools: find_join_path, get_relationships (tools 4, 5)."""
 
-from __future__ import annotations
-
 import json
 
 import httpx
@@ -10,7 +8,7 @@ from gateway.errors.mcp import sanitize_proxy_response
 from gateway.mcp.audit import audited_tool
 from gateway.mcp.context import _gateway_url, _gw_headers
 from gateway.mcp.server import mcp
-from gateway.mcp.validation import _CONN_NAME_RE
+from gateway.mcp.validation import _validate_connection_name
 
 
 @audited_tool(mcp)
@@ -19,7 +17,7 @@ async def find_join_path(connection_name: str, from_table: str, to_table: str, m
     Find join paths between two tables for accurate multi-table SQL generation.
 
     Returns the exact join columns at each hop, enabling correct JOIN construction
-    without hallucinating join conditions. Essential for Spider2.0-style queries.
+    without hallucinating join conditions. Useful for multi-table queries.
 
     Includes both explicit FK relationships AND inferred joins from column naming
     conventions (e.g., customer_id → customers.id), making this work even on
@@ -31,8 +29,8 @@ async def find_join_path(connection_name: str, from_table: str, to_table: str, m
         to_table: Target table (e.g., 'public.products')
         max_hops: Maximum FK hops to search (1-6, default 4)
     """
-    if not _CONN_NAME_RE.match(connection_name):
-        return "Error: Invalid connection name"
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
 
     async with httpx.AsyncClient(base_url=_gateway_url(), timeout=30) as client:
         resp = await client.get(
@@ -72,8 +70,8 @@ async def get_relationships(connection_name: str, format: str = "compact") -> st
         connection_name: Name of the database connection
         format: Output format — 'compact' (arrows), 'graph' (adjacency list)
     """
-    if not _CONN_NAME_RE.match(connection_name):
-        return "Error: Invalid connection name"
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
 
     async with httpx.AsyncClient(base_url=_gateway_url(), timeout=30) as client:
         resp = await client.get(

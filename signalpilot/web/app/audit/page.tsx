@@ -14,16 +14,16 @@ import {
   ChevronRight,
   Wrench,
 } from "lucide-react";
-import { getAuditExportUrl } from "@/lib/api";
-import type { AuditEntry } from "@/lib/types";
-import { useAudit, useAuditStats, usePlan } from "@/lib/hooks/use-gateway-data";
-import { useToast } from "@/components/ui/toast";
-import { PageLoader } from "@/components/ui/page-loader";
-import { EmptyList, EmptyState } from "@/components/ui/empty-states";
-import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { ActivityDots, StatusDot, Sparkline } from "@/components/ui/data-viz";
-import { SqlHighlight } from "@/components/ui/sql-highlight";
-import { TimeAgo } from "@/components/ui/time-ago";
+import { getAuditExportUrl } from "~/lib/api";
+import type { AuditEntry } from "~/lib/types";
+import { useAudit, useAuditStats, usePlan } from "~/lib/hooks/use-gateway-data";
+import { useToast } from "~/components/ui/toast";
+import { PageLoader } from "~/components/ui/page-loader";
+import { EmptyList, EmptyState } from "~/components/ui/empty-states";
+import { PageHeader, TerminalBar } from "~/components/ui/page-header";
+import { ActivityDots, StatusDot, Sparkline } from "~/components/ui/data-viz";
+import { SqlHighlight } from "~/components/ui/sql-highlight";
+import { TimeAgo } from "~/components/ui/time-ago";
 
 const typeIcons: Record<string, React.ElementType> = {
   query: DbIcon,
@@ -69,7 +69,7 @@ export default function AuditPage() {
     setExporting(format);
     toast("preparing report — this may take a moment for large audit logs", "info");
     try {
-      const { getAuthHeaders } = await import("@/lib/api");
+      const { getAuthHeaders } = await import("~/lib/api");
       const headers = await getAuthHeaders();
       const url = getAuditExportUrl(format, typeFilter || undefined);
       const res = await fetch(url, { headers });
@@ -151,7 +151,7 @@ export default function AuditPage() {
           <button
             onClick={() => canExport ? exportFile("csv") : toast("upgrade to team plan to export audit logs", "error")}
             disabled={exporting === "csv"}
-            className={`flex items-center gap-2 px-3 py-1.5 text-[12px] border transition-all tracking-wider ${
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-[10px] text-[12px] border transition-colors duration-150 ${
               canExport
                 ? "text-[var(--color-text-dim)] hover:text-[var(--color-text)] border-[var(--color-border)] hover:border-[var(--color-border-hover)] disabled:opacity-50"
                 : "text-[var(--color-text-dim)]/50 border-[var(--color-border)]/50 cursor-not-allowed"
@@ -163,7 +163,7 @@ export default function AuditPage() {
           <button
             onClick={() => canExport ? exportFile("json") : toast("upgrade to team plan to export audit logs", "error")}
             disabled={exporting === "json"}
-            className={`flex items-center gap-2 px-3 py-1.5 text-[12px] border transition-all tracking-wider ${
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-[10px] text-[12px] border transition-colors duration-150 ${
               canExport
                 ? "text-[var(--color-text-dim)] hover:text-[var(--color-text)] border-[var(--color-border)] hover:border-[var(--color-border-hover)] disabled:opacity-50"
                 : "text-[var(--color-text-dim)]/50 border-[var(--color-border)]/50 cursor-not-allowed"
@@ -173,7 +173,7 @@ export default function AuditPage() {
             {exporting === "json" ? "preparing..." : "compliance"}
           </button>
           <button onClick={() => { refreshAudit(); refreshStats(); }}
-            className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+            className="flex items-center gap-2 px-3 py-1.5 rounded-[10px] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors duration-150">
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? "animate-spin" : ""}`} strokeWidth={1.5} /> refresh
           </button>
         </div>
@@ -192,7 +192,7 @@ export default function AuditPage() {
 
       {/* Stats bar */}
       {entries.length > 0 && (
-        <div className="flex items-center gap-6 mb-6 px-4 py-2.5 border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+        <div className="flex items-center gap-6 mb-6 px-4 py-2.5 rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)]">
           {[
             { label: "total", value: statsData.total, color: "" },
             { label: "mcp tools", value: statsData.mcp_tools, color: "text-[var(--color-text-muted)]" },
@@ -201,8 +201,8 @@ export default function AuditPage() {
             { label: "blocked", value: statsData.blocked, color: statsData.blocked > 0 ? "text-[var(--color-error)]" : "" },
           ].map(s => (
             <div key={s.label} className="flex items-baseline gap-2">
-              <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{s.label}</span>
-              <span className={`text-xs tabular-nums ${s.color}`}>{s.value.toLocaleString()}</span>
+              <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">{s.label}</span>
+              <span className={`text-xs font-mono tabular-nums ${s.color}`}>{s.value.toLocaleString()}</span>
             </div>
           ))}
           {/* Latency sparkline from recent entries */}
@@ -216,15 +216,15 @@ export default function AuditPage() {
             const avg = latencyVals.reduce((a, b) => a + b, 0) / latencyVals.length;
             return (
               <div className="flex items-center gap-2 ml-auto">
-                <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">latency</span>
+                <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">latency</span>
                 <Sparkline values={latencyVals} color="var(--color-success)" width={60} height={16} />
-                <span className="text-[11px] tabular-nums text-[var(--color-text-dim)]">avg {avg.toFixed(0)}ms</span>
+                <span className="text-[11px] font-mono tabular-nums text-[var(--color-text-dim)]">avg {avg.toFixed(0)}ms</span>
               </div>
             );
           })()}
           {activitySlots.length > 0 && (
             <div className={`flex items-center gap-2 ${filtered.filter(e => e.duration_ms != null).length < 3 ? "ml-auto" : ""}`}>
-              <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">activity</span>
+              <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">activity</span>
               <ActivityDots values={activitySlots} rows={3} cols={12} dotSize={5} gap={2} />
             </div>
           )}
@@ -240,13 +240,13 @@ export default function AuditPage() {
             placeholder="search sql, connection, or reason..."
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            className="flex-1 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+            className="flex-1 px-3 py-2 rounded-[10px] bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
           />
         </div>
         <select
           value={typeFilter}
           onChange={(e) => setTypeFilter(e.target.value)}
-          className="px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
+          className="px-3 py-2 rounded-[10px] bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
         >
           <option value="">all types</option>
           <option value="query">queries</option>
@@ -255,19 +255,19 @@ export default function AuditPage() {
           <option value="block">blocked</option>
         </select>
         {!isLoading && (
-          <span className="text-[12px] text-[var(--color-text-dim)] tabular-nums whitespace-nowrap tracking-wider">
+          <span className="text-[12px] text-[var(--color-text-dim)] font-mono tabular-nums whitespace-nowrap">
             {filtered.length} entries
           </span>
         )}
       </div>
 
       {/* Table */}
-      <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
+      <div className="rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
         <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-[var(--color-border)]">
               {["time", "type", "connection", "detail", "duration"].map((h, i) => (
-                <th key={h} className={`${i === 4 ? "text-right" : "text-left"} px-4 py-2.5 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]`}>
+                <th key={h} className={`${i === 4 ? "text-right" : "text-left"} px-4 py-2.5 text-[11px] text-[var(--color-text-dim)]`}>
                   {h}
                 </th>
               ))}
@@ -295,7 +295,7 @@ export default function AuditPage() {
                     onClick={() => setExpandedRow(isExpanded ? null : entry.id)}
                     className="table-row-hover cursor-pointer group"
                   >
-                    <td className="px-4 py-2.5 text-[12px] text-[var(--color-text-dim)] tabular-nums whitespace-nowrap tracking-wider align-top">
+                    <td className="px-4 py-2.5 text-[12px] text-[var(--color-text-dim)] font-mono tabular-nums whitespace-nowrap align-top">
                       <div className="flex items-center gap-1.5">
                         {isExpanded ? (
                           <ChevronDown className="w-2.5 h-2.5 text-[var(--color-text-dim)]" />
@@ -306,7 +306,7 @@ export default function AuditPage() {
                       </div>
                     </td>
                     <td className="px-4 py-2.5 align-top">
-                      <span className={`flex items-center gap-1.5 text-[12px] tracking-wider ${color}`}>
+                      <span className={`flex items-center gap-1.5 text-[12px] ${color}`}>
                         <Icon className="w-3 h-3" strokeWidth={1.5} />
                         {entry.event_type === "mcp_tool" && entry.agent_id
                           ? entry.agent_id
@@ -314,13 +314,13 @@ export default function AuditPage() {
                             ? "internal sql"
                             : entry.event_type}
                         {entry.blocked && (
-                          <span className="px-1 py-0.5 border badge-error text-[11px] uppercase tracking-wider">
+                          <span className="px-1 py-0.5 rounded-[6px] border badge-error text-[11px] uppercase tracking-wider">
                             blocked
                           </span>
                         )}
                       </span>
                     </td>
-                    <td className="px-4 py-2.5 text-[12px] text-[var(--color-text-dim)] align-top tracking-wider">
+                    <td className="px-4 py-2.5 text-[12px] text-[var(--color-text-dim)] align-top font-mono">
                       {entry.event_type === "sql" ? "internal" : (entry.connection_name || "—")}
                     </td>
                     <td className="px-4 py-2.5 max-w-md align-top">
@@ -329,14 +329,14 @@ export default function AuditPage() {
                         const childSql = childSqlByParent.get(entry.id)?.[0]?.sql;
                         if (entry.sql) {
                           return (
-                            <div className="text-[12px] bg-[var(--color-bg)] px-2 py-0.5 block truncate overflow-hidden">
+                            <div className="text-[12px] bg-[var(--color-bg)] px-2 py-0.5 rounded-[6px] block truncate overflow-hidden">
                               <SqlHighlight sql={entry.sql.slice(0, 120)} className="text-[12px]" />
                             </div>
                           );
                         }
                         if (childSql) {
                           return (
-                            <div className="text-[12px] bg-[var(--color-bg)] px-2 py-0.5 block truncate overflow-hidden">
+                            <div className="text-[12px] bg-[var(--color-bg)] px-2 py-0.5 rounded-[6px] block truncate overflow-hidden">
                               <SqlHighlight sql={childSql.slice(0, 120)} className="text-[12px]" />
                             </div>
                           );
@@ -346,7 +346,7 @@ export default function AuditPage() {
                         }
                         if (entry.event_type === "mcp_tool" && entry.agent_id) {
                           return (
-                            <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
+                            <span className="text-[12px] text-[var(--color-text-dim)] font-mono">
                               {entry.connection_name
                                 ? `${entry.agent_id}(${entry.connection_name})`
                                 : entry.agent_id}
@@ -362,14 +362,14 @@ export default function AuditPage() {
                       {entry.tables.length > 0 && (
                         <div className="flex gap-1 mt-1 flex-wrap">
                           {entry.tables.map((t) => (
-                            <span key={t} className="text-[11px] px-1 py-0.5 border border-[var(--color-border)] text-[var(--color-text-dim)] tracking-wider">
+                            <span key={t} className="text-[11px] px-1 py-0.5 rounded-[6px] border border-[var(--color-border)] text-[var(--color-text-dim)] font-mono">
                               {t}
                             </span>
                           ))}
                         </div>
                       )}
                     </td>
-                    <td className="px-4 py-2.5 text-[12px] text-right tabular-nums whitespace-nowrap align-top tracking-wider">
+                    <td className="px-4 py-2.5 text-[12px] text-right font-mono tabular-nums whitespace-nowrap align-top">
                       {entry.duration_ms != null ? (
                         <span className={
                           entry.duration_ms < 50 ? "text-[var(--color-success)]" :
@@ -393,8 +393,8 @@ export default function AuditPage() {
                         <div className="ml-8 space-y-3">
                           {entry.sql && (
                             <>
-                              <p className="text-[11px] uppercase tracking-[0.15em] text-[var(--color-text-dim)] mb-1">full sql</p>
-                              <pre className="text-[13px] bg-[var(--color-bg)] p-3 border border-[var(--color-border)] max-h-40 overflow-auto whitespace-pre-wrap break-all">
+                              <p className="text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-dim)] mb-1">full sql</p>
+                              <pre className="text-[13px] font-mono bg-[var(--color-bg)] p-3 rounded-[10px] border border-[var(--color-border)] max-h-40 overflow-auto whitespace-pre-wrap break-all">
                                 <SqlHighlight sql={entry.sql} className="text-[13px]" />
                               </pre>
                             </>
@@ -402,18 +402,18 @@ export default function AuditPage() {
                           {/* Child SQL queries (linked via parent_id) */}
                           {childSqlByParent.has(entry.id) && (
                             <div>
-                              <p className="text-[11px] uppercase tracking-[0.15em] text-[var(--color-text-dim)] mb-2">
+                              <p className="text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-dim)] mb-2">
                                 sql queries ({childSqlByParent.get(entry.id)!.length})
                               </p>
                               <div className="space-y-2">
                                 {childSqlByParent.get(entry.id)!.map((child) => (
                                   <div key={child.id} className="border-l-2 border-[var(--color-border)] pl-3">
                                     {child.sql && (
-                                      <pre className="text-[12px] bg-[var(--color-bg)] px-2 py-1 border border-[var(--color-border)] overflow-auto max-h-20 whitespace-pre-wrap break-all">
+                                      <pre className="text-[12px] font-mono bg-[var(--color-bg)] px-2 py-1 rounded-[10px] border border-[var(--color-border)] overflow-auto max-h-20 whitespace-pre-wrap break-all">
                                         <SqlHighlight sql={child.sql.slice(0, 300)} className="text-[12px]" />
                                       </pre>
                                     )}
-                                    <div className="flex gap-3 mt-0.5 text-[11px] text-[var(--color-text-dim)] tracking-wider">
+                                    <div className="flex gap-3 mt-0.5 text-[11px] text-[var(--color-text-dim)] font-mono tabular-nums">
                                       {child.rows_returned != null && <span>rows: {child.rows_returned}</span>}
                                       {child.duration_ms != null && <span>{Math.round(child.duration_ms)}ms</span>}
                                       <span>{child.event_type === "sql" ? "internal" : (child.connection_name || "—")}</span>
@@ -427,21 +427,21 @@ export default function AuditPage() {
                           {(entry.client_ip || entry.user_agent) && (
                             <div className="flex flex-wrap gap-x-4 gap-y-1 pt-2 mt-2 border-t border-[var(--color-border)]">
                               {entry.client_ip && (
-                                <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
-                                  ip: <span className="text-[var(--color-text-muted)] tabular-nums">{entry.client_ip}</span>
+                                <p className="text-[11px] text-[var(--color-text-dim)]">
+                                  ip: <span className="text-[var(--color-text-muted)] font-mono tabular-nums">{entry.client_ip}</span>
                                 </p>
                               )}
                               {entry.user_agent && (
-                                <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
-                                  ua: <span className="text-[var(--color-text-muted)]">{entry.user_agent}</span>
+                                <p className="text-[11px] text-[var(--color-text-dim)]">
+                                  ua: <span className="text-[var(--color-text-muted)] font-mono">{entry.user_agent}</span>
                                 </p>
                               )}
                             </div>
                           )}
                           {entry.metadata && Object.keys(entry.metadata).length > 0 && (
                             <div>
-                              <p className="text-[11px] uppercase tracking-[0.15em] text-[var(--color-text-dim)] mb-1">metadata</p>
-                              <pre className="text-[11px] text-[var(--color-text-dim)] bg-[var(--color-bg)] p-2 border border-[var(--color-border)] max-h-32 overflow-auto whitespace-pre-wrap break-all">
+                              <p className="text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-dim)] mb-1">metadata</p>
+                              <pre className="text-[11px] font-mono text-[var(--color-text-dim)] bg-[var(--color-bg)] p-2 rounded-[10px] border border-[var(--color-border)] max-h-32 overflow-auto whitespace-pre-wrap break-all">
                                 {JSON.stringify(entry.metadata, null, 2)}
                               </pre>
                             </div>

@@ -1,0 +1,225 @@
+import type * as Plotly from "plotly.js";
+import { set } from "lodash-es";
+import { type JSX, lazy, useMemo } from "react";
+import useEvent from "react-use-event-hook";
+import { useDeepCompareMemoize } from "@/hooks/useDeepCompareMemoize";
+import { useScript } from "@/hooks/useScript";
+import { Arrays } from "@/utils/arrays";
+import { Logger } from "@/utils/Logger";
+import {
+  extractIndices,
+  extractPoints,
+  extractSunburstPoints,
+  extractTreemapPoints,
+  hasAreaTrace,
+  hasPureLineTrace,
+  lineSelectionButtons,
+  type ModeBarButton,
+  mergeModeBarButtonsToAdd,
+  shouldHandleClickSelection,
+} from "./selection";
+import { usePlotlyLayout } from "./usePlotlyLayout";
+import type { Figure } from "./Plot";
+import type { Setter } from "@/plugins/types";
+
+import "./plotly.css";
+import "./mapbox.css";
+
+interface Data {
+  figure: Figure;
+  config: Partial<Plotly.Config>;
+}
+
+type T =
+  | {
+      points?: Record<string, unknown>[] | Plotly.PlotDatum[];
+      indices?: number[];
+      range?: {
+        x?: number[];
+        y?: number[];
+      };
+      lasso?: {
+        x?: unknown[];
+        y?: unknown[];
+      };
+      selections?: unknown[];
+      dragmode?: Plotly.Layout["dragmode"];
+      xaxis?: Partial<Plotly.LayoutAxis>;
+      yaxis?: Partial<Plotly.LayoutAxis>;
+    }
+  | undefined;
+
+interface PlotlyComponentProps extends Data {
+  value: T;
+  setValue: Setter<T>;
+  host: HTMLElement;
+}
+
+const LazyPlot = lazy(() =>
+  import("./Plot").then((mod) => ({ default: mod.Plot })),
+);
+
+export default function PlotlyComponent({
+  figure: originalFigure,
+  value,
+  setValue,
+  config,
+}: PlotlyComponentProps): JSX.Element {
+  // Used for rendering LaTeX. TODO: Serve this library from SignalPilot
+  const scriptStatus = useScript(
+    "https://cdn.jsdelivr.net/npm/mathjax-full@3.2.2/es5/tex-mml-svg.min.js",
+  );
+  const isScriptLoaded = scriptStatus === "ready";
+
+  const { figure, layout, setLayout, handleReset } = usePlotlyLayout({
+    originalFigure,
+    initialValue: value,
+    isScriptLoaded,
+  });
+
+  const handleResetWithClear = useEvent(() => {
+    handleReset();
+    setValue({});
+  });
+  const handleSetDragmode = useEvent(
+    (dragmode: Plotly.Layout["dragmode"]) => {
+      setLayout((prev) => ({ ...prev, dragmode }));
+      setValue((prev) => ({ ...prev, dragmode }));
+    },
+  );
+
+  const configMemo = useDeepCompareMemoize(config);
+  const plotlyConfig = useMemo((): Partial<Plotly.Config> => {
+    const hasLineOrAreaTrace =
+      hasPureLineTrace(figure.data) || hasAreaTrace(figure.data);
+    const defaultButtons: ModeBarButton[] = [
+      {
+        name: "reset",
+        title: "Reset state",
+        icon: {
+          svg: `
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-rotate-ccw">
+              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+              <path d="M3 3v5h5" />
+            </svg>`,
+        },
+        click: handleResetWithClear,
+      },
+    ];
+    if (hasLineOrAreaTrace) {
+      defaultButtons.push(...lineSelectionButtons(handleSetDragmode));
+    }
+
+    return {
+      displaylogo: false,
+      ...configMemo,
+      modeBarButtonsToAdd: mergeModeBarButtonsToAdd(
+        defaultButtons,
+        configMemo.modeBarButtonsToAdd as
+          | readonly ModeBarButton[]
+          | undefined,
+      ),
+    };
+  }, [handleResetWithClear, handleSetDragmode, configMemo, figure.data]);
+
+  return (
+    <LazyPlot
+      {...figure}
+      layout={layout}
+      onRelayout={(layoutUpdate) => {
+        if ("dragmode" in layoutUpdate) {
+          setValue((prev) => ({ ...prev, dragmode: layoutUpdate.dragmode }));
+        }
+
+        if (
+          Object.keys(layoutUpdate).some(
+            (key) => key.includes("xaxis") || key.includes("yaxis"),
+          )
+        ) {
+          const obj: Partial<Plotly.Layout> = {};
+          Object.entries(layoutUpdate).forEach(([key, value]) => {
+            set(obj, key, value);
+          });
+          setValue((prev) => ({ ...prev, ...obj }));
+        }
+      }}
+      onDeselect={useEvent(() => {
+        setValue((prev) => {
+          return {
+            ...prev,
+            selections: Arrays.EMPTY,
+            points: Arrays.EMPTY,
+            indices: Arrays.EMPTY,
+            range: undefined,
+            lasso: undefined,
+          };
+        });
+      })}
+      onTreemapClick={useEvent((evt: Readonly<Plotly.PlotMouseEvent>) => {
+        if (!evt) {
+          return;
+        }
+
+        setValue((prev) => ({
+          ...prev,
+          points: extractTreemapPoints(evt.points),
+        }));
+      })}
+      onSunburstClick={useEvent((evt: Readonly<Plotly.PlotMouseEvent>) => {
+        if (!evt) {
+          return;
+        }
+
+        setValue((prev) => ({
+          ...prev,
+          points: extractSunburstPoints(evt.points),
+        }));
+      })}
+      config={plotlyConfig}
+      onClick={useEvent((evt: Readonly<Plotly.PlotMouseEvent>) => {
+        if (!evt) {
+          return;
+        }
+        if (!shouldHandleClickSelection(evt.points)) {
+          return;
+        }
+        const extractedPoints = extractPoints(evt.points);
+        const extractedIndices = extractIndices(evt.points);
+        setValue((prev) => ({
+          ...prev,
+          selections: Arrays.EMPTY,
+          range: undefined,
+          lasso: undefined,
+          points: extractedPoints,
+          indices: extractedIndices,
+        }));
+      })}
+      onSelected={useEvent((evt: Readonly<Plotly.PlotSelectionEvent>) => {
+        if (!evt) {
+          return;
+        }
+
+        setValue((prev) => ({
+          ...prev,
+          selections:
+            "selections" in evt ? (evt.selections as unknown[]) : [],
+          points: extractPoints(evt.points),
+          indices: extractIndices(evt.points),
+          range: evt.range,
+          lasso:
+            "lassoPoints" in evt
+              ? (evt.lassoPoints as { x?: unknown[]; y?: unknown[] })
+              : undefined,
+        }));
+      })}
+      className="w-full"
+      useResizeHandler={true}
+      frames={figure.frames ?? undefined}
+      onError={useEvent((err: Error) => {
+        Logger.error("PlotlyPlugin: ", err);
+      })}
+    />
+  );
+}
+PlotlyComponent.displayName = "PlotlyComponent";

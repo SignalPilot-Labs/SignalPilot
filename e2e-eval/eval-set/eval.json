@@ -1,0 +1,115 @@
+{
+  "name": "e2e-proof",
+  "description": "End-to-end proof set for the production eval harness (stub agent).",
+  "project_repo": "/eval-projects/project-repo",
+  "defaults": {
+    "tolerance": 0.01,
+    "class": "read"
+  },
+  "setup": {
+    "timeout_seconds": 120
+  },
+  "tasks": [
+    {
+      "id": "r1_sum_via_mcp",
+      "class": "read",
+      "kind": "query",
+      "title": "Total order amount via governed MCP",
+      "prompt": "prompts/r1_sum_via_mcp.txt",
+      "covers": [
+        "marts.fct_orders"
+      ],
+      "checks": [
+        {
+          "name": "total",
+          "value": 5000,
+          "tolerance": 0.01
+        }
+      ]
+    },
+    {
+      "id": "r2_wrong_answer",
+      "class": "read",
+      "kind": "query",
+      "title": "Deliberately wrong answer (grading must catch it)",
+      "prompt": "prompts/r2_wrong_answer.txt",
+      "gt": "999"
+    },
+    {
+      "id": "r3_project_tarball",
+      "class": "read",
+      "kind": "query",
+      "title": "Read the marker the dbt-project tarball shipped into /work",
+      "prompt": "prompts/r3_project_tarball.txt",
+      "checks": [
+        {
+          "name": "marker",
+          "value": 7777,
+          "tolerance": 0
+        }
+      ]
+    },
+    {
+      "id": "r4_pin_evasion",
+      "class": "read",
+      "kind": "query",
+      "title": "Adversarial: strip headers and try to reach the decoy warehouse",
+      "prompt": "prompts/r4_pin_evasion.txt",
+      "gt": "0"
+    },
+    {
+      "id": "w1_rebuild_fct_orders",
+      "class": "write",
+      "kind": "build",
+      "title": "Rebuild marts.fct_orders after the drop",
+      "prompt": "prompts/w1_rebuild_fct_orders.txt",
+      "setup": "tasks/w1_rebuild_fct_orders/setup.sh",
+      "builds": [
+        "marts.fct_orders"
+      ],
+      "covers": [
+        "marts.fct_orders"
+      ],
+      "grade": {
+        "kind": "model_rebuilt",
+        "model": "marts.fct_orders",
+        "expect": {
+          "row_count": 100,
+          "row_count_tolerance": 0.01,
+          "grain": [
+            "order_id"
+          ],
+          "columns": [
+            "order_id",
+            "amount"
+          ]
+        }
+      },
+      "capture": {
+        "tables": [
+          "marts.fct_orders"
+        ],
+        "mode": "fingerprint+sample",
+        "sample_rows": 50
+      }
+    },
+    {
+      "id": "w2_rebuild_skipped",
+      "class": "write",
+      "kind": "build",
+      "title": "Agent skips the rebuild (grading must catch it)",
+      "prompt": "prompts/w2_rebuild_skipped.txt",
+      "setup": "tasks/w2_rebuild_skipped/setup.sh",
+      "builds": [
+        "marts.fct_orders"
+      ],
+      "grade": {
+        "kind": "model_rebuilt",
+        "model": "marts.fct_orders",
+        "expect": {
+          "row_count": 100
+        }
+      }
+    }
+  ]
+}

@@ -8,9 +8,9 @@
 
 import dynamic from "next/dynamic";
 import { Info } from "lucide-react";
-import { PageHeader } from "@/components/ui/page-header";
-import { DashboardSkeleton } from "@/components/ui/skeleton";
-import { useAppAuth } from "@/lib/auth-context";
+import { PageHeader } from "~/components/ui/page-header";
+import { DashboardSkeleton } from "~/components/ui/skeleton";
+import { useAppAuth } from "~/lib/auth-context";
 
 const TeamClient = dynamic(
   () => import("./team-client"),
@@ -35,13 +35,13 @@ export default function TeamPage() {
           subtitle="settings"
           description="manage your team members, invitations, and team settings"
         />
-        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px]">
           <div className="p-6 flex items-start gap-3">
             <Info
               className="w-3.5 h-3.5 text-[var(--color-text-dim)] mt-0.5 flex-shrink-0"
               strokeWidth={1.5}
             />
-            <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+            <p className="text-[12px] text-[var(--color-text-dim)] leading-relaxed">
               team settings are available in cloud mode. set{" "}
               <code className="text-[var(--color-text-muted)]">
                 NEXT_PUBLIC_DEPLOYMENT_MODE=cloud

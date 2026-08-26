@@ -1,0 +1,103 @@
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Final
+
+from signalpilot._output.formatting import as_html
+from signalpilot._output.rich_help import mddoc
+from signalpilot._plugins.ui._core.ui_element import UIElement
+from signalpilot._runtime.functions import EmptyArgs, Function
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
+
+
+@dataclass
+class LoadResponse:
+    html: str
+
+
+@mddoc
+class lazy(UIElement[bool, bool]):
+    """Lazy load a component until it is visible.
+
+    Use `sp.lazy` to defer rendering of an item until it's visible. This is
+    useful for loading expensive components only when they are needed, e.g.,
+    only when an accordion or tab is opened.
+
+    The argument to `sp.lazy` can be an object to render lazily, or a function
+    that returns the object to render (that is, functions are lazily
+    evaluated). The function can be synchronous or asynchronous.
+    Using a function is useful when the item to render is
+    the result of a database query or some other expensive operation.
+
+    Examples:
+        Create a lazy-loaded tab:
+        ```python
+        tabs = sp.ui.tabs(
+            {"Overview": tab1, "Charts": sp.lazy(expensive_component)}
+        )
+        ```
+
+        Create a lazy-loaded accordion:
+        ```python
+        accordion = sp.accordion({"Charts": sp.lazy(expensive_component)})
+        ```
+
+        Usage with async functions:
+        ```python
+        async def expensive_component(): ...
+
+
+        sp.lazy(expensive_component)
+        ```
+
+    Args:
+        element (Union[Callable[[], object], object, Callable[[], Coroutine[None, None, object]]]):
+            Object or callable that returns content to be lazily loaded.
+        show_loading_indicator (bool, optional): Whether to show a loading indicator
+            while the content is being loaded. Defaults to False.
+    """
+
+    _name: Final[str] = "sp-lazy"
+
+    def __init__(
+        self,
+        element: Callable[[], object]
+        | object
+        | Callable[[], Coroutine[None, None, object]],
+        show_loading_indicator: bool = False,
+    ) -> None:
+        self._element = element
+
+        super().__init__(
+            component_name=self._name,
+            initial_value=False,
+            label="",
+            args={
+                "show-loading-indicator": show_loading_indicator,
+            },
+            on_change=None,
+            functions=(
+                Function(
+                    name="load",
+                    arg_cls=EmptyArgs,
+                    function=self._load,
+                ),
+            ),
+        )
+
+    def _convert_value(self, value: bool) -> bool:
+        return value
+
+    async def _load(self, _args: EmptyArgs) -> LoadResponse:
+        if callable(self._element) and not isinstance(
+            self._element, UIElement
+        ):
+            el = self._element()
+            if asyncio.iscoroutine(el):
+                el = await el
+            return LoadResponse(html=as_html(el).text)
+        else:
+            return LoadResponse(html=as_html(self._element).text)

@@ -14,7 +14,7 @@ export function SystemDiagram({
   governanceActive?: boolean;
 }) {
   return (
-    <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
+    <div className="rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
       <div className="px-4 py-2.5 border-b border-[var(--color-border)] flex items-center gap-2">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
           <rect x="1" y="1" width="4" height="4" stroke="var(--color-text-dim)" strokeWidth="0.75" />
@@ -23,7 +23,7 @@ export function SystemDiagram({
           <line x1="5" y1="5" x2="5" y2="7" stroke="var(--color-text-dim)" strokeWidth="0.5" />
           <line x1="7" y1="5" x2="7" y2="7" stroke="var(--color-text-dim)" strokeWidth="0.5" />
         </svg>
-        <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">system topology</span>
+        <span className="text-[12px] text-[var(--color-text-dim)]">system topology</span>
       </div>
       <div className="p-6 flex items-center justify-center w-full">
         <svg className="w-full" style={{ minHeight: 280, maxHeight: 420 }} viewBox="0 0 680 280" fill="none" preserveAspectRatio="xMidYMid meet">
@@ -38,10 +38,6 @@ export function SystemDiagram({
           <g>
             <line x1="130" y1="125" x2="210" y2="125" stroke="var(--color-border-hover)" strokeWidth="1.5" strokeDasharray="6 4" />
             <path d="M205 119L214 125L205 131" stroke="var(--color-border-hover)" strokeWidth="1.5" fill="none" />
-            {/* Flow dot */}
-            <circle r="3.5" fill="var(--color-success)" opacity="0.6">
-              <animateMotion dur="2s" repeatCount="indefinite" path="M130,125 L210,125" />
-            </circle>
             <text x="170" y="114" textAnchor="middle" fill="var(--color-text-dim)" fontSize="10" fontFamily="monospace" opacity="0.5">SQL</text>
           </g>
 
@@ -85,18 +81,12 @@ export function SystemDiagram({
           <g>
             <line x1="415" y1="100" x2="490" y2="72" stroke="var(--color-border-hover)" strokeWidth="1.5" strokeDasharray="6 4" />
             <path d="M484 66L493 72L484 78" stroke="var(--color-border-hover)" strokeWidth="1.5" fill="none" />
-            <circle r="2.5" fill="var(--color-text-dim)" opacity="0.4">
-              <animateMotion dur="2.5s" repeatCount="indefinite" path="M415,100 L490,72" />
-            </circle>
           </g>
 
           {/* Arrow: Gateway → Sandboxes */}
           <g>
             <line x1="415" y1="155" x2="490" y2="185" stroke="var(--color-border-hover)" strokeWidth="1.5" strokeDasharray="6 4" />
             <path d="M484 179L493 185L484 191" stroke="var(--color-border-hover)" strokeWidth="1.5" fill="none" />
-            <circle r="2.5" fill="var(--color-text-dim)" opacity="0.4">
-              <animateMotion dur="3s" repeatCount="indefinite" path="M415,155 L490,185" />
-            </circle>
           </g>
 
           {/* Databases */}

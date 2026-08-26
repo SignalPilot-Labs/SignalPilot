@@ -16,22 +16,22 @@ import type {
   OrganizationDomainResource,
   OrganizationEnrollmentMode,
 } from "@clerk/types";
-import { IconButton } from "@/components/ui/icon-button";
-import { SectionHeader } from "@/components/ui/section-header";
-import { Skeleton } from "@/components/ui/skeleton";
-import { PendingButton } from "@/components/ui/pending-button";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { useToast } from "@/components/ui/toast";
+import { IconButton } from "~/components/ui/icon-button";
+import { SectionHeader } from "~/components/ui/section-header";
+import { Skeleton } from "~/components/ui/skeleton";
+import { PendingButton } from "~/components/ui/pending-button";
+import { ConfirmDialog } from "~/components/ui/confirm-dialog";
+import { useToast } from "~/components/ui/toast";
 import {
   FIELD_INPUT_CLASS,
   LABEL_CLASS,
   ERROR_CLASS,
   NEUTRAL_CLASS,
   SECONDARY_BTN_CLASS,
-} from "@/components/auth/auth-primitives";
-import { isReverificationCancelledError } from "@/lib/security/use-reverify";
-import { formatClerkError } from "@/lib/security/clerk-errors";
-import type { TeamPermissions } from "@/lib/team/use-team-permissions";
+} from "~/components/auth/auth-primitives";
+import { isReverificationCancelledError } from "~/lib/security/use-reverify";
+import { formatClerkError } from "~/lib/security/clerk-errors";
+import type { TeamPermissions } from "~/lib/team/use-team-permissions";
 
 // ---------------------------------------------------------------------------
 // Types

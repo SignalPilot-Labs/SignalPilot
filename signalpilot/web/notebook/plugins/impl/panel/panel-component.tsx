@@ -1,0 +1,295 @@
+/* oxlint-disable typescript/no-explicit-any */
+
+import { type JSX, useCallback, useEffect, useRef, useState } from "react";
+import { SpIncomingMessageEvent } from "@/core/dom/events";
+import {
+  type HTMLElementNotDerivedFromRef,
+  useEventListener,
+} from "@/hooks/useEventListener";
+import { isTrustedVirtualFileUrl } from "@/plugins/core/trusted-url";
+import type { IPluginProps } from "@/plugins/types";
+import { Logger } from "@/utils/Logger";
+import { EventBuffer, extractBuffers, MessageSchema } from "./utils";
+
+interface BokehDocument {
+  create_json_patch: (events: unknown[]) => unknown;
+  apply_json_patch: (content: unknown, buffers: ArrayBuffer[]) => void;
+  on_change: (callback: (event: unknown) => void) => void;
+  _all_models: Map<string, unknown>;
+}
+
+interface RenderItems {
+  roots: Record<string, HTMLElement | null>;
+  [key: string]: unknown;
+}
+
+declare global {
+  interface Window {
+    Bokeh: {
+      embed: {
+        embed_items_notebook: (
+          docs_json: Record<string, unknown>,
+          render_items: unknown[],
+        ) => Promise<void>;
+      };
+      index: {
+        get_by_id: (id: string) => { model: { document: BokehDocument } };
+      };
+      protocol: {
+        Message: {
+          create: (
+            type: string,
+            metadata: Record<string, unknown>,
+            content: unknown,
+          ) => Record<string, unknown>;
+        };
+        Receiver: new () => {
+          consume: (data: ArrayBuffer | string) => void;
+          message: {
+            content: {
+              events?: {
+                model?: { id?: string };
+              }[];
+              [key: string]: unknown;
+            };
+            buffers: ArrayBuffer[];
+          } | null;
+        };
+      };
+    };
+  }
+}
+
+interface PanelData {
+  extensionUrl: string | null;
+  docs_json: Record<string, unknown>;
+  render_json: {
+    roots: Record<string, string>;
+    [key: string]: unknown;
+  };
+}
+
+type T = Record<string, unknown>;
+
+// oxlint-disable-next-line typescript/consistent-type-definitions
+type PluginFunctions = {
+  send_to_widget: <T>(req: {
+    message?: unknown;
+    buffers?: unknown;
+  }) => Promise<null | undefined>;
+};
+
+function isBokehLoaded() {
+  return window.Bokeh != null;
+}
+
+export function loadPanelExtension(extensionUrl: string | null): boolean {
+  if (!extensionUrl) {
+    return false;
+  }
+  if (!isTrustedVirtualFileUrl(extensionUrl)) {
+    Logger.error(
+      `Refusing to load Panel extension from untrusted URL: ${String(
+        extensionUrl,
+      )}`,
+    );
+    return false;
+  }
+  const script = document.createElement("script");
+  script.src = extensionUrl;
+  document.head.append(script);
+  return true;
+}
+
+function getDoc(id: string | null): BokehDocument | null {
+  if (!id) {
+    return null;
+  }
+  try {
+    return window.Bokeh.index.get_by_id(id).model.document;
+  } catch (error) {
+    Logger.warn("Failed to get Bokeh document", error);
+    return null;
+  }
+}
+
+function isSyncEvent(x: unknown): x is { sync: boolean } {
+  const isObject = !!x && typeof x === "object";
+  return isObject && "sync" in x;
+}
+
+function isDocumentEvent(x: unknown): x is { document: BokehDocument } {
+  const isObject = !!x && typeof x === "object";
+  return isObject && "document" in x;
+}
+
+type Props = IPluginProps<T, PanelData, PluginFunctions>;
+
+export default function PanelComponent({ data, functions, host }: Props): JSX.Element {
+  const { extensionUrl, docs_json: docsJson, render_json: renderJson } = data;
+  const ref = useRef<HTMLDivElement>(null);
+  const rootModelIdRef = useRef<string | null>(null);
+  const receiverRef = useRef<InstanceType<
+    typeof window.Bokeh.protocol.Receiver
+  > | null>(null);
+  const [loaded, setLoaded] = useState<boolean>(false);
+  const [rendered, setRendered] = useState<string | null>(null);
+
+  const functionsRef = useRef(functions);
+  functionsRef.current = functions;
+
+  const processEvents = useCallback(() => {
+    if (!eventBufferRef.current) {
+      return;
+    }
+
+    const events = eventBufferRef.current.getAndClear();
+    if (events.length === 0) {
+      return;
+    }
+
+    const firstEvent = events.at(0);
+    if (!isDocumentEvent(firstEvent)) {
+      return;
+    }
+    const doc = firstEvent.document;
+
+    const sameDocEvents = events.filter(
+      (ev) => isDocumentEvent(ev) && ev.document === doc,
+    );
+
+    const patch = doc.create_json_patch(sameDocEvents);
+    const message = window.Bokeh.protocol.Message.create(
+      "PATCH-DOC",
+      {},
+      patch,
+    );
+    const buffers: ArrayBuffer[] = [];
+    message.content = extractBuffers(message.content, buffers);
+    functionsRef.current.send_to_widget({ message, buffers }).catch((error) => {
+      Logger.warn("Failed to send Panel event to backend", error);
+    });
+  }, []);
+
+  const eventBufferRef = useRef<EventBuffer<unknown> | null>(
+    new EventBuffer(processEvents),
+  );
+
+  useEffect(() => {
+    if (isBokehLoaded()) {
+      setLoaded(true);
+      return;
+    }
+
+    loadPanelExtension(extensionUrl);
+
+    const checkBokeh = setInterval(() => {
+      if (isBokehLoaded()) {
+        setLoaded(true);
+        clearInterval(checkBokeh);
+      }
+    }, 10);
+
+    return () => clearInterval(checkBokeh);
+  }, [extensionUrl, setLoaded]);
+
+  useEventListener(
+    host as HTMLElementNotDerivedFromRef,
+    SpIncomingMessageEvent.TYPE,
+    (e) => {
+      if (e.detail.message == null) {
+        return;
+      }
+
+      const message = MessageSchema.parse(e.detail.message);
+      const buffers = e.detail.buffers;
+      const receiver = receiverRef.current;
+
+      if (!receiver) {
+        return;
+      }
+
+      const content = message.content;
+      if (content !== null && typeof message.content !== "string") {
+        if (eventBufferRef.current && eventBufferRef.current.size() > 0) {
+          processEvents();
+        }
+        return;
+      }
+
+      const doc = getDoc(rootModelIdRef.current);
+      if (!doc) {
+        return;
+      }
+
+      if (buffers && buffers.length > 0) {
+        const buffer = buffers[0];
+        if (buffer instanceof ArrayBuffer) {
+          receiver.consume(buffer);
+        } else if (buffer.buffer instanceof ArrayBuffer) {
+          receiver.consume(buffer.buffer);
+        }
+      } else if (content && typeof content === "string") {
+        receiver.consume(content);
+      } else {
+        return;
+      }
+
+      const commMessage = receiver.message;
+      if (commMessage != null && Object.keys(commMessage.content).length > 0) {
+        if (commMessage.content.events !== undefined) {
+          commMessage.content.events = commMessage.content.events.filter(
+            (e) => e?.model?.id && doc._all_models.has(e.model.id),
+          );
+        }
+        doc.apply_json_patch(commMessage.content, commMessage.buffers);
+      }
+    },
+  );
+
+  useEffect(() => {
+    const docId = Object.keys(docsJson)[0];
+
+    if (!loaded || rendered === docId) {
+      return;
+    }
+
+    const embedItems = async () => {
+      const renderItem: RenderItems = {
+        ...renderJson,
+        roots: {},
+      };
+      for (const modelId of Object.keys(renderJson.roots)) {
+        const rootId = renderJson.roots[modelId];
+        if (ref.current) {
+          const el = ref.current.querySelector(`#${rootId}`);
+          renderItem.roots[modelId] = el as HTMLElement | null;
+        }
+      }
+      const modelId = Object.keys(renderItem.roots)[0];
+      await window.Bokeh.embed.embed_items_notebook(docsJson, [renderItem]);
+      rootModelIdRef.current = modelId;
+      const doc = window.Bokeh.index.get_by_id(modelId).model.document;
+      receiverRef.current = new window.Bokeh.protocol.Receiver();
+      doc.on_change((event) => {
+        if (isSyncEvent(event) && event.sync) {
+          eventBufferRef.current?.add(event);
+        }
+      });
+      setRendered(docId);
+    };
+
+    embedItems();
+  }, [docsJson, loaded, renderJson, rendered]);
+
+  return (
+    <div ref={ref}>
+      {Object.values(renderJson.roots).map((rootId) => (
+        <div key={rootId} id={rootId}>
+          <div data-root-id={rootId} style={{ display: "contents" }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+PanelComponent.displayName = "PanelComponent";

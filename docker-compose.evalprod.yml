@@ -1,0 +1,106 @@
+# Use this isolated test stack with the `spevalprod` project name.
+# This project name prevents conflicts with the `signalpilot` stack.
+#
+#   docker compose -p spevalprod \
+#     -f docker-compose.yml -f docker-compose.evalprod.yml \
+#     --env-file .env.evalprod up -d --build
+#
+# The stack publishes db on 5701, gateway on 3410, notebook on 2818,
+# MinIO on 9100 and 9101, and Mailpit on 8125.
+# Docker Compose prefixes volume names with `spevalprod_` to isolate the data.
+# Dockerfile.eval-stub supplies the runner image without a model token.
+
+services:
+  db:
+    ports: !override
+      - "127.0.0.1:5701:5432"
+
+  # This service contains disposable warehouse data.
+  # The eval-runtime network cannot access the control database.
+  # Store the administrator password in the local .env.evalprod file.
+  eval-db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: signalpilot
+      POSTGRES_PASSWORD: ${SP_EVALPROD_DB_PASSWORD:?Set SP_EVALPROD_DB_PASSWORD in .env.evalprod}
+      POSTGRES_DB: postgres
+    volumes:
+      - eval-warehouse-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U signalpilot"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - default
+      - eval-runtime
+    restart: unless-stopped
+
+  notebook:
+    ports: !override
+      - "127.0.0.1:2818:2718"
+
+  gateway:
+    ports: !override
+      - "127.0.0.1:3410:3300"
+    environment:
+      SP_PUBLIC_GATEWAY_URL: http://localhost:3410
+      SP_WEB_URL: http://localhost:3250
+      # Use the host Next.js server on port 3260 to verify the web interface.
+      SP_ALLOWED_ORIGINS: http://localhost:3250,http://localhost:3260,http://localhost:3410
+      # Evaluation containers join the `spevalprod_eval_runtime` network.
+      SP_EVAL_DOCKER_NETWORK: spevalprod_eval_runtime
+      # The simulated CLI implements the Claude CLI interface without model tokens.
+      SP_EVAL_RUNNER_IMAGE: sp-eval-stub:evalprod
+      SP_EVAL_SETUP_IMAGE: sp-eval-stub:evalprod
+      # Evaluation sets are in ./e2e-eval and mount at /eval-projects.
+      # Docker resolves bind mounts from the host path.
+      SP_EVAL_PROJECTS_HOST_DIR: ${SP_EVALPROD_HOST_ROOT}/e2e-eval
+      SP_EVAL_SETUP_HOST_ROOT: ${SP_EVALPROD_HOST_ROOT}
+      # The local branch provider creates each eval-* database from the seeded parent warehouse.
+      SP_EVAL_PG_ADMIN_DSN: ${SP_EVALPROD_PG_SCHEME:-postgresql}://signalpilot:${SP_EVALPROD_DB_PASSWORD}@eval-db:5432/postgres
+      SP_EVAL_PG_PARENT_DB: evalwh
+      # Short timeouts reduce the duration of local end-to-end tests.
+      SP_EVAL_TIMEOUT_SECONDS: "180"
+      SP_EVAL_SETUP_TIMEOUT_SECONDS: "180"
+      SP_EVAL_MAX_PARALLEL_TASKS: "4"
+      SP_EVAL_REGRESSION_DROP_PCT: "10"
+    volumes:
+      - signalpilot-data:/data
+      - signalpilot-shared:/shared
+      - signalpilot-gateway-secrets:/gateway-secrets
+      - signalpilot-repos:/repos
+      - signalpilot-notebook-token:/notebook-token:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./e2e-eval:/eval-projects:ro
+    depends_on:
+      eval-db:
+        condition: service_healthy
+
+  # The end-to-end tests call the HTTP API directly.
+  # Use the host Next.js server on port 3260 to verify the web interface.
+  # The `webui` profile disables this service by default.
+  web:
+    profiles:
+      - webui
+    build:
+      args:
+        NEXT_PUBLIC_GATEWAY_URL: http://localhost:3410
+    environment:
+      NEXT_PUBLIC_GATEWAY_URL: http://localhost:3410
+
+  minio:
+    ports: !override
+      - "127.0.0.1:9100:9000"
+      - "127.0.0.1:9101:9001"
+
+  mailpit:
+    ports: !override
+      - "127.0.0.1:8125:8025"
+
+networks:
+  eval-runtime:
+    name: spevalprod_eval_runtime
+
+volumes:
+  eval-warehouse-data:

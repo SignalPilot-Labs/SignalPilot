@@ -1,4 +1,4 @@
-"""Microsoft SQL Server connector — pymssql backed.
+"""Microsoft SQL Server connector: pymssql backed.
 
 Supports SQL Server 2016+, Azure SQL Database, Azure SQL Managed Instance.
 Uses pymssql for synchronous operations wrapped in async context.
@@ -11,6 +11,7 @@ extended properties for comments, and index definitions.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from ..base import BaseConnector
@@ -22,12 +23,41 @@ try:
 except ImportError:
     HAS_PYMSSQL = False
 
+logger = logging.getLogger(__name__)
+
+# Multi-database introspection fans out over this many extra connections.
+# SQL Server handles concurrent catalog reads cheaply; keep it modest so a
+# server with hundreds of databases is not hammered.
+_MULTI_DB_INTROSPECT_CONCURRENCY = 4
+
+
+def _decode_extended_property(value: Any) -> str:
+    """Normalise a sys.extended_properties value into text.
+
+    The schema query casts these to NVARCHAR server-side, so pymssql hands back
+    a str. Bytes are still handled defensively: a plain str() on them would
+    yield the literal "b'...'" rather than the comment.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, bytes | bytearray):
+        return bytes(value).decode("utf-8", errors="replace").rstrip("\x00")
+    return str(value)
+
 
 class MSSQLConnector(BaseConnector):
     def __init__(self):
         super().__init__()
         self._conn: pymssql.Connection | None = None
+        # PoolManager hands the same connector to concurrent callers, but a
+        # pymssql connection cannot be multiplexed: interleaved cursors corrupt
+        # each other's state. Serialize every use of the underlying connection.
+        self._conn_lock = asyncio.Lock()
         self._connect_params: dict = {}
+        self._base_connect_kwargs: dict = {}
+        # Multi-database mode: no database in the connection URL. The session
+        # signs in to master and introspection covers every accessible database.
+        self._multi_db: bool = False
         self._login_timeout: int = 15
         # Azure AD / Entra ID auth via access token
         self._azure_ad_auth: bool = False
@@ -86,20 +116,21 @@ class MSSQLConnector(BaseConnector):
 
         params = self._parse_connection_string(connection_string)
         self._connect_params = params
+        self._multi_db = not params.get("database")
 
         connect_kwargs: dict = {
             "server": params.get("host", "localhost"),
             "port": str(params.get("port", "1433")),
             "user": params.get("user", ""),
             "password": params.get("password", ""),
-            "database": params.get("database", "master"),
+            "database": params.get("database") or "master",
             "login_timeout": self._login_timeout,
             "timeout": self._query_timeout,
             "as_dict": True,
             "charset": "UTF-8",
         }
 
-        # Azure AD auth — acquire token and use as password
+        # Azure AD auth: acquire token and use as password
         if self._azure_ad_auth:
             token = self._acquire_azure_ad_token()
             connect_kwargs["password"] = token
@@ -109,7 +140,7 @@ class MSSQLConnector(BaseConnector):
         # Default to TDS 7.4 (SQL Server 2019+ / Azure SQL)
         connect_kwargs["tds_version"] = "7.4"
 
-        # TLS encryption — from SSL config or URL encrypt=true
+        # TLS encryption: from SSL config or URL encrypt=true
         enable_tls = params.get("encrypt", False)
         if not self._azure_ad_auth:  # Azure AD already sets encryption above
             if self._ssl_config and self._ssl_config.get("enabled"):
@@ -121,6 +152,11 @@ class MSSQLConnector(BaseConnector):
                     connect_kwargs["conn_properties"] = "Encrypt=yes;TrustServerCertificate=yes"
             elif enable_tls:
                 connect_kwargs["conn_properties"] = "Encrypt=yes;TrustServerCertificate=yes"
+
+        # Multi-database introspection opens short-lived sibling connections
+        # (one per database) from these exact kwargs, so Azure AD tokens and
+        # TLS settings carry over without re-deriving them.
+        self._base_connect_kwargs = dict(connect_kwargs)
 
         try:
             self._conn = pymssql.connect(**connect_kwargs)
@@ -168,7 +204,9 @@ class MSSQLConnector(BaseConnector):
             "port": parsed.port or 1433,
             "user": unquote(parsed.username or "sa"),
             "password": unquote(parsed.password or ""),
-            "database": parsed.path.lstrip("/") if parsed.path else "master",
+            # Empty path = multi-database mode (sign in to master, discover all
+            # accessible databases). A named path pins the session to that database.
+            "database": parsed.path.lstrip("/") if parsed.path else "",
         }
 
         # Support named instances via query param: ?instance=SQLEXPRESS
@@ -191,7 +229,7 @@ class MSSQLConnector(BaseConnector):
                 port=str(self._connect_params.get("port", "1433")),
                 user=self._connect_params.get("user", ""),
                 password=self._connect_params.get("password", ""),
-                database=self._connect_params.get("database", "master"),
+                database=self._connect_params.get("database") or "master",
                 login_timeout=self._login_timeout,
                 timeout=self._query_timeout,
                 as_dict=True,
@@ -237,16 +275,22 @@ class MSSQLConnector(BaseConnector):
             return list(rows) if rows else []
 
         try:
-            return await self._run_in_thread(_run, effective_timeout, label="SQL Server")
+            async with self._conn_lock:
+                return await self._run_in_thread(_run, effective_timeout, label="SQL Server")
         except pymssql.Error as e:
             raise RuntimeError(f"SQL Server query error: {e}") from e
+
+    async def cancel_current_query(self) -> bool:
+        if self._conn is None:
+            return False
+        await self._run_in_thread(self._conn.cancel, 10, label="SQL Server cancellation")
+        return True
 
     async def _get_schema_impl(self) -> dict[str, Any]:
         import time as _time
 
         if self._conn is None:
             raise RuntimeError("Not connected")
-        self._ensure_connected()
 
         # Columns + primary keys from tables AND views
         col_sql = """
@@ -263,8 +307,10 @@ class MSSQLConnector(BaseConnector):
                 c.is_identity,
                 OBJECT_DEFINITION(c.default_object_id) AS column_default,
                 CASE WHEN pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key,
-                ep.value AS column_comment,
-                ep_t.value AS table_comment
+                -- extended_properties.value is sql_variant; cast server-side so the
+                -- driver never has to guess the underlying varchar/nvarchar encoding
+                CAST(ep.value AS NVARCHAR(4000)) AS column_comment,
+                CAST(ep_t.value AS NVARCHAR(4000)) AS table_comment
             FROM sys.objects o
             JOIN sys.schemas s ON o.schema_id = s.schema_id
             JOIN sys.columns c ON o.object_id = c.object_id
@@ -334,7 +380,7 @@ class MSSQLConnector(BaseConnector):
             GROUP BY i.object_id, i.name, i.is_unique, i.type_desc
         """
 
-        # Column statistics — helps Spider2.0 understand selectivity
+        # Column statistics: helps Spider2.0 understand selectivity
         # Uses dm_db_stats_properties for actual distinct counts from auto-stats
         # OUTER APPLY is required because dm_db_stats_properties is a TVF
         stats_sql = """
@@ -354,42 +400,130 @@ class MSSQLConnector(BaseConnector):
                 AND OBJECT_SCHEMA_NAME(s.object_id) NOT IN ('sys', 'INFORMATION_SCHEMA')
         """
 
-        def _fetch(query: str) -> tuple[list, float]:
+        def _fetch(query: str, conn: Any = None) -> tuple[list, float]:
+            active = conn or self._conn
             try:
-                cursor = self._conn.cursor(as_dict=True)
+                cursor = active.cursor(as_dict=True)
                 t0 = _time.monotonic()
                 cursor.execute(query)
                 result = cursor.fetchall()
                 elapsed = (_time.monotonic() - t0) * 1000
                 cursor.close()
                 return result, elapsed
-            except Exception:
+            except Exception as e:
+                # A failed catalog query means a silently incomplete schema —
+                # keep going (other queries still add value) but say so.
+                logger.warning("MSSQL schema introspection query failed: %s", e)
                 return [], 0.0
 
-        def _fetch_all_sequential() -> tuple:
-            """Run all metadata queries sequentially — pymssql uses a single connection.
-            5 queries (down from 6): cardinality merged into idx_sql via lead_column."""
+        # Multi-database mode: every ONLINE, accessible, non-system database.
+        # database_id > 4 excludes master/tempdb/model/msdb; the name filter
+        # drops managed-service databases (Amazon RDS rdsadmin, replication,
+        # SSIS/SSRS catalogs) that HAS_DBACCESS can still report as reachable.
+        db_list_sql = """
+            SELECT name FROM sys.databases
+            WHERE state = 0
+                AND database_id > 4
+                AND name NOT IN ('rdsadmin', 'distribution', 'SSISDB', 'ReportServer', 'ReportServerTempDB')
+                AND HAS_DBACCESS(name) = 1
+            ORDER BY name
+        """
+
+        def _five(conn: Any = None) -> tuple:
             return (
-                _fetch(col_sql),
-                _fetch(rowcount_sql),
-                _fetch(fk_sql),
-                _fetch(idx_sql),
-                _fetch(stats_sql),
+                _fetch(col_sql, conn),
+                _fetch(rowcount_sql, conn),
+                _fetch(fk_sql, conn),
+                _fetch(idx_sql, conn),
+                _fetch(stats_sql, conn),
             )
 
-        # Run the synchronous queries in a thread to avoid blocking the event loop
+        def _introspect_one_db(dbname: str) -> tuple[str, tuple] | None:
+            """Open a short-lived sibling connection pinned to dbname and run
+            the five catalog queries there. Sibling connections let databases
+            introspect in parallel: wall time becomes the slowest database
+            instead of the sum, and the shared session connection stays free.
+            """
+            kwargs = dict(self._base_connect_kwargs, database=dbname)
+            try:
+                conn = pymssql.connect(**kwargs)
+            except Exception as e:
+                # Not accessible after all (permissions raced, db dropped) — skip.
+                logger.warning("MSSQL multi-db introspection: cannot open '%s': %s", dbname, e)
+                return None
+            try:
+                return (dbname, _five(conn))
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+        if not self._multi_db:
+            def _fetch_single() -> list[tuple[str | None, tuple]]:
+                # Liveness check runs in this thread while _conn_lock is held;
+                # a check from the caller can conflict with a concurrent query.
+                self._ensure_connected()
+                return [(None, _five())]
+
+            async with self._conn_lock:
+                per_db_metadata = await asyncio.to_thread(_fetch_single)
+        else:
+            # The session connection only lists databases; each database is then
+            # introspected concurrently on its own connection (bounded fan-out).
+            def _list_dbs() -> list[str]:
+                self._ensure_connected()
+                db_rows, _ = _fetch(db_list_sql)
+                return [r["name"] for r in db_rows]
+
+            async with self._conn_lock:
+                names = await asyncio.to_thread(_list_dbs)
+
+            sem = asyncio.Semaphore(_MULTI_DB_INTROSPECT_CONCURRENCY)
+
+            async def _bounded(dbname: str) -> tuple[str, tuple] | None:
+                async with sem:
+                    return await asyncio.to_thread(_introspect_one_db, dbname)
+
+            results = await asyncio.gather(*(_bounded(n) for n in names))
+            per_db_metadata = [r for r in results if r is not None]
+
+        schema: dict[str, Any] = {}
+        for _dbname, _metadata in per_db_metadata:
+            await self._assemble_db_schema(
+                schema, _dbname, _metadata,
+                (col_sql, rowcount_sql, fk_sql, idx_sql, stats_sql),
+            )
+        return schema
+
+    async def _assemble_db_schema(
+        self,
+        schema: dict[str, Any],
+        dbname: str | None,
+        metadata: tuple,
+        sqls: tuple[str, str, str, str, str],
+    ) -> None:
+        """Fold one database's metadata query results into the schema dict.
+
+        dbname None = single-database mode: keys are schema.table. A named
+        database produces database.schema.table keys (same shape as Trino's
+        catalog.schema.table) so one connection can expose many databases.
+        """
+        col_sql, rowcount_sql, fk_sql, idx_sql, stats_sql = sqls
         (
             (rows, _col_ms),
             (rowcount_rows, _rc_ms),
             (fk_rows, _fk_ms),
             (idx_rows, _idx_ms),
             (stat_rows, _stat_ms),
-        ) = await asyncio.to_thread(_fetch_all_sequential)
+        ) = metadata
         await self._audit_sql(col_sql.strip(), len(rows), _col_ms)
         await self._audit_sql(rowcount_sql.strip(), len(rowcount_rows), _rc_ms)
         await self._audit_sql(fk_sql.strip(), len(fk_rows), _fk_ms)
         await self._audit_sql(idx_sql.strip(), len(idx_rows), _idx_ms)
         await self._audit_sql(stats_sql.strip(), len(stat_rows), _stat_ms)
+
+        prefix = f"{dbname}." if dbname else ""
 
         # Build row count and table size maps
         row_counts: dict[str, int] = {}
@@ -429,7 +563,7 @@ class MSSQLConnector(BaseConnector):
                 }
             )
 
-        # Build stats map (column → statistics info)
+        # Map each column to its statistics information.
         col_has_stats: set[str] = set()
         col_stat_info: dict[str, dict] = {}
         for r in stat_rows:
@@ -446,22 +580,24 @@ class MSSQLConnector(BaseConnector):
                 card_key = f"{r['table_schema']}.{r['table_name']}.{r['lead_column']}"
                 unique_cols.add(card_key)
 
-        schema: dict[str, Any] = {}
         for row in rows:
-            key = f"{row['table_schema']}.{row['table_name']}"
+            local_key = f"{row['table_schema']}.{row['table_name']}"
+            key = f"{prefix}{local_key}"
             if key not in schema:
                 is_view = row.get("object_type", "U").strip() == "V"
                 schema[key] = {
-                    "schema": row["table_schema"],
+                    "schema": f"{prefix}{row['table_schema']}",
                     "name": row["table_name"],
                     "type": "view" if is_view else "table",
                     "columns": [],
-                    "foreign_keys": foreign_keys.get(key, []),
-                    "indexes": indexes.get(key, []),
-                    "row_count": row_counts.get(key, 0),
-                    "size_mb": table_sizes.get(key, 0),
-                    "description": str(row.get("table_comment", "") or ""),
+                    "foreign_keys": foreign_keys.get(local_key, []),
+                    "indexes": indexes.get(local_key, []),
+                    "row_count": row_counts.get(local_key, 0),
+                    "size_mb": table_sizes.get(local_key, 0),
+                    "description": _decode_extended_property(row.get("table_comment")),
                 }
+                if dbname:
+                    schema[key]["database"] = dbname
 
             # Build data type string with precision info
             data_type = row["data_type"]
@@ -483,7 +619,7 @@ class MSSQLConnector(BaseConnector):
                 "nullable": bool(row["is_nullable"]),
                 "primary_key": bool(row["is_primary_key"]),
                 "default": row.get("column_default"),
-                "comment": str(row.get("column_comment", "") or ""),
+                "comment": _decode_extended_property(row.get("column_comment")),
             }
             if bool(row.get("is_identity")):
                 col_entry["identity"] = True
@@ -496,14 +632,17 @@ class MSSQLConnector(BaseConnector):
                 col_entry["stats"] = col_stat_info[stat_key]
 
             schema[key]["columns"].append(col_entry)
-        return schema
 
     async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
-        import time as _time
-
         if self._conn is None or not columns:
             return {}
+        async with self._conn_lock:
+            return await self._sample_values_locked(table, columns, limit)
+
+    async def _sample_values_locked(self, table: str, columns: list[str], limit: int) -> dict[str, list]:
+        import time as _time
+
         self._ensure_connected()
         safe_table = self._quote_table(table)
         try:
@@ -547,12 +686,15 @@ class MSSQLConnector(BaseConnector):
     async def health_check(self) -> bool:
         if self._conn is None:
             return False
-        try:
-            self._ensure_connected()
-            cursor = self._conn.cursor(as_dict=True)
-            cursor.execute("SELECT 1 AS ok")
-            cursor.fetchall()
-            cursor.close()
-            return True
-        except Exception:
-            return False
+        # PoolManager checks health during each acquisition.
+        # Use the connection lock because another caller can hold the connection.
+        async with self._conn_lock:
+            try:
+                self._ensure_connected()
+                cursor = self._conn.cursor(as_dict=True)
+                cursor.execute("SELECT 1 AS ok")
+                cursor.fetchall()
+                cursor.close()
+                return True
+            except Exception:
+                return False

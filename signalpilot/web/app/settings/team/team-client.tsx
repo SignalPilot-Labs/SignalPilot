@@ -7,15 +7,15 @@
 
 import { useUser, useOrganization } from "@clerk/nextjs";
 import { Info } from "lucide-react";
-import { PageHeaderSkeleton, CardSkeleton } from "@/components/ui/skeleton";
-import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { TeamOverviewSection } from "@/components/team/team-overview-section";
-import { TeamMembersSection } from "@/components/team/team-members-section";
-import { TeamInvitationsSection } from "@/components/team/team-invitations-section";
-import { TeamDangerSection } from "@/components/team/team-danger-section";
-import { TeamEnterpriseSection } from "@/components/team/team-enterprise-section";
-import { TeamDomainsSection } from "@/components/team/team-domains-section";
-import { useTeamPermissions } from "@/lib/team/use-team-permissions";
+import { PageHeaderSkeleton, CardSkeleton } from "~/components/ui/skeleton";
+import { PageHeader, TerminalBar } from "~/components/ui/page-header";
+import { TeamOverviewSection } from "~/components/team/team-overview-section";
+import { TeamMembersSection } from "~/components/team/team-members-section";
+import { TeamInvitationsSection } from "~/components/team/team-invitations-section";
+import { TeamDangerSection } from "~/components/team/team-danger-section";
+import { TeamEnterpriseSection } from "~/components/team/team-enterprise-section";
+import { TeamDomainsSection } from "~/components/team/team-domains-section";
+import { useTeamPermissions } from "~/lib/team/use-team-permissions";
 
 export default function TeamClient() {
   const { user, isLoaded: userLoaded } = useUser();
@@ -38,10 +38,10 @@ export default function TeamClient() {
   if (!organization || !user) {
     return (
       <div className="p-8 max-w-3xl">
-        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px]">
           <div className="p-6 flex items-start gap-3">
             <Info className="w-3.5 h-3.5 text-[var(--color-text-dim)] mt-0.5 flex-shrink-0" strokeWidth={1.5} />
-            <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+            <p className="text-[12px] text-[var(--color-text-dim)] leading-relaxed">
               no active team. use the team switcher to create or select one.
             </p>
           </div>

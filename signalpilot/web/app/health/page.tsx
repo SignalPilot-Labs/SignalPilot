@@ -20,7 +20,7 @@ import {
 import {
   getConnectionHealth,
   testConnection,
-} from "@/lib/api";
+} from "~/lib/api";
 
 const isCloud = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 import {
@@ -28,14 +28,14 @@ import {
   useConnectionsHealth,
   useSchemaCache,
   SWR_KEYS,
-} from "@/lib/hooks/use-gateway-data";
-import type { ConnectionHealthStats, ConnectionInfo } from "@/lib/types";
-import { EmptyChart, EmptyState } from "@/components/ui/empty-states";
-import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { PageLoader } from "@/components/ui/page-loader";
-import { RingGauge, StatusDot, Sparkline, MiniBar } from "@/components/ui/data-viz";
-import { Tooltip } from "@/components/ui/tooltip";
-import { TimeAgo } from "@/components/ui/time-ago";
+} from "~/lib/hooks/use-gateway-data";
+import type { ConnectionHealthStats, ConnectionInfo } from "~/lib/types";
+import { EmptyChart, EmptyState } from "~/components/ui/empty-states";
+import { CONNECTIONS_TABS, PageHeader, TerminalBar } from "~/components/ui/page-header";
+import { PageLoader } from "~/components/ui/page-loader";
+import { RingGauge, StatusDot, Sparkline, MiniBar } from "~/components/ui/data-viz";
+import { Tooltip } from "~/components/ui/tooltip";
+import { TimeAgo } from "~/components/ui/time-ago";
 
 const statusConfig: Record<string, { color: string; bg: string; icon: React.ElementType; label: string }> = {
   healthy: { color: "text-[var(--color-success)]", bg: "bg-[var(--color-success)]", icon: CheckCircle2, label: "healthy" },
@@ -54,14 +54,14 @@ function LatencyBar({ label, value, maxMs = 500 }: { label: string; value: numbe
   return (
     <Tooltip content={`${label}: ${value.toFixed(2)}ms (${pct.toFixed(0)}% of ${maxMs}ms budget)`} position="top">
       <div className="flex items-center gap-3 cursor-default">
-        <span className="text-[11px] text-[var(--color-text-dim)] w-8 text-right uppercase tracking-[0.15em]">{label}</span>
+        <span className="text-[11px] text-[var(--color-text-dim)] w-8 text-right uppercase tracking-[0.08em]">{label}</span>
         <div className="flex-1 h-1.5 bg-[var(--color-bg)] overflow-hidden relative">
           <div className="h-full transition-all duration-500" style={{ width: `${pct}%`, backgroundColor: color }} />
           {/* Threshold markers */}
           <div className="absolute top-0 h-full w-px bg-[var(--color-text-dim)] opacity-20" style={{ left: `${(50/maxMs)*100}%` }} />
           <div className="absolute top-0 h-full w-px bg-[var(--color-text-dim)] opacity-20" style={{ left: `${(200/maxMs)*100}%` }} />
         </div>
-        <span className={`text-[12px] tabular-nums w-16 text-right tracking-wider ${
+        <span className={`text-[12px] font-mono tabular-nums w-16 text-right ${
           value < 50 ? "text-[var(--color-success)]" : value < 200 ? "text-[var(--color-text-dim)]" : "text-[var(--color-error)]"
         }`}>{value.toFixed(1)}ms</span>
       </div>
@@ -144,15 +144,16 @@ export default function HealthPage() {
       <PageHeader
         title="health"
         subtitle="monitoring"
+        tabs={CONNECTIONS_TABS}
         description="connection health, latency, and cache performance"
         actions={
           <div className="flex items-center gap-3">
-            <label className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] cursor-pointer tracking-wider px-2 py-1.5 border border-[var(--color-border)] hover:border-[var(--color-border-hover)] transition-colors">
-              <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} className="rounded-none" />
+            <label className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] cursor-pointer px-2 py-1.5 border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-border-hover)] transition-colors">
+              <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} className="rounded-[6px]" />
               auto (10s)
             </label>
             <button onClick={handleRefresh} disabled={loading}
-              className="flex items-center gap-1.5 px-3 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors tracking-wider">
+              className="flex items-center gap-1.5 px-3 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] rounded-[10px] transition-colors">
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} strokeWidth={1.5} />
               refresh
             </button>
@@ -171,12 +172,12 @@ export default function HealthPage() {
       </TerminalBar>
 
       {/* Overview cards */}
-      <div className={`grid ${isCloud ? "grid-cols-2" : "grid-cols-3"} gap-px mb-8 bg-[var(--color-border)] stagger-fade-in`}>
+      <div className={`grid ${isCloud ? "grid-cols-2" : "grid-cols-3"} gap-px mb-8 bg-[var(--color-border)] rounded-[14px] overflow-hidden stagger-fade-in`}>
         {/* Connections */}
         <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
           <div className="flex items-center gap-2 mb-3">
             <Wifi className={`w-3.5 h-3.5 ${overallHealthy === overallTotal && overallTotal > 0 ? "text-[var(--color-success)]" : "text-[var(--color-text-dim)]"}`} strokeWidth={1.5} />
-            <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">connections</span>
+            <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">connections</span>
           </div>
           <div className="flex items-center gap-3">
             <RingGauge
@@ -187,8 +188,8 @@ export default function HealthPage() {
               color={overallHealthy === overallTotal ? "var(--color-success)" : "var(--color-warning)"}
             />
             <div>
-              <p className={`text-lg font-light tabular-nums ${overallHealthy === overallTotal && overallTotal > 0 ? "text-[var(--color-success)]" : ""}`}>{overallHealthy}/{overallTotal}</p>
-              <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider">healthy</p>
+              <p className={`text-lg font-mono tabular-nums ${overallHealthy === overallTotal && overallTotal > 0 ? "text-[var(--color-success)]" : ""}`}>{overallHealthy}/{overallTotal}</p>
+              <p className="text-[11px] text-[var(--color-text-dim)]">healthy</p>
             </div>
           </div>
         </div>
@@ -196,20 +197,20 @@ export default function HealthPage() {
         <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
           <div className="flex items-center gap-2 mb-3">
             <Clock className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-            <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">avg latency</span>
+            <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">avg latency</span>
           </div>
-          <p className="text-xl font-light tabular-nums">{avgLatency != null ? `${avgLatency.toFixed(1)}ms` : "--"}</p>
-          <p className="text-[12px] text-[var(--color-text-dim)] mt-1 tracking-wider">all connections</p>
+          <p className="text-xl font-mono tabular-nums">{avgLatency != null ? `${avgLatency.toFixed(1)}ms` : "--"}</p>
+          <p className="text-[12px] text-[var(--color-text-dim)] mt-1">all connections</p>
         </div>
         {/* Schema Cache — local mode only */}
         {!isCloud && (
           <div className="bg-[var(--color-bg-card)] p-5 hover:bg-[var(--color-bg-hover)] transition-colors card-accent-top">
             <div className="flex items-center gap-2 mb-3">
               <Database className="w-3.5 h-3.5 text-[var(--color-text-dim)]" strokeWidth={1.5} />
-              <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">schema cache</span>
+              <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">schema cache</span>
             </div>
-            <p className="text-xl font-light tabular-nums">{schemaCache ? String(schemaCache.cached_connections) : "--"}</p>
-            <p className="text-[12px] text-[var(--color-text-dim)] mt-1 tracking-wider">{schemaCache ? `${schemaCache.total_entries} entries, ttl ${schemaCache.ttl_seconds}s` : "cached connections"}</p>
+            <p className="text-xl font-mono tabular-nums">{schemaCache ? String(schemaCache.cached_connections) : "--"}</p>
+            <p className="text-[12px] text-[var(--color-text-dim)] mt-1">{schemaCache ? `${schemaCache.total_entries} entries, ttl ${schemaCache.ttl_seconds}s` : "cached connections"}</p>
           </div>
         )}
       </div>
@@ -226,9 +227,9 @@ export default function HealthPage() {
       ) : (
         <div className="space-y-4">
           <div className="section-header">
-            <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">connection health</span>
+            <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">connection health</span>
           </div>
-          <div className={`grid ${isCloud ? "grid-cols-1" : "grid-cols-2"} gap-px bg-[var(--color-border)] stagger-fade-in`}>
+          <div className={`grid ${isCloud ? "grid-cols-1" : "grid-cols-2"} gap-px bg-[var(--color-border)] rounded-[14px] overflow-hidden stagger-fade-in`}>
             {healthData.map((health) => {
               const cfg = statusConfig[health.status] || statusConfig.unknown;
               const StatusIcon = cfg.icon;
@@ -246,17 +247,17 @@ export default function HealthPage() {
                       />
                       <div>
                         <h3 className="text-xs text-[var(--color-text)]">{health.connection_name}</h3>
-                        <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
+                        <span className="text-[12px] text-[var(--color-text-dim)] font-mono">
                           {health.db_type}{conn ? ` — ${conn.host}:${conn.port}` : ""}
                         </span>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className={`flex items-center gap-1 text-[12px] tracking-wider ${cfg.color}`}>
+                      <span className={`flex items-center gap-1 text-[12px] ${cfg.color}`}>
                         <StatusIcon className="w-3 h-3" strokeWidth={1.5} /> {cfg.label}
                       </span>
                       <button onClick={() => handleTest(health.connection_name)} disabled={testing === health.connection_name}
-                        className="flex items-center gap-1 px-2 py-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-all disabled:opacity-50 tracking-wider">
+                        className="flex items-center gap-1 px-2 py-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] rounded-[6px] transition-colors duration-150 disabled:opacity-50">
                         {testing === health.connection_name ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <Activity className="w-2.5 h-2.5" strokeWidth={1.5} />}
                         test
                       </button>
@@ -267,7 +268,7 @@ export default function HealthPage() {
                     {/* Latency bars + distribution */}
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
-                        <div className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">latency</div>
+                        <div className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">latency</div>
                         <LatencyDistribution p50={health.latency_p50_ms} p95={health.latency_p95_ms} p99={health.latency_p99_ms} />
                       </div>
                       <LatencyBar label="p50" value={health.latency_p50_ms} />
@@ -283,43 +284,43 @@ export default function HealthPage() {
                         { label: "failures", value: health.failures ?? 0, color: "text-[var(--color-error)]" },
                       ].map((stat) => (
                         <div key={stat.label}>
-                          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{stat.label}</p>
-                          <p className={`text-xs font-light tabular-nums ${stat.color}`}>{stat.value}</p>
+                          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">{stat.label}</p>
+                          <p className={`text-xs font-mono tabular-nums ${stat.color}`}>{stat.value}</p>
                         </div>
                       ))}
                       {health.error_rate != null && (
                         <div>
-                          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">error rate</p>
-                          <p className={`text-xs font-light tabular-nums ${
+                          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">error rate</p>
+                          <p className={`text-xs font-mono tabular-nums ${
                             health.error_rate > 0.1 ? "text-[var(--color-error)]" : health.error_rate > 0 ? "text-[var(--color-warning)]" : "text-[var(--color-success)]"
                           }`}>{(health.error_rate * 100).toFixed(1)}%</p>
                         </div>
                       )}
                       {health.consecutive_failures != null && health.consecutive_failures > 0 && (
                         <div>
-                          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">consec fails</p>
-                          <p className="text-xs font-light tabular-nums text-[var(--color-error)]">{health.consecutive_failures}</p>
+                          <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">consec fails</p>
+                          <p className="text-xs font-mono tabular-nums text-[var(--color-error)]">{health.consecutive_failures}</p>
                         </div>
                       )}
                     </div>
 
                     {health.last_error && (
-                      <div className="p-2.5 border border-[var(--color-error)]/20 bg-[var(--color-error)]/5">
+                      <div className="p-2.5 border border-[var(--color-error)]/20 bg-[var(--color-error)]/5 rounded-[10px]">
                         <p className="text-[11px] text-[var(--color-error)] tracking-wider uppercase mb-0.5">last error</p>
                         <p className="text-[12px] text-[var(--color-text-dim)] truncate">{health.last_error}</p>
                       </div>
                     )}
 
                     {testResult && (
-                      <div className={`p-2.5 border ${testResult.status === "ok" ? "border-[var(--color-success)]/20 bg-[var(--color-success)]/5" : "border-[var(--color-error)]/20 bg-[var(--color-error)]/5"} animate-fade-in`}>
-                        <p className={`text-[12px] tracking-wider ${testResult.status === "ok" ? "text-[var(--color-success)]" : "text-[var(--color-error)]"}`}>
+                      <div className={`p-2.5 border rounded-[10px] ${testResult.status === "ok" ? "border-[var(--color-success)]/20 bg-[var(--color-success)]/5" : "border-[var(--color-error)]/20 bg-[var(--color-error)]/5"} animate-fade-in`}>
+                        <p className={`text-[12px] ${testResult.status === "ok" ? "text-[var(--color-success)]" : "text-[var(--color-error)]"}`}>
                           {testResult.message}
                         </p>
                       </div>
                     )}
 
                     {health.last_check && (
-                      <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider flex items-center gap-1">
+                      <p className="text-[11px] text-[var(--color-text-dim)] flex items-center gap-1">
                         last check: <TimeAgo timestamp={health.last_check} live className="text-[11px]" />
                       </p>
                     )}
@@ -335,9 +336,9 @@ export default function HealthPage() {
       {!isCloud && schemaCache && (
         <div className="mt-8">
           <div className="section-header mb-4">
-            <span className="text-[12px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">schema cache</span>
+            <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">schema cache</span>
           </div>
-          <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5">
+          <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] p-5">
             <div className="grid grid-cols-3 gap-3">
               {[
                 { label: "connections", value: schemaCache.cached_connections },
@@ -345,8 +346,8 @@ export default function HealthPage() {
                 { label: "ttl", value: `${schemaCache.ttl_seconds}s` },
               ].map((s) => (
                 <div key={s.label}>
-                  <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">{s.label}</p>
-                  <p className="text-xs font-light tabular-nums">{s.value}</p>
+                  <p className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">{s.label}</p>
+                  <p className="text-xs font-mono tabular-nums">{s.value}</p>
                 </div>
               ))}
             </div>

@@ -1,0 +1,72 @@
+---
+sidebar_position: 7
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
+# Trino
+
+`trino` Python client-backed connector for federated SQL across data sources (Trino / Starburst). `db_type` is `trino`. Tier 2.
+
+## Connection config
+
+<MiniCopyBlock
+  label="trino"
+  plain
+  code={`{\n  "name": "prod-trino",\n  "db_type": "trino",\n  "host": "trino.example.com",\n  "port": 8080,\n  "username": "analyst",\n  "password": "...",\n  "catalog": "hive",\n  "schema_name": "default"\n}`}
+/>
+
+## Connection fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Connection name. `[a-zA-Z0-9_-]`, max 64 chars. |
+| `db_type` | Yes | `trino`. |
+| `host` | Yes | Coordinator hostname. |
+| `port` | No | Defaults to `8080`. |
+| `username` | No | User (defaults to `trino`). |
+| `password` | One of | Basic auth (forces HTTPS). |
+| `catalog` | No | Catalog to query. |
+| `schema_name` | No | Default schema (mapped to `schema`). |
+| `ssl` / `ssl_config` | No | TLS. |
+| `query_timeout` | No | Maps to `SET SESSION query_max_run_time` and the client request timeout. |
+
+**Auth methods (priority JWT > certificate > Kerberos > password > none):** JWT (`auth_method: jwt`, `jwt_token`); certificate (`auth_method: certificate`, `client_cert` / `client_key` PEM); Kerberos (`auth_method: kerberos`, `kerberos_config`); Basic password. Any non-`none` auth or a password forces `https`. Connection-string forms: `trino://user@host:port/catalog/schema` and `trino+https://` for TLS without a password.
+
+## Capabilities
+
+| Capability | Supported | Notes |
+|------------|-----------|-------|
+| Query | Yes | Per-query timeout via `SET SESSION query_max_run_time` (best-effort on older Trino). |
+| Schema introspection | Yes | `information_schema.columns` + `.tables` per catalog (fast batch); falls back to `SHOW SCHEMAS` / `SHOW TABLES` / `SHOW COLUMNS` for catalogs that lack it. |
+| FK discovery | Yes | `information_schema.table_constraints` joined to `key_column_usage` / `constraint_column_usage` (best-effort; not all connectors expose constraints). |
+| Primary keys | Yes | `table_constraints` of type `PRIMARY KEY` (best-effort per connector). |
+| EXPLAIN | Yes | `EXPLAIN`; row estimate parsed from plan text (`rows: N` / `est. N`). |
+| Cost estimation | Yes (estimated) | Estimated rows × low self-hosted per-row rate. |
+| Schema stats | Partial | `SHOW STATS FOR` per table for row counts (best-effort, capped at 50 tables); no column stats. |
+
+Tier 2.
+
+## Dialect notes / gotchas
+
+- Identifiers are quoted with double quotes (`"col"`); embedded quotes are escaped by doubling.
+- Queries are catalog-qualified (`catalog.schema.table`). If no `catalog` is set, introspection enumerates `SHOW CATALOGS` (excluding `system`).
+- Constraint, `SHOW STATS`, and `information_schema` support vary by underlying connector — discovery is best-effort and silently degrades.
+- No SSH tunnel support.
+
+## Blocked functions
+
+No Trino-specific dangerous-function denylist is defined. Only the universal block applies:
+
+- `load_extension`
+- `install_extension`
+
+All DDL/DML statement types are blocked (`CREATE`, `DROP`, `ALTER`, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `MERGE`, `GRANT`, `REVOKE`, etc.).
+
+## Recommended plugin skill
+
+`sql-workflow` — no dedicated Trino skill exists. Covers output-shape inference, schema exploration, CTE-based query building, and the verification loop.
+
+## Cloud vs local
+
+Supported in both cloud and local mode. Trino is TCP-connected, so in cloud mode the resolved host is run through SSRF validation: public hostnames are allowed, but RFC1918/loopback/link-local addresses are blocked unless `SP_ALLOW_PRIVATE_CONNECTIONS` is set. In local mode SSRF validation is disabled.

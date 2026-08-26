@@ -45,5 +45,5 @@ async def update_settings(settings: GatewaySettings, store: StoreD, _role: OrgAd
     if settings.sandbox_api_key == REDACTED_MASK:
         settings = settings.model_copy(update={"sandbox_api_key": existing.sandbox_api_key})
     await store.save_settings(settings)
-    reset_sandbox_client()  # Reconnect with new URL
+    reset_sandbox_client(store.org_id)  # Reconnect with new URL
     return _redact_settings(settings)

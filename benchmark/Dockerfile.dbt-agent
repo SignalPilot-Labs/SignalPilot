@@ -11,24 +11,22 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && rm -rf /var/lib/apt/lists/*
 
 # Claude Code CLI
-# TODO: pin @anthropic-ai/claude-code to an exact version (run: npm show @anthropic-ai/claude-code version)
-RUN npm install -g @anthropic-ai/claude-code
+RUN npm install -g @anthropic-ai/claude-code@2.1.156
 
 # Python: dbt-duckdb + data tools + Claude Agent SDK + MCP + gateway deps
 # Versions pinned to those installed in this environment (pip show <pkg>).
 # dbt-duckdb, duckdb, pandas, pyarrow: not installed in build env;
 # pin to exact version once verified with: pip show <pkg> inside a built container.
-RUN pip install --no-cache-dir \
+# Install gateway from its pyproject.toml + benchmark-specific deps
+COPY signalpilot/gateway/ /tmp/gateway-install/
+RUN pip install --no-cache-dir /tmp/gateway-install/ \
+    && pip install --no-cache-dir \
     dbt-duckdb \
     duckdb \
     pandas \
     pyarrow \
     "claude-agent-sdk==0.1.59" \
-    "httpx==0.28.1" \
-    "mcp[cli]==1.27.0" \
-    "aiofiles==25.1.0" \
-    "pydantic==2.13.0" \
-    "sqlglot==30.6.0"
+    && rm -rf /tmp/gateway-install/
 
 # Non-root user (Claude CLI requires this)
 RUN useradd -m agentuser \
@@ -53,8 +51,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends gosu libfaketim
 COPY benchmark/ /app/benchmark/
 COPY signalpilot/gateway/ /app/signalpilot/gateway/
 
-# MCP config pointing to baked-in gateway
-RUN printf '{"mcpServers":{"signalpilot":{"type":"stdio","command":"bash","args":["-c","cd /app/signalpilot/gateway && exec python3 -m gateway.mcp_server"],"env":{"PYTHONPATH":"/app/signalpilot/gateway","SP_GATEWAY_URL":"http://signalpilot-gateway-1:3300"}}}}\n' \
+# Install SignalPilot plugin from baked-in copy.
+# This registers skills + agents so the agent discovers them natively.
+RUN gosu agentuser bash -c '\
+    claude plugin marketplace add /app/benchmark/signalpilot-plugin/.claude-plugin/marketplace.json 2>/dev/null; \
+    claude plugin install signalpilot-dbt@signalpilot --scope user 2>/dev/null; \
+    echo "Plugin installed"'
+
+# MCP config: stdio subprocess running the baked-in gateway code.
+# SP_DISABLE_SANDBOX=1 uses the direct DuckDB connector (no sandbox needed).
+# DATABASE_URL is injected at runtime by load_mcp_servers() so the subprocess
+# shares the same Postgres as the live gateway (connections are visible).
+RUN printf '{"mcpServers":{"signalpilot":{"type":"stdio","command":"bash","args":["-c","cd /app/signalpilot/gateway && exec python3 -c \\"from gateway.mcp.server import main; main()\\""],"env":{"PYTHONPATH":"/app/signalpilot/gateway","SP_DISABLE_SANDBOX":"1"}}}}\n' \
     > /app/benchmark/mcp_baked_config.json
 
 # dbt wrapper: per-task faketime for deterministic current_date.

@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react";
-import { useTierBranding } from "@/lib/hooks/use-tier-branding";
+import { useTierBranding } from "~/lib/hooks/use-tier-branding";
 
 interface Toast {
   id: string;
@@ -46,19 +46,19 @@ function ToastItem({ toast, onRemove }: { toast: Toast; onRemove: (id: string) =
   const icons: Record<string, ReactNode> = {
     success: (
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-        <rect x="0.5" y="0.5" width="11" height="11" stroke="var(--color-success)" strokeWidth="1" />
+        <rect x="0.5" y="0.5" width="11" height="11" rx="3" stroke="var(--color-success)" strokeWidth="1" />
         <path d="M3 6L5 8L9 4" stroke="var(--color-success)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     ),
     error: (
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-        <rect x="0.5" y="0.5" width="11" height="11" stroke="var(--color-error)" strokeWidth="1" />
+        <rect x="0.5" y="0.5" width="11" height="11" rx="3" stroke="var(--color-error)" strokeWidth="1" />
         <path d="M4 4L8 8M8 4L4 8" stroke="var(--color-error)" strokeWidth="1.5" strokeLinecap="round" />
       </svg>
     ),
     info: (
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-        <rect x="0.5" y="0.5" width="11" height="11" stroke="var(--color-text-dim)" strokeWidth="1" />
+        <rect x="0.5" y="0.5" width="11" height="11" rx="3" stroke="var(--color-text-dim)" strokeWidth="1" />
         <line x1="6" y1="5" x2="6" y2="8" stroke="var(--color-text-dim)" strokeWidth="1.5" strokeLinecap="round" />
         <circle cx="6" cy="3.5" r="0.75" fill="var(--color-text-dim)" />
       </svg>
@@ -78,12 +78,12 @@ function ToastItem({ toast, onRemove }: { toast: Toast; onRemove: (id: string) =
 
   return (
     <div
-      className={`flex items-center gap-3 px-4 py-3 bg-[var(--color-bg-card)] border ${borderColors[toast.type]} ${tierLeftClass} shadow-lg ${
+      className={`flex items-center gap-3 px-4 py-3 rounded-[14px] bg-[var(--color-bg-card)] border ${borderColors[toast.type]} ${tierLeftClass} shadow-lg ${
         exiting ? "animate-slide-out-right" : "animate-slide-in-right"
       }`}
     >
       {icons[toast.type]}
-      <span className="text-[13px] leading-none tracking-wide text-[var(--color-text-muted)]">{toast.message}</span>
+      <span className="text-[13px] leading-none text-[var(--color-text-muted)]">{toast.message}</span>
       <button
         onClick={() => {
           setExiting(true);

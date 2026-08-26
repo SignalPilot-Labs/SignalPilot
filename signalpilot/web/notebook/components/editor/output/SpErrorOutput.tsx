@@ -1,0 +1,648 @@
+import {
+  NotebookPenIcon,
+  PackageIcon,
+  SquareArrowOutUpRightIcon,
+  TerminalIcon,
+} from "lucide-react";
+import { Fragment, type JSX } from "react";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
+import { ExternalLink } from "@/components/ui/links";
+import type { CellId } from "@/core/cells/ids";
+import type { SpError } from "../../../core/kernel/messages";
+import { cn } from "../../../utils/cn";
+import { Alert, AlertTitle } from "../../ui/alert";
+import { openPackageManager } from "../chrome/panels/packages-utils";
+import { useChromeActions } from "../chrome/state";
+import { AutoFixButton } from "../errors/auto-fix";
+import { CellLinkError } from "../links/cell-link";
+import { processTextForUrls } from "./console/text-rendering";
+import { renderHTML } from "@/plugins/core/RenderHTML";
+
+const Tip = (props: {
+  title?: string;
+  className?: string;
+  children: React.ReactNode;
+}): JSX.Element => {
+  return (
+    <Accordion type="single" collapsible={true} className={props.className}>
+      <AccordionItem value="item-1" className="text-muted-foreground">
+        <AccordionTrigger className="pt-2 pb-2 font-normal">
+          {props.title ?? "Tip"}
+        </AccordionTrigger>
+        <AccordionContent className="mr-24 text-[0.84375rem]">
+          {props.children}
+        </AccordionContent>
+      </AccordionItem>
+    </Accordion>
+  );
+};
+
+interface Props {
+  cellId: CellId | undefined;
+  errors: SpError[];
+  className?: string;
+}
+
+/**
+ * List of errors due to violations of output semantics.
+ */
+export const SpErrorOutput = ({
+  errors,
+  cellId,
+  className,
+}: Props): JSX.Element => {
+  const chromeActions = useChromeActions();
+
+  let titleContents = "This cell wasn't run because it has errors";
+  let alertVariant: "destructive" | "default" = "destructive";
+  let titleColor = "text-error";
+  const liStyle = "my-0.5 ml-8 text-muted-foreground/40";
+
+  // Check for certain error types to adjust title and appearance
+  if (errors.some((e) => e.type === "interruption")) {
+    titleContents = "Interrupted";
+  } else if (errors.some((e) => e.type === "internal")) {
+    titleContents = "An internal error occurred";
+  } else if (errors.some((e) => e.type === "ancestor-prevented")) {
+    titleContents = "Ancestor prevented from running";
+    alertVariant = "default";
+    titleColor = "text-muted-foreground";
+    titleColor = "text-secondary-foreground";
+  } else if (errors.some((e) => e.type === "ancestor-stopped")) {
+    titleContents = "Ancestor stopped";
+    alertVariant = "default";
+    titleColor = "text-secondary-foreground";
+  } else if (errors.some((e) => e.type === "sql-error")) {
+    titleContents = "SQL error";
+  } else {
+    // Check for exception type
+    const exceptionError = errors.find((e) => e.type === "exception");
+    if (exceptionError && "exception_type" in exceptionError) {
+      titleContents = exceptionError.exception_type;
+    }
+  }
+
+  // Group errors by type
+  const setupErrors = errors.filter(
+    (e): e is Extract<SpError, { type: "setup-refs" }> =>
+      e.type === "setup-refs",
+  );
+  const cycleErrors = errors.filter(
+    (e): e is Extract<SpError, { type: "cycle" }> => e.type === "cycle",
+  );
+  const multipleDefsErrors = errors.filter(
+    (e): e is Extract<SpError, { type: "multiple-defs" }> =>
+      e.type === "multiple-defs",
+  );
+  const importStarErrors = errors.filter(
+    (e): e is Extract<SpError, { type: "import-star" }> =>
+      e.type === "import-star",
+  );
+  const interruptionErrors = errors.filter(
+    (e): e is Extract<SpError, { type: "interruption" }> =>
+      e.type === "interruption",
+  );
+  const exceptionErrors = errors.filter(
+    (e): e is Extract<SpError, { type: "exception" }> =>
+      e.type === "exception",
+  );
+  const strictExceptionErrors = errors.filter(
+    (e): e is Extract<SpError, { type: "strict-exception" }> =>
+      e.type === "strict-exception",
+  );
+  const internalErrors = errors.filter(
+    (e): e is Extract<SpError, { type: "internal" }> =>
+      e.type === "internal",
+  );
+  const ancestorPreventedErrors = errors.filter(
+    (e): e is Extract<SpError, { type: "ancestor-prevented" }> =>
+      e.type === "ancestor-prevented",
+  );
+  const ancestorStoppedErrors = errors.filter(
+    (e): e is Extract<SpError, { type: "ancestor-stopped" }> =>
+      e.type === "ancestor-stopped",
+  );
+  const syntaxErrors = errors.filter(
+    (e): e is Extract<SpError, { type: "syntax" }> => e.type === "syntax",
+  );
+  const unknownErrors = errors.filter(
+    (e): e is Extract<SpError, { type: "unknown" }> => e.type === "unknown",
+  );
+  const sqlErrors = errors.filter(
+    (e): e is Extract<SpError, { type: "sql-error" }> =>
+      e.type === "sql-error",
+  );
+
+  const openScratchpad = () => {
+    chromeActions.openApplication("scratchpad");
+  };
+
+  const renderMessages = () => {
+    const messages: JSX.Element[] = [];
+
+    if (syntaxErrors.length > 0 || unknownErrors.length > 0) {
+      // Detect if this is a pip/package manager related syntax error
+      const hasPipHint = syntaxErrors.some((error) =>
+        error.msg.includes("!pip"),
+      );
+      // Detect if this is a shell command syntax error (not pip)
+      const hasShellHint =
+        !hasPipHint &&
+        syntaxErrors.some((error) => error.msg.includes("use os.subprocess"));
+
+      messages.push(
+        <div key="syntax-unknown">
+          {syntaxErrors.map((error, idx) => (
+            <pre key={`syntax-${idx}`}>
+              {processTextForUrls(error.msg, `syntax-${idx}`)}
+            </pre>
+          ))}
+          {unknownErrors.map((error, idx) => (
+            <pre key={`unknown-${idx}`}>
+              {processTextForUrls(error.msg, `unknown-${idx}`)}
+            </pre>
+          ))}
+          {hasPipHint && (
+            <Button
+              size="xs"
+              variant="outline"
+              className="mt-2 font-normal"
+              onClick={() => openPackageManager(chromeActions)}
+            >
+              <PackageIcon className="h-3.5 w-3.5 mr-1.5 mb-0.5" />
+              <span>Open package manager</span>
+            </Button>
+          )}
+          {hasShellHint && (
+            <Button
+              size="xs"
+              variant="outline"
+              className="mt-2 font-normal"
+              onClick={() => chromeActions.openApplication("terminal")}
+            >
+              <TerminalIcon className="h-3.5 w-3.5 mr-1.5" />
+              <span>Open terminal</span>
+            </Button>
+          )}
+          {cellId && (
+            <AutoFixButton
+              errors={[...syntaxErrors, ...unknownErrors]}
+              cellId={cellId}
+            />
+          )}
+        </div>,
+      );
+    }
+
+    if (setupErrors.length > 0) {
+      messages.push(
+        <div key="setup-refs">
+          <p className="text-muted-foreground font-medium">
+            The setup cell cannot be run because it has references.
+          </p>
+          <ul className="list-disc">
+            {setupErrors.flatMap((error, errorIdx) =>
+              error.edges_with_vars.map((edge, edgeIdx) => (
+                <li
+                  className={liStyle}
+                  key={`setup-refs-${errorIdx}-${edgeIdx}`}
+                >
+                  <CellLinkError cellId={edge[0] as CellId} />
+                  <span className="text-muted-foreground">
+                    {": "}{" "}
+                    {edge[1].length === 1 ? edge[1][0] : edge[1].join(", ")}
+                  </span>
+                </li>
+              )),
+            )}
+          </ul>
+          {cellId && <AutoFixButton errors={setupErrors} cellId={cellId} />}
+          <Tip
+            title="Why can't the setup cell have references?"
+            className="mb-2"
+          >
+            <p className="pb-2">
+              The setup cell contains logic that must be run before any other
+              cell runs, including top-level imports used by top-level
+              functions. For this reason, it can't refer to other cells'
+              variables.
+            </p>
+
+            <p className="py-2">
+              Try simplifying the setup cell to only contain only necessary
+              variables.
+            </p>
+
+            <p className="py-2">
+              <ExternalLink href="https://docs.signalpilot.ai/docs/">
+                Learn more at our docs{" "}
+                <SquareArrowOutUpRightIcon size="0.75rem" className="inline" />
+              </ExternalLink>
+              .
+            </p>
+          </Tip>
+        </div>,
+      );
+    }
+
+    if (cycleErrors.length > 0) {
+      messages.push(
+        <div key="cycle">
+          <p className="text-muted-foreground font-medium">
+            This cell is in a cycle.
+          </p>
+          <ul className="list-disc">
+            {cycleErrors.flatMap((error, errorIdx) =>
+              error.edges_with_vars.map((edge, edgeIdx) => (
+                <li className={liStyle} key={`cycle-${errorIdx}-${edgeIdx}`}>
+                  <CellLinkError cellId={edge[0] as CellId} />
+                  <span className="text-muted-foreground">
+                    {" -> "}
+                    {edge[1].length === 1 ? edge[1][0] : edge[1].join(", ")}
+                    {" -> "}
+                  </span>
+                  <CellLinkError cellId={edge[2] as CellId} />
+                </li>
+              )),
+            )}
+          </ul>
+          {cellId && <AutoFixButton errors={cycleErrors} cellId={cellId} />}
+          <Tip
+            title="What are cycles and how do I resolve them?"
+            className="mb-2"
+          >
+            <p className="pb-2">
+              An example of a cycle is if one cell declares a variable 'a' and
+              reads 'b', and another cell declares 'b' and and reads 'a'. Cycles
+              like this make it impossible to know how to run your
+              cells, and generally suggest that your code has a bug.
+            </p>
+
+            <p className="py-2">
+              Try merging these cells into a single cell to eliminate the cycle.
+            </p>
+
+            <p className="py-2">
+              <ExternalLink href="https://docs.signalpilot.ai/docs/">
+                Learn more at our docs{" "}
+                <SquareArrowOutUpRightIcon size="0.75rem" className="inline" />
+              </ExternalLink>
+              .
+            </p>
+          </Tip>
+        </div>,
+      );
+    }
+
+    if (multipleDefsErrors.length > 0) {
+      const firstName = multipleDefsErrors[0].name;
+      messages.push(
+        <div key="multiple-defs">
+          <p className="text-muted-foreground font-medium">
+            This cell redefines variables from other cells.
+          </p>
+
+          {multipleDefsErrors.map((error, idx) => (
+            <Fragment key={`multiple-defs-${idx}`}>
+              <p className="text-muted-foreground mt-2">{`'${error.name}' was also defined by:`}</p>
+              <ul className="list-disc">
+                {error.cells.map((cid, cidIdx) => (
+                  <li className={liStyle} key={`cell-${cidIdx}`}>
+                    <CellLinkError cellId={cid} />
+                  </li>
+                ))}
+              </ul>
+            </Fragment>
+          ))}
+
+          {cellId && (
+            <AutoFixButton errors={multipleDefsErrors} cellId={cellId} />
+          )}
+
+          <Tip title="Why can't I redefine variables?">
+            <p className="pb-2">
+              SignalPilot requires that each variable is defined in just one cell.
+              This constraint enables reactive and reproducible execution,
+              arbitrary cell reordering, seamless UI elements, execution as a
+              script, and more.
+            </p>
+
+            <p className="py-2">
+              Try merging this cell with the mentioned cells or wrapping it in a
+              function. Alternatively, prefix variables with an underscore
+              (e.g., <Kbd className="inline">_{firstName}</Kbd>). to make them
+              private to this cell.
+            </p>
+
+            <p className="py-2">
+              <ExternalLink href="https://docs.signalpilot.ai/docs/">
+                Learn more at our docs{" "}
+                <SquareArrowOutUpRightIcon size="0.75rem" className="inline" />
+              </ExternalLink>
+              .
+            </p>
+          </Tip>
+
+          <Tip title="Need a scratchpad?">
+            <div className="flex flex-row gap-2 items-center">
+              <Button
+                size="xs"
+                variant="link"
+                className="my-2 font-normal mx-0 px-0"
+                onClick={openScratchpad}
+              >
+                <NotebookPenIcon className="h-3" />
+                <span>Try the scratchpad</span>
+              </Button>
+              <span>to experiment without restrictions on variable names.</span>
+            </div>
+          </Tip>
+        </div>,
+      );
+    }
+
+    if (importStarErrors.length > 0) {
+      messages.push(
+        <div key="import-star">
+          {importStarErrors.map((error, idx) => (
+            <p key={`import-star-${idx}`} className="text-muted-foreground">
+              {error.msg}
+            </p>
+          ))}
+          {cellId && (
+            <AutoFixButton errors={importStarErrors} cellId={cellId} />
+          )}
+          <Tip title="Why can't I use `import *`?">
+            <p className="pb-2">
+              Star imports are incompatible with SignalPilot's git-friendly file
+              format and reproducible reactive execution.
+            </p>
+
+            <p className="py-2">
+              SignalPilot's Python file format stores code in functions, so notebooks
+              can be imported as regular Python modules without executing all
+              their code. But Python disallows `import *` everywhere except at
+              the top-level of a module.
+            </p>
+
+            <p className="py-2">
+              Star imports would also silently add names to globals, which would
+              be incompatible with reactive execution.
+            </p>
+
+            <p className="py-2">
+              <ExternalLink href="https://docs.signalpilot.ai/docs/">
+                Learn more at our docs{" "}
+                <SquareArrowOutUpRightIcon size="0.75rem" className="inline" />
+              </ExternalLink>
+              .
+            </p>
+          </Tip>
+        </div>,
+      );
+    }
+
+    if (interruptionErrors.length > 0) {
+      messages.push(
+        <div key="interruption">
+          {interruptionErrors.map((_, idx) => (
+            <p key={`interruption-${idx}`}>
+              {"This cell was interrupted and needs to be re-run."}
+            </p>
+          ))}
+          {cellId && (
+            <AutoFixButton errors={interruptionErrors} cellId={cellId} />
+          )}
+        </div>,
+      );
+    }
+
+    if (exceptionErrors.length > 0) {
+      messages.push(
+        <ul key="exception">
+          {exceptionErrors.map((error, idx) => {
+            if (
+              error.exception_type === "NameError" &&
+              error.msg.startsWith("name 'mo'")
+            ) {
+              return (
+                <li className="my-2" key={`exception-${idx}`}>
+                  <div>
+                    <p className="text-muted-foreground">
+                      name 'mo' is not defined.
+                    </p>
+                    <p className="text-muted-foreground mt-2">
+                      The sp module (imported as{" "}
+                      <Kbd className="inline">mo</Kbd>) is required for
+                      Markdown, SQL, and UI elements.
+                    </p>
+                  </div>
+                </li>
+              );
+            }
+
+            if (
+              error.exception_type === "NameError" &&
+              error.msg.startsWith("name '_")
+            ) {
+              return (
+                <li className="my-2" key={`exception-${idx}`}>
+                  <div>
+                    <p className="text-muted-foreground">{error.msg}</p>
+                    <p className="text-muted-foreground mt-2">
+                      Variables prefixed with an underscore are local to a cell{" "}
+                      (
+                      <ExternalLink href="https://docs.signalpilot.ai/docs/">
+                        docs{" "}
+                        <SquareArrowOutUpRightIcon
+                          size="0.75rem"
+                          className="inline"
+                        />
+                      </ExternalLink>
+                      ).
+                    </p>
+                    <div className="text-muted-foreground mt-2">
+                      See the console area for a traceback.
+                    </div>
+                  </div>
+                </li>
+              );
+            }
+
+            // All other exceptions
+            return (
+              <li className="my-2" key={`exception-${idx}`}>
+                {error.raising_cell == null ? (
+                  <div>
+                    <p className="text-muted-foreground">
+                      {processTextForUrls(error.msg, `exception-${idx}`)}
+                    </p>
+                    {"traceback" in error && error.traceback ? (
+                      <div className="font-code text-sm mt-2 p-3 bg-muted rounded border overflow-auto max-h-[50vh] cursor-text select-text">
+                        {renderHTML({ html: error.traceback })}
+                      </div>
+                    ) : (
+                      <div className="text-muted-foreground mt-2">
+                        See the console area for a traceback.
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div>
+                    {processTextForUrls(error.msg, `exception-${idx}`)}
+                    <CellLinkError cellId={error.raising_cell} />
+                    {"traceback" in error && error.traceback && (
+                      <div className="font-code text-sm mt-2 p-3 bg-muted rounded border overflow-auto max-h-[50vh] cursor-text select-text">
+                        {renderHTML({ html: error.traceback })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+          {exceptionErrors.some((e) => e.raising_cell != null) && (
+            <Tip>
+              Fix the error in the mentioned cells, or handle the exceptions
+              with try/except blocks.
+            </Tip>
+          )}
+          {cellId && <AutoFixButton errors={exceptionErrors} cellId={cellId} />}
+        </ul>,
+      );
+    }
+
+    if (strictExceptionErrors.length > 0) {
+      messages.push(
+        <ul key="strict-exception">
+          {strictExceptionErrors.map((error, idx) => (
+            <li className="my-2" key={`strict-exception-${idx}`}>
+              {error.blamed_cell == null ? (
+                <p>{error.msg}</p>
+              ) : (
+                <div>
+                  {error.msg}
+                  <CellLinkError cellId={error.blamed_cell} />
+                </div>
+              )}
+            </li>
+          ))}
+          {cellId && (
+            <AutoFixButton errors={strictExceptionErrors} cellId={cellId} />
+          )}
+          <Tip>
+            {strictExceptionErrors.some((e) => e.blamed_cell != null)
+              ? "Ensure that the referenced cells define the required variables, or turn off strict execution."
+              : "Something is wrong with your declarations. Fix any discrepancies, or turn off strict execution."}
+          </Tip>
+        </ul>,
+      );
+    }
+
+    if (internalErrors.length > 0) {
+      messages.push(
+        <div key="internal">
+          {internalErrors.map((error, idx) => (
+            <p key={`internal-${idx}`}>{error.msg}</p>
+          ))}
+          {cellId && <AutoFixButton errors={internalErrors} cellId={cellId} />}
+        </div>,
+      );
+    }
+
+    if (ancestorPreventedErrors.length > 0) {
+      messages.push(
+        <div key="ancestor-prevented">
+          {ancestorPreventedErrors.map((error, idx) => (
+            <div key={`ancestor-prevented-${idx}`}>
+              {error.msg}
+              {error.blamed_cell == null ? (
+                <span>
+                  (<CellLinkError cellId={error.raising_cell} />)
+                </span>
+              ) : (
+                <span>
+                  (<CellLinkError cellId={error.raising_cell} />
+                  &nbsp;blames&nbsp;
+                  <CellLinkError cellId={error.blamed_cell} />)
+                </span>
+              )}
+            </div>
+          ))}
+          {cellId && (
+            <AutoFixButton errors={ancestorPreventedErrors} cellId={cellId} />
+          )}
+        </div>,
+      );
+    }
+
+    if (ancestorStoppedErrors.length > 0) {
+      messages.push(
+        <div key="ancestor-stopped">
+          {ancestorStoppedErrors.map((error, idx) => (
+            <div key={`ancestor-stopped-${idx}`}>
+              {error.msg}
+              <CellLinkError cellId={error.raising_cell} />
+            </div>
+          ))}
+          {cellId && (
+            <AutoFixButton errors={ancestorStoppedErrors} cellId={cellId} />
+          )}
+        </div>,
+      );
+    }
+
+    if (sqlErrors.length > 0) {
+      messages.push(
+        <div key="sql-errors">
+          {sqlErrors.map((error, idx) => {
+            return (
+              <div key={`sql-error-${idx}`} className="space-y-2 mt-2">
+                <p className="text-muted-foreground whitespace-pre-wrap">
+                  {error.msg}
+                </p>
+              </div>
+            );
+          })}
+          {cellId && (
+            <AutoFixButton
+              errors={sqlErrors}
+              cellId={cellId}
+              className="mt-2.5"
+            />
+          )}
+        </div>,
+      );
+    }
+
+    return messages;
+  };
+
+  const title = (
+    <AlertTitle className={`font-code font-medium tracking-wide ${titleColor}`}>
+      {titleContents}
+    </AlertTitle>
+  );
+
+  return (
+    <Alert
+      variant={alertVariant}
+      className={cn(
+        "border-none font-code text-sm text-[0.84375rem] px-0 text-muted-foreground normal [&:has(svg)]:pl-0 space-y-4",
+        className,
+      )}
+    >
+      {title}
+      <div>
+        <div className="flex flex-col gap-8">{renderMessages()}</div>
+      </div>
+    </Alert>
+  );
+};

@@ -1,8 +1,11 @@
-"""Top-level orchestration for the dbt benchmark runners.
+"""Provide the entry points for the dbt benchmark runners.
 
-Each submodule exposes a `main()` entrypoint; the original top-level
-benchmark/run_*.py files are thin shims that re-export that main().
+Each submodule provides a `main()` entry point. Use the full module path to run a submodule.
+
+For example, use `python -m benchmark.runners.kb_generator <instance_id>`.
 
 Submodules:
-    direct  — runs a task via the Claude Agent SDK directly (no Docker)
+    direct: Runs a dbt task through the Claude Agent SDK without Docker.
+    sql_runner: Runs the Spider2 SQL suites for Snowflake and SQLite.
+    kb_generator: Generates knowledge-base entries for a task.
 """

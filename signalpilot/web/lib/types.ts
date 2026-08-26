@@ -9,6 +9,104 @@ export interface GatewaySettings {
   blocked_tables: string[];
   gateway_url: string;
   api_key: string | null;
+  knowledge_history_versions_override: number | null;
+  deliverable_theme: DeliverableTheme | null;
+  improvement_runs_enabled?: boolean;
+}
+
+export interface ThemeColors {
+  bg: string;
+  surface: string;
+  surface_alt: string;
+  border: string;
+  text: string;
+  muted: string;
+  accent: string;
+  positive: string;
+  warning: string;
+  negative: string;
+  chart_grid: string;
+  chart_axis: string;
+}
+
+export interface DeliverableTheme {
+  version: number;
+  colors: ThemeColors;
+  chart_series: string[];
+  font_family: string;
+  font_size_base_px: number;
+  spacing_unit_px: number;
+  radius_px: number;
+}
+
+export interface KnowledgeDoc {
+  id: string;
+  org_id: string;
+  scope: "org" | "project" | "connection";
+  scope_ref: string | null;
+  category: "context" | "decisions" | "rules" | "troubleshooting";
+  title: string;
+  body: string | null;
+  excerpt?: string | null;
+  status: "active" | "pending" | "archived";
+  bytes: number;
+  view_count: number;
+  created_at: number;
+  updated_at: number;
+  created_by: string | null;
+  updated_by: string | null;
+  proposed_by_agent: string | null;
+}
+
+export interface KnowledgeEdit {
+  id: string;
+  doc_id: string;
+  org_id: string;
+  body_before: string;
+  bytes_before: number;
+  edited_at: number;
+  edited_by: string | null;
+  edit_kind: string;
+}
+
+export interface KnowledgeUsage {
+  org_id: string;
+  active_docs: number;
+  active_bytes: number;
+  storage_limit_bytes: number;
+  storage_limit_mb: number;
+}
+
+export interface RetrievalDocStats {
+  doc_id: string;
+  total: number;
+  by_source: Record<string, number>;
+  last_retrieved_at: number | null;
+  series: number[]; // oldest → newest buckets
+}
+
+export interface RetrievalStats {
+  since_days: number;
+  bucket_days: number;
+  generated_at: number;
+  docs: RetrievalDocStats[];
+}
+
+export interface ReportSummary {
+  id: string;
+  org_id: string;
+  scope_ref: string | null;
+  title: string;
+  bytes: number;
+  view_count: number;
+  created_at: number;
+  updated_at: number;
+  created_by: string | null;
+  proposed_by_agent: string | null;
+}
+
+export interface Report extends ReportSummary {
+  html: string;
 }
 
 export type DBType =
@@ -22,7 +120,8 @@ export type DBType =
   | "databricks"
   | "mssql"
   | "trino"
-  | "sqlite";
+  | "sqlite"
+  | "xata";
 
 export interface SSHTunnelConfig {
   enabled: boolean;
@@ -59,6 +158,11 @@ export interface ConnectionInfo {
   warehouse: string | null;
   schema_name: string | null;
   role: string | null;
+  // Snowflake auth + host/protocol overrides (gateway contract)
+  authenticator: string | null;
+  passcode: string | null;
+  snowflake_host: string | null;
+  snowflake_protocol: "https" | "http" | null;
   // BigQuery
   project: string | null;
   dataset: string | null;
@@ -67,6 +171,12 @@ export interface ConnectionInfo {
   // Databricks
   http_path: string | null;
   catalog: string | null;
+  // Xata (org/project/branch-scoped; gateway resolves the per-branch Postgres endpoint server-side)
+  branch: string | null;
+  xata_organization: string | null;
+  xata_project: string | null;
+  xata_database: string | null;
+  xata_api_url: string | null;
   // Meta
   description: string;
   tags: string[];
@@ -82,6 +192,31 @@ export interface ConnectionInfo {
   // Schema filtering
   schema_filter_include: string[] | null;
   schema_filter_exclude: string[] | null;
+}
+
+/** One shared demo warehouse, plus whether this workspace has cloned it. */
+export interface DemoWarehouse {
+  slug: string;
+  title: string;
+  description: string;
+  repo_url: string | null;
+  parent_branch: string;
+  exists: boolean;
+  branch: string | null;
+  connection_name: string;
+}
+
+export interface DemoConnectorStatus {
+  enabled: boolean;
+  demos: DemoWarehouse[];
+}
+
+export interface DemoConnectorCreated {
+  connection: ConnectionInfo;
+  demo: string;
+  title: string;
+  branch: string;
+  repo_url: string | null;
 }
 
 export interface ProjectInfo {
@@ -101,6 +236,47 @@ export interface ProjectInfo {
   git_branch: string | null;
   description: string;
   tags: string[];
+}
+
+export interface WorkspaceProjectInfo {
+  id: string;
+  org_id: string;
+  name: string;
+  display_name: string;
+  description: string | null;
+  source: "managed" | "github" | "dbt-cloud";
+  connection_name: string | null;
+  status: "active" | "archived";
+  tags: string[] | null;
+  settings: Record<string, unknown> | null;
+  file_count: number;
+  total_bytes: number;
+  default_branch: string;
+  created_by: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface WorkspaceFileInfo {
+  key: string;
+  size: number;
+  last_modified: number;
+}
+
+export interface WorkspaceBranchInfo {
+  id: string;
+  project_id: string;
+  org_id: string;
+  name: string;
+  created_from: string | null;
+  is_protected: boolean;
+  is_default: boolean;
+  status: "active" | "deleted";
+  file_count: number;
+  total_bytes: number;
+  created_by: string | null;
+  created_at: number;
+  updated_at: number;
 }
 
 export interface SandboxInfo {
@@ -181,4 +357,48 @@ export interface MetricsSnapshot {
     misses: number;
     hit_rate: number;
   };
+}
+
+// GitHub App
+export interface GitHubInstallation {
+  id: string;
+  org_id: string;
+  github_installation_id: number;
+  github_account_login: string;
+  github_account_type: string;
+  permissions: Record<string, string> | null;
+  status: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface GitHubRepo {
+  id: number;
+  full_name: string;
+  name: string;
+  private: boolean;
+  default_branch: string;
+  description: string | null;
+  html_url: string;
+}
+
+export interface GitHubRepoLink {
+  id: string;
+  org_id: string;
+  project_id: string;
+  installation_id: string;
+  repo_full_name: string;
+  repo_id: number;
+  default_branch: string;
+  status: string;
+  last_sync_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface GitCredentials {
+  source: string;
+  clone_url: string | null;
+  default_branch: string;
+  expires_at: number | null;
 }

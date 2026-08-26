@@ -1,0 +1,56 @@
+---
+sidebar_position: 1
+slug: /
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
+# Quickstart
+
+**SignalPilot** is a governed MCP server for AI agents — Snowflake, BigQuery, Postgres, dbt with enterprise guardrails. Works from Claude Code or Codex, backed by three pieces of infrastructure: plugin (skills + tools), MCP server, and an observability platform.
+
+## Three commands to a working setup
+
+<div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+  <MiniCopyBlock
+    label="1 · clone and start the stack"
+    code={`git clone https://github.com/SignalPilot-Labs/signalpilot.git\ncd signalpilot\ndocker compose up -d`}
+  />
+  <MiniCopyBlock
+    label="2 · connect the mcp server to claude code"
+    code="claude mcp add --transport http signalpilot http://localhost:3300/mcp"
+  />
+  <MiniCopyBlock
+    label="3 · install the plugin for skills + verifier agent (Claude Code)"
+    code={`claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin\nclaude plugin install signalpilot-dbt@signalpilot`}
+  />
+  <MiniCopyBlock
+    label="3 · or install the plugin for Codex"
+    code={`codex plugin marketplace add SignalPilot-Labs/codex-signalpilot-plugin\ncodex plugin add signalpilot@signalpilot`}
+  />
+</div>
+
+That's it. SignalPilot works with both **Claude Code** and **Codex** as entrypoints — install the plugin for whichever you use. Your agent now has governed access to your databases.
+
+## What you get
+
+- **54 MCP tools** — schema discovery, read-only SQL, dbt model verification, cost estimation, join path finding, sandboxed notebooks, knowledge base, Notion
+- **SQL governance** — DDL/DML blocked at parse time, auto-LIMIT injection, 79+ dangerous functions denied, full audit log
+- **23 Claude Code skills** — battle-tested dbt and SQL skills that auto-load based on your task
+- **Observability** — query history, latency dashboards, per-session budget caps, encrypted credential storage
+
+## Next steps
+
+**[Concepts](/docs/concepts)** — Mental model: gateway, governance, MCP, skills.
+
+**[MCP Setup](/docs/mcp/connect-claude-code)** — Verify tools loaded; troubleshoot handshake.
+
+**[Plugin](/docs/plugin)** — Install skills and the verifier agent.
+
+**[Tools Reference](/docs/reference/tools-overview)** — All 54 tools, grouped by category.
+
+**[Evals](/docs/evals/overview)** — Grade the agent against questions you know the answer to, and catch regressions before your team does.
+
+## SignalPilot Cloud
+
+Prefer not to self-host? [SignalPilot Cloud](https://app.signalpilot.ai) is free to start — sign up, get an API key, and point Claude Code at `https://gateway.signalpilot.ai/mcp`. See [Cloud setup](/docs/setup/cloud).

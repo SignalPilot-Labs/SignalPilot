@@ -1,26 +1,52 @@
+# syntax=docker/dockerfile:1.7
 FROM python:3.12-slim
+
+# AWS CLI arch is selected from uname so the image is correct on amd64 and arm64.
+RUN apt-get update && apt-get install -y git curl unzip && \
+    case "$(uname -m)" in aarch64|arm64) AWSARCH=aarch64 ;; *) AWSARCH=x86_64 ;; esac && \
+    curl -s "https://awscli.amazonaws.com/awscli-exe-linux-${AWSARCH}.zip" -o /tmp/awscliv2.zip && \
+    unzip -q /tmp/awscliv2.zip -d /tmp && /tmp/aws/install && \
+    rm -rf /tmp/awscliv2.zip /tmp/aws && \
+    apt-get remove -y unzip && apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/* && \
+    pip install --no-cache-dir uv
+
+# Reproducible installs: resolve from uv.lock against the system Python, never
+# download a managed interpreter.
+ENV UV_PYTHON_DOWNLOADS=never \
+    UV_PYTHON_PREFERENCE=only-system \
+    UV_PROJECT_ENVIRONMENT=/app/.venv \
+    UV_LINK_MODE=copy
 
 WORKDIR /app
 
-COPY pyproject.toml .
-COPY gateway/ gateway/
+COPY pyproject.toml uv.lock ./
 
-# Install core dependencies + commonly used optional connectors
-RUN pip install --no-cache-dir -e . && \
-    pip install --no-cache-dir \
-    duckdb \
-    "clickhouse-driver==0.2.7" \
-    clickhouse-connect \
-    "sshtunnel==0.4.0" \
-    "cryptography==44.0.0" \
-    "snowflake-connector-python>=3.12.0,<4" \
-    "google-cloud-bigquery==3.20.0" \
-    pyarrow
+# Core deps + commonly used optional connectors, pinned by the lockfile.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project \
+      --extra snowflake --extra bigquery --extra clickhouse
+
+COPY --chown=10001:10001 gateway/ gateway/
+
+# Install only the local package after copying source, so source edits do not
+# invalidate the expensive dependency layer above.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --python /app/.venv/bin/python --no-deps -e .
+
+# uv installs into .venv — put it first on PATH so uvicorn/python resolve to it.
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Run as non-root for defense-in-depth
 RUN groupadd -g 10001 appuser && \
     useradd -r -u 10001 -g appuser appuser
-RUN mkdir -p /data /shared && chown -R appuser:appuser /app /data /shared
+RUN mkdir -p /data /shared /gateway-secrets /repos && \
+    chown -R appuser:appuser /data /shared /gateway-secrets /repos
+
+# File-based state (eval configs and runs) lands here. Without this it defaults
+# to $HOME/.signalpilot, and appuser has no home directory in this image, so
+# every write 500s. /data is the one path already created and chowned above.
+ENV SP_DATA_DIR=/data
 
 USER appuser
 

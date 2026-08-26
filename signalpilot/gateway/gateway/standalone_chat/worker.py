@@ -338,6 +338,13 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                     )
                     if active_run is None:
                         return
+                    # Sandbox cold starts take 30-60s; without a progress
+                    # event the run looks hung before the first agent event.
+                    await _append(
+                        run_id,
+                        "progress",
+                        {"label": "Starting the secure analysis runtime"},
+                    )
                     execution = await prepare_execution(
                         db,
                         run=active_run,
@@ -348,6 +355,11 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                         prompt=prompt,
                         messages=messages,
                         warm_context=warm_context,
+                    )
+                    await _append(
+                        run_id,
+                        "progress",
+                        {"label": "Analysis runtime ready"},
                     )
                 async for event in stream_execution(execution):
                     if stop.is_set():

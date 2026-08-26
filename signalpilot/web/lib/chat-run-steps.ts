@@ -353,16 +353,47 @@ export function foldRunSteps(
       });
       continue;
     }
-    if (event.type === "plan_created" || event.type === "route_selected") {
+    if (event.type === "plan_created") {
+      const rows = event.payload.estimated_output_rows;
+      const rowsLabel =
+        typeof rows === "number" && rows > 0
+          ? ` (~${rows.toLocaleString()} rows)`
+          : "";
       steps.push({
         key,
         sequence: event.sequence,
         category: "plan",
         status: "info",
-        title:
-          event.type === "plan_created"
-            ? "Planned the analysis"
-            : `Chose the ${text(event.payload.route) ?? "analysis"} route`,
+        title: `Planned a governed query${rowsLabel}`,
+        tool: null,
+        toolOrigin: null,
+        input: asRecord(event.payload),
+        sql: text(event.payload.sql),
+        code: null,
+        file: null,
+        sources: [],
+        detail: text(event.payload.purpose),
+        startedAt: event.created_at,
+        endedAt: event.created_at,
+        durationMs: null,
+      });
+      continue;
+    }
+    if (event.type === "route_selected") {
+      const route = text(event.payload.route) ?? "analysis";
+      const routeTitles: Record<string, string> = {
+        mcp: "Route: run it as a direct governed query",
+        notebook_sdk: "Route: open a notebook for deeper analysis",
+        dataset_ref: "Route: reference the governed dataset",
+        aggregate_required: "Route: too broad — needs a bounded aggregate",
+        refuse: "Route: refused by governance",
+      };
+      steps.push({
+        key,
+        sequence: event.sequence,
+        category: "plan",
+        status: route === "refuse" ? "failed" : "info",
+        title: routeTitles[route] ?? `Route: ${route}`,
         tool: null,
         toolOrigin: null,
         input: asRecord(event.payload),
@@ -370,7 +401,8 @@ export function foldRunSteps(
         code: null,
         file: null,
         sources: [],
-        detail: text(event.payload.summary),
+        detail:
+          text(event.payload.route_reason) ?? text(event.payload.summary),
         startedAt: event.created_at,
         endedAt: event.created_at,
         durationMs: null,

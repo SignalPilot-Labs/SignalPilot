@@ -921,6 +921,10 @@ async def test_execution_uses_org_anthropic_key_as_request_scoped_auth(
     db_session,
     monkeypatch,
 ):
+    _, run = await _conversation_and_run(
+        db_session,
+        user_id="user-without-a-key",
+    )
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server")
     monkeypatch.setattr(
         chat_execution,
@@ -944,13 +948,6 @@ async def test_execution_uses_org_anthropic_key_as_request_scoped_auth(
         "get_k8s_settings",
         lambda: SimpleNamespace(sp_session_jwt_ttl_seconds=300),
     )
-    run = SimpleNamespace(
-        id="run-a",
-        org_id="org-a",
-        user_id="user-without-a-key",
-        project_id="project-a",
-    )
-
     prepared = await chat_execution.prepare_execution(
         db_session,
         run=run,

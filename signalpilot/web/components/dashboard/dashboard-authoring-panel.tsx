@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Check, MessageSquare, Sparkles, X } from "lucide-react";
+import { Check, MessageSquare, Sparkles, Wrench, X } from "lucide-react";
 
 import { request } from "~/lib/api";
 import type { DashboardDefinition } from "~/lib/dashboard/contracts";
@@ -45,6 +45,23 @@ export type DashboardAuthoringSession = {
 
 type AppliedDashboard = { dashboard: { id: string }; version: { id: string } };
 
+export type DashboardRepairIssue = {
+  chartTitle: string;
+  message: string;
+};
+
+export function dashboardRepairPrompt(issues: DashboardRepairIssue[]): string {
+  const errorList = issues
+    .map((issue) => `- ${issue.chartTitle}: ${issue.message}`)
+    .join("\n");
+  return [
+    "Repair only the failing charts in this dashboard:",
+    errorList,
+    "Preserve every healthy chart, the dashboard layout, filters, names, and descriptions unless a listed repair requires a binding change.",
+    "Use approved semantic fields and return a governed preview for review before Apply.",
+  ].join("\n\n");
+}
+
 export function DashboardAuthoringWorkspace({
   dashboardId,
   versionId,
@@ -56,6 +73,8 @@ export function DashboardAuthoringWorkspace({
   onApplied,
   onDiscard,
   onClose,
+  intent = "edit",
+  initialPrompt = "",
 }: {
   dashboardId?: string;
   versionId?: string;
@@ -67,8 +86,10 @@ export function DashboardAuthoringWorkspace({
   onApplied: (detail: AppliedDashboard) => void;
   onDiscard: () => void;
   onClose?: () => void;
+  intent?: "edit" | "repair";
+  initialPrompt?: string;
 }) {
-  const [prompt, setPrompt] = useState("");
+  const [prompt, setPrompt] = useState(initialPrompt);
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState("");
   const [error, setError] = useState<string>();
@@ -178,12 +199,26 @@ export function DashboardAuthoringWorkspace({
         >
           {!session?.events.length ? (
             <div className={styles.authoringWelcome}>
-              <Sparkles size={20} aria-hidden="true" />
-              <strong>What should this dashboard explain?</strong>
-              <p>
-                Ask for approved metrics and fields. Follow-ups refine the same
-                unsaved draft without rewriting unrelated charts.
-              </p>
+              {intent === "repair" ? (
+                <>
+                  <Wrench size={20} aria-hidden="true" />
+                  <strong>Repair the charts that need attention</strong>
+                  <p>
+                    The current errors are ready below. AI will create a private
+                    governed preview; the saved dashboard changes only after
+                    Apply.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <Sparkles size={20} aria-hidden="true" />
+                  <strong>What should this dashboard explain?</strong>
+                  <p>
+                    Ask for approved metrics and fields. Follow-ups refine the
+                    same unsaved draft without rewriting unrelated charts.
+                  </p>
+                </>
+              )}
             </div>
           ) : null}
           {session?.events.map((event) => (
@@ -279,7 +314,11 @@ export function DashboardAuthoringWorkspace({
           }}
         >
           <label htmlFor="dashboard-authoring-prompt">
-            {session ? "Refine this draft" : "Describe the dashboard"}
+            {intent === "repair"
+              ? "Repair request"
+              : session
+                ? "Refine this draft"
+                : "Describe the dashboard"}
           </label>
           <textarea
             id="dashboard-authoring-prompt"
@@ -294,9 +333,11 @@ export function DashboardAuthoringWorkspace({
             }
             rows={3}
             placeholder={
-              session
-                ? "Make the revenue trend a line chart and keep everything else."
-                : "Create an executive dashboard for revenue, margin, and customers…"
+              intent === "repair"
+                ? "Describe the chart errors to repair…"
+                : session
+                  ? "Make the revenue trend a line chart and keep everything else."
+                  : "Create an executive dashboard for revenue, margin, and customers…"
             }
           />
           {error ? <p className={styles.errorState}>{error}</p> : null}
@@ -313,7 +354,11 @@ export function DashboardAuthoringWorkspace({
             }
           >
             <Sparkles size={15} aria-hidden="true" />
-            {session ? "Send refinement" : "Create preview"}
+            {intent === "repair"
+              ? "Create repair preview"
+              : session
+                ? "Send refinement"
+                : "Create preview"}
           </button>
         </form>
       </aside>
@@ -431,11 +476,15 @@ export function DashboardAuthoringPanel({
   versionId,
   baseDefinition,
   onApplied,
+  intent = "edit",
+  repairIssues = [],
 }: {
   dashboardId: string;
   versionId: string;
   baseDefinition: DashboardDefinition;
   onApplied: (detail: AppliedDashboard) => void;
+  intent?: "edit" | "repair";
+  repairIssues?: DashboardRepairIssue[];
 }) {
   const [open, setOpen] = useState(false);
   const [session, setSession] = useState<DashboardAuthoringSession>();
@@ -450,11 +499,26 @@ export function DashboardAuthoringPanel({
   if (!open) {
     return (
       <button
-        className={styles.authoringLauncher}
+        className={`${styles.authoringLauncher} ${
+          intent === "repair" ? styles.repairLauncher : ""
+        }`}
         type="button"
         onClick={() => setOpen(true)}
+        aria-label={
+          intent === "repair"
+            ? `Repair ${repairIssues.length} failing chart${repairIssues.length === 1 ? "" : "s"} with AI`
+            : undefined
+        }
       >
-        <Sparkles size={16} aria-hidden="true" /> Edit with AI
+        {intent === "repair" ? (
+          <>
+            <Wrench size={15} aria-hidden="true" /> Repair
+          </>
+        ) : (
+          <>
+            <Sparkles size={16} aria-hidden="true" /> Edit with AI
+          </>
+        )}
       </button>
     );
   }
@@ -473,6 +537,10 @@ export function DashboardAuthoringPanel({
         onApplied={onApplied}
         onDiscard={() => setOpen(false)}
         onClose={() => setOpen(false)}
+        intent={intent}
+        initialPrompt={
+          intent === "repair" ? dashboardRepairPrompt(repairIssues) : undefined
+        }
       />
     </div>,
     document.body,

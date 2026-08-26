@@ -164,11 +164,119 @@ describe("DashboardRuntimeProvider incidents", () => {
     await vi.waitFor(() =>
       expect(container.textContent).not.toContain("Database unavailable"),
     );
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const queryCalls = fetchMock.mock.calls.filter(([url]) =>
+      String(url).includes("/charts/"),
+    );
+    expect(queryCalls).toHaveLength(2);
+    const telemetryCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).endsWith("/api/dashboards/dashboard-1/telemetry"),
+    );
+    expect(telemetryCall).toBeTruthy();
+    expect(
+      JSON.parse(String((telemetryCall?.[1] as RequestInit | undefined)?.body)),
+    ).toMatchObject({
+      event_type: "dashboard_rendered",
+      version_id: "version-1",
+    });
     const retryBody = JSON.parse(
-      String((fetchMock.mock.calls[1]?.[1] as RequestInit | undefined)?.body),
+      String((queryCalls[1]?.[1] as RequestInit | undefined)?.body),
     ) as { refresh: boolean; retry_token?: string };
     expect(retryBody.refresh).toBe(true);
     expect(retryBody.retry_token).toBeTruthy();
+  });
+
+  it("lists every chart error on the attention summary and keeps Repair beside it", async () => {
+    const secondChart = {
+      ...definition.charts[0],
+      id: "chart-profit",
+      title: "Gross Profit Trend",
+      query: {
+        ...definition.charts[0].query,
+        metrics: ["orders.gross_profit"],
+      },
+      visualization: {
+        type: "big_number" as const,
+        config: {
+          field: "orders.gross_profit",
+          format: "currency:USD" as const,
+        },
+      },
+    };
+    const twoChartDefinition: DashboardDefinition = {
+      ...definition,
+      tiles: [
+        definition.tiles[0],
+        {
+          ...definition.tiles[0],
+          uuid: "tile-profit",
+          tileSlug: "profit",
+          chartId: "chart-profit",
+          properties: { title: "Gross Profit Trend", chartSlug: "profit" },
+        },
+      ],
+      charts: [definition.charts[0], secondChart],
+    };
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            detail: {
+              code: "result_contract_mismatch",
+              message: "provider details stay hidden",
+              retryable: false,
+              scope: "chart",
+              correlation_id: "chart-error-1",
+              occurred_at: "2026-08-25T12:05:00Z",
+            },
+          }),
+          { status: 502, headers: { "Content-Type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            detail: {
+              code: "query_invalid",
+              message: "provider details stay hidden",
+              retryable: false,
+              scope: "chart",
+              correlation_id: "chart-error-2",
+              occurred_at: "2026-08-25T12:05:01Z",
+            },
+          }),
+          { status: 422, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+
+    await act(async () => {
+      root.render(
+        <DashboardRuntimeProvider
+          dashboardId="dashboard-1"
+          versionId="version-1"
+          definition={twoChartDefinition}
+          attentionAction={<button type="button">Repair</button>}
+        />,
+      );
+    });
+
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain("Some charts need attention"),
+    );
+    const tooltip = container.querySelector("[role='tooltip']");
+    expect(tooltip?.getAttribute("role")).toBe("tooltip");
+    expect(tooltip?.querySelectorAll("li")).toHaveLength(2);
+    expect(tooltip?.textContent).toContain("Revenue");
+    expect(tooltip?.textContent).toContain("Gross Profit Trend");
+    expect(tooltip?.textContent).toContain(
+      "The returned data does not match this chart's expected fields.",
+    );
+    expect(tooltip?.textContent).toContain(
+      "This chart query is no longer valid for the data source.",
+    );
+    expect(container.textContent).not.toContain("provider details stay hidden");
+    const attentionSummary = container.querySelector(
+      `[aria-describedby='${tooltip?.id}']`,
+    );
+    expect(attentionSummary?.parentElement?.textContent).toContain("Repair");
   });
 });

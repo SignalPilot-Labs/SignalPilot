@@ -192,7 +192,7 @@ describe("DashboardChartTile interactions", () => {
     expect(loadingState?.querySelector("[aria-hidden='true']")).not.toBeNull();
   });
 
-  it("shows a compact business-facing message for a network failure", async () => {
+  it("shows a centered broken state for a chart without usable data", async () => {
     await act(async () => {
       root.render(
         <DashboardChartTile
@@ -206,9 +206,14 @@ describe("DashboardChartTile interactions", () => {
     expect(container.textContent).toContain(
       "The data source is temporarily unavailable",
     );
-    expect(container.textContent).toContain("No cached data is available");
-    expect(container.textContent).toContain("Last attempted");
+    expect(container.textContent).toContain("Unable to display this chart");
+    expect(container.textContent).not.toContain("No cached data is available");
+    expect(container.textContent).toContain("Last checked");
     expect(container.textContent).toContain("Retry");
+    expect(container.querySelector("[class*='visualBroken']")).not.toBeNull();
+    expect(
+      container.querySelector("[class*='chartBrokenIcon']"),
+    ).not.toBeNull();
   });
 
   it("does not expose a result-contract mismatch as a usable chart", async () => {

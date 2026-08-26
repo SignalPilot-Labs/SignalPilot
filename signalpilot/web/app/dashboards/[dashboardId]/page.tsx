@@ -17,10 +17,16 @@ import {
 
 import { DashboardRuntimeProvider } from "~/components/dashboard/dashboard-runtime-provider";
 import { DashboardLoadingState } from "~/components/dashboard/dashboard-loading-state";
-import { DashboardAuthoringPanel } from "~/components/dashboard/dashboard-authoring-panel";
+import {
+  DashboardAuthoringPanel,
+  type DashboardRepairIssue,
+} from "~/components/dashboard/dashboard-authoring-panel";
 import type { DashboardQueryReceipt } from "~/lib/dashboard/api-data-source";
 import { request } from "~/lib/api";
-import type { DashboardDefinition } from "~/lib/dashboard/contracts";
+import type {
+  DashboardDefinition,
+  DashboardFailure,
+} from "~/lib/dashboard/contracts";
 import type {
   DashboardDrillStep,
   DashboardRuntimeFilter,
@@ -64,6 +70,9 @@ export default function DashboardDetailPage() {
   );
   const [suggestions, setSuggestions] = useState<DashboardSuggestion[]>([]);
   const [actionPending, setActionPending] = useState(false);
+  const [failures, setFailures] = useState<Record<string, DashboardFailure>>(
+    {},
+  );
   useEffect(() => {
     const version = new URLSearchParams(window.location.search).get("version");
     request<DashboardDetail>(
@@ -91,6 +100,27 @@ export default function DashboardDetailPage() {
       </main>
     );
   const exportReady = Object.keys(receipts).length > 0;
+  const repairIssues = Object.entries(failures).flatMap(
+    ([chartId, failure]): DashboardRepairIssue[] => {
+      if (failure.scope !== "chart") return [];
+      const chart = detail.version.definition.charts.find(
+        (candidate) => candidate.id === chartId,
+      );
+      return [
+        {
+          chartTitle: chart?.title ?? "Untitled chart",
+          message: failure.message,
+        },
+      ];
+    },
+  );
+  const onApplied = (applied: {
+    dashboard: { id: string };
+    version: { id: string };
+  }) =>
+    window.location.assign(
+      `/dashboards/${applied.dashboard.id}?version=${applied.version.id}`,
+    );
   return (
     <>
       <DashboardRuntimeProvider
@@ -101,6 +131,7 @@ export default function DashboardDetailPage() {
         onVisibleReceiptsChange={setReceipts}
         onRuntimeFiltersChange={setFilters}
         onRuntimeDrillsChange={setDrills}
+        onFailuresChange={setFailures}
         leadingAction={
           <Link
             href="/dashboards"
@@ -110,6 +141,18 @@ export default function DashboardDetailPage() {
           >
             <ArrowLeft size={17} aria-hidden="true" />
           </Link>
+        }
+        attentionAction={
+          detail.dashboard.is_owner && repairIssues.length ? (
+            <DashboardAuthoringPanel
+              dashboardId={detail.dashboard.id}
+              versionId={detail.version.id}
+              baseDefinition={detail.version.definition}
+              onApplied={onApplied}
+              intent="repair"
+              repairIssues={repairIssues}
+            />
+          ) : null
         }
         lifecycleActions={
           <nav
@@ -121,11 +164,7 @@ export default function DashboardDetailPage() {
                 dashboardId={detail.dashboard.id}
                 versionId={detail.version.id}
                 baseDefinition={detail.version.definition}
-                onApplied={(applied) =>
-                  window.location.assign(
-                    `/dashboards/${applied.dashboard.id}?version=${applied.version.id}`,
-                  )
-                }
+                onApplied={onApplied}
               />
             ) : null}
             <details className={pageStyles.actionMenu}>

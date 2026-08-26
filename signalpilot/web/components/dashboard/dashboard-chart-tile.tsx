@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { CircleX, RotateCw } from "lucide-react";
 import {
   Dialog as AriaDialog,
   Popover as AriaPopover,
@@ -290,21 +291,25 @@ export function DashboardChartTile({
           ))}
         </nav>
       ) : null}
-      <div className={styles.visual}>
+      <div
+        className={`${styles.visual} ${tileFailure && !result ? styles.visualBroken : ""}`}
+      >
         {tileFailure ? (
-          <div className={styles.errorState} role="status">
-            {result
-              ? "Latest refresh failed; showing the previous result. "
-              : "No cached data is available for this chart. "}
-            {tileFailure.message}
+          <div className={styles.chartBrokenState} role="status">
+            <span className={styles.chartBrokenIcon} aria-hidden="true">
+              <CircleX size={21} strokeWidth={1.8} />
+            </span>
+            <strong>Unable to display this chart</strong>
+            <p>{tileFailure.message}</p>
             {!result ? (
               <span className={styles.failureAttemptedAt}>
-                Last attempted{" "}
-                {new Date(tileFailure.occurredAt).toLocaleString()}.
+                Last checked {new Date(tileFailure.occurredAt).toLocaleString()}
+                .
               </span>
             ) : null}
             {!result && tileFailure.retryable && onRetry ? (
               <button type="button" onClick={onRetry} disabled={loading}>
+                <RotateCw size={13} aria-hidden="true" />
                 Retry
               </button>
             ) : null}

@@ -28,6 +28,7 @@ vi.mock("~/lib/api", () => ({
 import {
   DashboardAuthoringPanel,
   DashboardAuthoringWorkspace,
+  dashboardRepairPrompt,
   type DashboardAuthoringSession,
 } from "~/components/dashboard/dashboard-authoring-panel";
 
@@ -143,5 +144,52 @@ describe("DashboardAuthoringWorkspace", () => {
     expect(
       overlay?.querySelector("#dashboard-authoring-prompt"),
     ).not.toBeNull();
+  });
+
+  it("opens repair authoring with every chart error ready to submit", async () => {
+    const definition = fromLightdashFixture(fiveComponents);
+    const repairIssues = [
+      {
+        chartTitle: "Revenue Trend",
+        message: "The returned data does not match the expected fields.",
+      },
+      {
+        chartTitle: "Gross Profit Trend",
+        message: "This chart query is no longer valid.",
+      },
+    ];
+    await act(async () => {
+      root.render(
+        <DashboardAuthoringPanel
+          dashboardId="dashboard-1"
+          versionId="version-1"
+          baseDefinition={definition}
+          onApplied={vi.fn()}
+          intent="repair"
+          repairIssues={repairIssues}
+        />,
+      );
+    });
+    const launcher = container.querySelector("button");
+    expect(launcher?.textContent).toContain("Repair");
+    expect(launcher?.getAttribute("aria-label")).toBe(
+      "Repair 2 failing charts with AI",
+    );
+
+    await act(async () => launcher?.click());
+
+    const overlay = document.querySelector(
+      "[data-testid='dashboard-authoring-overlay']",
+    );
+    const textarea = overlay?.querySelector<HTMLTextAreaElement>(
+      "#dashboard-authoring-prompt",
+    );
+    expect(textarea?.value).toBe(dashboardRepairPrompt(repairIssues));
+    expect(textarea?.value).toContain("Revenue Trend");
+    expect(textarea?.value).toContain("Gross Profit Trend");
+    expect(overlay?.textContent).toContain("Create repair preview");
+    expect(overlay?.textContent).toContain(
+      "the saved dashboard changes only after Apply",
+    );
   });
 });

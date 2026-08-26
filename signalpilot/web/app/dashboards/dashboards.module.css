@@ -69,6 +69,11 @@
 }
 
 .primaryIconButton {
+  display: inline-flex;
+  width: auto;
+  gap: 7px;
+  padding: 0 12px;
+  white-space: nowrap;
   border-color: color-mix(in srgb, var(--color-border-active) 65%, transparent);
   background: color-mix(
     in srgb,

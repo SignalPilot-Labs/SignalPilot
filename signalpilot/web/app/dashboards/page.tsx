@@ -64,10 +64,11 @@ export default function DashboardsPage() {
         <Link
           href="/dashboards/new"
           className={styles.primaryIconButton}
-          aria-label="Create dashboard with AI"
-          title="Create dashboard with AI"
+          aria-label="Build dashboard with AI"
+          title="Build dashboard with AI"
         >
           <Sparkles size={17} aria-hidden="true" />
+          Build dashboard
         </Link>
       </header>
       {error ? <p className={styles.error}>{error}</p> : null}

@@ -30,7 +30,7 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / "outside-workspace").mkdir()
 
     monkeypatch.setenv(pc.WORKSPACE_ROOT_ENV, str(root))
-    # cwd is always an allowed root (the pod entrypoint chdirs into the
+    # cwd is always an allowed root (the sandbox boot command chdirs into the
     # workspace), so point it at the workspace to keep the roots minimal.
     monkeypatch.chdir(root)
     return root

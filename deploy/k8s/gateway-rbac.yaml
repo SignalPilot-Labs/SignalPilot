@@ -125,9 +125,9 @@ rules:
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["get", "list", "watch"]
-  - apiGroups: [""]
-    resources: ["pods/exec"]
-    verbs: ["create", "get"]
+  # pods/exec was removed with Notebook Runtime v2: notebook compute left the
+  # cluster and no gateway code path issues exec anymore. Do not re-add without
+  # also restoring the restrict-pod-exec admission policies.
   # Secrets are namespaced here and ONLY here. A cluster-wide Secrets verb for the
   # gateway was the SP-SEC-009 disclosure path.
   - apiGroups: [""]

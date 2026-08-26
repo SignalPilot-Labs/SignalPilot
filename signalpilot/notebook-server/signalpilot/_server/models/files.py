@@ -25,6 +25,10 @@ class FileListRequest(msgspec.Struct, rename="camel"):
     # The directory path to list files from
     # If None, the root directory will be used
     path: str | None = None
+    # When true, return the entire subtree in one response (children nested).
+    # One round trip instead of one per directory — a fully expanded tree
+    # re-hydrates in a single call.
+    recursive: bool = False
 
 
 class FileDetailsRequest(msgspec.Struct, rename="camel"):

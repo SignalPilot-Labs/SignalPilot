@@ -48,7 +48,10 @@ from signalpilot._session.kernel_exit import classify_kernel_exit
 from signalpilot._session.model import ConnectionState, SessionMode
 from signalpilot._session.notebook import AppFileManager
 from signalpilot._session.room import Room
-from signalpilot._session.state.session_view import SessionView
+from signalpilot._session.state.session_view import (
+    SessionView,
+    load_gateway_connections,
+)
 from signalpilot._session.types import (
     KernelExitInfo,
     KernelManager,
@@ -195,12 +198,41 @@ class SessionImpl(Session):
         self._event_bus = SessionEventBus()
 
         self._closed = False
+        self._prefetch_gateway_connections()
 
         # Attach all extensions
         self._attach_extensions()
         # Connect the main consumer after attaching extensions,
         # to avoid calling on_attach on the main consumer twice.
         self.connect_consumer(session_consumer, main=True)
+
+    def _prefetch_gateway_connections(self) -> None:
+        """Warm the datasources panel without blocking session creation.
+
+        Gateway connection/schema fetches are slow network calls; doing them
+        inline made every session (and cold boot) wait tens of seconds. The
+        kernel also reports connections as it discovers them, so this only
+        fills the gap before the first kernel-driven update — never after.
+        """
+        import threading
+
+        def _load() -> None:
+            connections = load_gateway_connections()
+            if not connections or self._closed:
+                return
+            if self.session_view.data_connectors.connections:
+                return  # kernel already reported; don't clobber
+            from signalpilot._messaging.notification import (
+                DataSourceConnectionsNotification,
+            )
+
+            self.session_view.data_connectors = (
+                DataSourceConnectionsNotification(connections=connections)
+            )
+
+        threading.Thread(
+            target=_load, name="gateway-connections-prefetch", daemon=True
+        ).start()
 
     @property
     def document(self) -> NotebookDocument:

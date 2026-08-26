@@ -78,9 +78,6 @@ const LazyDbtPanel = React.lazy(
 const LazyDbtLineagePanel = React.lazy(
   () => import("@/components/editor/dbt-lineage/dbt-lineage-panel"),
 );
-const LazyGitPanel = React.lazy(
-  () => import("@/components/editor/git/git-panel"),
-);
 const LazyAgentBranchesPanel = React.lazy(
   () => import("../panels/agent-branches-panel"),
 );
@@ -313,7 +310,6 @@ export const AppChrome: React.FC<PropsWithChildren> = ({ children }) => {
     cache: <LazyCachePanel />,
     dbt: <LazyDbtPanel />,
     "dbt-lineage": <LazyDbtLineagePanel />,
-    git: <LazyGitPanel />,
     "agent-branches": <LazyAgentBranchesPanel />,
   };
 

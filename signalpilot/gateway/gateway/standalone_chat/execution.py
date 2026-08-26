@@ -38,6 +38,26 @@ def _join_base_path(base: str, path: str) -> str:
     return f"{base.rstrip('/')}/{path.lstrip('/')}"
 
 
+def _notebook_auth_headers() -> dict[str, str]:
+    """Authenticate direct-mode notebook requests with the shared server token.
+
+    The shared notebook container runs with --token-password-file, so every
+    /api request needs the token. Kubernetes-mode pods resolve auth through
+    the notebook proxy instead, and the token file is absent there.
+    """
+    token_file = os.getenv("SP_NOTEBOOK_TOKEN_FILE", "")
+    if not token_file:
+        return {}
+    try:
+        with open(token_file, encoding="utf-8") as handle:
+            token = handle.read().strip()
+    except OSError:
+        return {}
+    if not token:
+        return {}
+    return {"Authorization": f"Bearer {token}"}
+
+
 @dataclass(frozen=True)
 class PreparedExecution:
     url: str
@@ -166,6 +186,7 @@ async def prepare_execution(
         "X-Gateway-Branch-Id": branch,
         "X-Gateway-Connection-Name": connection_name,
         "X-Gateway-Commit-Sha": commit_sha,
+        **_notebook_auth_headers(),
     }
     return PreparedExecution(
         url=_join_base_path(runtime.internal_base_url, "/api/standalone-chat/execute"),
@@ -211,7 +232,8 @@ async def cancel_execution_session(db: AsyncSession, run: GatewayChatRun) -> boo
                 _join_base_path(
                     runtime.internal_base_url,
                     f"/api/standalone-chat/cancel/{run.id}",
-                )
+                ),
+                headers=_notebook_auth_headers(),
             )
         return response.is_success
     except httpx.HTTPError:
@@ -234,20 +256,17 @@ async def cleanup_finished_execution(db: AsyncSession, *, run_id: str) -> None:
     )
     if session_info is None:
         return
-    if not os.getenv("SP_NOTEBOOK_DIRECT_URL") and session_info.pod_name:
-        try:
-            from gateway.notebooks.session_service import _get_orchestrator
+    try:
+        from gateway.notebooks.session_service import terminate_session
 
-            orchestrator = await _get_orchestrator()
-            await orchestrator.delete_pod(session_info.pod_name, org_id=run.org_id)
-        except Exception:
-            # The normal stale-session reaper remains a fallback.
-            pass
-    await notebook_session_store.mark_stopped(
-        db,
-        session_id=session_info.id,
-        org_id=run.org_id,
-    )
+        await terminate_session(db, session_info=session_info)
+    except Exception:
+        # The normal lifecycle reaper remains a fallback.
+        await notebook_session_store.mark_stopped(
+            db,
+            session_id=session_info.id,
+            org_id=run.org_id,
+        )
 
 
 async def cleanup_expired_approval_sandboxes(db: AsyncSession) -> int:
@@ -284,19 +303,12 @@ async def cleanup_expired_approval_sandboxes(db: AsyncSession) -> int:
         )
         if session_info is None:
             continue
-        if not os.getenv("SP_NOTEBOOK_DIRECT_URL") and session_info.pod_name:
-            try:
-                from gateway.notebooks.session_service import _get_orchestrator
+        try:
+            from gateway.notebooks.session_service import terminate_session
 
-                orchestrator = await _get_orchestrator()
-                await orchestrator.delete_pod(session_info.pod_name, org_id=run.org_id)
-            except Exception:
-                continue
-        await notebook_session_store.mark_stopped(
-            db,
-            session_id=session_info.id,
-            org_id=run.org_id,
-        )
+            await terminate_session(db, session_info=session_info)
+        except Exception:
+            continue
         run.execution_session_id = None
         await db.commit()
         cleaned += 1

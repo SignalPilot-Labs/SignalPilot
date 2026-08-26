@@ -2,7 +2,6 @@
 
 Allowed files (relative to the notebook-server/signalpilot/ directory):
 - _server/auth/session_token.py  (single source of truth)
-- _server/entrypoint.py           (boot-time shim)
 
 Comments and docstrings are excluded from the check.
 """
@@ -17,7 +16,6 @@ from pathlib import Path
 
 _ALLOWED_RELATIVE = {
     "_server/auth/session_token.py",
-    "_server/entrypoint.py",
 }
 
 # Pattern that matches actual code lines referencing both os.environ and SP_SESSION_JWT.
@@ -91,7 +89,7 @@ class TestNoDirectEnvReads:
         for py_file in root.rglob("*.py"):
             # Compute relative path from the signalpilot/ directory.
             rel = py_file.relative_to(root)
-            rel_str = str(rel)
+            rel_str = rel.as_posix()
 
             if rel_str in _ALLOWED_RELATIVE:
                 continue

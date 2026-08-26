@@ -40,68 +40,12 @@ kubectl apply -f require-gvisor-kyverno.yaml
 Requires Kyverno to be installed.  Install Kyverno first:
 `https://kyverno.io/docs/installation/`
 
-## pods/exec narrowing — Kyverno (F-21)
+## pods/exec narrowing — removed (Notebook Runtime v2)
 
-### Why RBAC is insufficient
-
-The gateway ServiceAccount holds a broad `pods/exec create` permission in each
-tenant namespace. Kubernetes RBAC `resourceNames` does not support prefix wildcards,
-and notebook pod names are dynamic (`nb-<12hex>`), so RBAC cannot restrict which
-pods may be exec'd. This admission policy fills the gap.
-
-This is a **defense-in-depth** layer. It does NOT replace:
-- The AST gate (`tests/test_pod_exec_caller_invariant.py`, R4 C4) — verifies the
-  call path in gateway code.
-- The hardcoded `"notebook"` container name in `kubernetes.py::pod_exec_io`.
-
-### Install — ValidatingAdmissionPolicy (default, k8s >= 1.30)
-
-```bash
-kubectl apply -f restrict-pod-exec-validatingadmissionpolicy.yaml
-```
-
-Default path, mirrors the gVisor VAP. A CONNECT on the `pods/exec` subresource is
-allowed only when `request.name` matches `^nb-[0-9a-f]{12}$` and
-`object.container == 'notebook'`. No Kyverno install needed. Cluster-scoped; you
-need cluster-admin to apply.
-
-### Install — Kyverno (fallback, k8s < 1.30 or VAP disabled)
-
-```bash
-kubectl apply -f restrict-pod-exec-kyverno.yaml
-```
-
-Apply after the gVisor policy. The policy is cluster-scoped; you need cluster-admin.
-Do NOT install both the VAP and Kyverno forms.
-
-### What the policy enforces
-
-Two rules, independently auditable:
-
-1. **restrict-pod-name** — exec is only permitted into pods whose name matches
-   `^nb-[0-9a-f]{12}$`. Any other pod name is denied.
-2. **restrict-container** — exec is only permitted when the target container is
-   `notebook`. Other container names are denied.
-
-The policy is **SA-agnostic**: no ServiceAccount or username pin. Namespace label
-`signalpilot.dev/tenant: user` scopes enforcement to tenant namespaces (the same
-label used by `require-gvisor-kyverno.yaml`). Operators using a non-default
-`SP_GATEWAY_SERVICE_ACCOUNT` need zero policy edits.
-
-### Test
-
-```bash
-deploy/k8s/validate-admission-policies.sh --e2e --with-kyverno
-```
-
-Note that the Kyverno CLI **cannot** evaluate these two rules: the policy matches
-`operations: [CONNECT]` and the CLI only ever simulates CREATE, so every resource comes
-back `Pass / Excluded` regardless of what the test declares. `restrict-pod-exec.test.yaml`
-therefore asserts only that the policy loads and is valid; the actual exec ALLOW/DENY
-behaviour is proven by the live `kubectl exec` checks in Phase B7 of the wrapper script.
-See "Validation findings" below.
-
----
+The former `restrict-pod-exec-*` policies narrowed the gateway's `pods/exec`
+grant to notebook pods. Notebook Runtime v2 moved notebook compute off the
+cluster and deleted the grant itself, so the policies were removed with it.
+History: git log -- deploy/k8s/admission/restrict-pod-exec-*.
 
 ## RBAC bootstrap confinement (SP-SEC-009)
 

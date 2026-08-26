@@ -1,15 +1,12 @@
-"""Verify the notebook reverse proxy contract.
+"""Verify the notebook reverse proxy contract (Runtime v2).
 
 Covers:
 - Proxy HTTP/WS: header stripping (cookie/authorization/set-cookie/hop-by-hop)
 - Security headers: CSP, X-Frame-Options, Cache-Control on proxy paths
-- Session shape: tokenless notebook_url, access_token None
+- Session shape: tokenless notebook_url, no credential fields FE-side
 - Session ownership: cross-user/cross-org 404 on API endpoints
-- Orchestrator: pod CLI --no-token, no SP_ACCESS_TOKEN, fail-fast upstream mode
-- Upstream mode: pod_ip_internal used (not NodePort)
-
-The live run_notebook test verifies proxy authentication with Clerk JWT and
-local credentials.
+- Upstream resolution: sandbox route URL + --base-url path, ws/wss scheme
+  bridging, active-org authorization, fail-closed on missing credentials
 """
 
 from __future__ import annotations
@@ -42,7 +39,7 @@ def _make_session_row(
     org_id: str = "org-1",
     user_id: str = "user-1",
     status: str = "running",
-    pod_ip_internal: str = "10.42.0.5",
+    upstream_url: str = "https://sbx-abc.vercel.run",
     access_token_enc: bytes | None = None,
 ):
     """Build a GatewayNotebookSession test double.
@@ -57,9 +54,9 @@ def _make_session_row(
         user_id=user_id,
         project_id="proj-1",
         branch="main",
-        pod_name="nb-test",
-        pod_ip="k3s:30042",
-        pod_ip_internal=pod_ip_internal,
+        backend="vercel",
+        runtime_handle="sbx-abc",
+        upstream_url=upstream_url,
         access_token_enc=access_token_enc,
         status=status,
         last_ping=time.time(),
@@ -172,7 +169,8 @@ class TestNotebookSessionInternal:
         )
         assert result is not None
         assert result.access_token == "secret-token-abc"
-        assert result.pod_ip_internal == "10.42.0.5"
+        assert result.upstream_url == "https://sbx-abc.vercel.run"
+        assert result.runtime_handle == "sbx-abc"
         mock_session.commit.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -223,7 +221,8 @@ class TestNotebookSessionInternal:
             mock_session, session_id="test-sess-123", org_id="org-1"
         )
         assert result is not None
-        assert result.access_token is None
+        assert not hasattr(result, "access_token")
+        assert not hasattr(result, "upstream_url")
 
     @pytest.mark.asyncio
     async def test_to_info_notebook_url_is_proxy_path(self):
@@ -260,160 +259,106 @@ class TestNotebookSessionInternal:
 # Verify the orchestrator pod command.
 
 
-def _manifest(**overrides):
-    from gateway.orchestrator.kubernetes import _pod_manifest
+class TestLaunchCredentialDelivery:
+    """backends.py: the boot command and process env carry credentials safely."""
 
-    kwargs = {
-        "pod_name": "nb-test",
-        "namespace": "default",
-        "image": "signalpilot-notebook:latest",
-        "user_id": "user-1",
-        "org_id": "org-1",
-        "project_id": "proj-1",
-        "branch": "main",
-        "gateway_url": "http://localhost:3300",
-        "session_jwt_secret_name": "sp-jwt-nb-test",
-        "session_id": "sess-abc",
-        "access_token": "pod-notebook-token",
-    }
-    kwargs.update(overrides)
-    return _pod_manifest(**kwargs)
+    def _launch_request(self, **overrides):
+        from gateway.notebooks.backends import LaunchRequest
 
-
-class TestPodCLI:
-    """kubernetes.py: pod boots with auth ON, token by file, no SP_ACCESS_TOKEN env."""
-
-    def test_pod_cli_never_disables_the_token(self):
-        args = _manifest()["spec"]["containers"][0]["args"]
-        assert "--no-token" not in args
-
-    def test_pod_cli_passes_token_by_file(self):
-        from gateway.orchestrator.kubernetes import SP_NOTEBOOK_TOKEN_MOUNT_FILE
-
-        args = _manifest()["spec"]["containers"][0]["args"]
-        assert "--token-password-file" in args
-        assert args[args.index("--token-password-file") + 1] == SP_NOTEBOOK_TOKEN_MOUNT_FILE
-        # The token itself must never appear in argv (/proc/*/cmdline is readable).
-        assert "pod-notebook-token" not in " ".join(args)
-
-    def test_pod_manifest_refuses_missing_token(self):
-        with pytest.raises(ValueError, match="without a notebook auth token"):
-            _manifest(access_token=None)
-
-    def test_pod_manifest_refuses_empty_token(self):
-        with pytest.raises(ValueError, match="without a notebook auth token"):
-            _manifest(access_token="")
-
-    def test_init_container_stages_the_token(self):
-        from gateway.orchestrator.kubernetes import (
-            SP_NOTEBOOK_TOKEN_MOUNT_FILE,
-            SP_NOTEBOOK_TOKEN_SECRET_KEY,
+        kwargs = dict(
+            org_id="org-1",
+            user_id="user-1",
+            session_id="sess-abc",
+            project_id="proj-1",
+            branch="main",
+            session_jwt="jwt.value",
+            notebook_token="pod-notebook-token",
         )
+        kwargs.update(overrides)
+        return LaunchRequest(**kwargs)
 
-        manifest = _manifest()
-        stager = manifest["spec"]["initContainers"][0]["command"][2]
-        assert SP_NOTEBOOK_TOKEN_MOUNT_FILE in stager
+    def test_boot_command_never_disables_the_token(self):
+        from gateway.notebooks.backends import _boot_command
 
-        secret_volume = next(
-            v for v in manifest["spec"]["volumes"] if v["name"] == "session-jwt-src"
-        )
-        keys = {item["key"] for item in secret_volume["secret"]["items"]}
-        assert keys == {"session_jwt", SP_NOTEBOOK_TOKEN_SECRET_KEY}
+        command = _boot_command(self._launch_request())
+        assert "--no-token" not in command
+        assert "--token-password-file" in command
+        # The token itself must never appear in argv (process lists are readable).
+        assert "pod-notebook-token" not in command
 
-    def test_pod_cli_includes_base_url(self):
-        args = _manifest()["spec"]["containers"][0]["args"]
-        assert "--base-url" in args
-        assert args[args.index("--base-url") + 1] == "/notebook/sess-abc"
+    def test_boot_command_includes_base_url(self):
+        from gateway.notebooks.backends import _boot_command
 
-    def test_pod_env_no_sp_access_token(self):
-        manifest = _manifest()
-        env_names = {e["name"] for e in manifest["spec"]["containers"][0]["env"]}
-        assert "SP_ACCESS_TOKEN" not in env_names
-        # F-6: the JWT is delivered by file, never via pod env.
-        assert "SP_SESSION_JWT" not in env_names
+        command = _boot_command(self._launch_request())
+        assert '--base-url "/notebook/$SP_SESSION_ID"' in command
 
-    def test_token_is_not_in_pod_env(self):
-        manifest = _manifest()
-        env_values = {e.get("value") for e in manifest["spec"]["containers"][0]["env"]}
-        assert "pod-notebook-token" not in env_values
+    def test_boot_command_hydrates_only_when_snapshot_given(self):
+        from gateway.notebooks.backends import _boot_command
 
-
-class TestNetworkPolicyUnchanged:
-    """The token is defense-in-depth; network isolation stays an independent gate."""
-
-    def test_pod_manifest_does_not_opt_out_of_network_policy(self):
-        manifest = _manifest()
-        assert manifest["spec"]["automountServiceAccountToken"] is False
-        assert manifest["spec"]["enableServiceLinks"] is False
+        assert "curl" not in _boot_command(self._launch_request())
+        hydrated = _boot_command(self._launch_request(snapshot_url="https://s3/x.tgz"))
+        assert 'curl -fsSL "$SP_SNAPSHOT_URL"' in hydrated
 
     @pytest.mark.asyncio
-    async def test_ensure_namespace_still_applies_network_policy(self, monkeypatch):
-        """ensure_org_namespace is still called with skip_network_policy=False."""
-        monkeypatch.setenv("SP_NOTEBOOK_UPSTREAM_MODE", "pod_ip")
-        monkeypatch.delenv("SP_NOTEBOOK_NETWORK_POLICY", raising=False)
-        import importlib
-        import sys
+    async def test_creation_spec_env_is_empty(self, monkeypatch):
+        """Creation metadata is provider-readable; secrets ride the process env."""
+        from gateway.config.notebooks import NotebookSettings
+        from gateway.notebooks.backends import VercelNotebookBackend
 
-        sys.modules.pop("gateway.orchestrator.kubernetes", None)
-        k8s_mod = importlib.import_module("gateway.orchestrator.kubernetes")
-
-        captured: dict = {}
-
-        async def _fake_ensure(*_args, **kwargs):
-            captured.update(kwargs)
-
-        monkeypatch.setattr(k8s_mod, "ensure_org_namespace", _fake_ensure)
-        orch = k8s_mod.KubernetesOrchestrator()
-        orch._client = object()
-        orch._core_api = MagicMock()
-        orch._networking_api = MagicMock()
-        orch._rbac_api = MagicMock()
-        orch._namespace_prefix = "sp"
-        orch._gateway_namespace = "signalpilot"
-        orch._gateway_pod_selector = {"app": "signalpilot-gateway"}
-        orch._gateway_port = 3300
-        orch._egress_cidr = "10.0.0.0/16"
-        orch._gateway_service_account = "sp-gateway"
-
-        await orch.ensure_namespace("org-1")
-        assert captured["skip_network_policy"] is False
+        runtime = AsyncMock()
+        runtime.create.return_value = "sbx-1"
+        runtime.exec.return_value = MagicMock(ok=True)
+        runtime.routes.return_value = {2718: "https://sbx-1.vercel.run"}
+        monkeypatch.setenv("SP_NOTEBOOK_VERCEL_IMAGE", "reg/nb:dev")
+        monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
+        backend = VercelNotebookBackend(NotebookSettings(), runtime=runtime)
+        await backend.launch(self._launch_request())
+        spec = runtime.create.await_args.args[0]
+        assert spec.env == {}
+        process_env = runtime.start_process.await_args.kwargs["env"]
+        assert process_env["SP_SESSION_JWT"] == "jwt.value"
+        assert "pod-notebook-token" not in process_env.values()
 
 
-# Verify invalid upstream modes.
+class TestUpstreamResolution:
+    """session_service.upstream_base_for: route URL + base-url path shape."""
 
+    def test_vercel_upstream_appends_base_url_path(self):
+        from gateway.notebooks.session_service import upstream_base_for
+        from gateway.store.notebook_sessions import NotebookSessionInternal
 
-class TestInvalidUpstreamMode:
-    """kubernetes.py: fail-fast on unknown SP_NOTEBOOK_UPSTREAM_MODE."""
+        internal = NotebookSessionInternal(
+            session_id="sess-1", org_id="o", user_id="u", status="running",
+            backend="vercel", runtime_handle="sbx", snapshot_id=None,
+            upstream_url="https://sbx.vercel.run/", access_token="t",
+        )
+        assert upstream_base_for(internal) == "https://sbx.vercel.run/notebook/sess-1"
 
-    def test_invalid_upstream_mode_fails_fast(self, monkeypatch):
-        """RuntimeError is raised at module import time for unknown mode values."""
-        import importlib
-        import sys
+    def test_direct_upstream_is_the_bare_container_url(self):
+        from gateway.notebooks.session_service import upstream_base_for
+        from gateway.store.notebook_sessions import NotebookSessionInternal
 
-        monkeypatch.setenv("SP_NOTEBOOK_UPSTREAM_MODE", "foobar")
-        # Remove cached module so it is re-evaluated with the new env var
-        sys.modules.pop("gateway.orchestrator.kubernetes", None)
+        internal = NotebookSessionInternal(
+            session_id="sess-1", org_id="o", user_id="u", status="running",
+            backend="direct", runtime_handle="local-notebook", snapshot_id=None,
+            upstream_url="http://notebook:2718", access_token="t",
+        )
+        assert upstream_base_for(internal) == "http://notebook:2718"
 
-        with pytest.raises(RuntimeError, match="Invalid SP_NOTEBOOK_UPSTREAM_MODE"):
-            importlib.import_module("gateway.orchestrator.kubernetes")
+    def test_missing_upstream_raises(self):
+        from gateway.notebooks.session_service import (
+            NotebookSessionError,
+            upstream_base_for,
+        )
+        from gateway.store.notebook_sessions import NotebookSessionInternal
 
-    def test_valid_upstream_mode_pod_ip(self, monkeypatch):
-        import importlib
-        import sys
-
-        monkeypatch.setenv("SP_NOTEBOOK_UPSTREAM_MODE", "pod_ip")
-        sys.modules.pop("gateway.orchestrator.kubernetes", None)
-        mod = importlib.import_module("gateway.orchestrator.kubernetes")
-        assert mod._UPSTREAM_MODE == "pod_ip"
-
-    def test_valid_upstream_mode_nodeport(self, monkeypatch):
-        import importlib
-        import sys
-
-        monkeypatch.setenv("SP_NOTEBOOK_UPSTREAM_MODE", "nodeport")
-        sys.modules.pop("gateway.orchestrator.kubernetes", None)
-        mod = importlib.import_module("gateway.orchestrator.kubernetes")
-        assert mod._UPSTREAM_MODE == "nodeport"
+        internal = NotebookSessionInternal(
+            session_id="sess-1", org_id="o", user_id="u", status="snapshotted",
+            backend="vercel", runtime_handle="sbx", snapshot_id="snap",
+            upstream_url=None, access_token="t",
+        )
+        with pytest.raises(NotebookSessionError):
+            upstream_base_for(internal)
 
 
 # Verify NotebookProxy HTTP behavior.
@@ -688,7 +633,10 @@ def _arrange_proxy_session(
         org_id=session_org_id,
         user_id=session_user_id,
         status="running",
-        pod_ip_internal="10.42.0.5",
+        backend="vercel",
+        runtime_handle="sbx-abc",
+        upstream_url="https://sbx-abc.vercel.run",
+        snapshot_id=None,
         access_token=access_token,
     )
     monkeypatch.setattr(ns_mod, "get_session_internal", AsyncMock(return_value=internal))
@@ -717,18 +665,16 @@ def _arrange_proxy_session(
     return connection
 
 
-class TestProxyUsesInternalIp:
-    """test_proxy_route_uses_internal_ip_not_nodeport."""
+class TestProxyUsesRouteUrl:
+    """Upstream is the sandbox's public route URL + the session base path."""
 
     @pytest.mark.asyncio
-    async def test_upstream_base_uses_pod_ip_internal(self, monkeypatch):
+    async def test_upstream_base_is_route_url_with_session_path(self, monkeypatch):
         from gateway.notebook_proxy.auth import resolve_proxy_session
 
         connection = _arrange_proxy_session(monkeypatch)
         result = await resolve_proxy_session(connection, "sess-123")
-        # Must use internal IP, not any nodeport address
-        assert "10.42.0.5" in result.upstream_base
-        assert "30" not in result.upstream_base  # NodePort ports are 30000+
+        assert result.upstream_base == "https://sbx-abc.vercel.run/notebook/sess-123"
 
 
 # Verify active organization authorization.
@@ -835,88 +781,6 @@ class TestProxyActiveOrgAuthorization:
         assert exc_info.value.status_code == 503
 
 
-# Verify the pod_ip upstream mode.
-
-
-class TestNodePortServiceGating:
-    """Verify that KubernetesOrchestrator accepts only pod_ip mode.
-
-    The orchestrator does not create services. ResourceQuota sets services to zero.
-    """
-
-    @pytest.mark.asyncio
-    async def test_pod_ip_mode_does_not_create_nodeport_service(self, monkeypatch):
-        """In pod_ip mode, create_pod must NOT call create_namespaced_service."""
-        import sys
-
-        monkeypatch.setenv("SP_NOTEBOOK_UPSTREAM_MODE", "pod_ip")
-        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "local")
-        sys.modules.pop("gateway.orchestrator.kubernetes", None)
-
-        import importlib
-        from unittest.mock import patch
-
-        mod = importlib.import_module("gateway.orchestrator.kubernetes")
-        orch = mod.KubernetesOrchestrator()
-
-        core_api = AsyncMock()
-        core_api.create_namespaced_pod = AsyncMock()
-        core_api.create_namespaced_service = AsyncMock()
-        orch._core_api = core_api
-        orch._networking_api = MagicMock()
-        orch._rbac_api = MagicMock()
-        orch._client = MagicMock()
-        orch._namespace_prefix = "sp-nb"
-        orch._gateway_namespace = "signalpilot"
-        orch._gateway_pod_selector = {"app": "signalpilot-gateway"}
-        orch._gateway_port = 3300
-        orch._egress_cidr = None
-        orch._gateway_service_account = "signalpilot-gateway"
-
-        with patch("gateway.orchestrator.kubernetes.ensure_org_namespace", AsyncMock()):
-            await orch.create_pod(
-                pod_name="nb-test",
-                user_id="user-1",
-                org_id="org-1",
-                project_id="proj-1",
-                branch="main",
-                image="signalpilot-notebook:latest",
-                gateway_url="http://localhost:3300",
-                session_jwt="test.jwt",
-                session_id="sess-abc",
-                access_token="tok",
-            )
-        core_api.create_namespaced_pod.assert_called_once()
-        core_api.create_namespaced_service.assert_not_called()
-
-    def test_nodeport_mode_constructor_raises_runtime_error(self, monkeypatch):
-        """Verify that the constructor rejects the nodeport upstream mode."""
-        import sys
-
-        monkeypatch.setenv("SP_NOTEBOOK_UPSTREAM_MODE", "nodeport")
-        sys.modules.pop("gateway.orchestrator.kubernetes", None)
-
-        import importlib
-
-        mod = importlib.import_module("gateway.orchestrator.kubernetes")
-
-        with pytest.raises(RuntimeError, match="pod_ip"):
-            mod.KubernetesOrchestrator()
-
-    def test_nodeport_mode_in_cloud_constructor_raises(self, monkeypatch):
-        """Verify constructor rejection of nodeport mode in each deployment mode."""
-        import sys
-
-        monkeypatch.setenv("SP_NOTEBOOK_UPSTREAM_MODE", "nodeport")
-        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
-        sys.modules.pop("gateway.orchestrator.kubernetes", None)
-
-        import importlib
-
-        mod = importlib.import_module("gateway.orchestrator.kubernetes")
-
-        with pytest.raises(RuntimeError, match="pod_ip"):
-            mod.KubernetesOrchestrator()
 
 
 # Verify session ownership in API endpoints.
@@ -940,8 +804,6 @@ class TestSessionOwnershipCheck:
             user_id="user-owner",  # Owned by different user
             project_id="proj-1",
             branch="main",
-            pod_name="nb-test",
-            pod_ip="10.0.0.1",
             access_token=None,
             status="running",
             last_ping=time.time(),
@@ -977,8 +839,6 @@ class TestSessionOwnershipCheck:
             user_id="user-owner",
             project_id="proj-1",
             branch="main",
-            pod_name="nb-test",
-            pod_ip="10.0.0.1",
             access_token=None,
             status="running",
             last_ping=time.time(),
@@ -1014,8 +874,6 @@ class TestSessionOwnershipCheck:
             user_id="user-owner",
             project_id="proj-1",
             branch="main",
-            pod_name="nb-test",
-            pod_ip="10.0.0.1",
             access_token=None,
             status="running",
             last_ping=time.time(),
@@ -1048,8 +906,6 @@ class TestSessionOwnershipCheck:
             user_id="user-1",
             project_id="proj-1",
             branch="main",
-            pod_name="nb-test",
-            pod_ip="10.0.0.1",
             access_token=None,
             status="running",
             last_ping=time.time(),
@@ -1227,7 +1083,7 @@ class TestSessionIdValidationOnApiEndpoints:
         response = Response()
 
         with pytest.raises(HTTPException) as exc_info:
-            await ns_api_mod.delete_session_by_id("bad\r\nid", store, response)
+            await ns_api_mod.delete_session_by_id("bad\r\nid", store)
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio

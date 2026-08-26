@@ -82,8 +82,8 @@ test.describe.serial("authenticated notebook shareability", () => {
       if (request.resourceType() === "document") documentRequests += 1;
       const url = request.url();
       if (/\/notebook\/[^/]+\/health(?:\?|$)/.test(url)) healthRequests += 1;
-      if (url.includes("/api/project/sync-down")) syncRequests += 1;
-      if (/\/api\/sessions(?:\?|$)/.test(url)) sessionRequests += 1;
+      if (url.includes("/api/notebook/static")) syncRequests += 1;
+      if (url.includes("/api/notebook-sessions")) sessionRequests += 1;
     });
     page.on("websocket", () => {
       webSockets += 1;

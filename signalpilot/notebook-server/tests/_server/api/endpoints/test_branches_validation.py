@@ -1,24 +1,19 @@
-"""R11-S-2: _validate_branch called in create/delete/switch branch handlers.
+"""Branch endpoints over the S3 workspace store.
 
-Verifies that branch names starting with '-' (and other invalid patterns)
-are rejected before any git subprocess is called.
+Branch names that could be used for injection (leading '-', traversal)
+are rejected before any gateway call; switching just repoints the
+session's working branch.
 """
 from __future__ import annotations
 
 import json as json_mod
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from signalpilot._server.files import workspace
+
 # ─── Helpers ─────────────────────────────────────────────────────────────────
-
-
-def _make_repo(tmp_path: Path) -> Path:
-    """Return a temp dir with a .git subdirectory so _get_repo returns it."""
-    git_dir = tmp_path / ".git"
-    git_dir.mkdir()
-    return tmp_path
 
 
 def _make_request(
@@ -49,84 +44,121 @@ def _make_request(
     return Request(scope, receive=_receive)
 
 
+@pytest.fixture
+def s3_mode(monkeypatch):
+    monkeypatch.setenv("SP_WORKSPACE_MODE", "s3")
+    monkeypatch.setenv("SP_PROJECT_ID", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+    monkeypatch.setattr(workspace, "_current_branch", "main")
+
+
 # ─── Tests ───────────────────────────────────────────────────────────────────
 
 
 class TestBranchValidation:
-    """R11-S-2: branch name validation rejects injection strings before subprocess."""
+    """Branch name validation rejects injection strings before any gateway call."""
 
     @pytest.mark.asyncio
-    async def test_create_branch_rejects_dash_prefix(self, tmp_path: Path) -> None:
-        """POST /create with name='-rf' returns 400; run_git never called."""
+    async def test_create_branch_rejects_dash_prefix(self, s3_mode) -> None:
         from signalpilot._server.api.endpoints.branches import create_branch
 
-        repo = _make_repo(tmp_path)
         request = _make_request({"name": "-rf"})
-
-        with patch("signalpilot._server.api.endpoints.branches._get_repo", return_value=repo), \
-             patch("signalpilot._server.api.endpoints.branches.run_git") as mock_git, \
-             patch("signalpilot._server.api.endpoints.branches.run_git_authed") as mock_git_authed:
+        with patch(
+            "signalpilot._server.files.workspace.create_file_system"
+        ) as mock_fs:
             response = await create_branch(request=request)
 
         assert response.status_code == 400
         body = json_mod.loads(response.body)
         assert "Invalid branch name" in body["error"]
-        mock_git.assert_not_called()
-        mock_git_authed.assert_not_called()
+        mock_fs.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_create_branch_rejects_dash_prefix_in_from_branch(self, tmp_path: Path) -> None:
-        """POST /create with from_branch='--upload-pack=evil' returns 400; run_git never called."""
+    async def test_create_branch_rejects_dash_prefix_in_from_branch(
+        self, s3_mode
+    ) -> None:
         from signalpilot._server.api.endpoints.branches import create_branch
 
-        repo = _make_repo(tmp_path)
-        request = _make_request({"name": "ok", "from_branch": "--upload-pack=evil"})
-
-        with patch("signalpilot._server.api.endpoints.branches._get_repo", return_value=repo), \
-             patch("signalpilot._server.api.endpoints.branches.run_git") as mock_git, \
-             patch("signalpilot._server.api.endpoints.branches.run_git_authed") as mock_git_authed:
+        request = _make_request(
+            {"name": "ok", "from_branch": "--upload-pack=evil"}
+        )
+        with patch(
+            "signalpilot._server.files.workspace.create_file_system"
+        ) as mock_fs:
             response = await create_branch(request=request)
 
         assert response.status_code == 400
         body = json_mod.loads(response.body)
         assert "Invalid branch name" in body["error"]
-        mock_git.assert_not_called()
-        mock_git_authed.assert_not_called()
+        mock_fs.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_delete_branch_rejects_dash_prefix(self, tmp_path: Path) -> None:
-        """POST /delete with name='-D' returns 400; run_git never called."""
-        from signalpilot._server.api.endpoints.branches import delete_branch
-
-        repo = _make_repo(tmp_path)
-        request = _make_request({"name": "-D"})
-
-        with patch("signalpilot._server.api.endpoints.branches._get_repo", return_value=repo), \
-             patch("signalpilot._server.api.endpoints.branches.run_git") as mock_git, \
-             patch("signalpilot._server.api.endpoints.branches.run_git_authed") as mock_git_authed:
-            response = await delete_branch(request=request)
-
-        assert response.status_code == 400
-        body = json_mod.loads(response.body)
-        assert "Invalid branch name" in body["error"]
-        mock_git.assert_not_called()
-        mock_git_authed.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_switch_branch_rejects_dash_prefix(self, tmp_path: Path) -> None:
-        """POST /switch with branch='-rf' returns 400; run_git never called."""
+    async def test_switch_branch_rejects_dash_prefix(self, s3_mode) -> None:
         from signalpilot._server.api.endpoints.branches import switch_branch
 
-        repo = _make_repo(tmp_path)
         request = _make_request({"branch": "-rf"})
-
-        with patch("signalpilot._server.api.endpoints.branches._get_repo", return_value=repo), \
-             patch("signalpilot._server.api.endpoints.branches.run_git") as mock_git, \
-             patch("signalpilot._server.api.endpoints.branches.run_git_authed") as mock_git_authed:
-            response = await switch_branch(request=request)
+        response = await switch_branch(request=request)
 
         assert response.status_code == 400
         body = json_mod.loads(response.body)
         assert "Invalid branch name" in body["error"]
-        mock_git.assert_not_called()
-        mock_git_authed.assert_not_called()
+        assert workspace.current_branch() == "main"
+
+    @pytest.mark.asyncio
+    async def test_switch_branch_rejects_traversal(self, s3_mode) -> None:
+        from signalpilot._server.api.endpoints.branches import switch_branch
+
+        request = _make_request({"branch": "a/../b"})
+        response = await switch_branch(request=request)
+
+        assert response.status_code == 400
+        assert workspace.current_branch() == "main"
+
+
+class TestBranchSwitch:
+    """Switching a branch is just repointing the working branch (S3 has
+    every branch); the next GatewayFileSystem is constructed against it."""
+
+    @pytest.mark.asyncio
+    async def test_switch_updates_current_branch(self, s3_mode) -> None:
+        from signalpilot._server.api.endpoints.branches import switch_branch
+
+        request = _make_request({"branch": "agent/feature-1"})
+        response = await switch_branch(request=request)
+
+        assert response.status_code == 200
+        body = json_mod.loads(response.body)
+        assert body == {"branch": "agent/feature-1", "switched": True}
+        assert workspace.current_branch() == "agent/feature-1"
+
+    @pytest.mark.asyncio
+    async def test_switch_to_same_branch_is_noop(self, s3_mode) -> None:
+        from signalpilot._server.api.endpoints.branches import switch_branch
+
+        request = _make_request({"branch": "main"})
+        response = await switch_branch(request=request)
+
+        assert response.status_code == 200
+        assert json_mod.loads(response.body) == {
+            "branch": "main",
+            "switched": False,
+        }
+
+    @pytest.mark.asyncio
+    async def test_current_reports_active_branch(self, s3_mode) -> None:
+        from signalpilot._server.api.endpoints.branches import (
+            get_current_branch,
+        )
+
+        response = await get_current_branch(request=_make_request({}))
+        assert json_mod.loads(response.body) == {"active_branch": "main"}
+
+    @pytest.mark.asyncio
+    async def test_non_s3_mode_rejects_switch(self, monkeypatch) -> None:
+        from signalpilot._server.api.endpoints.branches import switch_branch
+
+        monkeypatch.delenv("SP_WORKSPACE_MODE", raising=False)
+        monkeypatch.setattr(workspace, "_current_branch", "main")
+        response = await switch_branch(
+            request=_make_request({"branch": "other"})
+        )
+        assert response.status_code == 400

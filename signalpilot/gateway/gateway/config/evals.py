@@ -152,7 +152,7 @@ class EvalRunSettings(_GatewaySettingsBase):
         }
 
     # Cloud-mode image digest must be sha256 + exactly 64 lowercase hex chars,
-    # matching the guarantee SP_NOTEBOOK_IMAGE already carries.
+    # matching the guarantee SP_NOTEBOOK_VERCEL_IMAGE carries.
     _DIGEST_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
 
     @field_validator("runner_image", "setup_image", mode="after")

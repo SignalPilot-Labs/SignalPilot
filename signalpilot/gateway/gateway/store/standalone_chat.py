@@ -1577,10 +1577,20 @@ async def persist_artifact(
             )
         )
     ).scalar_one_or_none()
+    replaced_object_keys: list[str] = []
     if existing is not None:
-        if existing.content_hash and existing.content_hash != candidate_hash:
-            raise ValueError("Artifact filename is already bound to different content in this run")
-        return existing
+        if not existing.content_hash or existing.content_hash == candidate_hash:
+            return existing
+        # The run republished this filename with corrected content. Within a
+        # single run the newest publication supersedes the outdated artifact —
+        # the user should never see the stale version. Artifacts from earlier
+        # runs (follow-up questions) are separate rows and stay untouched.
+        if existing.object_key:
+            replaced_object_keys.append(existing.object_key)
+        if existing.source_object_key:
+            replaced_object_keys.append(existing.source_object_key)
+        await db.delete(existing)
+        await db.flush()
     artifact_id = str(uuid.uuid4())
     storage_kind = "inline"
     object_key = None
@@ -1674,6 +1684,11 @@ async def persist_artifact(
                     await storage.delete(uploaded_key)
         raise
     await db.refresh(artifact)
+    if replaced_object_keys:
+        storage = chat_object_storage()
+        for replaced_key in replaced_object_keys:
+            with suppress(Exception):
+                await storage.delete(replaced_key)
     return artifact
 
 

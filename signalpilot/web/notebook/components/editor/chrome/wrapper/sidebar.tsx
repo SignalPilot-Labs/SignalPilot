@@ -216,12 +216,13 @@ const SidebarItem: React.FC<
 
   // Render as div when not clickable (e.g., inside ReorderableList)
   // This avoids nested interactive elements which break react-aria's drag behavior
+  const ariaLabel = typeof tooltip === "string" ? tooltip : undefined;
   const content = onClick ? (
-    <button className={itemClassName} onClick={onClick}>
+    <button className={itemClassName} onClick={onClick} aria-label={ariaLabel}>
       {children}
     </button>
   ) : (
-    <div className={itemClassName}>{children}</div>
+    <div className={itemClassName} aria-label={ariaLabel}>{children}</div>
   );
 
   return (

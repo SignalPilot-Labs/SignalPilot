@@ -10,10 +10,19 @@ import pytest
 _stubbed_signalpilot = sys.modules.get("signalpilot")
 if getattr(_stubbed_signalpilot, "__spec__", None) is None:
     del sys.modules["signalpilot"]
+    # Re-importing the root below does NOT re-run already-imported submodules,
+    # so their attribute linkage on the fresh root must be restored by hand —
+    # otherwise later string-based monkeypatch.setattr("signalpilot._server...")
+    # resolution breaks for every test that runs after this module.
 
 notion_analysis = importlib.import_module(
     "signalpilot._server.api.endpoints.notion_analysis"
 )
+
+import signalpilot as _sp_root
+
+if not hasattr(_sp_root, "_server") and "signalpilot._server" in sys.modules:
+    _sp_root._server = sys.modules["signalpilot._server"]
 
 
 def _app_state(tmp_path):
@@ -128,7 +137,7 @@ def test_save_data_snapshot_enforces_count_and_size(
 def test_snapshot_project_registry_fallback_rejects_path_traversal(
     tmp_path, monkeypatch
 ) -> None:
-    from signalpilot._server.files import project_sync
+    from signalpilot._server.files import workspace
 
     project_root = tmp_path / "projects" / "project-1" / "repo"
     snapshot_dir = (
@@ -157,7 +166,7 @@ def test_snapshot_project_registry_fallback_rejects_path_traversal(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(project_sync, "PROJECTS_ROOT", tmp_path / "projects")
+    monkeypatch.setattr(workspace, "PROJECTS_ROOT", tmp_path / "projects")
 
     assert (
         notion_analysis._snapshot_file_from_project_registries(

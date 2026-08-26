@@ -18,7 +18,6 @@ import {
 const PHASE_LABELS: Record<string, string> = {
   health: "starting runtime...",
   notion: "loading trail...",
-  syncing: "syncing project files...",
   ready: "loading notebook...",
   editor: "loading editor...",
 };

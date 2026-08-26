@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import stat
 import subprocess
 import sys
@@ -15,7 +16,6 @@ from starlette.requests import Request
 
 from signalpilot._server.ai.claude_agent import AgentEvent
 from signalpilot._server.api.endpoints import standalone_chat
-from signalpilot._server.files import project_sync
 
 
 def test_seeded_analysis_notebooks_keep_run_tokens_out_of_source_and_isolated(
@@ -50,40 +50,13 @@ def test_seeded_analysis_notebooks_keep_run_tokens_out_of_source_and_isolated(
     assert (second_scratch / ".gateway-token").read_text(
         encoding="utf-8"
     ) == "token-b-secret"
-    assert (
-        stat.S_IMODE((first_scratch / ".gateway-token").stat().st_mode)
-        == 0o600
-    )
-
-
-def _git(repo: Path, *args: str) -> str:
-    return subprocess.check_output(
-        ["git", *args],
-        cwd=repo,
-        text=True,
-    ).strip()
-
-
-def _bare_project(tmp_path: Path) -> tuple[Path, str]:
-    source = tmp_path / "source"
-    source.mkdir()
-    _git(source, "init", "-b", "main")
-    _git(source, "config", "user.email", "test@signalpilot.dev")
-    _git(source, "config", "user.name", "SignalPilot Test")
-    (source / "dbt_project.yml").write_text(
-        "name: test_project\n", encoding="utf-8"
-    )
-    _git(source, "add", "dbt_project.yml")
-    _git(source, "commit", "-m", "initial")
-    commit_sha = _git(source, "rev-parse", "HEAD")
-    bare = tmp_path / "project.git"
-    subprocess.run(
-        ["git", "clone", "--bare", str(source), str(bare)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return bare, commit_sha
+    # chmod(0o600) has full meaning only on POSIX; Windows reports 0o666 for
+    # any owner-writable file, so assert the strict mode where it exists.
+    if os.name == "posix":
+        assert (
+            stat.S_IMODE((first_scratch / ".gateway-token").stat().st_mode)
+            == 0o600
+        )
 
 
 def _scoped_token(*, run_id: str, project_id: str, commit_sha: str) -> str:
@@ -114,11 +87,15 @@ def _request(body: dict[str, object], *, app: object | None = None) -> Request:
         delivered = True
         return {"type": "http.request", "body": encoded, "more_body": False}
 
+    from starlette.authentication import AuthCredentials, SimpleUser
+
     scope: dict[str, Any] = {
         "type": "http",
         "method": "POST",
         "path": "/execute",
         "headers": [(b"content-type", b"application/json")],
+        "auth": AuthCredentials(["edit"]),
+        "user": SimpleUser("test-user"),
     }
     if app is not None:
         scope["app"] = app
@@ -323,13 +300,18 @@ async def test_execute_materializes_the_frozen_project_before_starting_the_agent
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The execution checkout is pulled from the gateway snapshot endpoint
+    (S3 tarball) into disposable scratch — no git, disk is never the truth."""
+    import io
+    import tarfile
+
     project_id = "1dbf5492-81e6-4683-835f-f1785c9cfe78"
     run_id = "run-12345678"
-    bare, commit_sha = _bare_project(tmp_path)
+    commit_sha = "a" * 40
     projects_root = tmp_path / "projects"
     captured: dict[str, str] = {}
 
-    monkeypatch.setattr(project_sync, "PROJECTS_ROOT", projects_root)
+    monkeypatch.setattr(standalone_chat, "PROJECTS_ROOT", projects_root)
     monkeypatch.setenv("SP_CHAT_SCRATCH_ROOT", str(tmp_path / "scratch"))
     for name in (
         "SP_CHAT_RUN_ID",
@@ -340,25 +322,51 @@ async def test_execute_materializes_the_frozen_project_before_starting_the_agent
     ):
         monkeypatch.delenv(name, raising=False)
 
-    def gateway_get(url: str, **_kwargs: object) -> httpx.Response:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+        payload = b"name: test_project\n"
+        info = tarfile.TarInfo("dbt_project.yml")
+        info.size = len(payload)
+        tar.addfile(info, io.BytesIO(payload))
+    tarball = buffer.getvalue()
+
+    def gateway_get(url: str, **kwargs: object) -> httpx.Response:
+        assert url.endswith(f"/api/workspace-projects/{project_id}/snapshot")
+        assert kwargs["params"] == {"branch": "main"}
+        captured["snapshot_auth"] = dict(kwargs["headers"])["Authorization"]
         return httpx.Response(
             200,
             request=httpx.Request("GET", url),
-            json={
-                "clone_url": str(bare),
-                "auth_token": "",
-                "auth_username": "x-access-token",
-                "default_branch": "main",
-            },
+            json={"revision": 7, "url": "https://s3.test/snap.tgz", "key": "k"},
         )
 
+    class FakeStream:
+        def __enter__(self) -> "FakeStream":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def iter_bytes(self):
+            yield tarball
+
+    def gateway_stream(method: str, url: str, **_kwargs: object) -> FakeStream:
+        assert (method, url) == ("GET", "https://s3.test/snap.tgz")
+        return FakeStream()
+
     async def run_agent(_prompt: str, _session_id: object, **kwargs: object):
+        # Capture while the run is live: the disposable checkout is removed
+        # when the stream finishes, so nothing can be read after the fact.
         cwd = Path(str(kwargs["cwd"]))
         captured["cwd"] = str(cwd)
-        captured["head"] = _git(cwd, "rev-parse", "HEAD")
+        captured["dbt_project_yml"] = (cwd / "dbt_project.yml").read_text(encoding="utf-8")
         yield AgentEvent(type="text", content="Done")
 
-    monkeypatch.setattr(project_sync.httpx, "get", gateway_get)
+    monkeypatch.setattr(standalone_chat.httpx, "get", gateway_get)
+    monkeypatch.setattr(standalone_chat.httpx, "stream", gateway_stream)
     monkeypatch.setattr(standalone_chat, "run_notebook_agent", run_agent)
 
     token = _scoped_token(
@@ -386,8 +394,12 @@ async def test_execute_materializes_the_frozen_project_before_starting_the_agent
         "content": "Done",
         "artifacts": [],
     }
-    assert captured["head"] == commit_sha
-    assert Path(captured["cwd"]).is_relative_to(projects_root)
+    checkout = Path(captured["cwd"])
+    assert checkout.is_relative_to(projects_root / ".standalone-chat" / project_id)
+    assert captured["dbt_project_yml"] == "name: test_project\n"
+    assert captured["snapshot_auth"] == f"Bearer {token}"
+    # Disposable scratch: the checkout is gone once the stream completes.
+    assert not checkout.exists()
 
 
 @pytest.mark.asyncio
@@ -547,12 +559,14 @@ async def test_dirty_notebook_is_reset_and_only_clean_retry_answer_is_emitted(
     ]
 
     assert [event["type"] for event in events] == [
+        "text_delta",
         "progress",
         "tool_use",
         "tool_result",
+        "text_delta",
         "final",
     ]
-    assert events[0]["content"] == "Restarting analysis in a clean notebook"
+    assert events[1]["content"] == "Restarting analysis in a clean notebook"
     assert events[-1] == {
         "archive_id": "archive-clean",
         "artifacts": [{"filename": "accepted.csv"}],
@@ -560,7 +574,10 @@ async def test_dirty_notebook_is_reset_and_only_clean_retry_answer_is_emitted(
         "kernel_stopped": True,
         "type": "final",
     }
-    assert "REJECTED LEAK" not in json.dumps(events)
+    # Narration streams live (including from the rejected attempt), but the
+    # accepted answer is built only from the validated attempt's text blocks.
+    assert events[0]["content"] == "REJECTED LEAK"
+    assert "REJECTED LEAK" not in events[-1]["content"]
     assert closed == ["kernel-1", "kernel-2"]
     assert clean_starts == [seeded_paths[0]]
     assert archived == ["kernel-2"]
@@ -684,9 +701,11 @@ async def test_two_dirty_attempts_emit_one_validation_error_and_no_final(
     ]
 
     assert [event["type"] for event in events] == [
+        "text_delta",
         "progress",
         "tool_use",
         "tool_result",
+        "text_delta",
         "error",
     ]
     assert events[-1] == {
@@ -694,8 +713,6 @@ async def test_two_dirty_attempts_emit_one_validation_error_and_no_final(
         "is_error": True,
         "type": "error",
     }
-    assert all(
-        event["type"] not in {"final", "text", "text_delta"}
-        for event in events
-    )
+    # Narration may stream, but a rejected run never emits an accepted answer.
+    assert all(event["type"] not in {"final", "text"} for event in events)
     assert archive_calls == []

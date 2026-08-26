@@ -48,6 +48,11 @@ class NotebookRuntime:
     session_id: str
     internal_base_url: str
     public_base_url: str
+    # The session's runtime auth token (the notebook server's password).
+    # In-gateway callers dialing internal_base_url directly must send it as
+    # Authorization: Bearer, exactly like the notebook proxy does. Never
+    # serialize this object into an API response.
+    access_token: str | None = None
 
 
 class NotebookSessionError(RuntimeError):
@@ -197,6 +202,7 @@ async def runtime_for_session(
         session_id=session_info.id,
         internal_base_url=upstream_base_for(internal),
         public_base_url=_public_base_url(session_info.id),
+        access_token=internal.access_token,
     )
 
 

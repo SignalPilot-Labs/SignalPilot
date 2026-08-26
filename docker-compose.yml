@@ -321,6 +321,7 @@ services:
 
   # Web frontend.
   web:
+    image: ${WEB_IMAGE:-signalpilot-web:latest}
     build:
       context: .
       dockerfile: Dockerfile.web

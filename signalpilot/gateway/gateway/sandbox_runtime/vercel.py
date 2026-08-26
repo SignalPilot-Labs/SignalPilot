@@ -188,12 +188,20 @@ class VercelSandboxRuntime:
             sandbox_tags = dict(sandbox.tags or {})
             if tags and any(sandbox_tags.get(key) != value for key, value in tags.items()):
                 continue
+            created_at = getattr(sandbox, "created_at", None)
+            created_at_epoch: float | None = None
+            if isinstance(created_at, (int, float)) and created_at > 0:
+                # The API reports epoch milliseconds.
+                created_at_epoch = (
+                    created_at / 1000.0 if created_at > 1e12 else float(created_at)
+                )
             rows.append(
                 SandboxInfo(
                     sandbox_id=str(sandbox.name),
                     status=str(sandbox.status or "unknown"),
                     tags=sandbox_tags,
                     snapshot_id=getattr(sandbox, "current_snapshot_id", None),
+                    created_at_epoch=created_at_epoch,
                 )
             )
         return rows

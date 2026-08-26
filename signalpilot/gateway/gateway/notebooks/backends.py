@@ -279,8 +279,19 @@ class VercelNotebookBackend:
         except Exception:
             logger.warning("Notebook sandbox inventory failed; skipping reap", exc_info=True)
             return 0
+        # A launching sandbox is tagged before its session row carries the
+        # runtime handle (the handle is only persisted once launch returns),
+        # so a freshly created sandbox is indistinguishable from an orphan.
+        # Grant every sandbox a grace window covering the slowest launch.
+        grace_seconds = max(self._settings.start_timeout_seconds * 2, 900)
+        now = time.time()
         for info in rows:
             if info.sandbox_id in keep_handles:
+                continue
+            if (
+                info.created_at_epoch is not None
+                and now - info.created_at_epoch < grace_seconds
+            ):
                 continue
             try:
                 await self._runtime.destroy(info.sandbox_id)

@@ -16,8 +16,10 @@ from .budget import router as budget_router
 from .byok import router as byok_router
 from .cache import router as cache_router
 from .chat import router as chat_router
+from .chat_reports import router as chat_reports_router
 from .chat_traces import router as chat_traces_router
 from .connections import router as connections_router
+from .dashboards import router as dashboards_router
 from .demo import router as demo_router
 from .eval_runs import router as eval_runs_router
 from .files import router as files_router
@@ -56,6 +58,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(settings_router)
     app.include_router(connections_router)
     app.include_router(demo_router)
+    app.include_router(dashboards_router)
     app.include_router(schema_router)
     if not is_cloud_mode():
         app.include_router(sandboxes_router)
@@ -80,6 +83,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(workspace_projects_router)
     app.include_router(workspace_files_router)
     app.include_router(standalone_chat_router)
+    app.include_router(chat_reports_router)
     app.include_router(chat_router)
     app.include_router(chat_traces_router)
     app.include_router(agent_runs_router)

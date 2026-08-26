@@ -17,6 +17,8 @@ from gateway.api.schema._router import router
 from gateway.api.schema._semantic_store import _load_semantic_model
 from gateway.connectors.pool_manager import pool_manager
 from gateway.connectors.schema_cache import schema_cache
+from gateway.dashboard.authoring import compact_semantic_projection
+from gateway.dashboard.semantic_resolver import DashboardSemanticError, DashboardSemanticResolver
 from gateway.schema.utils import (
     _deduplicate_partitioned_tables,
     _infer_implicit_joins,
@@ -46,6 +48,12 @@ async def get_agent_context(
     ),
     full_ddl_count: int = Query(
         default=8, ge=1, le=50, description="Number of top-scoring tables to show full DDL for (when progressive=true)"
+    ),
+    dashboard_project_id: str | None = Query(
+        default=None, description="Optional project whose governed dashboard semantic projection is included"
+    ),
+    dashboard_commit_sha: str | None = Query(
+        default=None, min_length=40, max_length=40, description="Immutable commit for dashboard semantic context"
     ),
 ):
     """Single-call schema context optimized for SQL generation agents (Spider2.0 pattern).
@@ -369,4 +377,21 @@ async def get_agent_context(
             "compact_tables": len(compact_keys),
             "full_ddl_count_param": full_ddl_count,
         }
+    if bool(dashboard_project_id) != bool(dashboard_commit_sha):
+        raise HTTPException(
+            status_code=422,
+            detail="dashboard_project_id and dashboard_commit_sha must be supplied together",
+        )
+    if dashboard_project_id and dashboard_commit_sha:
+        try:
+            dashboard_context = await DashboardSemanticResolver().resolve(
+                store,
+                project_id=dashboard_project_id,
+                commit_sha=dashboard_commit_sha,
+            )
+        except DashboardSemanticError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if dashboard_context.connection_name != name:
+            raise HTTPException(status_code=422, detail="Dashboard project does not use this connection")
+        result["dashboard_semantic_context"] = compact_semantic_projection(dashboard_context)
     return result

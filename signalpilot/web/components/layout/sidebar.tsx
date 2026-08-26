@@ -188,6 +188,7 @@ const navGroups: { label: string | null; items: NavItem[] }[] = [
     items: [
       { href: "/chats", label: "Chats", icon: NavIconChats, shortcut: "" },
       { href: "/reports", label: "Reports", icon: NavIconReports, shortcut: "9" },
+      { href: "/dashboards", label: "Dashboards", icon: NavIconDashboard, shortcut: "" },
       { href: "/audit", label: "Audit", icon: NavIconAudit, shortcut: "7" },
     ],
   },

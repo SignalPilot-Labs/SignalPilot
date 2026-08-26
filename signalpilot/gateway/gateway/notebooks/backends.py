@@ -32,7 +32,8 @@ logger = logging.getLogger(__name__)
 
 NOTEBOOK_PORT = 2718
 NOTEBOOK_SANDBOX_TAG = {"sp-purpose": "notebook"}
-_TOKEN_FILE = "/tmp/sp-notebook-token"
+# This path exists only inside the isolated notebook sandbox.
+_TOKEN_FILE = "/tmp/sp-notebook-token"  # nosec B108
 _HEALTH_POLL_SECONDS = 2.0
 
 

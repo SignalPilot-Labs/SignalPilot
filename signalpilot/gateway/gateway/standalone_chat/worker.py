@@ -132,6 +132,26 @@ def _warm_context(
         }
         for result in context.get("query_results", [])
     ]
+    report_reference = next(
+        (
+            message.metadata_json.get("report_reference")
+            for message in reversed(context.get("messages", []))
+            if message.role == "user"
+            and isinstance(message.metadata_json, dict)
+            and isinstance(message.metadata_json.get("report_reference"), dict)
+        ),
+        None,
+    )
+    dashboard_chart_reference = next(
+        (
+            message.metadata_json.get("dashboard_chart_reference")
+            for message in reversed(context.get("messages", []))
+            if message.role == "user"
+            and isinstance(message.metadata_json, dict)
+            and isinstance(message.metadata_json.get("dashboard_chart_reference"), dict)
+        ),
+        None,
+    )
     return {
         "project": {
             "id": project.id,
@@ -146,6 +166,8 @@ def _warm_context(
         "prior_artifacts": artifact_refs,
         "query_decisions": query_decisions,
         "structured_results": result_refs,
+        "report_reference": report_reference,
+        "dashboard_chart_reference": dashboard_chart_reference,
         "runtime": {
             "gateway_version": gateway_version,
             "plugin_version": os.getenv("SIGNALPILOT_PLUGIN_VERSION", "deployed"),
@@ -273,11 +295,11 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
     renewer = asyncio.create_task(_lease_renewer(run_id, worker_id, stop))
     worker_task = asyncio.current_task()
     assert worker_task is not None
-    cancellation = asyncio.create_task(
-        _cancellation_monitor(run_id, worker_id, stop, worker_task)
-    )
+    cancellation = asyncio.create_task(_cancellation_monitor(run_id, worker_id, stop, worker_task))
     final_text = ""
     streamed_text = ""
+    report_proposal: dict[str, Any] | None = None
+    report_action_outcome: dict[str, Any] | None = None
     starts_new_text_block = False
     tool_names_by_id: dict[str, str] = {}
     try:
@@ -315,6 +337,19 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                     else None
                 ),
             )
+            report_reference = warm_context.get("report_reference")
+            if isinstance(report_reference, dict) and report_reference.get("report_id"):
+                from gateway.store import chat_reports as report_store
+
+                report_context = await report_store.load_report_context(
+                    db,
+                    org_id=run.org_id,
+                    user_id=run.user_id,
+                    project_id=run.project_id,
+                    report_id=str(report_reference["report_id"]),
+                )
+                if report_context is not None:
+                    warm_context["report_context"] = report_context.model_dump(mode="json")
 
         await _append(
             run_id,
@@ -451,6 +486,12 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                         raise RuntimeError(content or "Notebook analysis failed")
                     elif event_type == "final":
                         final_text = content or final_text or streamed_text
+                        raw_report_proposal = event.get("report_proposal")
+                        report_proposal = raw_report_proposal if isinstance(raw_report_proposal, dict) else None
+                        raw_report_action_outcome = event.get("report_action_outcome")
+                        report_action_outcome = (
+                            raw_report_action_outcome if isinstance(raw_report_action_outcome, dict) else None
+                        )
                         await _persist_artifacts(
                             run_id=run_id,
                             worker_id=worker_id,
@@ -509,6 +550,8 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                 run_id=run_id,
                 worker_id=worker_id,
                 content=answer,
+                report_proposal=report_proposal,
+                report_action_outcome=report_action_outcome,
             )
         if message is not None:
             await _update_summary(run_id)

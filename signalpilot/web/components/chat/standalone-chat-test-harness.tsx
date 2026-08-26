@@ -180,13 +180,19 @@ export function StandaloneChatTestHarness() {
           {(elapsed / 1000).toFixed(1)}s · {progress}%
         </span>
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto" data-testid="chat-test-viewport">
+      <div
+        className="min-h-0 flex-1 overflow-y-auto"
+        data-testid="chat-test-viewport"
+      >
         <ChatUiContext.Provider
           value={{
             events,
             artifacts,
             onStop: async () => undefined,
             onRetry: async () => undefined,
+            onApproveReportSuggestion: async () => ({
+              report_id: "test-harness-report",
+            }),
           }}
         >
           <div className="py-6" data-testid="standalone-chat-messages">

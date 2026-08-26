@@ -58,8 +58,8 @@ function findElementForCell(cellId: CellId): HTMLElement | undefined {
 
 const THRESHOLD_TIME_MS = 500;
 const HIDE_SCROLLBAR_STYLES = `
-  * { scrollbar-width: none; -ms-overflow-style: none; }
-  *::-webkit-scrollbar { display: none; }
+  .sp-image-export, .sp-image-export * { scrollbar-width: none; -ms-overflow-style: none; }
+  .sp-image-export *::-webkit-scrollbar { display: none; }
 `;
 
 /**
@@ -84,16 +84,25 @@ export async function getImageDataUrlForCell(
   }
 
   const startTime = Date.now();
-  const dataUrl = await toPng(element, {
-    extraStyleContent: HIDE_SCROLLBAR_STYLES,
-    // Add these styles so the element output is not clipped
-    // Width can be clipped since pdf has limited width
-    style: {
-      maxHeight: "none",
-      overflow: "visible",
-    },
-    height: element.scrollHeight,
-  });
+  const style = document.createElement("style");
+  style.textContent = HIDE_SCROLLBAR_STYLES;
+  document.head.appendChild(style);
+  element.classList.add("sp-image-export");
+  let dataUrl: string;
+  try {
+    dataUrl = await toPng(element, {
+      // Add these styles so the element output is not clipped
+      // Width can be clipped since pdf has limited width
+      style: {
+        maxHeight: "none",
+        overflow: "visible",
+      },
+      height: element.scrollHeight,
+    });
+  } finally {
+    element.classList.remove("sp-image-export");
+    style.remove();
+  }
   const timeTaken = Date.now() - startTime;
   if (timeTaken > THRESHOLD_TIME_MS) {
     Logger.debug(

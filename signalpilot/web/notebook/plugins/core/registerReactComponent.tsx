@@ -22,8 +22,8 @@ import ReactDOM, { type Root } from "react-dom/client";
 import useEvent from "react-use-event-hook";
 import { type ZodSchema, z } from "zod";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { notebookAtom } from "@/core/cells/cells.ts";
-import { HTMLCellId } from "@/core/cells/ids.ts";
+import { notebookAtom } from "@/core/cells/cells";
+import { HTMLCellId } from "@/core/cells/ids";
 import { isUninstantiated } from "@/core/cells/utils";
 import { createInputEvent, SpValueUpdateEvent } from "@/core/dom/events";
 import { getUIElementObjectId } from "@/core/dom/ui-element";
@@ -39,7 +39,7 @@ import {
 } from "@/hooks/useEventListener";
 import { StyleNamespace } from "@/theme/namespace";
 import { useTheme } from "@/theme/useTheme";
-import { CellNotInitializedError } from "@/utils/errors.ts";
+import { CellNotInitializedError } from "@/utils/errors";
 import { Functions } from "@/utils/functions";
 import { shallowCompare } from "@/utils/shallow-compare";
 import { defineCustomElement } from "../../core/dom/defineCustomElement";
@@ -242,7 +242,7 @@ function PluginSlotInternal<T>(
       Objects.mapValues(hostElement.dataset, (value) =>
         typeof value === "string" ? parseAttrValue(value) : value,
       ),
-      hostElement.shadowRoot ?? hostElement,
+      hostElement.shadowRoot,
     );
   }
 

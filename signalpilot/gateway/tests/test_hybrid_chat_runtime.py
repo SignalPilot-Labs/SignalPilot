@@ -41,6 +41,7 @@ def _route(
     supported: bool = True,
     justified: bool = False,
     raw_export: bool = False,
+    notebook_analysis: bool = True,
 ):
     return choose_query_route(
         execution_need=execution_need,  # type: ignore[arg-type]
@@ -51,6 +52,7 @@ def _route(
         connector_supports_datasets=supported,
         row_level_analysis_justified=justified,
         raw_export_requested=raw_export,
+        notebook_analysis_enabled=notebook_analysis,
     )
 
 
@@ -204,6 +206,34 @@ def test_track_b_requires_flag_connector_support_and_row_level_justification():
         justified=True,
         raw_export=True,
     )[0] == "refuse"
+
+
+@pytest.mark.parametrize("execution_need", ["sql", "python"])
+def test_notebook_routes_are_not_selected_when_notebook_analysis_is_disabled(
+    execution_need,
+):
+    assert _route(
+        rows=MCP_MAX_ROWS + 1,
+        byte_size=1,
+        execution_need=execution_need,
+        notebook_analysis=False,
+    ) == (
+        "aggregate_required",
+        "Notebook analysis is disabled; rewrite the work as a bounded warehouse aggregate.",
+        None,
+    )
+
+    assert (
+        _route(
+            rows=TRACK_A_MAX_ROWS + 1,
+            byte_size=1,
+            track_b=True,
+            supported=True,
+            justified=True,
+            notebook_analysis=False,
+        )[0]
+        == "aggregate_required"
+    )
 
 
 def test_routes_are_deterministic_for_identical_inputs():
@@ -445,3 +475,47 @@ def test_runtime_archive_html_injects_a_head_when_one_is_missing():
 
     assert sanitized.startswith('<html><head><meta http-equiv="Content-Security-Policy"')
     assert "connect-src 'none'" in sanitized
+
+
+@pytest.mark.asyncio
+async def test_mssql_estimate_separates_large_scan_from_small_top_n_output():
+    class Connector:
+        def __init__(self):
+            self.statements = []
+
+        async def execute(self, sql: str):
+            self.statements.append(sql)
+            if sql.startswith("SET SHOWPLAN_ALL"):
+                return []
+            # SHOWPLAN_ALL lists the root first, then operators depth-first.
+            return [
+                {"StmtText": "SELECT TOP 10 ...", "EstimateRows": 10, "TotalSubtreeCost": 4.2},
+                {"StmtText": "  |--Sort(...)", "EstimateRows": 850, "TotalSubtreeCost": 4.0},
+                {"StmtText": "    |--Clustered Index Scan(...)", "EstimateRows": 1_200_000, "TotalSubtreeCost": 3.5},
+            ]
+
+    estimate = await CostEstimator.estimate_mssql(
+        Connector(), "SELECT TOP 10 market, SUM(x) FROM f GROUP BY market"
+    )
+
+    assert estimate.estimated_scan_rows == 1_200_000
+    assert estimate.estimated_output_rows == 10
+    assert _route(
+        rows=estimate.estimated_output_rows,
+        byte_size=estimate.estimated_output_rows * 512,
+    )[0] == "mcp"
+
+
+def test_explicit_row_limit_caps_the_router_input_regardless_of_dialect():
+    from gateway.governance.query_planner import _explicit_row_limit
+
+    assert _explicit_row_limit("SELECT TOP 10 a FROM t GROUP BY a", "tsql") == 10
+    assert _explicit_row_limit("SELECT a FROM t LIMIT 25", "duckdb") == 25
+    assert (
+        _explicit_row_limit(
+            "SELECT a FROM t ORDER BY a OFFSET 0 ROWS FETCH NEXT 15 ROWS ONLY", "tsql"
+        )
+        == 15
+    )
+    assert _explicit_row_limit("SELECT a FROM t", "tsql") is None
+    assert _explicit_row_limit("not sql at all (", "tsql") is None

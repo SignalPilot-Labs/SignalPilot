@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.auth.notebook_jwt import mint_session_jwt
-from gateway.config.k8s import get_k8s_settings
+from gateway.config.gateway import get_gateway_settings
 from gateway.db.models import (
     GatewayChatConversation,
     GatewayChatObjectDeletion,
@@ -159,7 +159,7 @@ async def prepare_execution(
             capabilities=capabilities,
             execution_identity=f"chat:{run.id}",
             scopes=["read", "query", "execute"],
-            ttl=get_k8s_settings().sp_session_jwt_ttl_seconds,
+            ttl=get_gateway_settings().sp_session_jwt_ttl_seconds,
         ),
         "prompt": prompt,
         "messages": messages,

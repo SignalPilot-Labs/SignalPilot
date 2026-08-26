@@ -7,6 +7,8 @@ interface DatabaseLogoProps {
   className?: string;
 }
 
+export type DBLogoName = string;
+
 export const DatabaseLogo: FC<DatabaseLogoProps> = ({ name, className }) => {
   return <DatabaseIcon className={cn("mt-0.5", className)} />;
 };

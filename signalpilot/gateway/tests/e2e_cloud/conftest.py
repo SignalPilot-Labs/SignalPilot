@@ -183,6 +183,11 @@ def _child_env(workdir: Path, database_url: str, port: int, publishable_key: str
     from cryptography.fernet import Fernet
 
     base_url = f"http://127.0.0.1:{port}"
+    resolved_workdir = workdir.resolve()
+    repos_dir = (workdir / "repos").resolve()
+    assert repos_dir.is_relative_to(resolved_workdir), (
+        f"cloud E2E repositories must stay inside the fixture directory: {repos_dir}"
+    )
     env = {
         k: v for k, v in os.environ.items()
         if k.upper() in {
@@ -206,9 +211,6 @@ def _child_env(workdir: Path, database_url: str, port: int, publishable_key: str
         "SP_SESSION_JWT_SECRET": session_jwt_secret,
 
         # ── cloud hardening kill-switches (assert_cloud_hardening_intact) ─────
-        "SP_NOTEBOOK_RUNTIME_CLASS": "gvisor",
-        "SP_NOTEBOOK_IMAGE": "registry.invalid/notebook@sha256:0000000000000000000000000000000000000000000000000000000000000000",
-        "SP_NOTEBOOK_NETWORK_POLICY": "true",
         "SP_DISABLE_SANDBOX": "false",
         "SP_ALLOWED_ORIGINS": base_url,
 
@@ -219,7 +221,7 @@ def _child_env(workdir: Path, database_url: str, port: int, publishable_key: str
         "SP_PUBLIC_GATEWAY_URL": base_url,
         "SP_PUBLIC_GATEWAY_PORT": str(port),
         "SP_RATE_LIMIT_ENABLED": "false",
-        "SP_GIT_REPOS_DIR": str(workdir / "repos"),
+        "SP_REPOS_DIR": str(repos_dir),
         "SP_DATA_DIR": str(workdir / "data"),
 
         # Platform-staff allowlist. Without it the default is {"local"} and no
@@ -245,7 +247,7 @@ def _child_env(workdir: Path, database_url: str, port: int, publishable_key: str
 
 
 def _boot(env: dict[str, str], port: int, workdir: Path, label: str):
-    """Launch uvicorn and wait for /health. pytest.skip on failure, never fail."""
+    """Launch uvicorn and fail the authorization job when gateway boot fails."""
     base_url = f"http://127.0.0.1:{port}"
     log_path = workdir / f"gateway-{label}.log"
     log_fh = open(log_path, "w", encoding="utf-8")
@@ -262,14 +264,14 @@ def _boot(env: dict[str, str], port: int, workdir: Path, label: str):
     deadline = time.time() + BOOT_TIMEOUT_SECONDS
     while time.time() < deadline:
         if proc.poll() is not None:
-            pytest.skip(f"[{label}] gateway exited during boot (rc={proc.returncode}):\n{tail()}")
+            pytest.fail(f"[{label}] gateway exited during boot (rc={proc.returncode}):\n{tail()}")
         try:
             if httpx.get(f"{base_url}/health", timeout=3).status_code < 500:
                 return proc, log_fh, log_path
         except Exception:
             time.sleep(0.5)
     proc.terminate()
-    pytest.skip(f"[{label}] gateway not healthy in {BOOT_TIMEOUT_SECONDS}s:\n{tail()}")
+    pytest.fail(f"[{label}] gateway not healthy in {BOOT_TIMEOUT_SECONDS}s:\n{tail()}")
 
 
 def _shutdown(proc: subprocess.Popen, log_fh) -> None:

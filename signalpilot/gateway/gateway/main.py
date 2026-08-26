@@ -38,12 +38,14 @@ from .http import (
     SecurityHeadersMiddleware,
     enforce_principal_rate_limit,
 )
+from .http.log_redaction import install_uvicorn_secret_path_filter, redact_secret_path
 from .models import ConnectionUpdate
 from .runtime.mode import is_cloud_mode
 from .store import Store, configure_byok
 from .store.crypto import _validate_encryption_health
 
 logger = logging.getLogger(__name__)
+install_uvicorn_secret_path_filter()
 
 
 # Lifespan.
@@ -380,24 +382,6 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("Notebook lifecycle loop error: %s", e)
 
-    async def _eval_pod_reaper_loop():
-        """Eval pods stranded by a gateway restart mid-run: the run path
-        deletes its pod in a finally, but bare pods have no TTL, so a crash
-        leaves them Completed forever without this sweep."""
-        from .orchestrator.kubernetes import KubernetesOrchestrator
-
-        orch = KubernetesOrchestrator()
-        while True:
-            await asyncio.sleep(300)
-            try:
-                from .evals.backends import reap_terminal_eval_pods
-
-                reaped = await reap_terminal_eval_pods(orch)
-                if reaped:
-                    logger.info("Eval-pod reaper: deleted %d terminal pod(s)", reaped)
-            except Exception as e:
-                logger.warning("Eval-pod reaper error: %s", e)
-
     async def _knowledge_retention_loop():
         """Prune knowledge retrieval events past the retention window.
 
@@ -491,7 +475,6 @@ async def lifespan(app: FastAPI):
     cleanup_task = asyncio.create_task(_pool_cleanup_loop())
     refresh_task = asyncio.create_task(_schema_refresh_loop())
     notebook_lifecycle_task = asyncio.create_task(_notebook_lifecycle_loop())
-    eval_pod_reaper_task = asyncio.create_task(_eval_pod_reaper_loop())
     knowledge_retention_task = asyncio.create_task(_knowledge_retention_loop())
     schema_watch_task = asyncio.create_task(_schema_watch_loop())
     eval_reaper_task = asyncio.create_task(_eval_reaper_loop())
@@ -548,7 +531,6 @@ async def lifespan(app: FastAPI):
         cleanup_task.cancel()
         refresh_task.cancel()
         notebook_lifecycle_task.cancel()
-        eval_pod_reaper_task.cancel()
         knowledge_retention_task.cancel()
         schema_watch_task.cancel()
         eval_reaper_task.cancel()
@@ -655,7 +637,7 @@ async def _global_exception_handler(request: Request, exc: Exception) -> JSONRes
     logger.exception(
         "Unhandled exception in %s %s",
         request.method,
-        request.url.path,
+        redact_secret_path(request.url.path),
     )
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 

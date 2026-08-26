@@ -132,64 +132,9 @@ async def _seed_run(factory, org_id: str, run_id: str, *, pod: str, task_id: str
             run_id=run_id,
             task_id=task_id,
             status="running",
-            sandbox={"backend": "kubernetes", "name": pod, "namespace": f"sp-nb-{org_id}"},
+            sandbox={"backend": "vercel", "name": pod, "namespace": ""},
         )
         await evals_store.update_run(session, org_id=org_id, run_id=run_id, status="running")
-
-
-def _pod(name: str, *, phase: str = "Running", waiting: str = "", node: str = "ip-10-0-1-7") -> dict:
-    state: dict = {"running": {"started_at": "2026-01-01T00:00:11+00:00"}}
-    if waiting:
-        state = {"waiting": {"reason": waiting, "message": f"pulling with {OAUTH_TOKEN}"}}
-    return {
-        "metadata": {
-            "name": name,
-            "namespace": "sp-nb-org",
-            "labels": {
-                "signalpilot.ai/eval": "1",
-                "signalpilot.ai/eval-run": RUN_A,
-                "signalpilot.ai/eval-question": "t1-fan-out",
-            },
-            "creation_timestamp": "2026-01-01T00:00:00+00:00",
-        },
-        "spec": {
-            "node_name": node,
-            # The real pod spec carries these; the panel must never echo them back.
-            "containers": [
-                {
-                    "name": "eval",
-                    "env": [
-                        {"name": "SP_MCP_JSON_B64", "value": MCP_KEY_B64},
-                        {"name": "ANTHROPIC_API_KEY", "value": ANTHROPIC_KEY},
-                    ],
-                }
-            ],
-        },
-        "status": {
-            "phase": phase,
-            "start_time": "2026-01-01T00:00:05+00:00",
-            "container_statuses": [
-                {"name": "eval", "ready": phase == "Running" and not waiting, "restart_count": 1, "state": state}
-            ],
-        },
-    }
-
-
-def _fake_core(pods: list[dict] | None = None, events: list[dict] | None = None) -> MagicMock:
-    core = MagicMock()
-    core.list_namespaced_pod = AsyncMock(return_value={"items": pods or []})
-    core.list_namespaced_event = AsyncMock(return_value={"items": events or []})
-    return core
-
-
-def _patch_k8s_view(core: MagicMock, namespace: str = "sp-nb-org"):
-    """Wire KubernetesSandboxView onto a mocked cluster."""
-
-    async def _connect(self):
-        self._namespace = namespace
-        return core, namespace
-
-    return patch.object(sandboxes.KubernetesSandboxView, "_connect", _connect)
 
 
 def _patch_owners(monkeypatch, owners: dict[str, dict] | None = None) -> None:
@@ -329,118 +274,17 @@ class TestRedaction:
 
 
 class TestInventory:
-    async def test_pod_is_shaped_for_the_panel(self, monkeypatch) -> None:
-        _patch_owners(
-            monkeypatch,
-            {
-                POD_A: {
-                    "run_id": RUN_A,
-                    "task_id": "t1:fan/out",
-                    "task_title": "task for org-a",
-                }
-            },
-        )
-        core = _fake_core([_pod(POD_A)])
-        view = sandboxes.KubernetesSandboxView(EvalRunSettings(), org_id="org-a")
-        with _patch_k8s_view(core):
-            body = await view.inventory()
-        (sb,) = body["sandboxes"]
-        assert body["backend"] == "kubernetes" and body["live"] is True
-        assert sb["name"] == POD_A
-        assert sb["phase"] == "running"
-        assert sb["reason"] == "Running"
-        assert sb["node"] == "ip-10-0-1-7"
-        assert sb["restart_count"] == 1
-        assert sb["age_seconds"] is not None
-        assert sb["run_id"] == RUN_A
-        # Exact id from run state, not the label-sanitized "t1-fan-out".
-        assert sb["task_id"] == "t1:fan/out"
-        assert sb["task_title"] == "task for org-a"
-
-    async def test_waiting_pod_reports_its_reason(self, monkeypatch) -> None:
-        _patch_owners(monkeypatch)
-        core = _fake_core([_pod(POD_A, phase="Pending", waiting="ImagePullBackOff")])
-        view = sandboxes.KubernetesSandboxView(EvalRunSettings(), org_id="org-a")
-        with _patch_k8s_view(core):
-            body = await view.inventory()
-        (sb,) = body["sandboxes"]
-        assert sb["phase"] == "pending"
-        assert sb["reason"] == "ImagePullBackOff"
-        assert sb["ready"] is False
-
-    async def test_missing_namespace_is_an_empty_list_not_an_error(self, monkeypatch) -> None:
-        _patch_owners(monkeypatch)
-        core = _fake_core()
-        core.list_namespaced_pod = AsyncMock(side_effect=RuntimeError("(404) Not Found"))
-        view = sandboxes.KubernetesSandboxView(EvalRunSettings(), org_id="org-a")
-        with _patch_k8s_view(core):
-            body = await view.inventory()
-        assert body["sandboxes"] == [] and body["live"] is True
-
-    async def test_no_cluster_degrades_honestly(self) -> None:
-        view = sandboxes.KubernetesSandboxView(EvalRunSettings(), org_id="org-a")
-
-        async def _no_client(self):
-            return None, ""
-
-        with patch.object(sandboxes.KubernetesSandboxView, "_connect", _no_client):
-            body = await view.inventory()
-        assert body["live"] is False
-        assert "unavailable" in body["message"].lower()
-        assert body["sandboxes"] == []
-
-    async def test_only_eval_pods_are_listed(self, monkeypatch) -> None:
-        _patch_owners(monkeypatch)
-        core = _fake_core([_pod(POD_A)])
-        view = sandboxes.KubernetesSandboxView(EvalRunSettings(), org_id="org-a")
-        with _patch_k8s_view(core):
-            await view.inventory()
-        assert core.list_namespaced_pod.await_args.kwargs["label_selector"] == "signalpilot.ai/eval=1"
-
     def test_view_requires_an_org(self) -> None:
         with pytest.raises(ValueError, match="org_id"):
-            sandboxes.KubernetesSandboxView(EvalRunSettings(), org_id="")
-        with pytest.raises(ValueError, match="org_id"):
             sandboxes.DockerSandboxView(EvalRunSettings(), org_id="")
+        with pytest.raises(ValueError, match="org_id"):
+            sandboxes.VercelSandboxView(EvalRunSettings(), org_id="")
 
 
 # Verify events.
 
 
-def _event(reason: str, message: str, *, type_: str = "Warning") -> dict:
-    return {
-        "type": type_,
-        "reason": reason,
-        "message": message,
-        "count": 3,
-        "first_timestamp": "2026-01-01T00:00:00+00:00",
-        "last_timestamp": "2026-01-01T00:00:30+00:00",
-        "source": {"component": "kubelet"},
-    }
-
-
 class TestEvents:
-    async def test_events_are_shaped_and_field_selected(self) -> None:
-        core = _fake_core(events=[_event("FailedScheduling", "0/3 nodes are available")])
-        view = sandboxes.KubernetesSandboxView(EvalRunSettings(), org_id="org-a")
-        with _patch_k8s_view(core):
-            body = await view.events(POD_A)
-        (ev,) = body["events"]
-        assert ev["reason"] == "FailedScheduling"
-        assert ev["type"] == "Warning"
-        assert ev["count"] == 3
-        assert ev["source"] == "kubelet"
-        selector = core.list_namespaced_event.await_args.kwargs["field_selector"]
-        assert f"involvedObject.name={POD_A}" in selector
-        assert "involvedObject.kind=Pod" in selector
-
-    async def test_event_messages_are_redacted(self) -> None:
-        core = _fake_core(events=[_event("Failed", f"pull failed, auth {OAUTH_TOKEN}")])
-        view = sandboxes.KubernetesSandboxView(EvalRunSettings(), org_id="org-a")
-        with _patch_k8s_view(core):
-            body = await view.events(POD_A)
-        assert OAUTH_TOKEN not in json.dumps(body)
-
     async def test_docker_says_events_are_unsupported_rather_than_faking_them(self) -> None:
         view = sandboxes.DockerSandboxView(EvalRunSettings(), org_id="org-a")
         try:
@@ -455,32 +299,6 @@ class TestEvents:
 
 
 class TestCrossOrgIsolation:
-    async def test_each_org_reads_its_own_namespace(self, monkeypatch) -> None:
-        """Namespace resolution is the boundary. the org id must reach it."""
-        _patch_owners(monkeypatch)
-        seen: list[str] = []
-
-        class _Orch:
-            _core_api = _fake_core()
-            _namespace_prefix = "sp-nb"
-
-            async def _ensure_client(self):
-                return None
-
-            def _resolve_namespace(self, org_id):
-                seen.append(org_id)
-                return f"sp-nb-{org_id}"
-
-            async def close(self):
-                return None
-
-        with patch("gateway.orchestrator.kubernetes.KubernetesOrchestrator", _Orch):
-            for org in ("org-a", "org-b"):
-                view = sandboxes.KubernetesSandboxView(EvalRunSettings(), org_id=org)
-                body = await view.inventory()
-                assert body["namespace"] == f"sp-nb-{org}"
-        assert seen == ["org-a", "org-b"]
-
     async def test_sandbox_index_is_per_org(self, db) -> None:
         await _seed_run(db, "org-a", RUN_A, pod=POD_A)
         await _seed_run(db, "org-b", RUN_B, pod=POD_B)
@@ -520,7 +338,7 @@ class TestCrossOrgIsolation:
         class _View:
             async def inventory(self):
                 return {
-                    "backend": "kubernetes",
+                    "backend": "vercel",
                     "live": True,
                     "sandboxes": [],
                     "namespace": "",
@@ -553,22 +371,6 @@ class TestNoSecretLeakage:
     def _assert_clean(self, body: str) -> None:
         for secret in self._SECRETS:
             assert secret not in body, f"leaked {secret[:12]}… in response"
-
-    async def test_inventory_never_echoes_the_pod_spec(self, monkeypatch) -> None:
-        _patch_owners(monkeypatch)
-        core = _fake_core([_pod(POD_A, phase="Pending", waiting="ImagePullBackOff")])
-        view = sandboxes.KubernetesSandboxView(EvalRunSettings(), org_id="org-a")
-        with _patch_k8s_view(core):
-            body = await view.inventory()
-        self._assert_clean(json.dumps(body))
-        assert "env" not in json.dumps(body)
-
-    async def test_events_are_clean(self) -> None:
-        core = _fake_core(events=[_event("Failed", f"{OAUTH_TOKEN} {MCP_KEY_B64}")])
-        view = sandboxes.KubernetesSandboxView(EvalRunSettings(), org_id="org-a")
-        with _patch_k8s_view(core):
-            body = await view.events(POD_A)
-        self._assert_clean(json.dumps(body))
 
     def test_log_stream_is_clean(self) -> None:
 
@@ -654,43 +456,6 @@ class TestLogStream:
         assert resp.status_code == 429
         assert resp.headers.get("Retry-After") == "15"
 
-    async def test_kubernetes_stream_follows_and_caps_bytes(self, monkeypatch) -> None:
-        monkeypatch.setattr(sandboxes, "LOG_STREAM_MAX_BYTES", 16)
-        core = _fake_core()
-        core.read_namespaced_pod_log = AsyncMock(return_value=_FakeLogResponse([b"x" * 8, b"y" * 12, b"never"]))
-        view = sandboxes.KubernetesSandboxView(EvalRunSettings(), org_id="org-a")
-        out = []
-        with _patch_k8s_view(core):
-            async for item in view.stream_logs(POD_A, tail_lines=25):
-                out.append(item)
-        assert out[-1] == ("end", "byte-cap")
-        assert out[0] == ("log", "x" * 8 + "y" * 12)
-        assert len(out) == 2  # buffered log plus cap; third chunk never read
-        kwargs = core.read_namespaced_pod_log.await_args.kwargs
-        assert kwargs["follow"] is True
-        assert kwargs["tail_lines"] == 25
-        assert kwargs["_preload_content"] is False
-
-    async def test_kubernetes_stream_ends_when_the_pod_exits(self) -> None:
-        core = _fake_core()
-        core.read_namespaced_pod_log = AsyncMock(return_value=_FakeLogResponse([b"done\n"]))
-        view = sandboxes.KubernetesSandboxView(EvalRunSettings(), org_id="org-a")
-        out = []
-        with _patch_k8s_view(core):
-            async for item in view.stream_logs(POD_A, tail_lines=10):
-                out.append(item)
-        assert out == [("log", "done\n"), ("end", "sandbox-exited")]
-
-    async def test_attach_failure_is_reported_not_raised(self) -> None:
-        core = _fake_core()
-        core.read_namespaced_pod_log = AsyncMock(side_effect=RuntimeError("(404) pod gone"))
-        view = sandboxes.KubernetesSandboxView(EvalRunSettings(), org_id="org-a")
-        out = []
-        with _patch_k8s_view(core):
-            async for item in view.stream_logs(POD_A, tail_lines=10):
-                out.append(item)
-        assert out[-1] == ("end", "attach-failed")
-
     async def test_docker_stream_refuses_a_container_this_org_does_not_own(self, monkeypatch) -> None:
         async def fake_run_exists(org_id: str, run_id: str) -> bool:
             return False  # org-b owns nothing
@@ -710,26 +475,6 @@ class TestLogStream:
 class _LockedSemaphore:
     def locked(self) -> bool:
         return True
-
-
-class _FakeLogResponse:
-    """Stands in for the aiohttp response kubernetes_asyncio returns with
-    _preload_content=False."""
-
-    def __init__(self, chunks: list[bytes]) -> None:
-        self._chunks = chunks
-        self.released = False
-        self.content = self
-
-    def iter_chunked(self, _size: int):
-        async def gen():
-            for chunk in self._chunks:
-                yield chunk
-
-        return gen()
-
-    def release(self) -> None:
-        self.released = True
 
 
 # Verify run progress.
@@ -784,7 +529,7 @@ class TestRunnerMarkers:
             timeout_seconds=1,
             on_start=seen.append,
         )
-        _notify_start(spec, {"backend": "kubernetes", "name": POD_A, "namespace": "sp-nb-org"})
+        _notify_start(spec, {"backend": "vercel", "name": POD_A, "namespace": ""})
         assert seen[0]["name"] == POD_A
         assert seen[0]["started_at"]
 

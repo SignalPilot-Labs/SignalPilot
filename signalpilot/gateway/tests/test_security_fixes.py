@@ -856,7 +856,6 @@ class TestL1CookieCsrfOriginCheck:
 # Env vars that must be set to avoid other kill-switches tripping during L-1/I-5 tests.
 _CLOUD_HARDENING_BASE_ENV = {
     "SP_DEPLOYMENT_MODE": "cloud",
-    "SP_NOTEBOOK_RUNTIME_CLASS": "gvisor",
     # R11 added SP_ALLOWED_ORIGINS to assert_cloud_hardening_intact; without it
     # these L-1/I-5 tests would trip the unrelated SP_ALLOWED_ORIGINS violation.
     "SP_ALLOWED_ORIGINS": "https://app.signalpilot.ai",
@@ -871,8 +870,6 @@ def _set_cloud_base(monkeypatch, **overrides) -> None:
     # Ensure vars that should be absent are absent
     monkeypatch.delenv("SP_NOTEBOOK_DIRECT_URL", raising=False)
     monkeypatch.delenv("SP_DISABLE_SANDBOX", raising=False)
-    monkeypatch.delenv("SP_NOTEBOOK_NETWORK_POLICY", raising=False)
-    monkeypatch.delenv("SP_NOTEBOOK_NETWORK_POLICY_CLOUD_ACK", raising=False)
 
 
 class TestL1ClerkAudienceCloud:
@@ -911,86 +908,6 @@ class TestL1ClerkAudienceCloud:
         from gateway.runtime.mode import assert_cloud_hardening_intact
 
         assert_cloud_hardening_intact()
-
-
-# ─── I-5: SP_NOTEBOOK_NETWORK_POLICY=false warns in cloud mode ───────────────
-
-
-class TestI5NetworkPolicyOptOutCloud:
-    """I-5: SP_NOTEBOOK_NETWORK_POLICY=false must not block boot.
-
-    gVisor + VPC CNI NetworkPolicy currently breaks notebook pod egress in the
-    cloud demo, so the gateway logs a warning instead of hard-failing startup.
-    """
-
-    def test_cloud_netpol_false_no_ack_warns_only(self, monkeypatch, caplog) -> None:
-        _set_cloud_base(monkeypatch)
-        monkeypatch.setenv("SP_NOTEBOOK_NETWORK_POLICY", "false")
-        monkeypatch.delenv("SP_NOTEBOOK_NETWORK_POLICY_CLOUD_ACK", raising=False)
-
-        from gateway.runtime.mode import assert_cloud_hardening_intact
-
-        with caplog.at_level(logging.WARNING, logger="gateway.runtime.mode"):
-            assert_cloud_hardening_intact()
-
-        assert any("SP_NOTEBOOK_NETWORK_POLICY=false" in r.message for r in caplog.records)
-
-    def test_cloud_netpol_false_with_ack_warns_only(self, monkeypatch, caplog) -> None:
-        _set_cloud_base(monkeypatch)
-        monkeypatch.setenv("SP_NOTEBOOK_NETWORK_POLICY", "false")
-        monkeypatch.setenv("SP_NOTEBOOK_NETWORK_POLICY_CLOUD_ACK", "1")
-
-        from gateway.runtime.mode import assert_cloud_hardening_intact
-
-        with caplog.at_level(logging.WARNING, logger="gateway.runtime.mode"):
-            assert_cloud_hardening_intact()  # must not raise
-
-        assert any("SP_NOTEBOOK_NETWORK_POLICY=false" in r.message for r in caplog.records)
-
-    def test_cloud_netpol_true_passes(self, monkeypatch) -> None:
-        _set_cloud_base(monkeypatch)
-        monkeypatch.setenv("SP_NOTEBOOK_NETWORK_POLICY", "true")
-
-        from gateway.runtime.mode import assert_cloud_hardening_intact
-
-        assert_cloud_hardening_intact()  # must not raise
-
-    def test_local_netpol_false_passes(self, monkeypatch) -> None:
-        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "local")
-        monkeypatch.setenv("SP_NOTEBOOK_NETWORK_POLICY", "false")
-        monkeypatch.delenv("SP_NOTEBOOK_NETWORK_POLICY_CLOUD_ACK", raising=False)
-
-        from gateway.runtime.mode import assert_cloud_hardening_intact
-
-        assert_cloud_hardening_intact()  # local mode: no checks
-
-    @pytest.mark.parametrize(
-        "ack",
-        [
-            "1",
-            "true",
-            "yes",
-            "TRUE",
-            "Yes",
-            "",
-            "0",
-            "false",
-            "no",
-        ],
-    )
-    def test_cloud_netpol_false_ack_variants_warn_only(
-        self, monkeypatch, caplog, ack: str
-    ) -> None:
-        _set_cloud_base(monkeypatch)
-        monkeypatch.setenv("SP_NOTEBOOK_NETWORK_POLICY", "false")
-        monkeypatch.setenv("SP_NOTEBOOK_NETWORK_POLICY_CLOUD_ACK", ack)
-
-        from gateway.runtime.mode import assert_cloud_hardening_intact
-
-        with caplog.at_level(logging.WARNING, logger="gateway.runtime.mode"):
-            assert_cloud_hardening_intact()
-
-        assert any("SP_NOTEBOOK_NETWORK_POLICY=false" in r.message for r in caplog.records)
 
 
 # ─── L-6: org_id filter on session mutation helpers ──────────────────────────

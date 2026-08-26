@@ -12,6 +12,7 @@ from gateway.mcp.context import _store_session
 from gateway.mcp.helpers import _get_column_names
 from gateway.mcp.server import mcp
 from gateway.mcp.validation import _MODEL_NAME_RE, _quote_table, _validate_connection_name, _validate_sql
+from gateway.verification import compare_columns
 
 
 def _qid(name: str) -> str:
@@ -121,17 +122,7 @@ async def check_model_schema(connection_name: str, model_name: str, yml_columns:
     if not actual:
         return f"Error: Model '{model_name}' not found in database. Has it been materialized yet?"
 
-    expected_lower = {c.lower(): c for c in expected}
-    actual_lower = {c.lower(): c for c in actual}
-
-    matching = [c for c in expected if c in actual]
-    missing = [c for c in expected if c not in actual]
-    extra = [c for c in actual if c not in expected]
-    case_mismatches = [
-        f"{expected_lower[k]} (expected) vs {actual_lower[k]} (actual)"
-        for k in expected_lower
-        if k in actual_lower and expected_lower[k] != actual_lower[k]
-    ]
+    comparison = compare_columns(expected, actual)
 
     def _fmt(items: list[str]) -> str:
         return ", ".join(items) if items else "(none)"
@@ -139,10 +130,10 @@ async def check_model_schema(connection_name: str, model_name: str, yml_columns:
     lines = [
         f"Schema check for '{model_name}':",
         f"  Expected: {len(expected)} columns | Actual: {len(actual)} columns",
-        f"  [OK] Matching: {_fmt(matching)}",
-        f"  [X] Missing: {_fmt(missing)}",
-        f"  [X] Extra: {_fmt(extra)}",
-        f"  [!] Case mismatch: {_fmt(case_mismatches)}",
+        f"  [OK] Matching: {_fmt(comparison.matching)}",
+        f"  [X] Missing: {_fmt(comparison.missing)}",
+        f"  [X] Extra: {_fmt(comparison.extra)}",
+        f"  [!] Case mismatch: {_fmt(comparison.case_mismatches)}",
     ]
     return "\n".join(lines)
 

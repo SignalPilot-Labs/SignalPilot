@@ -144,9 +144,6 @@ def static_notebook_template(
     model_notifications: list[ModelLifecycleNotification] | None = None,
     asset_url: str | None = None,
 ) -> str:
-    if asset_url is None:
-        asset_url = f"https://cdn.jsdelivr.net/npm/@signalpilot-team/frontend@{__version__}/dist"
-
     html = html.replace("{{ base_url }}", "")
     filename = os.path.basename(filepath or "")
     html = html.replace("{{ filename }}", _html_escape(filename))
@@ -398,11 +395,10 @@ def _inject_custom_css_for_config(
 
 
 def _replace_asset_urls(html: str, asset_url: str | None) -> str:
-    """Replace relative asset URLs with the given CDN asset URL.
+    """Replace relative asset URLs with the requested asset URL.
 
-    Used only by static/wasm export templates, which still need to rewrite
-    `./assets/` references to point at the CDN bundle.  The live editor's
-    ``GET /`` no longer calls this function.
+    Used only by static/wasm export templates. When no asset URL is supplied,
+    keep references local instead of introducing an external dependency.
     """
     if asset_url is None:
         return html

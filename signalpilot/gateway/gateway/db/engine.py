@@ -140,6 +140,13 @@ async def init_db() -> None:
                 await asyncio.to_thread(upgrade_to_head, database_url)
         finally:
             await conn.execute(text("SELECT pg_advisory_unlock(hashtext('gateway_schema_migration'))"))
+    from gateway.store.chat_reports import backfill_inline_artifact_hashes
+
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        backfilled = await backfill_inline_artifact_hashes(session, limit=200)
+    if backfilled:
+        logger.info("Backfilled canonical hashes for %d Data Chat artifacts", backfilled)
     logger.info("Gateway database schema is up to date")
 
 

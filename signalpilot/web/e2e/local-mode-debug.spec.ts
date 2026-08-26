@@ -7,7 +7,7 @@ test("Local mode debug: log ALL errors", async ({ page }) => {
   const networkErrors: string[] = [];
 
   page.on("console", (msg) => {
-    if (msg.type() === "error" || msg.type() === "warn") {
+    if (msg.type() === "error" || msg.type() === "warning") {
       errors.push(`[${msg.type()}] ${msg.text().slice(0, 300)}`);
     }
   });

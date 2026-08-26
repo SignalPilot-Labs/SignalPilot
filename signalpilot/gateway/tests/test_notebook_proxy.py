@@ -256,7 +256,7 @@ class TestNotebookSessionInternal:
         assert result is None
 
 
-# Verify the orchestrator pod command.
+# Verify the runtime boot command.
 
 
 class TestLaunchCredentialDelivery:

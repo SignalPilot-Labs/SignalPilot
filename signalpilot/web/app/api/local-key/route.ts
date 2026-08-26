@@ -29,8 +29,14 @@ export async function GET() {
         signal: AbortSignal.timeout(3000),
       });
       if (resp.ok) {
-        const data = await resp.json();
-        _cachedKey = data.key ?? null;
+        const data: unknown = await resp.json();
+        _cachedKey =
+          typeof data === "object" &&
+          data !== null &&
+          "key" in data &&
+          typeof data.key === "string"
+            ? data.key
+            : null;
       }
     } catch {
       // Gateway unreachable

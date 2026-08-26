@@ -54,6 +54,16 @@ def enterprise_chat_feature_flags() -> EnterpriseChatFeatureFlags:
     )
 
 
+def runtime_env() -> str | None:
+    """Environment label stamped on runs and used for worker claim affinity.
+
+    Unset/empty means unpartitioned: runs are stamped NULL and the worker
+    claims every run regardless of label (the pre-partitioning behavior).
+    """
+    value = os.getenv("SP_RUNTIME_ENV", "").strip()
+    return value[:50] or None
+
+
 def worker_concurrency() -> int:
     raw = os.getenv("CHAT_WORKER_CONCURRENCY", "4")
     try:

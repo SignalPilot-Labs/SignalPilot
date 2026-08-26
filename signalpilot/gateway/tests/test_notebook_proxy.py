@@ -286,6 +286,15 @@ class TestLaunchCredentialDelivery:
         # The token itself must never appear in argv (process lists are readable).
         assert "pod-notebook-token" not in command
 
+    def test_boot_command_works_without_sudo(self):
+        """The custom notebook image has no sudo and a writable /workspace;
+        sudo is only the fallback for stock sandbox images."""
+        from gateway.notebooks.backends import _boot_command
+
+        command = _boot_command(self._launch_request())
+        assert "{ mkdir -p /workspace && test -w /workspace ; }" in command
+        assert "|| { sudo mkdir -p /workspace" in command
+
     def test_boot_command_includes_base_url(self):
         from gateway.notebooks.backends import _boot_command
 

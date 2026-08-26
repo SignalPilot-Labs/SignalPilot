@@ -128,7 +128,11 @@ def _boot_command(request: LaunchRequest) -> str:
         hydrate = f'curl -fsSL "$SP_SNAPSHOT_URL" | tar xz -C /workspace && '
     return (
         "set -e; "
-        'sudo mkdir -p /workspace && sudo chown "$(id -u):$(id -g)" /workspace; '
+        # The custom notebook image runs as its unprivileged user with
+        # /workspace already writable and no sudo installed; only fall back
+        # to sudo for stock sandbox images where /workspace needs root.
+        '{ mkdir -p /workspace && test -w /workspace ; } 2>/dev/null '
+        '|| { sudo mkdir -p /workspace && sudo chown "$(id -u):$(id -g)" /workspace; }; '
         f"{hydrate}"
         f"chmod 0400 {shlex.quote(_TOKEN_FILE)}; "
         "exec sp edit --host 0.0.0.0 --port 2718 --headless "

@@ -6,7 +6,7 @@ test("debug: tree folder expand", async ({ page }) => {
   test.setTimeout(120_000);
 
   page.on("console", (msg) => {
-    if (msg.type() === "error" || msg.type() === "warn")
+    if (msg.type() === "error" || msg.type() === "warning")
       console.log(`[${msg.type()}] ${msg.text().slice(0, 200)}`);
   });
 

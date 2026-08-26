@@ -37,6 +37,7 @@ async def run_legacy_bootstrap(engine) -> None:
     await _ensure_audit_ip_columns(engine)
     await _ensure_audit_parent_id_column(engine)
     await _ensure_audit_user_id_nullable(engine)
+    await _ensure_audit_event_type_width(engine)
     await _ensure_audit_indexes(engine)
     await _ensure_knowledge_columns(engine)
     await _ensure_chat_columns(engine)
@@ -59,7 +60,64 @@ async def run_legacy_bootstrap(engine) -> None:
     await _ensure_eval_regression_change_columns(engine)
     await _ensure_conversation_origin_column(engine)
     await _ensure_improvement_slot_width(engine)
+    await _ensure_dashboard_columns(engine)
     logger.info("Legacy schema bootstrap complete")
+
+
+async def _ensure_audit_event_type_width(engine) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(text("ALTER TABLE gateway_audit_logs ALTER COLUMN event_type TYPE VARCHAR(64)"))
+
+
+async def _ensure_dashboard_columns(engine) -> None:
+    """Bring pre-Alembic dashboard tables to the final legacy shape."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_dashboard_versions "
+                "ADD COLUMN IF NOT EXISTS authoring_provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_dashboards "
+                "ADD COLUMN IF NOT EXISTS visibility VARCHAR(20) NOT NULL DEFAULT 'private', "
+                "ADD COLUMN IF NOT EXISTS parent_dashboard_id VARCHAR, "
+                "ADD COLUMN IF NOT EXISTS parent_version_id VARCHAR"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_gw_dashboards_visibility "
+                "ON gateway_dashboards (org_id, visibility, updated_at)"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE gateway_dashboard_authoring_sessions "
+                "ADD COLUMN IF NOT EXISTS thread_id VARCHAR, "
+                "ADD COLUMN IF NOT EXISTS events_json JSONB NOT NULL DEFAULT '[]'::jsonb, "
+                "ADD COLUMN IF NOT EXISTS agent_runs_json JSONB NOT NULL DEFAULT '[]'::jsonb, "
+                "ADD COLUMN IF NOT EXISTS confirmations_json JSONB NOT NULL DEFAULT '[]'::jsonb, "
+                "ADD COLUMN IF NOT EXISTS pending_custom_sql_chart_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb, "
+                "ADD COLUMN IF NOT EXISTS draft_revision INTEGER NOT NULL DEFAULT 1, "
+                "ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), "
+                "ADD COLUMN IF NOT EXISTS discarded_at TIMESTAMPTZ"
+            )
+        )
+        await conn.execute(
+            text("UPDATE gateway_dashboard_authoring_sessions SET thread_id = id WHERE thread_id IS NULL")
+        )
+        await conn.execute(
+            text("ALTER TABLE gateway_dashboard_authoring_sessions ALTER COLUMN thread_id SET NOT NULL")
+        )
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_gw_dashboard_authoring_thread "
+                "ON gateway_dashboard_authoring_sessions "
+                "(org_id, owner_user_id, thread_id, created_at)"
+            )
+        )
 
 
 async def _ensure_key_version_column(engine) -> None:

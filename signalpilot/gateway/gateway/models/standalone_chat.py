@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .chat_reports import ReportReference
+
 ChatRunStatus = Literal[
     "queued",
     "running",
@@ -78,6 +80,7 @@ class StandaloneConversationCreate(StrictChatRequest):
     message: str = Field(..., min_length=1, max_length=50_000)
     per_query_budget_usd: float = Field(default=0.25, ge=0)
     chat_budget_usd: float = Field(default=1.0, ge=0)
+    report_reference: ReportReference | None = None
 
     @field_validator("project_id", "message")
     @classmethod
@@ -103,6 +106,7 @@ class QueryApprovalDecision(StrictChatRequest):
 
 class StandaloneRunCreate(StrictChatRequest):
     message: str = Field(..., min_length=1, max_length=50_000)
+    report_reference: ReportReference | None = None
 
     @field_validator("message")
     @classmethod
@@ -183,6 +187,10 @@ class ChatArtifactInfo(BaseModel):
     exclusions: list[str] = Field(default_factory=list)
     caveats: list[str] = Field(default_factory=list)
     parent_artifact_id: str | None = None
+    saved_report_id: str | None = None
+    saved_report_version_id: str | None = None
+    saved_report_title: str | None = None
+    report_action: Literal["create", "update", "open"] = "create"
     created_at: datetime
     download_formats: list[str]
 

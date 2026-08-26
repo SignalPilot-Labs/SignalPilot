@@ -396,7 +396,7 @@ def create_asgi_app(
             e.g. if the server is updated, the client will be prompted to reload.
         session_ttl (int): Time-to-live in seconds for sessions. Defaults to 120 (2 minutes).
         asset_url (str, optional): Custom asset URL for loading static resources. Can include {version} placeholder.
-            e.g. https://cdn.jsdelivr.net/npm/@signalpilot-team/frontend@{version}/dist
+            e.g. https://assets.example.com/notebook/{version}
         redirect_console_to_browser (bool, optional): Whether to redirect console output (stdout/stderr) to the browser.
             When True, console output will be displayed in the browser. Defaults to False.
         show_tracebacks (bool, optional): Whether to show detailed error tracebacks in a modal.

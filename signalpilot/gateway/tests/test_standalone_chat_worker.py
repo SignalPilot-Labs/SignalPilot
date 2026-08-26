@@ -11,6 +11,48 @@ import pytest
 from gateway.standalone_chat import worker
 
 
+def test_dashboard_chart_reference_is_preloaded_into_existing_chat_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference = {
+        "dashboard_id": "dashboard-a",
+        "dashboard_version_id": "version-a",
+        "dashboard_result_id": "result-a",
+        "execution_id": "execution-a",
+    }
+    context = {
+        "conversation": SimpleNamespace(
+            branch="main",
+            commit_sha="a" * 40,
+            internal_summary=None,
+        ),
+        "project": SimpleNamespace(
+            id="project-a",
+            name="pilot",
+            display_name="Pilot",
+            description=None,
+            connection_name="production",
+        ),
+        "messages": [
+            SimpleNamespace(
+                role="user",
+                metadata_json={"dashboard_chart_reference": reference},
+            )
+        ],
+        "artifacts": [],
+        "query_approvals": [],
+        "query_proposals": [],
+        "query_executions": [],
+        "query_results": [],
+    }
+    monkeypatch.setattr(worker, "project_metadata_context", lambda *_args: {"models": []})
+
+    warm = worker._warm_context(context)
+
+    assert warm["dashboard_chart_reference"] == reference
+    assert warm["project"]["commit_sha"] == "a" * 40
+
+
 @pytest.mark.asyncio
 async def test_cancellation_monitor_interrupts_the_active_worker_task(
     monkeypatch: pytest.MonkeyPatch,
@@ -45,6 +87,7 @@ async def test_cancellation_monitor_interrupts_the_active_worker_task(
 async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pytest.MonkeyPatch) -> None:
     active_sessions = 0
     completed_runs: list[str] = []
+    completion_payloads: list[dict[str, Any]] = []
     failed_runs: list[str] = []
     appended_events: list[tuple[str, dict[str, Any]]] = []
 
@@ -104,13 +147,25 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
             "type": "progress",
             "content": "Restarting analysis in a clean notebook",
         }
-        yield {"type": "final", "content": "Analysis complete", "artifacts": []}
+        yield {
+            "type": "final",
+            "content": "Analysis complete",
+            "artifacts": [],
+            "report_action_outcome": {
+                "action": "no_suggestion",
+                "artifact_kind": "report",
+                "artifact_filename": "diagnostic.html",
+                "reason": "One-off diagnostic.",
+                "catalog_scan_complete": True,
+            },
+        }
 
     async def prepare_execution(*_args: Any, **_kwargs: Any) -> object:
         return object()
 
     async def complete_run(*_args: Any, **kwargs: Any) -> None:
         completed_runs.append(kwargs["run_id"])
+        completion_payloads.append(kwargs)
 
     async def fail_run(*_args: Any, **kwargs: Any) -> None:
         failed_runs.append(kwargs["run_id"])
@@ -150,6 +205,13 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
     await worker._execute_claimed_run("run-a", "worker-a")
 
     assert completed_runs == ["run-a"]
+    assert completion_payloads[0]["report_action_outcome"] == {
+        "action": "no_suggestion",
+        "artifact_kind": "report",
+        "artifact_filename": "diagnostic.html",
+        "reason": "One-off diagnostic.",
+        "catalog_scan_complete": True,
+    }
     assert failed_runs == []
     assert ("cell_executed", {"status": "failed"}) in appended_events
     assert (

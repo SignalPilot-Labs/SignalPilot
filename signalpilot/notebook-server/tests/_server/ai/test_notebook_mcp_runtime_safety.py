@@ -14,6 +14,7 @@ from signalpilot._server.ai.notebook_mcp import (
     NotebookToolError,
     _handle_edit_notebook,
     _handle_run_cells,
+    _handle_start_notebook_session,
     _validate_candidate_graph,
     build_notebook_mcp_server,
 )
@@ -102,6 +103,18 @@ def _payload(error: NotebookToolError) -> dict[str, Any]:
             "left",
             ["a", "b"],
         ),
+        (
+            [
+                (CellId_t("a"), '_chart_path = "chart.png"'),
+                (
+                    CellId_t("b"),
+                    "artifact = publish_artifact(_chart_path)",
+                ),
+            ],
+            "PrivateVariableCrossCellReference",
+            "_chart_path",
+            ["a", "b"],
+        ),
     ],
 )
 def test_candidate_graph_rejects_invalid_batches(
@@ -119,6 +132,21 @@ def test_candidate_graph_rejects_invalid_batches(
         "type": error_type,
         "variable": variable,
     }
+
+
+def test_private_names_remain_valid_inside_their_own_cell_and_nested_scope():
+    _validate_candidate_graph(
+        [
+            (
+                CellId_t("a"),
+                '_chart_path = "chart.png"\nartifact = publish_artifact(_chart_path)',
+            ),
+            (
+                CellId_t("b"),
+                "def render(_value):\n    return _value\nresult = render(1)",
+            ),
+        ]
+    )
 
 
 @pytest.mark.asyncio
@@ -231,6 +259,49 @@ def test_kernel_sync_failure_marks_the_mutated_notebook_dirty(
         "type": "DocumentKernelSynchronizationError",
         "variable": None,
     }
+
+
+def test_notebook_start_fails_closed_when_kernel_instantiation_fails(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    notebook_path = tmp_path / "analysis.py"
+    notebook_path.write_text("answer = 1\n", encoding="utf-8")
+    session = SimpleNamespace(
+        _kernel_manager=SimpleNamespace(is_alive=lambda: True),
+        app_file_manager=SimpleNamespace(
+            app=SimpleNamespace(cell_manager=SimpleNamespace(cell_data=list))
+        ),
+    )
+    closed: list[Any] = []
+    context = _Context(session)
+    context.session_manager = SimpleNamespace(
+        auth_token="auth-token",
+        skew_protection_token="server-token",
+        sessions={},
+        create_session=lambda **_kwargs: session,
+        close_session=lambda session_id: closed.append(session_id),
+    )
+
+    import requests
+
+    monkeypatch.setattr(
+        requests,
+        "post",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            status_code=500, text="failed"
+        ),
+    )
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(NotebookToolError) as raised:
+        _handle_start_notebook_session(
+            context,
+            {"file_path": str(notebook_path), "auto_run": True},
+        )
+
+    assert _payload(raised.value)["error"]["type"] == "NotebookStartError"
+    assert len(closed) == 1
 
 
 class SpExceptionRaisedError:

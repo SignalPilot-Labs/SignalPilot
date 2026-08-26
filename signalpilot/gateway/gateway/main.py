@@ -38,12 +38,14 @@ from .http import (
     SecurityHeadersMiddleware,
     enforce_principal_rate_limit,
 )
+from .http.log_redaction import install_uvicorn_secret_path_filter, redact_secret_path
 from .models import ConnectionUpdate
 from .runtime.mode import is_cloud_mode
 from .store import Store, configure_byok
 from .store.crypto import _validate_encryption_health
 
 logger = logging.getLogger(__name__)
+install_uvicorn_secret_path_filter()
 
 
 # Lifespan.
@@ -635,7 +637,7 @@ async def _global_exception_handler(request: Request, exc: Exception) -> JSONRes
     logger.exception(
         "Unhandled exception in %s %s",
         request.method,
-        request.url.path,
+        redact_secret_path(request.url.path),
     )
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 

@@ -1,0 +1,17 @@
+{
+  "dashboard": {
+    "name": "Revenue performance",
+    "description": "Shared filters, cross-filtering, drill-down, and expandable rows using Lightdash-derived interactions.",
+    "version": 1,
+    "filters": { "dimensions": [], "metrics": [] },
+    "tiles": [
+      { "uuid": "revenue-by-region", "tileSlug": "revenue-by-region", "type": "saved_chart", "x": 0, "y": 0, "h": 15, "w": 18, "properties": { "title": "Recognized revenue by region", "chartSlug": "revenue-by-region" }, "chartId": "revenue-by-region" },
+      { "uuid": "margin-by-region", "tileSlug": "margin-by-region", "type": "saved_chart", "x": 18, "y": 0, "h": 15, "w": 18, "properties": { "title": "Gross margin by region", "chartSlug": "margin-by-region" }, "chartId": "margin-by-region" }
+    ]
+  },
+  "charts": [
+    { "id": "revenue-by-region", "title": "Recognized revenue by region", "description": "Click a bar to produce the future Ask AI context payload.", "query": { "kind": "semantic", "exploreName": "orders", "dimensions": ["region"], "metrics": ["revenue"], "filters": {}, "sorts": [{ "fieldId": "revenue", "descending": true }], "limit": 100, "timezone": "UTC", "projectId": "prototype", "commitSha": "b91bd2273f38fdc58702c71f538b6b5d5ae462c5" }, "visualization": { "type": "cartesian", "config": { "seriesType": "bar", "layout": { "xField": "region", "yField": ["revenue"] } } }, "signalPilot": { "crossFilter": true, "drillDimensions": ["customer"], "provenanceRef": "provenance-revenue-by-region" } },
+    { "id": "margin-by-region", "title": "Gross margin by region", "description": "The same global filter and drill path apply to this tile.", "query": { "kind": "semantic", "exploreName": "orders", "dimensions": ["region"], "metrics": ["revenue"], "filters": {}, "sorts": [{ "fieldId": "revenue", "descending": true }], "limit": 100, "timezone": "UTC", "projectId": "prototype", "commitSha": "b91bd2273f38fdc58702c71f538b6b5d5ae462c5" }, "visualization": { "type": "cartesian", "config": { "seriesType": "bar", "layout": { "xField": "region", "yField": ["revenue"] } } }, "signalPilot": { "crossFilter": true, "drillDimensions": ["customer"], "provenanceRef": "provenance-margin-by-region" } }
+  ],
+  "signalPilot": { "dashboardId": "dashboard-lightdash-extraction", "projectId": "prototype", "connectionName": "mock", "commitSha": "b91bd2273f38fdc58702c71f538b6b5d5ae462c5", "semanticFingerprint": "prototype-v1", "timezone": "UTC" }
+}

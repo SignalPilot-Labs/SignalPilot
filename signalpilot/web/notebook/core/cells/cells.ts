@@ -658,7 +658,7 @@ const {
     const { columnId } = action;
     return {
       ...state,
-      cellIds: state.cellIds.deleteById(columnId),
+      cellIds: state.cellIds.deleteColumnById(columnId),
     };
   },
   mergeAllColumns: (state) => {

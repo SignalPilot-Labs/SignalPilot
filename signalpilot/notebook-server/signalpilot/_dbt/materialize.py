@@ -134,7 +134,7 @@ def _extract_snapshot(snapshot_url: str, dest: Path) -> None:
                         raise DbtMaterializeError(
                             f"Unsafe member in snapshot tarball: {member.name!r}"
                         )
-                tar.extractall(staging)  # noqa: S202 — members validated above
+                tar.extractall(staging, filter="data")
         # Atomic-ish publish: concurrent dbt calls either see the old tree or
         # the complete new one, never a half-extracted directory.
         if not dest.exists():

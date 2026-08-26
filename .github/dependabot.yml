@@ -1,0 +1,88 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/New_York
+    labels:
+      - dependencies
+      - security
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: uv
+    directory: /signalpilot/gateway
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/New_York
+    labels:
+      - dependencies
+      - security
+    groups:
+      python-gateway:
+        patterns:
+          - "*"
+
+  - package-ecosystem: uv
+    directory: /signalpilot/notebook-server
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/New_York
+    labels:
+      - dependencies
+      - security
+    groups:
+      python-notebook-server:
+        patterns:
+          - "*"
+
+  - package-ecosystem: uv
+    directory: /sp-sandbox
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/New_York
+    labels:
+      - dependencies
+      - security
+    groups:
+      python-sandbox:
+        patterns:
+          - "*"
+
+  - package-ecosystem: npm
+    directory: /signalpilot/web
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/New_York
+    labels:
+      - dependencies
+      - security
+    groups:
+      web-npm:
+        patterns:
+          - "*"
+
+  - package-ecosystem: npm
+    directory: /docs
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/New_York
+    labels:
+      - dependencies
+      - security
+    groups:
+      docs-npm:
+        patterns:
+          - "*"

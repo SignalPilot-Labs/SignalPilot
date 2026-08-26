@@ -1,4 +1,4 @@
-"""gateway.mcp — FastMCP package for SignalPilot.
+"""gateway.mcp: FastMCP package for SignalPilot.
 
 Import order matters: server must be first (creates mcp instance),
 then context, validation, helpers, audit, and finally tools (which
@@ -7,7 +7,7 @@ register tool functions via @audited_tool(mcp) at decorator time).
 
 from __future__ import annotations
 
-# Named re-exports — must come AFTER the submodule-import block above so
+# Named re-exports: must come AFTER the submodule-import block above so
 # all @audited_tool(mcp) decorators have already run.
 from gateway.db.engine import get_session_factory
 from gateway.mcp import (
@@ -15,18 +15,27 @@ from gateway.mcp import (
     context,  # noqa: F401
     helpers,  # noqa: F401
     server,  # noqa: F401
-    tools,  # noqa: F401 — triggers all @audited_tool(mcp) registrations
+    tools,  # noqa: F401  # triggers all @audited_tool(mcp) registrations
     validation,  # noqa: F401
 )
 from gateway.mcp.context import (
     _gateway_url,
     _gw_headers,
     _is_cloud,
+    _require_mcp_admin_scope,
     _store_session,
+    mcp_allowed_connection_var,
     mcp_audit_id_var,
+    mcp_capabilities_var,
     mcp_client_ip_var,
+    mcp_eval_connection_var,
+    mcp_eval_doc_ids_var,
+    mcp_eval_run_var,
+    mcp_eval_task_var,
+    mcp_execution_identity_var,
     mcp_org_id_var,
     mcp_raw_key_var,
+    mcp_scopes_var,
     mcp_user_agent_var,
     mcp_user_id_var,
 )
@@ -47,7 +56,6 @@ from gateway.mcp.tools.model_verify import (
     compare_join_types,
     validate_model_output,
 )
-from gateway.mcp.tools.projects import get_project, list_projects
 from gateway.mcp.tools.query import (
     check_budget,
     debug_cte_query,
@@ -72,6 +80,12 @@ from gateway.mcp.tools.schema import (
     schema_overview,
     schema_statistics,
 )
+from gateway.mcp.tools.sandbox_vm import (
+    sandbox_exec,
+    sandbox_read_file,
+    sandbox_write_file,
+)
+from gateway.mcp.tools.workspace_projects import list_workspace_projects
 from gateway.mcp.validation import _quote_table
 from gateway.store import Store
 
@@ -86,6 +100,13 @@ __all__ = [
     "mcp_audit_id_var",
     "mcp_client_ip_var",
     "mcp_user_agent_var",
+    "mcp_eval_connection_var",
+    "mcp_eval_doc_ids_var",
+    "mcp_eval_run_var",
+    "mcp_eval_task_var",
+    "mcp_allowed_connection_var",
+    "mcp_capabilities_var",
+    "mcp_execution_identity_var",
     # Session helper
     "_store_session",
     # Validation helper used by tests
@@ -124,10 +145,14 @@ __all__ = [
     "validate_model_output",
     "audit_model_sources",
     "compare_join_types",
-    "list_projects",
-    "get_project",
+    "list_workspace_projects",
+    "sandbox_exec",
+    "sandbox_write_file",
+    "sandbox_read_file",
     # Internal context helpers
     "_gateway_url",
     "_gw_headers",
     "_is_cloud",
+    "_require_mcp_admin_scope",
+    "mcp_scopes_var",
 ]

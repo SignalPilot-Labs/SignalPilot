@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "signalpilot",
+  "version": "1.0.0",
+  "description": "SignalPilot plugins for governed AI database access",
+  "owner": {
+    "name": "SignalPilot Labs",
+    "email": "support@signalpilot.dev"
+  },
+  "plugins": [
+    {
+      "name": "signalpilot-dbt",
+      "description": "Governed AI database access for dbt and SQL — sandboxed queries, schema discovery, and intelligent model building powered by SignalPilot",
+      "source": "./",
+      "category": "development"
+    }
+  ]
+}

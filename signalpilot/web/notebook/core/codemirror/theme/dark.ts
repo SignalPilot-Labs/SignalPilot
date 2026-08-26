@@ -1,0 +1,53 @@
+import { EditorView } from "@codemirror/view";
+import { tags as t } from "@lezer/highlight";
+import { createTheme } from "thememirror";
+
+export const darkTheme = [
+  createTheme({
+    variant: "dark",
+    settings: {
+      background: "var(--cm-background)",
+      foreground: "#abb2bf",
+      caret: "#528bff",
+      selection: "#3E4451",
+      lineHighlight: "#2c313c",
+      gutterBackground: "var(--color-background)",
+      gutterForeground: "var(--gray-10)",
+    },
+    styles: [
+      { tag: t.comment, color: "var(--cm-comment)" },
+      { tag: t.variableName, color: "#abb2bf" },
+      { tag: [t.string, t.special(t.brace)], color: "#98c379" },
+      { tag: t.number, color: "#d19a66" },
+      { tag: t.bool, color: "#d19a66" },
+      { tag: t.null, color: "#d19a66" },
+      { tag: t.keyword, color: "#c678dd", fontWeight: 500 },
+      { tag: t.className, color: "#61afef" },
+      { tag: t.definition(t.typeName), color: "#61afef" },
+      { tag: t.typeName, color: "#56b6c2" },
+      { tag: t.angleBracket, color: "#abb2bf" },
+      { tag: t.tagName, color: "#e06c75" },
+      { tag: t.attributeName, color: "#d19a66" },
+      { tag: t.operator, color: "#56b6c2", fontWeight: 500 },
+      { tag: [t.function(t.variableName)], color: "#61afef" },
+      { tag: [t.propertyName], color: "#e5c07b" },
+    ],
+  }),
+  EditorView.theme({
+    "&": {
+      fontSize: "var(--sp-code-editor-font-size, 14px)",
+      fontFamily:
+        '"JetBrains Mono", "SF Mono", "Fira Code", "Cascadia Code", ui-monospace, monospace',
+    },
+    ".mo-cm-reactive-reference": {
+      fontWeight: "400",
+      color: "#2a7aa5",
+      borderBottom: "2px solid #bad3de",
+    },
+    ".mo-cm-reactive-reference-hover": {
+      cursor: "pointer",
+      borderBottomWidth: "3px",
+      borderBottomColor: "#4a90a5",
+    },
+  }),
+];

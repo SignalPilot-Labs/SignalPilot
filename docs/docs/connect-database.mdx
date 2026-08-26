@@ -1,0 +1,166 @@
+---
+sidebar_position: 5
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
+# Connect a Database
+
+SignalPilot supports 11 SQL dialects. Connection credentials are encrypted at rest with Fernet.
+
+## Supported databases
+
+For full per-database connection fields, capabilities, and dialect gotchas, see each database's dedicated page (linked below).
+
+| Database | db_type | Cloud/Local | Tier |
+|----------|---------|-------------|------|
+| [PostgreSQL](/docs/databases/postgresql) | `postgresql` | Cloud + Local | 1 |
+| [MySQL](/docs/databases/mysql) | `mysql` | Cloud + Local | 1 |
+| [Snowflake](/docs/databases/snowflake) | `snowflake` | Cloud | 1 |
+| [BigQuery](/docs/databases/bigquery) | `bigquery` | Cloud | 1 |
+| [Amazon Redshift](/docs/databases/redshift) | `redshift` | Cloud | 2 |
+| [ClickHouse](/docs/databases/clickhouse) | `clickhouse` | Cloud + Local | 2 |
+| [Databricks](/docs/databases/databricks) | `databricks` | Cloud | 2 |
+| [SQL Server](/docs/databases/mssql) | `mssql` | Cloud + Local | 2 |
+| [Trino](/docs/databases/trino) | `trino` | Cloud + Local | 2 |
+| [DuckDB](/docs/databases/duckdb) | `duckdb` | Local | 3 |
+| [SQLite](/docs/databases/sqlite) | `sqlite` | Local | 3 |
+
+## Add a connection via the web UI
+
+Go to `http://localhost:3200` → Connections → Add Connection. Fill in the connection details for your database type.
+
+## Add a connection via API
+
+<MiniCopyBlock
+  label="add a connection via api"
+  code={`curl -X POST http://localhost:3300/api/connections \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "name": "my-warehouse",\n    "db_type": "duckdb",\n    "database": "/path/to/warehouse.duckdb"\n  }'`}
+/>
+
+## Connection examples by dialect
+
+These are minimal examples. See each database's dedicated page (linked in the table above) for the full field reference, auth methods, and dialect-specific details.
+
+### PostgreSQL
+
+<MiniCopyBlock
+  label="postgresql"
+  plain
+  code={`{\n  "name": "prod-postgres",\n  "db_type": "postgresql",\n  "host": "db.example.com",\n  "port": 5432,\n  "database": "analytics",\n  "username": "readonly",\n  "password": "..."\n}`}
+/>
+
+**Recommended:** Create a read-only PostgreSQL user — the gateway enforces read-only at the SQL level, but defense-in-depth is good practice.
+
+### MySQL
+
+<MiniCopyBlock
+  label="mysql"
+  plain
+  code={`{\n  "name": "prod-mysql",\n  "db_type": "mysql",\n  "host": "db.example.com",\n  "port": 3306,\n  "database": "analytics",\n  "username": "readonly",\n  "password": "..."\n}`}
+/>
+
+### SQLite
+
+<MiniCopyBlock
+  label="sqlite"
+  plain
+  code={`{\n  "name": "local-sqlite",\n  "db_type": "sqlite",\n  "database": "/data/analytics.db"\n}`}
+/>
+
+SQLite connections are local-only (the gateway must have filesystem access to the `.db` file).
+
+### SQL Server
+
+<MiniCopyBlock
+  label="sql server"
+  plain
+  code={`{\n  "name": "prod-mssql",\n  "db_type": "mssql",\n  "host": "sqlserver.example.com",\n  "port": 1433,\n  "database": "Analytics",\n  "username": "readonly",\n  "password": "..."\n}`}
+/>
+
+### Snowflake
+
+<MiniCopyBlock
+  label="snowflake"
+  plain
+  code={`{\n  "name": "prod-snowflake",\n  "db_type": "snowflake",\n  "account": "xy12345.us-east-1",\n  "database": "ANALYTICS",\n  "warehouse": "COMPUTE_WH",\n  "role": "ANALYST",\n  "username": "...",\n  "password": "..."\n}`}
+/>
+
+### Databricks
+
+<MiniCopyBlock
+  label="databricks"
+  plain
+  code={`{\n  "name": "prod-databricks",\n  "db_type": "databricks",\n  "host": "adb-1234567890.azuredatabricks.net",\n  "http_path": "/sql/1.0/warehouses/abcdef123456",\n  "access_token": "..."\n}`}
+/>
+
+### BigQuery
+
+<MiniCopyBlock
+  label="bigquery"
+  plain
+  code={`{\n  "name": "prod-bigquery",\n  "db_type": "bigquery",\n  "project": "my-gcp-project",\n  "dataset": "analytics",\n  "credentials_json": "{...service account JSON...}"\n}`}
+/>
+
+### Amazon Redshift
+
+<MiniCopyBlock
+  label="redshift"
+  plain
+  code={`{\n  "name": "prod-redshift",\n  "db_type": "redshift",\n  "host": "my-cluster.abc123.us-east-1.redshift.amazonaws.com",\n  "port": 5439,\n  "database": "dev",\n  "username": "readonly",\n  "password": "..."\n}`}
+/>
+
+Redshift uses the PostgreSQL wire protocol. Both provisioned clusters and Redshift Serverless are supported. IAM auth (temporary credentials via `GetClusterCredentials` / Serverless `GetCredentials`) is available — see the [Redshift page](/docs/databases/redshift).
+
+### ClickHouse
+
+<MiniCopyBlock
+  label="clickhouse"
+  plain
+  code={`{\n  "name": "prod-clickhouse",\n  "db_type": "clickhouse",\n  "host": "my-host.clickhouse.cloud",\n  "port": 9440,\n  "database": "default",\n  "username": "default",\n  "password": "...",\n  "protocol": "native"\n}`}
+/>
+
+The connector tries native TCP first (default port 9000, TLS 9440) and falls back to HTTP (port 8123, TLS 8443). Set `protocol` to `native` or `http` to force one. ClickHouse Cloud, on-premise, and self-hosted instances are supported.
+
+### Trino
+
+<MiniCopyBlock
+  label="trino"
+  plain
+  code={`{\n  "name": "prod-trino",\n  "db_type": "trino",\n  "host": "trino.example.com",\n  "port": 8080,\n  "username": "analyst",\n  "password": "...",\n  "catalog": "hive",\n  "schema_name": "analytics"\n}`}
+/>
+
+Trino runs federated queries across catalogs. A password switches the connection to HTTPS. JWT, certificate, and Kerberos auth are also supported — see the [Trino page](/docs/databases/trino).
+
+## Environment variables for connections
+
+For self-hosted deployments, you can pre-configure connections via environment variables instead of the API. See [Configuration](/docs/setup/configuration) for the variable names.
+
+## SSH tunneling
+
+For databases that are not directly reachable from the gateway container, SSH tunneling is supported:
+
+<MiniCopyBlock
+  label="ssh tunnel config"
+  plain
+  code={`{\n  "name": "tunneled-postgres",\n  "db_type": "postgresql",\n  "host": "db.internal.example.com",\n  "port": 5432,\n  "database": "analytics",\n  "username": "readonly",\n  "password": "...",\n  "ssh_tunnel": {\n    "host": "bastion.example.com",\n    "port": 22,\n    "username": "ec2-user",\n    "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----..."\n  }\n}`}
+/>
+
+## SSRF allow-list (cloud mode)
+
+In cloud mode, cloud warehouse connection parameters are validated against an allow-list of known hostnames to prevent SSRF attacks. The default allow-list covers:
+
+- `*.snowflakecomputing.com`
+- `*.databricks.com` / `*.azuredatabricks.net`
+- `bigquery.googleapis.com`
+
+Self-hosted deployments where the warehouse sits on a private network can allow RFC1918 targets with `SP_ALLOW_PRIVATE_CONNECTIONS=true` (loopback and link-local stay blocked).
+
+## Connection health
+
+<MiniCopyBlock
+  label="connection health"
+  plain
+  code={`Tool: connection_health\n→ prod-snowflake: p50=42ms, p95=180ms, p99=450ms, error_rate=0.1%\n→ dev-duckdb: p50=2ms, p95=8ms, p99=15ms, error_rate=0.0%`}
+/>
+
+Use `connection_health` to verify all connections are reachable and responding within acceptable latency.

@@ -1,0 +1,25 @@
+# This image runs the Claude CLI for evaluation tasks.
+# The gateway starts one container for each task.
+# The gateway connects each container to MCP.
+# The gateway transfers the dbt project in a tar file through a presigned URL.
+# The container does not receive Git credentials.
+#
+# Build this image with the following command:
+# docker build -f Dockerfile.eval-runner -t sp-eval-runner:latest .
+FROM node:22-slim
+
+# postgresql-client is here because per-task setup/teardown scripts run in
+# this image by default (a manifest may override setup.image) and their whole
+# job is to mutate the task's warehouse branch — without psql every such
+# script dies with "psql: not found" after the branch has already been forked.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git ca-certificates curl postgresql-client && \
+    rm -rf /var/lib/apt/lists/* && \
+    npm install -g @anthropic-ai/claude-code
+
+RUN useradd -m -u 10002 evalrunner
+USER evalrunner
+WORKDIR /work
+
+# The gateway supplies the task command. This command is the container default.
+CMD ["claude", "--version"]

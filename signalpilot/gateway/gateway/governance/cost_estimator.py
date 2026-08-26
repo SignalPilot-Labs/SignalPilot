@@ -22,11 +22,28 @@ class CostEstimate:
     estimated_usd: float = 0.0  # Rough USD estimate
     warning: str | None = None
     raw_plan: str | None = None
+    estimated_scan_rows: int | None = None
+    estimated_scan_bytes: int | None = None
+    estimated_output_rows: int | None = None
+    estimated_output_bytes: int | None = None
+    quality: str = "approximate"
+
+    def __post_init__(self) -> None:
+        # Older adapters historically exposed one ambiguous row estimate. Treat
+        # that as an approximate scan and output estimate until the adapter is
+        # upgraded, while preserving unknown as None rather than a false zero.
+        if self.estimated_rows > 0:
+            if self.estimated_scan_rows is None:
+                self.estimated_scan_rows = self.estimated_rows
+            if self.estimated_output_rows is None:
+                self.estimated_output_rows = self.estimated_rows
+        if self.warning and self.estimated_output_rows is None:
+            self.quality = "unknown"
 
     @property
     def is_expensive(self) -> bool:
         """Heuristic: queries over $1 estimated or 1M rows are expensive."""
-        return self.estimated_usd > 1.0 or self.estimated_rows > 1_000_000
+        return self.estimated_usd > 1.0 or (self.estimated_scan_rows or 0) > 1_000_000
 
 
 # Cost per row scanned — rough heuristics for managed databases
@@ -72,7 +89,26 @@ class CostEstimator:
 
             plan = plan_json[0].get("Plan", {})
             total_cost = plan.get("Total Cost", 0)
-            plan_rows = plan.get("Plan Rows", 0)
+            # Root output rows can dramatically understate a join/aggregate.
+            # Sum leaf scan estimates across the entire plan tree instead.
+            def scanned_rows(node: dict) -> int:
+                children = [child for child in node.get("Plans", []) if isinstance(child, dict)]
+                if not children:
+                    return max(0, int(node.get("Plan Rows", 0) or 0))
+                return sum(scanned_rows(child) for child in children)
+
+            plan_rows = scanned_rows(plan) or int(plan.get("Plan Rows", 0) or 0)
+            output_rows = int(plan.get("Plan Rows", 0) or 0)
+            output_width = int(plan.get("Plan Width", 0) or 0)
+
+            def scanned_bytes(node: dict) -> int:
+                children = [child for child in node.get("Plans", []) if isinstance(child, dict)]
+                if not children:
+                    return max(0, int(node.get("Plan Rows", 0) or 0)) * max(
+                        0, int(node.get("Plan Width", 0) or 0)
+                    )
+                return sum(scanned_bytes(child) for child in children)
+
             estimated_usd = plan_rows * _COST_PER_ROW["postgres"]
 
             return CostEstimate(
@@ -80,6 +116,11 @@ class CostEstimator:
                 estimated_cost=total_cost,
                 estimated_usd=estimated_usd,
                 raw_plan=json.dumps(plan_json, indent=2)[:2000],
+                estimated_scan_rows=plan_rows,
+                estimated_scan_bytes=scanned_bytes(plan) or None,
+                estimated_output_rows=output_rows,
+                estimated_output_bytes=(output_rows * output_width) or None,
+                quality="approximate",
             )
         except Exception as e:
             return CostEstimate(warning=f"Cost estimation failed: {e}")
@@ -215,7 +256,7 @@ class CostEstimator:
                 dry_result = await connector.dry_run(sql)
                 bytes_processed = dry_result.get("total_bytes_processed", 0)
                 estimated_usd = dry_result.get("estimated_cost_usd", 0.0)
-                estimated_rows = bytes_processed // 100  # ~100 bytes per row heuristic
+                estimated_scan_rows = bytes_processed // 100  # cost-only heuristic
 
                 warning = None
                 if dry_result.get("would_exceed_limit"):
@@ -226,11 +267,16 @@ class CostEstimator:
                     )
 
                 return CostEstimate(
-                    estimated_rows=estimated_rows,
+                    estimated_rows=0,
                     estimated_cost=bytes_processed,
                     estimated_usd=estimated_usd,
                     warning=warning,
                     raw_plan=f"Bytes to process: {bytes_processed:,} ({dry_result.get('human_readable', '')})",
+                    estimated_scan_rows=estimated_scan_rows,
+                    estimated_scan_bytes=bytes_processed,
+                    estimated_output_rows=None,
+                    estimated_output_bytes=None,
+                    quality="unknown",
                 )
             return CostEstimate(warning="BigQuery dry_run not available")
         except Exception as e:
@@ -316,24 +362,40 @@ class CostEstimator:
 
     @staticmethod
     async def estimate_databricks(connector: BaseConnector, sql: str) -> CostEstimate:
-        """Estimate Databricks query cost using EXPLAIN FORMATTED.
+        """Estimate Databricks query cost via EXPLAIN COST (fallback: EXPLAIN FORMATTED).
 
         Parses row estimates from the physical plan output.
         """
         try:
-            # EXPLAIN FORMATTED gives structured plan info on Databricks SQL
-            explain_sql = f"EXPLAIN FORMATTED {sql}"
-            rows = await connector.execute(explain_sql)
+            # EXPLAIN COST includes Statistics(sizeInBytes=..., rowCount=...) on
+            # Databricks SQL; EXPLAIN FORMATTED is the fallback for runtimes
+            # that reject COST.
+            rows = None
+            last_exc: Exception | None = None
+            for explain_kw in ("EXPLAIN COST", "EXPLAIN FORMATTED"):
+                try:
+                    rows = await connector.execute(f"{explain_kw} {sql}")
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    continue
+            if rows is None:
+                return CostEstimate(warning=f"Cost estimation failed: {last_exc}")
             plan_text = "\n".join(str(list(r.values())) for r in rows) if rows else ""
 
             estimated_rows = 0
             if plan_text:
                 import re
 
-                # Look for 'Statistics(sizeInBytes=X, rowCount=Y)' in plan
-                row_match = re.search(r"rowCount=(\d+)", plan_text)
+                # 'Statistics(sizeInBytes=X, rowCount=Y)' — Spark prints
+                # rowCount in scientific notation past 3 sig figs (5.43E+3),
+                # so a \d+ match would truncate to the leading digits.
+                row_match = re.search(r"rowCount=([\d.]+(?:[Ee][+\-]?\d+)?)", plan_text)
                 if row_match:
-                    estimated_rows = int(row_match.group(1))
+                    try:
+                        estimated_rows = int(float(row_match.group(1)))
+                    except ValueError:
+                        estimated_rows = 0
                 # Also try 'numOutputRows=X'
                 if estimated_rows == 0:
                     output_match = re.search(r"numOutputRows[=:]?\s*(\d+)", plan_text)
@@ -369,6 +431,7 @@ class CostEstimator:
                 estimated_cost=0,
                 estimated_usd=0,
                 raw_plan=plan_text[:2000],
+                quality="unknown",
             )
         except Exception as e:
             return CostEstimate(warning=f"Cost estimation failed: {e}")
@@ -396,13 +459,21 @@ class CostEstimator:
             if not rows:
                 return CostEstimate(warning="SHOWPLAN returned no data")
 
-            estimated_rows = 0
+            # SHOWPLAN_ALL lists the plan root first, then operators depth-first.
+            # The FIRST EstimateRows is the statement's final output estimate;
+            # the max across all operators is the intermediate/scan volume. The
+            # two must not be conflated: a TOP-10 aggregate over a million-row
+            # fact table outputs 10 rows while scanning a million.
+            output_rows: int | None = None
+            scan_rows = 0
             total_cost = 0.0
             plan_lines = []
             for row in rows:
                 est = row.get("EstimateRows", 0)
                 if est and isinstance(est, (int, float)):
-                    estimated_rows = max(estimated_rows, int(est))
+                    scan_rows = max(scan_rows, int(est))
+                    if output_rows is None:
+                        output_rows = int(est)
                 cost = row.get("TotalSubtreeCost", 0)
                 if cost and isinstance(cost, (int, float)):
                     total_cost = max(total_cost, float(cost))
@@ -411,12 +482,14 @@ class CostEstimator:
                 if stmt:
                     plan_lines.append(str(stmt))
 
-            estimated_usd = estimated_rows * _COST_PER_ROW["mssql"]
+            estimated_usd = scan_rows * _COST_PER_ROW["mssql"]
             return CostEstimate(
-                estimated_rows=estimated_rows,
+                estimated_rows=scan_rows,
                 estimated_cost=total_cost,
                 estimated_usd=estimated_usd,
                 raw_plan="\n".join(plan_lines)[:2000],
+                estimated_scan_rows=scan_rows or None,
+                estimated_output_rows=output_rows,
             )
         except Exception as e:
             return CostEstimate(warning=f"Cost estimation failed: {e}")

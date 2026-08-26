@@ -2,13 +2,13 @@
 
 import React, { useState } from "react";
 import { Lock, CheckCircle2 } from "lucide-react";
-import { PendingButton } from "@/components/ui/pending-button";
+import { PendingButton } from "~/components/ui/pending-button";
 import { useUser, useReverification } from "@clerk/nextjs";
-import { SectionHeader } from "@/components/ui/section-header";
-import { useToast } from "@/components/ui/toast";
-import { FIELD_INPUT_CLASS, LABEL_CLASS, ERROR_CLASS, NEUTRAL_CLASS } from "@/components/auth/auth-primitives";
-import { isReverificationCancelledError } from "@/lib/security/use-reverify";
-import { formatClerkError } from "@/lib/security/clerk-errors";
+import { SectionHeader } from "~/components/ui/section-header";
+import { useToast } from "~/components/ui/toast";
+import { FIELD_INPUT_CLASS, LABEL_CLASS, ERROR_CLASS, NEUTRAL_CLASS } from "~/components/auth/auth-primitives";
+import { isReverificationCancelledError } from "~/lib/security/use-reverify";
+import { formatClerkError } from "~/lib/security/clerk-errors";
 
 export function PasswordSection(): React.JSX.Element {
   const { user } = useUser();

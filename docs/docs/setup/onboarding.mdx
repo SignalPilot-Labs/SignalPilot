@@ -1,0 +1,55 @@
+---
+sidebar_position: 2.5
+---
+
+# First run on Cloud
+
+What happens between signing up and having a working agent.
+
+## 1. Join or create a workspace
+
+If a colleague invited you, the invitation is waiting — accept it and you land in
+their workspace with their connections and knowledge base already there.
+
+Otherwise you create one. The name is free text (`acme corp`, `solo ops`, your
+team's name); it identifies the workspace across billing, team management, and
+audit records.
+
+## 2. Create your first API key
+
+The wizard creates a key and shows it **once**. Name it after where it will live —
+`production`, `ci-pipeline`, `local-dev` — because that name is what you will see
+later in usage breakdowns and audit records when you are deciding whether a key
+is still needed.
+
+Keys default to the `read` and `query` scopes, which is what an agent session
+needs. See [Authentication](/docs/mcp/auth#scopes).
+
+## 3. Connect your agent
+
+The last step hands you the MCP configuration with the key already in it. Paste
+it into Claude Code (or another client) and the tools appear.
+
+```bash
+claude mcp add --transport http signalpilot https://gateway.signalpilot.ai/mcp \
+  --header "X-API-Key: sp_your_key_here"
+```
+
+You can regenerate this any time from **Settings → MCP Connect**.
+
+## Then what
+
+In rough order of value:
+
+1. **[Add a connection](/docs/product/connections-ui)** to a warehouse — read-only
+   credentials, schema filters set.
+2. **Ask the agent something you already know the answer to.** The first task is
+   a calibration exercise, not a demo.
+3. **[Write knowledge entries](/docs/product/knowledge-base)** for whatever it got
+   wrong. This is the step that compounds.
+4. **[Build an eval set](/docs/evals/quickstart)** from those questions so the next
+   change is measurable.
+5. **[Install the plugin](/docs/plugin/install)** for the dbt and SQL skills.
+
+Not sure yet? The [demo warehouse](/docs/product/demo-warehouse) gives you a
+seeded warehouse and dbt project to try all of this against first.

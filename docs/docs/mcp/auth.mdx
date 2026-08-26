@@ -1,0 +1,101 @@
+---
+sidebar_position: 4
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
+# Authentication
+
+## Local self-hosted
+
+A local Docker Compose deployment accepts REST requests from localhost without a key. MCP starts without authentication only while no stored API key exists; creating the first key makes MCP authentication mandatory.
+
+## API keys
+
+API keys are the primary auth mechanism for both self-hosted and cloud deployments.
+
+**Format**: `sp_` prefix followed by 32 hexadecimal characters. The gateway stores a one-way SHA-256 hash and shows the raw key only at creation.
+
+**Create a key** via the web UI at `http://localhost:3200` → Settings → API Keys, or via the REST API:
+
+<MiniCopyBlock
+  label="create an api key"
+  code={`curl -X POST http://localhost:3300/api/keys \\\n  -H "Content-Type: application/json" \\\n  -d '{"name": "claude-code-local"}'`}
+/>
+
+**Use the key** as a bearer token:
+
+<MiniCopyBlock label="bearer token" plain code="Authorization: Bearer sp_your_key_here" />
+
+## Bearer token header
+
+Pass the API key in every MCP request:
+
+<MiniCopyBlock
+  label="claude code"
+  code={`claude mcp add --transport http signalpilot http://localhost:3300/mcp \\\n  --header "Authorization: Bearer sp_your_key_here"`}
+/>
+
+<MiniCopyBlock
+  label="json config"
+  plain
+  code={`{\n  "headers": {\n    "Authorization": "Bearer sp_your_key_here"\n  }\n}`}
+/>
+
+`X-API-Key: sp_your_key_here` is accepted as an equivalent header, and is what
+the **Settings → MCP Connect** page emits in generated client configs.
+
+## Scopes
+
+Every key carries one or more scopes, chosen at creation. The create form
+pre-selects `read` and `query`, which is what a normal agent session needs.
+
+| Scope | Grants |
+|-------|--------|
+| `read` | Read-only metadata: connections, schema, run status, configuration. |
+| `query` | Executing governed SQL and reading query results or stored evidence. |
+| `write` | Mutating workspace state — proposing knowledge, uploads, and similar. |
+| `execute` | Running workloads that consume compute on the caller's behalf. |
+| `admin` | Administrative operations: changing configuration, triggering eval runs. |
+| `dbt_proxy` | The dbt proxy endpoint only. |
+
+Grant the narrowest set that works: a key used only for schema exploration and
+SQL needs `read` and `query` and nothing else. The API accepts an optional
+`expires_at` on creation; the web form does not set one, so keys made in the UI
+do not expire — rotate them by creating a new key and deleting the old one.
+
+Some routes require more than a scope. Platform-administration and eval routes
+additionally require the caller's user id to appear in `SP_ADMIN_USER_IDS`, and
+eval routes require the workspace to be allow-listed.
+
+## Clerk JWT (cloud mode)
+
+SignalPilot Cloud uses [Clerk](https://clerk.com) for SSO. When a user authenticates through the web UI, Clerk issues a short-lived JWT. The gateway validates:
+
+- Signature against the Clerk JWKS endpoint
+- `exp` claim with a configurable clock leeway (`SP_JWT_LEEWAY`, default 30s)
+- Required claims: `org_id`, `sub`
+- Org role for admin endpoints: `org:admin`
+
+The JWT is not needed for MCP tool calls — those use API keys, which are org-scoped and tied to the authenticated org.
+
+## Rotating keys
+
+Old keys can be revoked in the web UI or via the REST API. Revocation is immediate — in-flight requests with the old key will fail on the next auth check.
+
+<MiniCopyBlock
+  label="revoke an api key"
+  code={`curl -X DELETE http://localhost:3300/api/keys/KEY_ID \\\n  -H "Authorization: Bearer sk_admin_key"`}
+/>
+
+## Scoping by org (cloud)
+
+In SignalPilot Cloud, each API key is tied to an org. A key can only access connections owned by that org. Cross-org access is blocked at the data layer — not just at the API layer.
+
+## Rate limits
+
+- **60 requests/min/IP** — brute-force protection on auth endpoints
+- **120 tool calls/min/key** — per API key
+- **300 tool calls/min/org** — per org (cloud)
+
+See [Configuration](/docs/setup/configuration) to adjust these defaults.

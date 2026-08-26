@@ -1,7 +1,7 @@
 "use client";
 
 import { AuthenticateWithRedirectCallback } from "@clerk/nextjs";
-import { AuthShell } from "@/components/auth/auth-shell";
+import { AuthShell } from "~/components/auth/auth-shell";
 import { Loader2 } from "lucide-react";
 
 export default function SSOCallbackClient() {

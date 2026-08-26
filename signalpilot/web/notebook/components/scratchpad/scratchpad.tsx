@@ -1,0 +1,301 @@
+import type { EditorView } from "@codemirror/view";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import {
+  BetweenHorizontalStartIcon,
+  CircleHelpIcon,
+  EraserIcon,
+  HistoryIcon,
+  PlayIcon,
+} from "lucide-react";
+import type React from "react";
+import { Suspense, useRef, useState } from "react";
+import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import useEvent from "react-use-event-hook";
+import { useCellActions, useNotebook } from "@/core/cells/cells";
+import { useLastFocusedCellId } from "@/core/cells/focus";
+import { HTMLCellId, SCRATCH_CELL_ID } from "@/core/cells/ids";
+import { DEFAULT_CELL_NAME } from "@/core/cells/names";
+import type { LanguageAdapterType } from "@/core/codemirror/language/types";
+import { useResolvedSpConfig } from "@/core/config/config";
+import { CSSClasses } from "@/core/constants";
+import { useRequestClient } from "@/core/network/requests";
+import type { CellConfig } from "@/core/network/types";
+import { LazyAnyLanguageCodeMirror } from "@/plugins/impl/code/LazyAnyLanguageCodeMirror";
+import { useTheme } from "@/theme/useTheme";
+import { cn } from "@/utils/cn";
+import { Functions } from "@/utils/functions";
+import { CellEditor } from "../editor/cell/code/cell-editor";
+import {
+  usePanelOrientation,
+  usePanelSection,
+} from "../editor/chrome/panels/panel-context";
+import { HideInKioskMode } from "../editor/kiosk-mode";
+import { OutputArea } from "../editor/Output";
+import { ConsoleOutput } from "../editor/output/console/ConsoleOutput";
+import { Spinner } from "../icons/spinner";
+import { renderShortcut } from "../shortcuts/renderShortcut";
+import { Button } from "../ui/button";
+import { Tooltip } from "../ui/tooltip";
+import {
+  addToHistoryAtom,
+  historyVisibleAtom,
+  scratchpadHistoryAtom,
+} from "./scratchpad-history";
+
+const scratchpadCellConfig: CellConfig = {
+  hide_code: false,
+  disabled: false,
+};
+
+export const ScratchPad: React.FC = () => {
+  const notebookState = useNotebook();
+  const [userConfig] = useResolvedSpConfig();
+  const { theme } = useTheme();
+  const ref = useRef<EditorView | null>(null);
+  const lastFocusedCellId = useLastFocusedCellId();
+  const { createNewCell, updateCellCode } = useCellActions();
+  const { sendRunScratchpad } = useRequestClient();
+  const orientation = usePanelOrientation();
+  const section = usePanelSection();
+
+  const cellId = SCRATCH_CELL_ID;
+  const cellRuntime = notebookState.cellRuntime[cellId];
+  const output = cellRuntime?.output;
+  const status = cellRuntime?.status;
+  const consoleOutputs = cellRuntime?.consoleOutputs;
+  const cellData = notebookState.cellData[cellId];
+  const code = cellData?.code ?? "";
+
+  const addToHistory = useSetAtom(addToHistoryAtom);
+  const [historyVisible, setHistoryVisible] = useAtom(historyVisibleAtom);
+  const history = useAtomValue(scratchpadHistoryAtom);
+
+  const handleRun = useEvent(() => {
+    void sendRunScratchpad({ code });
+    addToHistory(code);
+  });
+
+  const handleInsertCode = useEvent(() => {
+    if (!code.trim()) {
+      return;
+    }
+    createNewCell({
+      code,
+      before: false,
+      cellId: lastFocusedCellId ?? "__end__",
+    });
+  });
+
+  const handleClearCode = useEvent(() => {
+    updateCellCode({
+      cellId,
+      code: "",
+      formattingChange: false,
+    });
+    void sendRunScratchpad({ code: "" });
+    const ev = ref.current;
+    if (ev) {
+      ev.dispatch({
+        changes: {
+          from: 0,
+          to: ev.state.doc.length,
+          insert: "",
+        },
+      });
+    }
+  });
+
+  const handleSelectHistoryItem = useEvent((item: string) => {
+    setHistoryVisible(false);
+    updateCellCode({
+      cellId,
+      code: item,
+      formattingChange: false,
+    });
+    const ev = ref.current;
+    if (ev) {
+      ev.dispatch({
+        changes: {
+          from: 0,
+          to: ev.state.doc.length,
+          insert: item,
+        },
+      });
+    }
+  });
+
+  const [languageAdapter, setLanguageAdapter] = useState<LanguageAdapterType>();
+
+  const renderHistory = () => {
+    if (!historyVisible) {
+      return null;
+    }
+    return (
+      <div className="absolute inset-0 z-100 bg-background p-3 border-none overflow-auto">
+        <div className="overflow-auto flex flex-col gap-3">
+          {history.map((item, index) => (
+            <div
+              key={index}
+              className="border rounded-md hover:shadow-sm cursor-pointer hover:border-input overflow-hidden"
+              onClick={() => handleSelectHistoryItem(item)}
+            >
+              <Suspense>
+                <LazyAnyLanguageCodeMirror
+                  language="python"
+                  theme={theme}
+                  basicSetup={{
+                    highlightActiveLine: false,
+                    highlightActiveLineGutter: false,
+                  }}
+                  value={item.trim()}
+                  editable={false}
+                  readOnly={true}
+                />
+              </Suspense>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const renderToolbar = () => (
+    <div className="flex items-center shrink-0 border-b">
+      <Tooltip content={renderShortcut("cell.run")}>
+        <Button
+          data-testid="scratchpad-run-button"
+          onClick={handleRun}
+          disabled={historyVisible}
+          variant="text"
+          size="xs"
+        >
+          <PlayIcon color="var(--grass-11)" size={16} />
+        </Button>
+      </Tooltip>
+      <Tooltip content="Clear code and outputs">
+        <Button
+          disabled={historyVisible}
+          size="xs"
+          variant="text"
+          onClick={handleClearCode}
+        >
+          <EraserIcon size={16} />
+        </Button>
+      </Tooltip>
+      <HideInKioskMode>
+        <Tooltip content="Insert code">
+          <Button
+            disabled={historyVisible}
+            size="xs"
+            variant="text"
+            onClick={handleInsertCode}
+          >
+            <BetweenHorizontalStartIcon size={16} />
+          </Button>
+        </Tooltip>
+      </HideInKioskMode>
+
+      {(status === "running" || status === "queued") && (
+        <Spinner className="inline" size="small" />
+      )}
+      <div className="flex-1" />
+
+      <Tooltip content="Toggle history">
+        <Button
+          size="xs"
+          variant="text"
+          className={cn(historyVisible && "bg-(--sky-3) rounded-md")}
+          onClick={() => setHistoryVisible(!historyVisible)}
+          disabled={history.length === 0}
+        >
+          <HistoryIcon size={16} />
+        </Button>
+      </Tooltip>
+      <Tooltip
+        content={
+          <span className="block max-w-prose">
+            Use this scratchpad to experiment with code without restrictions on
+            variable names. Variables defined here aren't saved to notebook
+            memory, and the code is not saved in the notebook file.
+          </span>
+        }
+      >
+        <Button size="xs" variant="text">
+          <CircleHelpIcon size={16} />
+        </Button>
+      </Tooltip>
+    </div>
+  );
+
+  const isVertical = orientation === "vertical";
+
+  return (
+    <div
+      className="flex flex-col h-full overflow-hidden"
+      id={HTMLCellId.create(cellId)}
+    >
+      <PanelGroup key={section} direction={orientation} className="h-full">
+        {/* Editor panel */}
+        <Panel defaultSize={40} minSize={20} maxSize={70}>
+          <div className="h-full flex flex-col overflow-hidden relative">
+            {renderToolbar()}
+            <div className="flex-1 overflow-auto">
+              <CellEditor
+                theme={theme}
+                showPlaceholder={false}
+                id={cellId}
+                code={code}
+                config={scratchpadCellConfig}
+                status="idle"
+                serializedEditorState={null}
+                runCell={handleRun}
+                userConfig={userConfig}
+                editorViewRef={ref}
+                setEditorView={(ev) => {
+                  ref.current = ev;
+                }}
+                hidden={false}
+                showHiddenCode={Functions.NOOP}
+                languageAdapter={languageAdapter}
+                setLanguageAdapter={setLanguageAdapter}
+              />
+            </div>
+            {renderHistory()}
+          </div>
+        </Panel>
+        <PanelResizeHandle
+          className={cn(
+            "bg-border hover:bg-primary/50 transition-colors",
+            isVertical ? "h-1" : "w-1",
+          )}
+        />
+        {/* Output panel */}
+        <Panel defaultSize={60} minSize={20}>
+          <div className="h-full flex flex-col divide-y overflow-hidden">
+            <div className="flex-1 overflow-auto">
+              <OutputArea
+                allowExpand={false}
+                output={output}
+                className={CSSClasses.outputArea}
+                cellId={cellId}
+                stale={false}
+                loading={false}
+              />
+            </div>
+            <div className="overflow-auto shrink-0 max-h-[50%]">
+              <ConsoleOutput
+                consoleOutputs={consoleOutputs}
+                className="overflow-auto"
+                stale={false}
+                cellName={DEFAULT_CELL_NAME}
+                onSubmitDebugger={Functions.NOOP}
+                cellId={cellId}
+                debuggerActive={false}
+              />
+            </div>
+          </div>
+        </Panel>
+      </PanelGroup>
+    </div>
+  );
+};

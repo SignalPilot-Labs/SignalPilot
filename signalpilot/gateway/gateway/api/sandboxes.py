@@ -63,7 +63,7 @@ async def get_sandbox_detail(_: UserID, org_id: OrgID, sandbox_id: str):
     return sandbox
 
 
-@router.delete("/sandboxes/{sandbox_id}", status_code=204, dependencies=[RequireScope("execute")])
+@router.delete("/sandboxes/{sandbox_id}", status_code=204, response_model=None, dependencies=[RequireScope("execute")])
 async def kill_sandbox(sandbox_id: str, store: StoreD):
     org_id = store.org_id or ""
     sandbox = get_sandbox(sandbox_id, org_id)

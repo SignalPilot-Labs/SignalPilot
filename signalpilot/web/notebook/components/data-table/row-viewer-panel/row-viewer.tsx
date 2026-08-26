@@ -1,0 +1,379 @@
+import type {
+  Column,
+  OnChangeFn,
+  RowSelectionState,
+} from "@tanstack/react-table";
+import {
+  AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  Info,
+} from "lucide-react";
+import { type KeyboardEvent, useId, useRef, useState } from "react";
+import { useLocale } from "react-aria";
+import { ColumnName } from "@/components/datasources/components";
+import { CopyClipboardIcon } from "@/components/icons/copy-icon";
+import { Spinner } from "@/components/icons/spinner";
+import { KeyboardHotkeys } from "@/components/shortcuts/renderShortcut";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Command, CommandInput } from "@/components/ui/command";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { DelayMount } from "@/components/utils/delay-mount";
+import { useAsyncData } from "@/hooks/useAsyncData";
+import { Banner, ErrorBanner } from "@/plugins/impl/common/error-banner";
+import type { GetRowResult } from "@/plugins/impl/DataTablePlugin";
+import { NAMELESS_COLUMN_PREFIX, renderCellValue } from "../columns";
+import { prettifyRowCount } from "../pagination";
+import {
+  type FieldTypesWithExternalType,
+  INDEX_COLUMN_NAME,
+  SELECT_COLUMN_ID,
+  TOO_MANY_ROWS,
+  type TooManyRows,
+} from "../types";
+
+export interface RowViewerPanelProps {
+  rowIdx: number;
+  setRowIdx: (rowIdx: number) => void;
+  totalRows: number | TooManyRows;
+  fieldTypes: FieldTypesWithExternalType | undefined | null;
+  getRow: (rowIdx: number) => Promise<GetRowResult>;
+  isSelectable: boolean;
+  isRowSelected: boolean;
+  handleRowSelectionChange?: OnChangeFn<RowSelectionState>;
+}
+
+export const RowViewerPanel: React.FC<RowViewerPanelProps> = ({
+  rowIdx,
+  setRowIdx,
+  totalRows,
+  fieldTypes,
+  getRow,
+  isSelectable,
+  isRowSelected,
+  handleRowSelectionChange,
+}: RowViewerPanelProps) => {
+  const [searchQuery, setSearchQuery] = useState("");
+  const panelRef = useRef<HTMLDivElement>(null);
+  const checkboxId = useId();
+  const { locale } = useLocale();
+
+  const tooManyRows = totalRows === TOO_MANY_ROWS;
+
+  const { data: rows, error } = useAsyncData(async () => {
+    const data = await getRow(rowIdx);
+    return data.rows;
+  }, [getRow, rowIdx, totalRows]);
+
+  const setRow = (rowIdx: number) => {
+    if (rowIdx < 0 || (typeof totalRows === "number" && rowIdx >= totalRows)) {
+      return;
+    }
+    setRowIdx(rowIdx);
+  };
+
+  const toggleRowSelection = () => {
+    handleRowSelectionChange?.((prev) => {
+      if (isRowSelected) {
+        // Remove this row from selection
+        const { [rowIdx]: removedRow, ...rest } = prev;
+        return rest;
+      }
+      // Add this row to selection
+      return { ...prev, [rowIdx]: true };
+    });
+  };
+
+  // Total rows may change after the row viewer panel is opened
+  if (!tooManyRows && rowIdx > totalRows) {
+    setRow(totalRows - 1);
+  }
+
+  const handleKeyDown = (e: KeyboardEvent) => {
+    // Don't intercept keys when typing in an input
+    if (e.target instanceof HTMLInputElement) {
+      return;
+    }
+    switch (e.key) {
+      case "ArrowLeft":
+        setRow(rowIdx - 1);
+
+        break;
+
+      case "ArrowRight":
+        setRow(rowIdx + 1);
+
+        break;
+
+      case " ":
+        e.preventDefault();
+        toggleRowSelection();
+
+        break;
+    }
+  };
+
+  const buttonStyles = "h-6 w-6 p-0.5";
+
+  const renderTable = () => {
+    if (error) {
+      return <ErrorBanner error={error} className="p-4 mx-3 mt-5" />;
+    }
+
+    if (totalRows === 0) {
+      return (
+        <SimpleBanner kind="info" Icon={Info} message="No rows selected" />
+      );
+    }
+
+    if (!rows) {
+      return (
+        <DelayMount milliseconds={200}>
+          <Spinner size="medium" centered={true} />
+        </DelayMount>
+      );
+    }
+
+    if (rows.length !== 1) {
+      const message = tooManyRows
+        ? "LazyFrame, no data available."
+        : `Expected 1 row, got ${rows.length} rows. Please report the issue.`;
+      return (
+        <SimpleBanner kind="warn" Icon={AlertTriangle} message={message} />
+      );
+    }
+
+    const currentRow = rows[0];
+    if (typeof currentRow !== "object" || currentRow === null) {
+      return (
+        <SimpleBanner
+          kind="warn"
+          Icon={AlertTriangle}
+          message="Row is not an object. Please report the issue."
+        />
+      );
+    }
+
+    const rowValues: Record<string, unknown> = {};
+    for (const [columnName, columnValue] of Object.entries(currentRow)) {
+      if (columnName === SELECT_COLUMN_ID || columnName === INDEX_COLUMN_NAME) {
+        continue;
+      }
+      if (columnName.startsWith(NAMELESS_COLUMN_PREFIX)) {
+        // Remove the prefix
+        rowValues[columnName.slice(NAMELESS_COLUMN_PREFIX.length)] =
+          columnValue;
+      } else {
+        rowValues[columnName] = columnValue;
+      }
+    }
+
+    return (
+      <Table className="mb-4">
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-1/4">Column</TableHead>
+            <TableHead className="w-3/4">Value</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {fieldTypes?.map(([columnName, [dataType, _externalType]]) => {
+            const columnValue = rowValues[columnName];
+
+            if (!inSearchQuery({ columnName, columnValue, searchQuery })) {
+              return null;
+            }
+
+            const mockColumn = {
+              id: columnName,
+              columnDef: {
+                meta: {
+                  dataType,
+                },
+              },
+              getColumnFormatting: () => undefined,
+              applyColumnFormatting: (value) => value,
+            } as Column<unknown>;
+
+            const cellContent = renderCellValue({
+              column: mockColumn,
+              renderValue: () => columnValue,
+              getValue: () => columnValue,
+              selectCell: undefined,
+              cellStyles: "text-left break-word",
+            });
+
+            const copyValue =
+              typeof columnValue === "object"
+                ? JSON.stringify(columnValue)
+                : String(columnValue);
+
+            return (
+              <TableRow key={columnName} className="group">
+                <TableCell>
+                  <ColumnName
+                    columnName={<span>{columnName}</span>}
+                    dataType={dataType}
+                  />
+                </TableCell>
+                <TableCell>
+                  <div className="flex flex-row items-center justify-between gap-1">
+                    {cellContent}
+                    <CopyClipboardIcon
+                      value={copyValue}
+                      className="w-3 h-3 mr-1 text-muted-foreground cursor-pointer opacity-0 group-hover:opacity-100"
+                    />
+                  </div>
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    );
+  };
+
+  return (
+    <div
+      className="flex flex-col gap-3 focus:outline-hidden"
+      ref={panelRef}
+      tabIndex={-1}
+      onKeyDown={handleKeyDown}
+    >
+      <div className="flex flex-row gap-2 items-center mr-2 px-2">
+        {isSelectable && (
+          <div
+            className="flex items-center"
+            title="Select/unselect the current row"
+          >
+            <div className="flex items-center gap-1.5">
+              <Checkbox
+                id={checkboxId}
+                checked={isRowSelected}
+                onCheckedChange={toggleRowSelection}
+                className="h-3.5 w-3.5"
+              />
+              <label
+                htmlFor={checkboxId}
+                className="text-xs text-muted-foreground cursor-pointer"
+              >
+                Select
+              </label>
+            </div>
+            <KeyboardHotkeys shortcut="Space" className="scale-75" />
+          </div>
+        )}
+
+        <Button
+          variant="outline"
+          size="xs"
+          className={`${buttonStyles} ml-auto`}
+          onClick={() => setRow(0)}
+          disabled={rowIdx === 0}
+          aria-label="Go to first row"
+        >
+          <ChevronsLeft />
+        </Button>
+        <Button
+          variant="outline"
+          size="xs"
+          className={buttonStyles}
+          onClick={() => setRow(rowIdx - 1)}
+          disabled={rowIdx === 0}
+          aria-label="Previous row"
+        >
+          <ChevronLeft />
+        </Button>
+        <span className="text-xs">
+          {tooManyRows
+            ? `Row ${rowIdx + 1}`
+            : `Row ${rowIdx + 1} of ${prettifyRowCount(totalRows, locale)}`}
+        </span>
+        <Button
+          variant="outline"
+          size="xs"
+          className={buttonStyles}
+          onClick={() => setRow(rowIdx + 1)}
+          disabled={!tooManyRows && rowIdx === totalRows - 1}
+          aria-label="Next row"
+        >
+          <ChevronRight />
+        </Button>
+        <Button
+          variant="outline"
+          size="xs"
+          className={buttonStyles}
+          onClick={() => {
+            if (!tooManyRows) {
+              setRow(totalRows - 1);
+            }
+          }}
+          disabled={tooManyRows || rowIdx === totalRows - 1}
+          aria-label="Go to last row"
+        >
+          <ChevronsRight />
+        </Button>
+      </div>
+
+      <Command className="bg-background" shouldFilter={false}>
+        <CommandInput
+          placeholder="Search"
+          value={searchQuery}
+          onValueChange={setSearchQuery}
+          data-testid="selection-panel-search-input"
+        />
+      </Command>
+      {renderTable()}
+    </div>
+  );
+};
+
+export function inSearchQuery({
+  columnName,
+  columnValue,
+  searchQuery,
+}: {
+  columnName: string;
+  columnValue: unknown;
+  searchQuery: string;
+}) {
+  const colName = columnName.toLowerCase();
+  const searchQueryLower = searchQuery.toLowerCase();
+
+  let columnValueString =
+    typeof columnValue === "object"
+      ? JSON.stringify(columnValue)
+      : String(columnValue);
+  columnValueString = columnValueString.toLowerCase();
+
+  return (
+    colName.includes(searchQueryLower) ||
+    columnValueString.includes(searchQueryLower)
+  );
+}
+
+const SimpleBanner: React.FC<{
+  kind: "info" | "warn" | "danger";
+  Icon: React.FC<React.SVGProps<SVGSVGElement>>;
+  message: string;
+}> = ({ kind, Icon, message }) => {
+  return (
+    <Banner
+      kind={kind}
+      className="p-4 mx-3 mt-3 flex flex-row items-center gap-2"
+    >
+      <Icon className="w-5 h-5" />
+      <span>{message}</span>
+    </Banner>
+  );
+};

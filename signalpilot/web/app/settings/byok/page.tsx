@@ -12,11 +12,11 @@ import {
   RefreshCw,
   Key,
 } from "lucide-react";
-import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { SectionHeader } from "@/components/ui/section-header";
-import { StatusDot } from "@/components/ui/data-viz";
-import { useToast } from "@/components/ui/toast";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { PageHeader, TerminalBar } from "~/components/ui/page-header";
+import { SectionHeader } from "~/components/ui/section-header";
+import { StatusDot } from "~/components/ui/data-viz";
+import { useToast } from "~/components/ui/toast";
+import { ConfirmDialog } from "~/components/ui/confirm-dialog";
 import {
   listBYOKKeys,
   createBYOKKey,
@@ -25,8 +25,8 @@ import {
   getBYOKStatus,
   migrateToBYOK,
   revertToManaged,
-} from "@/lib/api";
-import type { BYOKKey, BYOKStatus } from "@/lib/api";
+} from "~/lib/api";
+import type { BYOKKey, BYOKStatus } from "~/lib/api";
 
 const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 
@@ -247,7 +247,7 @@ export default function BYOKPage() {
           <Loader2 className="w-5 h-5 animate-spin text-[var(--color-text-dim)]" />
         </div>
       ) : error ? (
-        <div className="border border-red-500/30 bg-red-500/5 p-4 text-[12px] text-red-400 tracking-wider">
+        <div className="border border-red-500/30 bg-red-500/5 rounded-[10px] p-4 text-[12px] text-red-400">
           {error}
         </div>
       ) : (
@@ -255,18 +255,18 @@ export default function BYOKPage() {
           {/* Keys Section */}
           <section className="mb-8">
             <SectionHeader icon={Key} title="encryption keys" />
-            <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
+            <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] overflow-hidden">
               <div className="p-6">
                 {keys.length === 0 && !showCreate ? (
                   <div className="text-center py-8">
                     <Shield className="w-8 h-8 text-[var(--color-text-dim)] mx-auto mb-3" strokeWidth={1} />
-                    <p className="text-[12px] text-[var(--color-text-muted)] tracking-wider mb-1">no encryption keys configured</p>
-                    <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider mb-4">
+                    <p className="text-[12px] text-[var(--color-text-muted)] mb-1">no encryption keys configured</p>
+                    <p className="text-[11px] text-[var(--color-text-dim)] mb-4">
                       credentials are encrypted with SignalPilot&apos;s managed key
                     </p>
                     <button
                       onClick={() => setShowCreate(true)}
-                      className="inline-flex items-center gap-2 px-4 py-2 text-xs tracking-wider uppercase border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-text)] transition-all"
+                      className="inline-flex items-center gap-2 px-4 py-2 text-xs border border-[var(--color-border)] rounded-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-text)] transition-colors duration-150"
                     >
                       <Plus className="w-3.5 h-3.5" /> register a key
                     </button>
@@ -276,16 +276,16 @@ export default function BYOKPage() {
                     {keys.map((key) => {
                       const vr = validationResults[key.id];
                       return (
-                        <div key={key.id} className={`flex items-center justify-between p-3 border ${key.status === "active" ? "border-[var(--color-border)]" : "border-red-500/20 bg-red-500/5"}`}>
+                        <div key={key.id} className={`flex items-center justify-between p-3 border rounded-[10px] ${key.status === "active" ? "border-[var(--color-border)]" : "border-red-500/20 bg-red-500/5"}`}>
                           <div className="flex items-center gap-3">
                             <StatusDot status={key.status === "active" ? "healthy" : "error"} size={4} />
                             <div>
                               <div className="flex items-center gap-2">
-                                <code className="text-[13px] text-[var(--color-text)] tracking-wider">{key.key_alias}</code>
-                                <span className="text-[10px] px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-dim)] tracking-wider uppercase">{key.provider_type}</span>
-                                <span className={`text-[10px] px-1.5 py-0.5 border tracking-wider uppercase ${key.status === "active" ? "border-emerald-500/30 text-emerald-400" : "border-red-500/30 text-red-400"}`}>{key.status}</span>
+                                <code className="text-[13px] text-[var(--color-text)] font-mono">{key.key_alias}</code>
+                                <span className="text-[10px] px-1.5 py-0.5 border border-[var(--color-border)] rounded-[6px] text-[var(--color-text-dim)] tracking-wider uppercase">{key.provider_type}</span>
+                                <span className={`text-[10px] px-1.5 py-0.5 border rounded-[6px] tracking-wider uppercase ${key.status === "active" ? "border-emerald-500/30 text-emerald-400" : "border-red-500/30 text-red-400"}`}>{key.status}</span>
                               </div>
-                              <p className="text-[10px] text-[var(--color-text-dim)] tracking-wider mt-0.5">
+                              <p className="text-[10px] text-[var(--color-text-dim)] mt-0.5">
                                 created {new Date(key.created_at * 1000).toLocaleDateString()}
                                 {key.revoked_at && ` — revoked ${new Date(key.revoked_at * 1000).toLocaleDateString()}`}
                               </p>
@@ -293,7 +293,7 @@ export default function BYOKPage() {
                           </div>
                           <div className="flex items-center gap-2">
                             {vr && (
-                              <span className={`text-[10px] tracking-wider ${vr.valid ? "text-emerald-400" : "text-red-400"}`}>
+                              <span className={`text-[10px] ${vr.valid ? "text-emerald-400" : "text-red-400"}`}>
                                 {vr.valid ? "valid" : "invalid"}
                               </span>
                             )}
@@ -308,7 +308,7 @@ export default function BYOKPage() {
                             {key.status === "active" && !migrating && (
                               <button
                                 onClick={() => handleMigrate(key.id)}
-                                className="px-2 py-1 text-[10px] tracking-wider uppercase border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 transition-all"
+                                className="px-2 py-1 text-[10px] border border-emerald-500/30 rounded-[6px] text-emerald-400 hover:bg-emerald-500/10 transition-colors duration-150"
                               >
                                 migrate
                               </button>
@@ -328,7 +328,7 @@ export default function BYOKPage() {
                     {!showCreate && (
                       <button
                         onClick={() => setShowCreate(true)}
-                        className="flex items-center gap-2 px-3 py-2 text-[11px] tracking-wider text-[var(--color-text-dim)] hover:text-[var(--color-text)] border border-dashed border-[var(--color-border)] hover:border-[var(--color-text)] transition-all w-full justify-center"
+                        className="flex items-center gap-2 px-3 py-2 text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] border border-dashed border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-text)] transition-colors duration-150 w-full justify-center"
                       >
                         <Plus className="w-3 h-3" /> add key
                       </button>
@@ -338,24 +338,24 @@ export default function BYOKPage() {
 
                 {/* Create form */}
                 {showCreate && (
-                  <div className="mt-4 p-4 border border-[var(--color-border)] bg-[var(--color-bg)]/50">
-                    <p className="text-[12px] text-[var(--color-text-muted)] tracking-wider mb-3">register encryption key</p>
+                  <div className="mt-4 p-4 border border-[var(--color-border)] rounded-[14px] bg-[var(--color-bg)]/50">
+                    <p className="text-[12px] text-[var(--color-text-muted)] mb-3">register encryption key</p>
                     <div className="grid grid-cols-2 gap-3 mb-3">
                       <div>
-                        <label className="block text-[11px] text-[var(--color-text-dim)] mb-1 tracking-wider">key alias</label>
+                        <label className="block text-[11px] text-[var(--color-text-dim)] mb-1">key alias</label>
                         <input
                           value={createAlias}
                           onChange={(e) => setCreateAlias(e.target.value)}
                           placeholder="my-encryption-key"
-                          className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+                          className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
                         />
                       </div>
                       <div>
-                        <label className="block text-[11px] text-[var(--color-text-dim)] mb-1 tracking-wider">provider</label>
+                        <label className="block text-[11px] text-[var(--color-text-dim)] mb-1">provider</label>
                         <select
                           value={createProvider}
                           onChange={(e) => setCreateProvider(e.target.value)}
-                          className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+                          className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
                         >
                           {!IS_CLOUD_MODE && <option value="local">local (auto-generated)</option>}
                           <option value="aws_kms">AWS KMS</option>
@@ -367,7 +367,7 @@ export default function BYOKPage() {
 
                     {/* Provider-specific config fields */}
                     {createProvider === "local" && (
-                      <div className="mb-3 px-3 py-2 border border-[var(--color-border)] border-dashed text-[11px] text-[var(--color-text-dim)] tracking-wider">
+                      <div className="mb-3 px-3 py-2 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)]">
                         key material is auto-generated and stored in memory. suitable for development and testing only.
                       </div>
                     )}
@@ -375,45 +375,45 @@ export default function BYOKPage() {
                     {createProvider === "aws_kms" && (
                       <div className="mb-3 space-y-3">
                         <div>
-                          <label className="block text-[11px] text-[var(--color-text-dim)] mb-1 tracking-wider">KMS key ARN *</label>
+                          <label className="block text-[11px] text-[var(--color-text-dim)] mb-1">KMS key ARN *</label>
                           <input
                             value={awsKmsArn}
                             onChange={(e) => setAwsKmsArn(e.target.value)}
                             placeholder="arn:aws:kms:us-east-1:123456789:key/abcd-1234-..."
-                            className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide font-mono"
+                            className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] text-xs focus:outline-none focus:border-[var(--color-text-dim)] font-mono"
                           />
                         </div>
                         <div className="grid grid-cols-3 gap-3">
                           <div>
-                            <label className="block text-[11px] text-[var(--color-text-dim)] mb-1 tracking-wider">region</label>
+                            <label className="block text-[11px] text-[var(--color-text-dim)] mb-1">region</label>
                             <input
                               value={awsRegion}
                               onChange={(e) => setAwsRegion(e.target.value)}
                               placeholder="us-east-1"
-                              className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+                              className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
                             />
                           </div>
                           <div>
-                            <label className="block text-[11px] text-[var(--color-text-dim)] mb-1 tracking-wider">access key ID *</label>
+                            <label className="block text-[11px] text-[var(--color-text-dim)] mb-1">access key ID *</label>
                             <input
                               value={awsAccessKeyId}
                               onChange={(e) => setAwsAccessKeyId(e.target.value)}
                               placeholder="AKIA..."
-                              className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide font-mono"
+                              className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] text-xs focus:outline-none focus:border-[var(--color-text-dim)] font-mono"
                             />
                           </div>
                           <div>
-                            <label className="block text-[11px] text-[var(--color-text-dim)] mb-1 tracking-wider">secret access key *</label>
+                            <label className="block text-[11px] text-[var(--color-text-dim)] mb-1">secret access key *</label>
                             <input
                               type="password"
                               value={awsSecretKey}
                               onChange={(e) => setAwsSecretKey(e.target.value)}
                               placeholder="wJalrXUtnFEMI..."
-                              className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide font-mono"
+                              className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] text-xs focus:outline-none focus:border-[var(--color-text-dim)] font-mono"
                             />
                           </div>
                         </div>
-                        <div className="px-3 py-2 border border-[var(--color-border)] border-dashed text-[10px] text-[var(--color-text-dim)] tracking-wider">
+                        <div className="px-3 py-2 border border-[var(--color-border)] border-dashed rounded-[10px] text-[10px] text-[var(--color-text-dim)]">
                           the IAM user needs <code className="text-[var(--color-text-muted)]">kms:Encrypt</code>, <code className="text-[var(--color-text-muted)]">kms:Decrypt</code>, <code className="text-[var(--color-text-muted)]">kms:GenerateDataKey</code> permissions on the key. credentials are stored encrypted and never leave SignalPilot.
                         </div>
                       </div>
@@ -422,24 +422,24 @@ export default function BYOKPage() {
                     {createProvider === "gcp_kms" && (
                       <div className="mb-3 space-y-3">
                         <div>
-                          <label className="block text-[11px] text-[var(--color-text-dim)] mb-1 tracking-wider">key resource name *</label>
+                          <label className="block text-[11px] text-[var(--color-text-dim)] mb-1">key resource name *</label>
                           <input
                             value={gcpKeyResource}
                             onChange={(e) => setGcpKeyResource(e.target.value)}
                             placeholder="projects/my-project/locations/global/keyRings/my-ring/cryptoKeys/my-key"
-                            className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide font-mono"
+                            className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] text-xs focus:outline-none focus:border-[var(--color-text-dim)] font-mono"
                           />
                         </div>
                         <div>
-                          <label className="block text-[11px] text-[var(--color-text-dim)] mb-1 tracking-wider">service account JSON key *</label>
+                          <label className="block text-[11px] text-[var(--color-text-dim)] mb-1">service account JSON key *</label>
                           <textarea
                             value={gcpServiceAccountJson}
                             onChange={(e) => setGcpServiceAccountJson(e.target.value)}
                             placeholder='{"type": "service_account", "project_id": "...", ...}'
                             rows={4}
-                            className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide font-mono resize-y"
+                            className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] text-xs focus:outline-none focus:border-[var(--color-text-dim)] font-mono resize-y"
                           />
-                          <p className="text-[10px] text-[var(--color-text-dim)] mt-1 tracking-wider opacity-60">
+                          <p className="text-[10px] text-[var(--color-text-dim)] mt-1 opacity-60">
                             paste the full JSON contents of your service account key file. the service account needs the <code className="text-[var(--color-text-muted)]">Cloud KMS CryptoKey Encrypter/Decrypter</code> role.
                           </p>
                         </div>
@@ -450,55 +450,55 @@ export default function BYOKPage() {
                       <div className="mb-3 space-y-3">
                         <div className="grid grid-cols-2 gap-3">
                           <div>
-                            <label className="block text-[11px] text-[var(--color-text-dim)] mb-1 tracking-wider">vault URL *</label>
+                            <label className="block text-[11px] text-[var(--color-text-dim)] mb-1">vault URL *</label>
                             <input
                               value={azureVaultUrl}
                               onChange={(e) => setAzureVaultUrl(e.target.value)}
                               placeholder="https://my-vault.vault.azure.net"
-                              className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide font-mono"
+                              className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] text-xs focus:outline-none focus:border-[var(--color-text-dim)] font-mono"
                             />
                           </div>
                           <div>
-                            <label className="block text-[11px] text-[var(--color-text-dim)] mb-1 tracking-wider">key name *</label>
+                            <label className="block text-[11px] text-[var(--color-text-dim)] mb-1">key name *</label>
                             <input
                               value={azureKeyName}
                               onChange={(e) => setAzureKeyName(e.target.value)}
                               placeholder="my-encryption-key"
-                              className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide"
+                              className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] text-xs focus:outline-none focus:border-[var(--color-text-dim)]"
                             />
                           </div>
                         </div>
                         <div className="grid grid-cols-3 gap-3">
                           <div>
-                            <label className="block text-[11px] text-[var(--color-text-dim)] mb-1 tracking-wider">tenant ID *</label>
+                            <label className="block text-[11px] text-[var(--color-text-dim)] mb-1">tenant ID *</label>
                             <input
                               value={azureTenantId}
                               onChange={(e) => setAzureTenantId(e.target.value)}
                               placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                              className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide font-mono"
+                              className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] text-xs focus:outline-none focus:border-[var(--color-text-dim)] font-mono"
                             />
                           </div>
                           <div>
-                            <label className="block text-[11px] text-[var(--color-text-dim)] mb-1 tracking-wider">client ID *</label>
+                            <label className="block text-[11px] text-[var(--color-text-dim)] mb-1">client ID *</label>
                             <input
                               value={azureClientId}
                               onChange={(e) => setAzureClientId(e.target.value)}
                               placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                              className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide font-mono"
+                              className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] text-xs focus:outline-none focus:border-[var(--color-text-dim)] font-mono"
                             />
                           </div>
                           <div>
-                            <label className="block text-[11px] text-[var(--color-text-dim)] mb-1 tracking-wider">client secret *</label>
+                            <label className="block text-[11px] text-[var(--color-text-dim)] mb-1">client secret *</label>
                             <input
                               type="password"
                               value={azureClientSecret}
                               onChange={(e) => setAzureClientSecret(e.target.value)}
                               placeholder="..."
-                              className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs focus:outline-none focus:border-[var(--color-text-dim)] tracking-wide font-mono"
+                              className="w-full px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] text-xs focus:outline-none focus:border-[var(--color-text-dim)] font-mono"
                             />
                           </div>
                         </div>
-                        <div className="px-3 py-2 border border-[var(--color-border)] border-dashed text-[10px] text-[var(--color-text-dim)] tracking-wider">
+                        <div className="px-3 py-2 border border-[var(--color-border)] border-dashed rounded-[10px] text-[10px] text-[var(--color-text-dim)]">
                           the service principal needs the <code className="text-[var(--color-text-muted)]">Key Vault Crypto User</code> role on the key vault. assign via Azure Portal &rarr; Key Vault &rarr; Access control (IAM). credentials are stored encrypted and never leave SignalPilot.
                         </div>
                       </div>
@@ -507,14 +507,14 @@ export default function BYOKPage() {
                       <button
                         onClick={handleCreate}
                         disabled={creating || !createAlias.trim()}
-                        className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium tracking-wider uppercase hover:opacity-90 disabled:opacity-30 transition-all"
+                        className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium rounded-[10px] hover:opacity-90 disabled:opacity-30 transition-opacity duration-150"
                       >
                         {creating && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                         register key
                       </button>
                       <button
                         onClick={() => { setShowCreate(false); setCreateAlias(""); }}
-                        className="px-4 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] tracking-wider transition-colors"
+                        className="px-4 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] rounded-[10px] transition-colors duration-150"
                       >
                         cancel
                       </button>
@@ -529,28 +529,28 @@ export default function BYOKPage() {
           {status && (
             <section className="mb-8">
               <SectionHeader icon={RefreshCw} title="migration status" />
-              <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
+              <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] overflow-hidden">
                 <div className="p-6">
                   <div className="grid grid-cols-3 gap-4 mb-4">
-                    <div className="p-3 border border-[var(--color-border)]">
+                    <div className="p-3 border border-[var(--color-border)] rounded-[10px]">
                       <p className="text-[10px] text-[var(--color-text-dim)] tracking-wider uppercase mb-1">total credentials</p>
-                      <p className="text-[20px] text-[var(--color-text)] tabular-nums">{status.total}</p>
+                      <p className="text-[20px] text-[var(--color-text)] font-mono tabular-nums">{status.total}</p>
                     </div>
-                    <div className="p-3 border border-emerald-500/20">
+                    <div className="p-3 border border-emerald-500/20 rounded-[10px]">
                       <p className="text-[10px] text-emerald-400 tracking-wider uppercase mb-1">your key</p>
-                      <p className="text-[20px] text-emerald-400 tabular-nums">{status.byok}</p>
+                      <p className="text-[20px] text-emerald-400 font-mono tabular-nums">{status.byok}</p>
                     </div>
-                    <div className="p-3 border border-[var(--color-border)]">
+                    <div className="p-3 border border-[var(--color-border)] rounded-[10px]">
                       <p className="text-[10px] text-[var(--color-text-dim)] tracking-wider uppercase mb-1">managed</p>
-                      <p className="text-[20px] text-[var(--color-text-muted)] tabular-nums">{status.managed}</p>
+                      <p className="text-[20px] text-[var(--color-text-muted)] font-mono tabular-nums">{status.managed}</p>
                     </div>
                   </div>
 
                   {status.byok > 0 && (
-                    <div className="flex items-start gap-2 p-3 border border-amber-500/20 bg-amber-500/5 mb-4">
+                    <div className="flex items-start gap-2 p-3 border border-amber-500/20 bg-amber-500/5 rounded-[10px] mb-4">
                       <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" strokeWidth={1.5} />
                       <div>
-                        <p className="text-[11px] text-amber-400 tracking-wider">
+                        <p className="text-[11px] text-amber-400">
                           {status.byok} credential(s) encrypted with your key. revoking your key will make these credentials unreadable.
                         </p>
                       </div>
@@ -561,7 +561,7 @@ export default function BYOKPage() {
                     <button
                       onClick={handleRevert}
                       disabled={reverting}
-                      className="flex items-center gap-2 px-3 py-2 text-[11px] tracking-wider border border-amber-500/30 text-amber-400 hover:bg-amber-500/10 transition-all"
+                      className="flex items-center gap-2 px-3 py-2 text-[11px] border border-amber-500/30 rounded-[10px] text-amber-400 hover:bg-amber-500/10 transition-colors duration-150"
                     >
                       {reverting ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" strokeWidth={1.5} />}
                       revert all to managed encryption
@@ -575,8 +575,8 @@ export default function BYOKPage() {
           {/* How it works */}
           <section className="mb-8">
             <SectionHeader icon={Shield} title="how bring-your-own-key works" />
-            <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
-              <div className="p-6 space-y-3 text-[11px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+            <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] overflow-hidden">
+              <div className="p-6 space-y-3 text-[11px] text-[var(--color-text-dim)] leading-relaxed">
                 <p><span className="text-[var(--color-text-muted)]">1.</span> you register a master key (KEK) — stored in your KMS, never leaves your infrastructure</p>
                 <p><span className="text-[var(--color-text-muted)]">2.</span> SignalPilot generates a data encryption key (DEK) per credential, wraps it with your KEK</p>
                 <p><span className="text-[var(--color-text-muted)]">3.</span> credentials are encrypted with the DEK — SignalPilot stores only the wrapped DEK + ciphertext</p>

@@ -1,0 +1,725 @@
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from gateway.analysis_delivery import (
+    DeliveryRenderer,
+    DeliveryResult,
+    delivery_api_key_for_org,
+    delivery_result_to_status,
+    load_delivery_packet,
+    load_delivery_packet_from_events,
+    render_slack_final_message,
+    render_slack_progress_message,
+)
+from gateway.analysis_delivery import credentials as credentials_module
+from gateway.analysis_delivery import trace_loader as trace_loader_module
+from gateway.analysis_delivery.html_orchestrator import _html_model_payload
+from gateway.analysis_delivery.renderer import fallback_delivery
+from gateway.trace_markers import redact_trace_control_markers
+
+
+def _marker_event(idx: int, marker: str, payload: dict, *, type_: str = "text") -> dict:
+    """Build a trace event in the stored format.
+
+    ``store.chat_traces`` applies ``redact_trace_control_markers`` during input.
+    The function stores control markers in metadata. The loader does not parse
+    markers from visible content.
+    """
+    import json as _json
+
+    content, metadata = redact_trace_control_markers(f"{marker}: {_json.dumps(payload)}")
+    return {"idx": idx, "type": type_, "content": content, "metadata": metadata}
+
+
+
+def test_trace_loader_extracts_latest_worker_plan_progress_and_final_statement() -> None:
+    packet = load_delivery_packet_from_events(
+        [
+            {"idx": 0, "type": "user", "content": "Analyze revenue"},
+            _marker_event(1, "PLAN", {"steps": ["Inspect schema", "Run revenue query"]}),
+            _marker_event(
+                2,
+                "PROGRESS",
+                {"currentStep": "Inspect schema", "completedSteps": [], "status": "checking tables"},
+            ),
+            _marker_event(
+                3,
+                "PLAN",
+                {"steps": ["Inspect schema", "Run revenue query", "Validate totals"]},
+            ),
+            _marker_event(
+                4,
+                "FINAL_STATEMENT",
+                {
+                    "statement": "Revenue increased.",
+                    "confidenceScore": "high",
+                    "caveats": ["Excludes refunds"],
+                    "handoffNotes": ["Used notebook SDK."],
+                },
+            ),
+            {
+                "idx": 5,
+                "type": "done",
+                "metadata": {
+                    "result": {
+                        "notion_charts": [
+                            {
+                                "title": "Revenue trend",
+                                "url": "/api/notion-analysis/chart/req/revenue.png",
+                            }
+                        ]
+                    }
+                },
+            },
+        ],
+        status_payload={
+            "status": "Done",
+            "dataSnapshots": [
+                {
+                    "name": "Revenue by month",
+                    "url": "/api/notion-analysis/snapshot/req/revenue.json",
+                    "columns": ["month", "revenue"],
+                    "rowCount": 1,
+                }
+            ],
+        },
+    )
+
+    assert packet.user_request == "Analyze revenue"
+    assert packet.plan is not None
+    assert packet.plan.steps == ["Inspect schema", "Run revenue query", "Validate totals"]
+    assert packet.latest_progress is not None
+    assert packet.latest_progress.current_step == "Inspect schema"
+    assert packet.final_statement is not None
+    assert packet.final_statement.statement == "Revenue increased."
+    assert packet.final_statement.confidence_score == "high"
+    assert packet.charts[0]["title"] == "Revenue trend"
+    assert packet.data_snapshots[0]["name"] == "Revenue by month"
+    assert packet.status == "done"
+
+
+def test_html_payload_excludes_audit_and_confidence_fields() -> None:
+    packet = load_delivery_packet_from_events(
+        [
+            _marker_event(
+                1,
+                "FINAL_STATEMENT",
+                {
+                    "statement": "Revenue increased.",
+                    "confidenceScore": "high",
+                    "caveats": ["Excludes refunds"],
+                    "handoffNotes": ["Used notebook SDK."],
+                },
+            )
+        ],
+        user_request="Build a revenue dashboard",
+        status_payload={
+            "status": "Done",
+            "summary": "Revenue increased.",
+            "confidenceScore": "high",
+            "gotchas": ["Excludes refunds"],
+            "analysisMethod": "Used notebook SDK",
+            "trailUrl": "https://app.test/projects?file=analysis.py",
+            "dataSnapshots": [{"name": "Revenue", "url": "/snapshot.json"}],
+        },
+    )
+
+    payload = _html_model_payload(packet)
+    serialized = json.dumps(payload)
+
+    assert set(payload) == {"userRequest", "answer", "summary", "dataSnapshots", "charts"}
+    assert payload["dataSnapshots"] == [{"name": "Revenue", "url": "/snapshot.json"}]
+    assert "confidenceScore" not in serialized
+    assert "caveats" not in serialized
+    assert "gotchas" not in serialized
+    assert "analysisMethod" not in serialized
+    assert "trailUrl" not in serialized
+
+
+def test_trace_loader_drops_numeric_confidence_score() -> None:
+    packet = load_delivery_packet_from_events(
+        [
+            _marker_event(
+                1,
+                "FINAL_STATEMENT",
+                {
+                    "statement": "Revenue increased.",
+                    "confidenceScore": 0.8,
+                    "caveats": [],
+                    "handoffNotes": [],
+                },
+            )
+        ],
+        status_payload={"status": "Done"},
+    )
+
+    assert packet.final_statement is not None
+    assert packet.final_statement.confidence_score is None
+
+    delivery = fallback_delivery(packet)
+    status = delivery_result_to_status(delivery, packet)
+
+    assert "confidenceScore" not in status
+
+
+@pytest.mark.asyncio
+async def test_load_delivery_packet_reuses_loaded_trace_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, dict]] = []
+
+    async def get_thread(*args, **kwargs):
+        calls.append(("get_thread", kwargs))
+        return SimpleNamespace(status="done")
+
+    async def get_events(*args, **kwargs):
+        calls.append(("get_events", kwargs))
+        return []
+
+    monkeypatch.setattr(trace_loader_module.chat_traces, "get_thread", get_thread)
+    monkeypatch.setattr(trace_loader_module.chat_traces, "get_events", get_events)
+
+    packet = await load_delivery_packet(
+        AsyncMock(),
+        org_id="org-1",
+        user_id="user-1",
+        thread_id="thread-1",
+    )
+
+    assert packet.status == "done"
+    assert calls == [
+        (
+            "get_thread",
+            {"org_id": "org-1", "user_id": "user-1", "thread_id": "thread-1"},
+        ),
+        (
+            "get_events",
+            {
+                "org_id": "org-1",
+                "user_id": "user-1",
+                "thread_id": "thread-1",
+                "require_thread": False,
+            },
+        ),
+    ]
+
+
+def test_fallback_delivery_strips_placeholder_chart_labels() -> None:
+    packet = load_delivery_packet_from_events(
+        [],
+        status_payload={
+            "status": "Done",
+            "notionCharts": [
+                {
+                    "title": "Chart 1",
+                    "caption": "Notebook image 1",
+                    "url": "/api/notion-analysis/chart/req/image-1.png",
+                }
+            ],
+        },
+    )
+
+    result = fallback_delivery(packet)
+
+    assert result.notion_charts == [
+        {
+            "title": "",
+            "caption": "",
+            "url": "/api/notion-analysis/chart/req/image-1.png",
+        }
+    ]
+
+
+def test_trace_control_markers_are_redacted_into_metadata_for_delivery() -> None:
+    content, metadata = redact_trace_control_markers(
+        "- Revenue increased.\n"
+        "- Costs stayed flat.\n\n"
+        'FINAL_STATEMENT: {"statement":"Revenue increased. Costs stayed flat.",'
+        '"confidenceScore":"medium","caveats":["Excludes refunds"],'
+        '"handoffNotes":["Used notebook SDK."]}'
+    )
+
+    assert "FINAL_STATEMENT" not in content
+    assert content == "- Revenue increased.\n- Costs stayed flat."
+
+    packet = load_delivery_packet_from_events(
+        [
+            {
+                "idx": 1,
+                "type": "text",
+                "content": content,
+                "metadata": metadata,
+            }
+        ],
+        status_payload={"status": "Done"},
+    )
+
+    assert packet.final_statement is not None
+    assert packet.final_statement.statement == "Revenue increased. Costs stayed flat."
+    assert packet.final_statement.confidence_score == "medium"
+    assert packet.final_statement.caveats == ["Excludes refunds"]
+    assert packet.final_statement.handoff_notes == ["Used notebook SDK."]
+
+
+def test_trace_loader_uses_final_statement_metadata_with_empty_content() -> None:
+    packet = load_delivery_packet_from_events(
+        [
+            {
+                "idx": 1,
+                "type": "done",
+                "content": "",
+                "metadata": {
+                    "control_markers": [
+                        {
+                            "marker": "FINAL_STATEMENT",
+                            "payload": {
+                                "statement": "Revenue increased.",
+                                "confidenceScore": "high",
+                                "caveats": ["Excludes refunds"],
+                                "handoffNotes": ["Used notebook SDK."],
+                            },
+                        }
+                    ],
+                    "result": {"summary": "Revenue increased."},
+                },
+            }
+        ],
+        status_payload={"status": "Done"},
+        thread_status="done",
+    )
+
+    assert packet.final_statement is not None
+    assert packet.final_statement.statement == "Revenue increased."
+    assert packet.final_statement.confidence_score == "high"
+    assert packet.final_statement.caveats == ["Excludes refunds"]
+    assert packet.final_statement.handoff_notes == ["Used notebook SDK."]
+
+
+def test_trace_loader_falls_back_to_done_result_final_statement() -> None:
+    """The canonical result payload (asdict of AnalysisResult) is snake_case."""
+    packet = load_delivery_packet_from_events(
+        [
+            {
+                "idx": 1,
+                "type": "done",
+                "content": "",
+                "metadata": {
+                    "result": {
+                        "final_answer": "Result-derived statement.",
+                        "confidence_score": "medium",
+                        "gotchas": ["Limited rows"],
+                        "analysis_method": "Used notebook SDK.",
+                    }
+                },
+            }
+        ],
+        status_payload={"status": "Done"},
+        thread_status="done",
+    )
+
+    assert packet.final_statement is not None
+    assert packet.final_statement.statement == "Result-derived statement."
+    assert packet.final_statement.confidence_score == "medium"
+    assert packet.final_statement.caveats == ["Limited rows"]
+    assert packet.final_statement.handoff_notes == ["Used notebook SDK."]
+
+
+def test_markdown_wrapped_marker_is_redacted_into_metadata() -> None:
+    """The ** wrapper the agent sometimes adds is still stripped on ingest."""
+    content, metadata = redact_trace_control_markers(
+        '**FINAL_STATEMENT: {"statement":"Revenue increased.",'
+        '"confidenceScore":"high","caveats":[],"handoffNotes":[]}**'
+    )
+
+    assert content == ""
+    assert metadata is not None
+    assert metadata["control_markers"][0]["payload"]["statement"] == "Revenue increased."
+
+    packet = load_delivery_packet_from_events(
+        [{"idx": 1, "type": "text", "content": content, "metadata": metadata}],
+        status_payload={"status": "Done"},
+    )
+
+    assert packet.final_statement is not None
+    assert packet.final_statement.statement == "Revenue increased."
+
+
+def test_inline_marker_without_metadata_is_not_parsed() -> None:
+    """Verify that the loader ignores an inline control marker.
+
+    ``redact_trace_control_markers`` stores control markers in metadata during
+    input. An event with a marker only in visible content contributes no data.
+    """
+    packet = load_delivery_packet_from_events(
+        [
+            {
+                "idx": 1,
+                "type": "text",
+                "content": 'PLAN: {"steps":["Inspect schema"]}',
+            },
+            {
+                "idx": 2,
+                "type": "text",
+                "content": (
+                    'FINAL_STATEMENT: {"statement":"Revenue increased.",'
+                    '"confidenceScore":"high","caveats":[],"handoffNotes":[]}'
+                ),
+            },
+        ],
+        status_payload={"status": "Done"},
+    )
+
+    assert packet.plan is None
+    assert packet.final_statement is None
+
+
+def test_marker_payload_snake_case_keys_are_not_accepted() -> None:
+    """Verify that control-marker payloads accept only camel case names."""
+    packet = load_delivery_packet_from_events(
+        [
+            _marker_event(
+                1,
+                "PROGRESS",
+                {"current_step": "Inspect schema", "completed_steps": ["Load data"]},
+            ),
+            _marker_event(
+                2,
+                "FINAL_STATEMENT",
+                {
+                    "statement": "Revenue increased.",
+                    "confidence_score": "high",
+                    "handoff_notes": ["Used notebook SDK."],
+                },
+            ),
+        ],
+        status_payload={"status": "Done"},
+    )
+
+    assert packet.latest_progress is None
+    assert packet.final_statement is not None
+    assert packet.final_statement.confidence_score is None
+    assert packet.final_statement.handoff_notes == []
+
+
+def test_done_result_with_legacy_camel_case_keys_is_rejected() -> None:
+    """A done-event result must use the canonical AnalysisResult field names."""
+    with pytest.raises(trace_loader_module.UnsupportedResultPayload) as exc_info:
+        load_delivery_packet_from_events(
+            [
+                {
+                    "idx": 1,
+                    "type": "done",
+                    "content": "",
+                    "metadata": {
+                        "result": {
+                            "finalAnswer": "Revenue increased.",
+                            "analysisMethod": "Used notebook SDK.",
+                            "notionComment": "Revenue increased.",
+                        }
+                    },
+                }
+            ],
+            status_payload={"status": "Done"},
+        )
+
+    message = str(exc_info.value)
+    assert "final_answer" in message
+    assert "analysis_method" in message
+
+
+def test_slack_progress_waits_for_worker_plan_then_uses_exact_steps() -> None:
+    no_plan = load_delivery_packet_from_events([], user_request="Analyze revenue")
+
+    assert render_slack_progress_message(no_plan) == "Analyzing your request..."
+
+    packet = load_delivery_packet_from_events(
+        [
+            _marker_event(1, "PLAN", {"steps": ["Inspect schema", "Run revenue query"]}),
+            _marker_event(
+                2,
+                "PROGRESS",
+                {
+                    "currentStep": "Run revenue query",
+                    "completedSteps": ["Inspect schema"],
+                    "status": "querying fin-db",
+                },
+            ),
+        ],
+    )
+
+    rendered = render_slack_progress_message(packet)
+
+    assert "- [x] Inspect schema" in rendered
+    assert "- [ ] Run revenue query (current)" in rendered
+    assert "querying fin-db" in rendered
+
+
+def test_slack_final_message_converts_standard_markdown_to_mrkdwn() -> None:
+    packet = load_delivery_packet_from_events([], status_payload={"status": "Done"})
+    delivery = DeliveryResult(
+        summary="Revenue increased.",
+        slack_message="# Summary\n- **Revenue** increased. See [report](https://app.test/report).",
+        notion_comment="",
+        final_answer="",
+    )
+
+    rendered = render_slack_final_message(packet, delivery)
+
+    assert "*Summary*" in rendered
+    assert "*Revenue*" in rendered
+    assert "<https://app.test/report|report>" in rendered
+    assert "**Revenue**" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_delivery_api_key_for_org_reads_stored_org_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    resolve_anthropic_key = AsyncMock(return_value="sk-ant-org")
+    monkeypatch.setattr(credentials_module.org_secrets_store, "resolve_anthropic_key", resolve_anthropic_key)
+
+    api_key = await delivery_api_key_for_org(AsyncMock(), org_id="org-1")
+
+    assert api_key == "sk-ant-org"
+    resolve_anthropic_key.assert_awaited_once()
+    assert resolve_anthropic_key.await_args.args[1:] == ("org-1",)
+
+
+@pytest.mark.asyncio
+async def test_delivery_api_key_for_org_disables_model_delivery_without_org_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolve_anthropic_key = AsyncMock(return_value=None)
+    monkeypatch.setattr(credentials_module.org_secrets_store, "resolve_anthropic_key", resolve_anthropic_key)
+
+    api_key = await delivery_api_key_for_org(AsyncMock(), org_id="org-1")
+
+    assert api_key == ""
+
+
+@pytest.mark.asyncio
+async def test_delivery_renderer_falls_back_to_final_statement_without_model() -> None:
+    packet = load_delivery_packet_from_events(
+        [
+            _marker_event(
+                1,
+                "FINAL_STATEMENT",
+                {
+                    "statement": "Revenue increased.",
+                    "confidenceScore": "high",
+                    "caveats": ["Excludes refunds"],
+                    "handoffNotes": ["Used notebook SDK."],
+                },
+            )
+        ],
+        status_payload={"status": "Done"},
+        trail_url="https://app.test/projects?file=analysis.py",
+    )
+
+    delivery = await DeliveryRenderer(model="", api_key="").render(packet)
+    status = delivery_result_to_status(delivery, packet)
+    slack_text = render_slack_final_message(packet, delivery)
+
+    assert delivery.slack_message == "- Revenue increased."
+    assert status["finalAnswer"] == "- Revenue increased."
+    assert status["confidenceScore"] == "high"
+    assert "*Analysis complete*" in slack_text
+    assert "- Revenue increased." in slack_text
+    assert "*Confidence:* high" in slack_text
+    assert "<https://app.test/projects?file=analysis.py|Open authenticated notebook>" in slack_text
+
+
+@pytest.mark.asyncio
+async def test_delivery_renderer_empty_api_key_ignores_server_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "server-ant-key")
+    packet = load_delivery_packet_from_events(
+        [
+            _marker_event(
+                1,
+                "FINAL_STATEMENT",
+                {
+                    "statement": "Revenue increased.",
+                    "confidenceScore": "high",
+                    "caveats": [],
+                    "handoffNotes": [],
+                },
+            )
+        ],
+        status_payload={"status": "Done"},
+    )
+
+    class FailingClient:
+        async def post(self, *_args, **_kwargs):
+            raise AssertionError("server env key should not trigger model rendering")
+
+    delivery = await DeliveryRenderer(
+        model="claude-haiku-test",
+        api_key="",
+        http_client=FailingClient(),
+    ).render(packet)  # type: ignore[arg-type]
+
+    assert delivery.slack_message == "- Revenue increased."
+
+
+@pytest.mark.asyncio
+async def test_delivery_renderer_defaults_to_sonnet_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SIGNALPILOT_DELIVERY_MODEL", raising=False)
+    packet = load_delivery_packet_from_events(
+        [
+            {
+                "idx": 1,
+                "type": "text",
+                "content": (
+                    'FINAL_STATEMENT: {"statement":"Revenue increased.",'
+                    '"confidenceScore":"high","caveats":[],"handoffNotes":[]}'
+                ),
+            }
+        ],
+        status_payload={"status": "Done"},
+    )
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            {
+                                "summary": "Revenue increased.",
+                                "slackMessage": "- Revenue increased.",
+                                "notionComment": "- Revenue increased.",
+                                "finalAnswer": "- Revenue increased.",
+                                "gotchas": [],
+                                "analysisMethod": "Notebook SDK.",
+                                "notionCharts": [],
+                            }
+                        ),
+                    }
+                ]
+            }
+
+    class FakeClient:
+        async def post(self, _url: str, *, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
+            del headers
+            captured["json"] = json
+            return FakeResponse()
+
+    await DeliveryRenderer(api_key="test-key", http_client=FakeClient()).render(packet)  # type: ignore[arg-type]
+
+    request_json = captured["json"]
+    assert isinstance(request_json, dict)
+    assert request_json["model"] == "claude-sonnet-4-5-20250929"
+
+
+@pytest.mark.asyncio
+async def test_delivery_renderer_preserves_packet_charts_when_model_returns_empty_chart_list() -> None:
+    packet = load_delivery_packet_from_events(
+        [],
+        status_payload={
+            "status": "Done",
+            "notionCharts": [
+                {"title": "Revenue trend", "url": "/api/notion-analysis/chart/req/revenue.png"},
+                {"title": "Margin ranking", "url": "/api/notion-analysis/chart/req/margin.png"},
+            ],
+        },
+    )
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            {
+                                "summary": "Revenue increased.",
+                                "slackMessage": "- Revenue increased.",
+                                "notionComment": "- Revenue increased.",
+                                "finalAnswer": "- Revenue increased.",
+                                "gotchas": [],
+                                "analysisMethod": "Notebook SDK.",
+                                "notionCharts": [],
+                            }
+                        ),
+                    }
+                ]
+            }
+
+    class FakeClient:
+        async def post(self, _url: str, *, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
+            del headers, json
+            return FakeResponse()
+
+    delivery = await DeliveryRenderer(model="claude-haiku-test", api_key="test-key", http_client=FakeClient()).render(
+        packet
+    )  # type: ignore[arg-type]
+    status = delivery_result_to_status(delivery, packet)
+
+    assert [chart["title"] for chart in delivery.notion_charts] == ["Revenue trend", "Margin ranking"]
+    assert [chart["title"] for chart in status["notionCharts"]] == ["Revenue trend", "Margin ranking"]
+
+
+@pytest.mark.asyncio
+async def test_delivery_renderer_prompt_requires_separate_bullet_lines() -> None:
+    packet = load_delivery_packet_from_events(
+        [
+            {
+                "idx": 1,
+                "type": "text",
+                "content": (
+                    'FINAL_STATEMENT: {"statement":"Revenue increased. Costs stayed flat.",'
+                    '"confidenceScore":"high","caveats":[],"handoffNotes":[]}'
+                ),
+            }
+        ],
+        status_payload={"status": "Done"},
+    )
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            {
+                                "summary": "Revenue increased.",
+                                "slackMessage": "- Revenue increased.\n- Costs stayed flat.",
+                                "notionComment": "- Revenue increased.\n- Costs stayed flat.",
+                                "finalAnswer": "- Revenue increased.\n- Costs stayed flat.",
+                                "gotchas": [],
+                                "analysisMethod": "Notebook SDK.",
+                                "notionCharts": [],
+                            }
+                        ),
+                    }
+                ]
+            }
+
+    class FakeClient:
+        async def post(self, _url: str, *, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
+            captured["headers"] = headers
+            captured["json"] = json
+            return FakeResponse()
+
+    await DeliveryRenderer(model="claude-haiku-test", api_key="test-key", http_client=FakeClient()).render(packet)  # type: ignore[arg-type]
+
+    request_json = captured["json"]
+    assert isinstance(request_json, dict)
+    system_prompt = request_json["system"]
+    assert isinstance(system_prompt, str)
+    assert "Each bullet must be on its own line and must start with '- '" in system_prompt
+    assert "do not keep them inside one bullet" in system_prompt

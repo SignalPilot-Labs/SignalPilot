@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import uuid
 from collections.abc import Awaitable, Callable
@@ -16,6 +17,17 @@ import gateway.store._constants as _constants
 import gateway.store.dbt_templates as dbt_templates
 from gateway.db.models import GatewayProject
 from gateway.models import ConnectionInfo, ProjectCreate, ProjectInfo, ProjectStorage, ProjectUpdate
+
+_ORG_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
+
+
+def _validate_org_id(org_id: str) -> None:
+    if not _ORG_ID_RE.match(org_id):
+        raise ValueError(f"Invalid org_id {org_id!r}: must match ^[A-Za-z0-9_\\-]{{1,64}}$")
+
+
+def _org_projects_root(org_id: str) -> Path:
+    return _constants.DATA_DIR / "projects" / org_id
 
 
 async def list_projects(session: AsyncSession, *, org_id: str) -> list[ProjectInfo]:
@@ -52,9 +64,9 @@ async def create_project(
         raise ValueError(f"Connection '{proj.connection_name}' not found")
 
     if proj.source.value == "local":
-        info = create_local_project(proj, connection)
+        info = create_local_project(proj, connection, org_id=org_id)
     else:
-        info = create_new_project(proj, connection)
+        info = create_new_project(proj, connection, org_id=org_id)
 
     db_proj = GatewayProject(
         id=info.id,
@@ -81,9 +93,16 @@ async def create_project(
     return info
 
 
-def create_new_project(proj: ProjectCreate, connection: ConnectionInfo) -> ProjectInfo:
-    project_dir = _constants.DATA_DIR / "projects" / proj.name
-    project_dir.mkdir(parents=True, exist_ok=True)
+def create_new_project(proj: ProjectCreate, connection: ConnectionInfo, *, org_id: str) -> ProjectInfo:
+    _validate_org_id(org_id)
+    org_root = _org_projects_root(org_id)
+    org_root.mkdir(parents=True, exist_ok=True)
+    os.chmod(str(org_root), 0o700)
+    project_dir = org_root / proj.name
+    try:
+        project_dir.mkdir(parents=True, exist_ok=False)
+    except FileExistsError:
+        raise ValueError(f"Project '{proj.name}' already exists on disk")
     for d in dbt_templates._SCAFFOLD_DIRS:
         (project_dir / d).mkdir(parents=True, exist_ok=True)
     for d in ("models/staging", "models/marts"):
@@ -107,13 +126,17 @@ def create_new_project(proj: ProjectCreate, connection: ConnectionInfo) -> Proje
     )
 
 
-def create_local_project(proj: ProjectCreate, connection: ConnectionInfo) -> ProjectInfo:
+def create_local_project(proj: ProjectCreate, connection: ConnectionInfo, *, org_id: str) -> ProjectInfo:
+    _validate_org_id(org_id)
     local = Path(proj.local_path or "")
     if not local.exists() or not (local / "dbt_project.yml").exists():
         raise ValueError(f"Path '{local}' does not exist or lacks dbt_project.yml")
     if proj.link_mode == "copy":
-        project_dir = _constants.DATA_DIR / "projects" / proj.name
-        shutil.copytree(str(local), str(project_dir), dirs_exist_ok=True)
+        org_root = _org_projects_root(org_id)
+        org_root.mkdir(parents=True, exist_ok=True)
+        os.chmod(str(org_root), 0o700)
+        project_dir = org_root / proj.name
+        shutil.copytree(str(local), str(project_dir), dirs_exist_ok=False)
         storage = ProjectStorage.managed
     else:
         project_dir = local
@@ -186,10 +209,15 @@ async def delete_project(session: AsyncSession, *, org_id: str, name: str) -> bo
     row = result.scalar_one_or_none()
     if not row:
         return False
-    if row.storage == "managed" and row.project_dir:
-        project_dir = Path(row.project_dir)
-        if project_dir.exists():
-            shutil.rmtree(project_dir)
+    if row.storage == "managed":
+        if row.project_dir:
+            stored_dir = Path(row.project_dir).resolve()
+            org_root = _org_projects_root(org_id).resolve()
+            if not stored_dir.is_relative_to(org_root):
+                raise ValueError(
+                    f"Project dir {stored_dir} is outside org root {org_root}; refusing to delete"
+                )
+            shutil.rmtree(str(stored_dir))
     await session.delete(row)
     await session.commit()
     return True

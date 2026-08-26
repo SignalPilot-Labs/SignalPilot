@@ -1,4 +1,4 @@
-"""Spider2-DBT benchmark runner — runs directly without Docker.
+"""Run the Spider2-DBT benchmark without Docker.
 
 Uses the Claude Agent SDK with MCP config for SignalPilot integration.
 Intended for use inside a container or machine that already has all deps
@@ -21,8 +21,6 @@ import sys
 import time
 from pathlib import Path
 
-from claude_agent_sdk.types import AgentDefinition
-
 from ..agent.prompts import build_agent_prompt
 from ..agent.sdk_runner import (
     run_name_fix_agent,
@@ -37,11 +35,8 @@ from ..core.tasks import load_eval_config, load_task
 from ..core.workdir import prepare_workdir, write_claude_md
 from ..dbt_tools.scanner import (
     check_package_availability,
-    classify_sql_models,
     extract_model_columns,
-    scan_yml_models,
 )
-from ..dbt_tools.templates import create_ephemeral_stubs, create_sql_templates
 from ..evaluation.comparator import evaluate
 from ..evaluation.db_utils import find_result_db, get_table_row_counts
 
@@ -51,88 +46,8 @@ DBT_BIN = shutil.which("dbt") or "/home/agentuser/.local/bin/dbt"
 
 _DBT_SYSTEM_PROMPT_TEMPLATE: str = (PROMPTS_DIR / "dbt_local_system.md").read_text()
 
-_DBT_SKILL_NAMES: tuple[str, ...] = ("dbt-workflow", "dbt-debugging", "duckdb-sql")
-
-
-def _snapshot_reference_tables(work_dir: Path, db_path: Path | None) -> None:
-    """Snapshot model tables that exist in the DB before the agent rebuilds them.
-
-    Only snapshots tables where: (1) a model SQL file exists AND is a stub, and
-    (2) the table already exists in the database (pre-computed reference data).
-    Raw source tables and complete models are excluded.
-    """
-    if not db_path or not db_path.exists():
-        return
-
-    import duckdb as _ddb
-
-    complete, stub_models = classify_sql_models(work_dir)
-    log(f"Snapshot: found {len(stub_models)} stubs: {sorted(stub_models)[:5]}")
-    if not stub_models:
-        return
-
-    try:
-        con = _ddb.connect(str(db_path), read_only=True)
-        db_tables = set(r[0] for r in con.execute("SHOW TABLES").fetchall())
-    except Exception as e:
-        log(f"Snapshot: cannot open DB: {e}", "WARN")
-        return
-
-    # Snapshot stubs that exist as pre-computed tables, plus complete sibling
-    # models in the same directories (their sample data helps the verifier
-    # catch NULL vs 0 and expression mismatches).
-    stub_dirs = set()
-    for sql_file in work_dir.rglob("*.sql"):
-        if any(skip in str(sql_file) for skip in ("dbt_packages", "target", ".claude")):
-            continue
-        if sql_file.stem in stub_models:
-            stub_dirs.add(sql_file.parent)
-    sibling_models = set()
-    for d in stub_dirs:
-        for sql_file in d.glob("*.sql"):
-            if sql_file.stem in complete and sql_file.stem in db_tables:
-                sibling_models.add(sql_file.stem)
-    to_snapshot = sorted((stub_models & db_tables) | sibling_models)
-    if not to_snapshot:
-        con.close()
-        log("Snapshot: no stub models have pre-existing tables — skipping")
-        return
-
-    lines = ["# Reference Table Snapshot\n"]
-    for table in to_snapshot:
-        try:
-            row_count = con.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
-            cols = con.execute(
-                f"SELECT column_name, data_type FROM information_schema.columns "
-                f"WHERE table_name = '{table}' ORDER BY ordinal_position"
-            ).fetchall()
-            sample_rows = con.execute(f'SELECT * FROM "{table}" LIMIT 3').fetchall()
-            col_names = [c[0] for c in cols]
-
-            lines.append(f"## {table} ({row_count:,} rows)")
-            lines.append("| Column | Type |")
-            lines.append("|--------|------|")
-            for col_name, col_type in cols:
-                lines.append(f"| {col_name} | {col_type} |")
-            lines.append("")
-            if sample_rows:
-                lines.append("Sample:")
-                lines.append("| " + " | ".join(col_names) + " |")
-                lines.append("|" + "|".join("---" for _ in col_names) + "|")
-                for row in sample_rows:
-                    lines.append("| " + " | ".join(str(v) for v in row) + " |")
-            lines.append("")
-        except Exception as e:
-            lines.append(f"## {table} (ERROR: {e})\n")
-
-    con.close()
-
-    try:
-        snapshot_path = work_dir / "reference_snapshot.md"
-        snapshot_path.write_text("\n".join(lines))
-        log(f"Snapshot: captured {len(to_snapshot)} reference table(s): {to_snapshot}")
-    except Exception as e:
-        log(f"Snapshot: failed to write file: {e}", "WARN")
+# Skills are provided by the signalpilot-plugin (installed at user scope).
+# The agent discovers skill names through the plugin.
 
 
 async def run_agent(
@@ -163,30 +78,14 @@ async def run_agent(
     print(system_prompt, flush=True)
     print("--- SYSTEM PROMPT END ---", flush=True)
 
-    verify_prompt_template = (PROMPTS_DIR / "dbt_verify_subagent.md").read_text()
-    verify_prompt_text = (
-        verify_prompt_template
-        .replace("${work_dir}", str(work_dir))
-        .replace("${instance_id}", instance_id)
-        .replace("${dbt_bin}", DBT_BIN)
-    )
-    verify_agent = AgentDefinition(
-        description="Verification agent that checks dbt model output for correctness after the build is complete.",
-        prompt=verify_prompt_text,
-        model="claude-sonnet-4-6",
-        maxTurns=80,
-    )
-
     result = await run_sdk_agent(
         prompt,
         work_dir,
         model,
         max_turns,
-        timeout=900,
+        timeout=1800,
         label="main-agent",
-        skill_names=_DBT_SKILL_NAMES,
         system_prompt=system_prompt,
-        agents={"verifier": verify_agent},
     )
 
     transcript_path = work_dir / "agent_output.json"
@@ -198,27 +97,6 @@ async def run_agent(
     }))
 
     return result["success"]
-
-
-def _auto_scale_max_turns(work_dir: Path, eval_critical_models: set[str], default_turns: int) -> int:
-    """Deprecated: we no longer scale turns by project complexity.
-
-    Turn caps are now a uniform safety ceiling (200) regardless of task size.
-    Validation loops are legitimate work and there is no budget cap either.
-    This function is kept only so that existing callers don't break — it logs
-    the project shape for debugging and returns the caller's default.
-    """
-    yml_models = scan_yml_models(work_dir)
-    complete_sql_models, stub_sql_models = classify_sql_models(work_dir)
-    missing_models_set = yml_models - (complete_sql_models | stub_sql_models)
-    work_count = len(missing_models_set) + len(stub_sql_models)
-    total_sql = len(list(work_dir.rglob("*.sql")))
-    log(
-        f"Project shape: {work_count} model(s) needing work "
-        f"({len(missing_models_set)} missing, {len(stub_sql_models)} stubs, "
-        f"{total_sql} total SQL files) — max_turns={default_turns}"
-    )
-    return default_turns
 
 
 def _run_dbt_selective(work_dir: Path, eval_critical_models: set[str], timeout: int = 120) -> subprocess.CompletedProcess:
@@ -342,21 +220,19 @@ def _post_agent_dbt_run(
     eval_critical_models: set[str],
     model: str,
 ) -> None:
-    """Post-agent safety net: run dbt deps + dbt run, dispatch quick-fix agent on failure."""
+    """Run dbt dependencies and models after the agent finishes.
+
+    Dispatch a correction agent when the dbt run fails.
+    """
     t0 = time.monotonic()
     log_separator("Step 4b: Final dbt deps + dbt run (post-agent safety net)")
 
-    # Only run dbt deps if packages.yml exists — otherwise it wipes pre-installed packages!
+    # Run dbt deps only when packages.yml exists.
     if (work_dir / "packages.yml").exists():
         subprocess.run(
             [DBT_BIN, "deps"],
             cwd=str(work_dir), capture_output=True, text=True, timeout=120,
         )
-
-    created_stubs_post = create_ephemeral_stubs(work_dir)
-    if created_stubs_post:
-        log(f"Post-agent ephemeral stubs created: {sorted(created_stubs_post)}")
-
 
     if eval_critical_models:
         dbt_result = _run_dbt_selective(work_dir, eval_critical_models)
@@ -386,8 +262,8 @@ def _post_agent_dbt_run(
         except Exception as e:
             log(f"Quick-fix agent failed: {e}", "WARN")
 
-    # Best-effort selective run (eval-critical only — do NOT run a full rebuild
-    # as it overwrites pre-existing dimension tables with non-deterministic ordering)
+    # Run only evaluation-critical models.
+    # A complete rebuild can overwrite reference dimension tables.
     if eval_critical_models:
         subprocess.run(
             [DBT_BIN, "run", "--select"] + list(sorted(eval_critical_models)),
@@ -403,7 +279,7 @@ def _run_name_fix_stage(
     eval_critical_models: set[str],
     model: str,
 ) -> None:
-    """If eval-critical tables are missing by name, dispatch a name-fix agent."""
+    """Dispatch a correction agent when evaluation-critical tables are missing."""
     if not eval_critical_models:
         return
 
@@ -458,9 +334,8 @@ def _flush_and_release(work_dir: Path, instance_id: str) -> None:
     time.sleep(2)
 
 
-# ── Async helpers for parallel mode ──────────────────────────────────────────
-# These wrap blocking subprocess calls so they don't stall the event loop when
-# multiple tasks run concurrently under asyncio.gather.
+# Define asynchronous helpers for parallel mode.
+# These helpers prevent blocking subprocess calls from stalling the event loop.
 
 async def _async_subprocess_run(
     args: list[str],
@@ -518,11 +393,6 @@ async def _post_agent_dbt_run_async(
             timeout=120,
         )
 
-    created_stubs_post = create_ephemeral_stubs(work_dir)
-    if created_stubs_post:
-        log(f"Post-agent ephemeral stubs created: {sorted(created_stubs_post)}")
-
-
     if eval_critical_models:
         dbt_result = await _run_dbt_selective_async(work_dir, eval_critical_models)
         if dbt_result.returncode == 0:
@@ -552,8 +422,8 @@ async def _post_agent_dbt_run_async(
         except Exception as e:
             log(f"Quick-fix agent failed: {e}", "WARN")
 
-    # Best-effort selective run (eval-critical only — do NOT run a full rebuild
-    # as it overwrites pre-existing dimension tables with non-deterministic ordering)
+    # Run only evaluation-critical models.
+    # A complete rebuild can overwrite reference dimension tables.
     if eval_critical_models:
         await _async_subprocess_run(
             [DBT_BIN, "run", "--select"] + list(sorted(eval_critical_models)),
@@ -689,20 +559,8 @@ async def execute_dbt_task(
         else:
             log(f"No .duckdb files in {work_dir}", "WARN")
 
-        _auto_scale_max_turns(work_dir, eval_critical_models, max_turns)
-
         for w in check_package_availability(work_dir):
             log(w, "WARN")
-
-        created_templates = create_sql_templates(work_dir, eval_critical_models)
-        if created_templates:
-            log(f"Pre-populated {len(created_templates)} SQL template(s) for priority models")
-
-        created_stubs = create_ephemeral_stubs(work_dir)
-        if created_stubs:
-            log(f"Auto-created {len(created_stubs)} ephemeral stub(s): {', '.join(sorted(created_stubs))}")
-
-        _snapshot_reference_tables(work_dir, _db)
 
         # Step 4: Run agent
         log_separator("Step 4: Run Claude agent")
@@ -716,29 +574,14 @@ async def execute_dbt_task(
                 .replace("${instruction}", instruction)
                 .replace("${dbt_bin}", DBT_BIN)
             )
-            verify_prompt_template = (PROMPTS_DIR / "dbt_verify_subagent.md").read_text()
-            verify_prompt_text = (
-                verify_prompt_template
-                .replace("${work_dir}", str(work_dir))
-                .replace("${instance_id}", instance_id)
-                .replace("${dbt_bin}", DBT_BIN)
-            )
-            verify_agent = AgentDefinition(
-                description="Verification agent that checks dbt model output for correctness after the build is complete.",
-                prompt=verify_prompt_text,
-                model="claude-sonnet-4-6",
-                maxTurns=80,
-            )
             agent_result = await run_sdk_agent(
                 prompt,
                 work_dir,
                 model,
                 max_turns,
-                timeout=900,
+                timeout=1800,
                 label="main-agent",
-                skill_names=_DBT_SKILL_NAMES,
                 system_prompt=system_prompt,
-                agents={"verifier": verify_agent},
             )
             transcript_path = work_dir / "agent_output.json"
             transcript_path.write_text(json.dumps({
@@ -773,6 +616,46 @@ async def execute_dbt_task(
     return passed, agent_result
 
 
+def _mcp_sanity_check() -> None:
+    """Connect to the MCP server via stdio and list tools. Fails fast with diagnostics."""
+    from ..core.mcp import load_mcp_servers
+
+    servers = load_mcp_servers()
+    if "signalpilot" not in servers:
+        log("MCP SANITY: No 'signalpilot' server in config — MCP tools will be unavailable!", "ERROR")
+        return
+
+    config = servers["signalpilot"]
+    log(f"MCP SANITY: server type={config.get('type')}")
+
+    # Attempt a stdio handshake using the mcp library
+    try:
+        import asyncio as _aio
+
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+
+        params = StdioServerParameters(
+            command=config["command"],
+            args=config.get("args", []),
+            env=config.get("env"),
+        )
+
+        async def _probe():
+            async with stdio_client(params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    tools = await session.list_tools()
+                    return [t.name for t in tools.tools]
+
+        tool_names = _aio.run(_probe())
+        log(f"MCP SANITY: OK — {len(tool_names)} tools: {tool_names[:5]}...")
+    except Exception as e:
+        log(f"MCP SANITY: FAILED — {e}", "ERROR")
+        import traceback
+        traceback.print_exc()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run a Spider2-DBT task directly (no Docker) using Claude Agent SDK + MCP"
@@ -795,13 +678,16 @@ def main() -> None:
     _main_start = time.monotonic()
 
     log_separator(f"Spider2-DBT Direct Benchmark: {instance_id}")
-    clear_all_connections()
+    delete_local_connection(instance_id)  # Only clear THIS task's stale connection, not all
     log(f"Model:     {model}")
     log(f"Max turns: {max_turns}")
     log(f"MCP config: {MCP_CONFIG}")
     log(f"Work dir:  {WORK_DIR / instance_id}")
 
-    # ── Load task ──────────────────────────────────────────────────────────────
+    # Check MCP availability.
+    _mcp_sanity_check()
+
+    # Load the task.
     t0 = time.monotonic()
     task = load_task(instance_id)
     instruction: str = task["instruction"]
@@ -810,7 +696,7 @@ def main() -> None:
 
     work_dir = WORK_DIR / instance_id
 
-    # ── Load eval config to identify critical models ───────────────────────────
+    # Load the evaluation configuration and identify critical models.
     eval_config = load_eval_config(instance_id)
     eval_critical_models: set[str] = set()
     if eval_config is not None:
@@ -827,7 +713,7 @@ def main() -> None:
         log(f"No eval config found for '{instance_id}' — treating all models as equal", "WARN")
 
     if not args.skip_agent:
-        # ── Prepare workdir ────────────────────────────────────────────────────
+        # Prepare the working directory.
         t0 = time.monotonic()
         log_separator("Step 1: Prepare workdir")
         if args.no_reset and work_dir.exists():
@@ -836,13 +722,13 @@ def main() -> None:
             work_dir = prepare_workdir(instance_id)
         log(f"Workdir ready in {time.monotonic()-t0:.2f}s")
 
-        # ── Write CLAUDE.md ────────────────────────────────────────────────────
+        # Write CLAUDE.md.
         t0 = time.monotonic()
         log_separator("Step 2: Write CLAUDE.md")
         write_claude_md(work_dir, instance_id, instruction)
         log(f"CLAUDE.md written in {time.monotonic()-t0:.2f}s")
 
-        # ── Register connection ────────────────────────────────────────────────
+        # Register the connection.
         t0 = time.monotonic()
         log_separator("Step 3: Register DuckDB connection")
         _db = find_result_db(work_dir)
@@ -852,24 +738,10 @@ def main() -> None:
             log(f"No .duckdb files in {work_dir}", "WARN")
         log(f"Connection registered in {time.monotonic()-t0:.2f}s")
 
-        # Still call the helper for its project-shape logging, but it no
-        # longer rewrites max_turns.
-        _auto_scale_max_turns(work_dir, eval_critical_models, max_turns)
-
         for w in check_package_availability(work_dir):
             log(w, "WARN")
 
-        created_templates = create_sql_templates(work_dir, eval_critical_models)
-        if created_templates:
-            log(f"Pre-populated {len(created_templates)} SQL template(s) for priority models")
-
-        created_stubs = create_ephemeral_stubs(work_dir)
-        if created_stubs:
-            log(f"Auto-created {len(created_stubs)} ephemeral stub(s): {', '.join(sorted(created_stubs))}")
-
-        _snapshot_reference_tables(work_dir, _db)
-
-        # ── Run agent ──────────────────────────────────────────────────────────
+        # Run the agent.
         t0 = time.monotonic()
         log_separator("Step 4: Run Claude agent")
         try:
@@ -889,7 +761,7 @@ def main() -> None:
 
     _flush_and_release(work_dir, instance_id)
 
-    # ── Evaluate ───────────────────────────────────────────────────────────────
+    # Evaluate the result.
     t0 = time.monotonic()
     log_separator("Step 5: Evaluate against gold standard")
 

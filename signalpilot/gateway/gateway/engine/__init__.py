@@ -11,7 +11,15 @@ Pipeline:
 
 from __future__ import annotations
 
+from .dialects import SQLGLOT_DIALECTS, sqlglot_dialect
 from .transforms import inject_limit, redact_sql_literals
 from .validation import ValidationResult, validate_sql
 
-__all__ = ["ValidationResult", "inject_limit", "redact_sql_literals", "validate_sql"]
+__all__ = [
+    "SQLGLOT_DIALECTS",
+    "ValidationResult",
+    "inject_limit",
+    "redact_sql_literals",
+    "sqlglot_dialect",
+    "validate_sql",
+]

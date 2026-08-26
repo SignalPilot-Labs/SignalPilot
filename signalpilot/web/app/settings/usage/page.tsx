@@ -11,21 +11,21 @@ import {
   Tooltip,
   CartesianGrid,
 } from "recharts";
-import { useAppAuth } from "@/lib/auth-context";
-import { useBackendClient } from "@/lib/backend-client";
-import type { UsageSummaryResponse, DailyUsagePoint, KeyUsageEntry } from "@/lib/backend-client";
-import { usePlan } from "@/lib/hooks/use-gateway-data";
-import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { SectionHeader } from "@/components/ui/section-header";
-import { StatusDot } from "@/components/ui/data-viz";
-import { TimeAgo } from "@/components/ui/time-ago";
-import { useToast } from "@/components/ui/toast";
-import { UsageSkeleton } from "@/components/ui/skeleton";
+import { useAppAuth } from "~/lib/auth-context";
+import { useBackendClient } from "~/lib/backend-client";
+import type { UsageSummaryResponse, DailyUsagePoint, KeyUsageEntry } from "~/lib/backend-client";
+import { usePlan } from "~/lib/hooks/use-gateway-data";
+import { PageHeader, TerminalBar } from "~/components/ui/page-header";
+import { SectionHeader } from "~/components/ui/section-header";
+import { StatusDot } from "~/components/ui/data-viz";
+import { TimeAgo } from "~/components/ui/time-ago";
+import { useToast } from "~/components/ui/toast";
+import { UsageSkeleton } from "~/components/ui/skeleton";
 import {
   generateDailyUsage,
   generateKeyUsage,
   getRateLimitStatus,
-} from "@/lib/mock-usage";
+} from "~/lib/mock-usage";
 
 // ---------------------------------------------------------------------------
 // Custom recharts tooltip
@@ -42,11 +42,11 @@ function UsageTooltip({
 }) {
   if (!active || !payload || payload.length === 0) return null;
   return (
-    <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] px-3 py-2">
-      <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider mb-0.5 font-mono">
+    <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-[10px] px-3 py-2">
+      <p className="text-[11px] text-[var(--color-text-dim)] mb-0.5 font-mono">
         {label}
       </p>
-      <p className="text-[13px] font-light tabular-nums text-[var(--color-text)] font-mono">
+      <p className="text-[13px] tabular-nums text-[var(--color-text)] font-mono">
         {payload[0].value.toLocaleString()} requests
       </p>
     </div>
@@ -84,7 +84,7 @@ function RateLimitCard({ summary }: { summary: UsageSummaryResponse }) {
   });
 
   return (
-    <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 mb-6 card-accent-top">
+    <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] p-5 mb-6 card-accent-top">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <StatusDot
@@ -97,11 +97,11 @@ function RateLimitCard({ summary }: { summary: UsageSummaryResponse }) {
             }
             size={4}
           />
-          <span className="text-[12px] text-[var(--color-text-muted)] uppercase tracking-[0.15em]">
+          <span className="text-[11px] text-[var(--color-text-muted)] uppercase tracking-[0.08em]">
             daily rate limit
           </span>
         </div>
-        <span className={`text-[13px] font-light tabular-nums ${textColor}`}>
+        <span className={`text-[13px] font-mono tabular-nums ${textColor}`}>
           {percentage}%
         </span>
       </div>
@@ -113,7 +113,7 @@ function RateLimitCard({ summary }: { summary: UsageSummaryResponse }) {
         aria-valuemin={0}
         aria-valuemax={summary.daily_limit}
         aria-label={`Rate limit: ${summary.daily_used} of ${summary.daily_limit} requests used today`}
-        className="h-1.5 bg-[var(--color-border)] w-full mb-3 overflow-hidden"
+        className="h-1.5 bg-[var(--color-border)] w-full mb-3 rounded-full overflow-hidden"
       >
         <div
           className="h-full transition-all duration-500"
@@ -124,17 +124,17 @@ function RateLimitCard({ summary }: { summary: UsageSummaryResponse }) {
         />
       </div>
 
-      <div className="flex items-center justify-between text-[12px] tracking-wider">
+      <div className="flex items-center justify-between text-[12px]">
         <span className="text-[var(--color-text-dim)]">
-          <span className="tabular-nums text-[var(--color-text-muted)]">
+          <span className="font-mono tabular-nums text-[var(--color-text-muted)]">
             {summary.daily_used.toLocaleString()}
           </span>{" "}
           of{" "}
-          <span className="tabular-nums">{summary.daily_limit.toLocaleString()}</span> requests
+          <span className="font-mono tabular-nums">{summary.daily_limit.toLocaleString()}</span> requests
         </span>
         <span className="text-[var(--color-text-dim)]">
           resets at{" "}
-          <span className="text-[var(--color-text-muted)] tabular-nums">{resetTimeStr}</span>
+          <span className="text-[var(--color-text-muted)] font-mono tabular-nums">{resetTimeStr}</span>
         </span>
       </div>
     </div>
@@ -150,23 +150,23 @@ function KeyUsageRow({ entry }: { entry: KeyUsageEntry }) {
     <div className="flex items-center gap-4 px-5 py-3 border-b border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] transition-colors">
       {/* Key name */}
       <div className="flex-1 min-w-0">
-        <span className="text-xs text-[var(--color-text-muted)] tracking-wider truncate block">
+        <span className="text-xs text-[var(--color-text-muted)] truncate block">
           {entry.key_name}
         </span>
       </div>
 
       {/* Key ID prefix */}
-      <code className="text-[12px] text-[var(--color-text-dim)] tracking-wider w-28 flex-shrink-0 truncate">
+      <code className="text-[12px] text-[var(--color-text-dim)] font-mono w-28 flex-shrink-0 truncate">
         {entry.key_id.slice(0, 8)}…
       </code>
 
       {/* Total requests */}
-      <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider w-24 flex-shrink-0 tabular-nums">
+      <span className="text-[12px] text-[var(--color-text-dim)] w-24 flex-shrink-0 font-mono tabular-nums">
         {entry.total_requests.toLocaleString()}
       </span>
 
       {/* Last 7 days */}
-      <span className="text-[12px] text-[var(--color-success)] tracking-wider w-20 flex-shrink-0 tabular-nums">
+      <span className="text-[12px] text-[var(--color-success)] w-20 flex-shrink-0 font-mono tabular-nums">
         {entry.last_7d.toLocaleString()}
       </span>
 
@@ -175,10 +175,10 @@ function KeyUsageRow({ entry }: { entry: KeyUsageEntry }) {
         {entry.last_used_at ? (
           <TimeAgo
             timestamp={new Date(entry.last_used_at).getTime() / 1000}
-            className="text-[12px] text-[var(--color-text-dim)] tracking-wider tabular-nums"
+            className="text-[12px] text-[var(--color-text-dim)] font-mono tabular-nums"
           />
         ) : (
-          <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">—</span>
+          <span className="text-[12px] text-[var(--color-text-dim)]">—</span>
         )}
       </div>
     </div>
@@ -192,19 +192,19 @@ function KeyUsageRow({ entry }: { entry: KeyUsageEntry }) {
 function KeyUsageTableHeader() {
   return (
     <div className="flex items-center gap-4 px-5 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg)]">
-      <span className="flex-1 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+      <span className="flex-1 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
         key name
       </span>
-      <span className="w-28 flex-shrink-0 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+      <span className="w-28 flex-shrink-0 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
         key id
       </span>
-      <span className="w-24 flex-shrink-0 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+      <span className="w-24 flex-shrink-0 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
         total req
       </span>
-      <span className="w-20 flex-shrink-0 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+      <span className="w-20 flex-shrink-0 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
         last 7d
       </span>
-      <span className="w-28 flex-shrink-0 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+      <span className="w-28 flex-shrink-0 text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
         last used
       </span>
     </div>
@@ -322,7 +322,7 @@ function UsageContent() {
             <code className="text-[12px] text-[var(--color-text)]">{planTier}</code>
           </span>
           {usingMock && (
-            <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider opacity-60">
+            <span className="text-[11px] text-[var(--color-text-dim)] opacity-60">
               (mock data)
             </span>
           )}
@@ -336,7 +336,7 @@ function UsageContent() {
       <section className="mb-8">
         <SectionHeader icon={BarChart3} title="daily usage — last 30 days" />
         <div
-          className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4"
+          className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] p-4"
           role="img"
           aria-label="Daily API usage chart, last 30 days"
         >
@@ -383,7 +383,7 @@ function UsageContent() {
             </ResponsiveContainer>
           ) : (
             <div className="h-[200px] flex items-center justify-center">
-              <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
+              <p className="text-[12px] text-[var(--color-text-dim)]">
                 no usage data — create api keys to start tracking
               </p>
             </div>
@@ -394,14 +394,14 @@ function UsageContent() {
       {/* Per-key breakdown */}
       <section>
         <SectionHeader icon={Key} title="per-key breakdown" />
-        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] overflow-hidden">
+        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] overflow-hidden">
           {keyStats.length === 0 ? (
             <div className="flex items-start gap-3 p-5">
               <AlertTriangle
                 className="w-3.5 h-3.5 text-[var(--color-text-dim)] mt-0.5 flex-shrink-0"
                 strokeWidth={1.5}
               />
-              <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
+              <p className="text-[12px] text-[var(--color-text-dim)]">
                 no api keys found. create keys in the{" "}
                 <a
                   href="/settings/api-keys"
@@ -445,12 +445,12 @@ export default function UsagePage() {
           subtitle="analytics"
           description="api request usage and rate limits"
         />
-        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-6 flex items-start gap-3">
+        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] p-6 flex items-start gap-3">
           <AlertTriangle
             className="w-3.5 h-3.5 text-[var(--color-text-dim)] mt-0.5 flex-shrink-0"
             strokeWidth={1.5}
           />
-          <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+          <p className="text-[12px] text-[var(--color-text-dim)] leading-relaxed">
             usage analytics is available in cloud mode. set{" "}
             <code className="text-[var(--color-text-muted)]">
               NEXT_PUBLIC_DEPLOYMENT_MODE=cloud

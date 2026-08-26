@@ -1,0 +1,72 @@
+# syntax=docker/dockerfile:1.7
+FROM python:3.13-slim
+
+RUN groupadd -g 10001 notebook && \
+    useradd -r -u 10001 -g notebook notebook && \
+    mkdir -p /workspace /home/notebook/.sp && \
+    apt-get update && apt-get install -y git curl gnupg && \
+    # Microsoft ODBC driver for dbt-sqlserver (SQL Server customers). A prod
+    # sandbox is recreated constantly — anything not baked here does not exist.
+    curl -fsSL https://packages.microsoft.com/keys/microsoft.asc -o /usr/share/keyrings/microsoft.asc && \
+    echo "deb [signed-by=/usr/share/keyrings/microsoft.asc] https://packages.microsoft.com/debian/12/prod bookworm main" \
+      > /etc/apt/sources.list.d/mssql-release.list && \
+    apt-get update && ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc-dev && \
+    rm -rf /var/lib/apt/lists/* && \
+    pip install --no-cache-dir uv
+
+WORKDIR /opt/sp-notebook
+
+ENV UV_PYTHON_DOWNLOADS=never \
+    UV_PYTHON_PREFERENCE=only-system \
+    UV_PROJECT_ENVIRONMENT=/opt/sp-notebook/.venv \
+    UV_LINK_MODE=copy
+
+# Copy local notebook-server source
+COPY signalpilot/notebook-server/pyproject.toml signalpilot/notebook-server/uv.lock ./
+COPY signalpilot/notebook-server/MANIFEST.in signalpilot/notebook-server/.python-version ./
+COPY signalpilot/notebook-server/README.md signalpilot/notebook-server/LICENSE ./
+
+# Install via uv + additional production dependencies
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project && \
+    uv pip install --python /opt/sp-notebook/.venv/bin/python \
+      requests httpx starlette uvicorn msgspec \
+      pydantic pydantic-settings websockets sse-starlette pyjwt \
+      dbt-core dbt-duckdb duckdb polars pandas pyarrow numpy \
+      sqlglot altair matplotlib plotly pyyaml jinja2 python-dotenv \
+      seaborn scikit-learn scipy \
+      anthropic openai tiktoken \
+      dbt-postgres dbt-snowflake dbt-sqlserver && \
+    # Bake dependency .pyc once. The runtime root is read-only, so imports should
+    # read precompiled bytecode instead of trying to write it at startup.
+    python -m compileall -q -j 0 /opt/sp-notebook/.venv/lib 2>/dev/null || true
+
+COPY --chown=notebook:notebook signalpilot/notebook-server/signalpilot/ signalpilot/
+
+# Install only the local package after copying source. Source edits should not
+# invalidate the heavyweight dependency layer above.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --python /opt/sp-notebook/.venv/bin/python --no-deps -e . && \
+    python -m compileall -q -j 0 /opt/sp-notebook/signalpilot 2>/dev/null || true && \
+    chown -R notebook:notebook /workspace /home/notebook
+
+ENV PATH="/opt/sp-notebook/.venv/bin:$PATH"
+
+USER notebook
+WORKDIR /workspace
+EXPOSE 2718
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s \
+    CMD curl -sf http://localhost:2718/health || exit 1
+
+ENV SP_GATEWAY_URL=""
+ENV SP_API_KEY=""
+ENV SP_LOG_LEVEL="10"
+
+# Fallback for a bare `docker run` of this image: auth is always on, with a
+# self-provisioned token file (see _server/local_token.py). In a Vercel
+# sandbox the gateway's boot command (notebooks/backends.py::_boot_command)
+# replaces this entirely and stages the per-session token itself.
+ENV SP_NOTEBOOK_TOKEN_FILE=/home/notebook/.sp/notebook_token
+
+CMD ["sh", "-c", "python -m signalpilot._server.local_token \"$SP_NOTEBOOK_TOKEN_FILE\" && exec python -m signalpilot edit --host 0.0.0.0 --port 2718 --headless --token-password-file \"$SP_NOTEBOOK_TOKEN_FILE\" --no-skew-protection /workspace"]

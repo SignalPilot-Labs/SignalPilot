@@ -1,0 +1,6 @@
+@reference "../../../../css/globals.css";
+
+.outline-item-highlight {
+  text-decoration: underline;
+  @apply decoration-primary;
+}

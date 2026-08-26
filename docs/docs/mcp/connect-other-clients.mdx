@@ -1,0 +1,90 @@
+---
+sidebar_position: 2
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
+# Connect Other MCP Clients
+
+:::caution Experimental
+The MCP tools work over `streamable-http` from any MCP client (Cursor, custom Agent SDK) — but the **SignalPilot skills are Claude Code-specific** and don't run outside it. You'll have the tools without skill orchestration. The Claude Code plugin is the supported path; treat the configs below as best-effort.
+
+**Codex is different** — it has a real SignalPilot plugin with the full skill and agent surface, not just raw MCP. See [Use with Codex](/docs/plugin/codex).
+:::
+
+## Claude Desktop
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+<MiniCopyBlock
+  label="claude desktop config"
+  plain
+  code={`{\n  "mcpServers": {\n    "signalpilot": {\n      "type": "http",\n      "url": "http://localhost:3300/mcp"\n    }\n  }\n}`}
+/>
+
+For cloud with bearer auth:
+
+<MiniCopyBlock
+  label="claude desktop cloud config"
+  plain
+  code={`{\n  "mcpServers": {\n    "signalpilot": {\n      "type": "http",\n      "url": "https://gateway.signalpilot.ai/mcp",\n      "headers": {\n        "Authorization": "Bearer YOUR_API_KEY"\n      }\n    }\n  }\n}`}
+/>
+
+## Cursor
+
+Add to `.cursor/mcp.json` in your project root:
+
+<MiniCopyBlock
+  label="cursor config"
+  plain
+  code={`{\n  "mcpServers": {\n    "signalpilot": {\n      "type": "http",\n      "url": "http://localhost:3300/mcp"\n    }\n  }\n}`}
+/>
+
+## Codex
+
+Codex has a dedicated SignalPilot plugin that provides the same surface as Claude Code — 54 MCP tools, 23 skills, and 2 agents (`verifier`, `value-verifier`). Use that instead of raw MCP config:
+
+<MiniCopyBlock
+  label="install the codex plugin"
+  code={`codex plugin marketplace add SignalPilot-Labs/codex-signalpilot-plugin\ncodex plugin add signalpilot@signalpilot`}
+/>
+
+See [Use with Codex](/docs/plugin/codex) for the full setup, including the marketplace-upgrade fallback and gateway connection details.
+
+## OpenAI Agent SDK
+
+<MiniCopyBlock
+  label="openai agent sdk config"
+  plain
+  code={`{\n  "mcpServers": {\n    "signalpilot": {\n      "type": "http",\n      "url": "http://localhost:3300/mcp"\n    }\n  }\n}`}
+/>
+
+## Custom Agent SDK
+
+Any client implementing [MCP streamable-http transport](https://spec.modelcontextprotocol.io/) can connect:
+
+- **Local endpoint**: `http://localhost:3300/mcp`
+- **Cloud endpoint**: `https://gateway.signalpilot.ai/mcp`
+- **Auth header**: `Authorization: Bearer YOUR_API_KEY`
+
+The gateway returns standard MCP responses. All 54 tools are callable — governance runs on the server side regardless of which client you use.
+
+## Bearer token auth
+
+When API keys are configured, pass them as a bearer token:
+
+<MiniCopyBlock
+  label="bearer token"
+  plain
+  code="Authorization: Bearer sp_your_key_here"
+/>
+
+For local self-hosted deployments without API key enforcement, no auth header is required.
+
+## Limitations for non-Claude clients
+
+- **No skills** — dbt-workflow, sql-workflow, and dialect-specific skills are Claude Code-specific. You'll need to craft your own prompt instructions.
+- **No verifier agent** — the post-build 7-check protocol is a Claude Code plugin agent. It won't run.
+- **No auto-skill loading** — you must manually structure your prompts to call the right tools in the right order.
+
+For full functionality, use [Claude Code](/docs/mcp/connect-claude-code).

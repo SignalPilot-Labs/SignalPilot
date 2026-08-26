@@ -7,6 +7,9 @@ from enum import Enum
 from pydantic import BaseModel, Field, field_validator
 
 from ._helpers import _validate_string_list
+from .deliverable_theme import DeliverableTheme
+
+_INT_GTE_ZERO_MSG = "knowledge_history_versions_override must be a non-negative integer or None"
 
 
 class SandboxProvider(str, Enum):  # noqa: UP042 — (str,Enum) keeps str(X.A)=='X.A'; StrEnum returns 'A' and breaks f-string/log output
@@ -33,7 +36,29 @@ class GatewaySettings(BaseModel):
     gateway_url: str = Field(default="http://localhost:3300", max_length=2048)
     api_key: str | None = None
 
+    # Automated improvement runs — when true, the scheduler seeds one
+    # system-initiated improvement chat per America/New_York calendar day.
+    improvement_runs_enabled: bool = False
+
+    # Knowledge Base — number of edit history versions to keep per doc.
+    # None = follow plan default. 0 = unlimited. >= 1 = exact count.
+    knowledge_history_versions_override: int | None = None
+
+    # Org-wide visual tokens for generated HTML deliverables. None = SignalPilot defaults.
+    deliverable_theme: DeliverableTheme | None = None
+
     @field_validator("blocked_tables")
     @classmethod
     def validate_blocked_tables(cls, v: list[str]) -> list[str]:
         return _validate_string_list(v, 256, "blocked_tables")
+
+    @field_validator("knowledge_history_versions_override")
+    @classmethod
+    def validate_knowledge_history_versions_override(cls, v: int | None) -> int | None:
+        if v is None:
+            return v
+        if not isinstance(v, int):
+            raise ValueError(_INT_GTE_ZERO_MSG)
+        if v < 0:
+            raise ValueError(_INT_GTE_ZERO_MSG)
+        return v

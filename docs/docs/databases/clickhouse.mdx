@@ -1,0 +1,74 @@
+---
+sidebar_position: 6
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
+# ClickHouse
+
+Connector backed by `clickhouse-driver` (native TCP) with automatic fallback to `clickhouse-connect` (HTTP). Supports ClickHouse Cloud, on-premise, and self-hosted. `db_type` is `clickhouse`. Tier 2.
+
+## Connection config
+
+<MiniCopyBlock
+  label="clickhouse"
+  plain
+  code={`{\n  "name": "prod-clickhouse",\n  "db_type": "clickhouse",\n  "host": "ch.example.com",\n  "port": 9000,\n  "database": "analytics",\n  "username": "readonly",\n  "password": "...",\n  "protocol": "native"\n}`}
+/>
+
+## Connection fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Connection name. `[a-zA-Z0-9_-]`, max 64 chars. |
+| `db_type` | Yes | `clickhouse`. |
+| `host` | Yes | Server hostname. |
+| `port` | No | Defaults: native `9000` / native+TLS `9440`; HTTP `8123` / HTTPS `8443`. |
+| `database` | No | Default database (defaults to `default`). |
+| `username` | No | User (defaults to `default`). |
+| `password` | No | Password. |
+| `protocol` | No | `native` or `http`. |
+| `ssl` / `ssl_config` | No | TLS. `verify-ca` / `verify-full` enable cert verification. |
+| `ssh_tunnel` | No | Connect through a bastion host. |
+| `connection_timeout` | No | Connect timeout, seconds. |
+| `query_timeout` | No | Maps to `max_execution_time` per query. |
+
+**Protocol fallback:** native TCP is tried first; on failure the connector falls back to HTTP, mapping native ports to HTTP ports (`9000→8123`, `9440→8443`, `9100→8124`). Connection-string forms: `clickhouse://`, `clickhouses://` (native+TLS), `clickhouse+http://`, `clickhouse+https://`.
+
+## Capabilities
+
+| Capability | Supported | Notes |
+|------------|-----------|-------|
+| Query | Yes | Per-query timeout via `max_execution_time` setting. |
+| Schema introspection | Yes | `system.columns` for columns; `system.tables` for engine, sorting key, primary key, row count, and byte size. |
+| FK discovery | No | ClickHouse has no foreign keys. |
+| Primary keys | Yes | `system.columns.is_in_primary_key`; also exposes table `sorting_key` and `primary_key`. |
+| EXPLAIN | Yes | `EXPLAIN ESTIMATE` (rows/marks per part); falls back to `EXPLAIN PLAN` parsing `rows: N`. |
+| Cost estimation | Yes (estimated) | Estimated rows × per-row rate (columnar storage rate). |
+| Schema stats | Yes | `total_rows` / `total_bytes` from `system.tables`; per-column uncompressed and compressed bytes from `system.parts_columns`. |
+
+Tier 2.
+
+## Dialect notes / gotchas
+
+- Identifiers are quoted with backticks (`` `col` ``).
+- Column types are unwrapped during introspection: `Nullable(...)` sets the column nullable, `LowCardinality(...)` is flagged via `low_cardinality`.
+- Engine matters: tables with engine `View`, `MaterializedView`, `LiveView`, or `WindowView` are reported as views.
+- `sorting_key` (ORDER BY key) drives query performance — prefer filtering on sorting-key prefixes.
+- The native and HTTP clients are not thread-safe on a single connection; schema queries run sequentially.
+
+## Blocked functions
+
+These ClickHouse table/remote functions are blocked inside `SELECT` (they read external resources):
+
+`file`, `url`, `s3`, `s3cluster`, `mysql`, `postgresql`, `remote`, `remotesecure`, `hdfs`, `jdbc`, `mongo`, `redis`, `sqlite`, `odbc`, `input`, `generaterandom`, `executable`, `azureblobstorage`, `deltalake`, `hudi`, `iceberg`.
+
+The universal `load_extension` / `install_extension` block also applies. All DDL/DML statement types are blocked.
+
+## Recommended plugin skill
+
+`sql-workflow` — no dedicated ClickHouse skill exists. Covers output-shape inference, schema exploration, CTE-based query building, and the verification loop.
+
+## Cloud vs local
+
+Supported in both cloud and local mode. ClickHouse is TCP-connected, so in cloud mode the resolved host is run through SSRF validation: public hostnames are allowed, but RFC1918/loopback/link-local addresses are blocked unless `SP_ALLOW_PRIVATE_CONNECTIONS` is set. In local mode SSRF validation is disabled.

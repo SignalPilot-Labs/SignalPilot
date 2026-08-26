@@ -1,0 +1,57 @@
+from __future__ import annotations
+
+import base64
+import io
+from typing import TYPE_CHECKING, Final
+
+from signalpilot._output.rich_help import mddoc
+from signalpilot._plugins.ui._core.ui_element import UIElement
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+
+@mddoc
+class microphone(UIElement[str, io.BytesIO]):
+    """An audio recorder element.
+
+    Use `sp.ui.microphone` to record audio via the user's browser. The
+    user must grant permission to use the microphone.
+
+    Examples:
+        ```python
+        mic = sp.ui.microphone()
+        mic
+        ```
+
+        ```python
+        sp.audio(mic.value)
+        ```
+
+    Attributes:
+        value (io.BytesIO): The blob of the recorded audio, as an `io.BytesIO` object.
+
+    Args:
+        label (str, optional): Markdown label for the element. Defaults to "".
+        on_change (Optional[Callable[[io.BytesIO], None]], optional): Optional callback
+            to run when this element's value changes.
+    """
+
+    name: Final[str] = "sp-microphone"
+
+    def __init__(
+        self,
+        *,
+        label: str = "",
+        on_change: Callable[[io.BytesIO], None] | None = None,
+    ) -> None:
+        super().__init__(
+            component_name=microphone.name,
+            initial_value="",
+            label=label,
+            args={},
+            on_change=on_change,
+        )
+
+    def _convert_value(self, value: str) -> io.BytesIO:
+        return io.BytesIO(base64.b64decode(value))

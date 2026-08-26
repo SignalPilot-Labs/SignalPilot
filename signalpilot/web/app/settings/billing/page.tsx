@@ -16,19 +16,19 @@ import {
   Building2,
   Mail,
 } from "lucide-react";
-import { useAppAuth } from "@/lib/auth-context";
-import { useBackendClient } from "@/lib/backend-client";
-import type { PlanInfo, PlanPrice } from "@/lib/backend-client";
-import { useSubscription } from "@/lib/subscription-context";
-import { usePlan } from "@/lib/hooks/use-gateway-data";
-import { PageHeader, TerminalBar } from "@/components/ui/page-header";
-import { StatusDot } from "@/components/ui/data-viz";
-import { SectionHeader } from "@/components/ui/section-header";
-import { useToast } from "@/components/ui/toast";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { BillingSkeleton } from "@/components/ui/skeleton";
-import { TierBadge } from "@/components/branding/tier-badge";
-import { TierAccent } from "@/components/branding/tier-accent";
+import { useAppAuth } from "~/lib/auth-context";
+import { useBackendClient } from "~/lib/backend-client";
+import type { PlanInfo, PlanPrice } from "~/lib/backend-client";
+import { useSubscription } from "~/lib/subscription-context";
+import { usePlan } from "~/lib/hooks/use-gateway-data";
+import { PageHeader, TerminalBar } from "~/components/ui/page-header";
+import { StatusDot } from "~/components/ui/data-viz";
+import { SectionHeader } from "~/components/ui/section-header";
+import { useToast } from "~/components/ui/toast";
+import { ConfirmDialog } from "~/components/ui/confirm-dialog";
+import { BillingSkeleton } from "~/components/ui/skeleton";
+import { TierBadge } from "~/components/branding/tier-badge";
+import { TierAccent } from "~/components/branding/tier-accent";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -71,7 +71,7 @@ function IntervalToggle({
     <div className="flex items-center gap-2 mb-5">
       <button
         onClick={() => onChange("month")}
-        className={`px-3 py-1.5 text-[11px] tracking-[0.15em] uppercase border transition-all ${
+        className={`px-3 py-1.5 text-[11px] border rounded-[10px] transition-colors duration-150 ${
           interval === "month"
             ? "border-[var(--color-text-muted)] text-[var(--color-text)]"
             : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
@@ -81,7 +81,7 @@ function IntervalToggle({
       </button>
       <button
         onClick={() => onChange("year")}
-        className={`px-3 py-1.5 text-[11px] tracking-[0.15em] uppercase border transition-all ${
+        className={`px-3 py-1.5 text-[11px] border rounded-[10px] transition-colors duration-150 ${
           interval === "year"
             ? "border-[var(--color-text-muted)] text-[var(--color-text)]"
             : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
@@ -135,7 +135,7 @@ function PlanCard({
 
   return (
     <div
-      className="flex-1 border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 hover:border-[var(--color-border-hover)] transition-all"
+      className="flex-1 border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] p-5 hover:border-[var(--color-border-hover)] transition-colors duration-150"
       style={{ borderTopColor: highlightColor, borderTopWidth: "2px" }}
     >
       {/* Plan header */}
@@ -146,14 +146,14 @@ function PlanCard({
             style={{ color: highlightColor }}
             strokeWidth={1.5}
           />
-          <span className="text-[12px] uppercase tracking-[0.15em] text-[var(--color-text-muted)]">
+          <span className="text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
             {plan.tier}
           </span>
         </div>
         <div className="text-right">
           <div className="flex items-baseline gap-0.5">
             <span
-              className="text-xl font-bold tracking-tight"
+              className="text-xl font-bold font-mono tracking-tight tabular-nums"
               style={{ color: highlightColor }}
             >
               {interval === "year"
@@ -165,19 +165,19 @@ function PlanCard({
             </span>
           </div>
           {interval === "year" && (
-            <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
+            <span className="text-[11px] text-[var(--color-text-dim)] font-mono tabular-nums">
               {displayAmount}/yr
             </span>
           )}
           {showSavings && (
-            <span className="block text-[11px] text-[var(--color-success)] tracking-wider">
+            <span className="block text-[11px] text-[var(--color-success)] font-mono tabular-nums">
               save {formatPrice(monthlyPrice.amount * 12 - price.amount, price.currency)}/yr
             </span>
           )}
         </div>
       </div>
 
-      <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed mb-4">
+      <p className="text-[12px] text-[var(--color-text-dim)] leading-relaxed mb-4">
         {plan.description}
       </p>
 
@@ -190,7 +190,7 @@ function PlanCard({
               style={{ color: highlightColor }}
               strokeWidth={1.5}
             />
-            <span className="text-[12px] text-[var(--color-text-muted)] tracking-wider">
+            <span className="text-[12px] text-[var(--color-text-muted)]">
               {f}
             </span>
           </li>
@@ -200,7 +200,7 @@ function PlanCard({
       {/* Action button */}
       {isCurrent ? (
         <div
-          className="w-full flex items-center justify-center gap-2 px-4 py-2 text-[12px] tracking-wider uppercase border"
+          className="w-full flex items-center justify-center gap-2 px-4 py-2 text-[12px] border rounded-[10px]"
           style={{
             borderColor: highlightColor,
             color: highlightColor,
@@ -212,7 +212,7 @@ function PlanCard({
         </div>
       ) : isPendingDowngrade && pendingDowngradeDate ? (
         <div
-          className="w-full flex items-center justify-center gap-2 px-4 py-2 text-[12px] tracking-wider uppercase border border-[var(--color-warning)]/40 text-[var(--color-warning)]"
+          className="w-full flex items-center justify-center gap-2 px-4 py-2 text-[12px] border rounded-[10px] border-[var(--color-warning)]/40 text-[var(--color-warning)]"
           style={{ opacity: 0.8 }}
         >
           <AlertTriangle className="w-3 h-3" />
@@ -226,7 +226,7 @@ function PlanCard({
         <button
           onClick={() => onUpgrade(price.price_id)}
           disabled={isUpgrading || upgrading !== null}
-          className="w-full flex items-center justify-center gap-2 px-4 py-2 text-[12px] tracking-wider uppercase border transition-all disabled:opacity-40 hover:bg-[var(--color-bg-hover)]"
+          className="w-full flex items-center justify-center gap-2 px-4 py-2 text-[12px] border rounded-[10px] transition-colors duration-150 disabled:opacity-40 hover:bg-[var(--color-bg-hover)]"
           style={{
             borderColor: highlightColor,
             color: highlightColor,
@@ -269,13 +269,13 @@ export default function BillingPage() {
           subtitle="subscription"
           description="manage your signalpilot plan and subscription"
         />
-        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px]">
           <div className="p-6 flex items-start gap-3">
             <Info
               className="w-3.5 h-3.5 text-[var(--color-text-dim)] mt-0.5 flex-shrink-0"
               strokeWidth={1.5}
             />
-            <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+            <p className="text-[12px] text-[var(--color-text-dim)] leading-relaxed">
               billing is available in cloud mode. local deployments have full
               team-tier access at no cost. set{" "}
               <code className="text-[var(--color-text-muted)]">
@@ -516,16 +516,16 @@ function BillingContent() {
 
       {/* Checkout outcome banners */}
       {checkoutOutcome === "success" && (
-        <div className="mb-6 flex items-start gap-3 p-4 border border-[var(--color-success)]/30 bg-[var(--color-success)]/5 animate-fade-in">
+        <div className="mb-6 flex items-start gap-3 p-4 border border-[var(--color-success)]/30 bg-[var(--color-success)]/5 rounded-[10px] animate-fade-in">
           <CheckCircle2
             className="w-4 h-4 text-[var(--color-success)] mt-0.5 flex-shrink-0"
             strokeWidth={1.5}
           />
           <div>
-            <p className="text-[12px] text-[var(--color-success)] tracking-wider font-medium">
+            <p className="text-[12px] text-[var(--color-success)] font-medium">
               subscription activated
             </p>
-            <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider mt-0.5">
+            <p className="text-[12px] text-[var(--color-text-dim)] mt-0.5">
               your plan has been upgraded. it may take a moment to reflect below.
             </p>
           </div>
@@ -533,12 +533,12 @@ function BillingContent() {
       )}
 
       {checkoutOutcome === "canceled" && (
-        <div className="mb-6 flex items-start gap-3 p-4 border border-[var(--color-border)] bg-[var(--color-bg-card)] animate-fade-in">
+        <div className="mb-6 flex items-start gap-3 p-4 border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[10px] animate-fade-in">
           <XCircle
             className="w-4 h-4 text-[var(--color-text-dim)] mt-0.5 flex-shrink-0"
             strokeWidth={1.5}
           />
-          <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
+          <p className="text-[12px] text-[var(--color-text-dim)]">
             checkout was canceled. no changes were made to your subscription.
           </p>
         </div>
@@ -546,12 +546,12 @@ function BillingContent() {
 
       {/* Error banner */}
       {actionError && (
-        <div className="mb-6 flex items-start gap-2 p-3 border border-[var(--color-error)]/20 bg-[var(--color-error)]/5 animate-fade-in">
+        <div className="mb-6 flex items-start gap-2 p-3 border border-[var(--color-error)]/20 bg-[var(--color-error)]/5 rounded-[10px] animate-fade-in">
           <AlertTriangle
             className="w-3.5 h-3.5 text-[var(--color-error)] mt-0.5 flex-shrink-0"
             strokeWidth={1.5}
           />
-          <p className="text-[12px] text-[var(--color-error)] tracking-wider">
+          <p className="text-[12px] text-[var(--color-error)]">
             {actionError}
           </p>
         </div>
@@ -560,19 +560,19 @@ function BillingContent() {
       {/* Current plan section */}
       <section className="mb-8">
         <SectionHeader icon={CreditCard} title="current plan" />
-        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5">
+        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] p-5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               {planTier === "free" ? (
                 <span className="inline-flex items-center gap-1.5">
-                  <span className="inline-block w-[5px] h-[5px] flex-shrink-0 bg-[var(--color-text-dim)]" aria-hidden="true" />
-                  <span className="text-[11px] leading-none tracking-[0.15em] uppercase text-[var(--color-text-dim)]">free</span>
+                  <span className="inline-block w-[5px] h-[5px] flex-shrink-0 rounded-full bg-[var(--color-text-dim)]" aria-hidden="true" />
+                  <span className="text-[11px] leading-none tracking-[0.08em] uppercase text-[var(--color-text-dim)]">free</span>
                 </span>
               ) : (
                 <TierBadge />
               )}
               <div>
-                <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
+                <span className="text-[12px] text-[var(--color-text-dim)]">
                   status:{" "}
                   <span
                     className={
@@ -586,7 +586,7 @@ function BillingContent() {
                     {statusLabel}
                   </span>
                 </span>
-                <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider mt-0.5">
+                <p className="text-[12px] text-[var(--color-text-dim)] mt-0.5">
                   {maxApiKeys} api keys allowed
                 </p>
               </div>
@@ -596,7 +596,7 @@ function BillingContent() {
               <button
                 onClick={handleManagePortal}
                 disabled={managingPortal}
-                className="flex items-center gap-2 px-4 py-2 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase disabled:opacity-40"
+                className="flex items-center gap-2 px-4 py-2 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-colors duration-150 disabled:opacity-40"
               >
                 {managingPortal ? (
                   <Loader2 className="w-3 h-3 animate-spin" />
@@ -613,16 +613,16 @@ function BillingContent() {
 
       {/* Pending downgrade banner */}
       {pendingDowngradeTo && pendingDowngradeDate && (
-        <div className="mb-6 flex items-start gap-3 p-4 border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/5 animate-fade-in">
+        <div className="mb-6 flex items-start gap-3 p-4 border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/5 rounded-[10px] animate-fade-in">
           <AlertTriangle
             className="w-4 h-4 text-[var(--color-warning)] mt-0.5 flex-shrink-0"
             strokeWidth={1.5}
           />
           <div>
-            <p className="text-[12px] text-[var(--color-warning)] tracking-wider font-medium">
+            <p className="text-[12px] text-[var(--color-warning)] font-medium">
               plan change scheduled
             </p>
-            <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider mt-0.5">
+            <p className="text-[12px] text-[var(--color-text-dim)] mt-0.5">
               your plan will change to{" "}
               <span className="text-[var(--color-text-muted)]">{pendingDowngradeTo}</span>{" "}
               on{" "}
@@ -644,18 +644,18 @@ function BillingContent() {
         <SectionHeader icon={Zap} title="plans" />
 
         {plans === null && !plansError && (
-          <div className="flex items-center gap-2 p-5 border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+          <div className="flex items-center gap-2 p-5 border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px]">
             <Loader2 className="w-3.5 h-3.5 text-[var(--color-text-dim)] animate-spin" />
-            <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
+            <span className="text-[12px] text-[var(--color-text-dim)]">
               loading plans...
             </span>
           </div>
         )}
 
         {plansError && (
-          <div className="flex items-start gap-3 p-5 border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+          <div className="flex items-start gap-3 p-5 border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px]">
             <AlertTriangle className="w-3.5 h-3.5 text-[var(--color-text-dim)] mt-0.5 flex-shrink-0" strokeWidth={1.5} />
-            <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
+            <p className="text-[12px] text-[var(--color-text-dim)]">
               unable to load pricing. please try again later.
             </p>
           </div>
@@ -680,7 +680,7 @@ function BillingContent() {
 
               {/* Enterprise card — static, contact us */}
               <div
-                className="flex-1 border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5 hover:border-[var(--color-border-hover)] transition-all"
+                className="flex-1 border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] p-5 hover:border-[var(--color-border-hover)] transition-colors duration-150"
                 style={{ borderTopColor: "var(--color-text-muted)", borderTopWidth: "2px" }}
               >
                 <div className="flex items-start justify-between mb-3">
@@ -689,16 +689,16 @@ function BillingContent() {
                       className="w-3.5 h-3.5 text-[var(--color-text-muted)]"
                       strokeWidth={1.5}
                     />
-                    <span className="text-[12px] uppercase tracking-[0.15em] text-[var(--color-text-muted)]">
+                    <span className="text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
                       enterprise
                     </span>
                   </div>
-                  <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider italic">
+                  <span className="text-[12px] text-[var(--color-text-dim)] italic">
                     contact us
                   </span>
                 </div>
 
-                <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed mb-4">
+                <p className="text-[12px] text-[var(--color-text-dim)] leading-relaxed mb-4">
                   for large organizations with dedicated infrastructure and compliance needs
                 </p>
 
@@ -717,7 +717,7 @@ function BillingContent() {
                         className="w-3 h-3 flex-shrink-0 text-[var(--color-text-muted)]"
                         strokeWidth={1.5}
                       />
-                      <span className="text-[12px] text-[var(--color-text-muted)] tracking-wider">
+                      <span className="text-[12px] text-[var(--color-text-muted)]">
                         {f}
                       </span>
                     </li>
@@ -726,7 +726,7 @@ function BillingContent() {
 
                 {planTier === "enterprise" ? (
                   <div
-                    className="w-full flex items-center justify-center gap-2 px-4 py-2 text-[12px] tracking-wider uppercase border"
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 text-[12px] border rounded-[10px]"
                     style={{ borderColor: "var(--color-text-muted)", color: "var(--color-text-muted)", opacity: 0.7 }}
                   >
                     <CheckCircle2 className="w-3 h-3" />
@@ -735,7 +735,7 @@ function BillingContent() {
                 ) : (
                   <a
                     href="mailto:daniel@signalpilot.ai?subject=SignalPilot%20Enterprise"
-                    className="w-full flex items-center justify-center gap-2 px-4 py-2 text-[12px] tracking-wider uppercase border border-[var(--color-text-muted)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] transition-all"
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 text-[12px] border rounded-[10px] border-[var(--color-text-muted)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] transition-colors duration-150"
                   >
                     <Mail className="w-3 h-3" />
                     contact us
@@ -743,7 +743,7 @@ function BillingContent() {
                 )}
               </div>
             </div>
-            <p className="mt-3 text-[11px] text-[var(--color-text-dim)] tracking-wider">
+            <p className="mt-3 text-[11px] text-[var(--color-text-dim)]">
               cancel anytime. prices in usd. self-hosted is always free.
             </p>
           </>
@@ -754,10 +754,10 @@ function BillingContent() {
       {!isFreeTier && (
         <section className="mb-8">
           <SectionHeader icon={AlertTriangle} title="cancel subscription" iconColor="text-[var(--color-error)]" />
-          <div className="border border-[var(--color-error)]/30 bg-[var(--color-bg-card)] p-5">
+          <div className="border border-[var(--color-error)]/30 bg-[var(--color-bg-card)] rounded-[14px] p-5">
             {cancelAtPeriodEnd ? (
               <div className="space-y-3">
-                <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+                <p className="text-[12px] text-[var(--color-text-dim)] leading-relaxed">
                   your subscription is set to cancel
                   {cancelDate && (
                     <> on{" "}
@@ -772,7 +772,7 @@ function BillingContent() {
                 </p>
                 <button
                   onClick={handleReactivate}
-                  className="flex items-center gap-2 px-4 py-2 text-[12px] text-[var(--color-success)] border border-[var(--color-success)]/40 hover:bg-[var(--color-bg-hover)] transition-all tracking-wider uppercase"
+                  className="flex items-center gap-2 px-4 py-2 text-[12px] text-[var(--color-success)] border border-[var(--color-success)]/40 rounded-[10px] hover:bg-[var(--color-bg-hover)] transition-colors duration-150"
                 >
                   <CheckCircle2 className="w-3 h-3" />
                   keep subscription
@@ -780,14 +780,14 @@ function BillingContent() {
               </div>
             ) : (
               <div className="space-y-3">
-                <p className="text-[12px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+                <p className="text-[12px] text-[var(--color-text-dim)] leading-relaxed">
                   cancel your subscription. you'll keep full access until the end of the current billing period,
                   then revert to the free plan.
                 </p>
                 <button
                   onClick={() => setCancelConfirmOpen(true)}
                   disabled={canceling}
-                  className="flex items-center gap-2 px-4 py-2 text-[12px] text-[var(--color-error)] border border-[var(--color-error)]/40 hover:bg-[var(--color-error)]/5 transition-all tracking-wider uppercase disabled:opacity-40"
+                  className="flex items-center gap-2 px-4 py-2 text-[12px] text-[var(--color-error)] border border-[var(--color-error)]/40 rounded-[10px] hover:bg-[var(--color-error)]/5 transition-colors duration-150 disabled:opacity-40"
                 >
                   {canceling ? (
                     <Loader2 className="w-3 h-3 animate-spin" />
@@ -808,7 +808,7 @@ function BillingContent() {
         title="cancel subscription"
         message="Are you sure you want to cancel?"
         body={
-          <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+          <p className="text-[11px] text-[var(--color-text-dim)] leading-relaxed">
             your {planTier} plan stays active until the end of the current billing period.
             after that, your account reverts to the free plan with reduced limits.
           </p>
@@ -833,18 +833,18 @@ function BillingContent() {
           pendingChange ? (
             <div className="space-y-3">
               <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
-                <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+                <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
                   new plan
                 </span>
-                <span className="text-[12px] text-[var(--color-text)] tracking-wider">
+                <span className="text-[12px] text-[var(--color-text)]">
                   {pendingChange.plan.tier}
                 </span>
               </div>
               <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
-                <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+                <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
                   price
                 </span>
-                <span className="text-[12px] text-[var(--color-text)] tracking-wider tabular-nums">
+                <span className="text-[12px] text-[var(--color-text)] font-mono tabular-nums">
                   {formatPrice(pendingChange.price.amount, pendingChange.price.currency)}
                   /{pendingChange.price.interval === "year" ? "yr" : "mo"}
                 </span>
@@ -853,7 +853,7 @@ function BillingContent() {
               {pendingChange.loadingPreview ? (
                 <div className="flex items-center gap-2 py-2">
                   <Loader2 className="w-3 h-3 text-[var(--color-text-dim)] animate-spin" />
-                  <span className="text-[11px] text-[var(--color-text-dim)] tracking-wider">
+                  <span className="text-[11px] text-[var(--color-text-dim)]">
                     calculating...
                   </span>
                 </div>
@@ -862,31 +862,31 @@ function BillingContent() {
                   <>
                     {pendingChange.proration.credit > 0 && (
                       <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
-                        <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+                        <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
                           credit from current plan
                         </span>
-                        <span className="text-[12px] text-[var(--color-success)] tracking-wider tabular-nums">
+                        <span className="text-[12px] text-[var(--color-success)] font-mono tabular-nums">
                           −{formatPrice(pendingChange.proration.credit, pendingChange.proration.currency)}
                         </span>
                       </div>
                     )}
                     <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
-                      <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.15em]">
+                      <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
                         charge today
                       </span>
-                      <span className="text-[13px] font-medium tracking-wider tabular-nums text-[var(--color-text)]">
+                      <span className="text-[13px] font-medium font-mono tabular-nums text-[var(--color-text)]">
                         {formatPrice(pendingChange.proration.amount_due, pendingChange.proration.currency)}
                       </span>
                     </div>
                   </>
                 ) : (
                   <div className="py-2 space-y-2">
-                    <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+                    <p className="text-[11px] text-[var(--color-text-dim)] leading-relaxed">
                       your current plan stays active until the end of this billing period.
                       no charge today.
                     </p>
                     {pendingChange.proration.effective_date && (
-                      <p className="text-[11px] text-[var(--color-error)] tracking-wider leading-relaxed">
+                      <p className="text-[11px] text-[var(--color-error)] leading-relaxed">
                         your plan will change to {pendingChange.plan.tier} on{" "}
                         {new Date(pendingChange.proration.effective_date + "T00:00:00").toLocaleDateString("en-US", {
                           month: "long",
@@ -898,7 +898,7 @@ function BillingContent() {
                   </div>
                 )
               ) : (
-                <p className="text-[11px] text-[var(--color-text-dim)] tracking-wider leading-relaxed">
+                <p className="text-[11px] text-[var(--color-text-dim)] leading-relaxed">
                   the prorated difference will be charged immediately.
                 </p>
               )}

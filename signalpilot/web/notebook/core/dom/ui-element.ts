@@ -1,0 +1,249 @@
+import { isCustomSpElement } from "@/plugins/core/registerReactComponent";
+import { Functions } from "../../utils/functions";
+import { Logger } from "../../utils/Logger";
+import { UIElementId } from "../cells/ids";
+import { defineCustomElement } from "./defineCustomElement";
+import {
+  SpValueInputEvent,
+  type SpValueInputEventType,
+} from "./events";
+import { RANDOM_ID_ATTR } from "./ui-element-constants";
+import { UI_ELEMENT_REGISTRY } from "./uiregistry";
+
+import "./ui-element.css";
+
+const UI_ELEMENT_TAG_NAME = "SP-UI-ELEMENT";
+
+interface IUIElement extends HTMLElement {
+  reset(): void;
+}
+
+/**
+ * Lazily initialize the UIElement component.
+ */
+export function initializeUIElement() {
+  /**
+   * UIElement Web Component
+   *
+   * Synchronizes the value of its first child on page and with the kernel.
+   *
+   * @example
+   * Example wrapping a custom web component:
+   * ```
+   * <sp-ui-element object-id="...">
+   *   <my-custom-component data-initial-value="..."/>
+   * </sp-ui-element>
+   * ```
+   *
+   * @example
+   * Example wrapping raw HTML:
+   * ```
+   * <sp-ui-element object-id="...">
+   *   <div data-initial-value="...">
+   *      ...
+   *   </div>
+   * </sp-ui-element>
+   * ```
+   *
+   * @remarks
+   * IDENTIFICATION
+   * UIElements are uniquely identified by their objectId, in the following
+   * sense: UIElements with the same objectId are synchronized to have the same
+   * value. In other words, the set of UIElements on the page can be partitioned
+   * into equivalence classes, where two elements are equivalent if they share
+   * the same objectId.
+   *
+   * Every UIElement is registered with the global UIElementRegistry.
+   *
+   * SYNCHRONIZATION
+   * Using a <sp-ui-element> tag declares that its first child is a component
+   * whose value should be synchronized. Synchronization happens on two levels:
+   *   1. multiple instances of the same component are synchronized to have the
+   *      same value
+   *   2. a change in value on the page is sent to the kernel
+   *
+   * INITIAL VALUE
+   * The first child of <sp-ui-element> may optionally take a data attribute
+   * called "initial-value" to influence its instantiation. Upon instantiation,
+   * the UIElement component may set this attribute if it already has a value
+   * for the objectId.
+   *
+   * COMMUNICATION
+   * Communication between sp-notebook and the child of a UIElement is facilitated
+   * by two events:
+   *   1. SpValueInputEvent: the child publishes its value by dispatching
+   *      a SpValueInputEvent, with `detail` set to
+   *      `{ value: <the new value> }`;
+   *   2. SpValueUpdateEvent: the UIElement node broadcasts a
+   *      SpValueUpdateEvent to every element registered under its
+   *      objectId when a new value is available; the targets of these
+   *      events (i.e., the child node of each UIElement in the equivalence
+   *      class of the objectId) are responsible for listening to these
+   *      events and updating their value internally.
+   *
+   */
+  class UIElement extends HTMLElement implements IUIElement {
+    private initialized = false;
+    private inputListener: (e: SpValueInputEventType) => void =
+      Functions.NOOP;
+
+    // This needs to happen in connectedCallback because the element may not be
+    // set at construction time
+    private init() {
+      if (this.initialized) {
+        return;
+      }
+
+      const objectId = UIElementId.parseOrThrow(this);
+      this.inputListener = (e: SpValueInputEventType) => {
+        // TODO: just fill in the objectId and let the document handle
+        // broadcast? that would still let other elements cancel the event
+        // while also reducing the number of event listeners on the document
+        if (objectId !== null && e.detail.element === this.firstElementChild) {
+          // A UIElement may be missing from the registry if it was returned from a function that caches return values.
+          if (!UI_ELEMENT_REGISTRY.has(objectId)) {
+            UI_ELEMENT_REGISTRY.registerInstance(
+              objectId,
+              child as HTMLElement,
+            );
+          }
+
+          UI_ELEMENT_REGISTRY.broadcastValueUpdate(
+            child as HTMLElement,
+            objectId,
+            e.detail.value,
+          );
+        }
+      };
+
+      // A UIElement tracks the value of its first child.
+      const child = this.firstElementChild;
+      if (objectId === null) {
+        Logger.error("[sp-ui-element] missing object-id attribute");
+        return;
+      }
+      if (child === null) {
+        Logger.error("[sp-ui-element] has no child");
+        return;
+      }
+      if (!(child instanceof HTMLElement)) {
+        Logger.error(
+          "[sp-ui-element] first child must be instance of HTMLElement",
+        );
+        return;
+      }
+
+      this.initialized = true;
+    }
+
+    connectedCallback() {
+      this.init();
+
+      if (this.initialized) {
+        // It is critical that the element is registered in this method,
+        // and not in the constructor, since it may be disconnected and
+        // reconnected without being re-constructed
+        const objectId = UIElementId.parseOrThrow(this);
+        const child = this.firstElementChild as HTMLElement;
+        UI_ELEMENT_REGISTRY.registerInstance(objectId, child);
+
+        // Listen to input events provided by the child element: these
+        // events are signals to this UIElement that our value should change.
+        document.addEventListener(
+          SpValueInputEvent.TYPE,
+          this.inputListener,
+        );
+      }
+    }
+
+    disconnectedCallback() {
+      if (this.initialized) {
+        // Unregister everything
+        document.removeEventListener(
+          SpValueInputEvent.TYPE,
+          this.inputListener,
+        );
+        const objectId = UIElementId.parseOrThrow(this);
+        UI_ELEMENT_REGISTRY.removeInstance(
+          objectId,
+          this.firstElementChild as HTMLElement,
+        );
+      }
+    }
+
+    /**
+     * Reset the value of the child element to its initial value.
+     */
+    reset() {
+      const child = this.firstElementChild;
+      if (isCustomSpElement(child)) {
+        child.reset();
+      } else {
+        Logger.error(
+          "[sp-ui-element] first child must have a reset method",
+        );
+      }
+    }
+
+    // We look for changes to the random-id attribute, which is effectively
+    // used like a React key. If the random-id changes, we need to unmount and
+    // remount its child.
+    static get observedAttributes() {
+      return [RANDOM_ID_ATTR];
+    }
+
+    attributeChangedCallback(
+      name: string,
+      oldValue: string | null,
+      newValue: string | null,
+    ) {
+      if (this.initialized) {
+        const hasChanged = oldValue !== newValue;
+        if (name === RANDOM_ID_ATTR && hasChanged) {
+          // deregister/clean-up this instance
+          this.disconnectedCallback();
+          // remove and re-add its child to force it to re-render; note that
+          // this doesn't reconstruct the UI element, only its child
+          const child = this.firstElementChild;
+          if (isCustomSpElement(child)) {
+            child.rerender();
+          } else {
+            Logger.error(
+              "[sp-ui-element] first child must have a rerender method",
+            );
+          }
+          // register the element and reset its initial value
+          this.initialized = false;
+          this.connectedCallback();
+        }
+      }
+    }
+  }
+
+  defineCustomElement(UI_ELEMENT_TAG_NAME.toLowerCase(), UIElement);
+}
+
+/**
+ * Given a node, check if its parent or itself is a UIElement,
+ * and return its objectId if so.
+ */
+export function getUIElementObjectId(target: HTMLElement): UIElementId | null {
+  if (!target) {
+    return null;
+  }
+
+  if (target.nodeName === UI_ELEMENT_TAG_NAME) {
+    return UIElementId.parseOrThrow(target);
+  }
+
+  const node = target.parentElement;
+  if (node?.nodeName === UI_ELEMENT_TAG_NAME) {
+    return UIElementId.parseOrThrow(node);
+  }
+
+  return null;
+}
+
+export function isUIElement(target: HTMLElement): target is IUIElement {
+  return target.tagName === UI_ELEMENT_TAG_NAME;
+}

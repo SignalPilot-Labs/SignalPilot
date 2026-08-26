@@ -1,14 +1,12 @@
 """Schema exploration tool: explore_table (tool 6)."""
 
-from __future__ import annotations
-
 import httpx
 
 from gateway.errors.mcp import sanitize_proxy_response
 from gateway.mcp.audit import audited_tool
 from gateway.mcp.context import _gateway_url, _gw_headers
 from gateway.mcp.server import mcp
-from gateway.mcp.validation import _CONN_NAME_RE
+from gateway.mcp.validation import _validate_connection_name
 
 
 @audited_tool(mcp)
@@ -17,14 +15,14 @@ async def explore_table(connection_name: str, table_name: str) -> str:
     Deep-dive a specific table — get full column details, types, FK refs, and sample values.
 
     Use this after list_tables to investigate tables relevant to the user's question.
-    This follows the ReFoRCE iterative column exploration pattern (Spider2.0 SOTA).
+    This performs iterative column exploration.
 
     Args:
         connection_name: Name of the database connection
         table_name: Full table name (e.g., 'public.customers')
     """
-    if not _CONN_NAME_RE.match(connection_name):
-        return "Error: Invalid connection name"
+    if err := _validate_connection_name(connection_name):
+        return f"Error: {err}"
 
     async with httpx.AsyncClient(base_url=_gateway_url(), timeout=30) as client:
         resp = await client.get(

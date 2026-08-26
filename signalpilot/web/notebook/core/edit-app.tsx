@@ -1,0 +1,553 @@
+import { usePrevious } from "@dnd-kit/utilities";
+import { Tooltip } from "radix-ui";
+import { apiCall } from "@/core/network/api-call";
+import { useAtomValue, useSetAtom } from "jotai";
+import { useEffect, useRef, useState } from "react";
+import { NotebookLoadingState } from "@/components/editor/alerts/connecting-alert";
+import { Controls } from "@/components/editor/controls/Controls";
+import { AppHeader } from "@/components/editor/header/app-header";
+import { FilenameForm } from "@/components/editor/header/filename-form";
+import { MultiCellActionToolbar } from "@/components/editor/navigation/multi-cell-action-toolbar";
+import { cn } from "@/utils/cn";
+import { Paths } from "@/utils/paths";
+import { KnownQueryParams } from "./constants";
+import { SPA_NAVIGATE_EVENT } from "./router/spa-navigate";
+import { resolveFileKind, type FileKind } from "./active-file";
+import {
+  activeTabIdAtom,
+  normalizePersistedTabs,
+  openFileInTab,
+  openTabsAtom,
+  useActiveTab,
+} from "./file-tabs";
+import { isSwitchingNotebookAtom } from "./notebook-switcher";
+import { dbtProjectDirAtom, dbtProjectInfoAtom } from "@/components/editor/dbt/use-dbt";
+import { fileTreeRefreshNonceAtom } from "@/components/editor/file-tree/state";
+import type { DbtProjectInfo } from "@/components/editor/dbt/types";
+import { gatewayBranchIdAtom as branchSelectionAtom } from "@/core/branch/branch-state";
+import { getGatewayBranchId, getGatewayProjectId, setGatewayBranchId, setGatewayProjectId } from "./network/api";
+import {
+  GATEWAY_BRANCH_STORAGE_KEY,
+  GATEWAY_PROJECT_STORAGE_KEY,
+  gatewayBranchIdAtom as coreGatewayBranchIdAtom,
+  gatewayProjectIdAtom,
+} from "./network/gateway-state";
+import {
+  DURABLE_TRAIL_FILE_PREFIXES,
+  isNotionTrailParams,
+  isNotionTrailSearchParams,
+} from "./notion/trail";
+import { store } from "./state/jotai";
+import { rawFallbackAtom } from "./meta/state";
+import { filenameAtom } from "./saving/file-state";
+import { updateQueryParams } from "@/utils/urls";
+import { AppContainer } from "../components/editor/app-container";
+import {
+  useRunAllCells,
+  useRunStaleCells,
+} from "../components/editor/cell/useRunCells";
+import { RawFileEditor } from "../components/editor/raw-file-editor";
+import { CellArray } from "../components/editor/renderers/cell-array";
+import { CellsRenderer } from "../components/editor/renderers/cells-renderer";
+import { useHotkey } from "../hooks/useHotkey";
+import {
+  hasCellsAtom,
+  notebookIsRunningAtom,
+  numColumnsAtom,
+  useCellActions,
+} from "./cells/cells";
+import type { AppConfig, UserConfig } from "./config/config-schema";
+import { RuntimeState } from "./kernel/RuntimeState";
+import { getSessionId, setSessionId } from "./kernel/session";
+import { useTogglePresenting } from "./layout/useTogglePresenting";
+import { viewStateAtom } from "./mode";
+import { useRequestClient } from "./network/requests";
+import { useFilename } from "./saving/filename";
+import { setDocumentTitle } from "./dom/document-title";
+import { lastSavedNotebookAtom } from "./saving/state";
+import { useSpKernelConnection } from "./websocket/useSpKernelConnection";
+
+const TooltipProvider = Tooltip.Provider;
+
+function currentSearchParams(): URLSearchParams {
+  return new URL(window.location.href).searchParams;
+}
+
+function isCurrentPageNotionTrail(): boolean {
+  return isNotionTrailSearchParams(currentSearchParams());
+}
+
+function isProjectEntrySearchParams(params: URLSearchParams): boolean {
+  return Boolean(
+    params.get(KnownQueryParams.project) &&
+      (params.get(KnownQueryParams.filePath) || "").startsWith("__new__"),
+  );
+}
+
+function clearEditorTabState() {
+  store.set(openTabsAtom, []);
+  store.set(activeTabIdAtom, null);
+  store.set(filenameAtom, null);
+  store.set(rawFallbackAtom, false);
+}
+
+function isTrailTabPath(path: string, sessionId: string | null | undefined): boolean {
+  const normalized = path.replace(/\\/g, "/").replace(/^\/+/, "");
+  return (
+    isNotionTrailParams({ file: normalized, sessionId }) ||
+    DURABLE_TRAIL_FILE_PREFIXES.some(
+      (prefix) => normalized.startsWith(prefix) || normalized.includes(`/${prefix}`),
+    )
+  );
+}
+
+function clearNotionTrailProjectState() {
+  setGatewayProjectId(null);
+  setGatewayBranchId(null);
+  store.set(gatewayProjectIdAtom, null);
+  store.set(coreGatewayBranchIdAtom, null);
+  store.set(branchSelectionAtom, null);
+  store.set(dbtProjectDirAtom, null);
+  if (typeof window !== "undefined") {
+    window.localStorage.removeItem(GATEWAY_PROJECT_STORAGE_KEY);
+    window.localStorage.removeItem(GATEWAY_BRANCH_STORAGE_KEY);
+    window.localStorage.removeItem("sp:dbt-project-dir");
+  }
+}
+
+interface AppProps {
+  /**
+   * The user config.
+   */
+  userConfig: UserConfig;
+  /**
+   * The app config.
+   */
+  appConfig: AppConfig;
+  /**
+   * If true, the floating controls will be hidden.
+   */
+  hideControls?: boolean;
+}
+
+export const EditApp: React.FC<AppProps> = ({
+  userConfig,
+  appConfig,
+  hideControls = false,
+}) => {
+  const { setCells, mergeAllColumns, collapseAllCells, expandAllCells } =
+    useCellActions();
+  const viewState = useAtomValue(viewStateAtom);
+  const numColumns = useAtomValue(numColumnsAtom);
+  const hasCells = useAtomValue(hasCellsAtom);
+  const filename = useFilename();
+  const setLastSavedNotebook = useSetAtom(lastSavedNotebookAtom);
+  const { sendComponentValues, sendInterrupt } = useRequestClient();
+  const activeTab = useActiveTab();
+  const initialRawFallback = useAtomValue(rawFallbackAtom);
+  const [fileNavigationReady, setFileNavigationReady] = useState(false);
+
+  const isEditing = viewState.mode === "edit";
+  const isPresenting = viewState.mode === "present";
+  const isRunning = useAtomValue(notebookIsRunningAtom);
+
+  // Initialize RuntimeState event-listeners
+  useEffect(() => {
+    RuntimeState.INSTANCE.start(sendComponentValues);
+    return () => {
+      try { RuntimeState.INSTANCE.stop(); } catch { /* client already disposed */ }
+    };
+  }, []);
+
+  const { connection, reconnect, forceReconnect } = useSpKernelConnection({
+    autoInstantiate: userConfig.runtime.auto_instantiate,
+    setCells: (cells, layout) => {
+      setCells(cells);
+      const names = cells.map((cell) => cell.name);
+      const codes = cells.map((cell) => cell.code);
+      const configs = cells.map((cell) => cell.config);
+      setLastSavedNotebook({ names, codes, configs, layout });
+    },
+    sessionId: getSessionId(),
+    static:
+      !fileNavigationReady ||
+      activeTab?.type === "raw" ||
+      (!activeTab && initialRawFallback),
+  });
+
+  // Update document title whenever filename or app_title changes
+  useEffect(() => {
+    setDocumentTitle(
+      appConfig.app_title ||
+        Paths.basename(filename ?? "") ||
+        "Untitled Notebook",
+    );
+  }, [appConfig.app_title, filename]);
+
+  // Delete column breakpoints if app width changes from "columns"
+  const previousWidth = usePrevious(appConfig.width);
+  useEffect(() => {
+    if (previousWidth === "columns" && appConfig.width !== "columns") {
+      mergeAllColumns();
+    }
+  }, [appConfig.width, previousWidth, mergeAllColumns, numColumns]);
+
+  const runStaleCells = useRunStaleCells();
+  const runAllCells = useRunAllCells();
+  const togglePresenting = useTogglePresenting();
+
+  // HOTKEYS
+  useHotkey("global.runStale", () => {
+    runStaleCells();
+  });
+  useHotkey("global.interrupt", () => {
+    sendInterrupt();
+  });
+  useHotkey("global.hideCode", () => {
+    togglePresenting();
+  });
+  useHotkey("global.runAll", () => {
+    runAllCells();
+  });
+  useHotkey("global.collapseAllSections", () => {
+    collapseAllCells();
+  });
+  useHotkey("global.expandAllSections", () => {
+    expandAllCells();
+  });
+
+  const navigationRequestRef = useRef(0);
+
+  const resolveAndOpenFile = async (
+    filePath: string,
+    knownKind?: FileKind,
+  ): Promise<void> => {
+    const requestId = ++navigationRequestRef.current;
+    try {
+      const kind = knownKind ?? await resolveFileKind(filePath);
+      if (requestId !== navigationRequestRef.current) {
+        return;
+      }
+      openFileInTab(filePath, kind);
+    } catch (error) {
+      console.error("[file-navigation] Failed to open file:", error);
+    }
+  };
+
+  // On mount: read branch from URL, sync cloud project files, set up tabs
+  useEffect(() => {
+    const init = async () => {
+      const params = currentSearchParams();
+      const isNotionTrail = isNotionTrailSearchParams(params);
+      const isProjectEntry = isProjectEntrySearchParams(params);
+
+      if (isProjectEntry) {
+        clearEditorTabState();
+      }
+
+      // Hydrate project/branch from URL (shareable links)
+      const urlProject = params.get(KnownQueryParams.project);
+      const urlBranch = params.get(KnownQueryParams.branch);
+      if (isNotionTrail) {
+        clearNotionTrailProjectState();
+      } else if (urlProject) {
+        setGatewayProjectId(urlProject);
+      }
+      if (!isNotionTrail && urlBranch) {
+        setGatewayBranchId(urlBranch);
+        store.set(branchSelectionAtom, urlBranch);
+      }
+
+      const projectId = isNotionTrail ? null : urlProject || getGatewayProjectId();
+
+      if (projectId) {
+        // Cloud project: no sync — files pull on demand from the workspace
+        // store. Pre-detect the dbt project (org setting / auto-detect on
+        // the server) so the dbt panel is ready when opened.
+        //
+        // Deliberately NOT setting dbtProjectDirAtom here: project_info
+        // reports the server's materialized exec path, and rooting the file
+        // tree (or later client requests) at a server-side scratch dir
+        // renders the workspace empty. v2 dbt endpoints resolve their own
+        // project dir server-side. Clear any stale persisted value so an
+        // old sync-era path can't root the tree either.
+        store.set(dbtProjectDirAtom, null);
+        apiCall<DbtProjectInfo>("/dbt/project_info", {})
+          .then((info) => {
+            if (info?.found) {
+              store.set(dbtProjectInfoAtom, info);
+            }
+          })
+          .catch(() => {});
+      }
+
+      const fileInUrl = currentSearchParams().get("file");
+      const isRawFallback = store.get(rawFallbackAtom);
+      const storedFilename = store.get(filenameAtom);
+      // Workspace-relative paths go to the runtime as-is; it resolves them
+      // against the workspace root.
+      const filePath = isRawFallback && storedFilename ? storedFilename : fileInUrl;
+
+      if (filePath && !filePath.startsWith("__new__")) {
+        console.log("[EditApp.init] opening file tab:", filePath.slice(-50));
+        await resolveAndOpenFile(
+          filePath,
+          isRawFallback ? "raw" : "notebook",
+        );
+        setFileNavigationReady(true);
+        void normalizePersistedTabs(resolveFileKind);
+      } else if (!fileInUrl || fileInUrl.startsWith("__new__")) {
+        console.log("[EditApp.init] __new__ project — clearing tabs");
+        clearEditorTabState();
+        setFileNavigationReady(true);
+      }
+    };
+
+    init();
+  }, []); // Only on mount
+
+  // Ref to track the path of the currently active tab, used by the URL-change
+  // listener below to avoid opening a tab that is already active.
+  const activeTabPathRef = useRef<string | null>(null);
+  useEffect(() => {
+    activeTabPathRef.current = activeTab?.path ?? null;
+  }, [activeTab?.path]);
+
+  // Listen for URL changes driven by navigate() / popstate (e.g. browser back/
+  // forward, home-page link clicks). When the URL's `file` param differs from
+  // the currently active tab, open the new file in a tab — identical to the
+  // mount-time init path, so WS reconnect and autosave guards all fire.
+  useEffect(() => {
+    const onUrlChange = () => {
+      const params = currentSearchParams();
+      const isNotionTrail = isNotionTrailSearchParams(params);
+      const file = params.get(KnownQueryParams.filePath);
+      console.log("[onUrlChange] file param:", file, "activeTabPath:", activeTabPathRef.current?.slice(-30));
+      if (!file || file.startsWith("__new__")) return;
+      // Resolve relative paths (e.g. "notebooks/intro.py" → "/workspace/.../notebooks/intro.py")
+      let filePath = file;
+      const projectDir = isNotionTrail ? null : store.get(dbtProjectDirAtom);
+      if (projectDir && !filePath.startsWith("/")) {
+        filePath = `${projectDir.replace(/\/$/, "")}/${filePath}`;
+      }
+      if (activeTabPathRef.current === filePath) {
+        console.log("[onUrlChange] same path — skipping");
+        return;
+      }
+      console.log("[onUrlChange] opening:", filePath.slice(-50));
+      void resolveAndOpenFile(filePath);
+    };
+    window.addEventListener("popstate", onUrlChange);
+    window.addEventListener(SPA_NAVIGATE_EVENT, onUrlChange);
+    return () => {
+      window.removeEventListener("popstate", onUrlChange);
+      window.removeEventListener(SPA_NAVIGATE_EVENT, onUrlChange);
+    };
+  }, []);
+
+  // Keep the URL in sync when switching between files/tabs.
+  // Guard: skip the replaceState when the URL already reflects the active file
+  // (e.g. immediately after navigate() has written the URL via pushState).
+  // This prevents a pushState→replaceState double-drive.
+  useEffect(() => {
+    updateQueryParams((params) => {
+      const currentParams = new URLSearchParams(window.location.search);
+      const isNotionTrailUrl = isNotionTrailSearchParams(currentParams);
+      const isProjectEntry = isProjectEntrySearchParams(currentParams);
+      if (isNotionTrailUrl) {
+        params.delete(KnownQueryParams.project);
+        params.delete(KnownQueryParams.branch);
+      }
+
+      const projectId = getGatewayProjectId();
+      const branchId = getGatewayBranchId();
+
+      if (!isNotionTrailUrl && projectId) {
+        params.set(KnownQueryParams.project, projectId);
+      }
+      if (!isNotionTrailUrl && branchId && projectId) {
+        params.set(KnownQueryParams.branch, branchId);
+      }
+
+      if (activeTab) {
+        const filePath = activeTab.path.replace(/\\/g, "/");
+        if ((isProjectEntry || projectId) && isTrailTabPath(filePath, activeTab.sessionId)) {
+          return;
+        }
+        // Strip the sync directory prefix to get project-relative path
+        const syncMarker = "/.sp/projects/";
+        const syncIdx = filePath.indexOf(syncMarker);
+        let canonicalFilePath: string;
+        if (syncIdx !== -1) {
+          // Path: .../.sp/projects/{projectId}/{projectName}/models/schema.yml
+          // After syncMarker: {projectId}/{projectName}/models/schema.yml
+          // We want: models/schema.yml (everything after {projectId}/{projectName})
+          const afterSync = filePath.slice(syncIdx + syncMarker.length);
+          const segments = afterSync.split("/");
+          // Structure: {projectId}/{projectName}/...rest
+          if (segments.length > 2) {
+            canonicalFilePath = segments.slice(2).join("/");
+          } else {
+            canonicalFilePath = filePath;
+          }
+        } else {
+          canonicalFilePath = filePath;
+        }
+        // Only write if the URL doesn't already reflect this file, so we don't
+        // create a pushState→replaceState double-drive when navigate() set it.
+        const currentFileParam = currentParams.get(KnownQueryParams.filePath);
+        if (isNotionTrailUrl && currentFileParam && currentFileParam !== canonicalFilePath) {
+          return;
+        }
+        if (currentFileParam === canonicalFilePath) return;
+        params.set(KnownQueryParams.filePath, canonicalFilePath);
+      }
+    });
+  }, [activeTab, filename]);
+
+  useEffect(() => {
+    store.set(rawFallbackAtom, activeTab?.type === "raw");
+    if (activeTab?.type === "notebook" && activeTab.path) {
+      store.set(filenameAtom, activeTab.path);
+      if (activeTab.sessionId) {
+        setSessionId(activeTab.sessionId);
+      }
+    }
+  }, [
+    activeTab?.path,
+    activeTab?.sessionId,
+    activeTab?.type,
+  ]);
+
+  // Reconnect the kernel WS when switching between notebook files. Crossing
+  // the raw/notebook boundary replaces the transport and connects on its own.
+  const currentWsPath = useRef<string | null>(null);
+  useEffect(() => {
+    if (activeTab?.type !== "notebook") {
+      currentWsPath.current = null;
+      return;
+    }
+    const newPath = activeTab.path;
+    if (currentWsPath.current === newPath) {return;}
+
+    const wasNull = currentWsPath.current === null;
+    currentWsPath.current = newPath;
+
+    if (wasNull) {return;}
+
+    console.log("[WS-RECONNECT] path changed:", newPath.slice(-40), "wasNull:", wasNull);
+    store.set(isSwitchingNotebookAtom, true);
+    forceReconnect();
+  }, [activeTab?.path, activeTab?.type, forceReconnect]);
+
+  // Reconnect the kernel WS when the git branch changes.
+  // rebootMountConfig() writes gatewayBranchIdAtom; this effect is the
+  // sole reconnect trigger — rebootMountConfig does not touch the WS directly.
+  const lastBranchId = useRef<string | null>(null);
+  const branchId = useAtomValue(branchSelectionAtom);
+  useEffect(() => {
+    if (isCurrentPageNotionTrail()) {
+      lastBranchId.current = null;
+      return;
+    }
+    if (lastBranchId.current === null) {
+      lastBranchId.current = branchId;
+      return;
+    }
+    if (lastBranchId.current !== branchId) {
+      lastBranchId.current = branchId;
+      store.set(isSwitchingNotebookAtom, true);
+      forceReconnect();
+    }
+  }, [branchId, forceReconnect]);
+
+  const editableCellsArray = (
+    <CellArray
+      mode={viewState.mode}
+      userConfig={userConfig}
+      appConfig={appConfig}
+      hideControls={hideControls}
+    />
+  );
+
+  const renderContent = () => {
+    // Active tab is a raw file — show raw file editor
+    if (activeTab?.type === "raw") {
+      return <RawFileEditor filePath={activeTab.path} />;
+    }
+
+    // No tab and no cells — show welcome state
+    const fileInUrl = new URL(window.location.href).searchParams.get("file") || "";
+    const isProjectEntry = fileInUrl.startsWith("__new__");
+    const isNotebookInUrl = fileInUrl.endsWith(".py") || fileInUrl.endsWith(".md") || fileInUrl.endsWith(".qmd");
+
+    if (!activeTab && !hasCells && (!fileInUrl || isProjectEntry) && !isNotebookInUrl) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground">
+          <div className="text-lg font-semibold text-foreground">
+            Select a file to get started
+          </div>
+          <div className="text-sm max-w-md text-center">
+            Use the file tree in the sidebar to open a <code className="text-xs bg-muted rounded px-1">.sql</code>, <code className="text-xs bg-muted rounded px-1">.yml</code>, or <code className="text-xs bg-muted rounded px-1">.py</code> file from your dbt project.
+          </div>
+        </div>
+      );
+    }
+
+    // Notebook view (active notebook file or cells already loaded)
+    return (
+      <>
+        <AppHeader
+          connection={connection}
+          onForceReconnect={forceReconnect}
+          className={cn(
+            "pt-4 sm:pt-12 pb-2 mb-4 print:hidden z-50",
+            "sticky left-0",
+          )}
+        >
+          {isEditing && (
+            <div className="flex items-center justify-center container">
+              <FilenameForm filename={activeTab?.path ?? filename} />
+            </div>
+          )}
+        </AppHeader>
+
+        {hasCells && (
+          <CellsRenderer appConfig={appConfig} mode={viewState.mode}>
+            {editableCellsArray}
+          </CellsRenderer>
+        )}
+        {!hasCells && <NotebookLoadingState />}
+      </>
+    );
+  };
+
+  return (
+    <>
+      {/* <TabBar /> */}
+      <AppContainer
+        connection={connection}
+        isRunning={isRunning}
+        width={appConfig.width}
+        onReconnect={reconnect}
+      >
+        {renderContent()}
+      </AppContainer>
+      <MultiCellActionToolbar />
+      {!hideControls && (
+        <TooltipProvider>
+          <Controls
+            presenting={isPresenting}
+            onTogglePresenting={togglePresenting}
+            onInterrupt={sendInterrupt}
+            onRun={runStaleCells}
+            onRunAll={runAllCells}
+            connectionState={connection.state}
+            running={isRunning}
+            appConfig={appConfig}
+          />
+        </TooltipProvider>
+      )}
+    </>
+  );
+};

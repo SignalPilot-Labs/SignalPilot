@@ -1,0 +1,8 @@
+/* Both the `sp-ui-element` and its child should be displayed as if they were not wrapped in a custom element. */
+sp-ui-element {
+  display: contents;
+
+  > * {
+    display: contents;
+  }
+}

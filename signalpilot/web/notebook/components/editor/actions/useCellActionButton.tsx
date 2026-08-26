@@ -1,0 +1,440 @@
+import type { EditorView } from "@codemirror/view";
+import { useAtomValue } from "jotai";
+import {
+  ChevronDownIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  ChevronsDownIcon,
+  ChevronsUpIcon,
+  ChevronUpIcon,
+  Code2Icon,
+  Columns2Icon,
+  DatabaseIcon,
+  EyeIcon,
+  EyeOffIcon,
+  ImageIcon,
+  LinkIcon,
+  PlayIcon,
+  PlusCircleIcon,
+  ScissorsIcon,
+  TextCursorInputIcon,
+  Trash2Icon,
+  XCircleIcon,
+  ZapIcon,
+  ZapOffIcon,
+} from "lucide-react";
+import { MultiIcon } from "@/components/icons/multi-icon";
+import { useImperativeModal } from "@/components/modal/ImperativeModal";
+import {
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { toast } from "@/components/ui/use-toast";
+import { maybeAddSpImport } from "@/core/cells/add-missing-import";
+import { hasOnlyOneCellAtom, useCellActions } from "@/core/cells/cells";
+import { type CellId, SETUP_CELL_ID } from "@/core/cells/ids";
+import type { CellData } from "@/core/cells/types";
+import { formatEditorViews } from "@/core/codemirror/format";
+import {
+  getCurrentLanguageAdapter,
+  toggleToLanguage,
+} from "@/core/codemirror/language/commands";
+import { switchLanguage } from "@/core/codemirror/language/extension";
+import { MARKDOWN_INITIAL_HIDE_CODE } from "@/core/codemirror/language/languages/markdown";
+import {
+  appWidthAtom,
+  autoInstantiateAtom,
+} from "@/core/config/config";
+import { kioskModeAtom } from "@/core/mode";
+import { useRequestClient } from "@/core/network/requests";
+import type { CellConfig, RuntimeState } from "@/core/network/types";
+import { canLinkToCell, createCellLink } from "@/utils/cell-urls";
+import { copyToClipboard } from "@/utils/copy";
+import { downloadCellOutputAsImage } from "@/utils/download";
+import { MarkdownIcon, PythonIcon } from "../cell/code/icons";
+import { useDeleteCellCallback } from "../cell/useDeleteCell";
+import { useRunCell } from "../cell/useRunCells";
+import { useSplitCellCallback } from "../cell/useSplitCell";
+import { NameCellInput } from "./name-cell-input";
+import type { ActionButton } from "./types";
+
+export interface CellActionButtonProps extends Pick<
+  CellData,
+  "name" | "config"
+> {
+  cellId: CellId;
+  status: RuntimeState;
+  hasOutput: boolean;
+  hasConsoleOutput: boolean;
+  getEditorView: () => EditorView | null;
+}
+
+interface Props {
+  cell: CellActionButtonProps | null;
+  closePopover?: () => void;
+}
+
+export function useCellActionButtons({ cell, closePopover }: Props) {
+  const {
+    createNewCell: createCell,
+    updateCellConfig,
+    updateCellName,
+    moveCell,
+    sendToTop,
+    sendToBottom,
+    addColumnBreakpoint,
+    clearCellOutput,
+    markUntouched,
+  } = useCellActions();
+  const splitCell = useSplitCellCallback();
+  const runCell = useRunCell(cell?.cellId);
+  const hasOnlyOneCell = useAtomValue(hasOnlyOneCellAtom);
+  const canDelete = !hasOnlyOneCell;
+  const deleteCell = useDeleteCellCallback();
+  const { openModal } = useImperativeModal();
+  const autoInstantiate = useAtomValue(autoInstantiateAtom);
+  const kioskMode = useAtomValue(kioskModeAtom);
+  const appWidth = useAtomValue(appWidthAtom);
+  const { saveCellConfig } = useRequestClient();
+
+  if (!cell || kioskMode) {
+    return [];
+  }
+
+  const {
+    cellId,
+    config,
+    getEditorView,
+    name,
+    hasOutput,
+    hasConsoleOutput,
+    status,
+  } = cell;
+
+  const toggleDisabled = async () => {
+    const newConfig = { disabled: !config.disabled };
+    await saveCellConfig({ configs: { [cellId]: newConfig } });
+    updateCellConfig({ cellId, config: newConfig });
+  };
+
+  const toggleHideCode = async () => {
+    const newConfig: Partial<CellConfig> = { hide_code: !config.hide_code };
+    await saveCellConfig({ configs: { [cellId]: newConfig } });
+    updateCellConfig({ cellId, config: newConfig });
+    const editorView = getEditorView();
+    // If we're hiding the code, we should blur the editor
+    // otherwise, we should focus it
+    if (editorView) {
+      if (newConfig.hide_code) {
+        editorView.contentDOM.blur();
+      } else {
+        editorView.focus();
+      }
+    }
+  };
+
+  const isSetupCell = cellId === SETUP_CELL_ID;
+
+  // Actions
+  const actions: ActionButton[][] = [
+    [
+      {
+        icon: <PlayIcon size={13} strokeWidth={1.5} />,
+        label: "Run cell",
+        hotkey: "cell.run",
+        hidden:
+          status === "running" ||
+          status === "queued" ||
+          status === "disabled-transitively" ||
+          config.disabled,
+        redundant: true,
+        handle: () => runCell(),
+      },
+      {
+        icon: <ScissorsIcon size={13} strokeWidth={1.5} />,
+        label: "Split",
+        hotkey: "cell.splitCell",
+        handle: () => splitCell({ cellId }),
+      },
+      {
+        icon: <Code2Icon size={13} strokeWidth={1.5} />,
+        label: "Format",
+        hotkey: "cell.format",
+        handle: () => {
+          const editorView = getEditorView();
+          if (!editorView) {
+            return;
+          }
+          formatEditorViews({ [cellId]: editorView });
+        },
+      },
+      {
+        icon: config.hide_code ? (
+          <EyeIcon size={13} strokeWidth={1.5} />
+        ) : (
+          <EyeOffIcon size={13} strokeWidth={1.5} />
+        ),
+        label: config.hide_code ? "Show code" : "Hide code",
+        handle: toggleHideCode,
+        hotkey: "cell.hideCode",
+      },
+      {
+        icon: config.disabled ? (
+          <ZapOffIcon size={13} strokeWidth={1.5} />
+        ) : (
+          <ZapIcon size={13} strokeWidth={1.5} />
+        ),
+        label: config.disabled ? "Enable execution" : "Disable execution",
+        handle: toggleDisabled,
+        hidden: isSetupCell,
+      },
+    ],
+
+    // View as
+    [
+      {
+        icon: <MarkdownIcon />,
+        label: "Convert to Markdown",
+        hotkey: "cell.viewAsMarkdown",
+        handle: async () => {
+          const editorView = getEditorView();
+          if (!editorView) {
+            return;
+          }
+          maybeAddSpImport({ autoInstantiate, createNewCell: createCell });
+          switchLanguage(editorView, {
+            language: "markdown",
+            keepCodeAsIs: false,
+          });
+          // Code stays visible until the user blurs the cell
+          if (!config.hide_code && MARKDOWN_INITIAL_HIDE_CODE) {
+            await saveCellConfig({
+              configs: { [cellId]: { hide_code: MARKDOWN_INITIAL_HIDE_CODE } },
+            });
+            updateCellConfig({
+              cellId,
+              config: { hide_code: MARKDOWN_INITIAL_HIDE_CODE },
+            });
+            markUntouched({ cellId });
+          }
+        },
+        hidden: isSetupCell,
+      },
+      // We need to check this here because the user may have toggled the language
+      getCurrentLanguageAdapter(getEditorView()) === "sql"
+        ? {
+            icon: <PythonIcon />,
+            label: "View as Python",
+            hotkey: "cell.viewAsSQL",
+            handle: () => {
+              const editorView = getEditorView();
+              if (!editorView) {
+                return;
+              }
+              toggleToLanguage(editorView, "python", { force: true });
+            },
+            hidden: isSetupCell,
+          }
+        : {
+            icon: <DatabaseIcon size={13} strokeWidth={1.5} />,
+            label: "Convert to SQL",
+            hotkey: "cell.viewAsSQL",
+            handle: () => {
+              const editorView = getEditorView();
+              if (!editorView) {
+                return;
+              }
+              maybeAddSpImport({
+                autoInstantiate,
+                createNewCell: createCell,
+              });
+              switchLanguage(editorView, {
+                language: "sql",
+                keepCodeAsIs: false,
+              });
+            },
+            hidden: isSetupCell,
+          },
+    ],
+
+    // Movement
+    [
+      {
+        icon: (
+          <MultiIcon>
+            <PlusCircleIcon size={13} strokeWidth={1.5} />
+            <ChevronUpIcon size={8} strokeWidth={2} />
+          </MultiIcon>
+        ),
+        label: "Create cell above",
+        hotkey: "cell.createAbove",
+        handle: () => createCell({ cellId, before: true }),
+        hidden: isSetupCell,
+        redundant: true,
+      },
+      {
+        icon: (
+          <MultiIcon>
+            <PlusCircleIcon size={13} strokeWidth={1.5} />
+            <ChevronDownIcon size={8} strokeWidth={2} />
+          </MultiIcon>
+        ),
+        label: "Create cell below",
+        hotkey: "cell.createBelow",
+        handle: () => createCell({ cellId, before: false }),
+        redundant: true,
+      },
+      {
+        icon: <ChevronUpIcon size={13} strokeWidth={1.5} />,
+        label: "Move cell up",
+        hotkey: "cell.moveUp",
+        handle: () => moveCell({ cellId, before: true }),
+        hidden: isSetupCell,
+      },
+      {
+        icon: <ChevronDownIcon size={13} strokeWidth={1.5} />,
+        label: "Move cell down",
+        hotkey: "cell.moveDown",
+        handle: () => moveCell({ cellId, before: false }),
+        hidden: isSetupCell,
+      },
+      {
+        icon: <ChevronLeftIcon size={13} strokeWidth={1.5} />,
+        label: "Move cell left",
+        hotkey: "cell.moveLeft",
+        handle: () => moveCell({ cellId, direction: "left" }),
+        hidden: appWidth !== "columns" || isSetupCell,
+      },
+      {
+        icon: <ChevronRightIcon size={13} strokeWidth={1.5} />,
+        label: "Move cell right",
+        hotkey: "cell.moveRight",
+        handle: () => moveCell({ cellId, direction: "right" }),
+        hidden: appWidth !== "columns" || isSetupCell,
+      },
+      {
+        icon: <ChevronsUpIcon size={13} strokeWidth={1.5} />,
+        label: "Send to top",
+        hotkey: "cell.sendToTop",
+        // When using the cell menu, likely the user doesn't want to scroll
+        // and instead just wants to get the cell out of the way
+        handle: () => sendToTop({ cellId, scroll: false }),
+        hidden: isSetupCell,
+      },
+      {
+        icon: <ChevronsDownIcon size={13} strokeWidth={1.5} />,
+        label: "Send to bottom",
+        hotkey: "cell.sendToBottom",
+        // When using the cell menu, likely the user doesn't want to scroll
+        // and instead just wants to get the cell out of the way
+        handle: () => sendToBottom({ cellId, scroll: false }),
+        hidden: isSetupCell,
+      },
+      {
+        icon: <Columns2Icon size={13} strokeWidth={1.5} />,
+        label: "Break into new column",
+        hotkey: "cell.addColumnBreakpoint",
+        handle: () => addColumnBreakpoint({ cellId }),
+        hidden: appWidth !== "columns" || isSetupCell,
+      },
+    ],
+
+    // Outputs
+    [
+      {
+        icon: <ImageIcon size={13} strokeWidth={1.5} />,
+        label: "Export output as PNG",
+        hidden: !hasOutput,
+        handle: () => downloadCellOutputAsImage(cellId, "result"),
+      },
+      {
+        icon: <XCircleIcon size={13} strokeWidth={1.5} />,
+        label: "Clear output",
+        hidden: !(hasOutput || hasConsoleOutput),
+        handle: () => {
+          clearCellOutput({ cellId });
+        },
+      },
+    ],
+
+    // Link to cell
+    [
+      {
+        icon: <TextCursorInputIcon size={13} strokeWidth={1.5} />,
+        label: "Name",
+        disableClick: true,
+        handle: (evt) => {
+          evt?.stopPropagation();
+          evt?.preventDefault();
+        },
+        handleHeadless: () => {
+          openModal(
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Rename cell</DialogTitle>
+              </DialogHeader>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="cell-name">Cell name</Label>
+                <NameCellInput
+                  placeholder={"cell name"}
+                  value={name}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      openModal(null);
+                    }
+                  }}
+                  onChange={(newName) =>
+                    updateCellName({ cellId, name: newName })
+                  }
+                />
+              </div>
+            </DialogContent>,
+          );
+        },
+        rightElement: (
+          <NameCellInput
+            placeholder={"cell name"}
+            value={name}
+            onChange={(newName) => updateCellName({ cellId, name: newName })}
+            onEnterKey={() => closePopover?.()}
+          />
+        ),
+        hidden: isSetupCell,
+      },
+      {
+        icon: <LinkIcon size={13} strokeWidth={1.5} />,
+        label: "Copy link to cell",
+        disabled: !canLinkToCell(name),
+        tooltip: canLinkToCell(name)
+          ? undefined
+          : "Only named cells can be linked to",
+        handle: async () => {
+          await copyToClipboard(createCellLink(name));
+          toast({ description: "Link copied to clipboard" });
+        },
+      },
+    ],
+
+    // Delete
+    [
+      {
+        label: "Delete",
+        hidden: !canDelete,
+        variant: "danger",
+        icon: <Trash2Icon size={13} strokeWidth={1.5} />,
+        handle: () => {
+          deleteCell({ cellId });
+        },
+      },
+    ],
+  ];
+
+  // remove hidden
+  return actions
+    .map((group) => group.filter((action) => !action.hidden))
+    .filter((group) => group.length > 0);
+}

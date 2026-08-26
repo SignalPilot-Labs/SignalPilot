@@ -1,0 +1,2 @@
+The dbt project should be checked out into your working directory. What is the marker value?
+[[e2e:file=/work/PROJECT_MARKER.txt]]

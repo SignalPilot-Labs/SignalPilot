@@ -1,0 +1,1437 @@
+.runtime {
+  min-height: 100vh;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+.runtime main {
+  padding: 32px;
+  min-width: 0;
+}
+.header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+.headerIdentity {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 8px;
+}
+.headerIdentity > div:last-child {
+  min-width: 0;
+}
+.header h1 {
+  font-size: 28px;
+  line-height: 1.2;
+  margin: 0 0 6px;
+}
+.header p {
+  color: var(--color-text-muted);
+  margin: 0;
+}
+.header code {
+  color: var(--color-text-dim);
+  font-size: 11px;
+}
+.dashboardRefreshState {
+  color: var(--color-text-muted) !important;
+  font-size: 11px !important;
+  letter-spacing: normal !important;
+  text-transform: none !important;
+}
+.dashboardAttentionGroup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dashboardAttentionSummary {
+  position: relative;
+  outline: none;
+}
+.dashboardAttentionSummary:focus-visible .dashboardRefreshState {
+  color: var(--color-text) !important;
+}
+.dashboardAttentionTooltip {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 10px);
+  right: 0;
+  width: min(360px, calc(100vw - 48px));
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-elevated);
+  box-shadow: 0 16px 42px rgb(0 0 0 / 40%);
+  color: var(--color-text-muted);
+  padding: 11px 12px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-3px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+.dashboardAttentionSummary:hover .dashboardAttentionTooltip,
+.dashboardAttentionSummary:focus-within .dashboardAttentionTooltip {
+  opacity: 1;
+  transform: translateY(0);
+}
+.dashboardAttentionTooltip strong {
+  color: var(--color-text);
+  font-size: 12px;
+}
+.dashboardAttentionTooltip ul {
+  display: grid;
+  gap: 9px;
+  margin: 9px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.dashboardAttentionTooltip li {
+  border-top: 1px solid var(--color-border);
+  padding-top: 8px;
+}
+.dashboardAttentionTooltip li span {
+  color: var(--color-text);
+  font-size: 11px;
+  font-weight: 600;
+}
+.dashboardAttentionTooltip li p {
+  margin: 2px 0 0;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-direction: row;
+}
+.incidentBanner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin: -6px 0 18px;
+  border: 1px solid color-mix(in srgb, #d7a84f 48%, var(--color-border));
+  border-radius: 10px;
+  background: color-mix(in srgb, #d7a84f 8%, var(--color-bg-card));
+  color: var(--color-text-muted);
+  padding: 11px 13px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.incidentBanner strong {
+  color: var(--color-text);
+}
+.incidentBanner p {
+  margin: 5px 0 0;
+  color: var(--color-text-dim);
+  font-size: 11px;
+}
+.incidentActions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+.incidentActions button,
+.errorState button,
+.chartBrokenState button {
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  cursor: pointer;
+  padding: 5px 9px;
+  font-size: 11px;
+}
+.incidentActions button:disabled,
+.errorState button:disabled,
+.chartBrokenState button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+.refreshButtonWrap > button {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  background: var(--color-bg-card);
+  color: var(--color-text);
+  padding: 0;
+  cursor: pointer;
+}
+.refreshButtonWrap > button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+.refreshButtonWrap {
+  position: relative;
+}
+.refreshTooltip {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 8px);
+  right: 0;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 48px));
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-elevated);
+  box-shadow: 0 12px 36px rgb(0 0 0 / 32%);
+  color: var(--color-text-muted) !important;
+  padding: 8px 10px;
+  font-size: 11px !important;
+  font-weight: 400;
+  letter-spacing: normal !important;
+  line-height: 1.4;
+  text-transform: none !important;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-3px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+.refreshButtonWrap:hover .refreshTooltip,
+.refreshButtonWrap:focus-within .refreshTooltip {
+  opacity: 1;
+  transform: translateY(0);
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(36, minmax(0, 1fr));
+  grid-auto-flow: row dense;
+  gap: 16px;
+}
+.controlBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  margin-bottom: 18px;
+}
+.filterIcon {
+  flex: none;
+  color: var(--color-text-muted);
+}
+.controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.control {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-bg-card);
+  overflow: hidden;
+}
+.control label {
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 0 7px 12px;
+  white-space: nowrap;
+}
+.control select,
+.control input {
+  min-width: 120px;
+  max-width: 220px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  padding: 7px 28px 7px 6px;
+}
+.absoluteRange,
+.nullActions,
+.filterChips,
+.tileActions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.nullActions button,
+.filterChips button,
+.tileActions button {
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 10px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.filterChips {
+  align-items: center;
+  flex: 1;
+  justify-content: flex-end;
+}
+.filterChips span {
+  color: var(--color-text-dim);
+  font-size: 10px;
+}
+.tileButton {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  min-width: 0;
+  height: var(--dashboard-tile-height, 380px);
+}
+.tile {
+  position: relative;
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg-card);
+  overflow: hidden;
+}
+.kpiTile {
+  height: 100%;
+}
+.chartTile {
+  height: 100%;
+}
+.tileHeader {
+  position: relative;
+  z-index: 5;
+  padding: 22px 24px 8px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+.confidenceFlag {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  flex: none;
+  margin-left: auto;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  padding: 0;
+  opacity: 0;
+  transition:
+    opacity 120ms ease,
+    background 120ms ease;
+}
+.tile:hover .confidenceFlag,
+.tile:focus-within .confidenceFlag,
+.confidenceFlag:focus-visible {
+  opacity: 1;
+}
+.highConfidence {
+  color: #63c991;
+}
+.lowConfidence {
+  color: #e3ae55;
+}
+.confidenceFlag:hover,
+.confidenceFlag:focus-visible {
+  background: var(--color-bg);
+  outline: 2px solid var(--color-border-active);
+  outline-offset: 2px;
+}
+.confidenceTooltip {
+  z-index: 120;
+  width: 290px;
+  max-width: min(290px, calc(100vw - 64px));
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-elevated);
+  color: var(--color-text-muted);
+  box-shadow: 0 12px 36px rgb(0 0 0 / 32%);
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.45;
+  outline: none;
+}
+.drillBreadcrumb button {
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px;
+}
+.drillBreadcrumb button:focus-visible,
+.selectionActions button:focus-visible,
+.dataDialog button:focus-visible,
+.detailsDrawer button:focus-visible,
+.tileMenuButton:focus-visible,
+.tileMenuPanel button:focus-visible {
+  outline: 2px solid var(--color-border-active);
+  outline-offset: 2px;
+}
+.drillBreadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 0 18px 4px;
+}
+.drillBreadcrumb span {
+  display: flex;
+  gap: 5px;
+  color: var(--color-text-dim);
+}
+.tileHeader h2 {
+  font-size: clamp(17px, 1.35vw, 24px);
+  font-weight: 600;
+  line-height: 1.25;
+  margin: 0;
+}
+.questionWrap {
+  min-width: 0;
+}
+.questionTrigger {
+  display: block;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  padding: 0;
+  text-align: left;
+  outline: none;
+}
+.questionTrigger:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--color-border-active);
+  outline-offset: 3px;
+}
+.questionTooltip {
+  z-index: 120;
+  width: max-content;
+  max-width: min(380px, calc(100vw - 80px));
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-elevated);
+  color: var(--color-text-muted);
+  box-shadow: 0 12px 36px rgb(0 0 0 / 32%);
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.45;
+  outline: none;
+}
+.tileMenuButton {
+  display: grid;
+  width: 32px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-muted);
+  padding: 0;
+  cursor: pointer;
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  list-style: none;
+  opacity: 0;
+  transition:
+    opacity 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease;
+}
+.tile:hover .tileMenuButton,
+.tile:focus-within .tileMenuButton,
+.tileMenuButton[aria-expanded="true"] {
+  opacity: 1;
+}
+.tileMenuButton:hover,
+.tileMenuButton[aria-expanded="true"] {
+  border-color: var(--color-border);
+  background: var(--color-bg);
+}
+.tileMenuPanel {
+  z-index: 120;
+  width: min(240px, calc(100vw - 32px));
+  max-height: min(420px, calc(100vh - 32px));
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-elevated);
+  box-shadow: 0 18px 50px rgb(0 0 0 / 42%);
+  padding: 8px;
+  outline: none;
+}
+.tileMenuDialog {
+  display: grid;
+  gap: 4px;
+  outline: none;
+}
+.tileMenuPanel button {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  padding: 8px 9px;
+  text-align: left;
+}
+.tileMenuPanel button:hover {
+  background: var(--color-bg);
+}
+.tileMenuPanel button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.tileMenuMeta {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-dim);
+  padding: 4px 9px 9px;
+  font-size: 10px;
+}
+.visual {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  padding: 12px 18px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.kpiTile .visual {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+.visual.visualBroken {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  padding: 24px;
+}
+.visual table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.visual [data-dashboard-renderer="kpi"] {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  flex-direction: column;
+  gap: 7px;
+  text-align: center;
+}
+.visual [data-dashboard-renderer="kpi"] strong {
+  max-width: 100%;
+  color: var(--color-text);
+  font-size: clamp(24px, 5.5cqi, 44px);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  white-space: nowrap;
+}
+.visual [data-dashboard-renderer="kpi"] span {
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1.2;
+}
+.visual th,
+.visual td {
+  border-bottom: 1px solid var(--color-border);
+  padding: 7px;
+  text-align: left;
+  font-size: 12px;
+}
+.state {
+  color: var(--color-text-muted);
+  display: grid;
+  place-items: center;
+  height: 100%;
+}
+.loadingState {
+  display: flex;
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+.pageLoadingState {
+  min-height: 220px;
+}
+.loadingSpinner {
+  display: inline-block;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-text);
+  border-radius: 999px;
+  vertical-align: -0.25em;
+  animation: dashboardSpin 700ms linear infinite;
+}
+.loadingSpinnerSmall {
+  width: 14px;
+  height: 14px;
+  border-width: 1.5px;
+  margin-right: 3px;
+}
+.visual [data-dashboard-renderer] {
+  animation: dashboardChartReveal 360ms ease-out both;
+}
+@keyframes dashboardSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes dashboardChartReveal {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.errorState {
+  box-sizing: border-box;
+  flex: none;
+  align-self: flex-start;
+  width: 100%;
+  border: 1px solid var(--color-danger, #b45a5a);
+  border-radius: 7px;
+  color: var(--color-text);
+  font-size: 11px;
+  padding: 8px;
+  margin-bottom: 8px;
+}
+.chartBrokenState {
+  display: flex;
+  width: min(100%, 420px);
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+.chartBrokenIcon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 12px;
+  place-items: center;
+  border: 1px solid
+    color-mix(in srgb, var(--color-danger, #b45a5a) 38%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-danger, #b45a5a) 9%, transparent);
+  color: var(--color-danger, #c66a6a);
+}
+.chartBrokenState strong {
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.chartBrokenState p {
+  max-width: 360px;
+  margin: 6px 0 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.failureAttemptedAt {
+  display: block;
+  margin-top: 8px;
+  color: var(--color-text-dim);
+  font-size: 10px;
+}
+.chartBrokenState button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+}
+.selectionActions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 18px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-bg);
+  font-size: 11px;
+}
+.selectionActions span {
+  margin-right: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.selectionActions button {
+  border: 1px solid var(--color-border-active);
+  border-radius: 999px;
+  background: var(--color-bg-card);
+  color: var(--color-text);
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 10px;
+}
+.selectionActions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.dataDialog {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 8vh 8vw;
+  background: rgb(0 0 0 / 72%);
+  backdrop-filter: blur(4px);
+}
+.dataDialogPanel {
+  width: 100%;
+  max-height: 84vh;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg-elevated);
+  box-shadow: 0 20px 80px rgb(0 0 0 / 45%);
+  padding: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.dataDialogHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-elevated);
+}
+.dataDialogHeader span {
+  color: var(--color-text-dim);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.dataDialogHeader h3,
+.dataDialogHeader p {
+  margin: 3px 0 0;
+}
+.dataDialogHeader p {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.dataDialogHeader button,
+.detailsDrawer button {
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  padding: 7px 10px;
+  cursor: pointer;
+}
+.dataTableViewport {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.dataDialog table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.dataDialog th,
+.dataDialog td {
+  border-bottom: 1px solid var(--color-border);
+  padding: 8px;
+  text-align: left;
+  font-size: 12px;
+}
+.dataDialog th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-bg-card);
+  white-space: nowrap;
+}
+.dataDialog td {
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.authoringLauncher {
+  border: 1px solid var(--color-border-active);
+  border-radius: 9px;
+  background: var(--color-bg-card);
+  color: var(--color-text);
+  height: 38px;
+  padding: 0 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.repairLauncher {
+  height: 30px;
+  border-color: color-mix(in srgb, #d7a84f 56%, var(--color-border));
+  background: color-mix(in srgb, #d7a84f 9%, var(--color-bg-card));
+  padding: 0 10px;
+}
+.authoringPanel {
+  position: fixed;
+  z-index: 50;
+  top: 16px;
+  right: 16px;
+  bottom: 16px;
+  width: min(420px, calc(100vw - 32px));
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-bg-elevated);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 55%);
+  padding: 18px;
+}
+.authoringPanel header,
+.authoringPreview > div,
+.analysisDialogPanel > header,
+.analysisDialogPanel > header > div:last-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.authoringPanel header span,
+.analysisDialogPanel header span {
+  color: var(--color-text-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.authoringPanel h2,
+.analysisDialogPanel h2 {
+  margin: 4px 0 0;
+  font-size: 16px;
+}
+.authoringPanel button,
+.authoringPanel textarea,
+.analysisDialogPanel button,
+.analysisDialogPanel textarea,
+.analysisDialogPanel a {
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  padding: 8px 10px;
+}
+.authoringPanel form {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+.authoringPanel form label {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+.authoringPanel form p,
+.authoringPreview p {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.authoringPreview {
+  margin-top: 18px;
+  border: 1px solid var(--color-border-active);
+  border-radius: 10px;
+  padding: 12px;
+}
+.authoringOverlay {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  box-sizing: border-box;
+  padding: 16px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--color-bg) 92%, transparent);
+  backdrop-filter: blur(8px);
+}
+@media (min-width: 768px) {
+  .authoringOverlay {
+    left: 14rem;
+  }
+}
+.authoringWorkspace {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(320px, 390px) minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: var(--color-bg);
+  box-shadow: 0 24px 90px rgb(0 0 0 / 45%);
+}
+.authoringMobileTabs {
+  display: none;
+}
+.authoringConversation {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-bg-elevated);
+}
+.authoringConversation > header,
+.authoringCanvas > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 64px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-border);
+}
+.authoringConversation header span,
+.authoringCanvas > header span,
+.authoringContext > span,
+.authoringEvent > span {
+  color: var(--color-text-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.authoringConversation h1 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 0;
+  font-size: 16px;
+}
+.authoringConversation button,
+.authoringConversation textarea,
+.authoringConversation select,
+.authoringConversation input,
+.authoringToolbarButton {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-card);
+  color: var(--color-text);
+  padding: 8px 10px;
+}
+.authoringConversation button,
+.authoringToolbarButton {
+  cursor: pointer;
+}
+.authoringConversation button:disabled,
+.authoringToolbarButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.authoringContext {
+  grid-row: 2;
+  display: grid;
+  gap: 5px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-card);
+}
+.authoringContext label {
+  display: grid;
+  gap: 4px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.authoringContext small {
+  color: var(--color-text-dim);
+}
+.authoringTranscript {
+  grid-row: 3;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px;
+}
+.authoringWelcome {
+  display: grid;
+  place-items: center;
+  min-height: 220px;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+.authoringWelcome p {
+  max-width: 290px;
+  margin: 5px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.authoringEvent {
+  width: fit-content;
+  max-width: 92%;
+  margin-bottom: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px 10px 10px 3px;
+  background: var(--color-bg-card);
+  padding: 9px 11px;
+}
+.authoringEvent_user {
+  margin-left: auto;
+  border-radius: 10px 10px 3px;
+  border-color: color-mix(
+    in srgb,
+    var(--color-border-active) 60%,
+    var(--color-border)
+  );
+}
+.authoringEvent_progress,
+.authoringEvent_validation {
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  padding-block: 3px;
+}
+.authoringEvent[data-status="error"] {
+  border-color: color-mix(in srgb, var(--color-error) 55%, var(--color-border));
+  color: var(--color-error);
+}
+.authoringEvent p {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 3px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.authoringConfirmation {
+  grid-row: 4;
+  margin: 0 14px 10px;
+  border: 1px solid color-mix(in srgb, #d6a84b 55%, var(--color-border));
+  border-radius: 10px;
+  background: color-mix(in srgb, #d6a84b 8%, var(--color-bg-card));
+  padding: 11px;
+}
+.authoringConfirmation p {
+  margin: 5px 0 10px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.authoringConfirmation > div,
+.authoringApplyActions {
+  display: flex;
+  gap: 7px;
+}
+.authoringComposer {
+  position: sticky;
+  z-index: 2;
+  bottom: 0;
+  grid-row: 5;
+  display: grid;
+  gap: 7px;
+  padding: 12px 14px 14px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-bg-elevated);
+}
+.authoringComposer label {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.authoringComposer textarea {
+  width: 100%;
+  resize: vertical;
+}
+.authoringComposer > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-color: var(--color-border-active);
+}
+.authoringComposer .errorState {
+  margin: 0;
+  color: var(--color-error);
+  font-size: 11px;
+}
+.authoringCanvas {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+.authoringCanvas > header > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+.authoringCanvas > header small {
+  margin-left: auto;
+  color: var(--color-text-dim);
+}
+.authoringApplyActions button:last-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-color: var(--color-border-active);
+}
+.authoringPreviewCanvas {
+  min-height: 0;
+  overflow: auto;
+}
+.authoringEmptyPreview {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: var(--color-text-dim);
+  text-align: center;
+}
+@media (max-width: 760px) {
+  .authoringOverlay {
+    padding: 0;
+  }
+  .authoringWorkspace {
+    display: block;
+    min-height: 100dvh;
+    border: 0;
+    border-radius: 0;
+  }
+  .authoringConversation {
+    height: 100dvh;
+    border-right: 0;
+  }
+  .authoringCanvas {
+    height: 100dvh;
+  }
+  .authoringWorkspace[data-mobile-view="chat"] .authoringCanvas,
+  .authoringWorkspace[data-mobile-view="preview"] .authoringConversation {
+    display: none;
+  }
+  .authoringMobileTabs {
+    position: absolute;
+    z-index: 4;
+    top: 14px;
+    left: 50%;
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: var(--color-bg-card);
+    transform: translateX(-50%);
+  }
+  .authoringMobileTabs button {
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--color-text-muted);
+    padding: 5px 8px;
+  }
+  .authoringMobileTabs button[aria-pressed="true"] {
+    background: var(--color-bg-elevated);
+    color: var(--color-text);
+  }
+  .authoringContext {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.analysisDialog {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  padding: 3vh 4vw;
+  background: rgb(0 0 0 / 76%);
+  backdrop-filter: blur(5px);
+}
+.analysisDialogPanel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  height: 94vh;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: var(--color-bg-elevated);
+  padding: 16px;
+}
+.analysisWorkspace {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(360px, 2fr);
+  gap: 12px;
+  min-height: 0;
+  overflow: hidden;
+}
+.frozenChart {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-height: 0;
+  height: min(460px, 100%);
+  align-self: start;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-card);
+}
+.frozenChartVisual {
+  min-height: 0;
+  overflow: hidden;
+  padding: 14px 18px;
+}
+.frozenChartVisual > [data-dashboard-renderer="bar"],
+.frozenChartVisual > [data-dashboard-renderer="line"],
+.frozenChartVisual > [data-dashboard-renderer="area"] {
+  height: 100%;
+}
+.frozenChartVisual [data-dashboard-renderer="kpi"] {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  text-align: center;
+}
+.frozenChartVisual [data-dashboard-renderer="kpi"] strong {
+  max-width: 100%;
+  color: var(--color-text);
+  font-size: clamp(32px, 4vw, 58px);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  white-space: nowrap;
+}
+.frozenChartVisual [data-dashboard-renderer="kpi"] span {
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+.frozenChartCaption {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  margin: 0;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-dim);
+  padding: 8px 14px;
+  font-size: 10px;
+}
+.analysisChat {
+  min-height: 0;
+  overflow: hidden;
+}
+.analysisChatDraft {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+}
+.analysisChatIntro {
+  display: flex;
+  width: min(520px, calc(100% - 48px));
+  min-height: 0;
+  margin: auto;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+.analysisChatIntro h3 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 18px;
+  font-weight: 500;
+}
+.analysisChatIntro p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.analysisChatIntro span {
+  color: var(--color-text-dim);
+  font-size: 12px;
+}
+@media (max-width: 1100px) {
+  .analysisDialog {
+    overflow: auto;
+  }
+  .analysisDialogPanel {
+    height: auto;
+    min-height: 94vh;
+  }
+  .analysisWorkspace {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(480px, 1fr) 320px;
+    overflow: visible;
+  }
+  .frozenChart {
+    grid-row: 2;
+    height: 320px;
+  }
+}
+.drawerBackdrop {
+  position: fixed;
+  z-index: 90;
+  inset: 0;
+  background: rgb(0 0 0 / 48%);
+}
+.detailsDrawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(440px, 100vw);
+  overflow: auto;
+  border-left: 1px solid var(--color-border);
+  background: var(--color-bg-elevated);
+  padding: 22px;
+  box-shadow: -18px 0 60px rgb(0 0 0 / 35%);
+}
+.detailsDrawer > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+.detailsDrawer header span {
+  color: var(--color-text-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.detailsDrawer h2 {
+  margin: 4px 0 0;
+  font-size: 18px;
+}
+.detailsDrawer section {
+  margin-top: 28px;
+}
+.detailsDrawer h3 {
+  font-size: 13px;
+}
+.detailsDrawer p,
+.detailsDrawer dt {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.detailsDrawer dl {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 8px;
+}
+.detailsDrawer dd {
+  margin: 0;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.detailsDrawer details {
+  margin-top: 18px;
+}
+.detailsDrawer summary {
+  cursor: pointer;
+  font-size: 12px;
+}
+.detailsDrawer pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 10px;
+  padding: 10px;
+  background: var(--color-bg);
+  border-radius: 8px;
+}
+.technicalDetails {
+  border-top: 1px solid var(--color-border);
+  padding-top: 18px;
+}
+@media (max-width: 1000px) {
+  .tileButton {
+    grid-column: span 18 !important;
+  }
+}
+@media (max-width: 700px) {
+  .runtime main {
+    padding: 18px;
+  }
+  .header {
+    flex-direction: column;
+  }
+  .headerActions {
+    align-items: flex-start;
+    flex-direction: row;
+  }
+  .incidentBanner {
+    flex-direction: column;
+  }
+  .controlBar {
+    align-items: flex-start;
+  }
+  .controls {
+    flex: 1;
+  }
+  .control {
+    width: 100%;
+  }
+  .control select {
+    flex: 1;
+    max-width: none;
+  }
+  .filterChips span {
+    display: none;
+  }
+  .tileButton {
+    grid-column: span 36 !important;
+    height: auto;
+  }
+  .kpiTile {
+    height: 240px;
+  }
+  .chartTile {
+    height: 400px;
+  }
+  .dataDialog {
+    padding: 12px;
+  }
+  .dataDialogPanel {
+    max-height: calc(100vh - 24px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .loadingSpinner,
+  .visual [data-dashboard-renderer] {
+    animation-duration: 1ms;
+    animation-iteration-count: 1;
+  }
+}

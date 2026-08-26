@@ -1,0 +1,444 @@
+import { historyField } from "@codemirror/commands";
+import { EditorState, StateEffect } from "@codemirror/state";
+import { EditorView, ViewPlugin } from "@codemirror/view";
+import { useAtomValue } from "jotai";
+import React, { memo, useEffect, useMemo, useRef } from "react";
+import useEvent from "react-use-event-hook";
+import { maybeAddSpImport } from "@/core/cells/add-missing-import";
+import { useCellActions } from "@/core/cells/cells";
+import { usePendingDeleteService } from "@/core/cells/pending-delete-service";
+import type { CellData, CellRuntimeState } from "@/core/cells/types";
+import { setupCodeMirror } from "@/core/codemirror/cm";
+import { acceptCompletionOnEnterAtom } from "@/core/codemirror/completion/accept-on-enter-atom";
+import {
+  getInitialLanguageAdapter,
+  languageAdapterState,
+  reconfigureLanguageEffect,
+  switchLanguage,
+} from "@/core/codemirror/language/extension";
+import { MARKDOWN_INITIAL_HIDE_CODE } from "@/core/codemirror/language/languages/markdown";
+import type { LanguageAdapterType } from "@/core/codemirror/language/types";
+import { autoInstantiateAtom, isAiEnabled } from "@/core/config/config";
+import type { UserConfig } from "@/core/config/config-schema";
+import { OverridingHotkeyProvider } from "@/core/hotkeys/hotkeys";
+
+import { useRequestClient } from "@/core/network/requests";
+import { useSaveNotebook } from "@/core/saving/save-component";
+
+import type { Theme } from "@/theme/useTheme";
+import { cn } from "@/utils/cn";
+import { invariant } from "@/utils/invariant";
+import { mergeRefs } from "@/utils/mergeRefs";
+import {
+  closeSignatureHelp,
+  useCellEditorNavigationProps,
+} from "../../navigation/navigation";
+import { useDeleteCellCallback } from "../useDeleteCell";
+import { useSplitCellCallback } from "../useSplitCell";
+import { LanguageToggles } from "./language-toggle";
+
+export interface CellEditorProps
+  extends
+    Pick<CellRuntimeState, "status">,
+    Pick<CellData, "id" | "code" | "serializedEditorState" | "config"> {
+  runCell: () => void;
+  theme: Theme;
+  showPlaceholder: boolean;
+  editorViewRef: React.RefObject<EditorView | null>;
+  setEditorView: (view: EditorView) => void;
+  userConfig: UserConfig;
+  /**
+   * If true, the cell code is hidden.
+   * This is different from cellConfig.hide_code, since it may be temporarily shown.
+   */
+  hidden?: boolean;
+  hasOutput?: boolean;
+  languageAdapter: LanguageAdapterType | undefined;
+  showLanguageToggles?: boolean;
+  setLanguageAdapter: React.Dispatch<
+    React.SetStateAction<LanguageAdapterType | undefined>
+  >;
+  // Props below are not used by scratchpad.
+  // DOM node where the editorView will be mounted
+  editorViewParentRef?: React.RefObject<HTMLDivElement | null>;
+  showHiddenCode: (opts?: { focus?: boolean }) => void;
+  outputArea?: "above" | "below";
+}
+
+const CellEditorInternal = ({
+  theme,
+  showPlaceholder,
+  id: cellId,
+  config: cellConfig,
+  code,
+  status,
+  serializedEditorState,
+  setEditorView,
+  runCell,
+  userConfig,
+  editorViewRef,
+  editorViewParentRef,
+  hidden,
+  hasOutput,
+  showHiddenCode,
+  languageAdapter,
+  setLanguageAdapter,
+  showLanguageToggles = true,
+  outputArea: _outputArea,
+}: CellEditorProps) => {
+  const deleteCell = useDeleteCellCallback();
+  const { saveOrNameNotebook } = useSaveNotebook();
+  const pendingDeleteService = usePendingDeleteService();
+  const { saveCellConfig } = useRequestClient();
+
+  const loading = status === "running" || status === "queued";
+  const cellActions = useCellActions();
+  const splitCell = useSplitCellCallback();
+
+  const isMarkdown = languageAdapter === "markdown";
+
+  const handleDelete = useEvent(() => {
+    // Cannot delete running cells, since we're waiting for their output.
+    if (loading) {
+      return false;
+    }
+
+    if (pendingDeleteService.idle && userConfig.keymap.destructive_delete) {
+      pendingDeleteService.submit([cellId]);
+      return true;
+    }
+
+    deleteCell({ cellId });
+    return true;
+  });
+
+  const handleRunCell = useEvent(() => {
+    if (loading) {
+      return false;
+    }
+    runCell();
+
+    // Close the signature help to maintain a clear view of the output and code
+    if (editorViewRef.current) {
+      closeSignatureHelp(editorViewRef.current);
+    }
+
+    return true;
+  });
+
+  const toggleHideCode = useEvent(() => {
+    // Use cellConfig.hide_code instead of hidden, since it may be temporarily shown
+    const nextHidden = !cellConfig.hide_code;
+    // Fire-and-forget save
+    void saveCellConfig({ configs: { [cellId]: { hide_code: nextHidden } } });
+    cellActions.updateCellConfig({ cellId, config: { hide_code: nextHidden } });
+    return nextHidden;
+  });
+
+  const autoInstantiate = useAtomValue(autoInstantiateAtom);
+  const acceptCompletionOnEnter = useAtomValue(acceptCompletionOnEnterAtom);
+  const afterToggleMarkdown = useEvent(() => {
+    maybeAddSpImport({
+      autoInstantiate,
+      createNewCell: cellActions.createNewCell,
+    });
+    // Code stays visible until the user blurs the cell
+    if (!cellConfig.hide_code && MARKDOWN_INITIAL_HIDE_CODE) {
+      void saveCellConfig({
+        configs: { [cellId]: { hide_code: MARKDOWN_INITIAL_HIDE_CODE } },
+      });
+      cellActions.updateCellConfig({
+        cellId,
+        config: { hide_code: MARKDOWN_INITIAL_HIDE_CODE },
+      });
+      cellActions.markUntouched({ cellId });
+    }
+  });
+
+  const afterToggleSQL = useEvent(() => {
+    maybeAddSpImport({
+      autoInstantiate,
+      createNewCell: cellActions.createNewCell,
+    });
+  });
+
+  const aiEnabled = isAiEnabled(userConfig);
+
+  const extensions = useMemo(() => {
+    const extensions = setupCodeMirror({
+      cellId,
+      showPlaceholder,
+      enableAI: aiEnabled,
+      cellActions: {
+        ...cellActions,
+        afterToggleMarkdown,
+        afterToggleSQL,
+        onRun: handleRunCell,
+        deleteCell: handleDelete,
+        saveNotebook: saveOrNameNotebook,
+        createManyBelow: (cells) => {
+          for (const code of cells.toReversed()) {
+            cellActions.createNewCell({
+              code,
+              before: false,
+              cellId: cellId,
+              // If the code already exists, skip creation
+              skipIfCodeExists: true,
+            });
+          }
+        },
+        splitCell,
+        toggleHideCode,
+        // AI completion is removed; no-op to satisfy interface
+        aiCellCompletion: () => false,
+      },
+      completionConfig: userConfig.completion,
+      acceptCompletionOnEnter,
+      keymapConfig: userConfig.keymap,
+      lspConfig: userConfig.language_servers,
+      theme,
+      hotkeys: new OverridingHotkeyProvider(userConfig.keymap.overrides ?? {}),
+      diagnosticsConfig: userConfig.diagnostics,
+      displayConfig: userConfig.display,
+      inlineAiTooltip: false,
+    });
+
+    extensions.push(
+      // Listen to code changes if we can use markdown
+      // Also update the language adapter
+      ViewPlugin.define((view) => {
+        // Init
+        const languageAdapter = view.state.field(languageAdapterState);
+        setLanguageAdapter(languageAdapter.type);
+
+        return {
+          update(view) {
+            const languageAdapter = view.state.field(languageAdapterState);
+            // Set the language adapter
+            setLanguageAdapter(languageAdapter.type);
+          },
+        };
+      }),
+      // Listen to selection changes, and show the code if it is hidden
+      EditorView.updateListener.of((update) => {
+        if (update.selectionSet) {
+          const selection = update.state.selection;
+          const hasSelection = selection.ranges.some(
+            (range) => range.from !== range.to,
+          );
+
+          if (hasSelection) {
+            showHiddenCode({ focus: false });
+          }
+        }
+      }),
+      // Whenever the editor is focused (e.g. via go-to-definition), show the cell if it is hidden.
+      EditorView.domEventHandlers({
+        focus: () => {
+          showHiddenCode({ focus: false });
+        },
+      }),
+    );
+
+    return extensions;
+  }, [
+    cellId,
+    acceptCompletionOnEnter,
+    userConfig.keymap,
+    userConfig.completion,
+    userConfig.language_servers,
+    userConfig.display,
+    userConfig.diagnostics,
+    aiEnabled,
+    theme,
+    showPlaceholder,
+    cellActions,
+    splitCell,
+    toggleHideCode,
+    handleDelete,
+    handleRunCell,
+    afterToggleMarkdown,
+    afterToggleSQL,
+    setLanguageAdapter,
+    showHiddenCode,
+    saveOrNameNotebook,
+  ]);
+
+  const handleInitializeEditor = useEvent(() => {
+    const ev = new EditorView({
+      state: EditorState.create({
+        doc: code,
+        extensions: extensions,
+      }),
+    });
+    setEditorView(ev);
+    switchLanguage(ev, {
+      language: getInitialLanguageAdapter(ev.state).type,
+    });
+  });
+
+  const handleReconfigureEditor = useEvent(() => {
+    invariant(editorViewRef.current !== null, "Editor view is not initialized");
+
+    editorViewRef.current.dispatch({
+      effects: [
+        StateEffect.reconfigure.of([extensions]),
+        reconfigureLanguageEffect(editorViewRef.current, {
+          completionConfig: userConfig.completion,
+          hotkeysProvider: new OverridingHotkeyProvider(
+            userConfig.keymap.overrides ?? {},
+          ),
+          lspConfig: {
+            ...userConfig.language_servers,
+            diagnostics: userConfig.diagnostics,
+          },
+        }),
+      ],
+    });
+  });
+
+  const handleDeserializeEditor = useEvent(() => {
+    invariant(serializedEditorState, "Editor view is not initialized");
+
+    const ev = new EditorView({
+      state: EditorState.fromJSON(
+        serializedEditorState,
+        {
+          doc: code,
+          extensions: extensions,
+        },
+        { history: historyField },
+      ),
+    });
+    // Initialize the language adapter
+    switchLanguage(ev, {
+      language: getInitialLanguageAdapter(ev.state).type,
+    });
+    setEditorView(ev);
+    // Clear the serialized state so that we don't re-create the editor next time
+    cellActions.clearSerializedEditorState({ cellId });
+  });
+
+  useEffect(() => {
+    if (serializedEditorState === null) {
+      if (editorViewRef.current === null) {
+        handleInitializeEditor();
+      } else {
+        // If the editor already exists, reconfigure it with the new extensions.
+        handleReconfigureEditor();
+      }
+    } else {
+      handleDeserializeEditor();
+    }
+
+    if (
+      editorViewRef.current !== null &&
+      editorViewParentRef &&
+      editorViewParentRef.current !== null
+    ) {
+      // Always replace the children in case the editor view was re-created.
+      editorViewParentRef.current.replaceChildren(editorViewRef.current.dom);
+    }
+  }, [
+    handleInitializeEditor,
+    handleReconfigureEditor,
+    handleDeserializeEditor,
+    editorViewRef,
+    editorViewParentRef,
+    serializedEditorState,
+    // Props to trigger reconfiguration
+    extensions,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      editorViewRef.current?.destroy();
+      (editorViewRef as React.MutableRefObject<EditorView | null>).current = null;
+    };
+  }, [editorViewRef]);
+
+  const navigationProps = useCellEditorNavigationProps(cellId, editorViewRef);
+
+  let editorClassName = "";
+  if (isMarkdown && hidden && hasOutput) {
+    editorClassName = "h-0 overflow-hidden";
+  } else if (hidden) {
+    // Shortens the editor and hides the cell panels
+    editorClassName =
+      "opacity-20 h-8 [&>div.cm-editor]:h-full [&>div.cm-editor]:overflow-hidden [&_.cm-panels]:hidden";
+  }
+
+  return (
+    <div className="relative w-full" {...navigationProps}>
+      <CellCodeMirrorEditor
+        className={editorClassName}
+        editorView={editorViewRef.current}
+        ref={editorViewParentRef}
+        hidden={hidden}
+        showHiddenCode={showHiddenCode}
+      />
+      {!hidden && showLanguageToggles && (
+        <div className="absolute top-1 right-5">
+          <LanguageToggles
+            code={code}
+            editorView={editorViewRef.current}
+            currentLanguageAdapter={languageAdapter}
+            onAfterToggle={afterToggleMarkdown}
+          />
+        </div>
+      )}
+    </div>
+  );
+};
+
+const CellCodeMirrorEditor = React.forwardRef(
+  (
+    props: {
+      className?: string;
+      editorView: EditorView | null;
+      hidden?: boolean;
+      showHiddenCode?: (opts?: { focus?: boolean }) => void;
+    },
+    ref?: React.Ref<HTMLDivElement>,
+  ) => {
+    const { className, editorView, hidden, showHiddenCode } = props;
+    const internalRef = useRef<HTMLDivElement>(null);
+
+    // If this gets unmounted/remounted, we need to re-append the editorView
+    useEffect(() => {
+      if (editorView === null) {
+        return;
+      }
+      if (internalRef.current === null) {
+        return;
+      }
+      // Has no children, so we can replaceChildren
+      if (internalRef.current.children.length === 0) {
+        internalRef.current.append(editorView.dom);
+      }
+    }, [editorView, internalRef]);
+
+    return (
+      <div
+        className={cn("cm mathjax_ignore", className)}
+        onDoubleClick={(e) => {
+          if (hidden && showHiddenCode) {
+            e.stopPropagation();
+            showHiddenCode({ focus: true });
+          }
+        }}
+        ref={(r) => {
+          if (ref) {
+            mergeRefs(ref, internalRef)(r);
+          } else {
+            mergeRefs(internalRef)(r);
+          }
+        }}
+        data-testid="cell-editor"
+      />
+    );
+  },
+);
+CellCodeMirrorEditor.displayName = "CellCodeMirrorEditor";
+
+export const CellEditor = memo(CellEditorInternal);

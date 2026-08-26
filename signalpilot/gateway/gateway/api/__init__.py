@@ -4,22 +4,50 @@ import logging
 
 from fastapi import FastAPI
 
+from ..dbt_proxy.api import router as dbt_proxy_router
+from ..git.http_server import router as git_http_router
 from ..runtime.mode import is_cloud_mode
+from .agent_notebooks import router as agent_notebooks_router
+from .agent_runs import router as agent_runs_router
+from .analysis_trails import router as analysis_trails_router
+from .artifacts import router as artifacts_router
 from .audit import router as audit_router
 from .budget import router as budget_router
 from .byok import router as byok_router
 from .cache import router as cache_router
+from .chat import router as chat_router
+from .chat_reports import router as chat_reports_router
+from .chat_traces import router as chat_traces_router
 from .connections import router as connections_router
+from .dashboards import router as dashboards_router
+from .demo import router as demo_router
+from .eval_runs import router as eval_runs_router
 from .files import router as files_router
+from .github import router as github_router
+from .github_bot import router as github_bot_router
 from .health import router as health_router
 from .keys import router as keys_router
+from .knowledge import router as knowledge_router
 from .metrics import router as metrics_router
+from .notebook_sessions import router as notebook_sessions_router
+from .notion import router as notion_router
+from .notion import webhook_router as notion_webhook_router
+from .org_secrets import router as org_secrets_router
 from .projects import router as projects_router
 from .query import router as query_router
+from .reports import router as reports_router
 from .sandboxes import router as sandboxes_router
 from .schema import router as schema_router
+from .improvements import router as improvements_router
+from .schema_watches import router as schema_watches_router
 from .security import router as security_router
 from .settings import router as settings_router
+from .slack import router as slack_router
+from .standalone_chat import router as standalone_chat_router
+from .uploads import router as uploads_router
+from .user_secrets import router as user_secrets_router
+from .workspace_files import router as workspace_files_router
+from .workspace_projects import router as workspace_projects_router
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +57,8 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(health_router)
     app.include_router(settings_router)
     app.include_router(connections_router)
+    app.include_router(demo_router)
+    app.include_router(dashboards_router)
     app.include_router(schema_router)
     if not is_cloud_mode():
         app.include_router(sandboxes_router)
@@ -44,3 +74,32 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(keys_router)
     app.include_router(security_router)
     app.include_router(byok_router)
+    app.include_router(knowledge_router)
+    app.include_router(reports_router)
+    app.include_router(notion_router)
+    app.include_router(notion_webhook_router)
+    app.include_router(org_secrets_router)
+    app.include_router(slack_router)
+    app.include_router(workspace_projects_router)
+    app.include_router(workspace_files_router)
+    app.include_router(standalone_chat_router)
+    app.include_router(chat_reports_router)
+    app.include_router(chat_router)
+    app.include_router(chat_traces_router)
+    app.include_router(agent_runs_router)
+    app.include_router(agent_notebooks_router, prefix="/api")
+    app.include_router(analysis_trails_router)
+    app.include_router(artifacts_router)
+    app.include_router(notebook_sessions_router)
+    app.include_router(github_router)
+    app.include_router(github_bot_router)
+    app.include_router(improvements_router)
+    app.include_router(schema_watches_router)
+    app.include_router(uploads_router)
+    app.include_router(eval_runs_router)
+    app.include_router(user_secrets_router)
+    app.include_router(git_http_router)
+    from ..notebook_proxy import router as notebook_proxy_router
+
+    app.include_router(notebook_proxy_router)
+    app.include_router(dbt_proxy_router)

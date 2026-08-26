@@ -1,0 +1,333 @@
+/* Copyright 2026 SignalPilot. All rights reserved. */
+
+import type { SyntaxNode, TreeCursor } from "@lezer/common";
+import dedent from "string-dedent";
+import type {
+  FormatResult,
+  LanguageParser,
+  ParseResult,
+  QuotePrefixKind,
+} from "../types";
+import {
+  getPrefixLength,
+  getStringContent,
+  parseArgsKwargs,
+  parsePythonAST,
+  safeDedent,
+} from "../utils/index";
+
+export interface SQLMetadata {
+  dataframeName: string;
+  quotePrefix: QuotePrefixKind;
+  commentLines: readonly string[];
+  showOutput: boolean;
+  engine: string;
+}
+
+const DEFAULT_ENGINE = "__sp_duckdb";
+
+interface SQLParseInfo {
+  dfName: string;
+  sqlString: string;
+  engine: string | undefined;
+  output: boolean | undefined;
+  startPosition: number;
+}
+
+/**
+ * Parser for sp SQL cells (sp.sql()).
+ *
+ * Converts between Python code like `_df = sp.sql(f"""SELECT * FROM users""")` and
+ * plain SQL like `SELECT * FROM users`.
+ */
+export class SQLParser implements LanguageParser<SQLMetadata> {
+  readonly type = "sql";
+
+  readonly defaultMetadata: SQLMetadata = {
+    dataframeName: "_df",
+    quotePrefix: "f",
+    commentLines: [],
+    showOutput: true,
+    engine: DEFAULT_ENGINE,
+  };
+
+  get defaultCode(): string {
+    return `_df = sp.sql(f"""SELECT * FROM """)`;
+  }
+
+  /**
+   * Create a SQL cell from a SQL query.
+   */
+  static fromQuery(query: string): string {
+    return `_df = sp.sql(f"""${query.trim()}""")`;
+  }
+
+  transformIn(pythonCode: string): ParseResult<SQLMetadata> {
+    pythonCode = pythonCode.trim();
+
+    // Default metadata
+    const metadata: SQLMetadata = {
+      ...this.defaultMetadata,
+      commentLines: this.extractCommentLines(pythonCode),
+    };
+
+    if (!this.isSupported(pythonCode)) {
+      // Just return the original code if not supported
+      return { code: pythonCode, offset: 0, metadata };
+    }
+
+    // Handle empty strings
+    if (pythonCode === "") {
+      return { code: "", offset: 0, metadata };
+    }
+
+    const sqlStatement = parseSQLStatement(pythonCode);
+    if (sqlStatement) {
+      metadata.dataframeName = sqlStatement.dfName;
+      metadata.showOutput = sqlStatement.output ?? true;
+      metadata.engine = sqlStatement.engine ?? DEFAULT_ENGINE;
+
+      return {
+        code: dedent(`\n${sqlStatement.sqlString}\n`).trim(),
+        offset: sqlStatement.startPosition,
+        metadata,
+      };
+    }
+
+    return { code: pythonCode, offset: 0, metadata };
+  }
+
+  transformOut(code: string, metadata: SQLMetadata): FormatResult {
+    const { quotePrefix, commentLines, showOutput, engine, dataframeName } =
+      metadata;
+
+    const start = `${dataframeName} = sp.sql(\n    ${quotePrefix}"""\n`;
+    const escapedCode = code.replaceAll('"""', String.raw`\"""`);
+
+    const showOutputParam = showOutput ? "" : ",\n    output=False";
+    const engineParam =
+      engine === DEFAULT_ENGINE ? "" : `,\n    engine="${engine}"`;
+    const end = `\n    """${showOutputParam}${engineParam}\n)`;
+
+    return {
+      code:
+        [...commentLines, start].join("\n") + indentOneTab(escapedCode) + end,
+      offset: start.length + 1,
+    };
+  }
+
+  isSupported(pythonCode: string): boolean {
+    if (pythonCode.trim() === "") {
+      return true;
+    }
+
+    // Has at least one `sp.sql` call
+    if (!pythonCode.includes("sp.sql")) {
+      return false;
+    }
+
+    // Does not have 2 `sp.sql` calls
+    if (pythonCode.split("sp.sql").length > 2) {
+      return false;
+    }
+
+    return parseSQLStatement(pythonCode) !== null;
+  }
+
+  private extractCommentLines(pythonCode: string): string[] {
+    const lines = pythonCode.split("\n");
+    const commentLines: string[] = [];
+    for (const line of lines) {
+      if (line?.startsWith("#")) {
+        commentLines.push(line);
+      } else {
+        break;
+      }
+    }
+    return commentLines;
+  }
+}
+
+/**
+ * Find an assignment node that is preceded only by comments.
+ */
+function findAssignment(cursor: TreeCursor): SyntaxNode | null {
+  do {
+    if (cursor.name === "AssignStatement") {
+      return cursor.node;
+    }
+
+    if (cursor.name !== "Comment") {
+      return null;
+    }
+  } while (cursor.next());
+  return null;
+}
+
+/**
+ * Parse a SQL statement from a Python code string.
+ *
+ * @param code - The Python code string to parse
+ * @returns The parsed SQL statement or null if parsing fails
+ */
+function parseSQLStatement(code: string): SQLParseInfo | null {
+  try {
+    const tree = parsePythonAST(code);
+    const cursor = tree.cursor();
+
+    // Trees start with a Script node
+    if (cursor.name === "Script") {
+      cursor.next();
+    }
+    const assignStmt = findAssignment(cursor);
+    if (!assignStmt) {
+      return null;
+    }
+
+    // Code after the assignment statement is not allowed
+    if (code.slice(assignStmt.to).trim().length > 0) {
+      return null;
+    }
+
+    let dfName: string | null = null;
+    let sqlString: string | null = null;
+    let engine: string | undefined;
+    let output: boolean | undefined;
+    let startPosition = 0;
+
+    // Parse the assignment
+    const assignCursor = assignStmt.cursor();
+    assignCursor.firstChild(); // Move to first child of assignment
+
+    // First child should be the variable name
+    if (assignCursor.name === "VariableName") {
+      dfName = code.slice(assignCursor.from, assignCursor.to);
+    }
+
+    if (!dfName) {
+      return null;
+    }
+
+    // Move to the expression part (after the =)
+    // We need to find the value being assigned (after AssignOp)
+    let foundAssignOp = false;
+    let rightHandSide: SyntaxNode | null = null;
+
+    while (assignCursor.nextSibling()) {
+      if (assignCursor.name === "AssignOp") {
+        foundAssignOp = true;
+      } else if (foundAssignOp && !rightHandSide) {
+        // This is the right-hand side of the assignment
+        rightHandSide = assignCursor.node;
+        break;
+      }
+    }
+
+    if (!rightHandSide) {
+      return null;
+    }
+
+    // Check if the right-hand side is wrapped in a conditional or binary expression
+    // These should NOT be treated as SQL cells (issue #7386)
+    if (
+      rightHandSide.name === "ConditionalExpression" ||
+      rightHandSide.name === "BinaryExpression" ||
+      rightHandSide.name === "UnaryExpression"
+    ) {
+      return null;
+    }
+
+    // Now look for the CallExpression - it should be the right-hand side or direct child
+    const rhsCursor = rightHandSide.cursor();
+    let callExprNode: SyntaxNode | null = null;
+
+    if (rhsCursor.name === "CallExpression") {
+      callExprNode = rhsCursor.node;
+    } else {
+      // Move to first child to handle potential wrapping
+      rhsCursor.firstChild();
+      do {
+        if (rhsCursor.name === "CallExpression") {
+          callExprNode = rhsCursor.node;
+          break;
+        }
+      } while (rhsCursor.nextSibling());
+    }
+
+    if (callExprNode) {
+      // Check if it's sp.sql call
+      const callCursor = callExprNode.cursor();
+      let isMoSql = false;
+
+      callCursor.firstChild(); // Move to first child of call
+      if (callCursor.name === "MemberExpression") {
+        const memberText = code.slice(callCursor.from, callCursor.to);
+        isMoSql = memberText === "sp.sql";
+      }
+
+      if (isMoSql) {
+        // Move to arguments
+        while (callCursor.next()) {
+          if (callCursor.name === "ArgList") {
+            const argListCursor = callCursor.node.cursor();
+
+            const { args, kwargs } = parseArgsKwargs(argListCursor, code);
+
+            // Parse positional args (SQL query)
+            if (args.length === 1) {
+              sqlString = getStringContent(args[0], code);
+              startPosition =
+                args[0].from +
+                getPrefixLength(code.slice(args[0].from, args[0].to));
+            }
+
+            // Parse kwargs (engine and output)
+            for (const { key, value } of kwargs) {
+              switch (key) {
+                case "engine":
+                  engine = value.replace(/^["']|["']$/g, "");
+                  break;
+                case "output":
+                  output = value === "True";
+                  break;
+              }
+            }
+
+            // Check if sql string is empty
+            if (sqlString === "") {
+              return { dfName, sqlString: "", engine, output, startPosition };
+            }
+
+            break;
+          }
+        }
+      }
+    }
+
+    if (!dfName || !sqlString) {
+      return null;
+    }
+
+    return {
+      dfName,
+      sqlString: safeDedent(sqlString),
+      engine,
+      output,
+      startPosition,
+    };
+  } catch (error) {
+    // oxlint-disable-next-line no-console -- warning ok
+    console.warn("Failed to parse SQL statement", error);
+    return null;
+  }
+}
+
+/**
+ * Indent code by one tab (4 spaces).
+ */
+function indentOneTab(code: string): string {
+  return code
+    .split("\n")
+    .map((line) => (line?.trim() ? `    ${line}` : line))
+    .join("\n");
+}

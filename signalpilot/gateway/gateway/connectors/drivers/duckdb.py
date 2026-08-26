@@ -6,6 +6,7 @@ Feature #9 from the feature table — P0 for demos and local dev.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from ..base import BaseConnector
@@ -41,11 +42,19 @@ class DuckDBConnector(BaseConnector):
 
         # connection_string is a file path, :memory:, or a MotherDuck URL (md:)
         self._db_path = connection_string
-        is_memory = connection_string == ":memory:" or connection_string.startswith("md:")
+        is_motherduck = connection_string.startswith("md:")
+        is_memory = connection_string == ":memory:" or is_motherduck
 
-        config = {}
-        if motherduck_token and connection_string.startswith("md:"):
+        config: dict[str, Any] = {}
+        if motherduck_token and is_motherduck:
             config["motherduck_token"] = motherduck_token
+        if not is_motherduck:
+            # Defence in depth beneath the SQL denylist: the engine itself refuses
+            # file/URL reads and extension downloads. Scoped to local and in-memory
+            # databases — MotherDuck is a network service and cannot connect with
+            # external access switched off.
+            config["enable_external_access"] = False
+            config["autoinstall_known_extensions"] = False
 
         try:
             self._is_memory = is_memory
@@ -115,6 +124,12 @@ class DuckDBConnector(BaseConnector):
             raise RuntimeError(f"DuckDB query timed out after {effective_timeout}s")
         except duckdb.Error as e:
             raise RuntimeError(f"DuckDB query error: {e}") from e
+
+    async def cancel_current_query(self) -> bool:
+        if self._conn is None:
+            return False
+        await asyncio.to_thread(self._conn.interrupt)
+        return True
 
     async def _get_schema_impl(self) -> dict[str, Any]:
         # For file-based DBs, open a transient connection to avoid holding a write lock

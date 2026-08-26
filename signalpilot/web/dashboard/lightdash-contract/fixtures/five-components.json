@@ -1,0 +1,23 @@
+{
+  "dashboard": {
+    "name": "Five component fixture",
+    "description": "Compatibility fixture for the complete MVP renderer subset.",
+    "version": 1,
+    "filters": { "dimensions": [], "metrics": [] },
+    "tiles": [
+      { "uuid": "tile-kpi", "tileSlug": "revenue-kpi", "type": "saved_chart", "x": 0, "y": 0, "h": 5, "w": 8, "properties": { "title": "Revenue", "chartSlug": "revenue-kpi" }, "chartId": "chart-kpi" },
+      { "uuid": "tile-table", "tileSlug": "revenue-table", "type": "saved_chart", "x": 8, "y": 0, "h": 10, "w": 14, "properties": { "title": "Revenue table", "chartSlug": "revenue-table" }, "chartId": "chart-table" },
+      { "uuid": "tile-bar", "tileSlug": "revenue-bar", "type": "saved_chart", "x": 22, "y": 0, "h": 10, "w": 14, "properties": { "title": "Revenue bars", "chartSlug": "revenue-bar" }, "chartId": "chart-bar" },
+      { "uuid": "tile-line", "tileSlug": "revenue-line", "type": "saved_chart", "x": 0, "y": 10, "h": 10, "w": 18, "properties": { "title": "Revenue line", "chartSlug": "revenue-line" }, "chartId": "chart-line" },
+      { "uuid": "tile-area", "tileSlug": "revenue-area", "type": "saved_chart", "x": 18, "y": 10, "h": 10, "w": 18, "properties": { "title": "Revenue area", "chartSlug": "revenue-area" }, "chartId": "chart-area" }
+    ]
+  },
+  "charts": [
+    { "id": "chart-kpi", "title": "Revenue", "query": { "kind": "semantic", "exploreName": "orders", "dimensions": [], "metrics": ["orders.revenue"], "filters": {}, "sorts": [], "limit": 1, "timezone": "UTC", "projectId": "project-1", "commitSha": "b91bd2273f38fdc58702c71f538b6b5d5ae462c5" }, "visualization": { "type": "big_number", "config": { "field": "orders.revenue", "format": "currency:USD" } }, "signalPilot": { "crossFilter": false, "provenanceRef": "fixture:kpi" } },
+    { "id": "chart-table", "title": "Revenue by region", "query": { "kind": "semantic", "exploreName": "orders", "dimensions": ["orders.region"], "metrics": ["orders.revenue"], "filters": {}, "sorts": [{ "fieldId": "orders.revenue", "descending": true }], "limit": 100, "timezone": "UTC", "projectId": "project-1", "commitSha": "b91bd2273f38fdc58702c71f538b6b5d5ae462c5" }, "visualization": { "type": "table", "config": { "columns": ["orders.region", "orders.revenue"], "groups": ["orders.region"] } }, "signalPilot": { "crossFilter": true, "tableGroups": ["orders.region"], "provenanceRef": "fixture:table" } },
+    { "id": "chart-bar", "title": "Revenue by region", "query": { "kind": "semantic", "exploreName": "orders", "dimensions": ["orders.region"], "metrics": ["orders.revenue"], "filters": {}, "sorts": [{ "fieldId": "orders.revenue", "descending": true }], "limit": 100, "timezone": "UTC", "projectId": "project-1", "commitSha": "b91bd2273f38fdc58702c71f538b6b5d5ae462c5" }, "visualization": { "type": "cartesian", "config": { "seriesType": "bar", "layout": { "xField": "orders.region", "yField": ["orders.revenue"] } } }, "signalPilot": { "crossFilter": true, "drillDimensions": ["orders.customer"], "provenanceRef": "fixture:bar" } },
+    { "id": "chart-line", "title": "Revenue trend", "query": { "kind": "semantic", "exploreName": "orders", "dimensions": ["orders.month"], "metrics": ["orders.revenue"], "filters": {}, "sorts": [{ "fieldId": "orders.month", "descending": false }], "limit": 100, "timezone": "UTC", "projectId": "project-1", "commitSha": "b91bd2273f38fdc58702c71f538b6b5d5ae462c5" }, "visualization": { "type": "cartesian", "config": { "seriesType": "line", "layout": { "xField": "orders.month", "yField": ["orders.revenue"] } } }, "signalPilot": { "crossFilter": true, "provenanceRef": "fixture:line" } },
+    { "id": "chart-area", "title": "Revenue area", "query": { "kind": "semantic", "exploreName": "orders", "dimensions": ["orders.month"], "metrics": ["orders.revenue"], "filters": {}, "sorts": [{ "fieldId": "orders.month", "descending": false }], "limit": 100, "timezone": "UTC", "projectId": "project-1", "commitSha": "b91bd2273f38fdc58702c71f538b6b5d5ae462c5" }, "visualization": { "type": "cartesian", "config": { "seriesType": "area", "layout": { "xField": "orders.month", "yField": ["orders.revenue"], "stack": false } } }, "signalPilot": { "crossFilter": true, "provenanceRef": "fixture:area" } }
+  ],
+  "signalPilot": { "dashboardId": "fixture-five", "projectId": "project-1", "connectionName": "mssql-pilot", "commitSha": "b91bd2273f38fdc58702c71f538b6b5d5ae462c5", "semanticFingerprint": "semantic-fixture-v1", "timezone": "UTC" }
+}

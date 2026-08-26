@@ -22,15 +22,15 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# ─── Constants ────────────────────────────────────────────────────────────────
+# Constants.
 
-_CACHE_TTL_SECONDS: int = 30  # 30 seconds — limits revocation window
+_CACHE_TTL_SECONDS: int = 30  # 30 seconds: limits revocation window
 _CACHE_MAX_ENTRIES: int = 256
 _HTTP_TIMEOUT_SECONDS: float = 5.0
 _VALIDATE_PATH: str = "/api/v1/keys/validate"
 _BEARER_PREFIX: str = "Bearer "
 
-# ─── HTTP client singleton ─────────────────────────────────────────────────────
+# HTTP client singleton.
 
 _http_client: httpx.AsyncClient | None = None
 
@@ -43,7 +43,7 @@ def _get_http_client() -> httpx.AsyncClient:
     return _http_client
 
 
-# ─── FIFO + TTL cache ─────────────────────────────────────────────────────────
+# FIFO + TTL cache.
 
 
 class _KeyCache:
@@ -67,7 +67,7 @@ class _KeyCache:
             return None
         result, inserted_at = entry
         if time.monotonic() - inserted_at > _CACHE_TTL_SECONDS:
-            # Expired — remove from store (order list cleaned lazily on put)
+            # Expired: remove from store (order list cleaned lazily on put)
             del self._store[key_hash]
             return None
         return result
@@ -94,7 +94,7 @@ class _KeyCache:
 _cache = _KeyCache()
 
 
-# ─── Auth failure brute-force limiter ─────────────────────────────────────────
+# Auth failure brute-force limiter.
 
 _auth_failures: dict[str, list[float]] = {}
 _AUTH_FAILURE_RPM: int = 60  # max 60 failed auth attempts per IP per minute
@@ -103,18 +103,20 @@ _AUTH_FAILURE_RPM: int = 60  # max 60 failed auth attempts per IP per minute
 def _check_auth_rate(client_ip: str) -> bool:
     """Return True if under the auth failure rate limit."""
     now = time.monotonic()
-    hits = _auth_failures.setdefault(client_ip, [])
-    # Prune old entries
     cutoff = now - 60.0
-    _auth_failures[client_ip] = [t for t in hits if t > cutoff]
-    hits = _auth_failures[client_ip]
+    hits = [t for t in _auth_failures.get(client_ip, []) if t > cutoff]
+    if hits:
+        _auth_failures[client_ip] = hits
+    else:
+        _auth_failures.pop(client_ip, None)
     if len(hits) >= _AUTH_FAILURE_RPM:
         return False
     hits.append(now)
+    _auth_failures[client_ip] = hits
     return True
 
 
-# ─── Key validation ───────────────────────────────────────────────────────────
+# Key validation.
 
 
 async def validate_api_key(key: str, backend_url: str) -> dict[str, Any] | None:
@@ -161,7 +163,7 @@ async def validate_api_key(key: str, backend_url: str) -> dict[str, Any] | None:
     return None
 
 
-# ─── ASGI middleware ──────────────────────────────────────────────────────────
+# ASGI middleware.
 
 _warned_no_backend_url: bool = False
 
@@ -199,8 +201,66 @@ class MCPAuthMiddleware:
         # (API keys are now org-scoped and managed by the gateway, not the backend)
         from sqlalchemy.exc import SQLAlchemyError
 
+        raw_bearer = _extract_bearer_key(scope)
+        if raw_bearer and not raw_bearer.startswith("sp_"):
+            from ..auth.notebook_jwt import NotebookSessionJWTError, verify_session_jwt
+            from ..mcp.context import (
+                mcp_allowed_connection_var,
+                mcp_capabilities_var,
+                mcp_client_ip_var,
+                mcp_eval_doc_ids_var,
+                mcp_execution_identity_var,
+                mcp_org_id_var,
+                mcp_raw_key_var,
+                mcp_scopes_var,
+                mcp_user_agent_var,
+                mcp_user_id_var,
+            )
+
+            try:
+                claims = verify_session_jwt(raw_bearer)
+            except NotebookSessionJWTError:
+                await _send_401(send, "Invalid notebook session token.")
+                return
+
+            token_user_id = claims["sub"]
+            token_org_id = claims["org_id"]
+            token_scopes = list(claims.get("scopes") or [])
+            if "state" not in scope:
+                scope["state"] = {}
+            scope["state"]["auth"] = {
+                "auth_method": "notebook_session",
+                "user_id": token_user_id,
+                "org_id": token_org_id,
+                "session_id": claims["session_id"],
+                "project_id": claims.get("project_id"),
+                "branch": claims.get("branch"),
+                "connection_name": claims.get("connection_name"),
+                "capabilities": list(claims.get("capabilities") or []),
+                "execution_identity": claims.get("execution_identity"),
+                "scopes": token_scopes,
+            }
+            mcp_user_id_var.set(token_user_id)
+            mcp_org_id_var.set(token_org_id)
+            mcp_raw_key_var.set(raw_bearer)
+            mcp_scopes_var.set(token_scopes)
+            mcp_allowed_connection_var.set(claims.get("connection_name"))
+            mcp_capabilities_var.set(list(claims.get("capabilities") or []))
+            mcp_execution_identity_var.set(claims.get("execution_identity"))
+            mcp_client_ip_var.set(_extract_client_ip(scope))
+            mcp_user_agent_var.set(_extract_user_agent(scope))
+            mcp_eval_doc_ids_var.set(None)
+            await self._app(scope, receive, send)
+            return
+
         from ..db.engine import get_session_factory
-        from ..mcp import mcp_org_id_var, mcp_user_id_var
+        from ..mcp import (
+            mcp_allowed_connection_var,
+            mcp_capabilities_var,
+            mcp_execution_identity_var,
+            mcp_org_id_var,
+            mcp_user_id_var,
+        )
         from ..store import Store
 
         try:
@@ -230,14 +290,39 @@ class MCPAuthMiddleware:
                     # Set user_id and org_id to "local" so MCP tools can access the store
                     mcp_user_id_var.set("local")
                     mcp_org_id_var.set("local")
+                    mcp_allowed_connection_var.set(None)
+                    mcp_capabilities_var.set(None)
+                    mcp_execution_identity_var.set(None)
                     from ..mcp import mcp_client_ip_var, mcp_raw_key_var, mcp_user_agent_var
 
                     mcp_raw_key_var.set(None)
                     mcp_client_ip_var.set(_extract_client_ip(scope))
                     mcp_user_agent_var.set(_extract_user_agent(scope))
+                    from ..mcp import (
+                        mcp_eval_connection_var,
+                        mcp_eval_doc_ids_var,
+                        mcp_eval_run_var,
+                        mcp_eval_task_var,
+                    )
+
+                    # A request without a stored key has no evaluation binding.
+                    # Clear each context variable to prevent values from crossing request boundaries.
+                    mcp_eval_doc_ids_var.set(None)
+                    mcp_eval_connection_var.set(None)
+                    mcp_eval_run_var.set(None)
+                    mcp_eval_task_var.set(None)
                     if "state" not in scope:
                         scope["state"] = {}
-                    scope["state"]["auth"] = {"user_id": "local", "org_id": "local"}
+                    from ..models import VALID_API_KEY_SCOPES
+
+                    scope["state"]["auth"] = {
+                        "user_id": "local",
+                        "org_id": "local",
+                        "scopes": list(VALID_API_KEY_SCOPES),
+                    }
+                    from ..mcp import mcp_scopes_var
+
+                    mcp_scopes_var.set(list(VALID_API_KEY_SCOPES))
                     await self._app(scope, receive, send)
                     return
 
@@ -259,33 +344,58 @@ class MCPAuthMiddleware:
 
                 if "state" not in scope:
                     scope["state"] = {}
-                # In cloud mode, reject keys that lack a real org_id — falling
+                # In cloud mode, reject keys that lack a real org_id: falling
                 # back to "local" would grant access to the shared namespace.
                 from ..runtime.mode import is_cloud_mode
 
-                if is_cloud_mode() and (not matched.org_id or matched.org_id == "local"):
+                cloud_mode = is_cloud_mode()
+                if cloud_mode and (not matched.org_id or matched.org_id == "local"):
                     logger.warning(
                         "MCP auth: rejecting key %s with invalid org_id in cloud mode",
                         matched.id,
                     )
                     await _send_401(send, "API key has no valid organization. Please re-create the key.")
                     return
-                key_org_id = matched.org_id or "local"
+                key_org_id = (matched.org_id or "local") if cloud_mode else "local"
                 key_user_id = matched.user_id or "local"
+                if matched.eval_run_id and not matched.eval_connection:
+                    logger.warning("MCP auth: rejecting eval key %s without a connection pin", matched.id)
+                    await _send_401(send, "Eval credential is missing its connection binding.")
+                    return
                 scope["state"]["auth"] = {
                     "key_id": matched.id,
                     "key_name": matched.name,
                     "user_id": key_user_id,
                     "org_id": key_org_id,
+                    "scopes": list(matched.scopes or []),
                 }
                 # Set user_id and org_id context vars for MCP store access
                 mcp_user_id_var.set(key_user_id)
                 mcp_org_id_var.set(key_org_id)
-                from ..mcp import mcp_client_ip_var, mcp_raw_key_var, mcp_user_agent_var
+                mcp_allowed_connection_var.set(None)
+                mcp_capabilities_var.set(None)
+                mcp_execution_identity_var.set(None)
+                from ..mcp import mcp_client_ip_var, mcp_raw_key_var, mcp_scopes_var, mcp_user_agent_var
+
+                mcp_scopes_var.set(list(matched.scopes or []))
 
                 mcp_raw_key_var.set(raw_key)
                 mcp_client_ip_var.set(_extract_client_ip(scope))
                 mcp_user_agent_var.set(_extract_user_agent(scope))
+                from ..mcp import (
+                    mcp_eval_connection_var,
+                    mcp_eval_doc_ids_var,
+                    mcp_eval_run_var,
+                    mcp_eval_task_var,
+                )
+
+                # The stored key defines the evaluation binding.
+                # A request header cannot define this security boundary because the agent controls the header.
+                # A run key remains confined to its assigned connection.
+                mcp_eval_doc_ids_var.set(list(matched.eval_doc_ids or []) or None)
+                mcp_eval_connection_var.set(matched.eval_connection or None)
+                mcp_eval_run_var.set(matched.eval_run_id or None)
+                mcp_eval_task_var.set(matched.eval_task_id or None)
 
                 # Per-key / per-org rate limit (MCP traffic bypasses FastAPI middleware)
                 from ..http import check_principal_rate_limit
@@ -306,7 +416,7 @@ def _extract_client_ip(scope: dict[str, Any]) -> str | None:
     headers: list[tuple[bytes, bytes]] = scope.get("headers", [])
     for name, value in headers:
         if name.lower() == b"x-forwarded-for":
-            # Use rightmost IP (closest proxy) — more resistant to spoofing
+            # Use rightmost IP (closest proxy): more resistant to spoofing
             # than leftmost (client-claimed). In production, configure a
             # reverse proxy to strip/overwrite X-Forwarded-For.
             parts = value.decode("latin-1").split(",")

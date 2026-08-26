@@ -1,0 +1,666 @@
+"""dbt-aware governance for proxy-forwarded SQL traffic.
+
+This module provides validate_dbt_statement(), which governs the DDL/DML set
+that dbt-postgres actually emits. It is distinct from validate_sql() (which is
+read-only and used for direct interactive queries).
+
+Connector-level isolation: schema-ownership is NOT enforced here. The connector's
+DB credentials already scope write access to the tenant's schemas. The proxy
+adds an allow/deny list on top. TODO(R7): add schema-allowlist enforcement once
+connectors carry an allowed_schemas field.
+
+The deny-list takes precedence over the allow-list. Every multi-statement string
+is parsed into individual statements; if any single one is denied the whole
+string is blocked.
+
+Cap: 1 MiB total SQL string length (dbt compiled models can be large).
+
+Security note: sqlglot is a HARD dependency of this module. If it is absent the
+module raises ImportError at import time (fail closed — do not skip validation).
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
+
+import sqlglot
+import sqlglot.expressions as exp
+
+if TYPE_CHECKING:
+    from ..dbt_proxy.tokens import RunTokenClaims
+
+# ─── Comment-stripping / whitespace normalization for prefix scan ─────────────
+# Postgres supports nested block comments (/* /* x */ */). A regex-only approach
+# cannot handle arbitrary nesting, so we use a character-level scanner for block
+# comments and fall back to a regex for line comments.
+
+_LINE_COMMENT_RE = re.compile(r"--[^\n]*")
+
+
+def _strip_block_comments(sql: str) -> str:
+    """Remove /* … */ block comments, correctly handling Postgres-style nesting."""
+    result: list[str] = []
+    depth = 0
+    i = 0
+    while i < len(sql):
+        if sql[i : i + 2] == "/*":
+            depth += 1
+            i += 2
+        elif sql[i : i + 2] == "*/" and depth > 0:
+            depth -= 1
+            i += 2
+            if depth == 0:
+                # Replace the closed comment with a space to preserve token boundaries.
+                result.append(" ")
+        elif depth == 0:
+            result.append(sql[i])
+            i += 1
+        else:
+            i += 1
+    return "".join(result)
+
+
+def _normalize_for_prefix_scan(sql: str) -> str:
+    """Strip comments and collapse whitespace so the prefix regex always fires.
+
+    Handles nested block comments (Postgres extension).  The returned string is
+    used ONLY for _DENIED_PREFIX_RE.search; the original SQL is still passed to
+    sqlglot and stored on ValidatedStatement.sql unchanged.
+    """
+    no_block = _strip_block_comments(sql)
+    no_comments = _LINE_COMMENT_RE.sub(" ", no_block)
+    # Collapse all whitespace runs (tab / newline / CRLF) to a single space so
+    # the single-space prefix literals in _DENIED_PREFIXES always match.
+    return re.sub(r"\s+", " ", no_comments)
+
+_SQL_MAX_BYTES = 1_048_576  # 1 MiB
+
+# ─── Statement kind classification ───────────────────────────────────────────
+
+_READ_TYPES: frozenset[str] = frozenset({
+    "Select", "With", "Union", "Intersect", "Except", "Values", "Subquery",
+})
+
+_WRITE_TYPES: frozenset[str] = frozenset({
+    "Insert", "Update", "Delete", "Merge", "Truncate",
+})
+
+_DDL_TYPES: frozenset[str] = frozenset({
+    "Create", "Drop", "Alter", "Rename", "Comment",
+})
+
+_TX_TYPES: frozenset[str] = frozenset({
+    "Transaction",  # BEGIN
+    "Commit",
+    "Rollback",
+    "Savepoint",
+    "ReleaseSavepoint",
+    "Command",  # SET, SET LOCAL, SET SESSION AUTHORIZATION handled below
+})
+
+# ─── Denied statement node types (names that always block) ───────────────────
+
+_DENIED_NODE_TYPES: frozenset[str] = frozenset({
+    "Grant",
+    "Revoke",
+})
+
+# ─── CREATE object-kind deny-list ────────────────────────────────────────────
+# dbt-postgres emits CREATE TABLE / CREATE VIEW / CREATE SCHEMA / CREATE INDEX.
+# Function/procedure/trigger/aggregate/operator/cast/extension/language/event
+# trigger DDL is never emitted by standard dbt models and allows RCE or
+# privilege escalation.
+
+_DENIED_CREATE_KINDS: frozenset[str] = frozenset({
+    "FUNCTION",
+    "PROCEDURE",
+    "TRIGGER",
+    "AGGREGATE",
+    "OPERATOR",
+    "CAST",
+    "EVENT TRIGGER",
+    "LANGUAGE",
+    "EXTENSION",
+    # Privilege-escalation objects — also blocked by Layer A prefix scan and the
+    # _validate_single Drop/Alter kind-check.
+    "ROLE",
+    "USER",
+    "DATABASE",
+    "TABLESPACE",
+})
+
+# ─── SQL keyword deny-list (checked via case-insensitive prefix on raw SQL) ──
+# These are a fast pre-filter. The AST walk below is authoritative; these
+# prefixes add defence-in-depth for statements sqlglot may mis-classify.
+
+_DENIED_PREFIXES: tuple[str, ...] = (
+    "copy ",
+    "copy\t",
+    "copy\n",
+    "listen ",
+    "notify ",
+    "unlisten ",
+    "do ",
+    "do\t",
+    "do\n",
+    "do$$",
+    "do $",
+    "load ",
+    "load\t",
+    "create role",
+    "drop role",
+    "alter role",
+    "create user",
+    "drop user",
+    "alter user",
+    "create database",
+    "drop database",
+    "alter database",
+    "create tablespace",
+    "drop tablespace",
+    "create extension",
+    "drop extension",
+    "create language",
+    "drop language",
+    "create function",
+    "create procedure",
+    "create trigger",
+    "create aggregate",
+    "create operator",
+    "lock table",
+    "lock\ttable",
+    "reset role",
+    "reset session",
+    "security definer",
+    # Role-membership grant/revoke — block at Layer A for defence-in-depth.
+    # Layer B catches these via _COMMAND_ADMIN_RE and _check_command_node.
+    "grant ",
+    "revoke ",
+)
+
+_DENIED_PREFIX_RE = re.compile(
+    r"(?:^|[\s;])(" + "|".join(re.escape(p.strip()) for p in _DENIED_PREFIXES) + r")(?=\s|;|\(|$)",
+    re.IGNORECASE,
+)
+
+# SET commands that are always denied (privilege escalation).
+# These are compiled regexes rather than substrings because SET LOCAL and
+# SET SESSION are valid qualifiers that PG accepts before ROLE / SESSION
+# AUTHORIZATION (e.g. "SET LOCAL ROLE admin" is identical to "SET ROLE admin").
+# The regexes tolerate optional LOCAL/SESSION qualifiers between SET and the
+# dangerous keyword.  Applied to the already-normalized (comment-stripped,
+# whitespace-collapsed) lower-case SQL.
+_DENIED_SET_REGEXES: tuple[re.Pattern[str], ...] = (
+    # SET [LOCAL|SESSION] ROLE …
+    re.compile(r"\bset\s+(?:local\s+|session\s+)?role\b"),
+    # SET [LOCAL|SESSION] SESSION AUTHORIZATION …
+    re.compile(r"\bset\s+(?:local\s+|session\s+)?session\s+authorization\b"),
+    # RESET ROLE / RESET SESSION AUTHORIZATION (no LOCAL qualifier in PG)
+    re.compile(r"\breset\s+role\b"),
+    re.compile(r"\breset\s+session\s+authorization\b"),
+)
+
+# ─── Dangerous function deny-list (AST walk) ─────────────────────────────────
+# These Postgres built-ins expose warehouse host filesystem, config, or network
+# egress. Block any SELECT/expression that calls them regardless of context.
+
+_DENIED_FUNCTION_NAMES: frozenset[str] = frozenset({
+    "pg_read_server_files",
+    "pg_read_file",
+    "pg_read_binary_file",
+    "pg_ls_dir",
+    "pg_stat_file",
+    "lo_import",
+    "lo_export",
+    "dblink",
+    "dblink_exec",
+    "dblink_connect",
+    "dblink_disconnect",
+    "dblink_open",
+    "dblink_fetch",
+    "dblink_close",
+    "dblink_send_query",
+    "dblink_get_result",
+    "dblink_get_notify",
+    "dblink_get_pkey",
+    "dblink_build_sql_insert",
+    "dblink_build_sql_delete",
+    "dblink_build_sql_update",
+})
+
+# Settings prefixes that are blocked in current_setting / set_config
+_SENSITIVE_SETTING_PREFIXES: tuple[str, ...] = (
+    "ssl_",
+    "data_directory",
+    "config_file",
+    "hba_file",
+    "ident_file",
+    "external_pid_file",
+    "dynamic_library_path",
+    "local_preload_libraries",
+    "session_preload_libraries",
+    "shared_preload_libraries",
+)
+
+# Names of the setting-accessor functions to handle with arg-aware logic
+_SETTING_FUNC_NAMES: frozenset[str] = frozenset({"current_setting", "set_config"})
+
+
+@dataclass
+class ValidatedStatement:
+    """Result of validate_dbt_statement().
+
+    sql:          The original SQL string (never rewritten).
+    kind:         Classification for audit logging.
+    blocked:      True if the statement was denied.
+    block_reason: Human-readable denial reason (None when not blocked).
+    """
+
+    sql: str
+    kind: Literal["read", "write", "ddl", "tx", "admin"]
+    blocked: bool
+    block_reason: str | None
+
+
+def validate_dbt_statement(sql: str, *, claims: RunTokenClaims) -> ValidatedStatement:
+    """Governance for proxy-forwarded dbt traffic.
+
+    Allows the DDL/DML set dbt-postgres actually emits; deny-lists destructive
+    and cross-tenant operations.
+
+    Connector-level isolation is provided by the connector's DB credentials.
+    Schema-ownership enforcement is deferred to R7 (TODO R7: add schema allowlist).
+
+    Args:
+        sql:    The raw SQL string from the client.
+        claims: The RunTokenClaims of the authenticated session (used for
+                future schema-allowlist enforcement in R7).
+
+    Returns:
+        ValidatedStatement with blocked=True and a block_reason if the SQL
+        is not permitted, or blocked=False when execution should proceed.
+    """
+    if len(sql.encode("utf-8")) > _SQL_MAX_BYTES:
+        return ValidatedStatement(
+            sql=sql,
+            kind="admin",
+            blocked=True,
+            block_reason="sql_too_long",
+        )
+
+    # Deny-list: quick case-insensitive prefix check on the normalised SQL.
+    # This is defence-in-depth; the AST walk below is authoritative.
+    # _normalize_for_prefix_scan strips comments and collapses whitespace so that
+    # tab/newline/block-comment evasion payloads are caught by the single-space
+    # literals in _DENIED_PREFIXES.  The original sql is returned unchanged.
+    normalized_sql = _normalize_for_prefix_scan(sql)
+    sql_lower = normalized_sql.strip().lower()
+    m = _DENIED_PREFIX_RE.search(normalized_sql)
+    if m:
+        return ValidatedStatement(
+            sql=sql,
+            kind="admin",
+            blocked=True,
+            block_reason=_deny_reason_for_prefix(sql_lower),
+        )
+
+    # Deny-list: SET … privilege-escalation patterns.
+    # Regex matching handles optional LOCAL/SESSION qualifiers (e.g. SET LOCAL ROLE).
+    for set_re in _DENIED_SET_REGEXES:
+        if set_re.search(sql_lower):
+            return ValidatedStatement(
+                sql=sql,
+                kind="admin",
+                blocked=True,
+                block_reason="privilege_escalation_blocked",
+            )
+
+    try:
+        stmts = sqlglot.parse(sql, dialect="postgres")
+    except Exception as exc:
+        return ValidatedStatement(
+            sql=sql,
+            kind="admin",
+            blocked=True,
+            block_reason=f"parse_error: {str(exc)[:100]}",
+        )
+
+    if not stmts:
+        return ValidatedStatement(
+            sql=sql,
+            kind="admin",
+            blocked=True,
+            block_reason="empty_statement",
+        )
+
+    overall_kind: Literal["read", "write", "ddl", "tx", "admin"] = "read"
+    for stmt in stmts:
+        if stmt is None:
+            continue
+        result = _validate_single(stmt, sql)
+        if result.blocked:
+            return result
+        overall_kind = _merge_kind(overall_kind, result.kind)
+
+    return ValidatedStatement(sql=sql, kind=overall_kind, blocked=False, block_reason=None)
+
+
+def _validate_single(stmt: exp.Expr, original_sql: str) -> ValidatedStatement:
+    """Classify and validate a single parsed statement node."""
+    stmt_type = type(stmt).__name__
+    kind = _classify_kind(stmt_type)
+
+    # Denied node types (GRANT, REVOKE)
+    if stmt_type in _DENIED_NODE_TYPES:
+        return ValidatedStatement(
+            sql=original_sql,
+            kind="admin",
+            blocked=True,
+            block_reason=f"{stmt_type.lower()}_blocked",
+        )
+
+    # Command node — could be COPY, LISTEN, NOTIFY, LOCK TABLE, DO, LOAD, etc.
+    if stmt_type == "Command":
+        return _check_command_node(stmt, original_sql)
+
+    # CREATE … FUNCTION/PROCEDURE/TRIGGER/AGGREGATE/EXTENSION/LANGUAGE — RCE risk
+    if stmt_type == "Create":
+        create_result = _check_create_node(stmt, original_sql)
+        if create_result is not None:
+            return create_result
+
+    # DROP / ALTER … on privileged objects — privilege escalation risk
+    if stmt_type in {"Drop", "Alter"}:
+        drop_alter_result = _check_drop_alter_node(stmt, stmt_type, original_sql)
+        if drop_alter_result is not None:
+            return drop_alter_result
+
+    # Walk the AST for dangerous function calls (pg_read_file, dblink, etc.)
+    func_result = _check_dangerous_functions(stmt, original_sql)
+    if func_result is not None:
+        return func_result
+
+    return ValidatedStatement(sql=original_sql, kind=kind, blocked=False, block_reason=None)
+
+
+def _check_command_node(stmt: exp.Expr, original_sql: str) -> ValidatedStatement:
+    """Check a sqlglot Command node for denied operations."""
+    # sqlglot represents unknown commands as Command with .this = keyword text
+    # and .expression containing the rest (e.g. nested-comment payloads).
+    # Combine both parts and normalize (strips nested block comments, line
+    # comments, and collapses whitespace) so evasion variants are caught.
+    raw_this = getattr(stmt, "this", "") or ""
+    raw_expr = stmt.args.get("expression") or ""
+    full_raw = f"{raw_this} {raw_expr}".strip()
+    full_normalized = _normalize_for_prefix_scan(full_raw)
+    raw_upper = full_normalized.strip().upper()
+
+    denied_keywords = {"COPY", "LISTEN", "NOTIFY", "UNLISTEN", "LOCK", "DO", "LOAD"}
+    for kw in denied_keywords:
+        if raw_upper.startswith(kw):
+            return ValidatedStatement(
+                sql=original_sql,
+                kind="admin",
+                blocked=True,
+                block_reason=f"{kw.lower()}_blocked",
+            )
+
+    # CREATE/DROP/ALTER on privileged objects — sqlglot falls back to Command for
+    # unsupported syntax (e.g. CREATE ROLE, DROP USER, nested-comment variants).
+    # full_normalized has had all comments stripped and whitespace collapsed.
+    admin_match = _COMMAND_ADMIN_RE.match(raw_upper)
+    if admin_match:
+        verb_token = admin_match.group(1).upper()
+        return ValidatedStatement(
+            sql=original_sql,
+            kind="admin",
+            blocked=True,
+            block_reason=f"{verb_token.lower()}_blocked",
+        )
+
+    # SET commands for privilege escalation.
+    # raw_upper starts with SET here; use regex to match optional LOCAL/SESSION.
+    if raw_upper.startswith("SET"):
+        raw_lower = full_normalized.lower()
+        for set_re in _DENIED_SET_REGEXES:
+            if set_re.search(raw_lower):
+                return ValidatedStatement(
+                    sql=original_sql,
+                    kind="admin",
+                    blocked=True,
+                    block_reason="privilege_escalation_blocked",
+                )
+        # All other SET (session-local settings) allowed
+        return ValidatedStatement(sql=original_sql, kind="tx", blocked=False, block_reason=None)
+
+    return ValidatedStatement(sql=original_sql, kind="admin", blocked=False, block_reason=None)
+
+
+def _check_create_node(stmt: exp.Expr, original_sql: str) -> ValidatedStatement | None:
+    """Block CREATE FUNCTION, PROCEDURE, TRIGGER, AGGREGATE, LANGUAGE, EXTENSION, etc.
+
+    Returns a blocked ValidatedStatement if the CREATE kind is denied, else None.
+    dbt-postgres only emits CREATE TABLE, VIEW, SCHEMA, INDEX — everything else
+    is blocked unconditionally for R3.
+    """
+    # sqlglot Create node exposes .kind (the object type string)
+    create_kind = getattr(stmt, "kind", None)
+    if create_kind is None:
+        # Attempt to read from args dict
+        create_kind = stmt.args.get("kind", "")
+    kind_upper = str(create_kind).upper() if create_kind else ""
+
+    for denied in _DENIED_CREATE_KINDS:
+        if denied in kind_upper:
+            return ValidatedStatement(
+                sql=original_sql,
+                kind="admin",
+                blocked=True,
+                block_reason=f"create_{denied.lower().replace(' ', '_')}_blocked",
+            )
+
+    # Also block SECURITY DEFINER anywhere in the CREATE text
+    if "security definer" in original_sql.lower():
+        return ValidatedStatement(
+            sql=original_sql,
+            kind="admin",
+            blocked=True,
+            block_reason="security_definer_blocked",
+        )
+
+    return None
+
+
+# Object kinds that must never be DROP-ped or ALTER-ed via dbt proxy traffic.
+_DENIED_DROP_ALTER_KINDS: frozenset[str] = frozenset({
+    "ROLE",
+    "USER",
+    "DATABASE",
+    "TABLESPACE",
+    "EXTENSION",
+    "LANGUAGE",
+    "FUNCTION",
+    "PROCEDURE",
+    "TRIGGER",
+    "AGGREGATE",
+})
+
+# Regex used as a belt-and-braces check inside _check_command_node when sqlglot
+# falls back to a Command node for CREATE/DROP/ALTER (already comment-collapsed).
+# GRANT/REVOKE on any object is also blocked at the Command node level.
+# Role-membership syntax (GRANT admin TO evil) produces a Command node, not
+# exp.Grant, because sqlglot does not recognise that syntax — so we must catch
+# it here in addition to the _DENIED_PREFIX_RE Layer A check.
+_COMMAND_ADMIN_RE = re.compile(
+    r"^(CREATE|DROP|ALTER|GRANT|REVOKE)\s+.+",
+    re.IGNORECASE,
+)
+
+
+def _check_drop_alter_node(stmt: exp.Expr, stmt_type: str, original_sql: str) -> ValidatedStatement | None:
+    """Block DROP / ALTER on privileged object kinds (ROLE, USER, DATABASE, etc.).
+
+    Returns a blocked ValidatedStatement if the kind is denied, else None.
+    sqlglot exposes the same .args['kind'] field on Drop and Alter as it does
+    on Create.
+    """
+    kind_raw = stmt.args.get("kind", "") or ""
+    kind_upper = str(kind_raw).upper().strip()
+    if not kind_upper:
+        return None
+
+    for denied in _DENIED_DROP_ALTER_KINDS:
+        if denied in kind_upper:
+            return ValidatedStatement(
+                sql=original_sql,
+                kind="admin",
+                blocked=True,
+                block_reason=f"{denied.lower()}_management_blocked",
+            )
+    return None
+
+
+def _check_setting_func_node(node: exp.Anonymous | exp.Func, func_name: str, original_sql: str) -> ValidatedStatement | None:
+    """Arg-aware check for current_setting / set_config calls.
+
+    Allows calls where the first argument is a string literal with a safe
+    setting name; blocks sensitive prefixes and non-literal first arguments.
+    """
+    args = node.args.get("expressions") or []
+    if not args:
+        return ValidatedStatement(
+            sql=original_sql,
+            kind="admin",
+            blocked=True,
+            block_reason=f"denied_function_{func_name}",
+        )
+    first_arg = args[0]
+    if not (isinstance(first_arg, exp.Literal) and first_arg.is_string):
+        return ValidatedStatement(
+            sql=original_sql,
+            kind="admin",
+            blocked=True,
+            block_reason="current_setting/set_config with non-literal name is not allowed — pass a constant string",
+        )
+    setting_name = first_arg.this.lower()
+    for prefix in _SENSITIVE_SETTING_PREFIXES:
+        if setting_name.startswith(prefix):
+            return ValidatedStatement(
+                sql=original_sql,
+                kind="admin",
+                blocked=True,
+                block_reason=f"reading {setting_name} via current_setting is restricted",
+            )
+    return None
+
+
+def _check_dangerous_functions(stmt: exp.Expr, original_sql: str) -> ValidatedStatement | None:
+    """Walk the AST for calls to dangerous built-in functions.
+
+    Checks both exp.Anonymous (unknown functions) and exp.Func subclasses.
+    Returns a blocked ValidatedStatement if a denied function is found, else None.
+    """
+    # Walk all Anonymous nodes (covers functions sqlglot doesn't know about)
+    for node in stmt.find_all(exp.Anonymous):
+        func_name = (node.name or "").lower()
+        if func_name in _SETTING_FUNC_NAMES:
+            result = _check_setting_func_node(node, func_name, original_sql)
+            if result is not None:
+                return result
+        elif func_name in _DENIED_FUNCTION_NAMES:
+            return ValidatedStatement(
+                sql=original_sql,
+                kind="admin",
+                blocked=True,
+                block_reason=f"denied_function_{func_name}",
+            )
+
+    # Walk all Func subclasses (covers functions sqlglot has typed representations for)
+    for node in stmt.find_all(exp.Func):
+        func_name = type(node).__name__.lower()
+        # sql_name() is a method on Expression — call it without a lambda to
+        # avoid the loop-variable closure capture issue (ruff B023).
+        sql_name_raw = node.sql_name() if callable(getattr(node, "sql_name", None)) else func_name
+        sql_name = sql_name_raw.lower() if isinstance(sql_name_raw, str) else func_name
+        if func_name in _SETTING_FUNC_NAMES or sql_name in _SETTING_FUNC_NAMES:
+            canonical = func_name if func_name in _SETTING_FUNC_NAMES else sql_name
+            result = _check_setting_func_node(node, canonical, original_sql)
+            if result is not None:
+                return result
+        elif func_name in _DENIED_FUNCTION_NAMES or sql_name in _DENIED_FUNCTION_NAMES:
+            return ValidatedStatement(
+                sql=original_sql,
+                kind="admin",
+                blocked=True,
+                block_reason=f"denied_function_{sql_name}",
+            )
+
+    return None
+
+
+def _classify_kind(stmt_type: str) -> Literal["read", "write", "ddl", "tx", "admin"]:
+    if stmt_type in _READ_TYPES:
+        return "read"
+    if stmt_type in _WRITE_TYPES:
+        return "write"
+    if stmt_type in _DDL_TYPES:
+        return "ddl"
+    if stmt_type in _TX_TYPES:
+        return "tx"
+    return "admin"
+
+
+def _merge_kind(
+    a: Literal["read", "write", "ddl", "tx", "admin"],
+    b: Literal["read", "write", "ddl", "tx", "admin"],
+) -> Literal["read", "write", "ddl", "tx", "admin"]:
+    """Promote kind to the 'most significant' type in a multi-statement string."""
+    order = {"read": 0, "tx": 1, "write": 2, "ddl": 3, "admin": 4}
+    return a if order[a] >= order[b] else b
+
+
+def _deny_reason_for_prefix(sql_lower: str) -> str:
+    if sql_lower.startswith("copy"):
+        return "copy_blocked"
+    if sql_lower.startswith("do"):
+        return "do_block_blocked"
+    if sql_lower.startswith("load"):
+        return "load_blocked"
+    if sql_lower.startswith("grant"):
+        return "grant_blocked"
+    if sql_lower.startswith("revoke"):
+        return "revoke_blocked"
+    if "listen" in sql_lower[:20]:
+        return "listen_blocked"
+    if "notify" in sql_lower[:20]:
+        return "notify_blocked"
+    if "unlisten" in sql_lower[:20]:
+        return "unlisten_blocked"
+    if "lock" in sql_lower[:20]:
+        return "lock_blocked"
+    if "security definer" in sql_lower:
+        return "security_definer_blocked"
+    if "create role" in sql_lower or "drop role" in sql_lower or "alter role" in sql_lower:
+        return "role_management_blocked"
+    if "create user" in sql_lower or "drop user" in sql_lower or "alter user" in sql_lower:
+        return "user_management_blocked"
+    if "database" in sql_lower[:30]:
+        return "database_management_blocked"
+    if "tablespace" in sql_lower[:30]:
+        return "tablespace_blocked"
+    if "extension" in sql_lower[:30]:
+        return "extension_blocked"
+    if "language" in sql_lower[:30]:
+        return "language_blocked"
+    if "function" in sql_lower[:30]:
+        return "create_function_blocked"
+    if "procedure" in sql_lower[:30]:
+        return "create_procedure_blocked"
+    if "trigger" in sql_lower[:30]:
+        return "create_trigger_blocked"
+    return "denied_statement"
+
+
+__all__ = ["ValidatedStatement", "validate_dbt_statement"]

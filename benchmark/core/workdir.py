@@ -36,27 +36,41 @@ def prepare_workdir(instance_id: str, data_dir: Path | None = None) -> Path:
     shutil.copytree(src, dst)
     log(f"Copied task files: {src} -> {dst}")
 
-    # Copy .mcp.json so Claude Code discovers SignalPilot MCP tools
-    mcp_json_src = PROJECT_ROOT / ".mcp.json"
-    if mcp_json_src.exists():
-        shutil.copy2(mcp_json_src, dst / ".mcp.json")
-        log("Copied .mcp.json for MCP tool discovery")
+    # Remove partial_parse.msgpack because it can contain state from another dbt version.
+    stale_parse = dst / "target" / "partial_parse.msgpack"
+    if stale_parse.exists():
+        stale_parse.unlink()
+        log("Removed stale target/partial_parse.msgpack")
 
-    # Copy skills into .claude/skills/ so Claude Code loads them natively
-    skills_dst = dst / ".claude" / "skills"
-    if SKILLS_SRC.exists():
-        shutil.copytree(
-            SKILLS_SRC,
-            skills_dst,
-            dirs_exist_ok=True,
-            ignore=shutil.ignore_patterns("*.json", "__pycache__"),
+    # Write .mcp.json with the same config the SDK runner uses (including
+    # runtime env injection: DATABASE_URL, SP_GATEWAY_URL, SP_DISABLE_SANDBOX).
+    # This ensures subagents and Claude CLI see the same MCP tools.
+    import json as _json
+    from .mcp import load_mcp_servers
+    try:
+        mcp_cfg = {"mcpServers": load_mcp_servers()}
+        (dst / ".mcp.json").write_text(_json.dumps(mcp_cfg, indent=2))
+        log("Wrote .mcp.json with runtime MCP config")
+    except Exception as e:
+        log(f"Failed to write .mcp.json: {e}", "WARN")
+
+    # Run dbt deps only when packages.yml exists.
+    # Some bundled packages do not contain dbt_project.yml.
+    if (dst / "packages.yml").exists():
+        result = subprocess.run(
+            [shutil.which("dbt") or "dbt", "deps"],
+            cwd=str(dst), capture_output=True, text=True, timeout=120,
         )
-        skill_count = len(list(skills_dst.rglob("SKILL.md")))
-        log(f"Copied {skill_count} skills -> {skills_dst}")
-    else:
-        log(f"Skills directory not found: {SKILLS_SRC}", "WARN")
+        if result.returncode == 0:
+            log("dbt deps completed successfully")
+        else:
+            log(f"dbt deps failed (non-fatal): {result.stderr[-200:]}", "WARN")
+    # Remove packages.yml after dependency installation to prevent another run.
+        (dst / "packages.yml").unlink(missing_ok=True)
+        (dst / "package-lock.yml").unlink(missing_ok=True)
+        log("Removed packages.yml (deps already resolved)")
 
-    # Initialize a git repo so Claude Code discovers skills in .claude/skills/
+    # Initialize a Git repository for Claude Code.
     subprocess.run(["git", "init"], cwd=str(dst), capture_output=True)
 
     return dst
@@ -67,13 +81,17 @@ def prepare_sql_workdir(
     config: "SuiteConfig",
     task: dict,
     backend: "DBBackend | None" = None,
-    skill_names: "tuple[str, ...] | None" = None,
+    *,
+    skill_names: "tuple[str, ...]",
 ) -> Path:
     """Create a fresh SQL working directory for the given task.
 
-    Unlike prepare_workdir (DBT), no project template is copied — the directory starts empty.
-    Files placed: .mcp.json, .claude/skills/<skill>/, optional external knowledge docs,
-    optional schema files. CLAUDE.md is written separately by write_sql_claude_md.
+    The directory starts empty. The function adds .mcp.json, requested skills,
+    optional knowledge documents, and optional schema files.
+    write_sql_claude_md writes CLAUDE.md separately.
+
+    `skill_names` is required: callers resolve the backend-specific skill set
+    themselves (see runners.sql_runner._get_skill_names).
     """
     from .suite import BenchmarkSuite
 
@@ -90,17 +108,10 @@ def prepare_sql_workdir(
         log("Copied .mcp.json for MCP tool discovery")
 
     # Copy only the requested skills into .claude/skills/
-    # skill_names parameter takes precedence over config.skills (backend-specific override).
-    # config.skills is the fallback for backward compatibility.
     skills_dst = work_dir / ".claude" / "skills"
     skills_dst.mkdir(parents=True, exist_ok=True)
-    skills_to_copy: tuple[str, ...] | list[str]
-    if skill_names is not None:
-        skills_to_copy = skill_names
-        log(f"Using backend-specific skills: {list(skill_names)}")
-    else:
-        skills_to_copy = config.skills
-    for skill_name in skills_to_copy:
+    log(f"Using backend-specific skills: {list(skill_names)}")
+    for skill_name in skill_names:
         skill_src = SKILLS_SRC / skill_name
         if skill_src.exists():
             shutil.copytree(
@@ -171,7 +182,7 @@ def prepare_sql_workdir(
                     except Exception as e:
                         log(f"Failed to build SQLite DB '{db_name}': {e}", "ERROR")
 
-    # Initialize a git repo so Claude Code discovers skills in .claude/skills/
+    # Initialize a Git repository so Claude Code discovers the requested skills.
     subprocess.run(["git", "init"], cwd=str(work_dir), capture_output=True)
 
     return work_dir
@@ -285,7 +296,6 @@ Use SignalPilot MCP tools to explore and query the database:
 - `mcp__signalpilot__generate_sql_skeleton` — generate SELECT template from YML column list
 
 ## Key Rules
-- Always use `{{ config(materialized='table') }}` at the top of every model
 - Column names in YML are exact — copy them into SELECT aliases character-for-character
 - When a sibling model exists, copy its JOIN types exactly (see dbt-write skill)
 """

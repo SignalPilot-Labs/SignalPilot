@@ -1,41 +1,60 @@
 @import "tailwindcss";
 
+/* Design tokens — aligned with the landing-page system (see UX.md).
+   Warm ink surfaces, translucent borders, mint reserved for live/primary,
+   DM Sans for chrome + JetBrains Mono for evidence (SQL, metrics, ids). */
 @theme {
-  --color-bg: #050505;
-  --color-bg-card: #0a0a0a;
-  --color-bg-hover: #111111;
-  --color-bg-input: #080808;
-  --color-bg-elevated: #0d0d0d;
-  --color-border: #222222;
-  --color-border-hover: #333333;
-  --color-border-active: #444444;
-  --color-text: #eeeeee;
-  --color-text-muted: #999999;
-  --color-text-dim: #666666;
+  --color-bg: #0e0e0f;
+  --color-bg-card: #141416;
+  --color-bg-hover: #1b1b1e;
+  --color-bg-input: #101012;
+  --color-bg-elevated: #18181a;
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-border-hover: rgba(255, 255, 255, 0.16);
+  --color-border-active: rgba(255, 255, 255, 0.28);
+  --color-text: #ededed;
+  --color-text-muted: #9c9c96;
+  --color-text-dim: #6b6b66;
   --color-accent: #ffffff;
-  --color-accent-hover: #cccccc;
+  --color-accent-hover: #d9d9d4;
   --color-success: #00ff88;
   --color-warning: #ffaa00;
   --color-error: #ff4444;
-  --color-sidebar: #030303;
-  --color-glow: rgba(255, 255, 255, 0.03);
-  --font-mono: "JetBrains Mono", "SF Mono", "Fira Code", "Cascadia Code", ui-monospace, monospace;
-}
+  --color-sidebar: #0b0b0c;
+  --color-glow: rgba(0, 255, 136, 0.08);
+  --font-sans: var(--font-dm-sans), "DM Sans", -apple-system, "Segoe UI", system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), "JetBrains Mono", "SF Mono", "Cascadia Code", ui-monospace, monospace;
 
-@font-face {
-  font-family: "JetBrains Mono";
-  font-style: normal;
-  font-weight: 100 800;
-  font-display: swap;
-  src: url("https://cdn.jsdelivr.net/gh/JetBrains/JetBrainsMono@latest/fonts/variable/JetBrainsMono[wght].woff2") format("woff2");
+  --radius-ctl: 10px;   /* buttons, inputs */
+  --radius-card: 14px;  /* cards, panels */
+  --radius-lg: 16px;    /* large containers */
 }
 
 body {
   background-color: var(--color-bg);
   color: var(--color-text);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  letter-spacing: -0.005em;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Evidence stays mono: code, metrics, ids, keyboard hints.
+   Layered as base so tracking-* utilities still win when explicitly set. */
+@layer base {
+  code, pre, kbd, samp, .font-mono {
+    font-family: var(--font-mono);
+    letter-spacing: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* ── Cursor — all interactive elements get pointer ── */
@@ -45,10 +64,10 @@ input[type="checkbox"], input[type="radio"], summary {
 }
 
 /* ── Scrollbar ── */
-::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 0; }
-::-webkit-scrollbar-thumb:hover { background: var(--color-border-hover); }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.12); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.22); }
 
 /* ── Terminal styling ── */
 .terminal-container .xterm { padding: 12px; }
@@ -234,6 +253,62 @@ select {
   background-repeat: no-repeat;
   background-position: right 8px center;
   padding-right: 24px;
+}
+
+/* Standalone data chat markdown stays business-readable; evidence remains mono. */
+.chat-markdown {
+  color: var(--color-text);
+  font-size: 14px;
+  line-height: 1.7;
+}
+.chat-markdown > * + * { margin-top: 0.85rem; }
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3 {
+  color: var(--color-text);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.3;
+}
+.chat-markdown ul,
+.chat-markdown ol { padding-left: 1.25rem; }
+.chat-markdown ul { list-style: disc; }
+.chat-markdown ol { list-style: decimal; }
+.chat-markdown a {
+  color: var(--color-text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.chat-markdown code {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg-input);
+  padding: 0.1rem 0.3rem;
+  color: var(--color-text-muted);
+  font-size: 0.85em;
+}
+.chat-markdown pre {
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-input);
+  padding: 0.85rem;
+}
+.chat-markdown pre code {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+.chat-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.chat-markdown th,
+.chat-markdown td {
+  border: 1px solid var(--color-border);
+  padding: 0.5rem 0.65rem;
+  text-align: left;
 }
 
 /* ── Smooth transitions ── */
@@ -776,4 +851,85 @@ kbd {
     transform: none !important;
     opacity: 1 !important;
   }
+}
+
+/* ── Chat agent activity timeline ── */
+.chat-code {
+  font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  tab-size: 4;
+}
+.chat-code .tok-keyword { color: #c792ea; }
+.chat-code .tok-string,
+.chat-code .tok-string2 { color: #9ece8c; }
+.chat-code .tok-number { color: #f2b96d; }
+.chat-code .tok-comment { color: var(--color-text-dim); font-style: italic; }
+.chat-code .tok-operator,
+.chat-code .tok-punctuation { color: #8fa3b5; }
+.chat-code .tok-variableName { color: #d6e4f0; }
+.chat-code .tok-propertyName { color: #7fb4e0; }
+.chat-code .tok-function,
+.chat-code .tok-typeName,
+.chat-code .tok-className { color: #6fc3df; }
+.chat-code .tok-bool,
+.chat-code .tok-atom { color: #f2b96d; }
+
+@keyframes chat-step-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.chat-step-in { animation: chat-step-in 0.25s ease-out both; }
+
+@keyframes chat-live-sheen {
+  0% { background-position: 120% 0; }
+  100% { background-position: -20% 0; }
+}
+.chat-live-label {
+  background: linear-gradient(
+    90deg,
+    var(--color-text-dim) 0%,
+    var(--color-text) 50%,
+    var(--color-text-dim) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: chat-live-sheen 1.8s linear infinite;
+}
+
+.chat-step-rail {
+  position: relative;
+}
+.chat-step-rail::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  background: var(--color-border);
+}
+
+@keyframes chat-dot-ping {
+  0% { box-shadow: 0 0 0 0 rgba(0, 255, 136, 0.35); }
+  70% { box-shadow: 0 0 0 6px rgba(0, 255, 136, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 255, 136, 0); }
+}
+.chat-dot-live { animation: chat-dot-ping 1.6s ease-out infinite; }
+
+.chat-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.28s ease;
+}
+.chat-collapse[data-open="true"] { grid-template-rows: 1fr; }
+.chat-collapse > div { overflow: hidden; min-width: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-step-in,
+  .chat-live-label,
+  .chat-dot-live {
+    animation: none !important;
+  }
+  .chat-collapse { transition: none; }
 }

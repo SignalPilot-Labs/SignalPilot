@@ -1,0 +1,1233 @@
+from __future__ import annotations
+
+import asyncio
+import importlib
+import json
+import re
+import sys
+from types import SimpleNamespace
+
+import pytest
+
+_stubbed_signalpilot = sys.modules.get("signalpilot")
+if getattr(_stubbed_signalpilot, "__spec__", None) is None:
+    del sys.modules["signalpilot"]
+    # Re-importing the root below does NOT re-run already-imported submodules,
+    # so their attribute linkage on the fresh root must be restored by hand —
+    # otherwise later string-based monkeypatch.setattr("signalpilot._server...")
+    # resolution breaks for every test that runs after this module.
+
+notion_analysis = importlib.import_module(
+    "signalpilot._server.api.endpoints.notion_analysis"
+)
+
+import signalpilot as _sp_root
+
+if not hasattr(_sp_root, "_server") and "signalpilot._server" in sys.modules:
+    _sp_root._server = sys.modules["signalpilot._server"]
+
+
+def _body() -> notion_analysis.StartNotionAnalysisRequest:
+    return notion_analysis.StartNotionAnalysisRequest(
+        discussion_id="slack:T:C:123",
+        source_url="https://slack.test/archives/C/p123",
+        headline="Analyze dev DB",
+        prompt="can you do an analysis of our dev db?",
+        created_at="2026-06-19T00:00:00Z",
+        previous_messages=["prior context"],
+    )
+
+
+def _record() -> notion_analysis.AnalysisRecord:
+    return notion_analysis.AnalysisRecord(
+        request_id="notion-test",
+        discussion_id="slack:T:C:123",
+        session_id="session-notion-test",
+        notebook_path="signalpilot-notion-analyses/analyze-dev-db.py",
+        trail_url="https://app.test/projects?file=analysis.py",
+        status="New",
+        headline="Analyze dev DB",
+        source_url="https://slack.test/archives/C/p123",
+        created_at="2026-06-19T00:00:00Z",
+    )
+
+
+def test_notebook_template_uses_compact_three_cell_scaffold() -> None:
+    template = notion_analysis._notebook_template(_body())
+
+    assert template.count("@app.cell") == 3
+    assert template.count("@app.cell(hide_code=True)") == 3
+    assert template.count("import signalpilot as sp") == 2
+    assert template.count("    import signalpilot as sp") == 1
+    assert template.count("def _(sp):") == 2
+    assert "    return (sp,)" in template
+    assert "# SignalPilot analysis" in template
+    assert "AI generated title" not in template
+    assert "**Source request:** https://slack.test/archives/C/p123" in template
+    assert "**Source prompt:**" in template
+    assert "**Requester prompt:**" not in template
+    assert "can you do an analysis of our dev db?" in template
+    assert "request_headline =" not in template
+    assert "source_url =" not in template
+    assert "user_prompt =" not in template
+    assert "previous_messages =" not in template
+    assert "request_title =" not in template
+    assert "## Executive Summary and Explorations" in template
+    assert "## Analysis steps" in template
+    assert "## Scouting and context notes" not in template
+    assert "## Setup and connection selection" not in template
+    assert "## Data discovery" not in template
+    assert "## Charts and visual evidence" not in template
+    assert "## Evidence Trace" not in template
+
+
+def test_analysis_registry_omits_latest_commit_sha(
+    tmp_path, monkeypatch
+) -> None:
+    record = _record()
+    record.latest_commit_sha = "abc123"
+    registry_path = (
+        tmp_path / "notebooks" / ".signalpilot-analysis-registry.json"
+    )
+    registry_path.parent.mkdir(parents=True)
+    monkeypatch.setattr(
+        notion_analysis, "_registry_path", lambda _app_state: registry_path
+    )
+
+    old_records = dict(notion_analysis._records_by_request_id)
+    try:
+        notion_analysis._records_by_request_id.clear()
+        notion_analysis._records_by_request_id[record.request_id] = record
+
+        notion_analysis._save_registry(object())
+
+        raw = json.loads(registry_path.read_text(encoding="utf-8"))
+        assert raw["records"][0]["request_id"] == "notion-test"
+        assert "latest_commit_sha" not in raw["records"][0]
+    finally:
+        notion_analysis._records_by_request_id.clear()
+        notion_analysis._records_by_request_id.update(old_records)
+
+
+def test_analysis_registry_round_trips_theme(tmp_path, monkeypatch) -> None:
+    record = _record()
+    record.theme = {"bg": "#101010", "chartSeries": ["#123456", "#abcdef", "#fedcba"]}
+    registry_path = tmp_path / "notebooks" / ".signalpilot-analysis-registry.json"
+    registry_path.parent.mkdir(parents=True)
+    monkeypatch.setattr(notion_analysis, "_registry_path", lambda _app_state: registry_path)
+
+    old_records = dict(notion_analysis._records_by_request_id)
+    old_discussions = dict(notion_analysis._records_by_discussion_id)
+    try:
+        notion_analysis._records_by_request_id.clear()
+        notion_analysis._records_by_discussion_id.clear()
+        notion_analysis._records_by_request_id[record.request_id] = record
+
+        notion_analysis._save_registry(object())
+        notion_analysis._records_by_request_id.clear()
+        notion_analysis._load_registry(object())
+
+        assert notion_analysis._records_by_request_id[record.request_id].theme == record.theme
+    finally:
+        notion_analysis._records_by_request_id.clear()
+        notion_analysis._records_by_request_id.update(old_records)
+        notion_analysis._records_by_discussion_id.clear()
+        notion_analysis._records_by_discussion_id.update(old_discussions)
+
+
+def test_project_root_is_the_session_workspace(tmp_path) -> None:
+    """Runtime v2: no local git clone — analysis artifacts live in the
+    session workspace; durability comes from write-through saves."""
+    app_state = SimpleNamespace(
+        request=SimpleNamespace(
+            headers={
+                "x-gateway-project-id": "project-1",
+                "x-gateway-branch-id": "analysis/slack/test",
+            }
+        ),
+        session_manager=SimpleNamespace(
+            workspace=SimpleNamespace(directory=str(tmp_path / "workspace"))
+        ),
+    )
+
+    assert notion_analysis._project_root(app_state) == tmp_path / "workspace"
+
+
+def test_project_root_falls_back_to_cwd_without_workspace() -> None:
+    from pathlib import Path
+
+    app_state = SimpleNamespace(
+        request=SimpleNamespace(headers={}),
+        session_manager=SimpleNamespace(
+            workspace=SimpleNamespace(directory=None)
+        ),
+    )
+
+    assert notion_analysis._project_root(app_state) == Path.cwd()
+
+
+def test_analysis_agent_runs_from_project_root(tmp_path, monkeypatch) -> None:
+    from signalpilot._server.ai import chat_store, claude_agent
+    from signalpilot._server.ai.claude_agent import AgentEvent
+    from signalpilot._types.ids import SessionId
+
+    monkeypatch.delenv("SIGNALPILOT_ANALYSIS_AGENT_MODEL", raising=False)
+    monkeypatch.delenv("SIGNALPILOT_WORKER_AGENT_MODEL", raising=False)
+
+    class FakeStore:
+        async def upsert_thread(self, thread) -> None:
+            del thread
+
+        async def clear_events(self, thread_id: str) -> None:
+            del thread_id
+
+        async def append_event(self, thread_id: str, event_data: dict) -> int:
+            del thread_id, event_data
+            return 0
+
+    project_root = tmp_path / "projects" / "project-1"
+    project_root.mkdir(parents=True)
+    app_state = SimpleNamespace(
+        request=SimpleNamespace(app=object(), headers={}),
+        session_manager=SimpleNamespace(
+            workspace=SimpleNamespace(directory=str(tmp_path / "workspace"))
+        ),
+    )
+    record = _record()
+    captured: dict[str, object] = {}
+
+    async def fake_run_notebook_agent(**kwargs: object):
+        captured.update(kwargs)
+        yield AgentEvent(
+            type="text",
+            content=(
+                'FINAL_STATEMENT: {"statement":"Done","confidenceScore":"high",'
+                '"caveats":[],"handoffNotes":["Notebook-executed SDK cells."]}'
+            ),
+        )
+
+    monkeypatch.setattr(
+        notion_analysis, "_project_root", lambda _app_state: project_root
+    )
+    monkeypatch.setattr(
+        notion_analysis,
+        "_build_analysis_warm_context",
+        lambda *_args, **_kwargs: (
+            "## Warm Context\n- Likely connection: `dev-db`"
+        ),
+    )
+    monkeypatch.setattr(
+        notion_analysis, "_ensure_session", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        notion_analysis, "_save_registry", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        notion_analysis,
+        "_persist_record_completion_artifacts",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        chat_store, "get_gateway_chat_trace_store", lambda: FakeStore()
+    )
+    monkeypatch.setattr(
+        claude_agent, "run_notebook_agent", fake_run_notebook_agent
+    )
+
+    asyncio.run(
+        notion_analysis._run_analysis(
+            app_state,
+            record,
+            _body(),
+            new_chat=True,
+        )
+    )
+
+    assert captured["session_id"] == SessionId(record.session_id)
+    assert captured["model"] == notion_analysis.DEFAULT_ANALYSIS_AGENT_MODEL
+    assert captured["new_chat"] is True
+    assert captured["cwd"] == str(project_root)
+    assert captured["additional_disallowed_tools"] == ["Agent"]
+    assert "Likely connection: `dev-db`" in str(captured["message"])
+
+
+def test_analysis_agent_parses_streamed_final_statement(
+    tmp_path, monkeypatch
+) -> None:
+    from signalpilot._server.ai import chat_store, claude_agent
+    from signalpilot._server.ai.claude_agent import AgentEvent
+
+    appended_events: list[dict] = []
+
+    class FakeStore:
+        async def upsert_thread(self, thread) -> None:
+            del thread
+
+        async def clear_events(self, thread_id: str) -> None:
+            del thread_id
+
+        async def append_event(self, thread_id: str, event_data: dict) -> int:
+            del thread_id
+            appended_events.append(event_data)
+            return 0
+
+    project_root = tmp_path / "projects" / "project-1"
+    project_root.mkdir(parents=True)
+    app_state = SimpleNamespace(
+        request=SimpleNamespace(app=object(), headers={}),
+        session_manager=SimpleNamespace(
+            workspace=SimpleNamespace(directory=str(tmp_path / "workspace"))
+        ),
+    )
+    record = _record()
+
+    async def fake_run_notebook_agent(**kwargs: object):
+        del kwargs
+        yield AgentEvent(type="text_delta", content='FINAL_STATEMENT: {"statement":')
+        yield AgentEvent(type="text_delta", content='"Streamed done",')
+        yield AgentEvent(
+            type="text_delta",
+            content='"confidenceScore":"high","caveats":[],"handoffNotes":[]}',
+        )
+        yield AgentEvent(type="done", content="")
+
+    monkeypatch.setattr(
+        notion_analysis, "_project_root", lambda _app_state: project_root
+    )
+    monkeypatch.setattr(
+        notion_analysis,
+        "_build_analysis_warm_context",
+        lambda *_args, **_kwargs: "",
+    )
+    monkeypatch.setattr(
+        notion_analysis, "_ensure_session", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        notion_analysis, "_save_registry", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        notion_analysis,
+        "_persist_record_completion_artifacts",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        chat_store, "get_gateway_chat_trace_store", lambda: FakeStore()
+    )
+    monkeypatch.setattr(
+        claude_agent, "run_notebook_agent", fake_run_notebook_agent
+    )
+
+    asyncio.run(
+        notion_analysis._run_analysis(
+            app_state,
+            record,
+            _body(),
+            new_chat=True,
+        )
+    )
+
+    assert record.status == "Done"
+    assert record.result is not None
+    assert record.result.final_answer == "Streamed done"
+    done_event = [event for event in appended_events if event["type"] == "done"][-1]
+    marker = done_event["metadata"]["control_markers"][0]
+    assert marker == {
+        "marker": "FINAL_STATEMENT",
+        "payload": {
+            "statement": "Streamed done",
+            "confidenceScore": "high",
+            "caveats": [],
+            "handoffNotes": [],
+        },
+    }
+
+
+def test_analysis_agent_parses_markdown_wrapped_final_statement(
+    tmp_path, monkeypatch
+) -> None:
+    from signalpilot._server.ai import chat_store, claude_agent
+    from signalpilot._server.ai.claude_agent import AgentEvent
+
+    appended_events: list[dict] = []
+
+    class FakeStore:
+        async def upsert_thread(self, thread) -> None:
+            del thread
+
+        async def clear_events(self, thread_id: str) -> None:
+            del thread_id
+
+        async def append_event(self, thread_id: str, event_data: dict) -> int:
+            del thread_id
+            appended_events.append(event_data)
+            return 0
+
+    project_root = tmp_path / "projects" / "project-1"
+    project_root.mkdir(parents=True)
+    app_state = SimpleNamespace(
+        request=SimpleNamespace(app=object(), headers={}),
+        session_manager=SimpleNamespace(
+            workspace=SimpleNamespace(directory=str(tmp_path / "workspace"))
+        ),
+    )
+    record = _record()
+
+    async def fake_run_notebook_agent(**kwargs: object):
+        del kwargs
+        yield AgentEvent(
+            type="text",
+            content=(
+                '**FINAL_STATEMENT: {"statement":"Bold wrapped done",'
+                '"confidenceScore":"medium","caveats":["Limited rows"],'
+                '"handoffNotes":["Used notebook SDK."]}**'
+            ),
+        )
+
+    monkeypatch.setattr(
+        notion_analysis, "_project_root", lambda _app_state: project_root
+    )
+    monkeypatch.setattr(
+        notion_analysis,
+        "_build_analysis_warm_context",
+        lambda *_args, **_kwargs: "",
+    )
+    monkeypatch.setattr(
+        notion_analysis, "_ensure_session", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        notion_analysis, "_save_registry", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        notion_analysis,
+        "_persist_record_completion_artifacts",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        chat_store, "get_gateway_chat_trace_store", lambda: FakeStore()
+    )
+    monkeypatch.setattr(
+        claude_agent, "run_notebook_agent", fake_run_notebook_agent
+    )
+
+    asyncio.run(
+        notion_analysis._run_analysis(
+            app_state,
+            record,
+            _body(),
+            new_chat=True,
+        )
+    )
+
+    assert record.status == "Done"
+    assert record.result is not None
+    assert record.result.final_answer == "Bold wrapped done"
+    assert "Analysis could not be completed" not in record.result.final_answer
+    done_event = [event for event in appended_events if event["type"] == "done"][-1]
+    assert done_event["metadata"]["control_markers"][0]["payload"] == {
+        "statement": "Bold wrapped done",
+        "confidenceScore": "medium",
+        "caveats": ["Limited rows"],
+        "handoffNotes": ["Used notebook SDK."],
+    }
+
+
+def test_analysis_agent_retries_once_after_transient_overload(
+    tmp_path, monkeypatch
+) -> None:
+    from signalpilot._server.ai import chat_store, claude_agent
+    from signalpilot._server.ai.claude_agent import AgentEvent
+
+    class FakeStore:
+        async def upsert_thread(self, thread) -> None:
+            del thread
+
+        async def clear_events(self, thread_id: str) -> None:
+            del thread_id
+
+        async def append_event(self, thread_id: str, event_data: dict) -> int:
+            del thread_id, event_data
+            return 0
+
+    project_root = tmp_path / "projects" / "project-1"
+    project_root.mkdir(parents=True)
+    app_state = SimpleNamespace(
+        request=SimpleNamespace(app=object(), headers={}),
+        session_manager=SimpleNamespace(
+            workspace=SimpleNamespace(directory=str(tmp_path / "workspace"))
+        ),
+    )
+    record = _record()
+    calls: list[dict[str, object]] = []
+
+    async def fake_run_notebook_agent(**kwargs: object):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            yield AgentEvent(type="error", content="API Error: Overloaded")
+            return
+        yield AgentEvent(
+            type="text",
+            content=(
+                'FINAL_STATEMENT: {"statement":"Done after retry",'
+                '"confidenceScore":"medium","caveats":[],"handoffNotes":[]}'
+            ),
+        )
+
+    monkeypatch.setattr(
+        notion_analysis, "_project_root", lambda _app_state: project_root
+    )
+    monkeypatch.setattr(
+        notion_analysis,
+        "_build_analysis_warm_context",
+        lambda *_args, **_kwargs: "",
+    )
+    monkeypatch.setattr(
+        notion_analysis, "_ensure_session", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        notion_analysis, "_save_registry", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        notion_analysis,
+        "_persist_record_completion_artifacts",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        chat_store, "get_gateway_chat_trace_store", lambda: FakeStore()
+    )
+    monkeypatch.setattr(
+        claude_agent, "run_notebook_agent", fake_run_notebook_agent
+    )
+
+    asyncio.run(
+        notion_analysis._run_analysis(
+            app_state,
+            record,
+            _body(),
+            new_chat=True,
+        )
+    )
+
+    assert len(calls) == 2
+    assert calls[0]["new_chat"] is True
+    assert calls[1]["new_chat"] is False
+    assert "transient model-provider overload" in str(calls[1]["message"])
+    assert record.status == "Done"
+    assert record.result is not None
+    assert record.result.final_answer == "Done after retry"
+
+
+def test_analysis_agent_model_prefers_env_override(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "SIGNALPILOT_ANALYSIS_AGENT_MODEL",
+        "claude-sonnet-analysis-test",
+    )
+    monkeypatch.setenv(
+        "SIGNALPILOT_WORKER_AGENT_MODEL", "claude-sonnet-worker-test"
+    )
+
+    assert (
+        notion_analysis._analysis_agent_model()
+        == "claude-sonnet-analysis-test"
+    )
+
+    monkeypatch.delenv("SIGNALPILOT_ANALYSIS_AGENT_MODEL")
+
+    assert (
+        notion_analysis._analysis_agent_model() == "claude-sonnet-worker-test"
+    )
+
+
+def test_refresh_notebook_is_written_from_captured_code_not_base_path(tmp_path) -> None:
+    app_state = SimpleNamespace(
+        request=SimpleNamespace(headers={}),
+        session_manager=SimpleNamespace(
+            workspace=SimpleNamespace(directory=str(tmp_path))
+        ),
+    )
+    body = notion_analysis.RefreshNotionAnalysisRequest(
+        ephemeral_run_id="notion-refresh-test",
+        deliverable_id="deliverable-1",
+        base_notebook_code="# captured notebook\nvalue = 1\n",
+        base_notebook_path=str(tmp_path / "original-mutated.py"),
+        base_chat_events=[],
+        base_final_packet={},
+        prompt="refresh with latest data",
+    )
+
+    file_key = notion_analysis._write_refresh_notebook(
+        app_state, body, "notion-refresh-test"
+    )
+
+    assert "original-mutated" not in file_key
+    assert (tmp_path / file_key).read_text(encoding="utf-8") == (
+        "# captured notebook\nvalue = 1\n"
+    )
+
+
+def test_refresh_start_body_includes_immutable_context_as_previous_messages() -> None:
+    theme = {"bg": "#101010", "chartSeries": ["#123456", "#abcdef", "#fedcba"]}
+    body = notion_analysis.RefreshNotionAnalysisRequest(
+        ephemeral_run_id="notion-refresh-test",
+        deliverable_id="deliverable-1",
+        base_notebook_code="# captured notebook\n",
+        base_notebook_path="notebooks/notion/original.py",
+        base_chat_events=[{"type": "user", "content": "build dashboard"}],
+        base_final_packet={"userRequest": "build dashboard"},
+        prompt="refresh with latest data",
+        theme=theme,
+    )
+
+    start_body = notion_analysis._refresh_start_body(body)
+
+    assert start_body.source == "notion"
+    assert start_body.output_mode == "deliverable"
+    assert start_body.prompt == "refresh with latest data"
+    assert any("metadata only" in message for message in start_body.previous_messages)
+    assert any("Original final delivery packet snapshot" in message for message in start_body.previous_messages)
+    assert any("Bounded original chat trace snapshot" in message for message in start_body.previous_messages)
+    assert start_body.theme == theme
+
+
+def test_themed_plotly_svg_uses_theme_and_floors_tiny_bars() -> None:
+    theme = notion_analysis.ChartTheme.from_payload(
+        {"bg": "#101010", "text": "#fafafa", "chartSeries": ["#123456", "#abcdef", "#fedcba"]}
+    )
+    vertical = {
+        "data": [{"type": "bar", "x": ["tiny", "huge"], "y": [1, 1_000_000]}],
+        "layout": {"title": {"text": "Tiny bars"}},
+    }
+    horizontal = {
+        "data": [{"type": "bar", "orientation": "h", "y": ["tiny", "huge"], "x": [1, 1_000_000]}],
+        "layout": {"title": {"text": "Tiny bars"}},
+    }
+
+    vertical_svg = notion_analysis._render_plotly_bar_svg(vertical, "Tiny bars", theme)
+    horizontal_svg = notion_analysis._render_plotly_bar_svg(horizontal, "Tiny bars", theme)
+
+    assert vertical_svg is not None
+    assert horizontal_svg is not None
+    assert 'fill="#101010"' in vertical_svg
+    assert 'fill="#123456"' in vertical_svg
+    assert 'height="2.0"' in vertical_svg
+    tiny_widths = [float(match) for match in re.findall(r'width="([0-9.]+)"', horizontal_svg)]
+    assert 2.0 in tiny_widths
+
+
+def test_refresh_session_creation_does_not_call_maybe_resume_session(tmp_path) -> None:
+    calls: list[str] = []
+
+    class FakeSessionManager:
+        workspace = SimpleNamespace(directory=str(tmp_path))
+
+        def get_session(self, session_id):
+            del session_id
+
+        def maybe_resume_session(self, session_id, notebook_path):
+            del session_id, notebook_path
+            calls.append("resume")
+
+        def create_session(self, **kwargs: object) -> None:
+            calls.append(f"create:{kwargs['file_key']}")
+
+    record = _record()
+    record.notebook_path = "notebooks/notion-refresh/refresh.py"
+    app_state = SimpleNamespace(session_manager=FakeSessionManager())
+
+    notion_analysis._ensure_session(app_state, record, allow_resume=False)
+
+    assert calls == ["create:notebooks/notion-refresh/refresh.py"]
+
+
+def test_missing_existing_notebook_is_restored_from_completion_artifacts(
+    tmp_path, monkeypatch
+) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    app_state = SimpleNamespace(
+        request=SimpleNamespace(headers={}),
+        session_manager=SimpleNamespace(
+            workspace=SimpleNamespace(directory=str(project_root))
+        ),
+    )
+    body = notion_analysis.StartNotionAnalysisRequest(
+        discussion_id="slack:T:C:123",
+        source_url="https://slack.test/archives/C/p124",
+        headline="Update dev DB",
+        prompt="what changed?",
+        created_at="2026-07-21T00:00:00Z",
+        source="slack",
+        previous_messages=["Analyze dev DB", "Prior trace summary: revenue increased."],
+        existing_notebook_path="notebooks/slack/original.py",
+    )
+    record = _record()
+    record.request_id = notion_analysis._request_id(body.discussion_id, "slack")
+    record.notebook_path = "notebooks/slack/original.py"
+    record.status = "Done"
+    record.result = notion_analysis.AnalysisResult(
+        summary="Revenue increased.",
+        final_answer="Revenue increased by 12%.",
+        confidence_score="high",
+    )
+    monkeypatch.setattr(notion_analysis, "_project_root", lambda _app_state: project_root)
+    monkeypatch.setattr(notion_analysis, "_load_registry", lambda _app_state: None)
+    monkeypatch.setattr(notion_analysis, "_save_registry", lambda _app_state: None)
+
+    old_records = dict(notion_analysis._records_by_request_id)
+    old_discussions = dict(notion_analysis._records_by_discussion_id)
+    try:
+        notion_analysis._records_by_request_id.clear()
+        notion_analysis._records_by_discussion_id.clear()
+        notion_analysis._records_by_request_id[record.request_id] = record
+        notion_analysis._records_by_discussion_id[record.discussion_id] = record.request_id
+
+        recovered = notion_analysis._ensure_record(app_state, body, "https://notebook.test/")
+
+        notebook = project_root / record.notebook_path
+        assert notebook.exists()
+        assert "Revenue increased by 12%." in notebook.read_text(encoding="utf-8")
+        assert recovered.recovery_mode == "restored"
+        assert "restored" in (recovered.recovery_notice or "").lower()
+    finally:
+        notion_analysis._records_by_request_id.clear()
+        notion_analysis._records_by_request_id.update(old_records)
+        notion_analysis._records_by_discussion_id.clear()
+        notion_analysis._records_by_discussion_id.update(old_discussions)
+
+
+def test_missing_existing_notebook_without_artifacts_becomes_explicit_rerun(
+    tmp_path, monkeypatch
+) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    app_state = SimpleNamespace(request=SimpleNamespace(headers={}))
+    body = notion_analysis.StartNotionAnalysisRequest(
+        discussion_id="slack:T:C:123",
+        source_url="https://slack.test/archives/C/p124",
+        headline="Update dev DB",
+        prompt="rerun with latest data",
+        created_at="2026-07-21T00:00:00Z",
+        source="slack",
+        previous_messages=["Analyze dev DB", "Prior analysis trace summary: revenue increased."],
+        existing_notebook_path="notebooks/slack/original.py",
+    )
+    monkeypatch.setattr(notion_analysis, "_project_root", lambda _app_state: project_root)
+    monkeypatch.setattr(notion_analysis, "_load_registry", lambda _app_state: None)
+    monkeypatch.setattr(notion_analysis, "_save_registry", lambda _app_state: None)
+    monkeypatch.setattr(
+        notion_analysis,
+        "_record_trail_url",
+        lambda *_args, **_kwargs: "https://notebook.test/trail",
+    )
+
+    old_records = dict(notion_analysis._records_by_request_id)
+    old_discussions = dict(notion_analysis._records_by_discussion_id)
+    try:
+        notion_analysis._records_by_request_id.clear()
+        notion_analysis._records_by_discussion_id.clear()
+
+        recovered = notion_analysis._ensure_record(app_state, body, "https://notebook.test/")
+
+        assert recovered.notebook_path == body.existing_notebook_path
+        assert recovered.recovery_mode == "rerun"
+        assert "rerunning" in (recovered.recovery_notice or "").lower()
+        assert (project_root / body.existing_notebook_path).exists()
+    finally:
+        notion_analysis._records_by_request_id.clear()
+        notion_analysis._records_by_request_id.update(old_records)
+        notion_analysis._records_by_discussion_id.clear()
+        notion_analysis._records_by_discussion_id.update(old_discussions)
+
+
+@pytest.mark.asyncio
+async def test_session_startup_failure_is_durable_and_pollable(monkeypatch) -> None:
+    from signalpilot._server.ai import chat_store, claude_agent
+
+    appended_events: list[dict] = []
+
+    class FakeStore:
+        async def upsert_thread(self, thread) -> None:
+            del thread
+
+        async def append_event(self, thread_id: str, event_data: dict) -> int:
+            del thread_id
+            appended_events.append(event_data)
+            return 0
+
+    app_state = SimpleNamespace(request=SimpleNamespace(app=object(), headers={}))
+    record = _record()
+    monkeypatch.setattr(
+        notion_analysis,
+        "_ensure_session",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError("missing.py")),
+    )
+    monkeypatch.setattr(notion_analysis, "_save_registry", lambda _app_state: None)
+    monkeypatch.setattr(chat_store, "get_gateway_chat_trace_store", lambda: FakeStore())
+    monkeypatch.setattr(claude_agent, "buffer_event", lambda *_args, **_kwargs: None)
+
+    old_records = dict(notion_analysis._records_by_request_id)
+    old_running = dict(notion_analysis._running_tasks)
+    try:
+        notion_analysis._records_by_request_id.clear()
+        notion_analysis._running_tasks.clear()
+        notion_analysis._records_by_request_id[record.request_id] = record
+        notion_analysis._running_tasks[record.request_id] = SimpleNamespace()
+
+        await notion_analysis._run_analysis(app_state, record, _body(), new_chat=False)
+
+        assert record.status == "Failed"
+        assert record.error == (
+            "The analysis notebook could not be reopened. "
+            "Start a fresh analysis from the thread context."
+        )
+        assert record.request_id not in notion_analysis._running_tasks
+        assert appended_events[-1]["type"] == "error"
+        assert appended_events[-1]["content"] == record.error
+
+        monkeypatch.setattr(notion_analysis, "AppState", lambda _request: app_state)
+        monkeypatch.setattr(notion_analysis, "_load_registry", lambda _app_state: None)
+        monkeypatch.setattr(notion_analysis, "_refresh_trail_url", lambda *_args, **_kwargs: None)
+        from starlette.authentication import AuthCredentials, SimpleUser
+        from starlette.requests import Request
+
+        status_request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "scheme": "https",
+                "server": ("notebook.test", 443),
+                "root_path": "",
+                "path": f"/api/notion-analysis/status/{record.request_id}",
+                "headers": [],
+                "path_params": {"request_id": record.request_id},
+                "auth": AuthCredentials(["edit"]),
+                "user": SimpleUser("test-user"),
+            }
+        )
+        response = await notion_analysis.notion_analysis_status(request=status_request)
+        payload = json.loads(response.body)
+        assert response.status_code == 200
+        assert payload["status"] == "Failed"
+        assert payload["error"] == record.error
+    finally:
+        notion_analysis._records_by_request_id.clear()
+        notion_analysis._records_by_request_id.update(old_records)
+        notion_analysis._running_tasks.clear()
+        notion_analysis._running_tasks.update(old_running)
+
+
+def test_status_recover_completed_refresh_from_trace(monkeypatch) -> None:
+    record = _record()
+    record.status = "Analyzing"
+
+    class FakeTraceStore:
+        async def get_thread(self, thread_id: str):
+            assert thread_id == record.session_id
+            return {"status": "done"}
+
+        async def get_events(self, thread_id: str):
+            assert thread_id == record.session_id
+            return [
+                {"type": "text_delta", "content": 'FINAL_STATEMENT: {"statement":'},
+                {"type": "text_delta", "content": '"Recovered",'},
+                {
+                    "type": "text_delta",
+                    "content": '"confidenceScore":"high","caveats":[],"handoffNotes":[]}',
+                },
+            ]
+
+    from signalpilot._server.ai import chat_store
+
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        chat_store, "get_gateway_chat_trace_store", lambda: FakeTraceStore()
+    )
+    monkeypatch.setattr(
+        notion_analysis,
+        "_save_registry",
+        lambda *_args, **_kwargs: calls.append("save_registry"),
+    )
+
+    recovered = asyncio.run(
+        notion_analysis._recover_completed_record_from_trace(
+            SimpleNamespace(), record
+        )
+    )
+
+    assert recovered is True
+    assert record.status == "Done"
+    assert record.error is None
+    assert record.result is not None
+    assert record.result.final_answer == "Recovered"
+    assert calls == ["save_registry"]
+
+
+def test_status_recover_completed_refresh_from_structured_trace_metadata(
+    monkeypatch,
+) -> None:
+    record = _record()
+    record.status = "Analyzing"
+
+    class FakeTraceStore:
+        async def get_thread(self, thread_id: str):
+            assert thread_id == record.session_id
+            return {"status": "done"}
+
+        async def get_events(self, thread_id: str):
+            assert thread_id == record.session_id
+            return [
+                {
+                    "type": "done",
+                    "content": "",
+                    "metadata": {
+                        "control_markers": [
+                            {
+                                "marker": "FINAL_STATEMENT",
+                                "payload": {
+                                    "statement": "Recovered from metadata",
+                                    "confidenceScore": "medium",
+                                    "caveats": ["Limited rows"],
+                                    "handoffNotes": ["Used notebook SDK."],
+                                },
+                            }
+                        ],
+                        "result": {
+                            "final_answer": "Should not win over marker metadata"
+                        },
+                    },
+                }
+            ]
+
+    from signalpilot._server.ai import chat_store
+
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        chat_store, "get_gateway_chat_trace_store", lambda: FakeTraceStore()
+    )
+    monkeypatch.setattr(
+        notion_analysis,
+        "_save_registry",
+        lambda *_args, **_kwargs: calls.append("save_registry"),
+    )
+
+    recovered = asyncio.run(
+        notion_analysis._recover_completed_record_from_trace(
+            SimpleNamespace(), record
+        )
+    )
+
+    assert recovered is True
+    assert record.status == "Done"
+    assert record.error is None
+    assert record.result is not None
+    assert record.result.final_answer == "Recovered from metadata"
+    assert record.result.confidence_score == "medium"
+    assert record.result.gotchas == ["Limited rows"]
+    assert record.result.analysis_method == "Used notebook SDK."
+    assert calls == ["save_registry"]
+
+
+def test_parse_final_statement_preserves_only_confidence_labels() -> None:
+    for label in ("high", "medium", "lower"):
+        result = notion_analysis._parse_final_statement_result(
+            'FINAL_STATEMENT: {"statement":"Done","confidenceScore":"'
+            f'{label}","caveats":[],"handoffNotes":[]}}'
+        )
+
+        assert result.confidence_score == label
+
+    numeric_result = notion_analysis._parse_final_statement_result(
+        'FINAL_STATEMENT: {"statement":"Done","confidenceScore":0.9,'
+        '"caveats":[],"handoffNotes":[]}'
+    )
+
+    assert numeric_result.confidence_score is None
+
+
+def test_analysis_prompt_requires_nearby_query_evidence_branches() -> None:
+    prompt = notion_analysis._analysis_prompt(_record(), _body())
+
+    assert "`sp.init()`" in prompt
+    assert "Define `sp` in exactly one notebook cell" in prompt
+    assert "must not repeat `import signalpilot as sp`" in prompt
+    assert "causes `MultipleDefinitionError`" in prompt
+    assert "`sp.init()`, `sp.connections()`" in prompt
+    assert 'then `sp.connect("connection_name")`' in prompt
+    assert "Markdown-only `sp.md(...)` cells" in prompt
+    assert "not require `sp.init()`" in prompt
+    assert "run_stale_cells" not in prompt
+    assert "`run_cells`" in prompt
+    assert "evidence-first" in prompt
+    assert "analysis title based on the\n     user's request" in prompt
+    assert "request-based title, Source request,\n     Source prompt" in prompt
+    assert "not the raw user" in prompt
+    assert "not the shortened `headline`" in prompt
+    assert "markdown-only cell" in prompt
+    assert "Do not add request metadata variables" in prompt
+    assert "do not rename this heading" in prompt
+    assert "`### Gotchas / Caveats`" in prompt
+    assert "`### Confidence Score: high|medium|lower`" in prompt
+    assert "assumptions used" in prompt
+    assert "exclusions/not-included items" in prompt
+    assert "known gaps" in prompt
+    assert "sensitivity" in prompt
+    assert "dbt evidence path" in prompt
+    assert "source tables, filters, validation checks" in prompt
+    assert "issues\n       that would change the confidence label" in prompt
+    assert "repeated finding branch" in prompt
+    assert "`### Finding: ...`" in prompt
+    assert "1-3 sentences explaining" in prompt
+    assert "visible query cell" in prompt
+    assert "visible data preview cell" in prompt
+    assert "visible checks cell" in prompt
+    assert 'Do not write generic "what I did" sections' in prompt
+    assert "Do not separate a finding from" in prompt
+    assert "Example branch shape to imitate" in prompt
+    assert (
+        "Completed GBP transfer revenue was concentrated in FX margin"
+        in prompt
+    )
+    assert "q1_gbp_revenue_df = pd.DataFrame(db.query" in prompt
+    assert "q1_gbp_revenue_df.head(10)" in prompt
+    assert "monthly_revenue_chart" in prompt
+    assert (
+        "Produce charts for every completed Slack/Notion data-analysis request"
+        in prompt
+    )
+    assert (
+        "at least two visible chart outputs for Notion page content" in prompt
+    )
+    assert (
+        "first chart must also be suitable\n   for the Slack/Notion comment thread"
+        in prompt
+    )
+    assert "head of\n     the joined table/query result" in prompt
+    assert "not just a branch list" in prompt
+    assert "finding explanation, exact query, data head/preview" in prompt
+    assert '"Analysis steps"' in prompt
+    assert '"Evidence Trace"' not in prompt
+    assert "Mermaid" not in prompt
+    assert "top-line result" not in prompt
+    assert "dbt evidence confidence label/methodology rationale" in prompt
+    assert "Queries must not be buried" in prompt
+    assert "Previous discussion messages:" in prompt
+    assert "Previous Notion discussion messages:" not in prompt
+    assert "Warm-start context:" in prompt
+    assert "Use warm context first" in prompt
+    assert "Do not broadly glob or read dbt project files" in prompt
+    assert "write and run a small schema-probe\n  notebook cell" in prompt
+    assert (
+        "Final evidence must still come from notebook-executed SignalPilot SDK cells"
+        in prompt
+    )
+
+
+def test_analysis_prompt_injects_warm_context_without_changing_output_contract() -> (
+    None
+):
+    prompt = notion_analysis._analysis_prompt(
+        _record(),
+        _body(),
+        warm_context=(
+            "## Warm Context\n"
+            "- Likely connection: `dev-db`\n"
+            "```sql\nCREATE TABLE public.orders (id INTEGER);\n```"
+        ),
+    )
+
+    assert "Likely connection: `dev-db`" in prompt
+    assert "CREATE TABLE public.orders" in prompt
+    assert (
+        "user-friendly and audit-ready for the notebook chat thread" in prompt
+    )
+    assert "Start with a concise bullet-point answer" in prompt
+    assert "PLAN:" in prompt
+    assert "PROGRESS:" in prompt
+    assert "Never use raw machine" in prompt
+    assert 'status enums such as `"in_progress"`' in prompt
+    assert "FINAL_STATEMENT:" in prompt
+    assert '"confidenceScore": "high"' in prompt
+    assert (
+        'confidenceScore must be exactly "high", "medium", or "lower"'
+        in prompt
+    )
+    assert "number from 0.0 to 1.0" not in prompt
+    assert "numeric probability" in prompt
+    assert "notionCharts" in prompt
+    assert (
+        "Do not include slackMessage, notionComment, finalAnswer, notionCharts"
+        in prompt
+    )
+    assert '"Executive Summary and Explorations" cell' in prompt
+    assert "Aim for two visible,\n  harvestable chart outputs" in prompt
+
+
+def test_analysis_prompt_adds_snapshot_instructions_only_for_deliverables() -> (
+    None
+):
+    answer_prompt = notion_analysis._analysis_prompt(_record(), _body())
+    deliverable_prompt = notion_analysis._analysis_prompt(
+        _record(),
+        _body(),
+        output_mode="deliverable",
+    )
+
+    assert "save_data_snapshot" not in answer_prompt
+    assert "Deliverable snapshot mode" in deliverable_prompt
+    assert "save 1-3 tidy aggregate data snapshots" in deliverable_prompt
+    assert "Do not author\n  HTML" in deliverable_prompt
+    assert "Preserve the normal notebook audit surface" in deliverable_prompt
+
+
+def test_warm_context_truncation_stays_under_cap() -> None:
+    oversized = "x" * (notion_analysis.WARM_CONTEXT_MAX_CHARS + 5000)
+
+    clipped = notion_analysis._clip_warm_context(oversized)
+
+    assert len(clipped) <= notion_analysis.WARM_CONTEXT_MAX_CHARS
+    assert "Warm context truncated" in clipped
+
+
+def test_gateway_json_get_rejects_non_http_gateway_url(monkeypatch) -> None:
+    monkeypatch.setenv("SP_GATEWAY_URL", "file:///tmp/signalpilot-gateway")
+
+    with pytest.raises(RuntimeError, match="absolute http or https"):
+        notion_analysis._gateway_json_get("/api/connections")
+
+
+def test_warm_context_builder_clips_oversized_schema_link(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    def fake_gateway_json_get(
+        path: str,
+        params: dict[str, object] | None = None,
+        **_kwargs: object,
+    ):
+        del params
+        if path == "/api/connections":
+            return [{"name": "dev-db", "db_type": "postgres"}]
+        return {
+            "connection_name": "dev-db",
+            "linked_tables": 10,
+            "total_tables": 10,
+            "ddl": "CREATE TABLE public.large_table (id INTEGER);\n"
+            + ("-- very long schema context\n" * 1000),
+        }
+
+    monkeypatch.setenv("SP_GATEWAY_URL", "http://gateway.test")
+    monkeypatch.setattr(
+        notion_analysis, "_gateway_json_get", fake_gateway_json_get
+    )
+
+    context = notion_analysis._build_analysis_warm_context(
+        object(),
+        _body(),
+        project_root=tmp_path,
+    )
+
+    assert len(context) <= notion_analysis.WARM_CONTEXT_MAX_CHARS
+    assert "Warm context truncated" in context
+
+
+def test_warm_context_uses_gateway_schema_link_and_selected_manifest(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, dict[str, object] | None]] = []
+
+    def fake_gateway_json_get(
+        path: str,
+        params: dict[str, object] | None = None,
+        **_kwargs: object,
+    ):
+        calls.append((path, params))
+        if path == "/api/connections":
+            return [
+                {"name": "other-db", "db_type": "postgres"},
+                {
+                    "name": "dev-db",
+                    "db_type": "postgres",
+                    "database": "warehouse",
+                    "schema_name": "analytics_marts",
+                },
+            ]
+        assert path == "/api/connections/dev-db/schema/link"
+        return {
+            "connection_name": "dev-db",
+            "linked_tables": 1,
+            "total_tables": 42,
+            "token_estimate": 123,
+            "scores": {"analytics_marts.fct_transfers": 9.0},
+            "ddl": (
+                "CREATE TABLE analytics_marts.fct_transfers (\n"
+                "  id INTEGER,\n"
+                "  revenue NUMERIC\n"
+                ");"
+            ),
+            "join_hints": [
+                "analytics_marts.fct_transfers.customer_id -> dim_customers.id"
+            ],
+            "query_hints": [
+                "Use completed transfers only when the question asks for completed revenue."
+            ],
+        }
+
+    manifest_path = tmp_path / "target" / "manifest.json"
+    manifest_path.parent.mkdir()
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "nodes": {
+                    "model.demo.fct_transfers": {
+                        "resource_type": "model",
+                        "name": "fct_transfers",
+                        "alias": "fct_transfers",
+                        "schema": "analytics_marts",
+                        "relation_name": "analytics_marts.fct_transfers",
+                        "description": "Transfer revenue fact table.",
+                        "columns": {
+                            "id": {},
+                            "revenue": {},
+                            "customer_id": {},
+                        },
+                        "depends_on": {"nodes": ["source.demo.raw_transfers"]},
+                    },
+                    "model.demo.dim_unrelated": {
+                        "resource_type": "model",
+                        "name": "dim_unrelated",
+                        "alias": "dim_unrelated",
+                        "schema": "analytics_marts",
+                        "relation_name": "analytics_marts.dim_unrelated",
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("SP_GATEWAY_URL", "http://gateway.test")
+    monkeypatch.setattr(
+        notion_analysis, "_gateway_json_get", fake_gateway_json_get
+    )
+
+    context = notion_analysis._build_analysis_warm_context(
+        object(),
+        _body(),
+        project_root=tmp_path,
+    )
+
+    schema_call = calls[1]
+    assert schema_call[0] == "/api/connections/dev-db/schema/link"
+    assert (
+        schema_call[1]["max_tables"]
+        == notion_analysis.WARM_CONTEXT_SCHEMA_MAX_TABLES
+    )
+    assert notion_analysis.WARM_CONTEXT_SCHEMA_MAX_TABLES <= 12
+    assert "Likely connection: `dev-db`" in context
+    assert "CREATE TABLE analytics_marts.fct_transfers" in context
+    assert "dbt Manifest Hints" in context
+    assert "model.demo.fct_transfers" in context
+    assert "model.demo.dim_unrelated" not in context
+    assert "no dbt file crawl" in context

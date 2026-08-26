@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import os
 import sys
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 # Ensure the gateway package is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+os.environ.setdefault("SP_DEPLOYMENT_MODE", "local")
 
 
 @pytest.fixture

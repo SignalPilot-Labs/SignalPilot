@@ -39,6 +39,16 @@ class TestMiddlewarePublicPaths:
 
         assert "/health" in PUBLIC_PATHS
 
+    def test_slack_events_webhook_is_public(self):
+        from gateway.http import PUBLIC_PATHS
+
+        assert "/slack/events" in PUBLIC_PATHS
+
+    def test_slack_oauth_callback_is_public(self):
+        from gateway.http import PUBLIC_PATHS
+
+        assert "/api/integrations/slack/oauth/callback" in PUBLIC_PATHS
+
     def test_api_endpoints_not_public(self):
         from gateway.http import PUBLIC_PATHS
 

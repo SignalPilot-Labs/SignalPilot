@@ -1,4 +1,4 @@
-"""ClickHouse connector — supports both native TCP (clickhouse-driver) and HTTP (clickhouse-connect).
+"""ClickHouse connector: supports both native TCP (clickhouse-driver) and HTTP (clickhouse-connect).
 
 Supports ClickHouse Cloud, on-premise, and self-hosted instances.
 Falls back from native to HTTP protocol for maximum compatibility.
@@ -6,6 +6,7 @@ Falls back from native to HTTP protocol for maximum compatibility.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from ..base import BaseConnector
@@ -34,6 +35,9 @@ class ClickHouseConnector(BaseConnector):
         self._http_client = None  # clickhouse_connect client (HTTP)
         self._use_http = False
         self._database: str = "default"
+        # PoolManager can give this connector to concurrent callers.
+        # A ClickHouse client rejects concurrent queries. Serialize access to the client.
+        self._conn_lock = asyncio.Lock()
 
     @property
     def _identifier_quote(self) -> str:
@@ -59,7 +63,7 @@ class ClickHouseConnector(BaseConnector):
             "send_receive_timeout": self._query_timeout,
         }
 
-        # SSL support — from connection string or explicit ssl_config
+        # SSL support: from connection string or explicit ssl_config
         if params.get("secure"):
             connect_args["secure"] = True
             connect_args["verify"] = True
@@ -99,11 +103,11 @@ class ClickHouseConnector(BaseConnector):
                 native_error = e
                 self._client = None
 
-        # Fallback: try HTTP protocol (clickhouse-connect) — supports newer ClickHouse versions
+        # Fallback: try HTTP protocol (clickhouse-connect): supports newer ClickHouse versions
         if HAS_CLICKHOUSE_HTTP:
             try:
                 http_port = connect_args.get("port", 9000)
-                # Map native ports → HTTP ports (common convention)
+            # Map native ports to the conventional HTTP ports.
                 native_to_http = {9000: 8123, 9440: 8443, 9100: 8124}
                 if http_port in native_to_http:
                     http_port = native_to_http[http_port]
@@ -255,7 +259,8 @@ class ClickHouseConnector(BaseConnector):
             return []
 
         try:
-            return await self._run_in_thread(_run, effective_timeout, label="ClickHouse")
+            async with self._conn_lock:
+                return await self._run_in_thread(_run, effective_timeout, label="ClickHouse")
         except RuntimeError:
             raise
         except Exception as e:
@@ -279,7 +284,6 @@ class ClickHouseConnector(BaseConnector):
             WHERE database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema')
             ORDER BY database, table, position
         """
-        import asyncio
 
         # Table engine and sorting key info (critical for ClickHouse query optimization)
         table_meta_sql = """
@@ -306,7 +310,7 @@ class ClickHouseConnector(BaseConnector):
 
         import time as _time
 
-        # Run queries sequentially — clickhouse-driver and clickhouse-connect
+        # Run queries sequentially: clickhouse-driver and clickhouse-connect
         # are NOT thread-safe for concurrent queries on a single connection
         def _fetch(query: str):
             try:
@@ -318,7 +322,8 @@ class ClickHouseConnector(BaseConnector):
             return _fetch(sql), _fetch(table_meta_sql), _fetch(col_stats_sql)
 
         t0 = _time.monotonic()
-        col_result, meta_result, stats_result = await asyncio.to_thread(_fetch_all)
+        async with self._conn_lock:
+            col_result, meta_result, stats_result = await asyncio.to_thread(_fetch_all)
         elapsed_ms = (_time.monotonic() - t0) * 1000
 
         rows_data, columns_info = col_result
@@ -397,10 +402,14 @@ class ClickHouseConnector(BaseConnector):
 
     async def _get_sample_values_impl(self, table: str, columns: list[str], limit: int = 5) -> dict[str, list]:
         """Get sample distinct values via single UNION ALL query (1 round trip)."""
-        import time as _time
-
         if (self._client is None and self._http_client is None) or not columns:
             return {}
+        async with self._conn_lock:
+            return await self._sample_values_locked(table, columns, limit)
+
+    async def _sample_values_locked(self, table: str, columns: list[str], limit: int) -> dict[str, list]:
+        import time as _time
+
         try:
             sql = self._build_sample_union_sql(table, columns, limit, quote="`")
             t0 = _time.monotonic()
@@ -434,11 +443,14 @@ class ClickHouseConnector(BaseConnector):
     async def health_check(self) -> bool:
         if self._client is None and self._http_client is None:
             return False
-        try:
-            self._raw_execute("SELECT 1")
-            return True
-        except Exception:
-            return False
+        # PoolManager checks health during each acquisition.
+        # Use the connection lock because another caller can hold the client.
+        async with self._conn_lock:
+            try:
+                self._raw_execute("SELECT 1")
+                return True
+            except Exception:
+                return False
 
     async def close(self) -> None:
         if self._client:

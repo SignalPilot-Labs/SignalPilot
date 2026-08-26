@@ -8,15 +8,15 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { Monitor } from "lucide-react";
-import { SessionListSkeleton } from "@/components/ui/list-skeletons";
+import { SessionListSkeleton } from "~/components/ui/list-skeletons";
 import { useUser, useSession, useReverification } from "@clerk/nextjs";
 import type { SessionWithActivitiesResource } from "@clerk/types";
-import { SectionHeader } from "@/components/ui/section-header";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { useToast } from "@/components/ui/toast";
-import { ERROR_CLASS, NEUTRAL_CLASS } from "@/components/auth/auth-primitives";
-import { isReverificationCancelledError } from "@/lib/security/use-reverify";
-import { formatClerkError } from "@/lib/security/clerk-errors";
+import { SectionHeader } from "~/components/ui/section-header";
+import { ConfirmDialog } from "~/components/ui/confirm-dialog";
+import { useToast } from "~/components/ui/toast";
+import { ERROR_CLASS, NEUTRAL_CLASS } from "~/components/auth/auth-primitives";
+import { isReverificationCancelledError } from "~/lib/security/use-reverify";
+import { formatClerkError } from "~/lib/security/clerk-errors";
 import { SessionRow } from "./session-row";
 
 export function ActiveSessionsSection() {

@@ -1,0 +1,70 @@
+---
+sidebar_position: 5
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
+# Databricks
+
+`databricks-sql-connector`-backed connector for Databricks SQL Warehouses and Unity Catalog. `db_type` is `databricks`. Tier 2.
+
+## Connection config
+
+<MiniCopyBlock
+  label="databricks"
+  plain
+  code={`{\n  "name": "prod-databricks",\n  "db_type": "databricks",\n  "host": "adb-1234567890.azuredatabricks.net",\n  "http_path": "/sql/1.0/warehouses/abcdef123456",\n  "access_token": "...",\n  "catalog": "main",\n  "schema_name": "default"\n}`}
+/>
+
+## Connection fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Connection name. `[a-zA-Z0-9_-]`, max 64 chars. |
+| `db_type` | Yes | `databricks`. |
+| `host` | Yes | Workspace hostname (e.g. `adb-….azuredatabricks.net`), no scheme. |
+| `http_path` | Yes | SQL Warehouse path (e.g. `/sql/1.0/warehouses/abcdef123456`). |
+| `access_token` | One of | Personal Access Token (PAT) — default auth method. |
+| `catalog` | No | Unity Catalog name. |
+| `schema_name` | No | Default schema (mapped to `schema`). |
+| `query_timeout` | No | Statement timeout, seconds (best-effort `SET statement_timeout`). |
+
+**Auth methods:** PAT (default, requires `access_token`); OAuth M2M (service principal — `auth_method: oauth_m2m` with `oauth_client_id` / `oauth_client_secret`); OAuth U2M (browser — `auth_method: oauth_u2m`). OAuth methods require `databricks-sdk`.
+
+## Capabilities
+
+| Capability | Supported | Notes |
+|------------|-----------|-------|
+| Query | Yes | Per-statement timeout via `SET statement_timeout` (best-effort; not all runtimes support it). |
+| Schema introspection | Yes | `information_schema.columns` / `.tables` (Unity Catalog); falls back to `SHOW SCHEMAS` + `SHOW TABLES` + `DESCRIBE TABLE` for legacy Hive metastore. |
+| FK discovery | Yes | `information_schema.table_constraints` joined to `key_column_usage` / `constraint_column_usage` (Unity Catalog only; best-effort). |
+| Primary keys | Yes | `table_constraints` + `constraint_column_usage` (Unity Catalog). |
+| EXPLAIN | Yes | `EXPLAIN FORMATTED`; row estimate parsed from the physical plan. |
+| Cost estimation | Yes (estimated) | `EXPLAIN FORMATTED` row estimate × per-row rate; defaults to 10,000 rows when the plan has no `rowCount`/`numOutputRows`. |
+| Schema stats | Partial | `DESCRIBE DETAIL` per Delta table (capped at 50 tables) for `numFiles` and `sizeInBytes`; no row counts. |
+
+Tier 2.
+
+## Dialect notes / gotchas
+
+- Identifiers are quoted with backticks (`` `col` ``).
+- FK and PK discovery only work on Unity Catalog; Delta tables do not enforce constraints, so they may be absent.
+- Row counts are not collected — `DESCRIBE DETAIL` provides file count and byte size, not row count.
+- Row-count batching and `DESCRIBE DETAIL` are limited to the first 50 tables.
+
+## Blocked functions
+
+No Databricks-specific dangerous-function denylist is defined. Only the universal block applies:
+
+- `load_extension`
+- `install_extension`
+
+All DDL/DML statement types are blocked (`CREATE`, `DROP`, `ALTER`, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `MERGE`, `GRANT`, `REVOKE`, etc.).
+
+## Recommended plugin skill
+
+`sql-workflow` — no dedicated Databricks skill exists. Covers output-shape inference, schema exploration, CTE-based query building, and the verification loop.
+
+## Cloud vs local
+
+Supported in both cloud and local mode. In cloud mode the `host` is validated against the Databricks domain allow-list: `*.cloud.databricks.com`, `*.azuredatabricks.net`, `*.gcp.databricks.com`, `*.databricksapps.com`. Databricks connects over HTTPS, so it skips the TCP SSRF DNS check.

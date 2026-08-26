@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "signalpilot": {
+      "type": "stdio",
+      "command": "bash",
+      "args": [
+        "-c",
+        "cd /app/signalpilot/gateway && exec python3 -c \"from gateway.mcp.server import main; main()\""
+      ],
+      "env": {
+        "PYTHONPATH": "/app/signalpilot/gateway",
+        "SP_DISABLE_SANDBOX": "1",
+        "SP_WORKSPACE_ROOT": "/workdir/dbt"
+      }
+    }
+  }
+}

@@ -1,0 +1,52 @@
+---
+sidebar_position: 3
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
+# Running Multiple MCP Servers
+
+Claude Code and other MCP clients support multiple servers simultaneously. SignalPilot works alongside other MCP servers — filesystem, GitHub, browser, etc.
+
+## Example `.mcp.json`
+
+A project using SignalPilot + a filesystem MCP + a GitHub MCP:
+
+<MiniCopyBlock
+  label="example .mcp.json"
+  plain
+  code={`{\n  "mcpServers": {\n    "signalpilot": {\n      "type": "http",\n      "url": "http://localhost:3300/mcp"\n    },\n    "filesystem": {\n      "type": "stdio",\n      "command": "npx",\n      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/project"]\n    },\n    "github": {\n      "type": "stdio",\n      "command": "npx",\n      "args": ["-y", "@modelcontextprotocol/server-github"],\n      "env": {\n        "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_your_token"\n      }\n    }\n  }\n}`}
+/>
+
+For Claude Code, you can also add servers individually and they combine:
+
+<MiniCopyBlock
+  label="add servers individually"
+  code={`claude mcp add --transport http signalpilot http://localhost:3300/mcp\nclaude mcp add --transport stdio filesystem npx -y @modelcontextprotocol/server-filesystem /path/to/project`}
+/>
+
+## Tool namespace conflicts
+
+Each MCP server declares its tools independently. If two servers expose a tool with the same name (e.g. `query_database`), Claude Code uses the server name as a prefix to disambiguate. SignalPilot's tools are prefixed `signalpilot__` internally in multi-server contexts.
+
+To avoid confusion, SignalPilot tool names are intentionally specific (`query_database`, `list_tables`, `dbt_error_parser`) and unlikely to conflict with general-purpose MCP servers.
+
+## Tool ordering
+
+Claude Code presents all available tools to the model. The model chooses which tool to call based on the task. If you want to steer Claude toward SignalPilot tools for data tasks, mention it in your `CLAUDE.md`:
+
+<MiniCopyBlock
+  label="claude.md example"
+  plain
+  code={`For any database or dbt task, use the SignalPilot MCP tools (signalpilot server).\nAlways call list_database_connections before querying to confirm the right connection is active.`}
+/>
+
+See [CLAUDE.md recipes](/docs/workflows/claude-md-recipes) for more templates.
+
+## Disabling individual tools
+
+If a specific SignalPilot tool conflicts or you want to limit Claude's surface area, you can disable individual tools in Claude Code's MCP settings. This does not affect other tools from the same server.
+
+## Connection health across servers
+
+Use `connection_health` from SignalPilot to verify database connectivity independently of whether the other MCP servers are working. Each server's health is independent.

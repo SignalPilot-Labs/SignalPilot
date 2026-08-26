@@ -1,68 +1,405 @@
-# SignalPilot — self-contained local stack
+# SignalPilot local development stack.
 #
-# Usage: docker compose up --build
+# Run the following command to start the stack: docker compose up --build
 #
-# Starts: Postgres + Gateway + Web + Sandbox
-# No external dependencies, no .env required.
+# The stack starts PostgreSQL, Gateway, Notebook, Web, and Sandbox services.
+# The stack does not require Kubernetes, an .env file, or external services.
+#
+# The PostgreSQL 17 database uses localhost port 5601.
+# The FastAPI gateway uses localhost port 3300.
+# The notebook kernel uses localhost port 2718.
+# The Next.js frontend uses localhost port 3200.
+# The gVisor sandbox is an internal service.
+#
+# Open http://localhost:3200 to start.
 
 name: signalpilot
 
 services:
+  # Database service.
   db:
     image: postgres:17
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-signalpilot}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_dev_only}
-      POSTGRES_DB: ${POSTGRES_DB:-signalpilot}
+      POSTGRES_USER: signalpilot
+      POSTGRES_PASSWORD: changeme_dev_only
+      POSTGRES_DB: signalpilot
     ports:
-      - "5601:5432"
+      - "127.0.0.1:${SP_DB_PORT:-5601}:5432"
     volumes:
       - signalpilot-pg-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-signalpilot}"]
+      test: ["CMD-SHELL", "pg_isready -U signalpilot"]
       interval: 5s
       timeout: 3s
       retries: 10
     restart: unless-stopped
 
+  # Gateway API and proxy.
   gateway:
+    # The durable chat worker reuses this exact image with a different command.
+    image: ${GATEWAY_IMAGE:-signalpilot-gateway:latest}
     build:
       context: ./signalpilot/gateway
       dockerfile: ../../Dockerfile.gateway
     ports:
-      - "3300:3300"
+      # The gateway listens on loopback unless SP_GATEWAY_HOST specifies another host.
+      # Local mode grants all scopes to requests without an API key.
+      # Do not expose local mode to a network.
+      - "${SP_GATEWAY_HOST:-127.0.0.1}:${SP_GATEWAY_PORT:-3300}:3300"
+      # Also bind IPv6 loopback: Windows resolves `localhost` to ::1 first, and
+      # an IPv4-only binding costs ~200ms of fallback on every new connection.
+      - "[::1]:${SP_GATEWAY_PORT:-3300}:3300"
+    env_file:
+      - path: ./.slack.local.env
+        required: false
+      - path: ./.env
+        required: false
+      # CLAUDE_KEY_1 authenticates evaluation run containers.
+      - path: ./benchmark/.env
+        required: false
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-signalpilot}:${POSTGRES_PASSWORD:-changeme_dev_only}@db:5432/${POSTGRES_DB:-signalpilot}
+      DATABASE_URL: postgresql+asyncpg://signalpilot:changeme_dev_only@db:5432/signalpilot
       SP_DATA_DIR: /data
-      SP_SANDBOX_MANAGER_URL: http://sandbox:8080
-      SP_SANDBOX_TOKEN: ${SP_SANDBOX_TOKEN:-}
       SP_DEPLOYMENT_MODE: local
-      SP_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:3200
+      SP_ENCRYPTION_KEY: 5d1aa5ETRcln8vkPWrzDkdfSEuqAua5xcZCWMLMDXmc=
+      SP_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:${SP_WEB_PORT:-3200},http://localhost:${SP_GATEWAY_PORT:-3300},http://localhost:${SP_NOTEBOOK_PORT:-2718}
+      # The notebook uses direct mode without Kubernetes.
+      SP_NOTEBOOK_DIRECT_URL: http://notebook:2718
+      # The proxy sends this value to the shared notebook container with each request.
+      # The notebook writes the value during startup.
+      SP_NOTEBOOK_TOKEN_FILE: /notebook-token/token
+      SP_NOTEBOOK_NETWORK_POLICY: "false"
+      SP_PUBLIC_GATEWAY_URL: http://localhost:${SP_GATEWAY_PORT:-3300}
+      SP_PUBLIC_GATEWAY_PORT: "${SP_GATEWAY_PORT:-3300}"
+      SP_REPOS_DIR: /repos
+      SP_WEB_URL: http://localhost:${SP_WEB_PORT:-3200}
+      SP_FEATURE_STANDALONE_CHAT: "true"
+      SP_FEATURE_CHAT_QUERY_APPROVAL: ${SP_FEATURE_CHAT_QUERY_APPROVAL:-false}
+      SP_FEATURE_CHAT_STRUCTURED_RESULTS: ${SP_FEATURE_CHAT_STRUCTURED_RESULTS:-true}
+      SP_FEATURE_CHAT_SIZE_ROUTER: ${SP_FEATURE_CHAT_SIZE_ROUTER:-true}
+      # Keep Data Chat on the governed SQL/MCP path until notebook analysis is re-enabled explicitly.
+      SP_FEATURE_CHAT_NOTEBOOK_ANALYSIS: ${SP_FEATURE_CHAT_NOTEBOOK_ANALYSIS:-false}
+      SP_FEATURE_CHAT_RUNTIME_RESULTS: ${SP_FEATURE_CHAT_RUNTIME_RESULTS:-true}
+      SP_FEATURE_CHAT_RUNTIME_ARTIFACTS: ${SP_FEATURE_CHAT_RUNTIME_ARTIFACTS:-true}
+      SP_FEATURE_CHAT_DATASET_REFS: ${SP_FEATURE_CHAT_DATASET_REFS:-false}
+      # Dedicated billing key for automated improvement runs (from root .env).
+      SP_IMPROVEMENT_ANTHROPIC_KEY: ${SP_IMPROVEMENT_ANTHROPIC_KEY:-}
+      SP_CHAT_OBJECTS_BUCKET: ${SP_CHAT_OBJECTS_BUCKET:-sp-chat-runtime}
+      SP_CHAT_OBJECTS_S3_ENDPOINT: ${SP_CHAT_OBJECTS_S3_ENDPOINT-http://minio:9000}
+      SP_CHAT_OBJECTS_S3_REGION: ${SP_CHAT_OBJECTS_S3_REGION-}
+      SP_CHAT_OBJECTS_S3_ACCESS_KEY: ${SP_CHAT_OBJECTS_S3_ACCESS_KEY-minioadmin}
+      SP_CHAT_OBJECTS_S3_SECRET_KEY: ${SP_CHAT_OBJECTS_S3_SECRET_KEY-minioadmin}
+      SIGNALPILOT_NOTEBOOK_PUBLIC_URL: http://localhost:${SP_WEB_PORT:-3200}/notebook
+      SIGNALPILOT_DELIVERY_MODEL: ${SIGNALPILOT_DELIVERY_MODEL:-claude-sonnet-4-5-20250929}
+      # The following settings configure the sandbox.
+      SP_SANDBOX_MANAGER_URL: http://sandbox:8080
+      SP_SANDBOX_ENABLED: "true"
+      # Gateway startup requires this value. Local mode does not use it.
+      SP_K8S_HOST: ""
+      KUBECONFIG: ""
+      SP_GATEWAY_NAMESPACE: signalpilot
+      SP_GATEWAY_POD_SELECTOR: "app=signalpilot-gateway"
+      # MinIO simulates S3 for local evaluation uploads.
+      # Mailpit simulates local email delivery.
+      SP_EVAL_UPLOADS_BUCKET: sp-eval-uploads
+      SP_EVAL_UPLOADS_S3_ENDPOINT: http://minio:9000
+      # The browser must reach presigned part URLs without Docker Compose DNS.
+      SP_EVAL_UPLOADS_S3_PUBLIC_ENDPOINT: http://localhost:9000
+      SP_EVAL_UPLOADS_S3_ACCESS_KEY: minioadmin
+      SP_EVAL_UPLOADS_S3_SECRET_KEY: minioadmin
+      SP_EVAL_UPLOADS_NOTIFY_EMAIL: evals@signalpilot.dev
+      # Runtime v2 workspace store: the S3-backed file plane (MinIO locally).
+      SP_WORKSPACE_S3_BUCKET: ${SP_WORKSPACE_S3_BUCKET:-sp-workspace}
+      SP_WORKSPACE_S3_ENDPOINT: ${SP_WORKSPACE_S3_ENDPOINT-http://minio:9000}
+      SP_WORKSPACE_S3_REGION: ${SP_WORKSPACE_S3_REGION-}
+      SP_WORKSPACE_S3_ACCESS_KEY: ${SP_WORKSPACE_S3_ACCESS_KEY-minioadmin}
+      SP_WORKSPACE_S3_SECRET_KEY: ${SP_WORKSPACE_S3_SECRET_KEY-minioadmin}
+      SP_EVAL_UPLOADS_SMTP_HOST: mailpit
+      SP_EVAL_UPLOADS_SMTP_PORT: "1025"
+      SP_EVAL_UPLOADS_MAX_MB: "500"
+      # The gateway starts Claude CLI containers for evaluation runs.
+      # The gateway uses the Docker socket to start the containers.
+      # Each container connects to this gateway through MCP.
+      SP_EVAL_RUNNER_IMAGE: sp-eval-runner:latest
+      SP_EVAL_SETUP_IMAGE: sp-eval-setup:latest
+      SP_EVAL_DOCKER_NETWORK: signalpilot_eval_runtime
+      SP_EVAL_MCP_URL: http://gateway:3300/mcp
+      # MinIO stores evaluation transcripts, setup logs, captures, and exports.
+      SP_EVAL_S3_BUCKET: sp-eval-runs
+      SP_EVAL_S3_ENDPOINT: http://minio:9000
+      SP_EVAL_S3_RUNNER_ENDPOINT: http://eval-object-proxy:9000
+      SP_EVAL_S3_ACCESS_KEY: minioadmin
+      SP_EVAL_S3_SECRET_KEY: minioadmin
+      # Mailpit receives local regression notifications. SES receives cloud notifications.
+      SP_EVAL_SMTP_HOST: mailpit
+      SP_EVAL_SMTP_PORT: "1025"
+      # The local branch provider copies the parent PostgreSQL database for each write task.
+      # Create the clean parent database before a write task starts.
+      SP_EVAL_PG_ADMIN_DSN: ${SP_EVAL_PG_ADMIN_DSN:-}
+      SP_EVAL_PG_PARENT_DB: ${SP_EVAL_PG_PARENT_DB:-}
+      # This allowlist prevents MCP DNS rebinding.
+      # Evaluation containers use the gateway network alias.
+      SP_MCP_ALLOWED_HOSTS: gateway
+      SP_EVAL_CLAUDE_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # PipelineProof uses a PAT and a default connection for local verification.
+      # Cloud deployments use GitHub App installation tokens.
+      SP_GITHUB_BOT_TOKEN: ${SP_GITHUB_BOT_TOKEN:-}
+      SP_GITHUB_BOT_CONNECTION: ${SP_GITHUB_BOT_CONNECTION:-}
+      SP_GITHUB_WEBHOOK_SECRET: ${SP_GITHUB_WEBHOOK_SECRET:-}
+      # Setup containers use host paths for bind mounts.
+      # Docker resolves these paths on the host.
+      # SP_EVAL_HOST_ROOT comes from .env.
+      SP_EVAL_PROJECTS_HOST_DIR: ${SP_EVAL_PROJECTS_HOST_DIR:-}
+      SP_EVAL_SETUP_HOST_ROOT: ${SP_EVAL_HOST_ROOT:-}
+      # The /demo-db page creates one Xata branch per workspace.
+      # Each branch uses the shared demonstration warehouse.
+      # The root .env file supplies these values.
+      # The gateway stores the organization XATA_KEY and resolves it for each request.
+      # Workspace connection records do not contain XATA_KEY.
+      XATA_KEY: ${XATA_KEY:-}
+      SP_DEMO_XATA_ORG: ${SP_DEMO_XATA_ORG:-}
+      SP_DEMO_CATALOG: ${SP_DEMO_CATALOG:-}
+      SP_DEMO_XATA_API_URL: ${SP_DEMO_XATA_API_URL:-https://api.xata.tech}
+    group_add:
+      - "0"  # docker socket access (root group inside Docker Desktop VM)
     volumes:
       - signalpilot-data:/data
       - signalpilot-shared:/shared
+      - signalpilot-gateway-secrets:/gateway-secrets
+      - signalpilot-repos:/repos
+      - signalpilot-notebook-token:/notebook-token:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Local evaluation project sets, mounted read-only.
+      # Point SP_EVAL_PROJECTS_HOST_DIR at a directory of <name>/project.env sets.
+      # The default is an empty local directory, so the stack starts without one.
+      - ${SP_EVAL_PROJECTS_HOST_DIR:-./.eval-projects}:/eval-projects:ro
     command: >
-      sh -c "python3 -c \"from gateway.store import get_local_api_key; open('/shared/local_api_key','w').write(get_local_api_key())\" &&
+      sh -c "python3 -m gateway.dev_local_api_key /shared/local_api_key &&
              uvicorn gateway.main:app --host 0.0.0.0 --port 3300"
     depends_on:
       db:
         condition: service_healthy
+      notebook:
+        condition: service_healthy
       sandbox:
         condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3300/health', timeout=2).read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - default
+      - eval-runtime
+
+  # Evaluation containers receive presigned project URLs through this read-only proxy.
+  # The eval-runtime network cannot access MinIO.
+  eval-object-proxy:
+    image: nginx:1.27-alpine
+    depends_on:
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./deploy/eval-object-proxy.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - default
+      - eval-runtime
     restart: unless-stopped
 
-  web:
+
+  # ─── Durable standalone-chat worker ───────────────────────────
+  gateway-chat-worker:
+    # Built once by the gateway service; only the process command differs.
+    image: ${GATEWAY_IMAGE:-signalpilot-gateway:latest}
+    env_file:
+      - path: ./.slack.local.env
+        required: false
+      - path: ./benchmark/.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://signalpilot:changeme_dev_only@db:5432/signalpilot
+      SP_DATA_DIR: /data
+      SP_DEPLOYMENT_MODE: local
+      SP_ENCRYPTION_KEY: 5d1aa5ETRcln8vkPWrzDkdfSEuqAua5xcZCWMLMDXmc=
+      SP_FEATURE_STANDALONE_CHAT: "true"
+      SP_FEATURE_CHAT_QUERY_APPROVAL: ${SP_FEATURE_CHAT_QUERY_APPROVAL:-false}
+      SP_FEATURE_CHAT_STRUCTURED_RESULTS: ${SP_FEATURE_CHAT_STRUCTURED_RESULTS:-true}
+      SP_FEATURE_CHAT_SIZE_ROUTER: ${SP_FEATURE_CHAT_SIZE_ROUTER:-true}
+      # Must match the gateway so workers cannot route Data Chat runs into notebook analysis.
+      SP_FEATURE_CHAT_NOTEBOOK_ANALYSIS: ${SP_FEATURE_CHAT_NOTEBOOK_ANALYSIS:-false}
+      SP_FEATURE_CHAT_RUNTIME_RESULTS: ${SP_FEATURE_CHAT_RUNTIME_RESULTS:-true}
+      SP_FEATURE_CHAT_RUNTIME_ARTIFACTS: ${SP_FEATURE_CHAT_RUNTIME_ARTIFACTS:-true}
+      SP_FEATURE_CHAT_DATASET_REFS: ${SP_FEATURE_CHAT_DATASET_REFS:-false}
+      # Dedicated billing key for automated improvement runs (from root .env).
+      SP_IMPROVEMENT_ANTHROPIC_KEY: ${SP_IMPROVEMENT_ANTHROPIC_KEY:-}
+      SP_CHAT_OBJECTS_BUCKET: ${SP_CHAT_OBJECTS_BUCKET:-sp-chat-runtime}
+      SP_CHAT_OBJECTS_S3_ENDPOINT: ${SP_CHAT_OBJECTS_S3_ENDPOINT-http://minio:9000}
+      SP_CHAT_OBJECTS_S3_REGION: ${SP_CHAT_OBJECTS_S3_REGION-}
+      SP_CHAT_OBJECTS_S3_ACCESS_KEY: ${SP_CHAT_OBJECTS_S3_ACCESS_KEY-minioadmin}
+      SP_CHAT_OBJECTS_S3_SECRET_KEY: ${SP_CHAT_OBJECTS_S3_SECRET_KEY-minioadmin}
+      CHAT_WORKER_CONCURRENCY: "4"
+      SP_NOTEBOOK_DIRECT_URL: http://notebook:2718
+      SP_NOTEBOOK_TOKEN_FILE: /notebook-token/token
+      SP_NOTEBOOK_NETWORK_POLICY: "false"
+      SP_PUBLIC_GATEWAY_URL: http://gateway:3300
+      SP_PUBLIC_GATEWAY_PORT: "3300"
+      SP_REPOS_DIR: /repos
+      SP_WEB_URL: http://localhost:${SP_WEB_PORT:-3200}
+      SP_K8S_HOST: ""
+      KUBECONFIG: ""
+      SP_GATEWAY_NAMESPACE: signalpilot
+      SP_GATEWAY_POD_SELECTOR: "app=signalpilot-gateway"
+    volumes:
+      - signalpilot-data:/data
+      - signalpilot-gateway-secrets:/gateway-secrets
+      - signalpilot-repos:/repos:ro
+      - signalpilot-notebook-token:/notebook-token:ro
+    command: signalpilot-chat-worker
+    depends_on:
+      db:
+        condition: service_healthy
+      gateway:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ─── Notebook Server ──────────────────────────────────────────
+  notebook:
     build:
-      context: ./signalpilot/web
-      dockerfile: ../../Dockerfile.web
+      context: ./signalpilot/notebook-server
+      dockerfile: Dockerfile
     ports:
-      - "3200:3200"
+      - "127.0.0.1:${SP_NOTEBOOK_PORT:-2718}:2718"
+      # IPv6 loopback too — see the gateway ports note.
+      - "[::1]:${SP_NOTEBOOK_PORT:-2718}:2718"
+    env_file:
+      - path: ./.slack.local.env
+        required: false
+      - path: ./.env
+        required: false
+    entrypoint:
+      - sh
+      - -c
+      - |
+        export SP_API_KEY=$$(cat /shared/local_api_key 2>/dev/null || echo '')
+        python -m signalpilot._server.local_token /notebook-token/token
+        exec python -m signalpilot edit \
+          --host 0.0.0.0 --port 2718 --headless \
+          --token-password-file /notebook-token/token --no-skew-protection \
+          --allow-origins http://localhost:${SP_WEB_PORT:-3200},http://localhost:${SP_GATEWAY_PORT:-3300} \
+          /workspace
+    environment:
+      # Set a notebook authentication token to access port 2718 directly.
+      # The container generates a token during startup when this value is absent.
+      SP_NOTEBOOK_TOKEN: ${SP_NOTEBOOK_TOKEN:-}
+      SP_LOG_LEVEL: "10"
+      SP_GATEWAY_URL: http://gateway:3300
+      SP_GATEWAY_INTERNAL_URL: http://gateway:3300
+      SP_WEB_URL: http://localhost:${SP_WEB_PORT:-3200}
+      CLAUDE_CONFIG_DIR: ${CLAUDE_CONFIG_DIR:-/home/notebook/.claude}
+      SIGNALPILOT_ANALYSIS_AGENT_MODEL: ${SIGNALPILOT_ANALYSIS_AGENT_MODEL:-claude-sonnet-4-5-20250929}
+      # Runtime v2 file plane: set SP_NOTEBOOK_WORKSPACE_MODE=s3 (plus a project
+      # id) to serve files from the gateway's S3 workspace store instead of the
+      # local volume — the cloud behavior, testable locally.
+      SP_WORKSPACE_MODE: ${SP_NOTEBOOK_WORKSPACE_MODE:-}
+      SP_PROJECT_ID: ${SP_NOTEBOOK_PROJECT_ID:-}
+      SP_BRANCH: ${SP_NOTEBOOK_BRANCH:-main}
+    volumes:
+      - signalpilot-workspace:/workspace
+      - signalpilot-shared:/shared:ro
+      # The notebook writes this volume. The gateway mounts it as read-only.
+      # Both containers use user identifier 10001.
+      # This separate volume prevents notebook write access to the gateway local_api_key.
+      - signalpilot-notebook-token:/notebook-token
+      - ${CLAUDE_HOST_CONFIG_DIR:-${HOME:-~}/.config/signalpilot/claude-code-docker}:/home/notebook/.claude
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:2718/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  # Web frontend.
+  web:
+    image: ${WEB_IMAGE:-signalpilot-web:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    ports:
+      # The web service listens on loopback unless SP_WEB_HOST specifies another host.
+      # Local mode grants all scopes to requests without an API key.
+      # Do not expose local mode to a network.
+      - "${SP_WEB_HOST:-127.0.0.1}:${SP_WEB_PORT:-3200}:3200"
+      # IPv6 loopback too — see the gateway ports note.
+      - "[::1]:${SP_WEB_PORT:-3200}:3200"
+    environment:
+      SP_GATEWAY_INTERNAL_URL: http://gateway:3300
     volumes:
       - signalpilot-shared:/shared:ro
     depends_on:
-      - gateway
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3200').then(r=>process.exit(r.status < 500 ? 0 : 1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
     restart: unless-stopped
 
+  # Local evaluation upload services.
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "127.0.0.1:9000:9000"   # S3 API
+      - "[::1]:9000:9000"       # IPv6 loopback — see the gateway ports note
+      - "127.0.0.1:9001:9001"   # console (minioadmin/minioadmin)
+    volumes:
+      - signalpilot-minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # This service creates the eval-uploads bucket and its seven-day lifecycle rule.
+  # The service exits after it creates the resources.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc mb --ignore-existing local/sp-eval-uploads &&
+        mc mb --ignore-existing local/sp-eval-runs &&
+        mc mb --ignore-existing local/sp-chat-runtime &&
+        mc mb --ignore-existing local/sp-workspace &&
+        mc ilm rule add local/sp-eval-uploads --prefix "uploads/" --expire-days 7 || true
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "127.0.0.1:8025:8025"   # inbox UI
+    restart: unless-stopped
+
+  # gVisor sandbox service.
   sandbox:
     build:
       context: ./sp-sandbox
@@ -81,13 +418,33 @@ services:
     pids_limit: 256
     environment:
       SP_GATEWAY_URL: http://gateway:3300
-      SP_SANDBOX_TOKEN: ${SP_SANDBOX_TOKEN:-}
       SP_MAX_VMS: "10"
     volumes:
-      - ${HOST_DATA_DIR:-~}:/host-data:ro
+      # Sandboxed DuckDB and SQLite map host file paths to /host-data/<user>.
+      # Supported host roots are C:/Users, /Users, and /home.
+      # Set SP_HOST_DATA_DIR to the host root to enable host file queries.
+      # An empty named volume disables host file access when the variable is absent.
+      - ${SP_HOST_DATA_DIR:-signalpilot-hostdata-empty}:/host-data:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
 
 volumes:
   signalpilot-pg-data:
+  signalpilot-minio-data:
   signalpilot-data:
   signalpilot-shared:
+  signalpilot-gateway-secrets:
+  signalpilot-repos:
+  signalpilot-workspace:
+  signalpilot-notebook-token:
+  # This empty volume disables host file access when SP_HOST_DATA_DIR is absent.
+  signalpilot-hostdata-empty:
+
+networks:
+  eval-runtime:
+    name: signalpilot_eval_runtime

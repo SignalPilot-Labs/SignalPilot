@@ -1,0 +1,252 @@
+---
+sidebar_position: 3
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+
+# Self-Hosting (Production / Cloud Mode)
+
+This guide covers running SignalPilot yourself in **cloud mode** — a multi-tenant
+deployment with Clerk authentication and sandboxed notebook pods on Kubernetes.
+
+If you want the local single-node Docker stack instead, see [Install](/docs/setup/install).
+If you want a fully managed gateway, see [SignalPilot Cloud](/docs/setup/cloud).
+
+## 1. Overview
+
+A production deployment has two parts:
+
+- **Gateway** — a single container (FastAPI + MCP server) that owns connections,
+  governance, audit logs, auth, and the Kubernetes orchestrator. It runs behind a
+  TLS reverse proxy.
+- **Notebook pods** — short-lived, per-session pods scheduled by the gateway onto a
+  Kubernetes cluster. Each runs user/agent-supplied code, so each is wrapped in a
+  kernel-level sandbox (gVisor `runsc`) and isolated by per-org namespace plus
+  NetworkPolicy.
+
+**Cloud mode vs local mode** is selected by `SP_DEPLOYMENT_MODE`:
+
+| | `local` | `cloud` |
+|---|---|---|
+| Auth | local API key | Clerk JWT, multi-tenant |
+| Notebooks | one direct container (`SP_NOTEBOOK_DIRECT_URL`) | sandboxed pods on Kubernetes |
+| Hardening | relaxed | `assert_cloud_hardening_intact()` enforced at boot |
+| Image refs | any tag | digest-pinned (`@sha256:…`) |
+
+In cloud mode the gateway runs `assert_cloud_hardening_intact()` during startup and
+**refuses to boot** if any security kill-switch is disabled. The rules are
+reproduced verbatim in [section 3](#3-required-environment-variables).
+
+## 2. Prerequisites
+
+- **Docker** and a container **registry** you control (`your-registry`) for the
+  gateway and notebook images.
+- A **PostgreSQL** database for gateway persistence (connections, audit logs, etc.).
+- A **Kubernetes cluster** for notebook pods, with:
+  - a **NetworkPolicy-enforcing CNI** (Calico, Cilium, AWS VPC CNI policy add-on,
+    or GKE Dataplane V2). Without one, cross-org isolation policies have no effect.
+  - a **sandbox RuntimeClass** installed on every node (gVisor `runsc`, or Kata).
+  - **IMDSv2 hop-limit=1** on node launch templates.
+  - a **`podPidsLimit`** (e.g. 4096) on every node (fork-bomb containment).
+  - the gateway **RBAC** and **admission policies** applied.
+- A **TLS reverse proxy** (Caddy, nginx, or an ingress) terminating HTTPS in front
+  of the gateway.
+
+The Kubernetes setup is the single source of truth in
+[`deploy/k8s/README.md`](https://github.com/SignalPilot-Labs/SignalPilot/blob/main/deploy/k8s/README.md)
+— follow it for CNI, RBAC, RuntimeClass, IMDS, PID-limit, and admission-policy
+details. This page only summarizes the gateway-facing configuration.
+
+## 3. Required environment variables
+
+In cloud mode the gateway validates the following at startup. Anything that
+violates a kill-switch causes a `RuntimeError: Cloud mode hardening violations: […].
+Refusing to boot.` (the error lists variable **names** only, never values).
+
+| Variable | Required value | Why |
+|---|---|---|
+| `SP_DEPLOYMENT_MODE` | `cloud` | Enables cloud-mode paths and all checks below. |
+| `SP_NOTEBOOK_RUNTIME_CLASS` | non-empty, e.g. `gvisor` | Sandbox RuntimeClass for notebook pods. Empty string is forbidden in cloud mode. |
+| `SP_NOTEBOOK_IMAGE` | `your-registry/notebook@sha256:<64-hex>` | Notebook pod image. **Must be a digest reference** in cloud mode; floating tags (`:latest`) are rejected. See below. |
+| `SP_ALLOWED_ORIGINS` | comma-separated, all `https://` (or `http://localhost` / `http://127.0.0.1`) | CORS allow-list. Must be set; **no wildcards** (`*`); no plain non-loopback `http://`. |
+| `SP_NOTEBOOK_NETWORK_POLICY` | `true` (default) | Setting `false` logs a loud cloud warning but does **not** block boot — needed where gVisor and the AWS VPC CNI NetworkPolicy agent don't compose. IMDS credential theft stays blocked via node IMDS hop-limit + the always-on block-imds-egress policy. |
+| `SP_NOTEBOOK_DIRECT_URL` | **must be empty/unset** | Any non-empty value is forbidden in cloud mode (direct-notebook mode is local-only). |
+| `SP_DISABLE_SANDBOX` | **must not be** `true`/`1`/`yes` | Disabling the sandbox is forbidden. |
+| `CLERK_JWT_AUDIENCE` | optional (leave unset) | See [section 4](#4-clerk-authentication). Optional request-time `aud` check; the gateway boots without it. |
+| `SP_ENCRYPTION_KEY` | Fernet key (base64) | Encrypts stored connection credentials. Generate once; rotating it invalidates stored secrets. |
+| `DATABASE_URL` | `postgresql+asyncpg://user:pass@host:5432/db` | Gateway persistence. |
+| `SP_PUBLIC_GATEWAY_URL` | `https://gateway.example.com` | Gateway URL injected into pods. The local default `http://gateway:3300` is rejected in cloud mode. |
+| `SP_NOTEBOOK_UPSTREAM_MODE` | `pod_ip` | Required for the Kubernetes orchestrator. |
+
+See `deploy/k8s/README.md` section (d) for the full set of orchestrator-only
+variables (`SP_PUBLIC_GATEWAY_PORT`, `SP_GATEWAY_NAMESPACE`,
+`SP_GATEWAY_POD_SELECTOR`, `SP_GATEWAY_SERVICE_ACCOUNT`,
+`SP_NOTEBOOK_NAMESPACE_PREFIX`, `SP_NOTEBOOK_EGRESS_CIDR`,
+`SP_SESSION_JWT_TTL_SECONDS`).
+
+### Image digest requirement
+
+In cloud mode `SP_NOTEBOOK_IMAGE` must match `@sha256:<64 lowercase hex>`. This
+guarantees pod image immutability — a floating tag could be re-pushed under you.
+Resolve the digest after pushing:
+
+<MiniCopyBlock
+  label="resolve image digest"
+  code={`crane digest your-registry/notebook:VERSION\n# or\ndocker buildx imagetools inspect your-registry/notebook:VERSION`}
+/>
+
+Then set the pinned reference:
+
+<MiniCopyBlock
+  label="pinned notebook image"
+  plain
+  code={`SP_NOTEBOOK_IMAGE=your-registry/notebook@sha256:<64-hex>`}
+/>
+
+### Generate the Fernet encryption key
+
+<MiniCopyBlock
+  label="generate fernet key"
+  code={`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`}
+/>
+
+Store the output as `SP_ENCRYPTION_KEY`. Treat it as a long-lived secret — losing it
+makes stored connection credentials undecryptable.
+
+## 4. Clerk authentication
+
+Cloud mode authenticates users with [Clerk](https://clerk.com) JWTs. From the Clerk
+dashboard (your application → API Keys), collect:
+
+| Variable | Source |
+|---|---|
+| `CLERK_PUBLISHABLE_KEY` | Clerk dashboard → API Keys (publishable key). |
+| `CLERK_SECRET_KEY` | Clerk dashboard → API Keys (secret key). |
+| `CLERK_JWT_AUDIENCE` | Optional — only set it if your tokens carry an `aud` (see note). |
+| `SP_EXPECTED_AZP` | Your app origin(s), e.g. `https://app.yourdomain.com`. **Recommended.** |
+
+**What the gateway enforces (current code):**
+
+- `CLERK_JWT_AUDIENCE` is **optional**. Clerk's default *session* tokens do not carry
+  an `aud` claim, so the gateway boots without this set and skips audience
+  verification. **Leave it unset** unless you have configured a Clerk **JWT template**
+  (or session-token claims) that emits an `aud` — only then set it, and
+  `gateway/auth/user.py` will validate `aud` against it at request time.
+- `SP_EXPECTED_AZP` is the **authorized-party** check and the recommended binding for
+  Clerk session tokens (which carry `azp`, not `aud`). When set, the gateway rejects
+  any token whose `azp` claim is not in this comma-separated allow-list. Set it to
+  your front-end origin(s) (e.g. `https://app.yourdomain.com`) to bind tokens to your
+  app.
+- `SP_JWT_LEEWAY` (default `30`) is the allowed clock-skew in seconds for `exp`/`iat`.
+
+## 5. Deploy the gateway
+
+Build and push the gateway image, then run it with the cloud-mode environment. The
+gateway listens on port `3300`; terminate TLS in front of it.
+
+<MiniCopyBlock
+  label="build and push the gateway image"
+  code={`docker build -f Dockerfile.gateway -t your-registry/gateway:VERSION signalpilot/gateway/\ndocker push your-registry/gateway:VERSION`}
+/>
+
+<MiniCopyBlock
+  label="run the gateway (cloud mode)"
+  code={`docker run -d --name signalpilot-gateway -p 127.0.0.1:3300:3300 \\\n  -e SP_DEPLOYMENT_MODE=cloud \\\n  -e DATABASE_URL='postgresql+asyncpg://user:pass@db.example.com:5432/signalpilot' \\\n  -e SP_ENCRYPTION_KEY='<fernet-key>' \\\n  -e SP_ALLOWED_ORIGINS='https://app.yourdomain.com' \\\n  -e SP_PUBLIC_GATEWAY_URL='https://gateway.example.com' \\\n  -e SP_NOTEBOOK_UPSTREAM_MODE=pod_ip \\\n  -e SP_NOTEBOOK_RUNTIME_CLASS=gvisor \\\n  -e SP_NOTEBOOK_IMAGE='your-registry/notebook@sha256:<64-hex>' \\\n  -e SP_NOTEBOOK_NETWORK_POLICY=true \\\n  -e CLERK_PUBLISHABLE_KEY='<pk>' \\\n  -e CLERK_SECRET_KEY='<sk>' \\\n  -e SP_EXPECTED_AZP='https://app.yourdomain.com' \\\n  your-registry/gateway:VERSION`}
+/>
+
+Bind the container port to loopback (`127.0.0.1:3300`) and put HTTPS in front of it.
+Example Caddy config:
+
+<MiniCopyBlock
+  label="caddy reverse proxy (tls)"
+  plain
+  code={`gateway.example.com {\n  reverse_proxy 127.0.0.1:3300\n}`}
+/>
+
+`SP_ALLOWED_ORIGINS` and `SP_PUBLIC_GATEWAY_URL` must use the **public HTTPS** origin,
+not the internal container address. The gateway must run as the
+`signalpilot-gateway` ServiceAccount (see RBAC in section 6) so it can manage org
+namespaces and notebook pods.
+
+## 6. Deploy notebook orchestration
+
+The notebook side runs on Kubernetes. Follow `deploy/k8s/README.md` in order — the
+steps below are the gateway-relevant summary.
+
+1. **Install a NetworkPolicy-enforcing CNI** (section a). Verify enforcement with the
+   cross-namespace `nc` test in section (f).
+2. **Apply the gateway RBAC** so it can create per-org namespaces and pods:
+
+<MiniCopyBlock
+  label="apply gateway rbac"
+  code={`kubectl create namespace signalpilot --dry-run=client -o yaml | kubectl apply -f -\nkubectl apply -f deploy/k8s/gateway-rbac.yaml`}
+/>
+
+3. **Install the sandbox RuntimeClass** on every node and apply the resource. gVisor
+   is the recommended runtime; the gateway will not start in cloud mode without
+   `SP_NOTEBOOK_RUNTIME_CLASS` set, and the `require-gvisor` admission policy rejects
+   any notebook pod that is not sandboxed:
+
+<MiniCopyBlock
+  label="gvisor runtimeclass"
+  plain
+  code={`apiVersion: node.k8s.io/v1\nkind: RuntimeClass\nmetadata:\n  name: gvisor\nhandler: runsc`}
+/>
+
+4. **Build, push, and digest-pin the notebook image**, then set `SP_NOTEBOOK_IMAGE`
+   to the `@sha256:…` reference (see section 3). Floating tags are rejected at boot.
+5. **Apply the admission policies** (defense-in-depth). Use the
+   `ValidatingAdmissionPolicy` variants on vanilla k8s 1.30+, or the Kyverno variants:
+
+<MiniCopyBlock
+  label="apply admission policies"
+  code={`kubectl apply -f deploy/k8s/admission/require-gvisor-validatingadmissionpolicy.yaml\nkubectl apply -f deploy/k8s/admission/restrict-pod-exec-validatingadmissionpolicy.yaml`}
+/>
+
+6. **Enforce node-level hardening**: IMDSv2 `HttpTokens=required` with
+   `HttpPutResponseHopLimit=1`, and `podPidsLimit` on every node. See
+   `deploy/k8s/README.md` sections (e) and (h).
+
+Workspaces are git-backed; pod-local state is ephemeral, so no PersistentVolume or
+shared filesystem is required.
+
+## 7. Secrets management
+
+- **Never bake secrets into images.** `SP_ENCRYPTION_KEY`, `CLERK_SECRET_KEY`,
+  `DATABASE_URL`, and stored connection credentials must be injected at runtime.
+- Use a secret store — Kubernetes Secrets (with encryption at rest / a KMS provider),
+  AWS SSM Parameter Store, HashiCorp Vault, or your platform's equivalent — and mount
+  them as environment variables.
+- The gateway never logs secret **values**; hardening violations report variable
+  **names** only. Keep that property: do not echo env into logs.
+- Rotating `SP_ENCRYPTION_KEY` invalidates all stored connection credentials. Plan
+  rotation as a re-entry of connections, not a hot swap.
+
+## 8. Verification
+
+1. **Health check** — confirm the gateway is up behind TLS:
+
+<MiniCopyBlock
+  label="health check"
+  code={`curl -sf https://gateway.example.com/health`}
+/>
+
+2. **Create a connection** — authenticate with a Clerk-issued token and add a
+   database (see [Connect a Database](/docs/connect-database) for per-dialect payloads):
+
+<MiniCopyBlock
+  label="create a connection"
+  code={`curl -X POST https://gateway.example.com/api/connections \\\n  -H "Authorization: Bearer <clerk-jwt>" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "name": "prod-postgres",\n    "db_type": "postgresql",\n    "host": "db.example.com",\n    "port": 5432,\n    "database": "analytics",\n    "username": "readonly",\n    "password": "..."\n  }'`}
+/>
+
+3. **Run a query** — point an MCP client at the gateway and call `query_database`, or
+   verify reachability of all connections with `connection_health`:
+
+<MiniCopyBlock
+  label="connect an mcp client"
+  code={`claude mcp add --transport http signalpilot https://gateway.example.com/mcp \\\n  --header "Authorization: Bearer <clerk-jwt>"`}
+/>
+
+If the gateway fails to start, check the logs for
+`Cloud mode hardening violations: […]` — the listed variable names map directly to
+the rules in [section 3](#3-required-environment-variables).

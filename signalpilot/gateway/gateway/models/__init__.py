@@ -32,7 +32,23 @@ from .connections import (
     SSHTunnelConfig,
     SSLConfig,
 )
+from .deliverable_theme import DeliverableTheme, ThemeColors
+from .knowledge import (
+    KnowledgeCategory,
+    KnowledgeDoc,
+    KnowledgeDocCreate,
+    KnowledgeDocUpdate,
+    KnowledgeEdit,
+    KnowledgeScope,
+    KnowledgeStatus,
+    KnowledgeUsage,
+)
 from .mcp import MCPToolCall
+from .notion import (
+    NotionIntegrationCreate,
+    NotionIntegrationInfo,
+    NotionIntegrationUpdate,
+)
 from .projects import (
     ProjectCreate,
     ProjectInfo,
@@ -68,10 +84,14 @@ __all__ = [
     "ConnectionInfo",
     "ConnectionUpdate",
     "DBType",
+    "DeliverableTheme",
     "ExecuteRequest",
     "ExecuteResult",
     "GatewaySettings",
     "MCPToolCall",
+    "NotionIntegrationCreate",
+    "NotionIntegrationInfo",
+    "NotionIntegrationUpdate",
     "ProjectCreate",
     "ProjectInfo",
     "ProjectSource",
@@ -83,4 +103,13 @@ __all__ = [
     "SandboxCreate",
     "SandboxInfo",
     "SandboxProvider",
+    "ThemeColors",
+    "KnowledgeCategory",
+    "KnowledgeDoc",
+    "KnowledgeDocCreate",
+    "KnowledgeDocUpdate",
+    "KnowledgeEdit",
+    "KnowledgeScope",
+    "KnowledgeStatus",
+    "KnowledgeUsage",
 ]

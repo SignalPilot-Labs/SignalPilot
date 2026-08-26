@@ -1,0 +1,667 @@
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import {
+  CheckIcon,
+  ChevronDownCircleIcon,
+  ChevronRightCircleIcon,
+  ClipboardCopyIcon,
+  CodeIcon,
+  CommandIcon,
+  DatabaseIcon,
+  DatabaseZapIcon,
+  DiamondPlusIcon,
+  DownloadIcon,
+  EditIcon,
+  EyeOffIcon,
+  FastForwardIcon,
+  FileIcon,
+  Files,
+  FolderDownIcon,
+  GlobeIcon,
+  HammerIcon,
+  Home,
+  ImageIcon,
+  KeyboardIcon,
+  LayoutTemplateIcon,
+  NotebookIcon,
+  NotebookPenIcon,
+  PanelLeftIcon,
+  PlayIcon,
+  PowerSquareIcon,
+  PresentationIcon,
+  SettingsIcon,
+  Share2Icon,
+  TestTubeIcon,
+  Undo2Icon,
+  WrenchIcon,
+  XCircleIcon,
+  ZapIcon,
+} from "lucide-react";
+import { settingDialogAtom } from "@/components/app-config/state";
+import { MarkdownIcon } from "@/components/editor/cell/code/icons";
+import { useImperativeModal } from "@/components/modal/ImperativeModal";
+import { renderShortcut } from "@/components/shortcuts/renderShortcut";
+import { ShareStaticNotebookModal } from "@/components/static-html/share-modal";
+import { toast } from "@/components/ui/use-toast";
+import {
+  canUndoDeletesAtom,
+  getNotebook,
+  hasDisabledCellsAtom,
+  undoLabelAtom,
+  useCellActions,
+} from "@/core/cells/cells";
+import { disabledCellIds } from "@/core/cells/utils";
+import { useResolvedSpConfig } from "@/core/config/config";
+
+import {
+  updateCellOutputsWithScreenshots,
+  useEnrichCellOutputs,
+} from "@/core/export/hooks";
+import { useLayoutActions, useLayoutState } from "@/core/layout/layout";
+import { useTogglePresenting } from "@/core/layout/useTogglePresenting";
+import { kioskModeAtom, viewStateAtom } from "@/core/mode";
+import { useRequestClient } from "@/core/network/requests";
+import { useFilename } from "@/core/saving/filename";
+import { downloadAsHTML } from "@/core/static/download-html";
+
+import { copyToClipboard } from "@/utils/copy";
+import {
+  ADD_PRINTING_CLASS,
+  downloadAsPDF,
+  downloadBlob,
+  downloadHTMLAsImage,
+  withLoadingToast,
+} from "@/utils/download";
+import { Filenames } from "@/utils/filenames";
+import { Objects } from "@/utils/objects";
+import type { ProgressState } from "@/utils/progress";
+import { Strings } from "@/utils/strings";
+import { newNotebookURL } from "@/utils/urls";
+import { useRunAllCells } from "../cell/useRunCells";
+import { useChromeActions, useChromeState } from "../chrome/state";
+import { PANELS, type NotebookProduct } from "../chrome/types";
+import { keyboardShortcutsAtom } from "../controls/keyboard-shortcuts";
+import { commandPaletteAtom } from "../controls/state";
+import { displayLayoutName, getLayoutIcon } from "../renderers/layout-select";
+import { LAYOUT_TYPES } from "../renderers/types";
+import { runServerSidePDFDownload } from "./pdf-export";
+import type { ActionButton } from "./types";
+import { useCopyNotebook } from "./useCopyNotebook";
+import { useDbtActions } from "../dbt/use-dbt";
+import { useHideAllMarkdownCode } from "./useHideAllMarkdownCode";
+import { useRestartKernel } from "./useRestartKernel";
+import { navigate } from "@/embed/host-navigate";
+import { useOptionalNotebookConfig } from "~/components/notebook/notebook-context";
+
+const NOOP_HANDLER = (event?: Event) => {
+  event?.preventDefault();
+  event?.stopPropagation();
+};
+
+function resolveNotebookProduct(product?: NotebookProduct): NotebookProduct {
+  if (product) {
+    return product;
+  }
+  return "projects";
+}
+
+export function useNotebookActions() {
+  const filename = useFilename();
+  const { openModal, closeModal } = useImperativeModal();
+  const { toggleApplication } = useChromeActions();
+  const { selectedPanel } = useChromeState();
+  const [viewState] = useAtom(viewStateAtom);
+  const kioskMode = useAtomValue(kioskModeAtom);
+  const hideAllMarkdownCode = useHideAllMarkdownCode();
+  const [resolvedConfig] = useResolvedSpConfig();
+  const notebookConfig = useOptionalNotebookConfig();
+  const product = resolveNotebookProduct(notebookConfig?.product);
+  const showDbtActions = product === "projects";
+
+  const {
+    updateCellConfig,
+    undoDeleteCell,
+    clearAllCellOutputs,
+    addSetupCellIfDoesntExist,
+    collapseAllCells,
+    expandAllCells,
+  } = useCellActions();
+  const restartKernel = useRestartKernel();
+  const runAllCells = useRunAllCells();
+  const { runCommand: runDbtCommand } = useDbtActions();
+  const copyNotebook = useCopyNotebook(filename);
+  const setCommandPaletteOpen = useSetAtom(commandPaletteAtom);
+  const setSettingsDialogOpen = useSetAtom(settingDialogAtom);
+  const setKeyboardShortcutsOpen = useSetAtom(keyboardShortcutsAtom);
+  const {
+    exportAsIPYNB,
+    exportAsMarkdown,
+    readCode,
+    saveCellConfig,
+    updateCellOutputs,
+  } = useRequestClient();
+  const takeScreenshots = useEnrichCellOutputs();
+
+  const hasDisabledCells = useAtomValue(hasDisabledCellsAtom);
+  const canUndoDeletes = useAtomValue(canUndoDeletesAtom);
+  const undoLabel = useAtomValue(undoLabelAtom);
+  const { selectedLayout } = useLayoutState();
+  const { setLayoutView } = useLayoutActions();
+  const togglePresenting = useTogglePresenting();
+  // Fallback: if sharing is undefined, both are enabled by default
+  const sharingHtmlEnabled = resolvedConfig.sharing?.html ?? true;
+
+
+  const serverSidePdfEnabled = true;
+  const isSlidesLayout = selectedLayout === "slides";
+
+  const renderCheckboxElement = (checked: boolean) => (
+    <div className="w-8 flex justify-end">
+      {checked && <CheckIcon size={14} />}
+    </div>
+  );
+
+  const renderRecommendedElement = (recommended: boolean) => {
+    if (!recommended) {
+      return null;
+    }
+    return (
+      <span className="ml-3 shrink-0 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+        Recommended
+      </span>
+    );
+  };
+
+  const downloadServerSidePDF = async ({
+    preset,
+    title,
+  }: {
+    preset: "document" | "slides";
+    title: string;
+  }) => {
+    if (!filename) {
+      toastNotebookMustBeNamed();
+      return;
+    }
+
+    const runDownload = async (progress: ProgressState) => {
+      await updateCellOutputsWithScreenshots({
+        takeScreenshots: () => takeScreenshots({ progress }),
+        updateCellOutputs,
+      });
+      await runServerSidePDFDownload({
+        filename,
+        preset,
+        downloadPDF: downloadAsPDF,
+      });
+    };
+    await withLoadingToast(title, runDownload);
+  };
+
+  const handleDocumentPDF = async () => {
+    if (serverSidePdfEnabled) {
+      await downloadServerSidePDF({
+        preset: "document",
+        title: "Downloading Document PDF...",
+      });
+      return;
+    }
+    const beforeprint = new Event("export-beforeprint");
+    const afterprint = new Event("export-afterprint");
+    window.dispatchEvent(beforeprint);
+    setTimeout(() => window.print(), 0);
+    setTimeout(() => window.dispatchEvent(afterprint), 0);
+  };
+
+  const handleDownloadAsIPYNB = async () => {
+    if (!filename) {
+      toastNotebookMustBeNamed();
+      return;
+    }
+
+    const runDownload = async (progress: ProgressState) => {
+      await updateCellOutputsWithScreenshots({
+        takeScreenshots: () => takeScreenshots({ progress }),
+        updateCellOutputs,
+      });
+      const ipynb = await exportAsIPYNB({ download: false });
+      downloadBlob(
+        new Blob([ipynb], { type: "application/x-ipynb+json" }),
+        Filenames.toIPYNB(document.title),
+      );
+    };
+
+    await withLoadingToast("Downloading IPYNB...", runDownload);
+  };
+
+  const actions: ActionButton[] = [
+    {
+      icon: <DownloadIcon size={14} strokeWidth={1.5} />,
+      label: "Download",
+      handle: NOOP_HANDLER,
+      dropdown: [
+        {
+          icon: <FolderDownIcon size={14} strokeWidth={1.5} />,
+          label: "Download as HTML",
+          handle: async () => {
+            if (!filename) {
+              toastNotebookMustBeNamed();
+              return;
+            }
+            await downloadAsHTML({ filename, includeCode: true });
+          },
+        },
+        {
+          icon: <FolderDownIcon size={14} strokeWidth={1.5} />,
+          label: "Download as HTML (exclude code)",
+          handle: async () => {
+            if (!filename) {
+              toastNotebookMustBeNamed();
+              return;
+            }
+            await downloadAsHTML({ filename, includeCode: false });
+          },
+        },
+        {
+          icon: (
+            <MarkdownIcon strokeWidth={1.5} style={{ width: 14, height: 14 }} />
+          ),
+          label: "Download as Markdown",
+          handle: async () => {
+            const md = await exportAsMarkdown({ download: false });
+            downloadBlob(
+              new Blob([md], { type: "text/plain" }),
+              Filenames.toMarkdown(document.title),
+            );
+          },
+        },
+        {
+          icon: <NotebookIcon size={14} strokeWidth={1.5} />,
+          label: "Download as ipynb",
+          handle: handleDownloadAsIPYNB,
+        },
+        {
+          icon: <CodeIcon size={14} strokeWidth={1.5} />,
+          label: "Download Python code",
+          handle: async () => {
+            const code = await readCode();
+            downloadBlob(
+              new Blob([code.contents], { type: "text/plain" }),
+              Filenames.toPY(document.title),
+            );
+          },
+        },
+        {
+          divider: true,
+          icon: <ImageIcon size={14} strokeWidth={1.5} />,
+          label: "Download as PNG",
+          disabled: viewState.mode !== "present",
+          tooltip:
+            viewState.mode === "present" ? undefined : (
+              <span>
+                Only available in app view. <br />
+                Toggle with: {renderShortcut("global.hideCode", false)}
+              </span>
+            ),
+          handle: async () => {
+            const app = document.getElementById("App");
+            if (!app) {
+              return;
+            }
+            await downloadHTMLAsImage({
+              element: app,
+              filename: document.title,
+              // Add body.printing ONLY when converting the whole notebook to a screenshot
+              prepare: ADD_PRINTING_CLASS,
+            });
+          },
+        },
+        isSlidesLayout
+          ? {
+              divider: true,
+              icon: <FileIcon size={14} strokeWidth={1.5} />,
+              label: "Download as PDF",
+              handle: NOOP_HANDLER,
+              dropdown: [
+                {
+                  icon: <FileIcon size={14} strokeWidth={1.5} />,
+                  label: "Document Layout",
+                  handle: handleDocumentPDF,
+                },
+                {
+                  icon: <FileIcon size={14} strokeWidth={1.5} />,
+                  label: "Slides Layout",
+                  rightElement: renderRecommendedElement(true),
+                  hidden: !serverSidePdfEnabled,
+                  handle: async () => {
+                    await downloadServerSidePDF({
+                      preset: "slides",
+                      title: "Downloading Slides PDF...",
+                    });
+                  },
+                },
+              ],
+            }
+          : {
+              divider: true,
+              icon: <FileIcon size={14} strokeWidth={1.5} />,
+              label: "Download as PDF",
+              handle: handleDocumentPDF,
+            },
+      ],
+    },
+
+    {
+      icon: <Share2Icon size={14} strokeWidth={1.5} />,
+      label: "Share",
+      handle: NOOP_HANDLER,
+      hidden: !sharingHtmlEnabled,
+      dropdown: [
+        {
+          icon: <GlobeIcon size={14} strokeWidth={1.5} />,
+          label: "Publish HTML to web",
+          hidden: !sharingHtmlEnabled,
+          handle: async () => {
+            openModal(<ShareStaticNotebookModal onClose={closeModal} />);
+          },
+        },
+      ],
+    },
+
+    {
+      icon: <PanelLeftIcon size={14} strokeWidth={1.5} />,
+      label: "Helper panel",
+      redundant: true,
+      handle: NOOP_HANDLER,
+      dropdown: PANELS.flatMap(
+        ({ type: id, Icon, hidden, products, additionalKeywords }) => {
+          if (hidden || (products && !products.includes(product))) {
+            return [];
+          }
+          return {
+            label: Strings.startCase(id),
+            rightElement: renderCheckboxElement(selectedPanel === id),
+            icon: <Icon size={14} strokeWidth={1.5} />,
+            handle: () => toggleApplication(id),
+            additionalKeywords,
+          };
+        },
+      ),
+    },
+
+    {
+      icon: <PresentationIcon size={14} strokeWidth={1.5} />,
+      label: "Present as",
+      handle: NOOP_HANDLER,
+      dropdown: [
+        {
+          icon:
+            viewState.mode === "present" ? (
+              <EditIcon size={14} strokeWidth={1.5} />
+            ) : (
+              <LayoutTemplateIcon size={14} strokeWidth={1.5} />
+            ),
+          label: "Toggle app view",
+          hotkey: "global.hideCode",
+          handle: () => {
+            togglePresenting();
+          },
+        },
+        ...LAYOUT_TYPES.map((type, idx) => {
+          const Icon = getLayoutIcon(type);
+          return {
+            divider: idx === 0,
+            label: displayLayoutName(type),
+            icon: <Icon size={14} strokeWidth={1.5} />,
+            rightElement: (
+              <div className="w-8 flex justify-end">
+                {selectedLayout === type && <CheckIcon size={14} />}
+              </div>
+            ),
+            handle: () => {
+              setLayoutView(type);
+              // Toggle if it's not in present mode
+              if (viewState.mode === "edit") {
+                togglePresenting();
+              }
+            },
+          };
+        }),
+      ],
+    },
+    {
+      icon: <Files size={14} strokeWidth={1.5} />,
+      label: "Duplicate notebook",
+      hidden: !filename,
+      handle: copyNotebook,
+    },
+    {
+      icon: <ClipboardCopyIcon size={14} strokeWidth={1.5} />,
+      label: "Copy code to clipboard",
+      hidden: !filename,
+      handle: async () => {
+        const code = await readCode();
+        await copyToClipboard(code.contents);
+        toast({
+          title: "Copied",
+          description: "Code copied to clipboard.",
+        });
+      },
+    },
+    {
+      icon: <ZapIcon size={14} strokeWidth={1.5} />,
+      label: "Enable all cells",
+      hidden: !hasDisabledCells || kioskMode,
+      handle: async () => {
+        const notebook = getNotebook();
+        const ids = disabledCellIds(notebook);
+        const newConfigs = Objects.fromEntries(
+          ids.map((cellId) => [cellId, { disabled: false }]),
+        );
+        // send to BE
+        await saveCellConfig({ configs: newConfigs });
+        // update on FE
+        for (const cellId of ids) {
+          updateCellConfig({ cellId, config: { disabled: false } });
+        }
+      },
+    },
+
+    {
+      divider: true,
+      icon: <DiamondPlusIcon size={14} strokeWidth={1.5} />,
+      label: "Add setup cell",
+      handle: () => {
+        addSetupCellIfDoesntExist({});
+      },
+    },
+    {
+      icon: <Undo2Icon size={14} strokeWidth={1.5} />,
+      label: undoLabel,
+      hidden: !canUndoDeletes || kioskMode,
+      handle: () => {
+        undoDeleteCell();
+      },
+    },
+    {
+      icon: <PowerSquareIcon size={14} strokeWidth={1.5} />,
+      label: "Restart kernel",
+      variant: "danger",
+      handle: restartKernel,
+      additionalKeywords: ["reset", "reload", "restart"],
+    },
+    {
+      icon: <FastForwardIcon size={14} strokeWidth={1.5} />,
+      label: "Re-run all cells",
+      redundant: true,
+      hotkey: "global.runAll",
+      handle: async () => {
+        runAllCells();
+      },
+    },
+    {
+      icon: <XCircleIcon size={14} strokeWidth={1.5} />,
+      label: "Clear all outputs",
+      redundant: true,
+      handle: () => {
+        clearAllCellOutputs();
+      },
+    },
+    {
+      icon: <EyeOffIcon size={14} strokeWidth={1.5} />,
+      label: "Hide all markdown code",
+      handle: hideAllMarkdownCode,
+      redundant: true, // hidden by default
+    },
+    {
+      icon: <ChevronRightCircleIcon size={14} strokeWidth={1.5} />,
+      label: "Collapse all sections",
+      hotkey: "global.collapseAllSections",
+      handle: collapseAllCells,
+      redundant: true,
+    },
+    {
+      icon: <ChevronDownCircleIcon size={14} strokeWidth={1.5} />,
+      label: "Expand all sections",
+      hotkey: "global.expandAllSections",
+      handle: expandAllCells,
+      redundant: true,
+    },
+    {
+      divider: true,
+      icon: <CommandIcon size={14} strokeWidth={1.5} />,
+      label: "Command palette",
+      hotkey: "global.commandPalette",
+      handle: () => setCommandPaletteOpen((open) => !open),
+    },
+
+    {
+      icon: <KeyboardIcon size={14} strokeWidth={1.5} />,
+      label: "Keyboard shortcuts",
+      hotkey: "global.showHelp",
+      handle: () => setKeyboardShortcutsOpen((open) => !open),
+    },
+    {
+      icon: <SettingsIcon size={14} strokeWidth={1.5} />,
+      label: "User settings",
+      handle: () => setSettingsDialogOpen((open) => !open),
+      redundant: true,
+      additionalKeywords: ["preferences", "options", "configuration"],
+    },
+    // dbt commands
+    {
+      divider: true,
+      icon: <DatabaseZapIcon size={14} strokeWidth={1.5} />,
+      label: "dbt",
+      hidden: !showDbtActions,
+      handle: NOOP_HANDLER,
+      additionalKeywords: ["sql", "data", "models", "build", "compile"],
+      dropdown: [
+        {
+          icon: <PlayIcon size={14} strokeWidth={1.5} />,
+          label: "dbt run",
+          handle: () => runDbtCommand("run"),
+          additionalKeywords: ["execute", "models"],
+        },
+        {
+          icon: <HammerIcon size={14} strokeWidth={1.5} />,
+          label: "dbt build",
+          handle: () => runDbtCommand("build"),
+          additionalKeywords: ["run", "test", "seed", "snapshot"],
+        },
+        {
+          icon: <WrenchIcon size={14} strokeWidth={1.5} />,
+          label: "dbt compile",
+          handle: () => runDbtCommand("compile"),
+          additionalKeywords: ["render", "jinja", "sql"],
+        },
+        {
+          icon: <TestTubeIcon size={14} strokeWidth={1.5} />,
+          label: "dbt test",
+          handle: () => runDbtCommand("test"),
+          additionalKeywords: ["validate", "check", "assert"],
+        },
+        {
+          icon: <DatabaseIcon size={14} strokeWidth={1.5} />,
+          label: "dbt deps",
+          handle: () => runDbtCommand("deps"),
+          additionalKeywords: ["install", "packages"],
+        },
+        {
+          icon: <DatabaseZapIcon size={14} strokeWidth={1.5} />,
+          label: "dbt debug",
+          handle: () => runDbtCommand("debug"),
+          additionalKeywords: ["connection", "validate", "config"],
+        },
+        {
+          icon: <DatabaseZapIcon size={14} strokeWidth={1.5} />,
+          label: "dbt parse",
+          handle: () => runDbtCommand("parse"),
+          additionalKeywords: ["manifest", "project"],
+        },
+        {
+          icon: <DatabaseZapIcon size={14} strokeWidth={1.5} />,
+          label: "dbt seed",
+          handle: () => runDbtCommand("seed"),
+          additionalKeywords: ["csv", "load", "data"],
+        },
+        {
+          icon: <DatabaseZapIcon size={14} strokeWidth={1.5} />,
+          label: "dbt ls",
+          handle: () => runDbtCommand("ls"),
+          additionalKeywords: ["list", "resources"],
+        },
+        {
+          icon: <DatabaseZapIcon size={14} strokeWidth={1.5} />,
+          label: "Open dbt panel",
+          handle: () => toggleApplication("dbt"),
+          additionalKeywords: ["panel", "output", "logs"],
+        },
+      ],
+    },
+    {
+      divider: true,
+      icon: <Home size={14} strokeWidth={1.5} />,
+      label: "Return home",
+      // If file is in the url, then we opened in edit mode
+      // without a specific file
+      hidden: !location.search.includes("file"),
+      handle: () => {
+        const u = new URL(document.baseURI);
+        u.search = "";
+        navigate(u.pathname);
+      },
+    },
+
+    {
+      icon: <NotebookPenIcon size={14} strokeWidth={1.5} />,
+      label: "New notebook",
+      // If file is in the url, then we opened in edit mode
+      // without a specific file
+      hidden: !location.search.includes("file"),
+      handle: () => {
+        const url = newNotebookURL();
+        window.open(url, "_blank");
+      },
+    },
+  ];
+
+  return actions
+    .filter((a) => !a.hidden)
+    .map((action) => {
+      if (action.dropdown) {
+        return {
+          ...action,
+          dropdown: action.dropdown.filter((item) => !item.hidden),
+        };
+      }
+      return action;
+    });
+}
+
+function toastNotebookMustBeNamed() {
+  toast({
+    title: "Error",
+    description: "Notebooks must be named to be exported.",
+    variant: "danger",
+  });
+}

@@ -1,0 +1,138 @@
+"""sp backend for matplotlib
+
+Adapted from
+
+matplotlib/matplotlib/blob/main/lib/matplotlib/backends/backend_template.py
+
+and
+
+https://stackoverflow.com/questions/58153024/matplotlib-how-to-create-original-backend
+"""
+
+from __future__ import annotations
+
+import base64
+import io
+import json
+import struct
+
+import matplotlib.pyplot as plt
+from matplotlib._pylab_helpers import Gcf
+from matplotlib.backend_bases import (
+    FigureCanvasBase,
+    FigureManagerBase,
+)
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+from signalpilot._messaging.cell_output import CellChannel
+from signalpilot._messaging.mimetypes import METADATA_KEY, KnownMimeType
+from signalpilot._messaging.notification_utils import CellNotificationUtils
+from signalpilot._utils.data_uri import build_data_url
+
+FigureCanvas = FigureCanvasAgg
+
+
+def close_figures() -> None:
+    if Gcf.get_all_fig_managers():
+        plt.close("all")
+
+
+def _extract_png_dimensions(png_bytes: bytes) -> tuple[int, int]:
+    """Extract width and height from PNG binary data.
+
+    Args:
+        png_bytes: Raw PNG file data
+
+    Returns:
+        Tuple of (width, height) in pixels
+    """
+    # Find IHDR chunk and extract dimensions
+    ihdr_index = png_bytes.index(b"IHDR")
+    # Next 8 bytes after IHDR are width (4 bytes) and height (4 bytes)
+    width, height = struct.unpack(
+        ">II", png_bytes[ihdr_index + 4 : ihdr_index + 12]
+    )
+    return width, height
+
+
+def _render_figure_mimebundle(
+    fig: FigureCanvasBase,
+) -> tuple[KnownMimeType, str]:
+    """Render a matplotlib figure as a mimebundle with retina support.
+
+    Args:
+        fig: Matplotlib figure canvas to render
+
+    Returns:
+        Tuple of (mimetype, data). If `matplotlib.rcParams["savefig.format"]` is 'svg',
+        mimetype is 'image/svg+xml' and data is the Base64-encoded SVG data URL.
+        Otherwise, mimetype is 'application/vnd.sp+mimebundle' and data is a JSON string
+        representing a mimebundle containing the PNG data URL and display metadata.
+    """
+    buf = io.BytesIO()
+
+    # SVG is rendered as a base64 data URL in an <img> tag rather than
+    # inlined into the DOM. This avoids sanitization complexity (SVG can
+    # contain scripts, event handlers, etc.) at the cost of non-selectable
+    # text. Could inline with a stricter sanitizer if that's needed.
+    if plt.rcParams["savefig.format"] == "svg":
+        fig.figure.savefig(buf, format="svg", bbox_inches="tight")  # type: ignore[attr-defined]
+        svg_bytes = buf.getvalue()
+        plot_bytes = base64.b64encode(svg_bytes)
+        data_url = build_data_url(mimetype="image/svg+xml", data=plot_bytes)
+        return "image/svg+xml", data_url
+
+    dpi = fig.figure.dpi
+    fig.figure.savefig(buf, format="png", bbox_inches="tight", dpi=dpi)  # type: ignore[attr-defined]
+
+    png_bytes = buf.getvalue()
+    plot_bytes = base64.b64encode(png_bytes)
+
+    image_mimetype: KnownMimeType = "image/png"
+    data_url = build_data_url(mimetype=image_mimetype, data=plot_bytes)
+
+    try:
+        # Extract dimensions from the PNG
+        width, height = _extract_png_dimensions(png_bytes)
+        # Normalize to a fixed 100 DPI reference for consistent display size
+        # https://matplotlib.org/stable/api/_as_gen/matplotlib.figure.Figure.html
+        factor = dpi / 100
+        mimebundle = {
+            "image/png": data_url,
+            METADATA_KEY: {
+                "image/png": {
+                    "width": round(width / factor),
+                    "height": round(height / factor),
+                }
+            },
+        }
+        return (
+            "application/vnd.sp+mimebundle",
+            json.dumps(mimebundle),
+        )
+    except (ValueError, struct.error, IndexError):
+        # Fall back to plain image if dimension extraction fails
+        return (image_mimetype, data_url)
+
+
+def _internal_show(canvas: FigureCanvasBase) -> None:
+    mimetype, data = _render_figure_mimebundle(canvas)
+    plt.close(canvas.figure)
+    CellNotificationUtils.broadcast_console_output(
+        channel=CellChannel.MEDIA,
+        mimetype=mimetype,
+        data=data,
+        cell_id=None,
+        status=None,
+    )
+
+
+class FigureManager(FigureManagerBase):
+    def show(self) -> None:
+        _internal_show(self.canvas)
+
+
+def show(*, block: bool | None = None) -> None:
+    del block
+    for manager in Gcf.get_all_fig_managers():
+        _internal_show(manager.canvas)

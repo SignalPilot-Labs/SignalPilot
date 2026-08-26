@@ -1,0 +1,16 @@
+# Eval setup image: runs per-state warehouse setup scripts (eval-format.md §setup)
+# in isolation — dbt + postgres adapter + psql + python, so eval-set state
+# machines don't depend on host conda/dbt installs or `docker exec`.
+#
+# Build: docker build -f Dockerfile.eval-setup -t sp-eval-setup:latest .
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends git postgresql-client ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    pip install --no-cache-dir "dbt-core>=1.8" "dbt-postgres>=1.8" "psycopg2-binary>=2.9" "duckdb>=1.0"
+
+RUN useradd -m -u 10003 evalsetup
+USER evalsetup
+WORKDIR /repo
+
+CMD ["dbt", "--version"]

@@ -1,0 +1,56 @@
+FROM sp-dbt-signalpilot-opus5-cc21227-ade-broad-fix1-starter:latest
+
+USER root
+
+# Keep the sanitized current harness while advancing its Claude runtime.
+ARG CLAUDE_CODE_VERSION=2.1.228
+ARG AGENT_SDK_VERSION=0.2.136
+RUN rm -rf /app/signalpilot/gateway
+COPY signalpilot/gateway/ /app/signalpilot/gateway/
+RUN pip install --no-cache-dir /app/signalpilot/gateway \
+    && npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+    && pip install --no-cache-dir "claude-agent-sdk==${AGENT_SDK_VERSION}"
+
+# Replace the installed prompt/tool bundle with the audited source in this checkout.
+RUN rm -rf /app/benchmark/signalpilot-plugin \
+    /home/agentuser/.claude/plugins
+COPY benchmark/signalpilot-plugin/ /app/benchmark/signalpilot-plugin/
+COPY benchmark/prompts/dbt_local_system.md /app/benchmark/prompts/dbt_local_system.md
+COPY benchmark/mcp_state_audit_config.json /app/benchmark/mcp_baked_config.json
+RUN sed -i 's/scored dbt workflow/ordered dbt workflow/' /app/benchmark/core/workdir.py
+RUN rm -rf /app/benchmark/signalpilot-plugin/agents/_archived \
+    && rm -f /app/benchmark/signalpilot-plugin/marketing.md \
+    && ! grep -R -Eiq 'benchmark|Spider2|gold|grader|grading|evaluation|evaluator|answer key|hidden answer|solution__|_gold|post-grade|scored-run|prompt|prompting|prompts' \
+      /app/benchmark/prompts/dbt_local_system.md \
+      /app/benchmark/signalpilot-plugin/skills \
+      /app/benchmark/signalpilot-plugin/agents \
+      /app/benchmark/signalpilot-plugin/README.md \
+      /app/signalpilot/gateway/gateway/mcp/tools/query.py \
+      /app/signalpilot/gateway/gateway/mcp/tools/schema/relationships.py \
+      /app/signalpilot/gateway/gateway/mcp/tools/schema/exploration_table.py \
+      /app/signalpilot/gateway/gateway/mcp/tools/schema/explore_value.py \
+      /app/signalpilot/gateway/gateway/mcp/tools/schema/ddl.py \
+    && python -m py_compile \
+      /app/benchmark/signalpilot-plugin/skills/dbt-workflow/inspect_model_state.py \
+    && python /app/benchmark/signalpilot-plugin/skills/dbt-workflow/inspect_model_state.py --help >/dev/null \
+    && gosu agentuser bash -c '\
+      claude plugin marketplace add /app/benchmark/signalpilot-plugin/.claude-plugin/marketplace.json >/dev/null; \
+      claude plugin install signalpilot-dbt@signalpilot --scope user >/dev/null; \
+      test -f /home/agentuser/.claude/plugins/cache/signalpilot/signalpilot-dbt/1.0.0/skills/dbt-workflow/inspect_model_state.py; \
+      grep -q inspect_model_state.py /home/agentuser/.claude/plugins/cache/signalpilot/signalpilot-dbt/1.0.0/skills/dbt-workflow/SKILL.md'
+RUN PYTHONPATH=/app python - <<'PY'
+import re
+import tempfile
+from pathlib import Path
+from benchmark.core.workdir import write_claude_md
+
+with tempfile.TemporaryDirectory() as raw:
+    path = Path(raw)
+    write_claude_md(path, "local_project", "dbt")
+    text = (path / "CLAUDE.md").read_text()
+    banned = re.compile(r"benchmark|Spider2|gold|grader|grading|evaluation|evaluator|answer key|hidden answer|solution__|_gold|post-grade|scored-run|prompt|prompting|prompts|scored dbt workflow|reference_snapshot\.md", re.I)
+    if banned.search(text):
+        raise SystemExit("generated instruction contains non-production terminology")
+PY
+
+ENTRYPOINT ["bash"]

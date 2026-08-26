@@ -1,4 +1,4 @@
-"""Tests for schema annotations — YAML loading, PII suggestion, skeleton generation."""
+"""Tests for schema annotations. YAML loading, PII suggestion, skeleton generation."""
 
 import pytest
 
@@ -28,13 +28,13 @@ class TestPIISuggestion:
         assert _suggest_pii_rule("phone") == "mask"
         assert _suggest_pii_rule("mobile_number") == "mask"
 
-    def test_password_suggests_drop(self):
-        assert _suggest_pii_rule("password") == "drop"
-        assert _suggest_pii_rule("password_hash") == "drop"
+    def test_password_suggests_hide(self):
+        assert _suggest_pii_rule("password") == "hide"
+        assert _suggest_pii_rule("password_hash") == "hide"
 
-    def test_credit_card_suggests_drop(self):
-        assert _suggest_pii_rule("credit_card_number") == "drop"
-        assert _suggest_pii_rule("card_number") == "drop"
+    def test_credit_card_suggests_hide(self):
+        assert _suggest_pii_rule("credit_card_number") == "hide"
+        assert _suggest_pii_rule("card_number") == "hide"
 
     def test_name_suggests_mask(self):
         assert _suggest_pii_rule("first_name") == "mask"

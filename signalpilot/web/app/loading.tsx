@@ -54,12 +54,9 @@ export default function Loading() {
           <path d="M8 62H2V56" stroke="var(--color-border-hover)" strokeWidth="1" />
         </svg>
 
-        <p className="text-[12px] text-[var(--color-text-dim)] tracking-[0.2em] uppercase">
+        <p className="text-[11px] text-[var(--color-text-dim)] tracking-[0.08em] uppercase">
           loading
         </p>
-        <div className="mt-2 w-16 h-px mx-auto overflow-hidden">
-          <div className="h-full bg-[var(--color-text-dim)] animate-data-flow" />
-        </div>
       </div>
     </div>
   );

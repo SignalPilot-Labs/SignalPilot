@@ -49,8 +49,8 @@ async def security_status(store: StoreD, org_id: OrgID, _role: OrgAdmin):
     )
     credentials_encrypted = result.scalar_one()
 
-    # Global count across all users (admin view)
-    total_pending_rotation = await store.get_credentials_needing_rotation()
+    # Current org's credentials pending key rotation
+    org_pending_rotation = await store.get_credentials_needing_rotation()
 
     # ─── BYOK provider info ───────────────────────────────────────────────────
 
@@ -118,7 +118,7 @@ async def security_status(store: StoreD, org_id: OrgID, _role: OrgAdmin):
         store.user_id,
         encryption_healthy,
         credentials_encrypted,
-        total_pending_rotation,
+        org_pending_rotation,
         byok_provider_type,
         byok_keys_total,
     )
@@ -129,7 +129,7 @@ async def security_status(store: StoreD, org_id: OrgID, _role: OrgAdmin):
         "encryption_healthy": encryption_healthy,
         "credentials_encrypted": credentials_encrypted,
         "current_key_version": CURRENT_KEY_VERSION,
-        "total_credentials_pending_rotation": total_pending_rotation,
+        "total_credentials_pending_rotation": org_pending_rotation,
         "byok_provider": byok_provider_type,
         "byok_keys_total": byok_keys_total,
         "byok_keys_active": byok_keys_active,

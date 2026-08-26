@@ -1,0 +1,89 @@
+/* Mirrors the landing-page CodePanel primitive:
+   translucent panel, 18px radius, mono eyebrow header. */
+
+.block {
+  border: 1px solid var(--sp-line-2);
+  background: var(--ifm-pre-background);
+  border-radius: var(--sp-radius-panel);
+  text-align: left;
+  overflow: hidden;
+  margin-bottom: 1.5rem;
+}
+
+.block:has(+ .block) {
+  margin-bottom: 0.5rem;
+}
+
+.block + .block {
+  margin-bottom: 1.5rem;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 2.75rem;
+  padding: 0.6rem 1.1rem;
+  border-bottom: 1px solid var(--sp-line);
+}
+
+.label {
+  font-family: var(--sp-font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+  text-transform: uppercase;
+  letter-spacing: var(--sp-track-wider);
+  color: var(--sp-dim);
+}
+
+.copyBtn {
+  flex-shrink: 0;
+  font-family: var(--sp-font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: var(--sp-track-wider);
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-radius-sm);
+  background: var(--sp-card);
+  color: var(--sp-muted);
+  cursor: pointer;
+  transition: color 180ms var(--sp-ease),
+              border-color 180ms var(--sp-ease),
+              background 180ms var(--sp-ease);
+}
+
+.copyBtn:hover {
+  color: var(--sp-text);
+  border-color: var(--sp-line-2);
+  background: var(--sp-card-hover);
+}
+
+.pre {
+  overflow-x: auto;
+  padding: 1rem 1.1rem;
+  margin: 0;
+  font-family: var(--sp-font-mono);
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--sp-text);
+  letter-spacing: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+}
+
+.prompt {
+  color: var(--sp-green);
+  user-select: none;
+}
+
+.comment {
+  color: var(--sp-syntax-comment);
+  font-style: italic;
+}
+
+.emptyLine {
+  height: 0.5em;
+}

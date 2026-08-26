@@ -1,6 +1,7 @@
 import {
   ArrowDownIcon,
   ArrowRightIcon,
+  HammerIcon,
   RefreshCwIcon,
   SearchIcon,
 } from "lucide-react";
@@ -28,6 +29,8 @@ interface Props {
   onSetDirection: (dir: LayoutDirection) => void;
   onReload: () => void;
   loading: boolean;
+  onRecompile?: () => void;
+  compiling?: boolean;
   nodeCount: number;
   edgeCount: number;
 }
@@ -40,6 +43,8 @@ export const LineageToolbar: React.FC<Props> = ({
   onSetDirection,
   onReload,
   loading,
+  onRecompile,
+  compiling,
   nodeCount,
   edgeCount,
 }) => {
@@ -130,6 +135,23 @@ export const LineageToolbar: React.FC<Props> = ({
         />
         Reload
       </Button>
+
+      {/* Recompile the stored dbt map on a sandbox */}
+      {onRecompile && (
+        <Button
+          variant="outline"
+          size="xs"
+          className="h-6 px-2 text-[10px] bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200"
+          onClick={onRecompile}
+          disabled={compiling}
+          title="Re-run dbt parse on a sandbox and refresh the stored map"
+        >
+          <HammerIcon
+            className={cn("w-3 h-3 mr-1", compiling && "animate-pulse")}
+          />
+          {compiling ? "Compiling..." : "Compile map"}
+        </Button>
+      )}
 
       {/* Stats */}
       <div className="ml-auto flex items-center gap-2 text-[10px] text-zinc-600">

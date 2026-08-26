@@ -1779,6 +1779,22 @@ export const linkGitHubRepo = (body: {
     body: JSON.stringify(body),
   });
 
+export const getGitHubImportStatus = (repoFullName: string) =>
+  request<{ stage: string; done?: number; total?: number; error?: string }>(
+    `/api/github/import/status?repo_full_name=${encodeURIComponent(repoFullName)}`,
+  );
+
+export const importGitHubRepo = (body: {
+  installation_id: string;
+  repo_full_name: string;
+  repo_id: number;
+  default_branch: string;
+}) =>
+  request<GitHubRepoImportResult>("/api/github/import", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
 export const unlinkGitHubRepo = (linkId: string) =>
   request<void>(`/api/github/repo-links/${linkId}`, { method: "DELETE" });
 
@@ -1789,6 +1805,28 @@ export const getGitHubRepoLinks = (projectId?: string) =>
 
 export const getGitCredentials = (projectId: string) =>
   request<GitCredentials>(`/api/github/credentials/${projectId}`);
+
+export const getDbtProjectDir = (projectId: string, branch?: string) =>
+  request<{ dbt_project_dir: string | null; detected: string[]; source: string }>(
+    `/api/workspace-projects/${projectId}/dbt-project-dir${branch ? `?branch=${encodeURIComponent(branch)}` : ""}`,
+  );
+
+// The following functions support the centrally stored dbt map.
+export const getDbtMap = (projectId: string, branch?: string, includeGraph = true) => {
+  const qs = new URLSearchParams();
+  if (branch) qs.set("branch", branch);
+  if (!includeGraph) qs.set("include_graph", "false");
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return request<DbtMapResponse>(
+    `/api/workspace-projects/${projectId}/dbt-map${suffix}`,
+  );
+};
+
+export const compileDbtMap = (projectId: string, branch?: string) =>
+  request<{ scheduled: boolean; map: DbtMapInfo | null }>(
+    `/api/workspace-projects/${projectId}/dbt-map/compile${branch ? `?branch=${encodeURIComponent(branch)}` : ""}`,
+    { method: "POST" },
+  );
 
 // The following function returns gateway health.
 export const getHealth = () => request<Record<string, unknown>>("/health");
@@ -2184,7 +2222,10 @@ import type {
   GitHubInstallation,
   GitHubRepo,
   GitHubRepoLink,
+  GitHubRepoImportResult,
   GitCredentials,
+  DbtMapInfo,
+  DbtMapResponse,
 } from "./types";
 
 export const listKnowledge = (params?: {

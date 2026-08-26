@@ -451,6 +451,19 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("Eval retention loop error: %s", e)
 
+    async def _dbt_map_reaper_loop():
+        """Fail dbt-map compiles whose lease died with a previous process."""
+        from .dbt_map.runner import reap_stale_compiles
+
+        while True:
+            await asyncio.sleep(120)
+            try:
+                reaped = await reap_stale_compiles()
+                if reaped:
+                    logger.warning("dbt-map reaper: failed %d stale compile(s)", reaped)
+            except Exception as e:
+                logger.warning("dbt-map reaper loop error: %s", e)
+
     async def _improvement_schedule_loop():
         """Seed due daily improvement runs every minute.
 
@@ -478,6 +491,7 @@ async def lifespan(app: FastAPI):
     eval_reaper_task = asyncio.create_task(_eval_reaper_loop())
     eval_retention_task = asyncio.create_task(_eval_retention_loop())
     improvement_schedule_task = asyncio.create_task(_improvement_schedule_loop())
+    dbt_map_reaper_task = asyncio.create_task(_dbt_map_reaper_loop())
 
     # Start MCP session manager if mounted
     mcp_ctx = None
@@ -534,6 +548,7 @@ async def lifespan(app: FastAPI):
         eval_reaper_task.cancel()
         eval_retention_task.cancel()
         improvement_schedule_task.cancel()
+        dbt_map_reaper_task.cancel()
         await pool_manager.close_all()
         dek_cache.clear()
         await close_db()

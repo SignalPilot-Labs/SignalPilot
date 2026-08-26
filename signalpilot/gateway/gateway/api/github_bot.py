@@ -52,13 +52,27 @@ async def github_webhook(request: Request):
     event = request.headers.get("x-github-event", "")
     if event == "ping":
         return {"ok": True, "pong": True}
-    if event != "pull_request":
+    if event not in ("pull_request", "push"):
         return {"ok": True, "ignored": event}
 
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="invalid JSON body")
+
+    if event == "push":
+        repo = (payload.get("repository") or {}).get("full_name", "")
+        ref = payload.get("ref", "")
+        if not repo or not ref:
+            raise HTTPException(status_code=400, detail="missing repository/ref in payload")
+        # Fan out in the background — sync + sandbox compile far exceed the
+        # 10s webhook budget. Watched-branch filtering happens per project.
+        import asyncio as _asyncio
+
+        from ..dbt_map.triggers import handle_push
+
+        _asyncio.create_task(_log_trigger_errors(handle_push(repo, ref), f"push {repo} {ref}"))
+        return {"ok": True, "scheduled": {"repo": repo, "ref": ref}}
 
     action = payload.get("action", "")
     if action not in _SCAN_ACTIONS:
@@ -89,7 +103,28 @@ async def github_webhook(request: Request):
         org_id = "local"
 
     schedule_scan(org_id, repo, pr_number)
+
+    # Beside the scan: per-project PR automation (dbt map compile of the head
+    # branch, agent-run dispatch hook). Background — never blocks the webhook.
+    import asyncio as _asyncio
+
+    from ..dbt_map.triggers import handle_pr_event
+
+    head_branch = ((payload.get("pull_request") or {}).get("head") or {}).get("ref")
+    _asyncio.create_task(
+        _log_trigger_errors(
+            handle_pr_event(repo, pr_number, head_branch), f"pr {repo}#{pr_number}"
+        )
+    )
     return {"ok": True, "scheduled": {"repo": repo, "pr": pr_number}}
+
+
+async def _log_trigger_errors(coro, label: str) -> None:
+    try:
+        result = await coro
+        logger.info("webhook automation %s: %s", label, result)
+    except Exception:
+        logger.exception("webhook automation failed: %s", label)
 
 
 class ScanRequest(BaseModel):

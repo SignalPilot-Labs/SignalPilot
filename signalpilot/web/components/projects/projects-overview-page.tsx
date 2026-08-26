@@ -43,7 +43,7 @@ import {
   getNotionOAuthInstallations,
   getProjects,
   getWorkspaceProjects,
-  linkGitHubRepo,
+  importGitHubRepo,
   request,
 } from "~/lib/api";
 import type {
@@ -786,32 +786,19 @@ function GitHubImportForm({
 
     setImportingRepo(repo.full_name);
     try {
-      const project = await createWorkspaceProject({
-        name: repo.name,
-        display_name: repo.name,
-        description: repo.description || "",
-        source: "github",
-        tags: ["github"],
-      });
-
-      await linkGitHubRepo({
-        project_id: project.id,
+      const result = await importGitHubRepo({
         installation_id: selectedInstall.id,
         repo_full_name: repo.full_name,
         repo_id: repo.id,
         default_branch: repo.default_branch,
       });
 
-      toast("Mirroring repository from GitHub...", "info");
-      try {
-        await request<unknown>(`/api/github/sync/${project.id}`, {
-          method: "POST",
-        });
-      } catch (error) {
-        console.warn("[Projects] Gateway GitHub sync failed:", error);
-      }
-
-      toast(`Imported ${repo.full_name}`, "success");
+      toast(
+        result.created
+          ? `Imported ${repo.full_name}`
+          : `${repo.full_name} was already imported`,
+        "success",
+      );
       await onImported();
       onClose();
     } catch (error) {

@@ -559,12 +559,14 @@ async def test_dirty_notebook_is_reset_and_only_clean_retry_answer_is_emitted(
     ]
 
     assert [event["type"] for event in events] == [
+        "text_delta",
         "progress",
         "tool_use",
         "tool_result",
+        "text_delta",
         "final",
     ]
-    assert events[0]["content"] == "Restarting analysis in a clean notebook"
+    assert events[1]["content"] == "Restarting analysis in a clean notebook"
     assert events[-1] == {
         "archive_id": "archive-clean",
         "artifacts": [{"filename": "accepted.csv"}],
@@ -572,7 +574,10 @@ async def test_dirty_notebook_is_reset_and_only_clean_retry_answer_is_emitted(
         "kernel_stopped": True,
         "type": "final",
     }
-    assert "REJECTED LEAK" not in json.dumps(events)
+    # Narration streams live (including from the rejected attempt), but the
+    # accepted answer is built only from the validated attempt's text blocks.
+    assert events[0]["content"] == "REJECTED LEAK"
+    assert "REJECTED LEAK" not in events[-1]["content"]
     assert closed == ["kernel-1", "kernel-2"]
     assert clean_starts == [seeded_paths[0]]
     assert archived == ["kernel-2"]
@@ -696,9 +701,11 @@ async def test_two_dirty_attempts_emit_one_validation_error_and_no_final(
     ]
 
     assert [event["type"] for event in events] == [
+        "text_delta",
         "progress",
         "tool_use",
         "tool_result",
+        "text_delta",
         "error",
     ]
     assert events[-1] == {
@@ -706,8 +713,6 @@ async def test_two_dirty_attempts_emit_one_validation_error_and_no_final(
         "is_error": True,
         "type": "error",
     }
-    assert all(
-        event["type"] not in {"final", "text", "text_delta"}
-        for event in events
-    )
+    # Narration may stream, but a rejected run never emits an accepted answer.
+    assert all(event["type"] not in {"final", "text"} for event in events)
     assert archive_calls == []

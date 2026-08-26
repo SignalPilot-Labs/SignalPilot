@@ -1099,6 +1099,20 @@ async def execute(*, request: Request) -> StreamingResponse:
                         continue
                     if event.type == "text_delta":
                         streamed_text += event.content
+                        # Forward narration live so the gateway records it in
+                        # sequence with tool events — the chat UI interleaves
+                        # text with the tool chains it narrates. The accepted
+                        # ANSWER still ships only via the validated final
+                        # event; a rejected run never emits final.
+                        yield (
+                            json.dumps(
+                                {
+                                    "type": "text_delta",
+                                    "content": event.content,
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8")
                         continue
                     if event.type == "text":
                         # A run interleaves narration and the closing summary

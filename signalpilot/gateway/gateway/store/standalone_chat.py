@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.connectors.schema_cache import _schema_fingerprint, schema_cache
+from gateway.standalone_chat import config as chat_config
 from gateway.db.models import (
     GatewayChatArtifact,
     GatewayChatConversation,
@@ -336,6 +337,7 @@ async def create_conversation_with_run(
         project_id=project.id,
         user_message_id=user_message.id,
         status=RunStatus.queued.value,
+        runtime_env=chat_config.runtime_env(),
     )
     db.add_all([conversation, user_message, run])
     if not commit:
@@ -1133,6 +1135,7 @@ async def create_run(
         project_id=conversation.project_id or "",
         user_message_id=user_message.id,
         status=RunStatus.queued.value,
+        runtime_env=chat_config.runtime_env(),
     )
     db.add_all([user_message, run])
     conversation.message_count = sequence
@@ -1283,6 +1286,7 @@ async def retry_run(
         user_message_id=failed.user_message_id,
         status=RunStatus.queued.value,
         retry_of_run_id=failed.id,
+        runtime_env=chat_config.runtime_env(),
     )
     db.add(retry)
     from gateway.store.chat_reports import rebind_refresh_retry
@@ -1385,20 +1389,26 @@ async def claim_runs(
     lease_seconds: int,
 ) -> list[str]:
     now = _now()
+    query = select(GatewayChatRun).where(
+        or_(
+            GatewayChatRun.status == RunStatus.queued.value,
+            and_(
+                GatewayChatRun.status == RunStatus.running.value,
+                GatewayChatRun.lease_expires_at < now,
+            ),
+        )
+    )
+    # Environment affinity: a labeled worker claims only its own runs plus
+    # unlabeled (NULL) rows; an unlabeled worker claims everything.
+    own_env = chat_config.runtime_env()
+    if own_env is not None:
+        query = query.where(
+            or_(GatewayChatRun.runtime_env == own_env, GatewayChatRun.runtime_env.is_(None))
+        )
     candidates = (
         (
             await db.execute(
-                select(GatewayChatRun)
-                .where(
-                    or_(
-                        GatewayChatRun.status == RunStatus.queued.value,
-                        and_(
-                            GatewayChatRun.status == RunStatus.running.value,
-                            GatewayChatRun.lease_expires_at < now,
-                        ),
-                    )
-                )
-                .order_by(GatewayChatRun.created_at)
+                query.order_by(GatewayChatRun.created_at)
                 .with_for_update(skip_locked=True)
                 .limit(limit)
             )

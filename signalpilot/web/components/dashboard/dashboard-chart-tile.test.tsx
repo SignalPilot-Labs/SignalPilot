@@ -153,13 +153,46 @@ describe("DashboardChartTile interactions", () => {
     );
     expect(actions).not.toBeNull();
     expect(container.contains(actions)).toBe(false);
-    expect(document.body.querySelector("[data-testid='underlay']")).toBeNull();
     expect(document.body.textContent).toContain("Complete result");
     expect(document.body.textContent).toContain("View data");
     const verification = container.querySelector<HTMLElement>(
       "[aria-label^='High confidence']",
     );
     expect(verification).not.toBeNull();
+  });
+
+  it("dismisses the overflow menu without reopening from outside, trigger, or Escape", async () => {
+    await act(async () => {
+      root.render(<DashboardChartTile chart={chart} result={result} />);
+    });
+    const menu = container.querySelector<HTMLButtonElement>(
+      "[aria-label='More actions for Accounts']",
+    );
+
+    await press(menu);
+    expect(
+      document.body.querySelector("[aria-label='Actions for Accounts']"),
+    ).not.toBeNull();
+    await press(document.body);
+    expect(
+      document.body.querySelector("[aria-label='Actions for Accounts']"),
+    ).toBeNull();
+
+    await press(menu);
+    await press(menu);
+    expect(
+      document.body.querySelector("[aria-label='Actions for Accounts']"),
+    ).toBeNull();
+
+    await press(menu);
+    await act(async () =>
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })),
+    );
+    expect(
+      document.body.querySelector("[aria-label='Actions for Accounts']"),
+    ).toBeNull();
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 75)));
+    expect(document.activeElement).toBe(menu);
   });
 
   it("renders confidence help above the tile instead of clipping it inside the card", async () => {

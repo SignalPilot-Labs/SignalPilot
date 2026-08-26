@@ -4,7 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CircleX, RotateCw } from "lucide-react";
 import {
+  Button as AriaButton,
   Dialog as AriaDialog,
+  DialogTrigger as AriaDialogTrigger,
   Popover as AriaPopover,
 } from "react-aria-components";
 
@@ -141,6 +143,7 @@ export function DashboardChartTile({
   const [menuOpen, setMenuOpen] = useState(false);
   const [questionOpen, setQuestionOpen] = useState(false);
   const menuButton = useRef<HTMLButtonElement>(null);
+  const menuPanel = useRef<HTMLDivElement>(null);
   const questionButton = useRef<HTMLButtonElement>(null);
   const isKpi = chart.visualization.type === "big_number";
   const question =
@@ -148,6 +151,31 @@ export function DashboardChartTile({
     (isKpi ? `What is our ${chart.title.toLowerCase()}?` : chart.title);
   const tileFailure =
     failure?.scope === "chart" || !result ? failure : undefined;
+  useEffect(() => {
+    if (!menuOpen) return;
+    const dismissFromOutside = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (
+        menuButton.current?.contains(target) ||
+        menuPanel.current?.contains(target)
+      )
+        return;
+      setMenuOpen(false);
+    };
+    const dismissFromEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setMenuOpen(false);
+      window.setTimeout(() => menuButton.current?.focus(), 50);
+    };
+    document.addEventListener("mousedown", dismissFromOutside, true);
+    document.addEventListener("keydown", dismissFromEscape);
+    return () => {
+      document.removeEventListener("mousedown", dismissFromOutside, true);
+      document.removeEventListener("keydown", dismissFromEscape);
+    };
+  }, [menuOpen]);
   return (
     <section
       className={`${styles.tile} ${isKpi ? styles.kpiTile : styles.chartTile}`}
@@ -190,88 +218,87 @@ export function DashboardChartTile({
           )}
         </div>
         <DashboardConfidenceFlag chart={chart} />
-        <button
-          ref={menuButton}
-          type="button"
-          className={styles.tileMenuButton}
-          aria-label={`More actions for ${chart.title}`}
-          aria-expanded={menuOpen}
-          aria-haspopup="dialog"
-          onClick={() => setMenuOpen((open) => !open)}
-        >
-          •••
-        </button>
-        <AriaPopover
-          className={styles.tileMenuPanel}
-          placement="bottom end"
-          offset={7}
-          triggerRef={menuButton}
+        <AriaDialogTrigger
           isOpen={menuOpen}
           onOpenChange={setMenuOpen}
-          isNonModal
         >
-          <AriaDialog
-            className={styles.tileMenuDialog}
-            aria-label={`Actions for ${chart.title}`}
+          <AriaButton
+            ref={menuButton}
+            className={styles.tileMenuButton}
+            aria-label={`More actions for ${chart.title}`}
           >
-            {result ? (
-              <div className={styles.tileMenuMeta}>
-                <span>
-                  {result.completeness === "complete"
-                    ? "Complete result"
-                    : "Result may be incomplete"}
-                </span>
-                <span>
-                  Updated {formatDashboardTimestamp(result.freshnessAt, result)}
-                </span>
-                {result.cacheState === "stale_refreshing" ? (
-                  <span>Updating cached result</span>
-                ) : result.cacheState === "cached_source_unavailable" ? (
-                  <span>Showing cached data</span>
-                ) : null}
-                {unaffectedFilters ? (
-                  <span>
-                    {unaffectedFilters} unmapped filter
-                    {unaffectedFilters === 1 ? "" : "s"}
-                  </span>
-                ) : null}
-              </div>
-            ) : null}
-            <button
-              type="button"
-              disabled={!result}
-              onClick={() => {
-                setMenuOpen(false);
-                setShowData(true);
-              }}
+            •••
+          </AriaButton>
+          <AriaPopover
+            ref={menuPanel}
+            className={styles.tileMenuPanel}
+            placement="bottom end"
+            offset={7}
+          >
+            <AriaDialog
+              className={styles.tileMenuDialog}
+              aria-label={`Actions for ${chart.title}`}
             >
-              View data
-            </button>
-            {onAnalyze ? (
+              {result ? (
+                <div className={styles.tileMenuMeta}>
+                  <span>
+                    {result.completeness === "complete"
+                      ? "Complete result"
+                      : "Result may be incomplete"}
+                  </span>
+                  <span>
+                    Updated{" "}
+                    {formatDashboardTimestamp(result.freshnessAt, result)}
+                  </span>
+                  {result.cacheState === "stale_refreshing" ? (
+                    <span>Updating cached result</span>
+                  ) : result.cacheState === "cached_source_unavailable" ? (
+                    <span>Showing cached data</span>
+                  ) : null}
+                  {unaffectedFilters ? (
+                    <span>
+                      {unaffectedFilters} unmapped filter
+                      {unaffectedFilters === 1 ? "" : "s"}
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
               <button
                 type="button"
                 disabled={!result}
                 onClick={() => {
                   setMenuOpen(false);
-                  onAnalyze();
+                  setShowData(true);
                 }}
               >
-                Analyze this change
+                View data
               </button>
-            ) : null}
-            {onDetails ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setMenuOpen(false);
-                  onDetails();
-                }}
-              >
-                Details
-              </button>
-            ) : null}
-          </AriaDialog>
-        </AriaPopover>
+              {onAnalyze ? (
+                <button
+                  type="button"
+                  disabled={!result}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onAnalyze();
+                  }}
+                >
+                  Analyze this change
+                </button>
+              ) : null}
+              {onDetails ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onDetails();
+                  }}
+                >
+                  Details
+                </button>
+              ) : null}
+            </AriaDialog>
+          </AriaPopover>
+        </AriaDialogTrigger>
       </header>
       {drillBreadcrumb.length ? (
         <nav

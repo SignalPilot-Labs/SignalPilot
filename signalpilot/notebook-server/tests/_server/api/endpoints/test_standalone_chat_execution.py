@@ -716,3 +716,26 @@ async def test_two_dirty_attempts_emit_one_validation_error_and_no_final(
     # Narration may stream, but a rejected run never emits an accepted answer.
     assert all(event["type"] not in {"final", "text"} for event in events)
     assert archive_calls == []
+
+
+def test_tree_digest_ignores_generated_tooling_artifacts(tmp_path: Path) -> None:
+    (tmp_path / "models").mkdir()
+    (tmp_path / "models" / "orders.sql").write_text("select 1", encoding="utf-8")
+    (tmp_path / "dbt_project.yml").write_text("name: demo", encoding="utf-8")
+    baseline = standalone_chat._tree_digest(tmp_path)
+
+    # dbt/python tooling side effects during a read-only analysis must not
+    # change the digest — only project source is frozen.
+    (tmp_path / "target").mkdir()
+    (tmp_path / "target" / "manifest.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs" / "dbt.log").write_text("log", encoding="utf-8")
+    (tmp_path / ".user.yml").write_text("id: x", encoding="utf-8")
+    (tmp_path / "models" / "__pycache__").mkdir()
+    (tmp_path / "models" / "__pycache__" / "m.pyc").write_bytes(b"\x00")
+    assert standalone_chat._tree_digest(tmp_path) == baseline
+    assert standalone_chat._project_is_unchanged(tmp_path, baseline)
+
+    # Real source edits still trip the check.
+    (tmp_path / "models" / "orders.sql").write_text("select 2", encoding="utf-8")
+    assert not standalone_chat._project_is_unchanged(tmp_path, baseline)

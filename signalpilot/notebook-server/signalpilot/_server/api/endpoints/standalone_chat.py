@@ -157,6 +157,7 @@ Rules:
 - Do not catch or suppress publication exceptions. A failed `sp.publish_result` or `sp.publish_artifact` means the analysis is incomplete and must not be reported as successful.
 - Ask for clarification only when exploration leaves a material ambiguity that would change the answer. If needed, return exactly `CLARIFICATION_REQUESTED: <one conversational question>`.
 - Choose text, a table, a chart, or a report automatically. Publish every displayed table, chart, or report with the publication tools.
+- A requested chart is a hard deliverable: if the user asked for a chart, the completed answer must include one published chart. When the rows are already in hand from a governed query_database result (for example a small ranked or aggregated set), publish it directly with the standalone-chat publish_chart tool, passing that result_id and the rows — no notebook is required for this path. Never abandon a requested chart because a plan routed to mcp; route restrictions govern how data is fetched, not whether the chart ships.
 - Close every completed answer with the "so what": the specific action the numbers support, with its quantified impact when the data allows (for example "prioritize X — it recovers roughly $Y per quarter"). If the data supports no action, say what to watch and when to re-check. Never end on a table alone.
 - Never guess. State freshness, assumptions, exclusions, truncation, and caveats explicitly.
 - Explicitly disclose incomplete, unknown-completeness, or display-limited results.
@@ -773,13 +774,23 @@ async def _execution_project_directory(
     return checkout, True
 
 
+# Ephemeral outputs that dbt/python tooling drops into the checkout during a
+# read-only analysis. They are not project source, so they must not trip the
+# integrity check — only human-authored files are frozen.
+_DIGEST_IGNORED_DIRS = frozenset(
+    {"target", "logs", "dbt_packages", "__pycache__", ".ruff_cache", ".pytest_cache"}
+)
+_DIGEST_IGNORED_FILES = frozenset({".user.yml", "package-lock.yml"})
+
+
 def _tree_digest(directory: Path) -> str:
     """Content digest of a materialized checkout.
 
     Replaces the git-status integrity check from the worktree era: the frozen
     checkout has no git, so 'unchanged' means every file's bytes hash the same
     as when the run started. Path order is normalized so the digest is stable
-    across platforms.
+    across platforms. Generated artifacts (dbt target/, logs/, caches) are
+    excluded on both the baseline and the final check.
     """
     import hashlib
 
@@ -787,7 +798,12 @@ def _tree_digest(directory: Path) -> str:
     for path in sorted(directory.rglob("*"), key=lambda p: p.as_posix()):
         if not path.is_file():
             continue
-        digest.update(path.relative_to(directory).as_posix().encode("utf-8"))
+        relative = path.relative_to(directory)
+        if any(part in _DIGEST_IGNORED_DIRS for part in relative.parts[:-1]):
+            continue
+        if relative.name in _DIGEST_IGNORED_FILES or relative.name.endswith(".log"):
+            continue
+        digest.update(relative.as_posix().encode("utf-8"))
         digest.update(b"\0")
         digest.update(hashlib.sha256(path.read_bytes()).digest())
     return digest.hexdigest()

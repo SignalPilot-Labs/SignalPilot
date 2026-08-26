@@ -10,6 +10,8 @@ import logging
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
+from ..log_redaction import redact_secret_path
+
 logger = logging.getLogger(__name__)
 
 # Paths that don't require authentication.
@@ -158,7 +160,7 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
             logger.info(
                 "request %s %s user=%s request_id=%s",
                 request.method,
-                request.url.path,
+                redact_secret_path(request.url.path),
                 "local",
                 request_id,
             )
@@ -209,7 +211,7 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
                     logger.info(
                         "request %s %s user=%s request_id=%s",
                         request.method,
-                        request.url.path,
+                        redact_secret_path(request.url.path),
                         matched.user_id,
                         request_id,
                     )

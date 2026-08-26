@@ -3,7 +3,7 @@
 Covers selection via SP_EVAL_EXECUTION_BACKEND, credential gating, the
 bootstrap/exec/destroy lifecycle against a fake runtime, secret handling
 (exec env only, never the creation spec), timeout mapping, and the
-bind-mount refusal shared with the Kubernetes backend.
+bind-mount refusal.
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from gateway.evals.backends import (
     TIMED_OUT,
     ContainerRun,
     DockerBackend,
-    KubernetesBackend,
     VercelBackend,
     get_execution_backend,
 )
@@ -109,10 +108,8 @@ class TestSelection:
 
     def test_default_backend_unchanged(self, monkeypatch):
         monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
-        backend = get_execution_backend(
-            _settings(SP_EVAL_EXECUTION_BACKEND=""), org_id="org_1"
-        )
-        assert isinstance(backend, KubernetesBackend)
+        with pytest.raises(RuntimeError, match="SP_EVAL_EXECUTION_BACKEND=vercel"):
+            get_execution_backend(_settings(SP_EVAL_EXECUTION_BACKEND=""), org_id="org_1")
         monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
         backend = get_execution_backend(
             _settings(SP_EVAL_EXECUTION_BACKEND=""), org_id="org_1"

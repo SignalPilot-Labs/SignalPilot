@@ -15,7 +15,6 @@ from signalpilot._config.config import (
     DisplayConfig,
     SpConfig,
 )
-from signalpilot._config.settings import GLOBAL_SETTINGS
 from signalpilot._config.utils import deep_copy
 from signalpilot._convert.common.dom_traversal import (
     replace_virtual_files_with_data_uris,
@@ -49,8 +48,8 @@ from signalpilot._types.ids import CellId_t
 from signalpilot._utils import async_path
 from signalpilot._utils.code import hash_code
 from signalpilot._utils.data_uri import build_data_url
+from signalpilot._utils.paths import notebook_output_dir, sp_package_path
 from signalpilot._utils.sp_path import SpPath
-from signalpilot._utils.paths import sp_package_path, notebook_output_dir
 from signalpilot._version import __version__
 
 if TYPE_CHECKING:
@@ -782,15 +781,5 @@ class AutoExporter:
 
 
 def get_html_contents() -> str:
-    if GLOBAL_SETTINGS.DEVELOPMENT_MODE:
-        from signalpilot._utils import requests
-
-        # Fetch from a CDN
-        LOGGER.info(
-            "Fetching index.html from jsdelivr because in development mode"
-        )
-        url = f"https://cdn.jsdelivr.net/npm/@signalpilot-team/frontend@{__version__}/dist/index.html"
-        return requests.get(url).text()
-
     index_html = Path(ROOT) / "index.html"
     return index_html.read_text(encoding="utf-8")

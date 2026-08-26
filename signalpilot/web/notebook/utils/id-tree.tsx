@@ -798,7 +798,7 @@ export class MultiColumn<T> {
     return new MultiColumn(newColumns);
   }
 
-  deleteById(columnId: CellColumnId): MultiColumn<T> {
+  deleteColumnById(columnId: CellColumnId): MultiColumn<T> {
     // Move cells to preceding column
     // If its the first column, move the cells to the next column
 

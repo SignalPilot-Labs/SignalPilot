@@ -51,7 +51,7 @@ describe("StandaloneArtifactContext", () => {
         originalScrollHeight,
       );
     } else {
-      delete (HTMLElement.prototype as Partial<HTMLElement>).scrollHeight;
+      Reflect.deleteProperty(HTMLElement.prototype, "scrollHeight");
     }
   });
 

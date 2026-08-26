@@ -38,9 +38,6 @@ dependencies = [
     "pyarrow>=17.0.0",
     # AWS SDK — BYOK KMS + connector IAM auth (Redshift/RDS)
     "boto3>=1.34.0",
-    # Kubernetes orchestrator (K3s locally, EKS in production)
-    # Pinned to >=32,<33 — uses kubernetes_asyncio.stream.WsApiClient (S9).
-    "kubernetes-asyncio>=32,<33",
     # Vercel Sandbox runtime for automated improvement runs
     "vercel>=0.9.0,<1",
     "alembic>=1.13",

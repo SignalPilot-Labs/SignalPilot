@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.auth.notebook_jwt import mint_session_jwt
-from gateway.config.k8s import get_k8s_settings
+from gateway.config.gateway import get_gateway_settings
 from gateway.config.notebooks import get_notebook_settings
 from gateway.models.notebook_sessions import NotebookSessionInfo
 from gateway.notebooks.backends import (
@@ -99,7 +99,7 @@ def _web_url() -> str | None:
 
 
 def _public_gateway_url() -> str:
-    return get_k8s_settings().sp_public_gateway_url.rstrip("/")
+    return get_gateway_settings().sp_public_gateway_url.rstrip("/")
 
 
 async def _runtime_env(
@@ -341,7 +341,7 @@ async def ensure_notebook_session(
         capabilities=token_capabilities,
         execution_identity=token_execution_identity,
         scopes=token_scopes,
-        ttl=get_k8s_settings().sp_session_jwt_ttl_seconds,
+        ttl=get_gateway_settings().sp_session_jwt_ttl_seconds,
     )
     env = await _runtime_env(session, org_id=org_id, extra_env=extra_env)
 

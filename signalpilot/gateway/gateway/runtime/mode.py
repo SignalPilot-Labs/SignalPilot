@@ -69,19 +69,10 @@ def assert_cloud_hardening_intact() -> None:
     """Validate that security kill-switches are not disabled in cloud mode.
 
     This is the single canonical source for kill-switch enforcement at runtime.
-    A complementary early-failure path exists in gateway/config/k8s.py (pydantic
-    settings validation at instantiation time for SP_NOTEBOOK_RUNTIME_CLASS).
-    That path fires before lifespan; this validator catches any path that bypasses
-    pydantic settings instantiation (subprocess, test harness, misconfigured import).
 
     Enforced kill-switches and required settings (final list — extend only via spec revision):
       CLERK_JWT_AUDIENCE          — optional Clerk client binding; when set,
                                     auth/user.py validates JWT aud at request time.
-      SP_NOTEBOOK_NETWORK_POLICY  — case-insensitive "false" logs an explicit
-                                    cloud warning because gVisor + VPC CNI
-                                    NetworkPolicy currently breaks notebook
-                                    pod egress.
-      SP_NOTEBOOK_RUNTIME_CLASS   — empty string is forbidden
       SP_NOTEBOOK_DIRECT_URL      — any non-empty value is forbidden
       SP_DISABLE_SANDBOX          — case-insensitive "true", "1", "yes" is forbidden
       SP_ALLOWED_ORIGINS          — must be set; no wildcards; all entries must be
@@ -98,32 +89,6 @@ def assert_cloud_hardening_intact() -> None:
     # Clerk's default session JWTs may not carry an aud claim. Keep
     # CLERK_JWT_AUDIENCE as opt-in hardening: auth/user.py validates aud when
     # configured and disables aud verification only when it is absent.
-
-    # SP_NOTEBOOK_NETWORK_POLICY=false disables full default-deny in cloud mode.
-    # Full default-deny requires the AWS VPC CNI NetworkPolicy agent, whose eBPF
-    # enforcement does NOT compose with gVisor pods (the runsc userspace netstack
-    # egress isn't matched by the agent's ipBlock allow rules), so enabling it
-    # severs pod->gateway egress and breaks every notebook. The crown-jewel threat
-    # this kill-switch defends — node IAM credential theft via IMDS — is
-    # independently closed by the IMDS hop-limit=1 (verified: a pod's IMDSv2 token
-    # PUT times out) PLUS the always-on block-imds-egress NetworkPolicy.
-    # Revisit if/when gVisor + VPC CNI NetworkPolicy interop is fixed upstream.
-    # I-5: This used to require SP_NOTEBOOK_NETWORK_POLICY_CLOUD_ACK=1|true|yes.
-    # The active cloud demo can legitimately run with this set to false because
-    # VPC CNI NetworkPolicy and gVisor do not currently compose. Warn loudly at
-    # startup, but do not refuse to boot.
-    netpol = os.environ.get("SP_NOTEBOOK_NETWORK_POLICY", "true").strip().lower()
-    if netpol == "false":
-        logger.warning(
-            "SP_NOTEBOOK_NETWORK_POLICY=false in cloud mode: full default-deny is "
-            "disabled (gVisor + VPC CNI NetworkPolicy incompatibility). IMDS "
-            "credential theft remains blocked via hop-limit + block-imds-egress "
-            "policy; arbitrary outbound egress from notebooks is NOT restricted."
-        )
-
-    runtime_class = os.environ.get("SP_NOTEBOOK_RUNTIME_CLASS", "").strip()
-    if runtime_class == "":
-        violations.append("SP_NOTEBOOK_RUNTIME_CLASS")
 
     direct_url = os.environ.get("SP_NOTEBOOK_DIRECT_URL", "").strip()
     if direct_url:

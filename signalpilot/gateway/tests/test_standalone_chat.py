@@ -941,7 +941,7 @@ async def test_execution_uses_org_anthropic_key_as_request_scoped_auth(
     monkeypatch.setattr(chat_execution, "mint_session_jwt", lambda **_kwargs: "session-jwt")
     monkeypatch.setattr(
         chat_execution,
-        "get_k8s_settings",
+        "get_gateway_public_settings",
         lambda: SimpleNamespace(sp_session_jwt_ttl_seconds=300),
     )
     run = SimpleNamespace(

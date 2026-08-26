@@ -7,7 +7,7 @@ import os as _os
 from mcp.server.fastmcp import FastMCP
 
 from ..config import get_mcp_settings
-from ..config.k8s import get_k8s_settings
+from ..config.gateway_public import get_gateway_public_settings
 from ..runtime.mode import is_cloud_mode
 from .transport_security import build_allowed_hosts
 
@@ -19,7 +19,7 @@ if _extra_hosts:
 # Include hosts with port numbers. SP_PUBLIC_GATEWAY_PORT reflects the port
 # clients actually connect on (e.g. compose's SP_GATEWAY_PORT override), so
 # a remapped host port doesn't get rejected as an invalid Host header.
-_gateway_port = get_k8s_settings().sp_public_gateway_port
+_gateway_port = get_gateway_public_settings().sp_public_gateway_port
 _allowed_hosts_with_ports = build_allowed_hosts(
     _allowed_hosts,
     public_port=_gateway_port,

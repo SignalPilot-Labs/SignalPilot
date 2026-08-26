@@ -16,7 +16,6 @@ from gateway.evals.backends import (
     TIMED_OUT,
     ContainerRun,
     DockerBackend,
-    KubernetesBackend,
     VercelBackend,
     get_execution_backend,
 )
@@ -108,11 +107,11 @@ class TestSelection:
         assert isinstance(backend, VercelBackend)
 
     def test_default_backend_unchanged(self, monkeypatch):
+        # Cloud without an explicit vercel opt-in refuses (the Kubernetes
+        # backend was retired with the EKS estate); local still gets Docker.
         monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
-        backend = get_execution_backend(
-            _settings(SP_EVAL_EXECUTION_BACKEND=""), org_id="org_1"
-        )
-        assert isinstance(backend, KubernetesBackend)
+        with pytest.raises(RuntimeError, match="SP_EVAL_EXECUTION_BACKEND=vercel"):
+            get_execution_backend(_settings(SP_EVAL_EXECUTION_BACKEND=""), org_id="org_1")
         monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
         backend = get_execution_backend(
             _settings(SP_EVAL_EXECUTION_BACKEND=""), org_id="org_1"

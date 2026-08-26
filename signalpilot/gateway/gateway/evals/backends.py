@@ -2,14 +2,15 @@
 
 One seam, two implementations. `runner.py` describes a short-lived container
 (image, command, env, limits, timeout) and gets back (exit_code, logs); it does
-not know whether that ran on a Docker daemon or as a Kubernetes pod.
+not know where that ran.
 
-    local mode  -> DockerBackend      (host Docker Engine API over the unix socket)
-    cloud mode  -> KubernetesBackend  (short-lived sandboxed pod, no docker socket)
+    local mode  -> DockerBackend  (host Docker Engine API over the unix socket)
+    cloud mode  -> VercelBackend  (ephemeral Vercel sandbox VM; required)
 
 In cloud mode the Docker path is unreachable: `get_execution_backend` raises
-rather than falling back, so a misconfigured cluster can never silently hand
-eval workloads the host daemon.
+rather than falling back, so a misconfiguration can never silently hand
+eval workloads the host daemon. (The Kubernetes backend was retired with the
+EKS estate; eval workloads no longer run on cluster pods.)
 """
 
 from __future__ import annotations
@@ -41,12 +42,11 @@ class ContainerRun:
     """One short-lived container: what to run and what it may consume.
 
     `secret_env` carries credentials (Anthropic tokens, the per-run MCP API key
-    embedded in the MCP config). Backends must keep those out of any spec a
-    cluster operator can read back: on Kubernetes they ride a Secret, never the
-    pod spec.
+    embedded in the MCP config). Backends must keep those out of anything an
+    operator can read back.
 
     `binds` and `extra_network` are Docker-only host affordances used by the
-    state-setup path; KubernetesBackend refuses them rather than silently
+    state-setup path; other backends refuse them rather than silently
     dropping the mount a setup script depends on.
 
     `on_start` fires once the workload exists and carries its identity
@@ -185,241 +185,6 @@ _TMP_DIR = "/tmp"  # nosec B108 - This path is a mounted container directory.
 _REPO_DIR = "/repo"
 
 
-def eval_pod_manifest(
-    *,
-    pod_name: str,
-    namespace: str,
-    spec: ContainerRun,
-    secret_name: str,
-    resources: dict | None = None,
-) -> dict:
-    """Pod spec for one eval workload.
-
-    restartPolicy Never rather than a Job: the runner already owns retry,
-    sequencing and timeout policy, and a bare Pod is the object it can name,
-    poll, read logs from and delete without a controller re-creating it or a
-    second object to garbage-collect. It also matches the notebook machinery,
-    so both sandboxed workloads share one scheduling and hardening story.
-
-    Credentials are never in this spec: they arrive via envFrom on the
-    ownerRef'd Secret, so `kubectl describe pod` and pod events show nothing.
-
-    `spec.memory_bytes`/`nano_cpus` size the Docker path only. Pod sizing comes
-    from settings (SP_EVAL_CPU_*/MEMORY_*/EPHEMERAL_*) and matches the notebook
-    pod: eval pods land on the same sandbox node group, so a limit above that
-    node's allocatable capacity is unschedulable rather than generous.
-    """
-    from ..orchestrator.kubernetes import _k8s_label_value, sandbox_scheduling
-
-    if resources is None:
-        from ..config.evals import get_eval_run_settings
-
-        resources = get_eval_run_settings().pod_resources
-
-    return {
-        "apiVersion": "v1",
-        "kind": "Pod",
-        "metadata": {
-            "name": pod_name,
-            "namespace": namespace,
-            "labels": {
-                "app": "signalpilot-eval",
-                _EVAL_POD_LABEL: "1",
-                **{f"{_EVAL_POD_LABEL}-{k}": _k8s_label_value(v, k) for k, v in spec.labels.items()},
-            },
-        },
-        "spec": {
-            **sandbox_scheduling(),
-            # The eval workload runs untrusted model-authored commands; it must
-            # not be able to reach the Kubernetes API at all.
-            "automountServiceAccountToken": False,
-            "enableServiceLinks": False,
-            "restartPolicy": "Never",
-            # Backstop for a pod the runner loses track of: kubelet stops it even
-            # if the gateway replica that created it died mid-run.
-            "activeDeadlineSeconds": spec.timeout_seconds,
-            "terminationGracePeriodSeconds": 5,
-            "securityContext": {
-                "runAsNonRoot": True,
-                "runAsUser": 10002,
-                "runAsGroup": 10002,
-                "fsGroup": 10002,
-                "fsGroupChangePolicy": "OnRootMismatch",
-                "seccompProfile": {"type": "RuntimeDefault"},
-            },
-            "containers": [
-                {
-                    "name": "eval",
-                    "image": spec.image,
-                    "imagePullPolicy": "IfNotPresent",
-                    "command": spec.command,
-                    "env": [{"name": k, "value": v} for k, v in {"HOME": _WORK_DIR, **spec.env}.items()],
-                    "envFrom": [{"secretRef": {"name": secret_name}}],
-                    "workingDir": _WORK_DIR,
-                    "resources": resources,
-                    "securityContext": {
-                        "runAsNonRoot": True,
-                        "allowPrivilegeEscalation": False,
-                        "readOnlyRootFilesystem": True,
-                        "capabilities": {"drop": ["ALL"]},
-                        "seccompProfile": {"type": "RuntimeDefault"},
-                    },
-                    "volumeMounts": [
-                        {"name": "work", "mountPath": _WORK_DIR},
-                        {"name": "tmp", "mountPath": _TMP_DIR},
-                        {"name": "repo", "mountPath": _REPO_DIR},
-                    ],
-                }
-            ],
-            "volumes": [
-                {"name": "work", "emptyDir": {"sizeLimit": "2Gi"}},
-                {"name": "tmp", "emptyDir": {"sizeLimit": "1Gi"}},
-                {"name": "repo", "emptyDir": {"sizeLimit": "4Gi"}},
-            ],
-        },
-    }
-
-
-class KubernetesBackend:
-    """One short-lived sandboxed pod per eval container.
-
-    Namespace layout mirrors notebooks: a per-org namespace built by
-    `ensure_org_namespace`, which installs the RoleBinding that grants this
-    gateway pods/secrets inside it, plus default-deny + allow-gateway
-    NetworkPolicies, a ResourceQuota and a LimitRange. The prefix is
-    SP_EVAL_K8S_NAMESPACE_PREFIX: see config/evals.py for why it defaults to
-    the notebook tenant prefix rather than a dedicated one.
-    """
-
-    def __init__(self, settings: EvalRunSettings, *, org_id: str) -> None:
-        if not org_id:
-            raise ValueError("org_id is required for the Kubernetes eval backend")
-        self._settings = settings
-        self._org_id = org_id
-        self._orchestrator = None
-
-    async def aclose(self) -> None:
-        if self._orchestrator is not None:
-            await self._orchestrator.close()
-            self._orchestrator = None
-
-    async def _namespace(self) -> str:
-        """Resolve (and bootstrap) the eval namespace for this org."""
-        if self._orchestrator is None:
-            import os
-
-            from ..orchestrator.kubernetes import KubernetesOrchestrator
-
-            # An eval pod runs model-authored code with a warehouse
-            # credential. Default-deny egress is not a hardening extra here,
-            # it is the wall between that pod and every notebook, in-cluster
-            # service and VPC endpoint around it. If the deployment has opted
-            # out of NetworkPolicy, this backend refuses to start rather than
-            # run the agent on a flat network.
-            if os.getenv("SP_NOTEBOOK_NETWORK_POLICY", "true").lower() == "false":
-                raise RuntimeError(
-                    "Eval runs refuse to start: SP_NOTEBOOK_NETWORK_POLICY=false leaves eval "
-                    "pods on a flat network with notebooks, cluster services and VPC endpoints. "
-                    "Enable NetworkPolicy for eval namespaces before enabling the harness."
-                )
-
-            orch = KubernetesOrchestrator()
-            await orch._ensure_client()
-            if orch._core_api is None:
-                raise RuntimeError(
-                    "Kubernetes eval backend unavailable: no usable cluster config. "
-                    "Eval runs do not fall back to the Docker socket in cloud mode."
-                )
-            orch._namespace_prefix = self._settings.k8s_namespace_prefix
-            self._orchestrator = orch
-        return await self._orchestrator.ensure_namespace(self._org_id)
-
-    async def run(self, spec: ContainerRun) -> tuple[int, str]:
-        if spec.binds or spec.extra_network:
-            raise RuntimeError(
-                "This eval set needs host bind mounts or an extra docker network, "
-                "which the Kubernetes backend cannot provide. Use a git eval repo "
-                "with a self-contained setup script."
-            )
-        ns = await self._namespace()
-        core = self._orchestrator._core_api
-        pod_name = f"sp-eval-{uuid.uuid4().hex[:12]}"
-        secret_name = f"sp-eval-env-{pod_name}"
-        manifest = eval_pod_manifest(
-            pod_name=pod_name,
-            namespace=ns,
-            spec=spec,
-            secret_name=secret_name,
-            resources=self._settings.pod_resources,
-        )
-
-        from ..orchestrator.secret_lifecycle import create_secret_with_owner_ref
-
-        await create_secret_with_owner_ref(
-            core,
-            namespace=ns,
-            secret_name=secret_name,
-            values=dict(spec.secret_env),
-            pod_name=pod_name,
-            create_pod_fn=lambda: core.create_namespaced_pod(namespace=ns, body=manifest),
-        )
-        _notify_start(spec, {"backend": "kubernetes", "name": pod_name, "namespace": ns})
-        try:
-            exit_code = await self._wait_terminal(core, pod_name, ns, spec.timeout_seconds)
-            logs = await self._read_logs(core, pod_name, ns)
-            return exit_code, logs
-        finally:
-            await self._delete(core, pod_name, secret_name, ns)
-
-    async def _wait_terminal(self, core, pod_name: str, ns: str, timeout: int) -> int:
-        """Poll until the pod terminates. Returns its exit code, or TIMED_OUT."""
-        # Grace beyond activeDeadlineSeconds so the kubelet's own kill is observed
-        # as a terminal phase rather than racing this loop.
-        deadline = asyncio.get_event_loop().time() + timeout + 60
-        while asyncio.get_event_loop().time() < deadline:
-            pod = (await core.read_namespaced_pod(name=pod_name, namespace=ns)).to_dict()
-            status = pod.get("status") or {}
-            phase = (status.get("phase") or "").lower()
-            if phase in ("succeeded", "failed"):
-                # activeDeadlineSeconds fired: report it the way the Docker
-                # path reports its own timeout, so grading treats them alike.
-                if status.get("reason") == "DeadlineExceeded":
-                    return TIMED_OUT
-                for cs in status.get("container_statuses") or []:
-                    term = (cs.get("state") or {}).get("terminated") or {}
-                    if "exit_code" in term:
-                        return int(term["exit_code"])
-                return 0 if phase == "succeeded" else 1
-            await asyncio.sleep(1.0)
-        return TIMED_OUT
-
-    async def _read_logs(self, core, pod_name: str, ns: str) -> str:
-        try:
-            return str(await core.read_namespaced_pod_log(name=pod_name, namespace=ns, container="eval"))
-        except Exception as exc:
-            logger.warning("Failed to read eval pod logs %s/%s: %s", ns, pod_name, exc)
-            return ""
-
-    async def _delete(self, core, pod_name: str, secret_name: str, ns: str) -> None:
-        # Kube GC removes the ownerRef'd Secret with the Pod, but that is
-        # asynchronous and best-effort; delete it explicitly so a credential
-        # never outlives the run it was minted for.
-        for call, what in (
-            (lambda: core.delete_namespaced_pod(name=pod_name, namespace=ns, grace_period_seconds=0), "pod"),
-            (lambda: core.delete_namespaced_secret(name=secret_name, namespace=ns), "secret"),
-        ):
-            try:
-                await call()
-            except Exception as exc:
-                if "404" not in str(exc) and "Not Found" not in str(exc):
-                    logger.warning("Failed to delete eval %s %s/%s: %s", what, ns, pod_name, exc)
-
-
-# Vercel.
-
-# Prepares a fresh Vercel sandbox for the runner script: the script assumes
-# /work exists and `claude` is on PATH — both baked into the runner image on
-# the container backends, neither present in a stock sandbox.
 _VERCEL_BOOTSTRAP = (
     "sudo mkdir -p /work && sudo chown \"$(id -u):$(id -g)\" /work && "
     "command -v claude >/dev/null 2>&1 || sudo npm install -g @anthropic-ai/claude-code"
@@ -544,60 +309,6 @@ class VercelBackend:
 # outcome, then they are removed. The run path deletes its own pod in a
 # finally block; this only catches pods stranded by a gateway crash/restart
 # mid-run — bare pods have no TTL, so without it they live forever.
-_EVAL_POD_REAP_AGE_SECONDS = 3600
-
-
-async def reap_terminal_eval_pods(orch, *, max_age_seconds: int = _EVAL_POD_REAP_AGE_SECONDS) -> int:
-    """Delete eval pods (and their env Secrets) in a terminal phase past the age cap.
-
-    `orch` is a KubernetesOrchestrator with an initialized client. Returns the
-    number of pods deleted; permission or listing failures return 0 rather
-    than raising — the cleanup loop must survive a partially-scoped RBAC.
-    """
-    from datetime import UTC, datetime
-
-    await orch._ensure_client()
-    core = orch._core_api
-    if core is None:
-        return 0
-    try:
-        pods = (await core.list_pod_for_all_namespaces(label_selector=f"{_EVAL_POD_LABEL}=1")).to_dict()
-    except Exception as exc:
-        logger.warning("Eval-pod reaper: cannot list pods (%s)", exc)
-        return 0
-
-    now = datetime.now(UTC)
-    deleted = 0
-    for pod in pods.get("items") or []:
-        meta = pod.get("metadata") or {}
-        phase = ((pod.get("status") or {}).get("phase") or "").lower()
-        if phase not in ("succeeded", "failed"):
-            continue
-        created = meta.get("creation_timestamp")
-        if created is not None and (now - created).total_seconds() < max_age_seconds:
-            continue
-        name, ns = meta.get("name") or "", meta.get("namespace") or ""
-        if not name or not ns:
-            continue
-        try:
-            await core.delete_namespaced_pod(name=name, namespace=ns, grace_period_seconds=0)
-            deleted += 1
-            logger.info("Eval-pod reaper: deleted terminal pod %s/%s (phase=%s)", ns, name, phase)
-        except Exception as exc:
-            if "404" not in str(exc):
-                logger.warning("Eval-pod reaper: failed to delete %s/%s: %s", ns, name, exc)
-            continue
-        # The env Secret is ownerRef'd to the pod, but GC is best-effort and a
-        # credential must not outlive the reaped pod.
-        try:
-            await core.delete_namespaced_secret(name=f"sp-eval-env-{name}", namespace=ns)
-        except Exception as exc:
-            if "404" not in str(exc) and "Not Found" not in str(exc):
-                logger.warning("Eval-pod reaper: failed to delete secret for %s/%s: %s", ns, name, exc)
-    return deleted
-
-
-# Selection.
 
 
 def get_execution_backend(settings: EvalRunSettings, *, org_id: str) -> ExecutionBackend:
@@ -613,5 +324,9 @@ def get_execution_backend(settings: EvalRunSettings, *, org_id: str) -> Executio
     if settings.execution_backend == "vercel":
         return VercelBackend(settings, org_id=org_id)
     if is_cloud_mode():
-        return KubernetesBackend(settings, org_id=org_id)
+        raise RuntimeError(
+            "Cloud mode requires SP_EVAL_EXECUTION_BACKEND=vercel — the "
+            "Kubernetes eval backend was retired with the EKS estate, and "
+            "cloud never hands eval workloads the host Docker daemon."
+        )
     return DockerBackend(settings)

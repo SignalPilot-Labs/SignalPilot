@@ -2,20 +2,16 @@
 
 backends.py owns the write side: creating, waiting on and deleting the
 container that runs one eval question. This is the read side: what is alive
-right now, why a pod that is not Running is not Running, and a bounded live tail
-of its output. Nothing here mutates cluster or daemon state.
+right now, and a bounded live tail of its output. Nothing here mutates daemon
+or provider state.
 
-Org scoping differs by backend and both are enforced here:
+Org scoping is enforced here: no namespaces exist, so a container or sandbox
+is visible only when the run id it is attributed to resolves to a run under
+the caller's own eval root.
 
-    kubernetes  the per-org namespace, which is also the only namespace the
-                gateway's RoleBinding lets it read
-    docker      no namespaces exist, so a container is visible only when the
-                run id in its labels resolves to a run under the caller's own
-                eval root
-
-Nothing that could carry a credential is emitted. Pod/container specs are never
-returned (that is where env lives); free text that a cluster can put in front of
-us: event messages, container state messages: goes through `redact` first.
+Nothing that could carry a credential is emitted. Container specs are never
+returned (that is where env lives); free text a daemon can put in front of
+us — container state messages — goes through `redact` first.
 """
 
 from __future__ import annotations
@@ -33,7 +29,7 @@ import httpx
 
 from ..config.evals import EvalRunSettings, get_eval_run_settings
 from . import runner
-from .backends import _DOCKER_API, _EVAL_POD_LABEL
+from .backends import _DOCKER_API
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +37,6 @@ logger = logging.getLogger(__name__)
 LOG_STREAM_MAX_BYTES = 2_000_000
 LOG_STREAM_MAX_SECONDS = 1800
 
-_POD_LABEL_SELECTOR = f"{_EVAL_POD_LABEL}=1"
 _DOCKER_LABEL = "signalpilot.eval"
 
 # The Vercel alternative requires >=3 lowercase words plus a random suffix
@@ -182,300 +177,11 @@ def _age_seconds(value) -> int | None:
     return max(0, int((datetime.now(UTC) - moment).total_seconds()))
 
 
-def _pick(d: dict, *names, default=None):
-    """Read the first present key: kubernetes_asyncio `to_dict()` is snake_case
-    but a raw manifest dict is camelCase, and tests feed both."""
-    for name in names:
-        if name in d and d[name] is not None:
-            return d[name]
-    return default
-
-
 class SandboxView(Protocol):
     async def inventory(self) -> dict: ...
     async def events(self, name: str) -> dict: ...
     def stream_logs(self, name: str, *, tail_lines: int) -> AsyncIterator[tuple[str, str]]: ...
     async def aclose(self) -> None: ...
-
-
-# Kubernetes.
-
-
-class KubernetesSandboxView:
-    """Pods, events and live logs for one org's eval namespace."""
-
-    backend = "kubernetes"
-    supports_live_logs = True
-
-    def __init__(self, settings: EvalRunSettings, *, org_id: str) -> None:
-        if not org_id:
-            raise ValueError("org_id is required to read eval sandboxes")
-        self._settings = settings
-        self._org_id = org_id
-        self._orchestrator = None
-        self._namespace = ""
-
-    async def aclose(self) -> None:
-        if self._orchestrator is not None:
-            await self._orchestrator.close()
-            self._orchestrator = None
-
-    async def _connect(self) -> tuple[object, str]:
-        """(core api, namespace), or (None, "") when no cluster is reachable.
-
-        Resolves the namespace without bootstrapping it: the panel is read-only,
-        so an org that has never run an eval reports "no sandboxes", it does not
-        provision a namespace as a side effect of someone opening a page.
-        """
-        if self._orchestrator is None:
-            from ..orchestrator.kubernetes import KubernetesOrchestrator
-
-            try:
-                orch = KubernetesOrchestrator()
-                await orch._ensure_client()
-            except Exception as exc:
-                logger.warning("Eval sandbox view: no Kubernetes client (%s)", exc)
-                return None, ""
-            if orch._core_api is None:
-                return None, ""
-            orch._namespace_prefix = self._settings.k8s_namespace_prefix
-            self._orchestrator = orch
-            self._namespace = orch._resolve_namespace(self._org_id)
-        return self._orchestrator._core_api, self._namespace
-
-    async def inventory(self) -> dict:
-        core, ns = await self._connect()
-        if core is None:
-            return {
-                "backend": self.backend,
-                "live": False,
-                "supports_live_logs": True,
-                "namespace": "",
-                "message": "No reachable Kubernetes cluster — sandbox introspection is unavailable.",
-                "sandboxes": [],
-            }
-        owners = await runner.sandbox_index(self._org_id)
-        try:
-            resp = await core.list_namespaced_pod(
-                namespace=ns, label_selector=_POD_LABEL_SELECTOR
-            )
-        except Exception as exc:
-            # A namespace that does not exist yet is the normal "never ran an
-            # eval here" case, not an error worth surfacing as a failure.
-            if _is_not_found(exc):
-                return _empty_inventory(self.backend, ns)
-            logger.warning("Eval sandbox list failed in %s: %s", ns, exc)
-            return {
-                "backend": self.backend,
-                "live": False,
-                "supports_live_logs": True,
-                "namespace": ns,
-                "message": f"Could not list eval pods: {type(exc).__name__}",
-                "sandboxes": [],
-            }
-        items = _as_dict(resp).get("items") or []
-        return {
-            "backend": self.backend,
-            "live": True,
-            "supports_live_logs": True,
-            "namespace": ns,
-            "message": "",
-            "sandboxes": [_shape_pod(pod, owners) for pod in items],
-        }
-
-    async def events(self, name: str) -> dict:
-        core, ns = await self._connect()
-        if core is None:
-            return {"backend": self.backend, "supported": True, "message": "No reachable Kubernetes cluster.", "events": []}
-        try:
-            resp = await core.list_namespaced_event(
-                namespace=ns,
-                field_selector=f"involvedObject.name={name},involvedObject.kind=Pod",
-            )
-        except Exception as exc:
-            if _is_not_found(exc):
-                return {"backend": self.backend, "supported": True, "message": "", "events": []}
-            logger.warning("Eval sandbox events failed for %s/%s: %s", ns, name, exc)
-            return {
-                "backend": self.backend,
-                "supported": True,
-                "message": f"Could not read events: {type(exc).__name__}",
-                "events": [],
-            }
-        events = [_shape_event(e) for e in (_as_dict(resp).get("items") or [])]
-        events.sort(key=lambda e: e["last_seen"])
-        return {"backend": self.backend, "supported": True, "message": "", "events": events[-50:]}
-
-    async def stream_logs(self, name: str, *, tail_lines: int) -> AsyncIterator[tuple[str, str]]:
-        core, ns = await self._connect()
-        if core is None:
-            yield "end", "no-cluster"
-            return
-        try:
-            resp = await core.read_namespaced_pod_log(
-                name=name,
-                namespace=ns,
-                container="eval",
-                follow=True,
-                tail_lines=tail_lines,
-                _preload_content=False,
-            )
-        except Exception as exc:
-            yield "error", f"could not attach to {name}: {type(exc).__name__}"
-            yield "end", "attach-failed"
-            return
-
-        sent = 0
-        redactor = _RedactionBuffer()
-        deadline = asyncio.get_event_loop().time() + LOG_STREAM_MAX_SECONDS
-        try:
-            async for chunk in resp.content.iter_chunked(4096):
-                text = chunk.decode("utf-8", errors="replace")
-                sent += len(chunk)
-                if safe := redactor.feed(text):
-                    yield "log", safe
-                if sent >= LOG_STREAM_MAX_BYTES:
-                    if safe := redactor.flush():
-                        yield "log", safe
-                    yield "end", "byte-cap"
-                    return
-                if asyncio.get_event_loop().time() >= deadline:
-                    if safe := redactor.flush():
-                        yield "log", safe
-                    yield "end", "deadline"
-                    return
-            # The API server closes the follow stream when the container exits.
-            if safe := redactor.flush():
-                yield "log", safe
-            yield "end", "sandbox-exited"
-        finally:
-            _release(resp)
-
-
-def _empty_inventory(backend: str, namespace: str) -> dict:
-    return {
-        "backend": backend,
-        "live": True,
-        "supports_live_logs": backend == "kubernetes",
-        "namespace": namespace,
-        "message": "",
-        "sandboxes": [],
-    }
-
-
-def _is_not_found(exc: Exception) -> bool:
-    text = str(exc)
-    return "404" in text or "Not Found" in text or getattr(exc, "status", None) == 404
-
-
-def _as_dict(resp) -> dict:
-    return resp.to_dict() if hasattr(resp, "to_dict") else dict(resp)
-
-
-def _release(resp) -> None:
-    for attr in ("release", "close"):
-        fn = getattr(resp, attr, None)
-        if callable(fn):
-            try:
-                result = fn()
-                if asyncio.iscoroutine(result):
-                    asyncio.ensure_future(result)
-            except Exception:
-                pass
-            return
-
-
-def _container_state(status: dict) -> tuple[str, str, int, bool, bool]:
-    """(reason, message, restart_count, ready, oom_killed) for the eval container.
-
-    The reason is the field that separates "slow" from "broken":
-    ContainerCreating and ImagePullBackOff are both non-Running, only one of
-    them will ever finish.
-
-    OOMKilled is called out separately because eval pods are sized like notebook
-    pods (512Mi), which a heavy question: a dbt build, say: can exceed. The
-    kubelet reports that as a terminated container with a non-zero exit code
-    like any other crash, so without this flag "the agent failed" and "we did
-    not give it enough memory" look identical in the panel.
-    """
-    statuses = _pick(status, "container_statuses", "containerStatuses", default=[]) or []
-    for cs in statuses:
-        state = cs.get("state") or {}
-        waiting, running, terminated = state.get("waiting"), state.get("running"), state.get("terminated")
-        restarts = int(_pick(cs, "restart_count", "restartCount", default=0) or 0)
-        ready = bool(cs.get("ready"))
-        # A container that OOMed and was restarted reports the kill under
-        # last_state, not state, so both are checked.
-        last_terminated = (_pick(cs, "last_state", "lastState", default={}) or {}).get("terminated") or {}
-        if waiting:
-            oom = str(last_terminated.get("reason") or "") == "OOMKilled"
-            return str(waiting.get("reason") or "Waiting"), redact(str(waiting.get("message") or "")), restarts, ready, oom
-        if terminated:
-            reason = str(terminated.get("reason") or "Terminated")
-            exit_code = _pick(terminated, "exit_code", "exitCode")
-            message = redact(str(terminated.get("message") or ""))
-            oom = reason == "OOMKilled" or str(last_terminated.get("reason") or "") == "OOMKilled"
-            if oom and not message:
-                message = "container exceeded its memory limit (SP_EVAL_MEMORY_LIMIT)"
-            if exit_code is not None:
-                message = f"exit {exit_code}{(' — ' + message) if message else ''}"
-            return reason, message, restarts, ready, oom
-        if running:
-            oom = str(last_terminated.get("reason") or "") == "OOMKilled"
-            return "Running", "", restarts, ready, oom
-    pod_reason = _pick(status, "reason", default="")
-    return str(pod_reason or "Pending"), redact(str(_pick(status, "message", default="") or "")), 0, False, False
-
-
-def _shape_pod(pod: dict, owners: dict[str, dict]) -> dict:
-    meta = pod.get("metadata") or {}
-    status = pod.get("status") or {}
-    spec = pod.get("spec") or {}
-    name = str(meta.get("name") or "")
-    labels = meta.get("labels") or {}
-    reason, message, restarts, ready, oom_killed = _container_state(status)
-    owner = owners.get(name, {})
-    created = _pick(meta, "creation_timestamp", "creationTimestamp")
-    return {
-        "name": name,
-        "backend": "kubernetes",
-        "phase": str(status.get("phase") or "Unknown").lower(),
-        "reason": reason,
-        "message": message,
-        "ready": ready,
-        "oom_killed": oom_killed,
-        "restart_count": restarts,
-        "node": str(_pick(spec, "node_name", "nodeName", default="") or ""),
-        "created_at": _iso(created),
-        "started_at": _iso(_pick(status, "start_time", "startTime")),
-        "age_seconds": _age_seconds(created),
-        # Run state provides the original task identifier.
-        # Kubernetes labels replace unsupported characters and cannot provide this identifier.
-        "run_id": owner.get("run_id") or str(labels.get(f"{_EVAL_POD_LABEL}-run") or ""),
-        "task_id": owner.get("task_id") or str(labels.get(f"{_EVAL_POD_LABEL}-task") or ""),
-        "task_title": owner.get("task_title", ""),
-        "task_phase": owner.get("task_phase") or str(labels.get(f"{_EVAL_POD_LABEL}-phase") or "agent"),
-    }
-
-
-def _shape_event(event: dict) -> dict:
-    source = event.get("source") or {}
-    series = event.get("series") or {}
-    last = (
-        _pick(event, "last_timestamp", "lastTimestamp")
-        or _pick(series, "last_observed_time", "lastObservedTime")
-        or _pick(event, "event_time", "eventTime")
-    )
-    return {
-        "type": str(event.get("type") or "Normal"),
-        "reason": str(event.get("reason") or ""),
-        "message": redact(str(event.get("message") or "")),
-        "count": int(event.get("count") or series.get("count") or 1),
-        "first_seen": _iso(_pick(event, "first_timestamp", "firstTimestamp")),
-        "last_seen": _iso(last),
-        "age_seconds": _age_seconds(last),
-        "source": str(_pick(source, "component", default="") or ""),
-    }
 
 
 # Docker.
@@ -810,5 +516,8 @@ def get_sandbox_view(org_id: str) -> SandboxView:
     if settings.execution_backend == "vercel":
         return VercelSandboxView(settings, org_id=org_id)
     if is_cloud_mode():
-        return KubernetesSandboxView(settings, org_id=org_id)
+        raise RuntimeError(
+            "Eval execution backend not configured for cloud mode: set "
+            "SP_EVAL_EXECUTION_BACKEND=vercel (the Kubernetes eval backend was removed)."
+        )
     return DockerSandboxView(settings, org_id=org_id)

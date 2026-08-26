@@ -790,7 +790,6 @@ class TestCloudAllowedOriginsHardening:
     _REQUIRED_ENVS = {
         "SP_DEPLOYMENT_MODE": "cloud",
         "CLERK_JWT_AUDIENCE": "test-aud",
-        "SP_NOTEBOOK_RUNTIME_CLASS": "gvisor",
     }
 
     def _set_required(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -799,7 +798,6 @@ class TestCloudAllowedOriginsHardening:
         # Remove vars that would trigger other violations
         monkeypatch.delenv("SP_NOTEBOOK_DIRECT_URL", raising=False)
         monkeypatch.delenv("SP_DISABLE_SANDBOX", raising=False)
-        monkeypatch.delenv("SP_NOTEBOOK_NETWORK_POLICY", raising=False)
 
     def test_cloud_missing_sp_allowed_origins_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Unset SP_ALLOWED_ORIGINS must raise RuntimeError in cloud mode."""

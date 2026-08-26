@@ -39,36 +39,6 @@ def test_user_id() -> str:
     return "test-user"
 
 
-@pytest.fixture
-def fake_k8s_core_api() -> MagicMock:
-    """Fake CoreV1Api stub for namespace bootstrap tests."""
-    api = MagicMock()
-    api.create_namespace = AsyncMock()
-    api.create_namespaced_resource_quota = AsyncMock()
-    api.create_namespaced_limit_range = AsyncMock()
-    api.create_namespaced_pod = AsyncMock()
-    api.delete_namespaced_pod = AsyncMock()
-    api.read_namespaced_pod = AsyncMock()
-    return api
-
-
-@pytest.fixture
-def fake_k8s_networking_api() -> MagicMock:
-    """Fake NetworkingV1Api stub for namespace bootstrap tests."""
-    api = MagicMock()
-    api.create_namespaced_network_policy = AsyncMock()
-    return api
-
-
-@pytest.fixture
-def fake_k8s_rbac_api() -> MagicMock:
-    """Fake RbacAuthorizationV1Api stub for namespace bootstrap tests."""
-    api = MagicMock()
-    api.create_namespaced_role = AsyncMock()
-    api.create_namespaced_role_binding = AsyncMock()
-    return api
-
-
 def pytest_runtest_setup(item):
     """Reset rate limiter state before each test to prevent 429 bleed-across.
 

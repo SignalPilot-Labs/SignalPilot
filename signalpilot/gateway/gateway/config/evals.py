@@ -13,13 +13,9 @@ Class A vars managed here:
     SP_EVAL_ANTHROPIC_KEY: alternative: ANTHROPIC_API_KEY for eval containers
     SP_EVAL_TIMEOUT_SECONDS: per-question container timeout
     SP_EVAL_PROJECTS_DIR: root allowed for local-path eval sets (mounted ro)
-    SP_EVAL_K8S_NAMESPACE_PREFIX: namespace prefix for eval pods in cloud mode
-    SP_EVAL_CPU_REQUEST / SP_EVAL_CPU_LIMIT: eval pod cpu sizing
-    SP_EVAL_MEMORY_REQUEST / SP_EVAL_MEMORY_LIMIT: eval pod memory sizing
-    SP_EVAL_EPHEMERAL_REQUEST / SP_EVAL_EPHEMERAL_LIMIT: eval pod scratch sizing
 
-SP_EVAL_DOCKER_* apply to local mode only. In cloud mode eval workloads run as
-Kubernetes pods and the Docker socket is never opened (gateway/evals/backends.py).
+SP_EVAL_DOCKER_* apply to local mode only. In cloud mode eval workloads run on
+Vercel sandboxes and the Docker socket is never opened (gateway/evals/backends.py).
 """
 
 from __future__ import annotations
@@ -48,8 +44,9 @@ class EvalRunSettings(_GatewaySettingsBase):
 
     runner_image: str = Field("", alias="SP_EVAL_RUNNER_IMAGE")
     setup_image: str = Field("", alias="SP_EVAL_SETUP_IMAGE")
-    # "" = pick by deployment mode (docker locally, kubernetes in cloud);
-    # "vercel" = ephemeral Vercel sandbox VMs (needs VERCEL_* credentials).
+    # "" = docker in local mode; unusable in cloud mode (the run fails with a
+    # clear error). "vercel" = ephemeral Vercel sandbox VMs (needs VERCEL_*
+    # credentials) — required in cloud mode.
     execution_backend: str = Field("", alias="SP_EVAL_EXECUTION_BACKEND")
     docker_socket: str = Field("/var/run/docker.sock", alias="SP_EVAL_DOCKER_SOCKET")
     docker_network: str = Field("signalpilot_eval_runtime", alias="SP_EVAL_DOCKER_NETWORK")
@@ -70,31 +67,6 @@ class EvalRunSettings(_GatewaySettingsBase):
     # Host root for manifest `setup.mounts` entries (external dbt trees etc.).
     setup_host_root: str = Field("", alias="SP_EVAL_SETUP_HOST_ROOT")
     setup_timeout_seconds: int = Field(1800, alias="SP_EVAL_SETUP_TIMEOUT_SECONDS")
-    # Cloud (Kubernetes) execution.
-    # Namespace prefix for eval pods. Defaults to the notebook tenant prefix so
-    # eval pods land in the org's existing namespace, which already has the
-    # RoleBinding, NetworkPolicies, quota and LimitRange.
-    #
-    # A dedicated prefix is cleaner (eval pods stop sharing the notebook
-    # ResourceQuota) but is NOT usable as-is: rule 5 of
-    # deploy/k8s/admission/restrict-rbac-writes-* pins the
-    # signalpilot.dev/tenant label to namespaces named sp-nb-*, so a differently
-    # named namespace is rejected at CREATE. Changing this requires widening
-    # that policy's tenantPrefix in the same deploy.
-    k8s_namespace_prefix: str = Field("sp-nb", alias="SP_EVAL_K8S_NAMESPACE_PREFIX")
-
-    # Eval pods are sized exactly like notebook pods: they share the sandbox node
-    # group, so a limit larger than that node's allocatable CPU could never be
-    # honoured. Both limit:request ratios are 4, which is the namespace
-    # LimitRange maxLimitRequestRatio: raising a limit without raising its
-    # request in step gets the pod rejected at CREATE.
-    cpu_request: str = Field("250m", alias="SP_EVAL_CPU_REQUEST")
-    cpu_limit: str = Field("1", alias="SP_EVAL_CPU_LIMIT")
-    memory_request: str = Field("128Mi", alias="SP_EVAL_MEMORY_REQUEST")
-    memory_limit: str = Field("512Mi", alias="SP_EVAL_MEMORY_LIMIT")
-    ephemeral_request: str = Field("256Mi", alias="SP_EVAL_EPHEMERAL_REQUEST")
-    ephemeral_limit: str = Field("4Gi", alias="SP_EVAL_EPHEMERAL_LIMIT")
-
     # Evidence store for S3 or MinIO.
     # The store contains transcripts, setup logs, table captures, and export archives.
     # Separate credentials prevent MinIO credentials from reaching BYOK or Redshift integrations.
@@ -135,21 +107,6 @@ class EvalRunSettings(_GatewaySettingsBase):
     artifact_bytes_per_run: int = Field(1024**3, alias="SP_EVAL_ARTIFACT_BYTES_PER_RUN")
     # Reject a full capture that exceeds this limit. Do not truncate the capture.
     capture_full_max_bytes: int = Field(256 * 1024**2, alias="SP_EVAL_CAPTURE_FULL_MAX_BYTES")
-
-    @property
-    def pod_resources(self) -> dict[str, dict[str, str]]:
-        return {
-            "requests": {
-                "cpu": self.cpu_request,
-                "memory": self.memory_request,
-                "ephemeral-storage": self.ephemeral_request,
-            },
-            "limits": {
-                "cpu": self.cpu_limit,
-                "memory": self.memory_limit,
-                "ephemeral-storage": self.ephemeral_limit,
-            },
-        }
 
     # Cloud-mode image digest must be sha256 + exactly 64 lowercase hex chars,
     # matching the guarantee SP_NOTEBOOK_VERCEL_IMAGE carries.

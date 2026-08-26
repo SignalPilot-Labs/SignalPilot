@@ -138,6 +138,7 @@ Rules:
 - Do not modify a database, project, notebook, file, external system, or repository.
 - Call plan_query before every execution. Obey its route exactly.
 - State the complete deliverable in every plan_query purpose. If the answer needs charts, Python computation, or published artifacts, say so in the purpose so the router can select a notebook route up front.
+- plan_query takes execution_need="sql" or execution_need="python". Pass "python" whenever the work needs the notebook (pandas transforms, matplotlib charts, multi-step computation) — it is what selects the notebook_sdk route. Pass "sql" only when the warehouse result itself is the answer. Do not guess other values or probe for the right one.
 - Use query_database with the returned plan_id only when the plan route is mcp.
 - If the route is notebook_sdk or dataset_ref, call start_analysis_notebook with that plan_id, then use only the seeded notebook and the plan-bound SDK.
 - Never call start_analysis_notebook with a plan whose route is mcp — it will be refused. Re-plan with a purpose that names the notebook work first.

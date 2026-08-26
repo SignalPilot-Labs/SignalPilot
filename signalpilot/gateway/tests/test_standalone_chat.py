@@ -1542,3 +1542,52 @@ def test_standalone_session_claims_and_mcp_allowlist(monkeypatch):
     finally:
         mcp_execution_identity_var.reset(identity_token)
         mcp_allowed_connection_var.reset(connection_token)
+
+
+@pytest.mark.asyncio
+async def test_workers_only_claim_runs_from_their_own_runtime_env(db_session, monkeypatch):
+    project = await _project(db_session)
+
+    async def _run_for(user_id: str) -> GatewayChatRun:
+        _, run = await chat_store.create_conversation_with_run(
+            db_session,
+            org_id="org-a",
+            user_id=user_id,
+            project=project,
+            branch="main",
+            message="What changed in revenue?",
+            commit_sha="a" * 40,
+        )
+        return run
+
+    monkeypatch.setenv("SP_RUNTIME_ENV", "staging")
+    staging_run = await _run_for("user-env-a")
+
+    monkeypatch.delenv("SP_RUNTIME_ENV", raising=False)
+    legacy_run = await _run_for("user-env-b")
+
+    monkeypatch.setenv("SP_RUNTIME_ENV", "local-dev")
+    local_run = await _run_for("user-env-c")
+
+    assert staging_run.runtime_env == "staging"
+    assert legacy_run.runtime_env is None
+    assert local_run.runtime_env == "local-dev"
+
+    # A labeled worker claims its own runs plus unlabeled ones — never another env's.
+    claimed = await chat_store.claim_runs(
+        db_session,
+        worker_id="worker-local",
+        limit=10,
+        lease_seconds=45,
+    )
+    assert set(claimed) == {legacy_run.id, local_run.id}
+
+    # An unlabeled worker claims whatever remains, regardless of label.
+    monkeypatch.delenv("SP_RUNTIME_ENV", raising=False)
+    claimed_rest = await chat_store.claim_runs(
+        db_session,
+        worker_id="worker-any",
+        limit=10,
+        lease_seconds=45,
+    )
+    assert claimed_rest == [staging_run.id]

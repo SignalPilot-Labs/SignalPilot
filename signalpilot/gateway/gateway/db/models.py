@@ -1021,6 +1021,9 @@ class GatewayChatRun(GatewayBase):
     project_id: Mapped[str] = mapped_column(String, nullable=False)
     user_message_id: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="queued", server_default="queued")
+    # Environment that created the run (SP_RUNTIME_ENV). Workers only claim runs
+    # from their own environment; NULL rows are claimable by any worker.
+    runtime_env: Mapped[str | None] = mapped_column(String(50))
     retry_of_run_id: Mapped[str | None] = mapped_column(String)
     execution_session_id: Mapped[str | None] = mapped_column(String)
     runtime_archive_id: Mapped[str | None] = mapped_column(String)

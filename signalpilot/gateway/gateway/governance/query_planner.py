@@ -285,6 +285,18 @@ async def create_query_plan(
     approval_required = await _approval_required(store, context, max(0.0, estimate.estimated_usd))
     plan_id = str(uuid.uuid4())
     shadow = bool(context.run_id and not enterprise_chat_feature_flags().size_router)
+    shadow_route: str | None = None
+    shadow_reason: str | None = None
+    if shadow and validation.ok:
+        # Size routing is DISABLED (SP_FEATURE_CHAT_SIZE_ROUTER unset). The
+        # would-be decision is recorded for telemetry only; the surfaced route
+        # must never block the agent, otherwise "shadow" mode still gates.
+        permissive: QueryRoute = "notebook_sdk" if execution_need == "python" else "mcp"
+        if route != permissive or scout_limit is not None:
+            shadow_route, shadow_reason = route, route_reason
+            route = permissive
+            route_reason = "Size routing is disabled; the planned query is approved for execution."
+            scout_limit = None
     row = GatewayQueryPlan(
         id=plan_id,
         org_id=store._require_org_id(),
@@ -338,7 +350,16 @@ async def create_query_plan(
             store.session,
             run_id=context.run_id,
             event_type="route_selected",
-            payload={"plan_id": plan_id, "route": route, "route_reason": route_reason},
+            payload={
+                "plan_id": plan_id,
+                "route": route,
+                "route_reason": route_reason,
+                **(
+                    {"shadow_route": shadow_route, "shadow_reason": shadow_reason}
+                    if shadow_route
+                    else {}
+                ),
+            },
         )
     return QueryPlanDecision(
         plan_id=plan_id,

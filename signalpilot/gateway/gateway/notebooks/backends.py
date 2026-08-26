@@ -215,13 +215,22 @@ class VercelNotebookBackend:
             )
         return upstream.rstrip("/")
 
+    # The server mounts under --base-url /notebook/<session_id>, so the root
+    # /health path 404s. Only the launching code knows the session id (resume
+    # and is_alive have just the runtime handle), so probe path-agnostically:
+    # curl without -f exits 0 for ANY HTTP response (the notebook server is
+    # the only listener on the port) and non-zero when nothing listens yet.
+    _HEALTH_PROBE = (
+        f"curl -s -o /dev/null --max-time 2 http://localhost:{NOTEBOOK_PORT}/"
+    )
+
     async def _wait_healthy(self, sandbox_id: str) -> None:
         deadline = time.monotonic() + self._settings.start_timeout_seconds
         last_error = ""
         while time.monotonic() < deadline:
             result = await self._runtime.exec(
                 sandbox_id,
-                f"curl -sf --max-time 2 http://localhost:{NOTEBOOK_PORT}/health",
+                self._HEALTH_PROBE,
                 timeout_seconds=10,
             )
             if result.ok:
@@ -236,7 +245,7 @@ class VercelNotebookBackend:
         try:
             result = await self._runtime.exec(
                 runtime_handle,
-                f"curl -sf --max-time 2 http://localhost:{NOTEBOOK_PORT}/health",
+                self._HEALTH_PROBE,
                 timeout_seconds=10,
             )
         except SandboxNotFound:

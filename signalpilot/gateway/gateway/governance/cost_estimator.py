@@ -459,13 +459,21 @@ class CostEstimator:
             if not rows:
                 return CostEstimate(warning="SHOWPLAN returned no data")
 
-            estimated_rows = 0
+            # SHOWPLAN_ALL lists the plan root first, then operators depth-first.
+            # The FIRST EstimateRows is the statement's final output estimate;
+            # the max across all operators is the intermediate/scan volume. The
+            # two must not be conflated: a TOP-10 aggregate over a million-row
+            # fact table outputs 10 rows while scanning a million.
+            output_rows: int | None = None
+            scan_rows = 0
             total_cost = 0.0
             plan_lines = []
             for row in rows:
                 est = row.get("EstimateRows", 0)
                 if est and isinstance(est, (int, float)):
-                    estimated_rows = max(estimated_rows, int(est))
+                    scan_rows = max(scan_rows, int(est))
+                    if output_rows is None:
+                        output_rows = int(est)
                 cost = row.get("TotalSubtreeCost", 0)
                 if cost and isinstance(cost, (int, float)):
                     total_cost = max(total_cost, float(cost))
@@ -474,12 +482,14 @@ class CostEstimator:
                 if stmt:
                     plan_lines.append(str(stmt))
 
-            estimated_usd = estimated_rows * _COST_PER_ROW["mssql"]
+            estimated_usd = scan_rows * _COST_PER_ROW["mssql"]
             return CostEstimate(
-                estimated_rows=estimated_rows,
+                estimated_rows=scan_rows,
                 estimated_cost=total_cost,
                 estimated_usd=estimated_usd,
                 raw_plan="\n".join(plan_lines)[:2000],
+                estimated_scan_rows=scan_rows or None,
+                estimated_output_rows=output_rows,
             )
         except Exception as e:
             return CostEstimate(warning=f"Cost estimation failed: {e}")

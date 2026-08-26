@@ -445,3 +445,47 @@ def test_runtime_archive_html_injects_a_head_when_one_is_missing():
 
     assert sanitized.startswith('<html><head><meta http-equiv="Content-Security-Policy"')
     assert "connect-src 'none'" in sanitized
+
+
+@pytest.mark.asyncio
+async def test_mssql_estimate_separates_large_scan_from_small_top_n_output():
+    class Connector:
+        def __init__(self):
+            self.statements = []
+
+        async def execute(self, sql: str):
+            self.statements.append(sql)
+            if sql.startswith("SET SHOWPLAN_ALL"):
+                return []
+            # SHOWPLAN_ALL lists the root first, then operators depth-first.
+            return [
+                {"StmtText": "SELECT TOP 10 ...", "EstimateRows": 10, "TotalSubtreeCost": 4.2},
+                {"StmtText": "  |--Sort(...)", "EstimateRows": 850, "TotalSubtreeCost": 4.0},
+                {"StmtText": "    |--Clustered Index Scan(...)", "EstimateRows": 1_200_000, "TotalSubtreeCost": 3.5},
+            ]
+
+    estimate = await CostEstimator.estimate_mssql(
+        Connector(), "SELECT TOP 10 market, SUM(x) FROM f GROUP BY market"
+    )
+
+    assert estimate.estimated_scan_rows == 1_200_000
+    assert estimate.estimated_output_rows == 10
+    assert _route(
+        rows=estimate.estimated_output_rows,
+        byte_size=estimate.estimated_output_rows * 512,
+    )[0] == "mcp"
+
+
+def test_explicit_row_limit_caps_the_router_input_regardless_of_dialect():
+    from gateway.governance.query_planner import _explicit_row_limit
+
+    assert _explicit_row_limit("SELECT TOP 10 a FROM t GROUP BY a", "tsql") == 10
+    assert _explicit_row_limit("SELECT a FROM t LIMIT 25", "duckdb") == 25
+    assert (
+        _explicit_row_limit(
+            "SELECT a FROM t ORDER BY a OFFSET 0 ROWS FETCH NEXT 15 ROWS ONLY", "tsql"
+        )
+        == 15
+    )
+    assert _explicit_row_limit("SELECT a FROM t", "tsql") is None
+    assert _explicit_row_limit("not sql at all (", "tsql") is None

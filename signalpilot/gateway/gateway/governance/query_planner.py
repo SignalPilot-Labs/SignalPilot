@@ -146,6 +146,32 @@ def choose_query_route(
     return "mcp", "The complete predicted result fits the MCP row and byte limits.", None
 
 
+def _explicit_row_limit(sql: str, dialect: str | None) -> int | None:
+    """Literal top-level row bound (LIMIT n / TOP n / FETCH NEXT n ROWS), if any.
+
+    An explicit bound caps the true output cardinality no matter what the
+    engine's plan-level cardinality guess says, so the router must never
+    predict more output rows than this.
+    """
+    try:
+        import sqlglot
+
+        expression = sqlglot.parse_one(sql, read=dialect)
+    except Exception:
+        return None
+    if expression is None:
+        return None
+    node = expression.args.get("limit")
+    if node is None:
+        return None
+    literal = node.args.get("expression") or node.args.get("count")
+    try:
+        value = int(literal.this)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
 def _estimate_quality(estimate: CostEstimate) -> Literal["exact", "approximate", "unknown"]:
     if estimate.quality == "exact":
         return "exact"
@@ -227,6 +253,17 @@ async def create_query_plan(
             connection_name=connection_name,
         ) as connector:
             estimate = await CostEstimator.estimate(connector, sql, info.db_type)
+
+    if validation.ok:
+        explicit_limit = _explicit_row_limit(sql, dialect)
+        if explicit_limit is not None and (
+            estimate.estimated_output_rows is None
+            or estimate.estimated_output_rows > explicit_limit
+        ):
+            estimate.estimated_output_rows = explicit_limit
+            # The byte estimate was derived from the uncapped row guess; let
+            # _bounded_output_bytes recompute it from the capped rows.
+            estimate.estimated_output_bytes = None
 
     quality = _estimate_quality(estimate)
     output_bytes = _bounded_output_bytes(estimate)

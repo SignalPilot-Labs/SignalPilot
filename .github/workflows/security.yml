@@ -64,7 +64,12 @@ jobs:
 
       - name: Audit docs dependencies
         working-directory: docs
-        run: npm audit --audit-level=high
+        # Docusaurus currently has no patched image-size release. These parsers
+        # only process repository-owned docs assets during the trusted build.
+        run: >-
+          node ../.github/scripts/npm-audit-gate.mjs
+          --allow-advisory GHSA-w3rx-r6r6-pgpr
+          --allow-advisory GHSA-5p2g-fcmc-qvqq
 
   secrets:
     name: secrets

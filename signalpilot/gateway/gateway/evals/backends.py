@@ -431,7 +431,8 @@ _VERCEL_MAX_LIFETIME = 2700
 _VERCEL_LIFETIME_HEADROOM = 300
 # The run's combined output is tee'd here inside the sandbox so the panel can
 # poll a live tail (exec only returns output when the command finishes).
-_VERCEL_LOG_PATH = "/tmp/sp-eval-output.log"
+# This is an isolated provider sandbox path, not a shared host temp file.
+_VERCEL_LOG_PATH = "/tmp/sp-eval-output.log"  # nosec B108
 
 
 class VercelBackend:

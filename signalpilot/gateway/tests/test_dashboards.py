@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from gateway.api.dashboards import (
     _cached_receipt,
-    _dashboard_cache_key,
     _dashboard_failure,
     _DashboardConnectionRetryGate,
     _DashboardFailureRaised,
@@ -25,6 +24,7 @@ from gateway.api.dashboards import (
     dashboard_connection_retry_gate,
 )
 from gateway.dashboard import store as dashboard_store
+from gateway.dashboard.cache import dashboard_query_cache_key
 from gateway.dashboard.compiler import compile_custom_sql_query, compile_metric_query
 from gateway.dashboard.confidence import dashboard_confidence_counts, semantic_query_signature
 from gateway.dashboard.domain import AdHocSqlQuery, DashboardDefinition, FieldTarget, FilterRule, SemanticChartQuery
@@ -251,7 +251,7 @@ def test_cache_request_identity_is_exact_and_does_not_need_semantic_context() ->
     reordered = first.model_copy(update={"dashboard_filters": list(reversed(first.dashboard_filters or []))})
 
     def key(body: DashboardQueryRequest, *, version_id: str = "version-1") -> str:
-        return _dashboard_cache_key(
+        return dashboard_query_cache_key(
             version_id=version_id,
             chart=chart,
             tile_uuid=tile.uuid,
@@ -301,7 +301,7 @@ async def test_exact_cached_result_returns_before_live_semantic_resolution(
     chart = definition.charts[0]
     tile = definition.tiles[0]
     body = DashboardQueryRequest(version_id="version-1", tile_uuid=tile.uuid)
-    cache_key = _dashboard_cache_key(
+    cache_key = dashboard_query_cache_key(
         version_id="version-1",
         chart=chart,
         tile_uuid=tile.uuid,

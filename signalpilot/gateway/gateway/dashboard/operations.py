@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Annotated, Literal
 
 from pydantic import Field, TypeAdapter
@@ -279,6 +280,96 @@ def validate_dashboard_semantics(definition: DashboardDefinition, context: Dashb
         for target in targets:
             if target.tableName not in fields_by_explore or target.fieldId not in fields_by_explore[target.tableName]:
                 raise ValueError(f"Unknown dashboard filter target: {target.tableName}.{target.fieldId}")
+
+
+class DashboardTimeSeriesWindowError(ValueError):
+    """A line or area chart cannot prove a complete bounded initial view."""
+
+    code = "dashboard_time_series_window_required"
+    recovery = "Narrow the default date window or use coarser time aggregation."
+
+
+def _has_bounded_default(rule: DashboardFilterRule) -> bool:
+    values = list(rule.values or [])
+    if rule.operator == "inBetween":
+        if len(values) != 2 or any(value is None or value == "" for value in values):
+            return False
+        try:
+            return values[0] < values[1]  # type: ignore[operator]
+        except TypeError:
+            return False
+    if rule.operator == "inThePast":
+        return (
+            len(values) == 1
+            and not isinstance(values[0], bool)
+            and isinstance(values[0], (int, float))
+            and math.isfinite(values[0])
+            and values[0] > 0
+            and rule.settings is not None
+            and rule.settings.unitOfTime is not None
+        )
+    return (
+        rule.operator in {"inTheCurrent", "inPeriodToDate"}
+        and rule.settings is not None
+        and rule.settings.unitOfTime is not None
+    )
+
+
+def validate_time_series_default_windows(
+    definition: DashboardDefinition,
+    context: DashboardSemanticContext,
+) -> None:
+    """Require every line/area tile to open on a bounded date or timestamp window."""
+
+    explores = {
+        explore.name: {field.field_id: field.logical_type for field in explore.dimensions}
+        for explore in context.explores
+    }
+    tiles_by_chart = {
+        chart.id: [tile for tile in definition.tiles if tile.chartId == chart.id]
+        for chart in definition.charts
+    }
+    for chart in definition.charts:
+        if (
+            chart.visualization.type != "cartesian"
+            or chart.visualization.config.seriesType not in {"line", "area"}
+        ):
+            continue
+        valid_window = False
+        for tile in tiles_by_chart[chart.id]:
+            for rule in definition.filters.dimensions:
+                explicit_target = (rule.tileTargets or {}).get(tile.uuid)
+                if explicit_target is False:
+                    continue
+                if explicit_target is None:
+                    if not isinstance(chart.query, SemanticChartQuery):
+                        continue
+                    if rule.target.tableName != chart.query.exploreName:
+                        continue
+                    target = rule.target
+                else:
+                    target = explicit_target
+                if isinstance(chart.query, SemanticChartQuery):
+                    logical_type = explores.get(chart.query.exploreName, {}).get(target.fieldId)
+                else:
+                    logical_type = next(
+                        (
+                            binding.logicalType
+                            for binding in chart.query.outputBindings
+                            if binding.dashboardFieldId == target.fieldId
+                        ),
+                        None,
+                    )
+                if logical_type in {"date", "timestamp"} and _has_bounded_default(rule):
+                    valid_window = True
+                    break
+            if valid_window:
+                break
+        if not valid_window:
+            raise DashboardTimeSeriesWindowError(
+                f"{chart.title} requires an applicable date or timestamp filter with a valid bounded default. "
+                f"{DashboardTimeSeriesWindowError.recovery}"
+            )
 
 
 def canonicalize_dashboard_filter_targets(

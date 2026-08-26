@@ -6,10 +6,11 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gateway.dashboard.cache import dashboard_query_cache_key
 from gateway.dashboard.confidence import dashboard_confidence_counts
 from gateway.dashboard.domain import DashboardDefinition, dashboard_content_hash, normalize_dashboard_definition
 from gateway.db.models import (
@@ -38,6 +39,131 @@ class DashboardValidationError(ValueError):
 class DashboardConflictError(RuntimeError):
     dashboard_id: str
     actual_current_version_id: str
+
+
+@dataclass(frozen=True)
+class _ApplyReceipt:
+    row: GatewayDashboardResult
+    source: str
+
+
+def _default_dashboard_filters(definition: DashboardDefinition):
+    return [
+        rule
+        for rule in definition.filters.dimensions
+        if rule.values or rule.operator in {"isNull", "notNull"}
+    ]
+
+
+def _receipt_cache_key(definition: DashboardDefinition, *, version_id: str, chart_id: str) -> str:
+    chart = next(item for item in definition.charts if item.id == chart_id)
+    tile = next(item for item in definition.tiles if item.chartId == chart_id)
+    return dashboard_query_cache_key(
+        version_id=version_id,
+        chart=chart,
+        tile_uuid=tile.uuid,
+        requested_filters=_default_dashboard_filters(definition),
+        drill_path=[],
+        dashboard_filters=definition.filters,
+    )
+
+
+async def _validate_apply_receipts(
+    db: AsyncSession,
+    *,
+    session: GatewayDashboardAuthoringSession,
+    definition: DashboardDefinition,
+    org_id: str,
+    result_ids: list[str],
+) -> list[_ApplyReceipt]:
+    chart_ids = [chart.id for chart in definition.charts]
+    if len(result_ids) != len(set(result_ids)):
+        raise DashboardValidationError("Apply receipts must be unique")
+    if len(result_ids) != len(chart_ids):
+        raise DashboardValidationError("Apply requires one exact complete preview receipt for every chart")
+    rows = (
+        await db.execute(
+            select(GatewayDashboardResult).where(
+                GatewayDashboardResult.id.in_(result_ids),
+                GatewayDashboardResult.org_id == org_id,
+            )
+        )
+    ).scalars().all()
+    if len(rows) != len(result_ids):
+        raise DashboardValidationError("Apply receipts must belong to this organization and authoring preview")
+    by_id = {row.id: row for row in rows}
+    draft_dashboard_id = session.dashboard_id or f"draft:{session.id}"
+    draft_version_id = f"draft:{session.id}"
+    base_definition = None
+    if session.dashboard_id and session.base_version_id:
+        base_version = (
+            await db.execute(
+                select(GatewayDashboardVersion).where(
+                    GatewayDashboardVersion.id == session.base_version_id,
+                    GatewayDashboardVersion.dashboard_id == session.dashboard_id,
+                    GatewayDashboardVersion.org_id == org_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if base_version is not None:
+            base_definition = DashboardDefinition.model_validate(base_version.definition_json)
+    accepted: list[_ApplyReceipt] = []
+    used_ids: set[str] = set()
+    for chart_id in chart_ids:
+        draft_key = _receipt_cache_key(definition, version_id=draft_version_id, chart_id=chart_id)
+        match = next(
+            (
+                row
+                for row in rows
+                if row.id not in used_ids
+                and row.dashboard_id == draft_dashboard_id
+                and row.version_id == draft_version_id
+                and row.chart_id == chart_id
+                and row.cache_key == draft_key
+                and row.completeness == "complete"
+            ),
+            None,
+        )
+        source = "draft"
+        if match is None and base_definition is not None:
+            current_chart = next(item for item in definition.charts if item.id == chart_id)
+            base_chart = next((item for item in base_definition.charts if item.id == chart_id), None)
+            current_tile = next(item for item in definition.tiles if item.chartId == chart_id)
+            base_tile = next((item for item in base_definition.tiles if item.chartId == chart_id), None)
+            if (
+                base_chart == current_chart
+                and base_tile is not None
+                and base_tile.uuid == current_tile.uuid
+                and base_definition.filters == definition.filters
+            ):
+                base_key = _receipt_cache_key(
+                    base_definition,
+                    version_id=session.base_version_id,
+                    chart_id=chart_id,
+                )
+                match = next(
+                    (
+                        row
+                        for row in rows
+                        if row.id not in used_ids
+                        and row.dashboard_id == session.dashboard_id
+                        and row.version_id == session.base_version_id
+                        and row.chart_id == chart_id
+                        and row.cache_key == base_key
+                        and row.completeness == "complete"
+                    ),
+                    None,
+                )
+                source = "base"
+        if match is None:
+            raise DashboardValidationError(
+                f"Apply receipt for chart {chart_id} is missing, stale, incomplete, or outside this preview"
+            )
+        used_ids.add(match.id)
+        accepted.append(_ApplyReceipt(row=by_id[match.id], source=source))
+    if used_ids != set(result_ids):
+        raise DashboardValidationError("Apply includes a receipt that is not part of the exact visible preview")
+    return accepted
 
 
 def _confidence_counts(version: GatewayDashboardVersion | None) -> tuple[int, int]:
@@ -743,6 +869,13 @@ async def apply_authoring_session(
     if session.requires_custom_sql_confirmation and not session.custom_sql_confirmed:
         raise DashboardValidationError("Custom SQL must be explicitly confirmed before Apply")
     definition = DashboardDefinition.model_validate(session.definition_json)
+    accepted_receipts = await _validate_apply_receipts(
+        db,
+        session=session,
+        definition=definition,
+        org_id=org_id,
+        result_ids=visible_complete_result_ids,
+    )
     provenance = {
         "authoring_session_id": session.id,
         "agent_run_id": session.agent_run_id,
@@ -756,7 +889,6 @@ async def apply_authoring_session(
         "confirmation_count": len(session.confirmations_json or []),
     }
     was_new_dashboard = session.dashboard_id is None
-    draft_dashboard_id = f"draft:{session.id}" if was_new_dashboard else session.dashboard_id
     if was_new_dashboard:
         detail = await create_private_dashboard(
             db,
@@ -782,18 +914,37 @@ async def apply_authoring_session(
         )
         session = await get_authoring_session(db, org_id=org_id, user_id=user_id, session_id=session_id)
         assert session is not None
-    if visible_complete_result_ids:
-        await db.execute(
-            update(GatewayDashboardResult)
-            .where(
-                GatewayDashboardResult.id.in_(visible_complete_result_ids),
-                GatewayDashboardResult.org_id == org_id,
-                GatewayDashboardResult.dashboard_id == draft_dashboard_id,
-                GatewayDashboardResult.version_id == f"draft:{session.id}",
-                GatewayDashboardResult.completeness == "complete",
-            )
-            .values(dashboard_id=detail.dashboard.id, version_id=detail.version.id)
+    applied_definition = detail.version.definition
+    for receipt in accepted_receipts:
+        final_cache_key = _receipt_cache_key(
+            applied_definition,
+            version_id=detail.version.id,
+            chart_id=receipt.row.chart_id,
         )
+        if receipt.source == "draft":
+            receipt.row.dashboard_id = detail.dashboard.id
+            receipt.row.version_id = detail.version.id
+            receipt.row.cache_key = final_cache_key
+        else:
+            db.add(
+                GatewayDashboardResult(
+                    id=str(uuid.uuid4()),
+                    dashboard_id=detail.dashboard.id,
+                    version_id=detail.version.id,
+                    chart_id=receipt.row.chart_id,
+                    org_id=receipt.row.org_id,
+                    execution_id=receipt.row.execution_id,
+                    structured_result_id=receipt.row.structured_result_id,
+                    cache_key=final_cache_key,
+                    sql_hash=receipt.row.sql_hash,
+                    parameter_hash=receipt.row.parameter_hash,
+                    tables_json=receipt.row.tables_json,
+                    semantic_definition_json=receipt.row.semantic_definition_json,
+                    completeness=receipt.row.completeness,
+                    freshness_at=receipt.row.freshness_at,
+                    expires_at=receipt.row.expires_at,
+                )
+            )
     events = list(session.events_json or [])
     events.append(
         _authoring_event(

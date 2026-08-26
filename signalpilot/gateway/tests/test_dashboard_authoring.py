@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,12 +16,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from gateway.api import dashboards as dashboard_api
 from gateway.dashboard import store as dashboard_store
 from gateway.dashboard.authoring import DashboardAgentDraft, DashboardAuthoringAgent, materialize_agent_draft
+from gateway.dashboard.cache import dashboard_query_cache_key
 from gateway.dashboard.domain import DashboardDefinition
 from gateway.dashboard.operations import (
+    DashboardTimeSeriesWindowError,
     RenameDashboard,
     apply_dashboard_operations,
     canonicalize_dashboard_filter_targets,
     validate_dashboard_semantics,
+    validate_time_series_default_windows,
 )
 from gateway.db.models import GatewayBase, GatewayDashboardAuthoringSession, GatewayDashboardResult
 from gateway.models.dashboards import (
@@ -138,6 +142,54 @@ def _orders_context() -> DashboardSemanticContext:
     )
 
 
+async def _seed_apply_receipts(
+    db: AsyncSession,
+    *,
+    preview,
+    definition: DashboardDefinition,
+    dashboard_id: str | None = None,
+    version_id: str | None = None,
+) -> list[GatewayDashboardResult]:
+    receipt_dashboard_id = dashboard_id or preview.dashboard_id or f"draft:{preview.id}"
+    receipt_version_id = version_id or f"draft:{preview.id}"
+    requested_filters = [
+        rule
+        for rule in definition.filters.dimensions
+        if rule.values or rule.operator in {"isNull", "notNull"}
+    ]
+    rows = []
+    for chart in definition.charts:
+        tile = next(tile for tile in definition.tiles if tile.chartId == chart.id)
+        rows.append(
+            GatewayDashboardResult(
+                id=str(uuid.uuid4()),
+                dashboard_id=receipt_dashboard_id,
+                version_id=receipt_version_id,
+                chart_id=chart.id,
+                org_id="org-a",
+                execution_id=f"execution-{chart.id}",
+                structured_result_id=f"structured-{chart.id}",
+                cache_key=dashboard_query_cache_key(
+                    version_id=receipt_version_id,
+                    chart=chart,
+                    tile_uuid=tile.uuid,
+                    requested_filters=requested_filters,
+                    drill_path=[],
+                    dashboard_filters=definition.filters,
+                ),
+                sql_hash="s" * 64,
+                parameter_hash="p" * 64,
+                tables_json=["dbo.orders"],
+                semantic_definition_json={"chart_id": chart.id},
+                completeness="complete",
+                expires_at=datetime.now(UTC) + timedelta(minutes=5),
+            )
+        )
+    db.add_all(rows)
+    await db.commit()
+    return rows
+
+
 @pytest_asyncio.fixture
 async def db_session():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -218,6 +270,26 @@ def test_unknown_dashboard_filter_target_still_fails_after_canonicalization() ->
 
     with pytest.raises(ValueError, match="Unknown dashboard filter target: orders.missing_date"):
         validate_dashboard_semantics(definition, _orders_context())
+
+
+def test_time_series_authoring_rejects_an_empty_applicable_date_window() -> None:
+    payload = _definition_with_filter().model_dump(mode="json", by_alias=True)
+    payload["filters"]["dimensions"][0].update(
+        {"operator": "inBetween", "values": []}
+    )
+
+    with pytest.raises(
+        DashboardTimeSeriesWindowError,
+        match="Narrow the default date window or use coarser time aggregation",
+    ):
+        validate_time_series_default_windows(
+            DashboardDefinition.model_validate(payload),
+            _orders_context(),
+        )
+
+
+def test_time_series_authoring_accepts_a_bounded_relative_date_window() -> None:
+    validate_time_series_default_windows(_definition_with_filter(), _orders_context())
 
 
 @pytest.mark.parametrize(
@@ -485,7 +557,7 @@ async def test_apply_is_explicit_and_records_authoring_provenance(db_session: As
         db_session,
         org_id="org-a",
         user_id="owner-a",
-        definition=_definition(),
+        definition=_definition_with_filter(),
     )
     definition = created.version.definition.model_copy(update={"name": "Agent preview"})
     preview = await dashboard_store.create_authoring_session(
@@ -511,6 +583,11 @@ async def test_apply_is_explicit_and_records_authoring_provenance(db_session: As
     )
     assert still_current is not None
     assert still_current.version.id == created.version.id
+    receipts = await _seed_apply_receipts(
+        db_session,
+        preview=preview,
+        definition=definition,
+    )
 
     applied = await dashboard_store.apply_authoring_session(
         db_session,
@@ -518,7 +595,7 @@ async def test_apply_is_explicit_and_records_authoring_provenance(db_session: As
         user_id="owner-a",
         session_id=preview.id,
         expected_current_version_id=created.version.id,
-        visible_complete_result_ids=[],
+        visible_complete_result_ids=[row.id for row in receipts],
     )
     assert applied.version.ordinal == 2
     assert applied.version.definition.name == "Agent preview"
@@ -531,8 +608,134 @@ async def test_apply_is_explicit_and_records_authoring_provenance(db_session: As
             user_id="owner-a",
             session_id=preview.id,
             expected_current_version_id=created.version.id,
-            visible_complete_result_ids=[],
+            visible_complete_result_ids=[row.id for row in receipts],
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_receipt",
+    ["missing", "stale", "cross_version", "cross_dashboard", "cross_org", "incomplete"],
+)
+async def test_apply_rejects_any_non_exact_or_incomplete_chart_receipt(
+    db_session: AsyncSession,
+    invalid_receipt: str,
+) -> None:
+    created = await dashboard_store.create_private_dashboard(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        definition=_definition_with_filter(),
+    )
+    definition = created.version.definition.model_copy(update={"name": "Validated preview"})
+    preview = await dashboard_store.create_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        dashboard_id=created.dashboard.id,
+        base_version_id=created.version.id,
+        definition=definition,
+        operations=[{"operation": "rename_dashboard", "name": "Validated preview"}],
+        prompt="Rename this dashboard",
+        summary="Renamed the dashboard.",
+        agent_run_id="agent-run-invalid-receipt",
+        model="test-model",
+        requires_custom_sql_confirmation=False,
+        custom_sql_confirmed=False,
+    )
+    receipts = await _seed_apply_receipts(
+        db_session,
+        preview=preview,
+        definition=definition,
+    )
+    result_ids = [row.id for row in receipts]
+    if invalid_receipt == "missing":
+        result_ids.pop()
+    else:
+        row = receipts[0]
+        if invalid_receipt == "stale":
+            row.cache_key = "x" * 64
+        elif invalid_receipt == "cross_version":
+            row.version_id = "draft:another-session"
+        elif invalid_receipt == "cross_dashboard":
+            row.dashboard_id = "another-dashboard"
+        elif invalid_receipt == "cross_org":
+            row.org_id = "org-b"
+        elif invalid_receipt == "incomplete":
+            row.completeness = "truncated"
+        await db_session.commit()
+
+    with pytest.raises(dashboard_store.DashboardValidationError):
+        await dashboard_store.apply_authoring_session(
+            db_session,
+            org_id="org-a",
+            user_id="owner-a",
+            session_id=preview.id,
+            expected_current_version_id=created.version.id,
+            visible_complete_result_ids=result_ids,
+        )
+    unchanged = await dashboard_store.get_private_dashboard(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        dashboard_id=created.dashboard.id,
+    )
+    assert unchanged is not None
+    assert unchanged.version.id == created.version.id
+
+
+@pytest.mark.asyncio
+async def test_apply_reuses_complete_base_receipts_for_unchanged_charts(
+    db_session: AsyncSession,
+) -> None:
+    created = await dashboard_store.create_private_dashboard(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        definition=_definition_with_filter(),
+    )
+    definition = created.version.definition.model_copy(update={"name": "Receipt reuse"})
+    preview = await dashboard_store.create_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        dashboard_id=created.dashboard.id,
+        base_version_id=created.version.id,
+        definition=definition,
+        operations=[{"operation": "rename_dashboard", "name": "Receipt reuse"}],
+        prompt="Rename without changing queries",
+        summary="Renamed the dashboard.",
+        agent_run_id="agent-run-reuse",
+        model="test-model",
+        requires_custom_sql_confirmation=False,
+        custom_sql_confirmed=False,
+    )
+    base_receipts = await _seed_apply_receipts(
+        db_session,
+        preview=preview,
+        definition=created.version.definition,
+        dashboard_id=created.dashboard.id,
+        version_id=created.version.id,
+    )
+
+    applied = await dashboard_store.apply_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        session_id=preview.id,
+        expected_current_version_id=created.version.id,
+        visible_complete_result_ids=[row.id for row in base_receipts],
+    )
+
+    all_results = (
+        await db_session.execute(
+            select(GatewayDashboardResult).where(
+                GatewayDashboardResult.dashboard_id == created.dashboard.id
+            )
+        )
+    ).scalars().all()
+    assert {row.version_id for row in base_receipts} == {created.version.id}
+    assert sum(row.version_id == applied.version.id for row in all_results) == len(definition.charts)
 
 
 @pytest.mark.asyncio
@@ -544,7 +747,7 @@ async def test_applied_dashboard_reopens_the_same_authoring_thread_with_a_fresh_
         db_session,
         org_id="org-a",
         user_id="owner-a",
-        definition=_definition(),
+        definition=_definition_with_filter(),
     )
     first_definition = created.version.definition.model_copy(update={"name": "First edit"})
     first = await dashboard_store.create_authoring_session(
@@ -562,13 +765,18 @@ async def test_applied_dashboard_reopens_the_same_authoring_thread_with_a_fresh_
         requires_custom_sql_confirmation=False,
         custom_sql_confirmed=False,
     )
+    receipts = await _seed_apply_receipts(
+        db_session,
+        preview=first,
+        definition=first_definition,
+    )
     applied = await dashboard_store.apply_authoring_session(
         db_session,
         org_id="org-a",
         user_id="owner-a",
         session_id=first.id,
         expected_current_version_id=created.version.id,
-        visible_complete_result_ids=[],
+        visible_complete_result_ids=[row.id for row in receipts],
     )
     reopened = await dashboard_store.get_active_authoring_session(
         db_session,
@@ -593,7 +801,7 @@ async def test_applied_dashboard_reopens_the_same_authoring_thread_with_a_fresh_
             )
 
     async def verified_context(*_args, **_kwargs) -> DashboardSemanticContext:
-        return _context()
+        return _orders_context()
 
     async def resolve_key(*_args, **_kwargs) -> str:
         return "test-key"
@@ -640,24 +848,11 @@ async def test_new_dashboard_apply_promotes_only_the_exact_complete_preview_resu
         requires_custom_sql_confirmation=False,
         custom_sql_confirmed=False,
     )
-    result = GatewayDashboardResult(
-        id="preview-result",
-        dashboard_id=f"draft:{preview.id}",
-        version_id=f"draft:{preview.id}",
-        chart_id="chart-kpi",
-        org_id="org-a",
-        execution_id="execution-a",
-        structured_result_id="structured-a",
-        cache_key="c" * 64,
-        sql_hash="s" * 64,
-        parameter_hash="p" * 64,
-        tables_json=["dbo.orders"],
-        semantic_definition_json={"metric": "orders.revenue"},
-        completeness="complete",
-        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    results = await _seed_apply_receipts(
+        db_session,
+        preview=preview,
+        definition=preview.definition,
     )
-    db_session.add(result)
-    await db_session.commit()
 
     applied = await dashboard_store.apply_authoring_session(
         db_session,
@@ -665,13 +860,18 @@ async def test_new_dashboard_apply_promotes_only_the_exact_complete_preview_resu
         user_id="owner-a",
         session_id=preview.id,
         expected_current_version_id=None,
-        visible_complete_result_ids=[result.id],
+        visible_complete_result_ids=[result.id for result in results],
     )
     promoted = (
-        await db_session.execute(select(GatewayDashboardResult).where(GatewayDashboardResult.id == result.id))
-    ).scalar_one()
-    assert promoted.dashboard_id == applied.dashboard.id
-    assert promoted.version_id == applied.version.id
+        await db_session.execute(
+            select(GatewayDashboardResult).where(
+                GatewayDashboardResult.id.in_([result.id for result in results])
+            )
+        )
+    ).scalars().all()
+    assert {row.dashboard_id for row in promoted} == {applied.dashboard.id}
+    assert {row.version_id for row in promoted} == {applied.version.id}
+    assert {row.chart_id for row in promoted} == {chart.id for chart in applied.version.definition.charts}
 
 
 @pytest.mark.asyncio

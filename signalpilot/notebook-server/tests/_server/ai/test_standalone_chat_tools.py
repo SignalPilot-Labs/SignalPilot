@@ -426,22 +426,24 @@ def test_gateway_mcp_uses_the_per_run_read_only_identity(monkeypatch):
 
 
 def test_agent_contract_excludes_mutating_and_external_tools():
-    assert "English only" in STANDALONE_SYSTEM_PROMPT
-    assert "Never guess" in STANDALONE_SYSTEM_PROMPT
-    assert "chain-of-thought" in STANDALONE_SYSTEM_PROMPT
-    assert "sp.publish_result(dataframe" in STANDALONE_SYSTEM_PROMPT
-    assert "sp.publish_artifact(path" in STANDALONE_SYSTEM_PROMPT
-    assert "Do not catch or suppress publication exceptions" in STANDALONE_SYSTEM_PROMPT
-    assert "Never edit, remove, or redefine the seeded" in STANDALONE_SYSTEM_PROMPT
-    assert "sp.init()` returns None" in STANDALONE_SYSTEM_PROMPT
-    assert "marimo reactive notebook, not a Jupyter notebook" in STANDALONE_SYSTEM_PROMPT
-    assert "top-level loop targets all define names" in STANDALONE_SYSTEM_PROMPT
-    assert "Prefix disposable cell-local names with one underscore" in STANDALONE_SYSTEM_PROMPT
-    assert "must never be referenced from another cell" in STANDALONE_SYSTEM_PROMPT
-    assert "If you change the SQL, call plan_query again" in STANDALONE_SYSTEM_PROMPT
-    assert "including as a fallback during recovery" in STANDALONE_SYSTEM_PROMPT
-    assert "same unchanged notebook code hash" in STANDALONE_SYSTEM_PROMPT
-    assert "MultipleDefinitionError" in STANDALONE_SYSTEM_PROMPT
+    # The prompt file wraps lines; compare against whitespace-collapsed text.
+    _prompt_flat = " ".join(STANDALONE_SYSTEM_PROMPT.split())
+    assert "in English" in _prompt_flat
+    assert "Never guess" in _prompt_flat
+    assert "chain-of-thought" in _prompt_flat
+    assert "sp.publish_result(dataframe" in _prompt_flat
+    assert "sp.publish_artifact(path" in _prompt_flat
+    assert "Never catch or suppress publication exceptions" in _prompt_flat
+    assert "Never edit, remove, or redefine the seeded" in _prompt_flat
+    assert "sp.init()` returns None" in _prompt_flat
+    assert "marimo reactive notebook, not Jupyter" in _prompt_flat
+    assert "exactly ONE live cell" in _prompt_flat
+    assert "Prefix disposable cell-local names with one underscore" in _prompt_flat
+    assert "must never be referenced from another cell" in _prompt_flat
+    assert "Call `plan_query` again" in _prompt_flat
+    assert "as a fallback during recovery" in _prompt_flat
+    assert "same unchanged notebook code hash" in _prompt_flat
+    assert "MultipleDefinitionError" in _prompt_flat
     assert all(
         "notion" not in tool.lower() for tool in STANDALONE_ALLOWED_TOOLS
     )

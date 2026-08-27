@@ -137,9 +137,13 @@ async def prepare_execution(
         "schema:read",
         "runtime:publish",
     ]
-    if is_improvement_run:
-        # Unlocks the sandbox VM MCP tools; ordinary chats never carry this.
+    flags = enterprise_chat_feature_flags()
+    if is_improvement_run or flags.sandbox_runtime:
+        # Unlocks the sandbox VM MCP tools (project-seeded, credential-free).
         capabilities.append("sandbox:execute")
+    if flags.sandbox_runtime:
+        # Warehouse-connected dbt via the gateway-held executor sandbox.
+        capabilities.append("dbt:execute")
     payload = {
         "run_id": run.id,
         "project_id": run.project_id,
@@ -164,6 +168,7 @@ async def prepare_execution(
         "warm_context": warm_context,
         "run_origin": "improvement" if is_improvement_run else "user",
         "features": {
+            "sandbox_runtime": enterprise_chat_feature_flags().sandbox_runtime,
             "size_router": enterprise_chat_feature_flags().size_router,
             "size_router_shadow": enterprise_chat_feature_flags().size_router_shadow,
             "notebook_analysis": enterprise_chat_feature_flags().notebook_analysis,

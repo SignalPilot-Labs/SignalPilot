@@ -64,6 +64,8 @@ import {
 } from "~/lib/api";
 import { StandaloneArtifactContext } from "~/components/chat/standalone-artifact-context";
 import { StandaloneChatComposer } from "~/components/chat/standalone-chat-composer";
+import { ProjectChip, ProjectPicker } from "~/components/chat/project-picker";
+import { getDbtMap } from "~/lib/api";
 import { RunActivityBlocks, RunTimeline } from "~/components/chat/run-timeline";
 import { ReplayControls } from "~/components/chat/replay-controls";
 import { foldRunBlocks, foldRunSteps } from "~/lib/chat-run-steps";
@@ -1683,6 +1685,65 @@ export function StandaloneDataChat({
     currentRun?.status === "running" ||
     currentRun?.status === "waiting_for_query_approval";
 
+  const runIsStreaming =
+    currentRun?.status === "queued" || currentRun?.status === "running";
+
+  // Why the composer is blocked — surfaced under the input, never silent.
+  const disabledReason = !selectedProjectId
+    ? "Choose a project to start."
+    : readiness?.ready === false && currentRun?.status !== "waiting_for_user"
+      ? readiness?.message || "This project isn't ready for chat yet."
+      : runIsStreaming
+        ? "Working on your last question…"
+        : currentRun?.status === "waiting_for_query_approval"
+          ? "Approve or decline the proposed query above."
+          : undefined;
+
+  const selectedProject =
+    bootstrap?.projects.find((p) => p.id === selectedProjectId) ?? null;
+
+  // @-mention names: reuse the compiled dbt map's node names for the selected
+  // project (the same graph the Lineage page serves). Best-effort.
+  const [mentionOptions, setMentionOptions] = useState<string[]>([]);
+  useEffect(() => {
+    let active = true;
+    if (!selectedProjectId) {
+      setMentionOptions([]);
+      return;
+    }
+    void getDbtMap(selectedProjectId, undefined, true)
+      .then((res) => {
+        if (!active) return;
+        const graph = res.graph as { nodes?: Record<string, { name?: string }> } | null;
+        const names = graph?.nodes
+          ? Object.values(graph.nodes)
+              .map((n) => n.name)
+              .filter((n): n is string => Boolean(n))
+          : [];
+        setMentionOptions([...new Set(names)].sort());
+      })
+      .catch(() => {
+        if (active) setMentionOptions([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedProjectId]);
+
+  // Draft persistence: keep per-conversation (or "new") drafts across reloads.
+  const draftKey = `sp:chat-draft:${conversationId ?? "new"}`;
+  useEffect(() => {
+    const saved =
+      typeof localStorage !== "undefined" ? localStorage.getItem(draftKey) : null;
+    setDraft(saved ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey]);
+  useEffect(() => {
+    if (typeof localStorage === "undefined") return;
+    if (draft) localStorage.setItem(draftKey, draft);
+    else localStorage.removeItem(draftKey);
+  }, [draft, draftKey]);
+
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
     const switchedConversation =
@@ -1983,6 +2044,12 @@ export function StandaloneDataChat({
                   onValueChange={setDraft}
                   onSubmit={(text) => void submitText(text)}
                   submitDisabled={submitDisabled}
+                  disabledReason={disabledReason}
+                  running={runIsStreaming}
+                  onStop={
+                    currentRun ? () => void onStop(currentRun.id) : undefined
+                  }
+                  mentionOptions={mentionOptions}
                   placeholder={
                     currentRun?.status === "waiting_for_user"
                       ? "Answer the clarification…"
@@ -1992,73 +2059,64 @@ export function StandaloneDataChat({
                   }
                   projectPicker={
                     !conversationId ? (
-                      <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--color-text-dim)]">
-                        <label className="flex items-center gap-2">
-                          <span>Project</span>
-                          <select
-                            value={selectedProjectId ?? ""}
-                            onChange={(event) => {
-                              const projectId = event.target.value;
-                              setSelectedProjectId(projectId);
-                              void setDefaultStandaloneChatProject(projectId);
-                              router.replace(
-                                `/chats?project=${encodeURIComponent(projectId)}`,
-                              );
-                            }}
-                            aria-label="Select project"
-                            className="rounded-full border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-1.5 text-xs text-[var(--color-text-muted)] focus:outline-none"
-                          >
-                            {bootstrap.projects.map((project) => (
-                              <option key={project.id} value={project.id}>
-                                {project.display_name}
-                                {project.ready
-                                  ? ""
-                                  : projectSetupSuffix(
-                                      project.readiness_message,
-                                    )}
-                              </option>
-                            ))}
-                          </select>
+                      <ProjectPicker
+                        projects={bootstrap.projects}
+                        selectedId={selectedProjectId}
+                        onSelect={(projectId) => {
+                          setSelectedProjectId(projectId);
+                          void setDefaultStandaloneChatProject(projectId);
+                          router.replace(
+                            `/chats?project=${encodeURIComponent(projectId)}`,
+                          );
+                        }}
+                      />
+                    ) : (
+                      <ProjectChip project={selectedProject} />
+                    )
+                  }
+                  settings={
+                    !conversationId &&
+                    bootstrap.enterprise_features.query_approval ? (
+                      <div className="space-y-3">
+                        <label className="block">
+                          <span className="mb-1 block text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-dim)]">
+                            Per-query budget (USD)
+                          </span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={perQueryBudgetUsd}
+                            onChange={(event) =>
+                              setPerQueryBudgetUsd(
+                                Math.max(0, Number(event.target.value)),
+                              )
+                            }
+                            aria-label="Per-query budget in USD"
+                            className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-input)] px-2 py-1.5 text-xs text-[var(--color-text)]"
+                          />
                         </label>
-                        {bootstrap.enterprise_features.query_approval && (
-                          <>
-                            <label className="flex items-center gap-2">
-                              <span>Per-query budget</span>
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                value={perQueryBudgetUsd}
-                                onChange={(event) =>
-                                  setPerQueryBudgetUsd(
-                                    Math.max(0, Number(event.target.value)),
-                                  )
-                                }
-                                aria-label="Per-query budget in USD"
-                                className="w-20 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-1.5"
-                              />
-                            </label>
-                            <label className="flex items-center gap-2">
-                              <span>Chat budget</span>
-                              <input
-                                type="number"
-                                min={perQueryBudgetUsd}
-                                step="0.01"
-                                value={chatBudgetUsd}
-                                onChange={(event) =>
-                                  setChatBudgetUsd(
-                                    Math.max(
-                                      perQueryBudgetUsd,
-                                      Number(event.target.value),
-                                    ),
-                                  )
-                                }
-                                aria-label="Chat budget in USD"
-                                className="w-20 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-1.5"
-                              />
-                            </label>
-                          </>
-                        )}
+                        <label className="block">
+                          <span className="mb-1 block text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-dim)]">
+                            Chat budget (USD)
+                          </span>
+                          <input
+                            type="number"
+                            min={perQueryBudgetUsd}
+                            step="0.01"
+                            value={chatBudgetUsd}
+                            onChange={(event) =>
+                              setChatBudgetUsd(
+                                Math.max(
+                                  perQueryBudgetUsd,
+                                  Number(event.target.value),
+                                ),
+                              )
+                            }
+                            aria-label="Chat budget in USD"
+                            className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-input)] px-2 py-1.5 text-xs text-[var(--color-text)]"
+                          />
+                        </label>
                       </div>
                     ) : undefined
                   }

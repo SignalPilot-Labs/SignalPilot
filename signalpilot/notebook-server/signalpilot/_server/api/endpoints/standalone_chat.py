@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -81,14 +82,19 @@ STANDALONE_ALLOWED_TOOLS = [
     "mcp__signalpilot-notebook__get_notebook_errors",
 ]
 
-# Additional gateway tools available only to automated improvement runs. The
-# gateway enforces this server-side through the sandbox:execute JWT capability;
-# this list only widens the agent-side allowlist for those runs.
-IMPROVEMENT_EXTRA_TOOLS = [
+# Sandbox VM tools: for improvement runs always; for user chats when the
+# gateway forwards features.sandbox_runtime (SP_FEATURE_CHAT_SANDBOX_RUNTIME).
+# The gateway enforces this server-side through the sandbox:execute JWT
+# capability; these lists only widen the agent-side allowlist.
+SANDBOX_TOOLS = [
     "mcp__signalpilot__sandbox_exec",
     "mcp__signalpilot__sandbox_write_file",
     "mcp__signalpilot__sandbox_read_file",
 ]
+IMPROVEMENT_EXTRA_TOOLS = SANDBOX_TOOLS  # historical alias
+# Warehouse-connected dbt via the gateway's credential-holding executor;
+# user chats only, gated by the dbt:execute JWT capability.
+DBT_EXECUTE_TOOL = "mcp__signalpilot__dbt_execute"
 
 # Gateway MCP tools that must not be offered to the ordinary Data Chat agent.
 # analyze_project_db and map_columns can return after they use the governed
@@ -100,67 +106,20 @@ STANDALONE_DISALLOWED_MCP_TOOLS = [
     "mcp__signalpilot__map_columns",
 ]
 
-IMPROVEMENT_SYSTEM_PROMPT_SUFFIX = """
+# System prompts live in standalone .md files — easy to read and modify
+# without touching code. See _server/ai/prompts/.
+_PROMPTS_DIR = Path(__file__).resolve().parents[2] / "ai" / "prompts"
 
-<automated_improvement_run>
-This is an AUTOMATED IMPROVEMENT RUN scheduled by SignalPilot, not a user
-conversation. Your mission: analyze the selected dbt project for warehouse
-cost-saving opportunities and publish an HTML report.
 
-Additional rules for this run only:
-- You have sandbox VM tools (sandbox_exec, sandbox_write_file,
-  sandbox_read_file): a disposable Linux VM with python3, uv, pip, and git.
-  Use it to install dbt and parse/compile the project sources you need.
-  The project files are also available read-only in your working directory.
-- Workflow: enumerate the project's models, use estimate_query_cost on the
-  compiled SQL of the most material models against the selected connection,
-  and identify concrete savings (duplicated subqueries worth extracting into
-  a cached staging model, SELECT * from wide tables, expensive views that
-  many models reference, dead models with no downstream refs).
-- Rank recommendations by estimated savings and show before/after cost when
-  you can estimate both.
-- Publish exactly one HTML report artifact via publish_report titled
-  "Cost optimization report". The report must include: an executive summary,
-  a ranked recommendation table with estimated impact, and the per-model
-  cost estimates you gathered. If you find no meaningful savings, publish
-  the report saying so with the evidence.
-- Never modify the database, the project, or any external system. Read-only
-  queries and the sandbox only.
-- End with a 3-6 sentence plain-language summary of the findings.
-</automated_improvement_run>"""
+@lru_cache(maxsize=8)
+def _load_prompt(name: str) -> str:
+    return (_PROMPTS_DIR / name).read_text(encoding="utf-8").strip()
 
-STANDALONE_SYSTEM_PROMPT = """You are SignalPilot Data Chat, helping a non-technical business user answer questions from one governed project.
 
-Rules:
-- Respond in English only and lead with the business answer.
-- Inspect the supplied dbt metadata, schema, and relevant data before asking a question.
-- Query only the selected connection shown below. Queries must be read-only.
-- Do not modify a database, project, notebook, file, external system, or repository.
-- Call plan_query before every execution. Obey its route exactly.
-- Use query_database with the returned plan_id only when the plan route is mcp.
-- If the route is notebook_sdk or dataset_ref, call start_analysis_notebook with that plan_id, then use only the seeded notebook and the plan-bound SDK.
-- The analysis notebook is a marimo reactive notebook, not a Jupyter notebook. Before editing it, inspect the current cell map. Every non-private top-level name may be defined by exactly one live cell across the entire notebook. Imports, assignments, function and class names, and top-level loop targets all define names.
-- Define shared imports and reusable DataFrames once, then reference them from downstream cells. Prefix disposable cell-local names with one underscore (for example `_fig`, `_ax`, `_i`, `_row`, or `_segment`), or place scratch work inside a uniquely named function. Underscore-prefixed names are cell-local and must never be referenced from another cell; any cross-cell value needs one unique public name. Never repeat public helper names across cells.
-- If edit_notebook returns MultipleDefinitionError, use its variable and cell_ids to update, rename, or delete the conflicting definitions in one atomic edit batch. Do not add a replacement definition in a separate transaction while the old defining cell remains live.
-- Never edit, remove, or redefine the seeded hidden context/import cell or the seeded SDK setup cell. They already run `sp.init(...)` and define the plan-bound `db = sp.connect(...)` connection. `sp.init()` returns None, and there is no `signalpilot.db` export.
-- For notebook_sdk, first define `plan_id` from the exact ID returned by plan_query, then execute the exact planned SQL with `source = db.query_result(sql, plan_id=plan_id)` and build the in-kernel DataFrame from `source["rows"]`; retain `source["result_id"]` for publication. A plan ID authorizes only its exact planned SQL and execution scope. If you change the SQL, call plan_query again and use its new plan ID. There is no `db.read_plan` method.
-- If the route is aggregate_required, rewrite the work as a bounded warehouse aggregate. If it is refuse, stop.
-- Never copy MCP previews into notebook DataFrames, including as a fallback during recovery. MCP previews are model context, not a data transport.
-- Keep complete bounded DataFrames inside the kernel. Notebook cells may display only schema, completeness, statistics, checks, and a small preview.
-- Publish derived rows from the kernel with exactly `derived = sp.publish_result(dataframe, name="...", source_result_ids=[source["result_id"]], completeness="complete" | "truncated" | "unknown", reconciliation="...")`. The SDK computes the notebook code hash; do not pass `result=`, `code_hash=`, or `metadata=`.
-- Publish a runtime file with exactly `artifact = sp.publish_artifact(path, kind="table" | "chart" | "report", result_id=derived.id, assumptions=[...], exclusions=[...], caveats=[...])`. Create chart PNGs and other artifacts only under `SP_CHAT_SCRATCH_DIRECTORY`. Finalize every notebook cell before executing publication: the result and artifact must be published from the same unchanged notebook code hash. Do not edit the notebook between `sp.publish_result` and `sp.publish_artifact`; after any edit, publish both again from the final notebook version.
-- PublishedResult exposes only `id`, `name`, `row_count`, `byte_size`, and `completeness`. PublishedArtifact exposes only `id`, `filename`, `kind`, and `byte_size`.
-- Do not catch or suppress publication exceptions. A failed `sp.publish_result` or `sp.publish_artifact` means the analysis is incomplete and must not be reported as successful.
-- Ask for clarification only when exploration leaves a material ambiguity that would change the answer. If needed, return exactly `CLARIFICATION_REQUESTED: <one conversational question>`.
-- Choose text, a table, a chart, or a report automatically. Publish every displayed table, chart, or report with the publication tools.
-- Never guess. State freshness, assumptions, exclusions, truncation, and caveats explicitly.
-- Explicitly disclose incomplete, unknown-completeness, or display-limited results.
-- Use SignalPilot MCP for schema discovery and bounded pre-analysis. MCP row samples are context-limited and must never be treated as a complete dataset.
-- Prefer governed SDK structured-result IDs for substantial analysis and for every published artifact.
-- The dbt project is frozen at the supplied commit. Inspect it but never run dbt run, build, seed, or snapshot.
-- Never mention or expose confidence scores, hidden reasoning, chain-of-thought, credentials, or implementation internals.
-- Do not suggest follow-up questions.
-"""
+# Back-compat accessor (tests and older callers) — the content lives in the
+# .md file; this just materializes it at import time.
+STANDALONE_SYSTEM_PROMPT = _load_prompt("standalone_chat_system.md")
+
 
 
 def _require_execution_scope(
@@ -845,9 +804,16 @@ async def execute(*, request: Request) -> StreamingResponse:
     )
     notebook_analysis_enabled = bool(feature_values.get("notebook_analysis"))
     is_improvement_run = str(body.get("run_origin") or "user") == "improvement"
+    sandbox_runtime_enabled = (
+        bool(feature_values.get("sandbox_runtime")) and not is_improvement_run
+    )
+    prompt_parts = [_load_prompt("standalone_chat_system.md")]
+    if sandbox_runtime_enabled:
+        prompt_parts.append(_load_prompt("sandbox_dbt_suffix.md"))
+    if is_improvement_run:
+        prompt_parts.append(_load_prompt("improvement_suffix.md"))
     system_prompt = (
-        f"{STANDALONE_SYSTEM_PROMPT}"
-        f"{IMPROVEMENT_SYSTEM_PROMPT_SUFFIX if is_improvement_run else ''}\n\n"
+        "\n\n".join(prompt_parts) + "\n\n"
         f"Selected project: {project_id}\nFrozen branch: {branch}\nFrozen commit: {commit_sha}\n"
         f"Selected connection: {connection_name}\n\n"
         f"<governed_project_context>\n{warm_context}\n</governed_project_context>"
@@ -1059,7 +1025,12 @@ async def execute(*, request: Request) -> StreamingResponse:
                         "WebFetch",
                         "WebSearch",
                         *STANDALONE_DISALLOWED_MCP_TOOLS,
-                        *([] if is_improvement_run else IMPROVEMENT_EXTRA_TOOLS),
+                        *(
+                            []
+                            if (is_improvement_run or sandbox_runtime_enabled)
+                            else SANDBOX_TOOLS
+                        ),
+                        *([] if sandbox_runtime_enabled else [DBT_EXECUTE_TOOL]),
                     ],
                     allowed_tools=(
                         (
@@ -1072,7 +1043,12 @@ async def execute(*, request: Request) -> StreamingResponse:
                                 and not tool.endswith("start_analysis_notebook")
                             ]
                         )
-                        + (IMPROVEMENT_EXTRA_TOOLS if is_improvement_run else [])
+                        + (
+                            SANDBOX_TOOLS
+                            if (is_improvement_run or sandbox_runtime_enabled)
+                            else []
+                        )
+                        + ([DBT_EXECUTE_TOOL] if sandbox_runtime_enabled else [])
                     ),
                     additional_mcp_servers={
                         "standalone-chat": artifact_server

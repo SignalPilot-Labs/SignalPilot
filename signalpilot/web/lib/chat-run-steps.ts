@@ -106,7 +106,7 @@ function categorizeTool(tool: string): RunStepCategory {
   if (SQL_TOOLS.has(tool)) return "sql";
   if (PYTHON_TOOLS.has(tool)) return "python";
   if (NOTEBOOK_TOOLS.has(tool)) return "notebook";
-  if (tool === "Bash") return "terminal";
+  if (tool === "Bash" || tool.startsWith("sandbox_")) return "terminal";
   if (FILE_WRITE_TOOLS.has(tool)) return "file-write";
   if (FILE_EDIT_TOOLS.has(tool)) return "file-edit";
   if (FILE_READ_TOOLS.has(tool)) return "file-read";
@@ -132,6 +132,10 @@ function humanizeTool(tool: string): string {
     start_analysis_notebook: "Started the analysis notebook",
     save_data_snapshot: "Saved a data snapshot",
     inspect_dbt: "Inspected the dbt project",
+    dbt_execute: "Ran dbt against the warehouse",
+    sandbox_exec: "Ran a command in the sandbox",
+    sandbox_write_file: "Wrote a file in the sandbox",
+    sandbox_read_file: "Read a file in the sandbox",
     publish_table: "Published a table",
     publish_chart: "Published a chart",
     publish_report: "Published a report",
@@ -238,8 +242,11 @@ export function foldRunSteps(
   runId: string,
 ): RunStep[] {
   const steps: RunStep[] = [];
-  /** Open tool steps awaiting their tool_completed, in start order. */
+  /** Open tool steps awaiting their tool_completed, in start order (fallback
+   * when no tool_call_id is present). */
   const open: RunStep[] = [];
+  /** Open steps keyed by tool_call_id — the reliable pairing when present. */
+  const openById = new Map<string, RunStep>();
   const runEvents = events
     .filter((event) => event.run_id === runId)
     .sort((a, b) => a.sequence - b.sequence);
@@ -250,6 +257,7 @@ export function foldRunSteps(
       const rawTool = text(event.payload.tool) ?? "analysis tool";
       const { tool, origin } = normalizeToolName(rawTool);
       const category = categorizeTool(tool);
+      const toolCallId = text(event.payload.tool_call_id);
       const input = asRecord(event.payload.input);
       const step: RunStep = {
         key,
@@ -274,18 +282,34 @@ export function foldRunSteps(
       };
       steps.push(step);
       open.push(step);
+      if (toolCallId) openById.set(toolCallId, step);
       continue;
     }
     if (event.type === "tool_completed") {
-      const step = open.shift();
+      // Pair by tool_call_id when the worker provides it (tools can complete
+      // out of order); fall back to FIFO only when it's absent.
+      const toolCallId = text(event.payload.tool_call_id);
+      let step: RunStep | undefined;
+      if (toolCallId && openById.has(toolCallId)) {
+        step = openById.get(toolCallId);
+        openById.delete(toolCallId);
+        const idx = open.indexOf(step!);
+        if (idx >= 0) open.splice(idx, 1);
+      } else {
+        step = open.shift();
+      }
       if (!step) continue;
       const failed = event.payload.error === true;
       step.status = failed ? "failed" : "succeeded";
       step.endedAt = event.created_at;
       step.durationMs = durationBetween(step.startedAt, event.created_at);
       if (failed) {
+        // The worker writes the failure text as `summary`; `message` is the
+        // legacy field kept as a fallback.
         step.detail =
-          text(event.payload.message) ?? "The tool returned an error.";
+          text(event.payload.summary) ??
+          text(event.payload.message) ??
+          "The tool returned an error.";
       }
       continue;
     }

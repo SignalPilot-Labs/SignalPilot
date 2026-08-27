@@ -28,6 +28,15 @@ mcp_capabilities_var: contextvars.ContextVar[list[str] | None] = contextvars.Con
 mcp_execution_identity_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "mcp_execution_identity", default=None
 )
+# Session-JWT project pin (chat/notebook sessions) — lets project-scoped tools
+# (dbt_execute) resolve their workspace without a request parameter the agent
+# could spoof.
+mcp_project_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "mcp_project_id", default=None
+)
+mcp_branch_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "mcp_branch", default=None
+)
 # Evaluation document identifiers are bound to the stored API key.
 # Knowledge tools include these proposed documents with active documents during a run.
 mcp_eval_doc_ids_var: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(

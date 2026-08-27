@@ -1,0 +1,447 @@
+"""Per-chat dbt EXECUTOR sandbox — the credential side of the split-sandbox model.
+
+The chat agent's own sandbox never holds warehouse credentials (stub-profile
+parse/compile only). Warehouse-touching dbt commands run HERE: a second Vercel
+sandbox, created and driven exclusively by the gateway, holding a generated
+profiles.yml under /creds. The agent's only interface is the `dbt_execute` MCP
+tool, whose argument surface is a hard allowlist — there is no exec/read/write
+tool that accepts this sandbox's identity, so the agent has no path to the
+credentials.
+
+Materializations land in a per-chat scratch schema (sp_chat_<run8>), keeping
+model builds out of production namespaces. Source reads use the connection's
+stored credential unchanged.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import re
+import shlex
+from dataclasses import dataclass
+from urllib.parse import parse_qs, unquote, urlparse
+
+import yaml
+
+from ..config.notebooks import get_notebook_settings
+from ..config.sandbox_runtime import get_sandbox_runtime_settings
+from ..sandbox_runtime import SandboxRuntimeError, SandboxSpec, get_sandbox_runtime
+from ..workspace_store import workspace_object_storage
+from ..workspace_store.dbt_detect import resolve_dbt_project_dir_detailed
+from ..workspace_store.store import WorkspaceStore
+
+logger = logging.getLogger(__name__)
+
+DBT_EXECUTE_CAPABILITY = "dbt:execute"
+
+_ALLOWED_COMMANDS = {"run", "test", "build", "seed", "snapshot", "compile", "docs"}
+# Node-selector syntax only. A leading dash would let a value masquerade as a
+# flag, so it is disallowed even though it lands in its own argv slot.
+_SELECTOR_RE = re.compile(r"^[\w.+:,*@/][\w .+:,*@/-]*$")
+_MAX_OUTPUT_CHARS = 20_000
+_MAX_SYNC_TAR_BYTES = 25_000_000
+_EXEC_TIMEOUT = 900.0
+
+_PROFILES_DIR = "/creds"
+_WORKSPACE = "/workspace"
+
+# One executor per chat execution identity for the lifetime of this process
+# (same lifecycle model as the agent's session sandbox).
+_executors: dict[str, str] = {}
+_executor_lock = asyncio.Lock()
+
+
+class DbtExecutorError(RuntimeError):
+    pass
+
+
+def scratch_schema_for(identity: str) -> str:
+    """chat:<run_id> -> sp_chat_<first 8 hex of run id>."""
+    run_part = identity.split(":", 1)[-1].replace("-", "")[:8] or "run"
+    return f"sp_chat_{run_part}"
+
+
+# ── Profile emitters (credentials never leave this module) ───────────────────
+
+
+@dataclass(frozen=True)
+class EmittedProfile:
+    profile_yaml: str
+    adapter_package: str  # pip package providing the adapter
+
+
+def _url_parts(dsn: str):
+    u = urlparse(dsn)
+    return {
+        "host": u.hostname or "",
+        "port": u.port,
+        "user": unquote(u.username or ""),
+        "password": unquote(u.password or ""),
+        "database": (u.path or "/").lstrip("/"),
+        "query": {k: v[0] for k, v in parse_qs(u.query).items()},
+    }
+
+
+def _emit_postgres(profile_name: str, dsn: str, schema: str) -> EmittedProfile:
+    p = _url_parts(dsn)
+    out = {
+        profile_name: {
+            "target": "sp",
+            "outputs": {
+                "sp": {
+                    "type": "postgres",
+                    "host": p["host"],
+                    "port": p["port"] or 5432,
+                    "user": p["user"],
+                    "password": p["password"],
+                    "dbname": p["database"],
+                    "schema": schema,
+                    "threads": 4,
+                    "sslmode": p["query"].get("sslmode", "prefer"),
+                }
+            },
+        }
+    }
+    return EmittedProfile(yaml.safe_dump(out), "dbt-postgres")
+
+
+def _emit_redshift(profile_name: str, dsn: str, schema: str) -> EmittedProfile:
+    p = _url_parts(dsn)
+    out = {
+        profile_name: {
+            "target": "sp",
+            "outputs": {
+                "sp": {
+                    "type": "redshift",
+                    "host": p["host"],
+                    "port": p["port"] or 5439,
+                    "user": p["user"],
+                    "password": p["password"],
+                    "dbname": p["database"],
+                    "schema": schema,
+                    "threads": 4,
+                }
+            },
+        }
+    }
+    return EmittedProfile(yaml.safe_dump(out), "dbt-redshift")
+
+
+def _emit_snowflake(profile_name: str, dsn: str, schema: str) -> EmittedProfile:
+    # snowflake://user:pass@account/database/schema?warehouse=...&role=...
+    p = _url_parts(dsn)
+    path_bits = [b for b in (urlparse(dsn).path or "").split("/") if b]
+    database = path_bits[0] if path_bits else p["database"]
+    out = {
+        profile_name: {
+            "target": "sp",
+            "outputs": {
+                "sp": {
+                    "type": "snowflake",
+                    "account": p["host"],
+                    "user": p["user"],
+                    "password": p["password"],
+                    "database": database,
+                    "schema": schema,
+                    "warehouse": p["query"].get("warehouse", ""),
+                    "role": p["query"].get("role", ""),
+                    "threads": 4,
+                }
+            },
+        }
+    }
+    return EmittedProfile(yaml.safe_dump(out), "dbt-snowflake")
+
+
+def _emit_mssql(profile_name: str, dsn: str, schema: str) -> EmittedProfile:
+    p = _url_parts(dsn)
+    out = {
+        profile_name: {
+            "target": "sp",
+            "outputs": {
+                "sp": {
+                    "type": "sqlserver",
+                    "driver": "ODBC Driver 18 for SQL Server",
+                    "server": p["host"],
+                    "port": p["port"] or 1433,
+                    "user": p["user"],
+                    "password": p["password"],
+                    "database": p["database"],
+                    "schema": schema,
+                    "trust_cert": True,
+                    "threads": 4,
+                }
+            },
+        }
+    }
+    return EmittedProfile(yaml.safe_dump(out), "dbt-sqlserver")
+
+
+_EMITTERS = {
+    "postgres": _emit_postgres,
+    "redshift": _emit_redshift,
+    "snowflake": _emit_snowflake,
+    "mssql": _emit_mssql,
+}
+
+
+def emit_profile(db_type: str, profile_name: str, dsn: str, schema: str) -> EmittedProfile:
+    emitter = _EMITTERS.get(db_type)
+    if emitter is None:
+        raise DbtExecutorError(
+            f"dbt_execute does not support '{db_type}' connections yet "
+            f"(supported: {', '.join(sorted(_EMITTERS))}). "
+            "Use your own sandbox for dbt parse/compile."
+        )
+    return emitter(profile_name, dsn, schema)
+
+
+# ── Executor lifecycle ───────────────────────────────────────────────────────
+
+
+async def _hydrate_project(runtime, sandbox_id: str, snapshot_url: str) -> None:
+    result = await runtime.exec(
+        sandbox_id,
+        "set -e; "
+        'sudo mkdir -p /workspace /creds && sudo chown "$(id -u):$(id -g)" /workspace /creds; '
+        "chmod 700 /creds; "
+        'curl -fsSL "$SP_SNAPSHOT_URL" | tar xz -C /workspace',
+        env={"SP_SNAPSHOT_URL": snapshot_url},
+        timeout_seconds=300,
+    )
+    if not result.ok:
+        raise DbtExecutorError(f"executor hydration failed: {result.stderr[-400:]}")
+
+
+async def ensure_executor(
+    db,
+    *,
+    identity: str,
+    org_id: str,
+    project_id: str,
+    branch: str,
+    connection_name: str,
+    store,
+) -> tuple[str, str, str]:
+    """Create (or reuse) the executor sandbox. Returns
+    (sandbox_id, dbt_project_dir, scratch_schema). Credentials are written
+    inside this function and never returned."""
+    async with _executor_lock:
+        existing = _executors.get(identity)
+        if existing:
+            # Project dir/schema are deterministic; recompute cheaply.
+            storage = workspace_object_storage()
+            ws = WorkspaceStore(storage)
+            manifest = await ws.load_manifest(db, org_id=org_id, project_id=project_id, branch=branch)
+            project = await store.get_workspace_project(project_id)
+            dbt_dir, _, _ = resolve_dbt_project_dir_detailed(
+                (project.settings if project else None) or {}, manifest
+            )
+            return existing, dbt_dir or "", scratch_schema_for(identity)
+
+        storage = workspace_object_storage()
+        if not storage.enabled:
+            raise DbtExecutorError("workspace storage is not configured")
+        ws = WorkspaceStore(storage)
+        revision, snap_key = await ws.build_snapshot(
+            db, org_id=org_id, project_id=project_id, branch=branch
+        )
+        snapshot_url = await storage.presign_get(snap_key, expires_seconds=3600)
+        manifest = await ws.load_manifest(
+            db, org_id=org_id, project_id=project_id, branch=branch, revision=revision
+        )
+        project = await store.get_workspace_project(project_id)
+        dbt_dir, source, _ = resolve_dbt_project_dir_detailed(
+            (project.settings if project else None) or {}, manifest
+        )
+        if source == "none":
+            raise DbtExecutorError("no dbt_project.yml found in this project")
+
+        dsn = await store.get_connection_string(connection_name)
+        if not dsn:
+            raise DbtExecutorError(f"connection '{connection_name}' is not available")
+        info = await store.get_connection(connection_name)
+        db_type = str(getattr(info, "db_type", "") or "").split(".")[-1]
+
+        # Profile name must match dbt_project.yml's `profile:`; read it from the
+        # manifest-backed file via the workspace store.
+        profile_name = await _read_profile_name(
+            db, ws, org_id=org_id, project_id=project_id, branch=branch,
+            revision=revision, dbt_dir=dbt_dir or "",
+        )
+        schema = scratch_schema_for(identity)
+        emitted = emit_profile(db_type, profile_name, dsn, schema)
+
+        runtime = get_sandbox_runtime()
+        settings = get_sandbox_runtime_settings()
+        nb = get_notebook_settings()
+        image = nb.vercel_image or None
+        sandbox_id = await runtime.create(
+            SandboxSpec(
+                time_limit_seconds=settings.time_limit_seconds,
+                image=image,
+                tags={"sp_execution_identity": f"chat-exec:{identity}", "sp_purpose": "chat-dbt-executor"},
+                env={},
+            )
+        )
+        try:
+            await _hydrate_project(runtime, sandbox_id, snapshot_url)
+            await runtime.write_file(
+                sandbox_id, f"{_PROFILES_DIR}/profiles.yml", emitted.profile_yaml.encode()
+            )
+            # The pinned notebook image ships dbt-core/postgres/snowflake/duckdb;
+            # install anything else the connection needs, once per executor.
+            await runtime.exec(
+                sandbox_id,
+                'export PATH="/opt/sp-notebook/.venv/bin:$PATH"; '
+                f"pip show {shlex.quote(emitted.adapter_package)} >/dev/null 2>&1 "
+                f"|| pip install --quiet {shlex.quote(emitted.adapter_package)}",
+                timeout_seconds=420,
+            )
+        except Exception:
+            await runtime.destroy(sandbox_id)
+            raise
+        _executors[identity] = sandbox_id
+        logger.info("dbt executor ready for %s (db_type=%s, schema=%s)", identity, db_type, schema)
+        return sandbox_id, dbt_dir or "", schema
+
+
+async def _read_profile_name(
+    db, ws: WorkspaceStore, *, org_id: str, project_id: str, branch: str,
+    revision: int, dbt_dir: str,
+) -> str:
+    path = f"{dbt_dir}/dbt_project.yml" if dbt_dir else "dbt_project.yml"
+    found = await ws.read_file(
+        db, org_id=org_id, project_id=project_id, branch=branch, path=path, revision=revision
+    )
+    if found is None:
+        raise DbtExecutorError(f"{path} not found in workspace revision {revision}")
+    try:
+        parsed = yaml.safe_load(found[1].decode("utf-8")) or {}
+    except Exception as exc:
+        raise DbtExecutorError(f"could not parse {path}: {exc}")
+    return str(parsed.get("profile") or parsed.get("name") or "default")
+
+
+async def release_executor(identity: str) -> None:
+    async with _executor_lock:
+        sandbox_id = _executors.pop(identity, None)
+    if sandbox_id:
+        try:
+            await get_sandbox_runtime().destroy(sandbox_id)
+        except SandboxRuntimeError:
+            pass
+
+
+# ── Project sync: agent sandbox -> executor ─────────────────────────────────
+
+
+async def sync_from_agent_sandbox(agent_sandbox_id: str, executor_sandbox_id: str) -> str:
+    """Copy the agent's edited project tree into the executor.
+
+    Excludes build artifacts and anything credential-shaped. Returns a short
+    human-readable summary. The tarball travels through the gateway, never
+    peer-to-peer, so the executor stays unreachable from the agent."""
+    runtime = get_sandbox_runtime()
+    pack = await runtime.exec(
+        agent_sandbox_id,
+        "tar czf /tmp/sp-sync.tgz -C /workspace "
+        "--exclude='target' --exclude='dbt_packages' --exclude='.git' "
+        "--exclude='profiles.yml' --exclude='.env' --exclude='*.pem' . "
+        "&& stat -c %s /tmp/sp-sync.tgz",
+        timeout_seconds=120,
+    )
+    if not pack.ok:
+        raise DbtExecutorError(f"could not pack agent workspace: {pack.stderr[-300:]}")
+    try:
+        size = int(pack.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        size = -1
+    if size > _MAX_SYNC_TAR_BYTES:
+        raise DbtExecutorError(f"workspace too large to sync ({size} bytes)")
+    data = await runtime.read_file(agent_sandbox_id, "/tmp/sp-sync.tgz")
+    if data is None:
+        raise DbtExecutorError("agent workspace tarball disappeared")
+    await runtime.write_file(executor_sandbox_id, "/tmp/sp-sync.tgz", data)
+    unpack = await runtime.exec(
+        executor_sandbox_id,
+        "tar xzf /tmp/sp-sync.tgz -C /workspace && rm -f /tmp/sp-sync.tgz",
+        timeout_seconds=120,
+    )
+    if not unpack.ok:
+        raise DbtExecutorError(f"could not unpack into executor: {unpack.stderr[-300:]}")
+    return f"synced {len(data)} bytes"
+
+
+# ── Command execution ────────────────────────────────────────────────────────
+
+
+def build_dbt_argv(
+    command: str,
+    *,
+    select: str = "",
+    exclude: str = "",
+    full_refresh: bool = False,
+    threads: int = 0,
+    dbt_dir: str,
+) -> list[str]:
+    """Structured args only — no free-form flags, no shell strings."""
+    cmd = command.strip().lower()
+    parts = cmd.split()
+    if not parts or parts[0] not in _ALLOWED_COMMANDS:
+        raise DbtExecutorError(
+            f"command must be one of: {', '.join(sorted(_ALLOWED_COMMANDS))}"
+        )
+    if parts[0] == "docs" and parts[1:] != ["generate"]:
+        raise DbtExecutorError("only 'docs generate' is allowed")
+    if parts[0] != "docs" and len(parts) != 1:
+        raise DbtExecutorError("command must be a single dbt subcommand; use select/exclude args")
+
+    argv = ["dbt", *parts, "--no-use-colors", "--profiles-dir", _PROFILES_DIR, "--target", "sp"]
+    project_dir = f"{_WORKSPACE}/{dbt_dir}" if dbt_dir else _WORKSPACE
+    argv += ["--project-dir", project_dir]
+    for label, value in (("--select", select), ("--exclude", exclude)):
+        if value:
+            if not _SELECTOR_RE.match(value):
+                raise DbtExecutorError(f"invalid characters in {label} value")
+            argv += [label, value]
+    if full_refresh:
+        argv.append("--full-refresh")
+    if threads:
+        argv += ["--threads", str(max(1, min(8, int(threads))))]
+    return argv
+
+
+async def run_dbt_command(sandbox_id: str, argv: list[str], dbt_dir: str) -> str:
+    runtime = get_sandbox_runtime()
+    shell = 'export PATH="/opt/sp-notebook/.venv/bin:$PATH"; ' + " ".join(
+        shlex.quote(a) for a in argv
+    )
+    result = await runtime.exec(sandbox_id, shell, timeout_seconds=_EXEC_TIMEOUT)
+
+    sections = [f"exit_code: {result.returncode}"]
+    output = (result.stdout or "") + ("\n" + result.stderr if result.stderr else "")
+    if len(output) > _MAX_OUTPUT_CHARS:
+        output = output[-_MAX_OUTPUT_CHARS:]
+    sections.append(f"output:\n{output.strip()}")
+
+    project_dir = f"{_WORKSPACE}/{dbt_dir}" if dbt_dir else _WORKSPACE
+    rr = await runtime.read_file(sandbox_id, f"{project_dir}/target/run_results.json")
+    if rr:
+        try:
+            parsed = json.loads(rr)
+            statuses: dict[str, int] = {}
+            failures = []
+            for r in parsed.get("results", []):
+                status = str(r.get("status"))
+                statuses[status] = statuses.get(status, 0) + 1
+                if status in ("error", "fail") and len(failures) < 10:
+                    failures.append(f"{r.get('unique_id')}: {str(r.get('message'))[:200]}")
+            sections.append("run_results: " + ", ".join(f"{k}={v}" for k, v in sorted(statuses.items())))
+            if failures:
+                sections.append("failures:\n" + "\n".join(failures))
+        except Exception:
+            pass
+    return "\n".join(sections)

@@ -551,6 +551,17 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
         with suppress(Exception):
             async with get_session_factory()() as db:
                 await cleanup_finished_execution(db, run_id=run_id)
+        # Tear down both per-run sandboxes: the agent's seeded VM and the
+        # credential-holding dbt executor. Best-effort — the provider time
+        # limit is the backstop.
+        with suppress(Exception):
+            from ..mcp.tools.sandbox_vm import release_session_sandbox
+
+            await release_session_sandbox(f"chat:{run_id}")
+        with suppress(Exception):
+            from .dbt_executor import release_executor
+
+            await release_executor(f"chat:{run_id}")
 
 
 async def run_worker() -> None:

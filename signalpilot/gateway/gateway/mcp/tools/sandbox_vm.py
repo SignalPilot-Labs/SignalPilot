@@ -1,25 +1,36 @@
-"""Sandbox VM tools for automated improvement runs.
+"""Sandbox VM tools for chat and improvement-run agents.
 
-These tools give an improvement-run agent a disposable Linux VM (via the
-configured sandbox runtime provider) to load and compile the dbt project in.
-They are capability-gated: the session JWT must carry "sandbox:execute",
-which the gateway mints only for improvement runs — ordinary standalone
-chats never receive it.
+These tools give the agent a disposable Linux VM (via the configured sandbox
+runtime provider) to explore, edit, and compile the dbt project in. They are
+capability-gated: the session JWT must carry "sandbox:execute" — minted for
+improvement runs always, and for user chats when SP_FEATURE_CHAT_SANDBOX_RUNTIME
+is on.
+
+Chat sandboxes are SEEDED: created from the pinned notebook image (dbt
+preinstalled) and hydrated with the project's branch snapshot at /workspace,
+plus a stub duckdb profile at /tmp/sp-profiles so `dbt deps/parse/compile`
+work immediately. The sandbox NEVER holds warehouse credentials — connected
+dbt commands go through the separate dbt_execute tool/executor.
 
 One sandbox exists per execution identity (one per run), created lazily on
-first use and destroyed by the improvement runner / provider time limit.
+first use and destroyed by the run teardown / provider time limit.
 """
 
 from __future__ import annotations
 
 import asyncio
 
+from gateway.config.notebooks import get_notebook_settings
 from gateway.config.sandbox_runtime import get_sandbox_runtime_settings
 from gateway.errors.mcp import sanitize_mcp_error
 from gateway.mcp.audit import audited_tool
 from gateway.mcp.context import (
+    _store_session,
+    mcp_branch_var,
     mcp_capabilities_var,
     mcp_execution_identity_var,
+    mcp_org_id_var,
+    mcp_project_id_var,
 )
 from gateway.mcp.server import mcp
 from gateway.sandbox_runtime import SandboxRuntimeError, SandboxSpec, get_sandbox_runtime
@@ -38,17 +49,71 @@ _session_lock = asyncio.Lock()
 
 
 def _sandbox_denial() -> str | None:
-    """Fail closed unless the caller's JWT carries the sandbox capability."""
+    """Fail closed unless the caller's JWT carries the sandbox capability.
+
+    Only agent identities (chat:*) are accepted — the dbt EXECUTOR sandboxes
+    (chat-exec:*) are gateway-driven and must stay unreachable from agents.
+    """
     capabilities = mcp_capabilities_var.get(None) or []
     if SANDBOX_CAPABILITY not in capabilities:
-        return "Error: sandbox tools are only available to automated improvement runs"
-    if not (mcp_execution_identity_var.get(None) or "").startswith("chat:"):
+        return "Error: sandbox tools are not enabled for this session"
+    identity = mcp_execution_identity_var.get(None) or ""
+    if not identity.startswith("chat:") or identity.startswith("chat-exec:"):
         return "Error: sandbox tools require a run execution identity"
     return None
 
 
+async def _seed_project(runtime, sandbox_id: str) -> None:
+    """Hydrate /workspace from the branch snapshot + write the stub profile.
+
+    Best-effort: seeding failure leaves a blank sandbox (the agent can still
+    work); it must never block sandbox availability."""
+    project_id = mcp_project_id_var.get(None)
+    org_id = mcp_org_id_var.get(None)
+    branch = mcp_branch_var.get(None) or "main"
+    if not project_id or not org_id:
+        return
+    from gateway.workspace_store import workspace_object_storage
+    from gateway.workspace_store.store import WorkspaceStore
+
+    storage = workspace_object_storage()
+    if not storage.enabled:
+        return
+    async with _store_session() as store:
+        ws = WorkspaceStore(storage)
+        _, snap_key = await ws.build_snapshot(
+            store.session, org_id=org_id, project_id=project_id, branch=branch
+        )
+        snapshot_url = await storage.presign_get(snap_key, expires_seconds=3600)
+    stub = (
+        "import yaml, pathlib, glob\n"
+        "candidates = glob.glob('/workspace/**/dbt_project.yml', recursive=True)\n"
+        "profile = 'default'\n"
+        "if candidates:\n"
+        "    proj = yaml.safe_load(pathlib.Path(sorted(candidates, key=len)[0]).read_text()) or {}\n"
+        "    profile = proj.get('profile') or proj.get('name') or 'default'\n"
+        "stub = {profile: {'target': 'sp', 'outputs': {'sp': {\n"
+        "    'type': 'duckdb', 'path': '/tmp/sp-parse.duckdb', 'threads': 1}}}}\n"
+        "out = pathlib.Path('/tmp/sp-profiles'); out.mkdir(parents=True, exist_ok=True)\n"
+        "(out / 'profiles.yml').write_text(yaml.safe_dump(stub))\n"
+    )
+    result = await runtime.exec(
+        sandbox_id,
+        "set -e; "
+        'export PATH="/opt/sp-notebook/.venv/bin:$PATH"; '
+        'sudo mkdir -p /workspace && sudo chown "$(id -u):$(id -g)" /workspace; '
+        'curl -fsSL "$SP_SNAPSHOT_URL" | tar xz -C /workspace; '
+        f"python - <<'SP_EOF'\n{stub}\nSP_EOF",
+        env={"SP_SNAPSHOT_URL": snapshot_url},
+        timeout_seconds=300,
+    )
+    if not result.ok:
+        raise SandboxRuntimeError(f"seed failed: {result.stderr[-300:]}")
+
+
 async def _sandbox_for_session() -> str:
-    """Return the current run's sandbox id, creating the sandbox on first use."""
+    """Return the current run's sandbox id, creating (and for chat identities,
+    seeding with the project) on first use."""
     identity = mcp_execution_identity_var.get(None) or ""
     async with _session_lock:
         sandbox_id = _session_sandboxes.get(identity)
@@ -56,12 +121,22 @@ async def _sandbox_for_session() -> str:
             return sandbox_id
         runtime = get_sandbox_runtime()
         settings = get_sandbox_runtime_settings()
+        image = get_notebook_settings().vercel_image or None
         sandbox_id = await runtime.create(
             SandboxSpec(
                 time_limit_seconds=settings.time_limit_seconds,
-                tags={"sp_execution_identity": identity, "sp_purpose": "improvement-run"},
+                image=image,
+                tags={"sp_execution_identity": identity, "sp_purpose": "agent-sandbox"},
             )
         )
+        try:
+            await _seed_project(runtime, sandbox_id)
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "sandbox seeding failed for %s; continuing blank", identity, exc_info=True
+            )
         _session_sandboxes[identity] = sandbox_id
         return sandbox_id
 
@@ -88,10 +163,12 @@ async def sandbox_exec(command: str, cwd: str = "", timeout_seconds: int = 0) ->
     """
     Run a shell command inside this run's isolated sandbox VM.
 
-    The sandbox is a disposable Linux VM (Python 3, node, uv, pip, git
-    preinstalled) created on first use and destroyed when the run ends.
-    Use it to clone the dbt project, install dbt, and run `dbt parse` /
-    `dbt compile`. It has no access to gateway secrets or the warehouse.
+    The sandbox is a disposable Linux VM created on first use and destroyed
+    when the run ends. The dbt project is pre-seeded at /workspace and dbt is
+    preinstalled (PATH includes /opt/sp-notebook/.venv/bin); a stub profile at
+    /tmp/sp-profiles supports `dbt deps` / `dbt parse` / `dbt compile`
+    immediately. It has NO warehouse credentials — use the dbt_execute tool
+    for warehouse-connected commands (run/test/build).
 
     Args:
         command: Shell command to run (bash -c).

@@ -29,7 +29,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
       sqlglot altair matplotlib plotly pyyaml jinja2 python-dotenv \
       seaborn scikit-learn scipy \
       anthropic openai tiktoken \
-      dbt-postgres dbt-snowflake && \
+      dbt-postgres dbt-snowflake dbt-sqlserver dbt-redshift && \
     # Bake dependency .pyc once. The runtime root is read-only, so imports should
     # read precompiled bytecode instead of trying to write it at startup.
     python -m compileall -q -j 0 /opt/sp-notebook/.venv/lib 2>/dev/null || true

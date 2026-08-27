@@ -184,6 +184,8 @@ class VercelNotebookBackend:
         )
         sandbox_id = await self._runtime.create(spec)
         try:
+            from gateway.auth.jwt_secret import load_session_jwt_secret
+
             process_env = {
                 **request.env,
                 # The boot command stages this into _TOKEN_FILE itself —
@@ -191,6 +193,10 @@ class VercelNotebookBackend:
                 # attach round trip (~1s) on the launch critical path.
                 "SP_NOTEBOOK_TOKEN": request.notebook_token,
                 "SP_SESSION_JWT": request.session_jwt,
+                # The notebook server's tokens.py derives/verifies session tokens
+                # from this secret (same value the gateway signs with). Without
+                # it, /api/standalone-chat/execute rejects every call with 401.
+                "SP_SESSION_JWT_SECRET": load_session_jwt_secret(),
                 "SP_SESSION_ID": request.session_id,
                 "SP_ORG_ID": request.org_id,
                 "SP_USER_ID": request.user_id,

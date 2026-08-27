@@ -164,10 +164,13 @@ async def prepare_execution(
             connection_name=connection_name,
             commit_sha=commit_sha,
             capabilities=capabilities,
-            # Conversation-scoped so the dbt executor sandbox stays warm and is
-            # reused across every message in the conversation (cold start ~21s,
-            # warm reuse ~0.2s). Keeps the `chat:` prefix for identity checks.
-            execution_identity=f"chat:conv-{run.conversation_id}",
+            # MUST stay chat:{run_id}: the notebook /execute endpoint validates
+            # the JWT's execution_identity against exactly f"chat:{run_id}"
+            # (it only has run_id in scope). The dbt executor keys off this too,
+            # so it is per-run; the idle reaper still frees it after the warm
+            # window. (The notebook SESSION warm-reuse is keyed separately by
+            # conversation in session_service and is unaffected.)
+            execution_identity=f"chat:{run.id}",
             scopes=["read", "query", "execute"],
             ttl=get_gateway_settings().sp_session_jwt_ttl_seconds,
         ),

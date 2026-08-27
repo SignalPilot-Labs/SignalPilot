@@ -13,6 +13,8 @@ export class RuntimeManager {
   private initialHealthyCheck = new Deferred<void>();
   private config: RuntimeConfig;
   private lazy: boolean;
+  private provisionPromise: Promise<string> | null = null;
+  private hasStartedInit = false;
 
   constructor(config: RuntimeConfig, lazy = false) {
     this.config = config;
@@ -234,6 +236,12 @@ export class RuntimeManager {
       return true;
     }
 
+    // Lazy runtime that was never started: there is nothing to poll — the
+    // placeholder URL would just 404. Status chips render "not connected".
+    if (this.lazy && !this.hasStartedInit) {
+      return false;
+    }
+
     try {
       const headers: Record<string, string> = {};
       const token = await this.resolveAuthToken();
@@ -310,9 +318,38 @@ export class RuntimeManager {
   }
 
   async init(options?: { disableRetryDelay?: boolean }) {
+    this.hasStartedInit = true;
     // If already resolved (e.g. by markHealthy), skip the retry loop.
     if (this.initialHealthyCheck.status === "resolved") {
       return;
+    }
+
+    // Lazy provisioning: the runtime URL may not exist yet (no sandbox has
+    // been created). Provision exactly once; concurrent init() calls share
+    // the same in-flight promise. A provisioning failure rejects the health
+    // deferred so waiters (WS connect, run requests) fail fast.
+    if (this.config.provision && !this.provisionPromise) {
+      this.provisionPromise = this.config.provision();
+    }
+    if (this.provisionPromise) {
+      try {
+        this.config.url = await this.provisionPromise;
+        // The gateway health-checked the sandbox before returning from
+        // session create — a client-side re-probe is a redundant round trip.
+        Logger.debug("Runtime provisioned; trusting gateway health check");
+        if (this.isSameOrigin) {
+          this.setDOMBaseUri(this.config.url);
+        }
+        this.initialHealthyCheck.resolve();
+        return;
+      } catch (error) {
+        Logger.error("Runtime provisioning failed", error);
+        // Leave the healthy deferred PENDING: the WS transport keeps waiting,
+        // so a successful retry connects normally. The thrown error reaches
+        // the caller (Run click / connect button) and surfaces as a toast.
+        this.provisionPromise = null;
+        throw error instanceof Error ? error : new Error(String(error));
+      }
     }
 
     Logger.debug("Initializing runtime...");
@@ -343,11 +380,25 @@ export class RuntimeManager {
 
   /**
    * Wait for the runtime to be healthy.
+   *
+   * Rejects immediately for a lazy runtime that has not started init() —
+   * mount-time background fetchers must fail fast, never trigger sandbox
+   * provisioning, and never hang. Use `whenHealthy()` for waiters that
+   * should sleep until someone else starts the runtime.
    */
   async waitForHealthy(): Promise<void> {
-    if (this.lazy) {
+    if (this.lazy && !this.hasStartedInit) {
       return Promise.reject(new Error("Runtime is lazy — init() was never called"));
     }
+    return this.initialHealthyCheck.promise;
+  }
+
+  /**
+   * Resolves once the runtime is healthy, however long that takes.
+   * Used by the WebSocket transport so the kernel connection simply waits
+   * for lazy provisioning (first Run click) instead of erroring out.
+   */
+  whenHealthy(): Promise<void> {
     return this.initialHealthyCheck.promise;
   }
 

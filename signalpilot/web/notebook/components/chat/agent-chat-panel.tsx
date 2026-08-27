@@ -27,7 +27,7 @@ import { useAtomValue } from "jotai";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useActiveFile } from "@/core/active-file";
-import { useRuntimeManager } from "@/core/runtime/config";
+import { connectToRuntimeAndWaitReady, useRuntimeManager } from "@/core/runtime/config";
 import { filenameAtom } from "@/core/saving/file-state";
 import {
   DURABLE_TRAIL_FILE_PREFIXES,
@@ -122,6 +122,12 @@ const AgentChatPanel: React.FC = () => {
   useEffect(() => {
     const check = async () => {
       try {
+        // No runtime yet (lazy, unprovisioned): nothing to ask — assume
+        // configured; a real answer arrives once a sandbox exists.
+        if (!(await runtimeManager.isHealthy())) {
+          setAiConfigured(true);
+          return;
+        }
         const headers = await runtimeManager.headers();
         fetch(runtimeManager.getAgentURL("auth-status").toString(), { headers })
           .then((r): Promise<{ configured?: boolean }> => r.ok ? r.json() : Promise.resolve({ configured: true }))
@@ -216,8 +222,12 @@ const AgentChatPanelInner: React.FC = () => {
     deleteSession,
     renameSession,
   } = useAgentChat({
-    baseUrl: runtimeManager.getAgentBaseURL(),
+    // Thunk: a lazy runtime's URL changes when the sandbox is provisioned.
+    baseUrl: () => runtimeManager.getAgentBaseURL(),
     headers: () => runtimeManager.headers(),
+    // Sending a chat message provisions the sandbox if none is running —
+    // the agent executes there, same "start the runtime" intent as Run.
+    ensureRuntime: connectToRuntimeAndWaitReady,
     getActiveFile,
     includeNotionConversations,
     initialSessionId: explicitNotionThreadId,

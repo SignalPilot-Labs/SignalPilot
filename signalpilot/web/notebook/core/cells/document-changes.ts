@@ -18,7 +18,9 @@ import type { DispatchedActionOf } from "@/utils/createReducer";
 import { Logger } from "@/utils/Logger";
 import type { NotificationMessageData } from "../kernel/messages";
 import { kioskModeAtom } from "../mode";
+import { connectionAtom } from "../network/connection";
 import { getRequestClient } from "../network/requests";
+import { WebSocketState } from "../websocket/types";
 import type { NotebookDocumentTransactionRequest } from "../network/types";
 import { store } from "../state/jotai";
 import type { CellActions, NotebookState } from "./cells";
@@ -594,6 +596,15 @@ function enqueue(change: DocumentChange) {
   }
   // The scratchpad cell is local-only — don't sync it to the document.
   if (isScratchChange(change)) {
+    return;
+  }
+  // No open kernel connection (sessionless boot / provisioning window):
+  // there is no server-side document to sync with, and cell ids will be
+  // re-assigned at kernel-ready — queued changes would reference dead ids
+  // and 500. Persistence is handled by the gateway save path instead; the
+  // server document converges from the first full save after connect.
+  if (store.get(connectionAtom).state !== WebSocketState.OPEN) {
+    pendingChanges = [];
     return;
   }
   pendingChanges.push(change);

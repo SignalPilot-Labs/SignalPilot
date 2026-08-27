@@ -84,6 +84,49 @@ export async function runCells({
     return;
   }
 
+  // Lazy runtime with no kernel yet (sessionless boot): the first Run is
+  // what provisions the sandbox. A fresh kernel re-ids every cell at
+  // kernel-ready, so ids captured now would be dead on arrival — connect
+  // FIRST, then remap the requested cells by position and rebuild the
+  // payload from the reconciled notebook state.
+  const [{ getRuntimeManager, connectToRuntimeAndWaitReady }, { store }, { connectionAtom }, { WebSocketState }] =
+    await Promise.all([
+      import("@/core/runtime/config"),
+      import("@/core/state/jotai"),
+      import("@/core/network/connection"),
+      import("@/core/websocket/types"),
+    ]);
+  if (
+    getRuntimeManager().isLazy &&
+    store.get(connectionAtom).state !== WebSocketState.OPEN
+  ) {
+    const positions = cellIds.map((id) =>
+      notebook.cellIds.inOrderIds.indexOf(id),
+    );
+    try {
+      await connectToRuntimeAndWaitReady();
+    } catch (error) {
+      Logger.error("Failed to start the notebook runtime", error);
+      const { toast } = await import("@/components/ui/use-toast");
+      toast({
+        title: "Failed to start the notebook runtime",
+        description: error instanceof Error ? error.message : String(error),
+        variant: "danger",
+      });
+      return;
+    }
+    const freshNotebook = getNotebook();
+    const freshIds = freshNotebook.cellIds.inOrderIds;
+    const remapped = positions
+      .map((i) => (i >= 0 ? freshIds[i] : undefined))
+      .filter((id): id is CellId => id !== undefined);
+    if (remapped.length === 0) {
+      return;
+    }
+    cellIds = remapped;
+    notebook = freshNotebook;
+  }
+
   const { cellHandles, cellData } = notebook;
 
   const codes: string[] = [];

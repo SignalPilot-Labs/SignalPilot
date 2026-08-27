@@ -46,7 +46,13 @@ export function useAutoSave(opts: {
         clearTimeout(autosaveTimeoutId.current);
       }
 
-      if (needsSave && connStatus.state === WebSocketState.OPEN) {
+      // NOT_STARTED = sessionless boot: autosave persists through the
+      // gateway workspace store with no kernel (see saveNotebook).
+      if (
+        needsSave &&
+        (connStatus.state === WebSocketState.OPEN ||
+          connStatus.state === WebSocketState.NOT_STARTED)
+      ) {
         console.log(`[AUTOSAVE] scheduling save in ${config.autosave_delay}ms for "${filename}"`);
         // Capture current filename when scheduling
         scheduledFilenameRef.current = filename;

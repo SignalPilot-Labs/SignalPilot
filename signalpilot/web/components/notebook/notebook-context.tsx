@@ -77,3 +77,24 @@ export function getNotebookConfig(): NotebookConfig {
 export function tryGetNotebookConfig(): NotebookConfig | null {
   return _config;
 }
+
+// ── Lazily provisioned session id ────────────────────────────────
+// A sessionless boot mounts with config.sessionId === "". When the sandbox
+// is provisioned later (first Run), the id lands here so URL builders pick
+// it up without re-rendering the NotebookProvider (which would remount the
+// whole editor).
+
+let _provisionedSessionId = "";
+
+export function setProvisionedSessionId(sessionId: string): void {
+  _provisionedSessionId = sessionId;
+}
+
+/** The active runtime session id: boot-time if present, else provisioned. */
+export function getActiveSessionId(config: NotebookConfig): string {
+  return config.sessionId || _provisionedSessionId;
+}
+
+export function clearProvisionedSessionId(): void {
+  _provisionedSessionId = "";
+}

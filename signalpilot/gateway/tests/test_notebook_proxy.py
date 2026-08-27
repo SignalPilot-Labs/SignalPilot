@@ -317,7 +317,11 @@ class TestLaunchCredentialDelivery:
         assert spec.env == {}
         process_env = runtime.start_process.await_args.kwargs["env"]
         assert process_env["SP_SESSION_JWT"] == "jwt.value"
-        assert "pod-notebook-token" not in process_env.values()
+        # The token rides the process env (never the creation spec); the boot
+        # command stages it into the 0400 token file and unsets it before
+        # exec'ing the server. No provider write_file on the critical path.
+        assert process_env["SP_NOTEBOOK_TOKEN"] == "pod-notebook-token"
+        runtime.write_file.assert_not_awaited()
 
 
 class TestUpstreamResolution:

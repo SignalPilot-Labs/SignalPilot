@@ -61,10 +61,13 @@ import { RuntimeState } from "./kernel/RuntimeState";
 import { getSessionId, setSessionId } from "./kernel/session";
 import { useTogglePresenting } from "./layout/useTogglePresenting";
 import { viewStateAtom } from "./mode";
+import { connectionAtom } from "./network/connection";
 import { useRequestClient } from "./network/requests";
+import { getRuntimeManager } from "./runtime/config";
+import { WebSocketState } from "./websocket/types";
 import { useFilename } from "./saving/filename";
 import { setDocumentTitle } from "./dom/document-title";
-import { lastSavedNotebookAtom } from "./saving/state";
+import { lastSavedNotebookAtom, needsSaveAtom } from "./saving/state";
 import { useSpKernelConnection } from "./websocket/useSpKernelConnection";
 
 const TooltipProvider = Tooltip.Provider;
@@ -174,6 +177,29 @@ export const EditApp: React.FC<AppProps> = ({
       activeTab?.type === "raw" ||
       (!activeTab && initialRawFallback),
   });
+
+  // Speculative sandbox prewarm: the first edit is a strong run-intent
+  // signal, and the cold boot (~5-10s) hides entirely behind typing time.
+  // Fire-and-forget — a failure here is invisible; the Run click provisions
+  // again through the normal path.
+  const needsSaveForPrewarm = useAtomValue(needsSaveAtom);
+  const prewarmFired = useRef(false);
+  useEffect(() => {
+    if (!needsSaveForPrewarm || prewarmFired.current) {
+      return;
+    }
+    const runtimeManager = getRuntimeManager();
+    if (
+      !runtimeManager.isLazy ||
+      store.get(connectionAtom).state !== WebSocketState.NOT_STARTED
+    ) {
+      return;
+    }
+    prewarmFired.current = true;
+    void runtimeManager.init().catch(() => {
+      /* silent — the Run click retries via the normal provisioning path */
+    });
+  }, [needsSaveForPrewarm]);
 
   // Update document title whenever filename or app_title changes
   useEffect(() => {
@@ -434,6 +460,21 @@ export const EditApp: React.FC<AppProps> = ({
     currentWsPath.current = newPath;
 
     if (wasNull) {return;}
+
+    // No kernel (sessionless boot, or a lazy runtime whose session ended):
+    // load the target notebook straight from the gateway store instead of
+    // bouncing the WS — there is nothing on the other end to reconnect to.
+    const connState = store.get(connectionAtom).state;
+    if (
+      connState === WebSocketState.NOT_STARTED ||
+      (connState === WebSocketState.CLOSED && getRuntimeManager().isLazy)
+    ) {
+      console.log("[TAB-SWITCH] sessionless load:", newPath.slice(-40));
+      void import("./notebook-file/load-sessionless").then(
+        ({ loadNotebookSessionless }) => loadNotebookSessionless(newPath),
+      );
+      return;
+    }
 
     console.log("[WS-RECONNECT] path changed:", newPath.slice(-40), "wasNull:", wasNull);
     store.set(isSwitchingNotebookAtom, true);

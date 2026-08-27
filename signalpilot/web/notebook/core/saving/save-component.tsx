@@ -1,6 +1,6 @@
 import { useAtom, useAtomValue, useSetAtom, useStore } from "jotai";
 import { SaveIcon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { FilenameInput } from "@/components/editor/header/filename-input";
 import { Button as ControlButton } from "@/components/editor/inputs/Inputs";
 import { RecoveryButton } from "@/components/editor/RecoveryButton";
@@ -42,8 +42,30 @@ export const SaveComponent = ({ kioskMode }: SaveNotebookProps) => {
   const filename = useFilename();
   const needsSave = useAtomValue(needsSaveAtom);
   const closed = useAtomValue(connectionAtom).state === WebSocketState.CLOSED;
-  const { saveOrNameNotebook, saveIfNotebookIsPersistent } = useSaveNotebook();
+  const { saveOrNameNotebook, saveIfNotebookIsPersistent, saveNotebook } =
+    useSaveNotebook();
   useAutoSaveNotebook({ onSave: saveIfNotebookIsPersistent, kioskMode });
+  const jotaiStore = useStore();
+
+  // Before a lazy runtime provisions its sandbox (first Run), flush unsaved
+  // edits to the workspace store so the fresh kernel loads current code.
+  useEffect(() => {
+    let unregister: (() => void) | undefined;
+    let cancelled = false;
+    void import("../runtime/pre-provision").then(({ registerPreProvisionHook }) => {
+      if (cancelled) return;
+      unregister = registerPreProvisionHook(async () => {
+        const currentFilename = jotaiStore.get(filenameAtom);
+        if (jotaiStore.get(needsSaveAtom) && isNamedPersistentFile(currentFilename)) {
+          await saveNotebook(currentFilename, false);
+        }
+      });
+    });
+    return () => {
+      cancelled = true;
+      unregister?.();
+    };
+  }, [jotaiStore, saveNotebook]);
 
   useAutoExport();
 
@@ -105,10 +127,19 @@ export function useSaveNotebook() {
         return;
       }
 
-      // Don't save if we are not connected to a kernel
-      if (connection.state !== WebSocketState.OPEN) {
-        openAlert("Failed to save notebook: not connected to a kernel.");
-        return;
+      // With no kernel connected, fall back to the sessionless gateway save
+      // (client-side serialize → workspace store). Only alert when neither
+      // path is available.
+      const kernelConnected = connection.state === WebSocketState.OPEN;
+      let gatewaySave: typeof import("./gateway-save") | null = null;
+      if (!kernelConnected) {
+        gatewaySave = await import("./gateway-save");
+        if (!(await gatewaySave.canSaveViaGateway())) {
+          if (userInitiated) {
+            openAlert("Failed to save notebook: not connected to a kernel.");
+          }
+          return;
+        }
       }
 
       // DEFENSE: Block saves during notebook switching
@@ -130,7 +161,7 @@ export function useSaveNotebook() {
 
       console.log(`[SAVE] saving to "${filename}" userInitiated=${userInitiated}`);
 
-      if (userInitiated && autoSaveConfig.format_on_save) {
+      if (userInitiated && autoSaveConfig.format_on_save && kernelConnected) {
         console.log("[SAVE] formatting notebook (onSave)");
         await formatAll();
       }
@@ -159,16 +190,28 @@ export function useSaveNotebook() {
         return;
       }
 
-      await sendSave({
-        cellIds: cellIds,
-        codes,
-        names: cellNames,
-        filename,
-        configs,
-        layout: getSerializedLayout(),
-        persist: true,
-      });
-      console.log("[SAVE] sendSave complete");
+      if (kernelConnected) {
+        await sendSave({
+          cellIds: cellIds,
+          codes,
+          names: cellNames,
+          filename,
+          configs,
+          layout: getSerializedLayout(),
+          persist: true,
+        });
+        console.log("[SAVE] sendSave complete");
+      } else if (gatewaySave) {
+        await gatewaySave.saveNotebookViaGateway(
+          filename,
+          cells.map((cell, i) => ({
+            code: cell.code,
+            name: cell.name,
+            config: configs[i] ?? {},
+          })),
+        );
+        console.log("[SAVE] gateway save complete (no kernel)");
+      }
       invalidateFileKind(filename);
 
       setLastSavedNotebook({
@@ -180,13 +223,16 @@ export function useSaveNotebook() {
     },
   );
 
-  // Save the notebook with the current filename, only if the filename exists
+  // Save the notebook with the current filename, only if the filename exists.
+  // NOT_STARTED = sessionless boot: saves go through the gateway store with
+  // no kernel. CONNECTING is excluded — the pre-provision flush handles it.
   const saveIfNotebookIsPersistent = useEvent((userInitiated = false) => {
     const filename = store.get(filenameAtom);
     const connection = store.get(connectionAtom);
     if (
       isNamedPersistentFile(filename) &&
-      connection.state === WebSocketState.OPEN
+      (connection.state === WebSocketState.OPEN ||
+        connection.state === WebSocketState.NOT_STARTED)
     ) {
       saveNotebook(filename, userInitiated);
     }

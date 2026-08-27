@@ -576,13 +576,15 @@ class TestLaunchCredentials:
         assert 2718 in spec.ports
         assert spec.tags["sp-purpose"] == "notebook"
 
-        runtime.write_file.assert_awaited_once()
-        write_args = runtime.write_file.await_args.args
-        assert write_args[2] == b"nb-token"
+        # The token rides the process env (never the creation spec); the boot
+        # command stages it into the 0400 token file and unsets it before
+        # exec'ing the server. No provider write_file on the critical path.
+        runtime.write_file.assert_not_awaited()
 
         process_env = runtime.start_process.await_args.kwargs["env"]
         assert process_env["SP_SESSION_JWT"] == "jwt.value.here"
         assert process_env["SP_SESSION_ID"] == "sess-abc"
+        assert process_env["SP_NOTEBOOK_TOKEN"] == "nb-token"
         assert "SP_API_KEY" not in process_env
 
     @pytest.mark.asyncio

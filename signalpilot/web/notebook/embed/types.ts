@@ -17,7 +17,14 @@ export interface SignalpilotClientOptions {
   /**
    * Optional remote runtime; passed through to runtimeConfigAtom on mount.
    */
-  runtimeConfig?: { url: string; authToken?: AuthTokenProvider; lazy?: boolean; healthVerified?: boolean };
+  runtimeConfig?: {
+    url: string;
+    authToken?: AuthTokenProvider;
+    lazy?: boolean;
+    healthVerified?: boolean;
+    /** Lazy provisioner: creates the sandbox session on first kernel need. */
+    provision?: () => Promise<string>;
+  };
   /**
    * Sp-Server-Token header value.
    */

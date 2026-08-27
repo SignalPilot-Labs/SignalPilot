@@ -1,5 +1,5 @@
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { useErrorBoundary } from "react-error-boundary";
 import { toast } from "@/components/ui/use-toast";
 import { getNotebook, useCellActions } from "@/core/cells/cells";
@@ -167,10 +167,12 @@ function getExistingCells(): CellData[] | undefined {
     return undefined;
   }
 
-  // Remove scratch pad
-  return Object.values(getNotebook().cellData).filter(
-    (cell) => cell.id !== SCRATCH_CELL_ID,
-  );
+  // Document order matters: kernel-ready reconciliation maps existing cells
+  // to server cells positionally. Remove the scratch pad.
+  const notebook = getNotebook();
+  return notebook.cellIds.inOrderIds
+    .map((id) => notebook.cellData[id])
+    .filter((cell) => cell && cell.id !== SCRATCH_CELL_ID);
 }
 
 /**
@@ -508,8 +510,27 @@ export function useSpKernelConnection(opts: {
     return wsResolveRef.current.promise!;
   };
 
+  // When the static placeholder transport hands over to the real one, clear
+  // its synthetic OPEN: BasicTransport reports "open" immediately (so static
+  // exports render), but the real transport starts CLOSED and — on a lazy
+  // runtime — stays idle until provisioning. A stale OPEN here makes the app
+  // think a kernel exists (saves and doc-sync go to a void, Run never
+  // provisions).
+  const effectiveStatic = isStaticNotebook() || opts.static;
+  const wasStaticRef = useRef(effectiveStatic);
+  useEffect(() => {
+    if (wasStaticRef.current && !effectiveStatic) {
+      setConnection((prev) =>
+        prev.state === WebSocketState.OPEN
+          ? { state: WebSocketState.NOT_STARTED }
+          : prev,
+      );
+    }
+    wasStaticRef.current = effectiveStatic;
+  }, [effectiveStatic, setConnection]);
+
   const ws = useConnectionTransport({
-    static: isStaticNotebook() || opts.static,
+    static: effectiveStatic,
     /**
      * Unique URL for this session.
      */
@@ -548,6 +569,14 @@ export function useSpKernelConnection(opts: {
      */
     waitToConnect: async () => {
       if (isStaticNotebook()) {
+        return;
+      }
+
+      if (runtimeManager.isLazy) {
+        // Lazy runtime: the sandbox may not exist yet. Sleep until someone
+        // provisions it (first Run click → init()); the URL factory then
+        // resolves against the freshly provisioned session URL.
+        await runtimeManager.whenHealthy();
         return;
       }
 

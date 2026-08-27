@@ -38,7 +38,14 @@ export function useConnectToRuntime(): () => Promise<void> {
   return useEvent(async () => {
     if (isAppNotStarted(connection.state)) {
       setConnection({ state: WebSocketState.CONNECTING });
-      await runtimeManager.init();
+      try {
+        await runtimeManager.init();
+      } catch (error) {
+        // Lazy provisioning failed (e.g. session create error) — return to
+        // NOT_STARTED so the connect affordances remain clickable.
+        setConnection({ state: WebSocketState.NOT_STARTED });
+        throw error;
+      }
     } else {
       Logger.log("Runtime already started or starting...");
     }
@@ -50,6 +57,35 @@ export function useConnectToRuntime(): () => Promise<void> {
  */
 export function getRuntimeManager(): RuntimeManager {
   return store.get(runtimeManagerAtom);
+}
+
+/**
+ * Bring the runtime all the way up — provision (lazy), health, WebSocket
+ * open, kernel instantiated — and only then return. Safe to call when
+ * already connected. Used by run flows that must reconcile against
+ * kernel-ready state (fresh kernels re-id every cell) before building
+ * their request payloads.
+ */
+export async function connectToRuntimeAndWaitReady(): Promise<void> {
+  const [{ waitForConnectionOpen }, { waitForKernelToBeInstantiated }] =
+    await Promise.all([
+      import("../network/connection"),
+      import("../kernel/state"),
+    ]);
+  const runtimeManager = getRuntimeManager();
+  if (isAppNotStarted(store.get(connectionAtom).state)) {
+    store.set(connectionAtom, { state: WebSocketState.CONNECTING });
+  }
+  try {
+    await runtimeManager.init();
+  } catch (error) {
+    if (store.get(connectionAtom).state === WebSocketState.CONNECTING) {
+      store.set(connectionAtom, { state: WebSocketState.NOT_STARTED });
+    }
+    throw error;
+  }
+  await waitForConnectionOpen();
+  await waitForKernelToBeInstantiated();
 }
 
 export function asRemoteURL(path: string): URL {

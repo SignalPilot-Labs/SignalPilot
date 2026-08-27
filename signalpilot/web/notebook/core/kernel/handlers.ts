@@ -146,7 +146,29 @@ export function handleKernelReady(
     existingCells.length === data.cell_ids.length &&
     existingCells.every((c) => serverCellIds.has(c.id));
   const useExisting = hasExistingCells && !resumed && existingMatchServer;
-  const cells = useExisting ? existingCells : buildCellData(data);
+
+  // Sessionless boot reconciliation: cells hydrated client-side carry
+  // client-generated ids, so a fresh kernel's ids never match. Adopt the
+  // kernel's ids (its source of truth for cell-ops) but keep the editor's
+  // codes positionally — pre-connect edits, including anything typed while
+  // the sandbox was booting, survive the swap. The pre-provision flush makes
+  // the codes usually identical anyway; this covers the boot window.
+  const adoptExistingCodes =
+    hasExistingCells &&
+    !resumed &&
+    !existingMatchServer &&
+    existingCells.length === data.cell_ids.length;
+  let cells: CellData[];
+  if (useExisting) {
+    cells = existingCells;
+  } else if (adoptExistingCodes) {
+    cells = buildCellData(data).map((cell, i) => ({
+      ...cell,
+      code: existingCells[i].code,
+    }));
+  } else {
+    cells = buildCellData(data);
+  }
 
   console.log("[handleKernelReady] hasExisting:", hasExistingCells, "resumed:", resumed, "idsMatch:", existingMatchServer, "using:", useExisting ? "EXISTING" : "SERVER", "cellCount:", cells.length);
 
@@ -186,8 +208,11 @@ export function handleKernelReady(
   // send them to the kernel. This may happen after re-connecting
   // to the kernel after the computer wakes from sleep.
   const { objectIds, values } = collectUIElementValues();
+  // Keyed by the ids the kernel knows: when we adopted server ids above, the
+  // final `cells` carry (server id → editor code) — sending the old client
+  // ids would register phantom duplicate cells in the kernel.
   const codesToSend = hasExistingCells
-    ? Object.fromEntries(existingCells.map((c) => [c.id, c.code]))
+    ? Object.fromEntries(cells.map((c) => [c.id, c.code]))
     : undefined;
 
   // Send instantiate request to kernel

@@ -92,12 +92,14 @@ SANDBOX_TOOLS = [
     "mcp__signalpilot__sandbox_read_file",
 ]
 IMPROVEMENT_EXTRA_TOOLS = SANDBOX_TOOLS  # historical alias
-# Warehouse-connected dbt via the gateway's credential-holding executor;
-# user chats only, gated by the dbt:execute JWT capability. refresh_mart is the
-# agent's only warehouse WRITE action — rebuild a stale mart into the dev DB.
-DBT_EXECUTE_TOOL = "mcp__signalpilot__dbt_execute"
+# refresh_mart is the chat agent's ONLY warehouse write action: rebuild a stale
+# mart into the dev DB via the gateway's credential-holding executor. The agent
+# has one sandbox (the notebook session); it does not get sandbox_exec or the
+# retired dbt_execute. sandbox_exec stays available to improvement runs only.
 REFRESH_MART_TOOL = "mcp__signalpilot__refresh_mart"
-DBT_WRITE_TOOLS = [DBT_EXECUTE_TOOL, REFRESH_MART_TOOL]
+# Retired for chat (superseded by refresh_mart). Kept as a constant so it can be
+# explicitly disallowed on the chat surface.
+DBT_EXECUTE_TOOL = "mcp__signalpilot__dbt_execute"
 
 # Gateway MCP tools that must not be offered to the ordinary Data Chat agent.
 # analyze_project_db and map_columns can return after they use the governed
@@ -1032,12 +1034,13 @@ async def execute(*, request: Request) -> StreamingResponse:
                         "WebFetch",
                         "WebSearch",
                         *STANDALONE_DISALLOWED_MCP_TOOLS,
-                        *(
-                            []
-                            if (is_improvement_run or sandbox_runtime_enabled)
-                            else SANDBOX_TOOLS
-                        ),
-                        *([] if sandbox_runtime_enabled else DBT_WRITE_TOOLS),
+                        # One agent sandbox: sandbox_exec is improvement-only,
+                        # never chat.
+                        *([] if is_improvement_run else SANDBOX_TOOLS),
+                        # dbt_execute is retired for chat (refresh_mart replaces
+                        # it); refresh_mart only when the sandbox runtime is on.
+                        DBT_EXECUTE_TOOL,
+                        *([] if sandbox_runtime_enabled else [REFRESH_MART_TOOL]),
                     ],
                     allowed_tools=(
                         (
@@ -1050,12 +1053,8 @@ async def execute(*, request: Request) -> StreamingResponse:
                                 and not tool.endswith("start_analysis_notebook")
                             ]
                         )
-                        + (
-                            SANDBOX_TOOLS
-                            if (is_improvement_run or sandbox_runtime_enabled)
-                            else []
-                        )
-                        + (DBT_WRITE_TOOLS if sandbox_runtime_enabled else [])
+                        + (SANDBOX_TOOLS if is_improvement_run else [])
+                        + ([REFRESH_MART_TOOL] if sandbox_runtime_enabled else [])
                     ),
                     additional_mcp_servers={
                         "standalone-chat": artifact_server

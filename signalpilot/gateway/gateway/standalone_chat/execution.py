@@ -138,11 +138,13 @@ async def prepare_execution(
         "runtime:publish",
     ]
     flags = enterprise_chat_feature_flags()
-    if is_improvement_run or flags.sandbox_runtime:
-        # Unlocks the sandbox VM MCP tools (project-seeded, credential-free).
+    if is_improvement_run:
+        # sandbox_exec is improvement-only. Chat collapsed to one sandbox (the
+        # notebook session) + refresh_mart, so chat runs do not get this.
         capabilities.append("sandbox:execute")
     if flags.sandbox_runtime:
-        # Warehouse-connected dbt via the gateway-held executor sandbox.
+        # refresh_mart via the gateway-held executor sandbox (credentials never
+        # reach the agent). The only warehouse write the chat agent can request.
         capabilities.append("dbt:execute")
     payload = {
         "run_id": run.id,

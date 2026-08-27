@@ -33,6 +33,7 @@ from gateway.dashboard.operations import (
     validate_dashboard_semantics,
     validate_time_series_default_windows,
 )
+from gateway.dashboard.project_snapshot import ensure_branch_snapshot
 from gateway.dashboard.semantic_resolver import DashboardSemanticError, DashboardSemanticResolver
 from gateway.dashboard.telemetry import DashboardTelemetryEvent, record_dashboard_event
 from gateway.db.models import (
@@ -79,6 +80,7 @@ from gateway.standalone_chat.projects import evaluate_project_readiness
 from gateway.store import org_secrets as org_secrets_store
 from gateway.store import standalone_chat as chat_store
 from gateway.verification import compare_columns
+from gateway.workspace_store.objects import workspace_object_storage
 
 from .deps import StoreD
 
@@ -247,6 +249,33 @@ def _dashboard_failure(
 
 def _user_id(store: StoreD) -> str:
     return store.user_id or "local"
+
+
+async def _resolve_project_immutable_head(
+    store: StoreD,
+    *,
+    org_id: str,
+    project_id: str,
+    branch: str,
+) -> str | None:
+    storage = workspace_object_storage()
+    durable = await ensure_branch_snapshot(
+        store.session,
+        storage,
+        org_id=org_id,
+        project_id=project_id,
+        branch=branch,
+    )
+    if durable:
+        return durable
+    if storage.enabled:
+        # Never persist a gateway-local commit as cloud dashboard lineage. A
+        # later replica would be unable to resolve it after this pod exits.
+        return None
+    # Compatibility for local/self-hosted projects that predate the durable
+    # workspace store. Cloud authoring uses the snapshot path above and
+    # therefore survives gateway replacement.
+    return branch_head_sha(project_id, branch)
 
 
 async def _verified_context(store: StoreD, definition: DashboardDefinition) -> DashboardSemanticContext:
@@ -622,9 +651,17 @@ async def create_dashboard_authoring_session(body: DashboardAuthoringRequest, st
             if project is None:
                 raise HTTPException(status_code=404, detail="Dashboard project not found")
             branch = body.branch or project.default_branch or "main"
-            commit_sha = branch_head_sha(project.id, branch)
+            commit_sha = await _resolve_project_immutable_head(
+                store,
+                org_id=org_id,
+                project_id=project.id,
+                branch=branch,
+            )
             if not commit_sha:
-                raise HTTPException(status_code=409, detail="The selected project branch has no immutable head")
+                raise HTTPException(
+                    status_code=409,
+                    detail="The selected project branch has no durable workspace snapshot or immutable Git head",
+                )
     try:
         context = await resolver.resolve(store, project_id=project_id, commit_sha=commit_sha)
     except DashboardSemanticError as exc:

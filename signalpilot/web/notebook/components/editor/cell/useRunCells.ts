@@ -89,16 +89,25 @@ export async function runCells({
   // kernel-ready, so ids captured now would be dead on arrival — connect
   // FIRST, then remap the requested cells by position and rebuild the
   // payload from the reconciled notebook state.
-  const [{ getRuntimeManager, connectToRuntimeAndWaitReady }, { store }, { connectionAtom }, { WebSocketState }] =
-    await Promise.all([
-      import("@/core/runtime/config"),
-      import("@/core/state/jotai"),
-      import("@/core/network/connection"),
-      import("@/core/websocket/types"),
-    ]);
+  const [
+    { getRuntimeManager, connectToRuntimeAndWaitReady },
+    { store },
+    { connectionAtom },
+    { WebSocketState },
+    { kernelLaunchAtom, isKernelLaunchInFlight },
+  ] = await Promise.all([
+    import("@/core/runtime/config"),
+    import("@/core/state/jotai"),
+    import("@/core/network/connection"),
+    import("@/core/websocket/types"),
+    import("@/core/runtime/launch-state"),
+  ]);
   if (
     getRuntimeManager().isLazy &&
-    store.get(connectionAtom).state !== WebSocketState.OPEN
+    (store.get(connectionAtom).state !== WebSocketState.OPEN ||
+      // Socket open but the kernel is still coming up (it re-ids every cell
+      // at kernel-ready) — wait and remap rather than firing dead ids.
+      isKernelLaunchInFlight(store.get(kernelLaunchAtom)))
   ) {
     const positions = cellIds.map((id) =>
       notebook.cellIds.inOrderIds.indexOf(id),

@@ -4,7 +4,6 @@ import { Logger } from "@/utils/Logger";
 import { connectionAtom } from "../network/connection";
 import { store } from "../state/jotai";
 import { isAppNotStarted } from "../websocket/connection-utils";
-import { WebSocketState } from "../websocket/types";
 import { RuntimeManager } from "./runtime";
 import type { RuntimeConfig } from "./types";
 
@@ -33,19 +32,13 @@ export function useRuntimeManager(): RuntimeManager {
 }
 
 export function useConnectToRuntime(): () => Promise<void> {
-  const runtimeManager = useRuntimeManager();
-  const [connection, setConnection] = useAtom(connectionAtom);
+  const [connection] = useAtom(connectionAtom);
   return useEvent(async () => {
     if (isAppNotStarted(connection.state)) {
-      setConnection({ state: WebSocketState.CONNECTING });
-      try {
-        await runtimeManager.init();
-      } catch (error) {
-        // Lazy provisioning failed (e.g. session create error) — return to
-        // NOT_STARTED so the connect affordances remain clickable.
-        setConnection({ state: WebSocketState.NOT_STARTED });
-        throw error;
-      }
+      // Drive the shared launch state machine so every surface (run
+      // buttons, kernel island, footer chip) reflects this connect.
+      const { launchRuntime } = await import("./launch-state");
+      await launchRuntime("manual");
     } else {
       Logger.log("Runtime already started or starting...");
     }
@@ -67,25 +60,8 @@ export function getRuntimeManager(): RuntimeManager {
  * their request payloads.
  */
 export async function connectToRuntimeAndWaitReady(): Promise<void> {
-  const [{ waitForConnectionOpen }, { waitForKernelToBeInstantiated }] =
-    await Promise.all([
-      import("../network/connection"),
-      import("../kernel/state"),
-    ]);
-  const runtimeManager = getRuntimeManager();
-  if (isAppNotStarted(store.get(connectionAtom).state)) {
-    store.set(connectionAtom, { state: WebSocketState.CONNECTING });
-  }
-  try {
-    await runtimeManager.init();
-  } catch (error) {
-    if (store.get(connectionAtom).state === WebSocketState.CONNECTING) {
-      store.set(connectionAtom, { state: WebSocketState.NOT_STARTED });
-    }
-    throw error;
-  }
-  await waitForConnectionOpen();
-  await waitForKernelToBeInstantiated();
+  const { launchRuntime } = await import("./launch-state");
+  await launchRuntime("run");
 }
 
 export function asRemoteURL(path: string): URL {

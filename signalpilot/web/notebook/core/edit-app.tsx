@@ -67,7 +67,7 @@ import { getRuntimeManager } from "./runtime/config";
 import { WebSocketState } from "./websocket/types";
 import { useFilename } from "./saving/filename";
 import { setDocumentTitle } from "./dom/document-title";
-import { lastSavedNotebookAtom, needsSaveAtom } from "./saving/state";
+import { lastSavedNotebookAtom } from "./saving/state";
 import { useSpKernelConnection } from "./websocket/useSpKernelConnection";
 
 const TooltipProvider = Tooltip.Provider;
@@ -178,14 +178,20 @@ export const EditApp: React.FC<AppProps> = ({
       (!activeTab && initialRawFallback),
   });
 
-  // Speculative sandbox prewarm: the first edit is a strong run-intent
-  // signal, and the cold boot (~5-10s) hides entirely behind typing time.
-  // Fire-and-forget — a failure here is invisible; the Run click provisions
-  // again through the normal path.
-  const needsSaveForPrewarm = useAtomValue(needsSaveAtom);
+  // Speculative sandbox prewarm: opening a notebook is itself the intent
+  // signal — start the kernel in the background as soon as the notebook
+  // editor is active, so the cold boot (~5-10s) is usually done before the
+  // first Run is pressed. The launch state machine keeps the run button and
+  // status UI in sync with this background launch (a Run mid-prewarm simply
+  // adopts it). Fire-and-forget — a failure here is invisible; the Run
+  // click provisions again through the normal path.
+  const notebookEditorActive =
+    fileNavigationReady &&
+    activeTab?.type !== "raw" &&
+    !(!activeTab && initialRawFallback);
   const prewarmFired = useRef(false);
   useEffect(() => {
-    if (!needsSaveForPrewarm || prewarmFired.current) {
+    if (!notebookEditorActive || prewarmFired.current) {
       return;
     }
     const runtimeManager = getRuntimeManager();
@@ -196,10 +202,12 @@ export const EditApp: React.FC<AppProps> = ({
       return;
     }
     prewarmFired.current = true;
-    void runtimeManager.init().catch(() => {
-      /* silent — the Run click retries via the normal provisioning path */
-    });
-  }, [needsSaveForPrewarm]);
+    void import("@/core/runtime/launch-state").then(({ launchRuntime }) =>
+      launchRuntime("prewarm").catch(() => {
+        /* silent — the Run click retries via the normal provisioning path */
+      }),
+    );
+  }, [notebookEditorActive]);
 
   // Update document title whenever filename or app_title changes
   useEffect(() => {

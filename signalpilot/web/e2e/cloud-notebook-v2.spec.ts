@@ -9,9 +9,12 @@
  *     pnpm exec playwright test cloud-notebook-v2 --reporter=line
  *
  * Verifies the v2 contract end to end:
- *   1. Opening a project notebook creates NO runtime session — the editor and
- *      file plane come straight from the gateway workspace store.
- *   2. The first Run lazily provisions a Vercel sandbox and executes.
+ *   1. Opening a project notebook renders instantly from the gateway
+ *      workspace store (never blocked on a kernel) while a Vercel sandbox
+ *      prewarms in the background, narrated by the kernel status island
+ *      and footer chip.
+ *   2. By the time the user presses Run the kernel is typically ready, so
+ *      run -> output is near-instant.
  *   3. Saving persists a durable revision; reload replays without a kernel.
  *
  * Creates a scratch project (e2e-nbv2-*) and deletes it at the end.
@@ -117,6 +120,11 @@ async function gw<T>(
 const scratchName = `e2e-nbv2-${Date.now().toString(36)}`;
 let projectId = "";
 
+// Kernel-UX screenshots land outside the repo (sp-local is the scratch tree).
+const SHOT_DIR =
+  process.env.SP_E2E_SHOT_DIR ??
+  "../../../sp-local/screenshots/kernel-launch-ux";
+
 test("sessionless open → lazy Vercel run → save → reload replay", async ({ page }) => {
   const s = state!;
   const errors: string[] = [];
@@ -161,28 +169,46 @@ test("sessionless open → lazy Vercel run → save → reload replay", async ({
   projectId = project.id;
   expect(projectId).toBeTruthy();
 
-  // ── 1. Sessionless open: editor mounts with NO runtime session ─
+  // ── 1. Open: editor mounts instantly (sessionless doc load) while the
+  //       kernel prewarms in the background ───────────────────────
+  const openedAt = Date.now();
   await page.goto(
     `/projects?project=${projectId}&branch=main&file=__new__notebook`,
     { waitUntil: "domcontentloaded" },
   );
   await dismissTierCelebration(page);
   await page.locator(".cm-editor").first().waitFor({ timeout: 30_000 });
-
-  await page.waitForTimeout(1000);
-  const sessionAfterOpen = await gw<unknown>(page, s, "/api/notebook-sessions");
+  console.log(
+    `TIMING open→editor: ${((Date.now() - openedAt) / 1000).toFixed(1)}s (must not wait on a kernel)`,
+  );
   console.log("DIAGNOSTICS(open):\n" + diagnostics.join("\n"));
-  expect(
-    sessionAfterOpen,
-    `opening the editor must not create a runtime session, got: ${JSON.stringify(sessionAfterOpen)?.slice(0, 200)}`,
-  ).toBeFalsy();
 
-  // ── 2. Type + first Run provisions the Vercel sandbox lazily ───
+  // The background prewarm narrates itself: subtle island + footer chip.
+  await expect(page.getByTestId("kernel-status-island")).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(page.getByTestId("kernel-status-island")).toContainText(
+    "Preparing your kernel",
+  );
+  await page.screenshot({ path: `${SHOT_DIR}/01-prewarm.png` });
+
+  // ── 2. Type while it warms; the Run runs on the prewarmed kernel ─
   await dismissTierCelebration(page, 2000);
   const cm = page.locator(".cm-editor").first().locator(".cm-content");
   await cm.click();
   await page.keyboard.type('print("hello staging v2")', { delay: 20 });
-  await page.waitForTimeout(500);
+
+  // Wait for the prewarm to finish (chip flips to ready with no Run yet) —
+  // this is the "kernel is up before the user presses Run" contract.
+  await expect(page.getByTestId("kernel-footer-status")).toContainText(
+    "Kernel ready",
+    { timeout: 120_000 },
+  );
+  console.log(
+    `TIMING open→kernel-ready (background): ${((Date.now() - openedAt) / 1000).toFixed(1)}s`,
+  );
+  await page.screenshot({ path: `${SHOT_DIR}/02-warm-before-run.png` });
+
   const runClickedAt = Date.now();
   await page.keyboard.press("Control+Enter");
 
@@ -191,8 +217,13 @@ test("sessionless open → lazy Vercel run → save → reload replay", async ({
     timeout: 180_000,
   });
   console.log(
-    `TIMING run→output: ${((Date.now() - runClickedAt) / 1000).toFixed(1)}s (cold sandbox provisioned lazily)`,
+    `TIMING run→output: ${((Date.now() - runClickedAt) / 1000).toFixed(1)}s (prewarmed kernel)`,
   );
+  await page.screenshot({ path: `${SHOT_DIR}/03-ran.png` });
+  // Island auto-dismisses once everything is up.
+  await expect(page.getByTestId("kernel-status-island")).toHaveCount(0, {
+    timeout: 10_000,
+  });
 
   const sessionAfterRun = await gw<{ status?: string } | null>(
     page, s, "/api/notebook-sessions",
@@ -223,8 +254,11 @@ test("sessionless open → lazy Vercel run → save → reload replay", async ({
   const fatal = errors.filter((e) => e.includes("TypeError") || e.includes("500 "));
   expect(fatal, `no fatal errors: ${fatal.join(" | ")}`).toHaveLength(0);
 
-  // ── 4. Reload replay (kill the session first: replay must be kernel-free)
+  // ── 4. Reload replay (kill the session first: the saved document must
+  //       render from the store alone, well before the background prewarm
+  //       could have a kernel up) ────────────────────────────────────
   await gw(page, s, "/api/notebook-sessions", { method: "DELETE" });
+  const reloadAt = Date.now();
   await page.goto(
     `/projects?project=${projectId}&branch=main&file=${encodeURIComponent(saved!.path)}`,
     { waitUntil: "domcontentloaded" },
@@ -236,9 +270,9 @@ test("sessionless open → lazy Vercel run → save → reload replay", async ({
     console.log("[E2E reload-page-text]", text.replace(/\s+/g, " ").slice(0, 500));
   }
   expect(text).toContain("hello staging v2");
-
-  const sessionAfterReload = await gw<unknown>(page, s, "/api/notebook-sessions");
-  expect(sessionAfterReload, "reload must not provision a session").toBeFalsy();
+  console.log(
+    `TIMING reload→content: ${((Date.now() - reloadAt) / 1000).toFixed(1)}s (kernel-free replay; prewarm continues in background)`,
+  );
 
   // ── Cleanup ────────────────────────────────────────────────────
   await gw(page, s, `/api/workspace-projects/${projectId}`, { method: "DELETE" });

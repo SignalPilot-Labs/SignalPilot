@@ -20,10 +20,12 @@ from gateway.db.models import (
     GatewayChatUserPreference,
     GatewayConnection,
     GatewayCredential,
+    GatewayDbtManifest,
     GatewayWorkspaceProject,
 )
 from gateway.git.repos import _run_git, branch_head_sha, repo_path
 from gateway.store import org_secrets as org_secrets_store
+from gateway.workspace_store.dbt_detect import resolve_dbt_project_dir
 
 
 @dataclass(frozen=True)
@@ -104,13 +106,43 @@ def _has_dbt_metadata(project: GatewayWorkspaceProject, files: list[str]) -> boo
     settings = project.settings or {}
     if settings.get("dbt_metadata_checksum") or settings.get("manifest"):
         return True
-    has_project_file = "dbt_project.yml" in files
+    # The dbt project rarely sits at the repo root — most real repos nest it in
+    # a subfolder (e.g. `dumpsters_dbt/`). Resolve the project directory the same
+    # way dbt_map/runner and the dbt executor do (explicit setting, else the
+    # shallowest detected `<dir>/dbt_project.yml`) instead of assuming the root,
+    # otherwise readiness reports `metadata_unavailable` for a perfectly valid
+    # nested project.
+    project_dir = resolve_dbt_project_dir(settings, files)
+    if project_dir is None:
+        return False
+    prefix = f"{project_dir}/" if project_dir else ""
+    has_project_file = f"{prefix}dbt_project.yml" in files
+    resource_prefixes = tuple(
+        f"{prefix}{sub}/" for sub in ("models", "metrics", "semantic_models", "snapshots")
+    )
     has_resource = any(
-        file.startswith(("models/", "metrics/", "semantic_models/", "snapshots/"))
+        file.startswith(resource_prefixes)
         and file.endswith((".sql", ".yml", ".yaml", ".json"))
         for file in files
     )
     return has_project_file and has_resource
+
+
+async def _has_successful_compile(db: AsyncSession, project_id: str, branch: str) -> bool:
+    """A completed dbt-map compile is proof that dbt metadata exists — it is the
+    strongest signal we have and independent of how the repo is laid out. The
+    static tree check can miss projects (generated models, sparse mirrors); a
+    green manifest on this branch cannot lie."""
+    manifest = (
+        await db.execute(
+            select(GatewayDbtManifest.id).where(
+                GatewayDbtManifest.project_id == project_id,
+                GatewayDbtManifest.branch == branch,
+                GatewayDbtManifest.status == "success",
+            )
+        )
+    ).first()
+    return manifest is not None
 
 
 async def evaluate_project_readiness(
@@ -135,7 +167,9 @@ async def evaluate_project_readiness(
             project.connection_name,
             None,
         )
-    if not _has_dbt_metadata(project, files):
+    if not _has_dbt_metadata(project, files) and not await _has_successful_compile(
+        db, project.id, branch
+    ):
         return ProjectReadiness(
             False,
             "metadata_unavailable",

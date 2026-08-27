@@ -208,10 +208,18 @@ async def lifespan(app: FastAPI):
                         token = current_org_id_var.set(conn_info.org_id)
                         try:
                             inner_store = Store(session, org_id=conn_info.org_id)
-                            conn_str = await inner_store.get_connection_string(conn_info.name)
+                            # A single row with undecryptable credentials must
+                            # not abort the sweep for every other connection.
+                            try:
+                                conn_str = await inner_store.get_connection_string(conn_info.name)
+                                extras = await inner_store.get_credential_extras(conn_info.name)
+                            except Exception as e:
+                                logger.debug(
+                                    "Health ping skipped for %s: %s", conn_info.name, e
+                                )
+                                continue
                             if not conn_str:
                                 continue
-                            extras = await inner_store.get_credential_extras(conn_info.name)
                             start = time.monotonic()
                             try:
                                 async with pool_manager.connection(

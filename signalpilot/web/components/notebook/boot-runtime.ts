@@ -163,11 +163,23 @@ export async function bootRuntime(
   // ── Phase 1: Wait for runtime healthy ──────────────────────────
   onPhase("health");
   let healthy = false;
-  for (let i = 0; i < 30 && !signal.aborted; i++) {
+  // Warm project reattach targets a session that claimed to be running —
+  // if it's actually healthy it answers on the first probe or two. Give it
+  // a short window and fall back to a sessionless boot rather than
+  // hammering a dead sandbox for 15s. Fresh (non-project) boots keep the
+  // long window: their sandbox may genuinely still be coming up.
+  const maxHealthAttempts = isProjectRuntime ? 6 : 30;
+  for (let i = 0; i < maxHealthAttempts && !signal.aborted; i++) {
     try {
       const r = await fetch(`${runtimeUrl}/health`, { headers, signal });
       if (r.ok) {
         healthy = true;
+        break;
+      }
+      // The gateway answers 404 (no such session) / 409 (session stopped)
+      // definitively for reattach targets — retrying cannot succeed.
+      if (isProjectRuntime && (r.status === 404 || r.status === 409)) {
+        Logger.warn(`Reattach target is gone (HTTP ${r.status})`);
         break;
       }
     } catch (err) {
@@ -177,7 +189,27 @@ export async function bootRuntime(
     await new Promise((r) => setTimeout(r, 500));
   }
   if (signal.aborted) throw new Error("Boot cancelled");
-  if (!healthy) throw new Error("Runtime did not become healthy after 15 seconds");
+  if (!healthy) {
+    if (isProjectRuntime) {
+      // The session row outlived its sandbox (e.g. the sandbox hit its
+      // runtime timeout). Clean it up and open sessionless — the editor
+      // works without a kernel and the next Run provisions a fresh one.
+      Logger.warn(
+        "Warm session reattach failed — clearing stale session, booting sessionless",
+      );
+      const { deleteNotebookSession } = await import("~/lib/api");
+      await deleteNotebookSession().catch(() => {});
+      clearProvisionedSessionId();
+      return bootSessionless(
+        { ...config, sessionId: "" },
+        bootToken,
+        onPhase,
+        navigate,
+        signal,
+      );
+    }
+    throw new Error("Runtime did not become healthy after 15 seconds");
+  }
 
   // ── Phase 1b: Rehydrate Notion trail kernels before WS connect ─
   if (notionRequestId) {

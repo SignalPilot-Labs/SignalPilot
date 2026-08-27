@@ -813,11 +813,12 @@ async def execute(*, request: Request) -> StreamingResponse:
     prompt_parts = [_load_prompt("standalone_chat_system.md")]
     if sandbox_runtime_enabled:
         prompt_parts.append(_load_prompt("sandbox_dbt_suffix.md"))
-        # The persistence/resume contract: project + scripts are restored, local
-        # data files (DuckDB, extracts) are not — regenerate them gracefully.
-        prompt_parts.append(_load_prompt("sandbox_resume_suffix.md"))
     if is_improvement_run:
         prompt_parts.append(_load_prompt("improvement_suffix.md"))
+    # NOTE: sandbox_resume_suffix.md is NOT part of the always-on system prompt.
+    # It is supplemental context, attached to the user message ONLY on a cold
+    # resume (the warm sandbox expired and was rebuilt), so the agent silently
+    # rebuilds local data files. Wired by the sandbox-lifecycle rehydrate path.
     system_prompt = (
         "\n\n".join(prompt_parts) + "\n\n"
         f"Selected project: {project_id}\nFrozen branch: {branch}\nFrozen commit: {commit_sha}\n"

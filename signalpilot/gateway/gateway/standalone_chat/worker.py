@@ -461,6 +461,16 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                         is_error = bool(event.get("is_error"))
                         tool_call_id = str(event.get("tool_call_id") or "")
                         completed_tool = tool_names_by_id.get(tool_call_id, "")
+                        if is_error:
+                            # Author-visible events redact tool errors. Log the raw
+                            # error text here (server-side only) so operators can see
+                            # exactly why a tool failed.
+                            logger.warning(
+                                "standalone-chat tool error tool=%s run=%s raw=%s",
+                                completed_tool or "unknown",
+                                run_id,
+                                (content or "")[:2000],
+                            )
                         await _append(
                             run_id,
                             "tool_completed",

@@ -16,6 +16,85 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from pathlib import Path
 
+def _resolve_dbt_project_dir(root: Path) -> Path | None:
+    """Return the dbt project directory under the checkout root.
+
+    The checkout root is not always the dbt project. Some repos keep the dbt
+    project in a nested folder, for example ``dumpsters_dbt/``. Return the root
+    when it holds ``dbt_project.yml``. If not, walk down up to 3 levels and
+    return the first folder that holds ``dbt_project.yml`` (shallowest wins).
+    Return ``None`` when no dbt project is found.
+    """
+    from pathlib import Path as _Path
+
+    root = _Path(root)
+    if (root / "dbt_project.yml").is_file():
+        return root
+    skip = {
+        "target", "logs", "dbt_packages", "__pycache__", ".git",
+        "node_modules", ".venv", ".ruff_cache", ".pytest_cache",
+    }
+    frontier: list[tuple[Path, int]] = [(root, 0)]
+    while frontier:
+        current, depth = frontier.pop(0)
+        if depth >= 3:
+            continue
+        try:
+            entries = sorted(current.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.is_dir() or entry.name in skip or entry.name.startswith("."):
+                continue
+            if (entry / "dbt_project.yml").is_file():
+                return entry
+            frontier.append((entry, depth + 1))
+    return None
+
+
+def _write_stub_dbt_profiles(dbt_project_dir: Path, scratch_directory: Path) -> Path:
+    """Write a throwaway profiles.yml so read-only dbt commands can run.
+
+    ``dbt ls``, ``dbt parse`` and ``dbt compile`` need a profile to resolve the
+    adapter, but they never open the warehouse connection. The agent has no
+    warehouse credentials, so point every output at a local duckdb file. The
+    duckdb adapter is baked into the notebook image. Return the directory that
+    holds the written profiles.yml (pass it to dbt as ``--profiles-dir``).
+    """
+    import yaml
+
+    # dbt_project.yml names the profile the project expects. Match it so dbt
+    # does not fail with "Could not find profile named ...".
+    profile_name = "default"
+    try:
+        project_yml = yaml.safe_load(
+            (dbt_project_dir / "dbt_project.yml").read_text(encoding="utf-8")
+        )
+        if isinstance(project_yml, dict) and project_yml.get("profile"):
+            profile_name = str(project_yml["profile"])
+    except (OSError, yaml.YAMLError):
+        pass
+
+    profiles_dir = scratch_directory / "dbt-profiles"
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    stub = {
+        profile_name: {
+            "target": "stub",
+            "outputs": {
+                "stub": {
+                    "type": "duckdb",
+                    "path": str(scratch_directory / "dbt-stub.duckdb"),
+                    "threads": 1,
+                }
+            },
+        }
+    }
+    (profiles_dir / "profiles.yml").write_text(
+        yaml.safe_dump(stub), encoding="utf-8"
+    )
+    return profiles_dir
+
+
 from signalpilot._server.ai.standalone_chat_chart_theme import (
     CHART_BACKGROUND,
     CHART_BORDER,
@@ -957,6 +1036,15 @@ def build_standalone_chat_mcp_server(
             if name == "inspect_dbt":
                 if project_directory is None or scratch_directory is None:
                     raise ValueError("The frozen dbt project is unavailable")
+                # The checkout root is not always the dbt project. Some repos
+                # keep it nested (for example dumpsters_dbt/). Resolve the real
+                # project dir so dbt does not fail with "Missing dbt_project.yml".
+                dbt_project_dir = _resolve_dbt_project_dir(project_directory)
+                if dbt_project_dir is None:
+                    raise ValueError(
+                        "No dbt_project.yml was found in this project. "
+                        "This project has no dbt project to inspect."
+                    )
                 command = str(arguments.get("command") or "")
                 if command not in {"parse", "ls", "compile"}:
                     raise ValueError(
@@ -964,14 +1052,64 @@ def build_standalone_chat_mcp_server(
                     )
                 target_path = scratch_directory / "dbt-target"
                 target_path.mkdir(parents=True, exist_ok=True)
+                # The agent has no warehouse credentials. Write a stub duckdb
+                # profile so read-only dbt commands can resolve the adapter
+                # without connecting. Without this dbt falls back to ~/.dbt and
+                # fails with "profiles-dir ... does not exist".
+                profiles_dir = _write_stub_dbt_profiles(dbt_project_dir, scratch_directory)
+                log_path = scratch_directory / "dbt-logs"
+                # The frozen checkout does not include dbt_packages (it is a
+                # build artifact). If the project declares packages, install
+                # them first, or dbt ls/parse/compile fail with
+                # "Run dbt deps to install package dependencies".
+                declares_packages = (
+                    (dbt_project_dir / "packages.yml").is_file()
+                    or (dbt_project_dir / "dependencies.yml").is_file()
+                )
+                packages_installed = (dbt_project_dir / "dbt_packages").is_dir() and any(
+                    (dbt_project_dir / "dbt_packages").iterdir()
+                )
+                if declares_packages and not packages_installed:
+                    deps_argv = [
+                        "dbt",
+                        "--no-use-colors",
+                        "--log-path",
+                        str(log_path),
+                        "deps",
+                        "--project-dir",
+                        str(dbt_project_dir),
+                        "--profiles-dir",
+                        str(profiles_dir),
+                    ]
+                    deps_proc = await asyncio.create_subprocess_exec(
+                        *deps_argv,
+                        cwd=dbt_project_dir,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT,
+                    )
+                    try:
+                        deps_out, _ = await asyncio.wait_for(
+                            deps_proc.communicate(), timeout=120
+                        )
+                    except TimeoutError:
+                        deps_proc.kill()
+                        await deps_proc.wait()
+                        raise ValueError("dbt deps timed out") from None
+                    if deps_proc.returncode != 0:
+                        raise ValueError(
+                            "dbt deps failed: "
+                            + deps_out.decode(errors="replace")[-2_000:]
+                        )
                 argv = [
                     "dbt",
                     "--no-use-colors",
                     "--log-path",
-                    str(scratch_directory / "dbt-logs"),
+                    str(log_path),
                     command,
                     "--project-dir",
-                    str(project_directory),
+                    str(dbt_project_dir),
+                    "--profiles-dir",
+                    str(profiles_dir),
                     "--target-path",
                     str(target_path),
                 ]

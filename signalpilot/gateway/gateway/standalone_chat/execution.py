@@ -79,6 +79,7 @@ async def ensure_execution_runtime(
         org_id=run.org_id,
         user_id=run.user_id,
         run_id=run.id,
+        conversation_id=run.conversation_id,
         project_id=run.project_id,
         branch=branch,
         connection_name=connection_name,
@@ -248,13 +249,26 @@ async def cancel_execution_session(db: AsyncSession, run: GatewayChatRun) -> boo
 
 
 async def cleanup_finished_execution(db: AsyncSession, *, run_id: str) -> None:
-    """Release a synthetic notebook only after its durable run yields the lease."""
+    """Release the notebook session after a run finishes.
+
+    Interactive chat sessions stay WARM: they are conversation-keyed and reused
+    by the next message, and the idle lifecycle loop snapshots and reaps them.
+    Only one-shot improvement runs terminate their session at run end."""
     run = await db.get(GatewayChatRun, run_id)
     if (
         run is None
         or run.status not in {"waiting_for_user", "completed", "failed", "cancelled"}
         or not run.execution_session_id
     ):
+        return
+    conversation = await db.get(GatewayChatConversation, run.conversation_id)
+    is_improvement = bool(
+        conversation and getattr(conversation, "origin", "user") == "improvement"
+    )
+    if not is_improvement:
+        # Keep the interactive chat session warm for the next message. The idle
+        # lifecycle loop (main._notebook_lifecycle_loop) snapshots it after
+        # SP_NOTEBOOK_IDLE_SNAPSHOT_SECONDS and reaps it later.
         return
     session_info = await notebook_session_store.get_session_by_id(
         db,

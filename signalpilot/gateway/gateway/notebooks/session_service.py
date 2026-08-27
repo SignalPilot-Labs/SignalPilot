@@ -516,19 +516,25 @@ async def ensure_standalone_chat_notebook_session(
     org_id: str,
     user_id: str,
     run_id: str,
+    conversation_id: str,
     project_id: str,
     branch: str,
     connection_name: str,
     commit_sha: str,
     frozen_revision: int | None = None,
 ) -> NotebookRuntime:
-    """Start an isolated, frozen-workspace runtime for one durable chat run.
+    """Start (or reuse) the notebook runtime for a chat CONVERSATION.
 
-    The workspace is pinned to `frozen_revision` (default: the branch head at
-    session start) and mounted read-only; commit_sha remains in the JWT for
-    run attribution.
+    The session is keyed by conversation, not by run, so every message in a
+    conversation reuses one warm sandbox instead of booting a fresh one. The
+    idle lifecycle loop snapshots and resumes it, so the agent's files survive
+    between messages. The workspace is pinned to `frozen_revision` (the branch
+    head at first session start) and mounted read-only; commit_sha stays in the
+    JWT for run attribution.
     """
-    execution_identity = f"chat:{run_id}"
+    # Conversation-scoped identity. Keeps the `chat:` prefix so identity checks
+    # that accept `chat:` (and reject `chat-exec:`) still hold.
+    execution_identity = f"chat:conv-{conversation_id}"
     session_info = await ensure_notebook_session(
         session,
         org_id=org_id,

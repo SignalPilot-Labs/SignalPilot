@@ -1067,6 +1067,7 @@ async def test_execution_uses_org_anthropic_key_as_request_scoped_auth(
         org_id="org-a",
         user_id="user-without-a-key",
         project_id="project-a",
+        conversation_id="conv-a",
     )
 
     prepared = await chat_execution.prepare_execution(

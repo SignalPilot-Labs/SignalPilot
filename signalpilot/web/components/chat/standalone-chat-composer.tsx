@@ -144,31 +144,10 @@ export function StandaloneChatComposer({
       data-testid="standalone-chat-composer"
       className="mx-auto w-full max-w-3xl px-6 pb-6 pt-3"
     >
-      <div className="relative rounded-2xl border border-[var(--color-border-hover)] bg-[var(--color-bg-input)] shadow-2xl shadow-black/20 transition-colors focus-within:border-[var(--color-border-active)]">
-        {projectPicker && (
-          <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-4 py-2.5">
-            <div className="min-w-0 flex-1">{projectPicker}</div>
-            {settings && (
-              <div className="relative shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setSettingsOpen((v) => !v)}
-                  aria-label="Chat settings"
-                  aria-expanded={settingsOpen}
-                  className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
-                >
-                  <Settings2 className="h-3.5 w-3.5" />
-                </button>
-                {settingsOpen && (
-                  <div className="absolute bottom-9 right-0 z-30 w-64 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)] p-3 shadow-xl">
-                    {settings}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
+      {/* Single field: textarea on top, one borderless control bar beneath.
+          A lifted surface (#1f1f22) separates it from the near-black page, so
+          the border can stay soft — legibility over harsh outlines. */}
+      <div className="relative flex flex-col rounded-2xl border border-[var(--color-border)] bg-[#1f1f22] shadow-2xl shadow-black/40 transition-colors focus-within:border-[var(--color-border-hover)]">
         {/* @-mention popover */}
         {mentionMatches.length > 0 && (
           <div className="absolute bottom-full left-4 z-30 mb-2 w-80 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)] shadow-xl">
@@ -207,44 +186,76 @@ export function StandaloneChatComposer({
           }}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
-          className="min-h-14 w-full resize-none border-0 bg-transparent px-4 py-4 pr-14 text-sm leading-6 text-[var(--color-text)] shadow-none outline-none placeholder:text-[var(--color-text-dim)] focus:border-0 focus:shadow-none focus:outline-none focus-visible:outline-none focus-visible:ring-0"
+          // The global stylesheet paints two rings on a focused textarea: a
+          // `textarea:focus` box-shadow AND a `*:focus-visible` 1px outline
+          // (drawn outside the box, so element screenshots hide it). Plain
+          // Tailwind resets lose the specificity fight, so force both off with
+          // !important — the OUTER container carries the focus affordance via
+          // focus-within:border.
+          // The global `::placeholder { opacity:.35 }` / `:focus::placeholder
+          // { opacity:.25 }` rules crush the placeholder to near-invisible and
+          // win on specificity — force full opacity + a legible muted color.
+          className="min-h-[60px] w-full resize-none border-0 bg-transparent px-5 pb-1 pt-4 text-[16px] leading-7 text-[var(--color-text)] !shadow-none !outline-none placeholder:text-[var(--color-text-muted)] placeholder:!opacity-100 focus:!border-0 focus:!shadow-none focus:!outline-none focus:placeholder:!opacity-100 focus-visible:!outline-none focus-visible:!ring-0"
         />
 
-        {running && onStop ? (
-          <button
-            type="button"
-            onClick={onStop}
-            aria-label="Stop the running analysis"
-            className="absolute bottom-3 right-3 flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--color-error)] text-[var(--color-error)] hover:bg-[var(--color-error)]/10"
-          >
-            <Square className="h-3 w-3 fill-current" />
-          </button>
-        ) : (
-          <button
-            type="button"
-            disabled={!canSubmit}
-            onClick={submit}
-            aria-label="Send message"
-            className="absolute bottom-3 right-3 flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--color-text)] text-[var(--color-bg)] disabled:cursor-not-allowed disabled:opacity-30"
-          >
-            <Send className="h-3.5 w-3.5" />
-          </button>
-        )}
+        {/* Control bar: project picker (left), settings + send (right). */}
+        <div className="flex items-center gap-2 px-2.5 pb-2.5 pt-1">
+          {projectPicker && <div className="min-w-0 flex-1">{projectPicker}</div>}
+          <div className="ml-auto flex items-center gap-1.5">
+            {settings && (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setSettingsOpen((v) => !v)}
+                  aria-label="Chat settings"
+                  aria-expanded={settingsOpen}
+                  className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+                >
+                  <Settings2 className="h-3.5 w-3.5" />
+                </button>
+                {settingsOpen && (
+                  <div className="absolute bottom-10 right-0 z-30 w-64 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)] p-3 shadow-xl">
+                    {settings}
+                  </div>
+                )}
+              </div>
+            )}
+            {running && onStop ? (
+              <button
+                type="button"
+                onClick={onStop}
+                aria-label="Stop the running analysis"
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--color-error)] text-[var(--color-error)] hover:bg-[var(--color-error)]/10"
+              >
+                <Square className="h-3 w-3 fill-current" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={!canSubmit}
+                onClick={submit}
+                aria-label="Send message"
+                className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--color-text)] text-[var(--color-bg)] transition-opacity disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                <Send className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
       </div>
 
       {submitDisabled && disabledReason ? (
         <p
           aria-live="polite"
-          className={`mt-2 text-center text-[10px] transition-colors ${
-            blockedFlash ? "text-[var(--color-warning)]" : "text-[var(--color-text-dim)]"
+          className={`mt-2.5 text-center text-xs transition-colors ${
+            blockedFlash ? "text-[var(--color-warning)]" : "text-[var(--color-text-muted)]"
           }`}
         >
           {disabledReason}
         </p>
       ) : (
-        <p className="mt-2 text-center text-[10px] text-[var(--color-text-dim)]">
-          Enter to send · Shift+Enter for a new line · @ to mention a model ·
-          governed, read-only access
+        <p className="mt-2.5 text-center text-xs text-[var(--color-text-muted)]">
+          Enter to send · Shift+Enter for a new line · @ to mention a model
         </p>
       )}
     </div>

@@ -258,8 +258,8 @@ select {
 /* Standalone data chat markdown stays business-readable; evidence remains mono. */
 .chat-markdown {
   color: var(--color-text);
-  font-size: 14px;
-  line-height: 1.7;
+  font-size: 15.5px;
+  line-height: 1.75;
 }
 .chat-markdown > * + * { margin-top: 0.85rem; }
 .chat-markdown h1,

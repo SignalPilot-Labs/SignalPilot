@@ -648,7 +648,7 @@ function UserMessage({ message }: { message: UiMessage }) {
       data-chat-message-id={message.id}
       className="mx-auto w-full max-w-3xl px-6 py-4"
     >
-      <div className="ml-auto max-w-[78%] rounded-2xl rounded-br-md border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-4 py-3 text-sm leading-6 text-[var(--color-text)]">
+      <div className="ml-auto max-w-[80%] rounded-2xl rounded-br-md bg-[#2a2a2e] px-4 py-3 text-[15.5px] leading-7 text-[var(--color-text)]">
         <div className="whitespace-pre-wrap">{message.content}</div>
       </div>
     </article>
@@ -772,7 +772,7 @@ function StarterQuestions({
                 ?.focus(),
             );
           }}
-          className="min-h-24 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 text-left text-sm leading-5 text-[var(--color-text-muted)] hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+          className="min-h-24 rounded-xl border border-[var(--color-border)] bg-[#1a1a1d] p-4 text-left text-[14.5px] leading-6 text-[var(--color-text-muted)] transition-colors hover:border-[var(--color-border-hover)] hover:bg-[#212125] hover:text-[var(--color-text)]"
         >
           {question}
         </button>
@@ -1895,6 +1895,83 @@ export function StandaloneDataChat({
     );
   }
 
+  const isEmptyNewChat = empty && !conversationId;
+
+  const composerNode = (
+    <StandaloneChatComposer
+      value={draft}
+      onValueChange={setDraft}
+      onSubmit={(text) => void submitText(text)}
+      submitDisabled={submitDisabled}
+      disabledReason={disabledReason}
+      running={runIsStreaming}
+      onStop={currentRun ? () => void onStop(currentRun.id) : undefined}
+      mentionOptions={mentionOptions}
+      placeholder={
+        currentRun?.status === "waiting_for_user"
+          ? "Answer the clarification…"
+          : currentRun?.status === "waiting_for_query_approval"
+            ? "Approve or decline the proposed query above…"
+            : "Ask anything about this project…"
+      }
+      projectPicker={
+        !conversationId ? (
+          <ProjectPicker
+            projects={bootstrap.projects}
+            selectedId={selectedProjectId}
+            onSelect={(projectId) => {
+              setSelectedProjectId(projectId);
+              void setDefaultStandaloneChatProject(projectId);
+              router.replace(`/chats?project=${encodeURIComponent(projectId)}`);
+            }}
+          />
+        ) : (
+          <ProjectChip project={selectedProject} />
+        )
+      }
+      settings={
+        !conversationId && bootstrap.enterprise_features.query_approval ? (
+          <div className="space-y-3">
+            <label className="block">
+              <span className="mb-1 block text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-dim)]">
+                Per-query budget (USD)
+              </span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={perQueryBudgetUsd}
+                onChange={(event) =>
+                  setPerQueryBudgetUsd(Math.max(0, Number(event.target.value)))
+                }
+                aria-label="Per-query budget in USD"
+                className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-input)] px-2 py-1.5 text-xs text-[var(--color-text)]"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-dim)]">
+                Chat budget (USD)
+              </span>
+              <input
+                type="number"
+                min={perQueryBudgetUsd}
+                step="0.01"
+                value={chatBudgetUsd}
+                onChange={(event) =>
+                  setChatBudgetUsd(
+                    Math.max(perQueryBudgetUsd, Number(event.target.value)),
+                  )
+                }
+                aria-label="Chat budget in USD"
+                className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-input)] px-2 py-1.5 text-xs text-[var(--color-text)]"
+              />
+            </label>
+          </div>
+        ) : undefined
+      }
+    />
+  );
+
   return (
     <ChatUiContext.Provider
       value={{
@@ -1985,19 +2062,21 @@ export function StandaloneDataChat({
                 <ConversationMessagesSkeleton />
               ) : empty ? (
                 <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center px-6 py-12">
-                  <div className="mb-8">
-                    <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)]">
-                      <Sparkles className="h-4 w-4 text-[var(--color-success)]" />
+                  <div className="mb-6 text-center">
+                    <div className="mx-auto mb-5 flex h-11 w-11 items-center justify-center rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+                      <Sparkles className="h-5 w-5 text-[var(--color-success)]" />
                     </div>
-                    <h1 className="text-2xl font-medium tracking-[-0.025em] text-[var(--color-text)]">
+                    <h1 className="text-[32px] font-semibold leading-tight tracking-[-0.025em] text-[var(--color-text)]">
                       What would you like to understand?
                     </h1>
-                    <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--color-text-muted)]">
+                    <p className="mx-auto mt-3 max-w-xl text-[15px] leading-7 text-[var(--color-text-muted)]">
                       Ask in plain English. SignalPilot will inspect the
                       project, query governed production data, and choose the
                       clearest answer format.
                     </p>
                   </div>
+                  {/* The input is the focal point in the empty state. */}
+                  {!conversationId && <div className="-mx-6">{composerNode}</div>}
                   {unreadyMessage ? (
                     <ReadinessNotice
                       message={unreadyMessage}
@@ -2032,6 +2111,7 @@ export function StandaloneDataChat({
                   ))}
                 </div>
               )}
+              {!isEmptyNewChat && (
               <div className="sticky bottom-0 bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)] to-transparent pt-3">
                 {approvalEvent && (
                   <QueryApprovalCard
@@ -2039,89 +2119,9 @@ export function StandaloneDataChat({
                     onDecision={onQueryDecision}
                   />
                 )}
-                <StandaloneChatComposer
-                  value={draft}
-                  onValueChange={setDraft}
-                  onSubmit={(text) => void submitText(text)}
-                  submitDisabled={submitDisabled}
-                  disabledReason={disabledReason}
-                  running={runIsStreaming}
-                  onStop={
-                    currentRun ? () => void onStop(currentRun.id) : undefined
-                  }
-                  mentionOptions={mentionOptions}
-                  placeholder={
-                    currentRun?.status === "waiting_for_user"
-                      ? "Answer the clarification…"
-                      : currentRun?.status === "waiting_for_query_approval"
-                        ? "Approve or decline the proposed query above…"
-                        : "Ask a question about this project…"
-                  }
-                  projectPicker={
-                    !conversationId ? (
-                      <ProjectPicker
-                        projects={bootstrap.projects}
-                        selectedId={selectedProjectId}
-                        onSelect={(projectId) => {
-                          setSelectedProjectId(projectId);
-                          void setDefaultStandaloneChatProject(projectId);
-                          router.replace(
-                            `/chats?project=${encodeURIComponent(projectId)}`,
-                          );
-                        }}
-                      />
-                    ) : (
-                      <ProjectChip project={selectedProject} />
-                    )
-                  }
-                  settings={
-                    !conversationId &&
-                    bootstrap.enterprise_features.query_approval ? (
-                      <div className="space-y-3">
-                        <label className="block">
-                          <span className="mb-1 block text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-dim)]">
-                            Per-query budget (USD)
-                          </span>
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={perQueryBudgetUsd}
-                            onChange={(event) =>
-                              setPerQueryBudgetUsd(
-                                Math.max(0, Number(event.target.value)),
-                              )
-                            }
-                            aria-label="Per-query budget in USD"
-                            className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-input)] px-2 py-1.5 text-xs text-[var(--color-text)]"
-                          />
-                        </label>
-                        <label className="block">
-                          <span className="mb-1 block text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-dim)]">
-                            Chat budget (USD)
-                          </span>
-                          <input
-                            type="number"
-                            min={perQueryBudgetUsd}
-                            step="0.01"
-                            value={chatBudgetUsd}
-                            onChange={(event) =>
-                              setChatBudgetUsd(
-                                Math.max(
-                                  perQueryBudgetUsd,
-                                  Number(event.target.value),
-                                ),
-                              )
-                            }
-                            aria-label="Chat budget in USD"
-                            className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-input)] px-2 py-1.5 text-xs text-[var(--color-text)]"
-                          />
-                        </label>
-                      </div>
-                    ) : undefined
-                  }
-                />
+                {composerNode}
               </div>
+            )}
             </div>
           </main>
         </div>

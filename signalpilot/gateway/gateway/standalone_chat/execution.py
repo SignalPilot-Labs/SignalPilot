@@ -162,7 +162,10 @@ async def prepare_execution(
             connection_name=connection_name,
             commit_sha=commit_sha,
             capabilities=capabilities,
-            execution_identity=f"chat:{run.id}",
+            # Conversation-scoped so the dbt executor sandbox stays warm and is
+            # reused across every message in the conversation (cold start ~21s,
+            # warm reuse ~0.2s). Keeps the `chat:` prefix for identity checks.
+            execution_identity=f"chat:conv-{run.conversation_id}",
             scopes=["read", "query", "execute"],
             ttl=get_gateway_public_settings().sp_session_jwt_ttl_seconds,
         ),

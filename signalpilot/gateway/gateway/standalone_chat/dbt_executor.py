@@ -21,6 +21,7 @@ import logging
 import os
 import re
 import shlex
+import time
 from dataclasses import dataclass
 from urllib.parse import parse_qs, unquote, urlparse, urlunparse
 
@@ -60,10 +61,23 @@ _EXEC_TIMEOUT = 900.0
 _PROFILES_DIR = "/creds"
 _WORKSPACE = "/workspace"
 
-# One executor per chat execution identity for the lifetime of this process
-# (same lifecycle model as the agent's session sandbox).
+# One executor per chat execution identity (conversation-scoped), kept warm and
+# reused across messages. `_executor_seen` tracks last-use so the idle reaper can
+# release executors whose conversation has gone quiet.
 _executors: dict[str, str] = {}
+_executor_seen: dict[str, float] = {}
 _executor_lock = asyncio.Lock()
+
+# How long an executor sandbox stays warm after its last use before the reaper
+# releases it. Matches the notebook-session warm window by default.
+_EXECUTOR_WARM_ENV = "SP_CHAT_EXECUTOR_WARM_SECONDS"
+
+
+def _executor_warm_seconds() -> int:
+    try:
+        return max(60, int(os.getenv(_EXECUTOR_WARM_ENV, "3600")))
+    except ValueError:
+        return 3600
 
 
 class DbtExecutorError(RuntimeError):
@@ -272,6 +286,7 @@ async def ensure_executor(
     async with _executor_lock:
         existing = _executors.get(cache_key)
         if existing:
+            _executor_seen[cache_key] = time.monotonic()
             # Project dir/schema are deterministic; recompute cheaply.
             storage = workspace_object_storage()
             ws = WorkspaceStore(storage)
@@ -356,6 +371,7 @@ async def ensure_executor(
             await runtime.destroy(sandbox_id)
             raise
         _executors[cache_key] = sandbox_id
+        _executor_seen[cache_key] = time.monotonic()
         logger.info(
             "dbt executor ready for %s (db_type=%s, database=%s, schema=%s)",
             cache_key, db_type, target_database or "<connection default>", schema,
@@ -382,9 +398,10 @@ async def _read_profile_name(
 
 async def release_executor(identity: str) -> None:
     async with _executor_lock:
-        sandbox_ids = [
-            _executors.pop(key, None) for key in (identity, f"{identity}::dev")
-        ]
+        sandbox_ids = []
+        for key in (identity, f"{identity}::dev"):
+            sandbox_ids.append(_executors.pop(key, None))
+            _executor_seen.pop(key, None)
     runtime = get_sandbox_runtime()
     for sandbox_id in sandbox_ids:
         if sandbox_id:
@@ -392,6 +409,32 @@ async def release_executor(identity: str) -> None:
                 await runtime.destroy(sandbox_id)
             except SandboxRuntimeError:
                 pass
+
+
+async def cleanup_idle_executors() -> int:
+    """Release executor sandboxes whose conversation has gone quiet past the warm
+    window. Executors are conversation-scoped and kept warm across messages, so
+    they are not torn down at run end; this reaper is what eventually frees them
+    (and the credential-holding sandbox they carry)."""
+    ttl = _executor_warm_seconds()
+    now = time.monotonic()
+    async with _executor_lock:
+        stale = [key for key, seen in _executor_seen.items() if now - seen > ttl]
+        sandbox_ids = []
+        for key in stale:
+            sandbox_ids.append(_executors.pop(key, None))
+            _executor_seen.pop(key, None)
+    runtime = get_sandbox_runtime()
+    released = 0
+    for sandbox_id in sandbox_ids:
+        if not sandbox_id:
+            continue
+        try:
+            await runtime.destroy(sandbox_id)
+            released += 1
+        except SandboxRuntimeError:
+            pass
+    return released
 
 
 # ── Project sync: agent sandbox -> executor ─────────────────────────────────

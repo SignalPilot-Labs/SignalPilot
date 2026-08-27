@@ -551,17 +551,14 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
         with suppress(Exception):
             async with get_session_factory()() as db:
                 await cleanup_finished_execution(db, run_id=run_id)
-        # Tear down both per-run sandboxes: the agent's seeded VM and the
-        # credential-holding dbt executor. Best-effort — the provider time
-        # limit is the backstop.
+        # Tear down the improvement-run agent sandbox (per-run). The chat agent
+        # no longer creates one (collapsed to the notebook session). The dbt
+        # executor is NOT released here: it is conversation-scoped and kept warm
+        # across messages, freed by cleanup_idle_executors after the warm window.
         with suppress(Exception):
             from ..mcp.tools.sandbox_vm import release_session_sandbox
 
             await release_session_sandbox(f"chat:{run_id}")
-        with suppress(Exception):
-            from .dbt_executor import release_executor
-
-            await release_executor(f"chat:{run_id}")
 
 
 async def run_worker() -> None:
@@ -581,6 +578,10 @@ async def run_worker() -> None:
             async with factory() as db:
                 await cleanup_expired_approval_sandboxes(db)
                 await cleanup_expired_runtime_objects(db)
+                with suppress(Exception):
+                    from .dbt_executor import cleanup_idle_executors
+
+                    await cleanup_idle_executors()
                 run_ids = await chat_store.claim_runs(
                     db,
                     worker_id=worker_id,

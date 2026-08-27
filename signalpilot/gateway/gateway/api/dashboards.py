@@ -671,7 +671,18 @@ async def create_dashboard_authoring_session(body: DashboardAuthoringRequest, st
         raise HTTPException(status_code=409, detail="Dashboard authoring requires the organization Anthropic key")
     agent = DashboardAuthoringAgent(api_key=api_key)
     try:
-        draft = await agent.draft(prompt=body.prompt, context=context, base_definition=base_definition)
+        def validate_candidate(candidate):
+            candidate_definition = materialize_agent_draft(candidate, base_definition=base_definition)
+            candidate_definition = canonicalize_dashboard_filter_targets(candidate_definition, context)
+            validate_dashboard_semantics(candidate_definition, context)
+            validate_time_series_default_windows(candidate_definition, context)
+
+        draft = await agent.draft(
+            prompt=body.prompt,
+            context=context,
+            base_definition=base_definition,
+            validator=validate_candidate,
+        )
         definition = materialize_agent_draft(draft, base_definition=base_definition)
         if base_definition is None:
             binding = definition.signalPilot.model_copy(
@@ -817,7 +828,18 @@ async def continue_dashboard_authoring_session(session_id: str, body: DashboardA
         if not api_key:
             raise HTTPException(status_code=409, detail="Dashboard authoring requires the organization Anthropic key")
         agent = DashboardAuthoringAgent(api_key=api_key)
-        draft = await agent.draft(prompt=body.prompt, context=context, base_definition=current_definition)
+        def validate_candidate(candidate):
+            candidate_definition = materialize_agent_draft(candidate, base_definition=current_definition)
+            candidate_definition = canonicalize_dashboard_filter_targets(candidate_definition, context)
+            validate_dashboard_semantics(candidate_definition, context)
+            validate_time_series_default_windows(candidate_definition, context)
+
+        draft = await agent.draft(
+            prompt=body.prompt,
+            context=context,
+            base_definition=current_definition,
+            validator=validate_candidate,
+        )
         definition = materialize_agent_draft(draft, base_definition=current_definition)
         verified = await _verified_context(store, definition)
         definition = canonicalize_dashboard_filter_targets(definition, verified)

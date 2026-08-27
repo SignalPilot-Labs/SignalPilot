@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Callable
 from typing import Any
 
 from pydantic import Field, model_validator
@@ -27,6 +28,7 @@ FILTER_OPT_OUT_PATTERNS = (
     r"\bn[aã]o (?:adicione|inclua|crie|use) filtros?\b",
     r"\bn[aã]o quero filtros?\b",
 )
+MAX_DRAFT_ATTEMPTS = 3
 
 
 class DashboardAgentDraft(ContractModel):
@@ -126,6 +128,7 @@ class DashboardAuthoringAgent:
         prompt: str,
         context: DashboardSemanticContext,
         base_definition: DashboardDefinition | None,
+        validator: Callable[[DashboardAgentDraft], None] | None = None,
     ) -> DashboardAgentDraft:
         mode = "update" if base_definition is not None else "create"
         contract = DashboardAgentDraft.model_json_schema(by_alias=True)
@@ -181,12 +184,12 @@ class DashboardAuthoringAgent:
             "tool_choice": {"type": "tool", "name": "submit_dashboard_draft"},
         }
 
-        async def request_draft(body: dict[str, Any]) -> DashboardAgentDraft:
+        async def request_tool_input(body: dict[str, Any]) -> Any:
             response = await self.model_client.create_message(body)
             content = response.get("content")
             if not isinstance(content, list):
                 raise ValueError("Dashboard authoring model returned no tool result")
-            tool_input = next(
+            return next(
                 (
                     block.get("input")
                     for block in content
@@ -196,55 +199,55 @@ class DashboardAuthoringAgent:
                 ),
                 None,
             )
-            return DashboardAgentDraft.model_validate(tool_input)
 
-        draft = await request_draft(request_body)
-        if not explicitly_omits_filters(prompt) and not draft_has_filters(draft, base_definition=base_definition):
-            repair_payload = {
-                **payload,
-                "rejected_draft": draft.model_dump(mode="json", by_alias=True, exclude_none=True),
-                "validation_feedback": (
-                    "The previous draft was rejected because it omitted dashboard filter controls. Add useful governed "
-                    "filters now. Prefer a date filter when available, include explicit per-tile targets, and preserve "
-                    "all otherwise valid chart and layout work."
-                ),
-            }
-            request_body = {
-                **request_body,
-                "messages": [{"role": "user", "content": json.dumps(repair_payload, default=str)}],
-            }
-            draft = await request_draft(request_body)
-            if not draft_has_filters(draft, base_definition=base_definition):
-                raise ValueError("Dashboard authoring requires at least one governed filter control")
-        if base_definition is None and draft.definition is not None:
-            missing_drills = charts_missing_usable_drills(draft.definition, context)
-            if missing_drills:
+        last_error: ValueError | None = None
+        for attempt in range(MAX_DRAFT_ATTEMPTS):
+            rejected_draft: Any = None
+            try:
+                rejected_draft = await request_tool_input(request_body)
+                draft = DashboardAgentDraft.model_validate(rejected_draft)
+                if base_definition is None and draft.definition is None:
+                    raise ValueError("Dashboard creation requires a complete definition")
+                if base_definition is not None and draft.definition is not None:
+                    raise ValueError("Dashboard updates require typed operations")
+                if not explicitly_omits_filters(prompt) and not draft_has_filters(
+                    draft, base_definition=base_definition
+                ):
+                    raise ValueError(
+                        "Dashboard authoring requires at least one governed filter control. Add a useful governed "
+                        "filter, prefer a bounded date filter when available, and include explicit per-tile targets."
+                    )
+                if base_definition is None and draft.definition is not None:
+                    missing_drills = charts_missing_usable_drills(draft.definition, context)
+                    if missing_drills:
+                        raise ValueError(
+                            "Dashboard authoring requires usable drill hierarchies for applicable charts: "
+                            f"{', '.join(missing_drills)}. Add a meaningful lower-grain drill hierarchy using exact "
+                            "same-explore field_id values without repeating query dimensions or drill levels."
+                        )
+                if validator is not None:
+                    validator(draft)
+                return draft
+            except ValueError as exc:
+                last_error = exc
+                if attempt + 1 >= MAX_DRAFT_ATTEMPTS:
+                    raise
                 repair_payload = {
                     **payload,
-                    "rejected_draft": draft.model_dump(mode="json", by_alias=True, exclude_none=True),
                     "validation_feedback": (
-                        "The previous draft was rejected because applicable charts omitted a usable lower-grain drill "
-                        f"hierarchy: {', '.join(missing_drills)}. Add meaningful signalPilot.drillDimensions using exact "
-                        "same-explore field_id values. Do not repeat query dimensions or drill levels, and preserve all "
-                        "otherwise valid filters, charts, and layout work."
+                        "The server rejected the previous draft. Correct every reported contract or semantic error, "
+                        "copy explore and field identifiers exactly from semantic_context, preserve otherwise valid "
+                        f"work, and resubmit the complete {mode} payload.\n{str(exc)[:6000]}"
                     ),
                 }
+                if rejected_draft is not None:
+                    repair_payload["rejected_draft"] = rejected_draft
                 request_body = {
                     **request_body,
                     "messages": [{"role": "user", "content": json.dumps(repair_payload, default=str)}],
                 }
-                draft = await request_draft(request_body)
-                if draft.definition is None or charts_missing_usable_drills(draft.definition, context):
-                    raise ValueError("Dashboard authoring requires usable drill hierarchies for applicable charts")
-                if not explicitly_omits_filters(prompt) and not draft_has_filters(
-                    draft, base_definition=base_definition
-                ):
-                    raise ValueError("Dashboard authoring requires at least one governed filter control")
-        if base_definition is None and draft.definition is None:
-            raise ValueError("Dashboard creation requires a complete definition")
-        if base_definition is not None and draft.definition is not None:
-            raise ValueError("Dashboard updates require typed operations")
-        return draft
+        assert last_error is not None
+        raise last_error
 
 
 def explicitly_omits_filters(prompt: str) -> bool:

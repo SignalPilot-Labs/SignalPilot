@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import logging
 import tarfile
 import time
 import uuid
@@ -25,6 +26,8 @@ from ..db.models import GatewayWorkspaceRevision
 from .model import FileEntry, Manifest, blob_key, manifest_key, snapshot_key
 from .objects import WorkspaceObjectStorage
 from .paths import confine_relpath
+
+logger = logging.getLogger(__name__)
 
 _MAX_INLINE_UPSERT_BYTES = 8 * 1024 * 1024
 _CAS_RETRIES = 3
@@ -59,6 +62,58 @@ class Upsert:
     size: int | None = None
     mode: int = 0o644
     mtime: float | None = None
+
+
+# ── Background snapshot pre-warming ─────────────────────────────────────────
+# One debounced task per (org, project, branch); a new commit supersedes the
+# pending warm. Strictly best-effort: any failure just means the next launch
+# builds the snapshot on demand, exactly as before.
+
+_WARM_DEBOUNCE_SECONDS = 1.5
+_warm_tasks: dict[tuple[str, str, str], asyncio.Task] = {}
+# In-flight snapshot builds keyed by object key — concurrent callers await
+# the same build instead of duplicating it.
+_snapshot_builds: dict[str, asyncio.Future] = {}
+
+
+def _schedule_snapshot_warm(
+    storage: WorkspaceObjectStorage, *, org_id: str, project_id: str, branch: str
+) -> None:
+    if not storage.enabled:
+        return
+    key = (org_id, project_id, branch)
+    prior = _warm_tasks.get(key)
+    if prior is not None and not prior.done():
+        prior.cancel()
+
+    async def _warm() -> None:
+        try:
+            await asyncio.sleep(_WARM_DEBOUNCE_SECONDS)
+            from ..db.engine import get_session_factory
+
+            factory = get_session_factory()
+            async with factory() as db:
+                await WorkspaceStore(storage).build_snapshot(
+                    db, org_id=org_id, project_id=project_id, branch=branch
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug(
+                "Snapshot pre-warm failed for %s@%s (next launch builds on demand)",
+                project_id,
+                branch,
+                exc_info=True,
+            )
+        finally:
+            if _warm_tasks.get(key) is asyncio.current_task():
+                _warm_tasks.pop(key, None)
+
+    try:
+        _warm_tasks[key] = asyncio.create_task(_warm())
+    except RuntimeError:
+        # No running event loop (sync test contexts) — skip quietly.
+        pass
 
 
 class WorkspaceStore:
@@ -321,6 +376,14 @@ class WorkspaceStore:
             raise RevisionConflict(
                 f"Revision {new_revision} on {project_id}@{branch} was committed by another writer"
             ) from exc
+        # Pre-warm the boot snapshot for the new head in the background so a
+        # subsequent session launch finds it cached instead of paying the
+        # full tar build on the critical path (measured at 10s+ for a
+        # few-thousand-file project). Debounced per branch: save bursts
+        # rebuild once.
+        _schedule_snapshot_warm(
+            self.storage, org_id=org_id, project_id=project_id, branch=branch
+        )
         return manifest
 
     async def commit_at_head(
@@ -412,6 +475,31 @@ class WorkspaceStore:
         if await self.storage.exists(key):
             return manifest.revision, key
 
+        # Dedup concurrent builds of the same snapshot: a launch that lands
+        # while the post-commit pre-warm is still building must await that
+        # build, not run a second one (each build re-fetches every blob).
+        in_flight = _snapshot_builds.get(key)
+        if in_flight is not None:
+            await asyncio.shield(in_flight)
+            return manifest.revision, key
+        future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        _snapshot_builds[key] = future
+        try:
+            await self._build_snapshot_object(org_id, project_id, manifest, key)
+            future.set_result(None)
+        except BaseException as exc:
+            future.set_exception(exc)
+            # A waiter (if any) re-raises; otherwise silence the "exception
+            # was never retrieved" warning.
+            future.exception()
+            raise
+        finally:
+            _snapshot_builds.pop(key, None)
+        return manifest.revision, key
+
+    async def _build_snapshot_object(
+        self, org_id: str, project_id: str, manifest: Manifest, key: str
+    ) -> None:
         # Blob fetches dominate build time; identical content dedupes to one
         # fetch, and the rest run concurrently (bounded so a 20k-file project
         # doesn't stampede the store).
@@ -436,7 +524,6 @@ class WorkspaceStore:
                 info.mtime = int(entry.mtime)
                 tar.addfile(info, io.BytesIO(blob))
         await self.storage.put_bytes(key, buffer.getvalue(), content_type="application/gzip")
-        return manifest.revision, key
 
     # ── Deletion ─────────────────────────────────────────────────────────────
 

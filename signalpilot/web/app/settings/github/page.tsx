@@ -8,6 +8,7 @@ import {
   GitBranch,
   Loader2,
   Plug,
+  Settings as SettingsIcon,
   Unplug,
   Link as LinkIcon,
   Unlink,
@@ -365,16 +366,18 @@ export default function GitHubConnectionsPage() {
                   const project = projects.find((p) => p.id === link.project_id);
                   return (
                     <div key={link.id} className="flex items-center justify-between px-5 py-3">
-                      <div className="flex items-center gap-4">
-                        <div>
-                          <span className="text-xs font-bold text-[var(--color-text)]">{project?.display_name || link.project_id}</span>
-                        </div>
-                        <span className="text-[11px] text-[var(--color-text-dim)]">&rarr;</span>
-                        <div className="flex items-center gap-1.5">
-                          <GitBranch className="w-3 h-3 text-[var(--color-text-dim)]" />
-                          <span className="text-xs font-mono text-[var(--color-text)]">{link.repo_full_name}</span>
-                          <span className="text-[11px] text-[var(--color-text-dim)]">({link.default_branch})</span>
-                        </div>
+                      <div className="flex items-center gap-3 leading-none">
+                        <a
+                          href={`/projects/${link.project_id}/settings`}
+                          className="text-xs font-bold leading-none text-[var(--color-text)] hover:underline"
+                          title="Open project settings (dbt folder, watched branches, dbt map)"
+                        >
+                          {project?.display_name || link.project_id}
+                        </a>
+                        <span className="text-[11px] leading-none text-[var(--color-text-dim)]">&rarr;</span>
+                        <GitBranch className="w-3 h-3 shrink-0 text-[var(--color-text-dim)]" />
+                        <span className="text-xs font-mono leading-none text-[var(--color-text)]">{link.repo_full_name}</span>
+                        <span className="text-[11px] leading-none text-[var(--color-text-dim)]">({link.default_branch})</span>
                       </div>
                       {confirmDeleteLink === link.id ? (
                         <div className="flex items-center gap-2">
@@ -398,12 +401,21 @@ export default function GitHubConnectionsPage() {
                           </button>
                         </div>
                       ) : (
-                        <button
-                          onClick={() => setConfirmDeleteLink(link.id)}
-                          className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-error)] hover:text-[var(--color-error)] transition-colors duration-150"
-                        >
-                          <Unlink className="w-3 h-3" /> unlink
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <a
+                            href={`/projects/${link.project_id}/settings`}
+                            title="Project settings (dbt folder, watched branches, dbt map)"
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-text-dim)] transition-colors duration-150"
+                          >
+                            <SettingsIcon className="w-3 h-3 text-[var(--color-text)]" /> settings
+                          </a>
+                          <button
+                            onClick={() => setConfirmDeleteLink(link.id)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-error)] hover:text-[var(--color-error)] transition-colors duration-150"
+                          >
+                            <Unlink className="w-3 h-3" /> unlink
+                          </button>
+                        </div>
                       )}
                     </div>
                   );

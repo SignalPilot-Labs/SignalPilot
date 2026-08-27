@@ -48,6 +48,13 @@ class WorkspaceObjectStorage:
                 kwargs["endpoint_url"] = self.endpoint
             if self.region:
                 kwargs["region_name"] = self.region
+                if not self.endpoint:
+                    # Pin the regional endpoint: without it boto may presign
+                    # against the global s3.amazonaws.com host, and S3 then
+                    # rejects the URL with AuthorizationQueryParametersError
+                    # ("the region 'X' is wrong; expecting 'us-east-1'") when
+                    # an external client (a sandbox) fetches it.
+                    kwargs["endpoint_url"] = f"https://s3.{self.region}.amazonaws.com"
             if self.access_key:
                 kwargs["aws_access_key_id"] = self.access_key
             if self.secret_key:

@@ -83,6 +83,7 @@ from gateway.mcp.tools.schema import (
     schema_statistics,
 )
 from gateway.mcp.tools.dbt_execute import dbt_execute
+from gateway.mcp.tools.refresh_mart import refresh_mart
 from gateway.mcp.tools.sandbox_vm import (
     sandbox_exec,
     sandbox_read_file,

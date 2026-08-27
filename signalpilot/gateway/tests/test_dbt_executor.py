@@ -89,3 +89,60 @@ def test_scratch_schema_is_deterministic_and_scoped():
     s = scratch_schema_for("chat:1234abcd-5678-90ef")
     assert s == "sp_chat_1234abcd"
     assert s.startswith("sp_chat_")
+
+
+# ── dev-database target (refresh_mart path) ──────────────────────────────────
+
+
+def test_database_override_retargets_the_profile():
+    """refresh_mart materializes into the shared dev DB regardless of the
+    connection's database (which may be empty for multi-db browsing)."""
+    emitted = emit_profile(
+        "mssql", "demo", "mssql://admin:pw@host:1433/", "dbo",
+        database_override="Analytics_dev",
+    )
+    assert "database: Analytics_dev" in emitted.profile_yaml
+    assert "schema: dbo" in emitted.profile_yaml
+
+
+def test_database_override_wins_over_dsn_database():
+    emitted = emit_profile(
+        "mssql", "demo", "mssql://admin:pw@host:1433/Analytics", "dbo",
+        database_override="Analytics_dev",
+    )
+    assert "database: Analytics_dev" in emitted.profile_yaml
+    assert "database: Analytics\n" not in emitted.profile_yaml
+
+
+def test_refresh_mart_selector_rebuilds_upstream_lineage():
+    argv = build_dbt_argv("run", select="+fct_daily_sales", dbt_dir="dumpsters_dbt")
+    assert argv[:2] == ["dbt", "run"]
+    assert argv[argv.index("--select") + 1] == "+fct_daily_sales"
+
+
+def test_dev_database_reads_env(monkeypatch):
+    from gateway.standalone_chat.dbt_executor import dev_database
+
+    monkeypatch.delenv("SP_CHAT_DEV_DATABASE", raising=False)
+    assert dev_database() is None
+    monkeypatch.setenv("SP_CHAT_DEV_DATABASE", "Analytics_dev")
+    assert dev_database() == "Analytics_dev"
+    monkeypatch.setenv("SP_CHAT_DEV_DATABASE", "   ")
+    assert dev_database() is None
+
+
+@pytest.mark.parametrize("good", ["fct_daily_sales", "int_calls__unified", "_stg", "m1"])
+def test_refresh_mart_accepts_bare_model_names(good):
+    from gateway.mcp.tools.refresh_mart import _MART_RE
+
+    assert _MART_RE.match(good)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["+fct", "fct+", "a b", "a;drop", "a.b", "a/b", "*", "--select", "a`id`", "1a"],
+)
+def test_refresh_mart_rejects_selector_and_injection(bad):
+    from gateway.mcp.tools.refresh_mart import _MART_RE
+
+    assert not _MART_RE.match(bad)

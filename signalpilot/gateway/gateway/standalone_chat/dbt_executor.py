@@ -18,10 +18,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import shlex
 from dataclasses import dataclass
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse, urlunparse
 
 import yaml
 
@@ -35,6 +36,18 @@ from ..workspace_store.store import WorkspaceStore
 logger = logging.getLogger(__name__)
 
 DBT_EXECUTE_CAPABILITY = "dbt:execute"
+
+# The shared dev database the agent materializes refreshes into (e.g.
+# "Analytics_dev"). Prod stays read-only; refreshes land here, in the project's
+# normal schemas. Unset => refresh_mart is disabled and the executor falls back
+# to the per-chat scratch schema.
+_DEV_DATABASE_ENV = "SP_CHAT_DEV_DATABASE"
+_DEV_DEFAULT_SCHEMA = "dbo"
+
+
+def dev_database() -> str | None:
+    value = (os.getenv(_DEV_DATABASE_ENV) or "").strip()
+    return value or None
 
 _ALLOWED_COMMANDS = {"run", "test", "build", "seed", "snapshot", "compile", "docs"}
 # Node-selector syntax only. A leading dash would let a value masquerade as a
@@ -187,7 +200,20 @@ _EMITTERS = {
 }
 
 
-def emit_profile(db_type: str, profile_name: str, dsn: str, schema: str) -> EmittedProfile:
+def _with_database(dsn: str, database: str) -> str:
+    """Return dsn with its database path replaced — used to point a multi-db
+    connection at the dev materialization target without mutating the stored
+    connection string."""
+    return urlunparse(urlparse(dsn)._replace(path=f"/{database}"))
+
+
+def emit_profile(
+    db_type: str,
+    profile_name: str,
+    dsn: str,
+    schema: str,
+    database_override: str | None = None,
+) -> EmittedProfile:
     emitter = _EMITTERS.get(db_type)
     if emitter is None:
         raise DbtExecutorError(
@@ -195,6 +221,8 @@ def emit_profile(db_type: str, profile_name: str, dsn: str, schema: str) -> Emit
             f"(supported: {', '.join(sorted(_EMITTERS))}). "
             "Use your own sandbox for dbt parse/compile."
         )
+    if database_override:
+        dsn = _with_database(dsn, database_override)
     return emitter(profile_name, dsn, schema)
 
 
@@ -204,9 +232,11 @@ def emit_profile(db_type: str, profile_name: str, dsn: str, schema: str) -> Emit
 async def _hydrate_project(runtime, sandbox_id: str, snapshot_url: str) -> None:
     result = await runtime.exec(
         sandbox_id,
+        # The notebook image runs as root and ships no `sudo`; create the dirs
+        # directly and fall back to sudo only if a future image runs non-root.
         "set -e; "
-        'sudo mkdir -p /workspace /creds && sudo chown "$(id -u):$(id -g)" /workspace /creds; '
-        "chmod 700 /creds; "
+        "mkdir -p /workspace /creds 2>/dev/null || sudo mkdir -p /workspace /creds; "
+        "chmod 700 /creds 2>/dev/null || true; "
         'curl -fsSL "$SP_SNAPSHOT_URL" | tar xz -C /workspace',
         env={"SP_SNAPSHOT_URL": snapshot_url},
         timeout_seconds=300,
@@ -224,12 +254,23 @@ async def ensure_executor(
     branch: str,
     connection_name: str,
     store,
+    target_database: str | None = None,
+    target_schema: str | None = None,
 ) -> tuple[str, str, str]:
     """Create (or reuse) the executor sandbox. Returns
-    (sandbox_id, dbt_project_dir, scratch_schema). Credentials are written
-    inside this function and never returned."""
+    (sandbox_id, dbt_project_dir, materialization_schema). Credentials are
+    written inside this function and never returned.
+
+    Default mode materializes into the per-chat scratch schema. When
+    ``target_database`` is set (the shared dev database), the emitted profile
+    targets that database with a normal default schema so the project's own
+    schema config (staging/intermediate/marts) applies — this is the
+    refresh-into-Analytics_dev path. Dev and scratch executors are cached under
+    distinct keys so they never share one profiles.yml."""
+    schema = (target_schema or _DEV_DEFAULT_SCHEMA) if target_database else scratch_schema_for(identity)
+    cache_key = f"{identity}::dev" if target_database else identity
     async with _executor_lock:
-        existing = _executors.get(identity)
+        existing = _executors.get(cache_key)
         if existing:
             # Project dir/schema are deterministic; recompute cheaply.
             storage = workspace_object_storage()
@@ -239,7 +280,7 @@ async def ensure_executor(
             dbt_dir, _, _ = resolve_dbt_project_dir_detailed(
                 (project.settings if project else None) or {}, manifest
             )
-            return existing, dbt_dir or "", scratch_schema_for(identity)
+            return existing, dbt_dir or "", schema
 
         storage = workspace_object_storage()
         if not storage.enabled:
@@ -271,8 +312,9 @@ async def ensure_executor(
             db, ws, org_id=org_id, project_id=project_id, branch=branch,
             revision=revision, dbt_dir=dbt_dir or "",
         )
-        schema = scratch_schema_for(identity)
-        emitted = emit_profile(db_type, profile_name, dsn, schema)
+        emitted = emit_profile(
+            db_type, profile_name, dsn, schema, database_override=target_database
+        )
 
         runtime = get_sandbox_runtime()
         settings = get_sandbox_runtime_settings()
@@ -300,11 +342,24 @@ async def ensure_executor(
                 f"|| pip install --quiet {shlex.quote(emitted.adapter_package)}",
                 timeout_seconds=420,
             )
+            # Install dbt package deps (packages.yml) once per executor — the
+            # snapshot carries source files but not the resolved dbt_packages/,
+            # so `dbt run/build` would fail with "run dbt deps" without this.
+            proj = f"{_WORKSPACE}/{dbt_dir}" if dbt_dir else _WORKSPACE
+            await runtime.exec(
+                sandbox_id,
+                'export PATH="/opt/sp-notebook/.venv/bin:$PATH"; '
+                f"dbt deps --no-use-colors --project-dir {shlex.quote(proj)} || true",
+                timeout_seconds=300,
+            )
         except Exception:
             await runtime.destroy(sandbox_id)
             raise
-        _executors[identity] = sandbox_id
-        logger.info("dbt executor ready for %s (db_type=%s, schema=%s)", identity, db_type, schema)
+        _executors[cache_key] = sandbox_id
+        logger.info(
+            "dbt executor ready for %s (db_type=%s, database=%s, schema=%s)",
+            cache_key, db_type, target_database or "<connection default>", schema,
+        )
         return sandbox_id, dbt_dir or "", schema
 
 
@@ -327,12 +382,16 @@ async def _read_profile_name(
 
 async def release_executor(identity: str) -> None:
     async with _executor_lock:
-        sandbox_id = _executors.pop(identity, None)
-    if sandbox_id:
-        try:
-            await get_sandbox_runtime().destroy(sandbox_id)
-        except SandboxRuntimeError:
-            pass
+        sandbox_ids = [
+            _executors.pop(key, None) for key in (identity, f"{identity}::dev")
+        ]
+    runtime = get_sandbox_runtime()
+    for sandbox_id in sandbox_ids:
+        if sandbox_id:
+            try:
+                await runtime.destroy(sandbox_id)
+            except SandboxRuntimeError:
+                pass
 
 
 # ── Project sync: agent sandbox -> executor ─────────────────────────────────

@@ -101,7 +101,8 @@ async def _seed_project(runtime, sandbox_id: str) -> None:
         sandbox_id,
         "set -e; "
         'export PATH="/opt/sp-notebook/.venv/bin:$PATH"; '
-        'sudo mkdir -p /workspace && sudo chown "$(id -u):$(id -g)" /workspace; '
+        # Image runs as root without `sudo`; create /workspace directly.
+        "mkdir -p /workspace 2>/dev/null || sudo mkdir -p /workspace; "
         'curl -fsSL "$SP_SNAPSHOT_URL" | tar xz -C /workspace; '
         f"python - <<'SP_EOF'\n{stub}\nSP_EOF",
         env={"SP_SNAPSHOT_URL": snapshot_url},

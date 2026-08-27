@@ -93,8 +93,11 @@ SANDBOX_TOOLS = [
 ]
 IMPROVEMENT_EXTRA_TOOLS = SANDBOX_TOOLS  # historical alias
 # Warehouse-connected dbt via the gateway's credential-holding executor;
-# user chats only, gated by the dbt:execute JWT capability.
+# user chats only, gated by the dbt:execute JWT capability. refresh_mart is the
+# agent's only warehouse WRITE action — rebuild a stale mart into the dev DB.
 DBT_EXECUTE_TOOL = "mcp__signalpilot__dbt_execute"
+REFRESH_MART_TOOL = "mcp__signalpilot__refresh_mart"
+DBT_WRITE_TOOLS = [DBT_EXECUTE_TOOL, REFRESH_MART_TOOL]
 
 # Gateway MCP tools that must not be offered to the ordinary Data Chat agent.
 # analyze_project_db and map_columns can return after they use the governed
@@ -1030,7 +1033,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                             if (is_improvement_run or sandbox_runtime_enabled)
                             else SANDBOX_TOOLS
                         ),
-                        *([] if sandbox_runtime_enabled else [DBT_EXECUTE_TOOL]),
+                        *([] if sandbox_runtime_enabled else DBT_WRITE_TOOLS),
                     ],
                     allowed_tools=(
                         (
@@ -1048,7 +1051,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                             if (is_improvement_run or sandbox_runtime_enabled)
                             else []
                         )
-                        + ([DBT_EXECUTE_TOOL] if sandbox_runtime_enabled else [])
+                        + (DBT_WRITE_TOOLS if sandbox_runtime_enabled else [])
                     ),
                     additional_mcp_servers={
                         "standalone-chat": artifact_server

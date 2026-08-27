@@ -813,6 +813,9 @@ async def execute(*, request: Request) -> StreamingResponse:
     prompt_parts = [_load_prompt("standalone_chat_system.md")]
     if sandbox_runtime_enabled:
         prompt_parts.append(_load_prompt("sandbox_dbt_suffix.md"))
+        # The persistence/resume contract: project + scripts are restored, local
+        # data files (DuckDB, extracts) are not — regenerate them gracefully.
+        prompt_parts.append(_load_prompt("sandbox_resume_suffix.md"))
     if is_improvement_run:
         prompt_parts.append(_load_prompt("improvement_suffix.md"))
     system_prompt = (

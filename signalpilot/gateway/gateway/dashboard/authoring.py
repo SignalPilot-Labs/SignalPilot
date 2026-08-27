@@ -134,7 +134,9 @@ class DashboardAuthoringAgent:
         contract = DashboardAgentDraft.model_json_schema(by_alias=True)
         system = (
             "You are SignalPilot's governed dashboard author. Use only the supplied explores, fields, and metrics. "
-            "Use only KPI, table, bar, line, and area visualizations. Each semantic chart queries one explore. "
+            "Use only KPI, table, bar, line, and area visualizations. Each semantic chart queries one explore. Copy "
+            "exploreName exactly from semantic_context.explores[].name; never invent an explore or use placeholders "
+            "such as <UNKNOWN>. "
             "For every chart, write three distinct pieces of business copy: question is a concise natural-language "
             "question shown at the top left and ending in a question mark; title is a short 2-5 word business label "
             "such as Total Revenue or Net Revenue; description is one useful sentence. For Cartesian charts, begin "
@@ -237,7 +239,9 @@ class DashboardAuthoringAgent:
                     "validation_feedback": (
                         "The server rejected the previous draft. Correct every reported contract or semantic error, "
                         "copy explore and field identifiers exactly from semantic_context, preserve otherwise valid "
-                        f"work, and resubmit the complete {mode} payload.\n{str(exc)[:6000]}"
+                        f"work, and resubmit the complete {mode} payload. Valid exploreName values: "
+                        f"{', '.join(explore.name for explore in context.explores) or 'none'}. Never use <UNKNOWN> "
+                        f"or another placeholder.\n{str(exc)[:6000]}"
                     ),
                 }
                 if rejected_draft is not None:

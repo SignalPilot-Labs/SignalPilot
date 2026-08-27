@@ -28,6 +28,7 @@ from gateway.dashboard.compiler import (
 from gateway.dashboard.confidence import semantic_query_signature
 from gateway.dashboard.domain import DashboardDefinition, FieldTarget, FilterRule, SemanticChartQuery
 from gateway.dashboard.operations import (
+    canonicalize_dashboard_explore_names,
     canonicalize_dashboard_filter_targets,
     has_custom_sql,
     validate_dashboard_semantics,
@@ -673,6 +674,7 @@ async def create_dashboard_authoring_session(body: DashboardAuthoringRequest, st
     try:
         def validate_candidate(candidate):
             candidate_definition = materialize_agent_draft(candidate, base_definition=base_definition)
+            candidate_definition = canonicalize_dashboard_explore_names(candidate_definition, context)
             candidate_definition = canonicalize_dashboard_filter_targets(candidate_definition, context)
             validate_dashboard_semantics(candidate_definition, context)
             validate_time_series_default_windows(candidate_definition, context)
@@ -705,6 +707,7 @@ async def create_dashboard_authoring_session(body: DashboardAuthoringRequest, st
                 definition.model_copy(update={"signalPilot": binding, "charts": charts})
             )
         verified = await _verified_context(store, definition)
+        definition = canonicalize_dashboard_explore_names(definition, verified)
         definition = canonicalize_dashboard_filter_targets(definition, verified)
         validate_dashboard_semantics(definition, verified)
         validate_time_series_default_windows(definition, verified)
@@ -830,6 +833,7 @@ async def continue_dashboard_authoring_session(session_id: str, body: DashboardA
         agent = DashboardAuthoringAgent(api_key=api_key)
         def validate_candidate(candidate):
             candidate_definition = materialize_agent_draft(candidate, base_definition=current_definition)
+            candidate_definition = canonicalize_dashboard_explore_names(candidate_definition, context)
             candidate_definition = canonicalize_dashboard_filter_targets(candidate_definition, context)
             validate_dashboard_semantics(candidate_definition, context)
             validate_time_series_default_windows(candidate_definition, context)
@@ -842,6 +846,7 @@ async def continue_dashboard_authoring_session(session_id: str, body: DashboardA
         )
         definition = materialize_agent_draft(draft, base_definition=current_definition)
         verified = await _verified_context(store, definition)
+        definition = canonicalize_dashboard_explore_names(definition, verified)
         definition = canonicalize_dashboard_filter_targets(definition, verified)
         validate_dashboard_semantics(definition, verified)
         validate_time_series_default_windows(definition, verified)

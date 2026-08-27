@@ -22,6 +22,7 @@ from gateway.dashboard.operations import (
     DashboardTimeSeriesWindowError,
     RenameDashboard,
     apply_dashboard_operations,
+    canonicalize_dashboard_explore_names,
     canonicalize_dashboard_filter_targets,
     validate_dashboard_semantics,
     validate_time_series_default_windows,
@@ -272,6 +273,53 @@ def test_unknown_dashboard_filter_target_still_fails_after_canonicalization() ->
         validate_dashboard_semantics(definition, _orders_context())
 
 
+def test_unknown_filter_explore_is_recovered_from_an_exact_field_id() -> None:
+    payload = _definition_with_filter().model_dump(mode="json", by_alias=True)
+    payload["filters"]["dimensions"][0]["target"]["tableName"] = "<UNKNOWN>"
+    payload["filters"]["dimensions"][0]["tileTargets"] = {
+        "tile-bar": {"tableName": "<UNKNOWN>", "fieldId": "orders.order_date"}
+    }
+
+    canonical = canonicalize_dashboard_filter_targets(
+        DashboardDefinition.model_validate(payload),
+        _orders_context(),
+    )
+
+    rule = canonical.filters.dimensions[0]
+    assert rule.target.tableName == "orders"
+    assert rule.tileTargets is not None
+    assert rule.tileTargets["tile-bar"] is not False
+    assert rule.tileTargets["tile-bar"].tableName == "orders"
+    validate_dashboard_semantics(canonical, _orders_context())
+
+
+def test_unknown_explore_is_recovered_from_exact_unambiguous_field_ids() -> None:
+    payload = _single_bar_definition(drill_dimensions=["orders.customer"]).model_dump(mode="json", by_alias=True)
+    payload["charts"][0]["query"]["exploreName"] = "<UNKNOWN>"
+
+    canonical = canonicalize_dashboard_explore_names(
+        DashboardDefinition.model_validate(payload),
+        _orders_context(),
+    )
+
+    assert canonical.charts[0].query.exploreName == "orders"
+    validate_dashboard_semantics(canonical, _orders_context())
+
+
+def test_unknown_explore_is_not_recovered_from_invented_fields() -> None:
+    payload = _single_bar_definition(drill_dimensions=["orders.customer"]).model_dump(mode="json", by_alias=True)
+    payload["charts"][0]["query"].update({"exploreName": "<UNKNOWN>", "metrics": ["unknown.revenue"]})
+    payload["charts"][0]["visualization"]["config"]["layout"]["yField"] = ["unknown.revenue"]
+    definition = canonicalize_dashboard_explore_names(
+        DashboardDefinition.model_validate(payload),
+        _orders_context(),
+    )
+
+    assert definition.charts[0].query.exploreName == "<UNKNOWN>"
+    with pytest.raises(ValueError, match="Unknown explore: <UNKNOWN>"):
+        validate_dashboard_semantics(definition, _orders_context())
+
+
 def test_time_series_authoring_rejects_an_empty_applicable_date_window() -> None:
     payload = _definition_with_filter().model_dump(mode="json", by_alias=True)
     payload["filters"]["dimensions"][0].update(
@@ -349,6 +397,7 @@ async def test_agent_update_is_forced_through_typed_operations() -> None:
     assert client.request is not None
     assert client.request["tool_choice"] == {"type": "tool", "name": "submit_dashboard_draft"}
     assert "question is a concise natural-language question" in client.request["system"]
+    assert "never invent an explore or use placeholders" in client.request["system"]
     assert "Copy each filter target exactly" in client.request["system"]
     assert "meaningful lower-grain drill hierarchy" in client.request["system"]
     request_payload = json.loads(client.request["messages"][0]["content"])
@@ -540,6 +589,8 @@ async def test_agent_repairs_semantic_validation_failures_before_returning_the_d
     assert len(client.requests) == 2
     repair_payload = json.loads(client.requests[1]["messages"][0]["content"])
     assert "Unknown explore: sales" in repair_payload["validation_feedback"]
+    assert "Valid exploreName values: orders" in repair_payload["validation_feedback"]
+    assert "Never use <UNKNOWN>" in repair_payload["validation_feedback"]
     assert repair_payload["rejected_draft"]["definition"]["charts"][0]["query"]["exploreName"] == "sales"
 
 

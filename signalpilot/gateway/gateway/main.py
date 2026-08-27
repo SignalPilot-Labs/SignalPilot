@@ -501,6 +501,21 @@ async def lifespan(app: FastAPI):
     improvement_schedule_task = asyncio.create_task(_improvement_schedule_loop())
     dbt_map_reaper_task = asyncio.create_task(_dbt_map_reaper_loop())
 
+    async def _repo_mirror_reconcile_startup() -> None:
+        # Heal any GitHub-linked project whose bare mirror is missing (reset
+        # repos volume, failed import clone, container remount) so users never
+        # hit "the production branch is not available". One-shot, best-effort,
+        # slightly delayed so it never slows startup.
+        await asyncio.sleep(15)
+        try:
+            from .git.sync import reconcile_all_repo_mirrors
+
+            await reconcile_all_repo_mirrors()
+        except Exception as e:
+            logger.warning("repo mirror reconcile failed: %s", e)
+
+    repo_reconcile_task = asyncio.create_task(_repo_mirror_reconcile_startup())
+
     # Start MCP session manager if mounted
     mcp_ctx = None
     if _mcp_session_manager is not None:
@@ -557,6 +572,7 @@ async def lifespan(app: FastAPI):
         eval_retention_task.cancel()
         improvement_schedule_task.cancel()
         dbt_map_reaper_task.cancel()
+        repo_reconcile_task.cancel()
         await pool_manager.close_all()
         dek_cache.clear()
         await close_db()

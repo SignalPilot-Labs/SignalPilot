@@ -328,6 +328,15 @@ async def get_repo_link_for_project(
     return result.scalar_one_or_none()
 
 
+async def list_all_active_repo_links(session: AsyncSession) -> list[GatewayGitHubRepoLink]:
+    """Every active repo link across all orgs — used by startup mirror
+    reconciliation to heal missing bare repos wholesale."""
+    result = await session.execute(
+        select(GatewayGitHubRepoLink).where(GatewayGitHubRepoLink.status == "active")
+    )
+    return list(result.scalars().all())
+
+
 async def delete_repo_link(session: AsyncSession, *, org_id: str, link_id: str) -> bool:
     result = await session.execute(
         select(GatewayGitHubRepoLink).where(

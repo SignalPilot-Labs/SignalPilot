@@ -159,10 +159,25 @@ async def evaluate_project_readiness(
     branch = (branch_override or project.default_branch or "main").strip() or "main"
     files, head = _project_tree(project.id, branch)
     if not head:
+        # The bare git mirror lives on an ephemeral volume while the project and
+        # its GitHub link are durable in the DB, so the two can drift and leave a
+        # linked project with no mirror. Self-heal by re-cloning before giving
+        # up, so the project recovers on load instead of dead-ending.
+        from gateway.git.sync import ensure_repo_mirror
+
+        try:
+            if await ensure_repo_mirror(
+                db, org_id=org_id, project_id=project.id, default_branch=branch
+            ):
+                files, head = _project_tree(project.id, branch)
+        except Exception:
+            pass
+    if not head:
         return ProjectReadiness(
             False,
             "branch_unavailable",
-            "The production branch is not available yet.",
+            "The repository could not be synced. Re-sync the project, or reconnect "
+            "the GitHub app if it was removed.",
             None,
             project.connection_name,
             None,

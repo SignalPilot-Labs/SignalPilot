@@ -4,18 +4,22 @@ import base64
 import json
 import os
 import stat
-import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Self
 
+import anyio
 import httpx
 import pytest
+from mcp.types import CallToolRequest, CallToolRequestParams
 from starlette.requests import Request
 
+from signalpilot._config.settings import GLOBAL_SETTINGS
 from signalpilot._server.ai.claude_agent import AgentEvent
 from signalpilot._server.api.endpoints import standalone_chat
+from signalpilot._utils import requests
+from signalpilot._utils.requests import RequestError
 
 
 def test_seeded_analysis_notebooks_keep_run_tokens_out_of_source_and_isolated(
@@ -111,13 +115,15 @@ def _runtime_session(*, dirty: bool = False) -> Any:
     session = SimpleNamespace(
         app_file_manager=SimpleNamespace(
             app=SimpleNamespace(
+                to_py=lambda: "answer = 1",
                 cell_manager=SimpleNamespace(
                     cell_data=lambda: [
                         SimpleNamespace(cell_id=cell_id, code="answer = 1")
                     ]
-                )
+                ),
             )
         ),
+        config_manager=SimpleNamespace(get_config=lambda: {"display": {}}),
         session_view=SimpleNamespace(
             cell_notifications={cell_id: notification}
         ),
@@ -205,8 +211,17 @@ def test_recovery_context_keeps_prior_graph_errors(
 
 
 @pytest.mark.asyncio
-async def test_archive_uses_a_safe_fallback_without_frontend_assets(
+@pytest.mark.parametrize(
+    "export_error",
+    [
+        FileNotFoundError("frontend index missing"),
+        RequestError("network unavailable"),
+    ],
+    ids=["missing-assets", "http-failure"],
+)
+async def test_archive_uses_safe_fallback_when_frontend_export_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
+    export_error: Exception,
 ) -> None:
     scoped_token = "runtime-secret-token"
     cell_id = "cell-a"
@@ -237,7 +252,7 @@ async def test_archive_uses_a_safe_fallback_without_frontend_assets(
 
     class MissingAssetsExporter:
         def export_as_html(self, **_kwargs: Any) -> tuple[str, str]:
-            raise FileNotFoundError("frontend index missing")
+            raise export_error
 
     class FakeResponse:
         def raise_for_status(self) -> None:
@@ -341,7 +356,7 @@ async def test_execute_materializes_the_frozen_project_before_starting_the_agent
         )
 
     class FakeStream:
-        def __enter__(self) -> "FakeStream":
+        def __enter__(self) -> Self:
             return self
 
         def __exit__(self, *_args: object) -> None:
@@ -399,11 +414,212 @@ async def test_execute_materializes_the_frozen_project_before_starting_the_agent
     assert captured["dbt_project_yml"] == "name: test_project\n"
     assert captured["snapshot_auth"] == f"Bearer {token}"
     # Disposable scratch: the checkout is gone once the stream completes.
-    assert not checkout.exists()
+    assert not await anyio.Path(checkout).exists()
 
 
 @pytest.mark.asyncio
-async def test_dirty_notebook_is_reset_and_only_clean_retry_answer_is_emitted(
+async def test_first_turn_complete_artifact_returns_a_proactive_create_proposal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_id = "1dbf5492-81e6-4683-835f-f1785c9cfe78"
+    run_id = "run-first-turn"
+    commit_sha = "b" * 40
+
+    monkeypatch.setenv("SP_CHAT_SCRATCH_ROOT", str(tmp_path / "scratch"))
+
+    async def execution_directory(**_kwargs: Any) -> tuple[Path, bool]:
+        return tmp_path, False
+
+    class CatalogResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "items": [],
+                "next_cursor": None,
+                "catalog_revision": "empty-catalog",
+                "total_reports": 0,
+                "proactive_creation_allowed": True,
+            }
+
+    class CatalogClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def get(self, url: str, **_kwargs: Any) -> CatalogResponse:
+            assert url.endswith(f"/api/chat/runs/{run_id}/report-catalog")
+            return CatalogResponse()
+
+    async def run_agent(_prompt: str, _session_id: object, **kwargs: Any):
+        server = kwargs["additional_mcp_servers"]["standalone-chat"][
+            "instance"
+        ]
+        published = await server.request_handlers[CallToolRequest](
+            CallToolRequest(
+                params=CallToolRequestParams(
+                    name="publish_report",
+                    arguments={
+                        "filename": "first-turn-revenue.html",
+                        "html": "<html><body>Revenue</body></html>",
+                    },
+                )
+            )
+        )
+        assert "REQUIRED BEFORE YOUR FINAL ANSWER" in (
+            published.root.content[0].text
+        )
+        await server.request_handlers[CallToolRequest](
+            CallToolRequest(
+                params=CallToolRequestParams(
+                    name="list_saved_report_catalog",
+                    arguments={},
+                )
+            )
+        )
+        proposed = await server.request_handlers[CallToolRequest](
+            CallToolRequest(
+                params=CallToolRequestParams(
+                    name="propose_report_action",
+                    arguments={
+                        "action": "create",
+                        "artifact_kind": "report",
+                        "artifact_filename": "first-turn-revenue.html",
+                        "title": "Revenue overview",
+                        "reason": "No saved report matches this business question.",
+                    },
+                )
+            )
+        )
+        assert proposed.root.isError is False
+        yield AgentEvent(type="text", content="Revenue is growing.")
+
+    monkeypatch.setattr(
+        standalone_chat, "_execution_project_directory", execution_directory
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", CatalogClient)
+    monkeypatch.setattr(standalone_chat, "run_notebook_agent", run_agent)
+
+    token = _scoped_token(
+        run_id=run_id,
+        project_id=project_id,
+        commit_sha=commit_sha,
+    )
+    response = await standalone_chat.execute(
+        request=_request(
+            {
+                "run_id": run_id,
+                "project_id": project_id,
+                "branch": "main",
+                "connection_name": "production",
+                "commit_sha": commit_sha,
+                "gateway_session_token": token,
+                "prompt": "Build a revenue overview",
+                "new_execution": True,
+            }
+        )
+    )
+    events = [
+        json.loads(line)
+        for line in (
+            b"".join([chunk async for chunk in response.body_iterator])
+        ).splitlines()
+    ]
+
+    final = events[-1]
+    assert final["type"] == "final"
+    assert final["content"] == "Revenue is growing."
+    assert final["report_proposal"]["action"] == "create"
+    assert final["report_proposal"]["catalog_revision"] == "empty-catalog"
+    assert final["report_action_outcome"] == final["report_proposal"]
+    assert final["artifacts"][0]["filename"] == "first-turn-revenue.html"
+
+
+@pytest.mark.asyncio
+async def test_completion_check_is_non_fatal_when_agent_skips_report_decision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = "run-missed-decision"
+    project_id = "1dbf5492-81e6-4683-835f-f1785c9cfe78"
+    commit_sha = "c" * 40
+    collectors: list[Any] = []
+
+    async def execution_directory(**_kwargs: Any) -> tuple[Path, bool]:
+        return tmp_path, False
+
+    def build_server(collector: Any, **_kwargs: Any) -> object:
+        collectors.append(collector)
+        return object()
+
+    async def run_agent(_prompt: str, _session_id: object, **_kwargs: Any):
+        collectors[-1].artifacts.append(
+            {
+                "kind": "report",
+                "filename": "missed.html",
+                "payload": {"html": "<html>Complete</html>"},
+                "provenance": {"result_references": []},
+            }
+        )
+        yield AgentEvent(type="text", content="Completed answer")
+
+    monkeypatch.setenv("SP_CHAT_SCRATCH_ROOT", str(tmp_path / "scratch"))
+    monkeypatch.setattr(
+        standalone_chat, "_execution_project_directory", execution_directory
+    )
+    monkeypatch.setattr(
+        standalone_chat, "build_standalone_chat_mcp_server", build_server
+    )
+    monkeypatch.setattr(standalone_chat, "run_notebook_agent", run_agent)
+    monkeypatch.setattr(
+        standalone_chat, "_project_is_unchanged", lambda *_args: True
+    )
+    monkeypatch.setattr(
+        standalone_chat, "clear_chat_session", lambda *_args, **_kwargs: None
+    )
+
+    response = await standalone_chat.execute(
+        request=_request(
+            {
+                "run_id": run_id,
+                "project_id": project_id,
+                "branch": "main",
+                "connection_name": "production",
+                "commit_sha": commit_sha,
+                "gateway_session_token": _scoped_token(
+                    run_id=run_id,
+                    project_id=project_id,
+                    commit_sha=commit_sha,
+                ),
+                "prompt": "Build a report",
+            }
+        )
+    )
+    events = [
+        json.loads(line)
+        for line in (
+            b"".join([chunk async for chunk in response.body_iterator])
+        ).splitlines()
+    ]
+
+    final = events[-1]
+    assert final["type"] == "final"
+    assert final["content"] == "Completed answer"
+    assert "report_proposal" not in final
+    assert final["report_action_outcome"]["action"] == "no_suggestion"
+    assert final["report_action_outcome"]["source"] == "completion_check"
+    assert final["report_action_outcome"]["catalog_scan_complete"] is False
+
+
+@pytest.mark.asyncio
+async def test_validated_retry_survives_offline_development_archive(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -418,7 +634,7 @@ async def test_dirty_notebook_is_reset_and_only_clean_retry_answer_is_emitted(
     event_sinks: list[Any] = []
     closed: list[str] = []
     cleared: list[str] = []
-    archived: list[str] = []
+    archived: dict[str, Any] = {}
     clean_starts: list[Path] = []
     agent_attempts = 0
 
@@ -490,11 +706,51 @@ async def test_dirty_notebook_is_reset_and_only_clean_retry_answer_is_emitted(
         yield AgentEvent(type="text_delta", content="Accepted streamed text")
         yield AgentEvent(type="text", content="Accepted answer")
 
-    async def archive(**kwargs: Any) -> str:
-        archived.append(kwargs["session_id"])
-        return "archive-clean"
+    class FakeArchiveResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, str]:
+            return {"archive_id": "archive-clean"}
+
+    class FakeArchiveClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def post(self, _url: str, **kwargs: Any) -> FakeArchiveResponse:
+            archived.update(kwargs["json"])
+            return FakeArchiveResponse()
+
+    class OfflineExporter:
+        def export_as_html(self, **_kwargs: Any) -> tuple[str, str]:
+            raise RequestError("network unavailable")
 
     monkeypatch.setenv("SP_CHAT_SCRATCH_ROOT", str(tmp_path / "scratch"))
+    monkeypatch.setattr(GLOBAL_SETTINGS, "DEVELOPMENT_MODE", True)
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda *_args, **_kwargs: pytest.fail(
+            "development archive attempted a network request"
+        ),
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", FakeArchiveClient)
+    monkeypatch.setitem(
+        sys.modules,
+        "signalpilot._server.export.exporter",
+        SimpleNamespace(Exporter=OfflineExporter),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "signalpilot._server.models.export",
+        SimpleNamespace(ExportAsHTMLRequest=lambda **kwargs: kwargs),
+    )
     monkeypatch.setattr(
         standalone_chat, "_execution_project_directory", execution_directory
     )
@@ -521,7 +777,6 @@ async def test_dirty_notebook_is_reset_and_only_clean_retry_answer_is_emitted(
             "kernel-2",
         )[-1],
     )
-    monkeypatch.setattr(standalone_chat, "_archive_analysis_notebook", archive)
     monkeypatch.setattr(
         standalone_chat, "_project_is_unchanged", lambda *_args: True
     )
@@ -559,12 +814,14 @@ async def test_dirty_notebook_is_reset_and_only_clean_retry_answer_is_emitted(
     ]
 
     assert [event["type"] for event in events] == [
+        "text_delta",
         "progress",
         "tool_use",
         "tool_result",
+        "text_delta",
         "final",
     ]
-    assert events[0]["content"] == "Restarting analysis in a clean notebook"
+    assert events[1]["content"] == "Restarting analysis in a clean notebook"
     assert events[-1] == {
         "archive_id": "archive-clean",
         "artifacts": [{"filename": "accepted.csv"}],
@@ -572,10 +829,15 @@ async def test_dirty_notebook_is_reset_and_only_clean_retry_answer_is_emitted(
         "kernel_stopped": True,
         "type": "final",
     }
-    assert "REJECTED LEAK" not in json.dumps(events)
+    # Narration streams live (including from the rejected attempt), but the
+    # accepted answer is built only from the validated attempt's text blocks.
+    assert events[0]["content"] == "REJECTED LEAK"
+    assert "REJECTED LEAK" not in events[-1]["content"]
     assert closed == ["kernel-1", "kernel-2"]
     assert clean_starts == [seeded_paths[0]]
-    assert archived == ["kernel-2"]
+    archived_html = base64.b64decode(archived["html_base64"]).decode()
+    assert "Validated analysis notebook" in archived_html
+    assert "answer = 1" not in archived_html
     assert cleared.count(f"standalone:{run_id}") >= 2
 
 
@@ -696,9 +958,11 @@ async def test_two_dirty_attempts_emit_one_validation_error_and_no_final(
     ]
 
     assert [event["type"] for event in events] == [
+        "text_delta",
         "progress",
         "tool_use",
         "tool_result",
+        "text_delta",
         "error",
     ]
     assert events[-1] == {
@@ -706,8 +970,29 @@ async def test_two_dirty_attempts_emit_one_validation_error_and_no_final(
         "is_error": True,
         "type": "error",
     }
-    assert all(
-        event["type"] not in {"final", "text", "text_delta"}
-        for event in events
-    )
+    # Narration may stream, but a rejected run never emits an accepted answer.
+    assert all(event["type"] not in {"final", "text"} for event in events)
     assert archive_calls == []
+
+
+def test_tree_digest_ignores_generated_tooling_artifacts(tmp_path: Path) -> None:
+    (tmp_path / "models").mkdir()
+    (tmp_path / "models" / "orders.sql").write_text("select 1", encoding="utf-8")
+    (tmp_path / "dbt_project.yml").write_text("name: demo", encoding="utf-8")
+    baseline = standalone_chat._tree_digest(tmp_path)
+
+    # dbt/python tooling side effects during a read-only analysis must not
+    # change the digest — only project source is frozen.
+    (tmp_path / "target").mkdir()
+    (tmp_path / "target" / "manifest.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs" / "dbt.log").write_text("log", encoding="utf-8")
+    (tmp_path / ".user.yml").write_text("id: x", encoding="utf-8")
+    (tmp_path / "models" / "__pycache__").mkdir()
+    (tmp_path / "models" / "__pycache__" / "m.pyc").write_bytes(b"\x00")
+    assert standalone_chat._tree_digest(tmp_path) == baseline
+    assert standalone_chat._project_is_unchanged(tmp_path, baseline)
+
+    # Real source edits still trip the check.
+    (tmp_path / "models" / "orders.sql").write_text("select 2", encoding="utf-8")
+    assert not standalone_chat._project_is_unchanged(tmp_path, baseline)

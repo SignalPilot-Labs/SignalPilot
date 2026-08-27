@@ -38,7 +38,6 @@ dependencies = [
     "pyarrow>=17.0.0",
     # AWS SDK — BYOK KMS + connector IAM auth (Redshift/RDS)
     "boto3>=1.34.0",
-    # Kubernetes orchestrator (K3s locally, EKS in production)
     # Vercel Sandbox runtime for automated improvement runs
     "vercel>=0.9.0,<1",
     "alembic>=1.13",

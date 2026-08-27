@@ -1,12 +1,9 @@
-"""Gateway public identity settings.
+"""Public gateway URL settings (relocated from the removed config/k8s.py).
 
-The vetted public gateway URL/port every runtime (Vercel notebook sandbox,
-eval sandbox, chat worker) uses to reach back, plus the session JWT TTL.
-Never derived from a request Host header.
-
-History: this lived in config/k8s.py alongside the Kubernetes eval-orchestrator
-settings; those were deleted with the K8s estate (Runtime v2 retired notebook
-pods, and eval workloads moved to Vercel sandboxes / local Docker).
+Notebook Runtime v2 removed the Kubernetes notebook path entirely; what
+survives here is the vetted public gateway URL/port that every runtime —
+notebook sandbox, eval sandbox, MCP client — uses to reach back, plus the
+session-JWT TTL those runtimes are minted with.
 """
 
 from __future__ import annotations
@@ -21,7 +18,7 @@ from ._base import _GatewaySettingsBase
 _LOCAL_GATEWAY_URL_DEFAULT = "http://gateway:3300"
 
 
-class GatewayPublicSettings(_GatewaySettingsBase):
+class GatewaySettings(_GatewaySettingsBase):
     sp_session_jwt_ttl_seconds: int = Field(28800, alias="SP_SESSION_JWT_TTL_SECONDS")
     # Gateway URL as seen by runtimes — must be a vetted value, never derived
     # from request Host. In local mode defaults to the compose-network address.
@@ -53,5 +50,5 @@ class GatewayPublicSettings(_GatewaySettingsBase):
 
 
 @lru_cache(maxsize=1)
-def get_gateway_public_settings() -> GatewayPublicSettings:
-    return GatewayPublicSettings()
+def get_gateway_settings() -> GatewaySettings:
+    return GatewaySettings()

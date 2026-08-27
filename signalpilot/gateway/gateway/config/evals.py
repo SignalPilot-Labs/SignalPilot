@@ -44,8 +44,9 @@ class EvalRunSettings(_GatewaySettingsBase):
 
     runner_image: str = Field("", alias="SP_EVAL_RUNNER_IMAGE")
     setup_image: str = Field("", alias="SP_EVAL_SETUP_IMAGE")
-    # "" = docker locally; cloud REQUIRES "vercel" (ephemeral Vercel sandbox
-    # VMs, needs VERCEL_* credentials) — there is no cluster backend anymore.
+    # "" = docker in local mode; unusable in cloud mode (the run fails with a
+    # clear error). "vercel" = ephemeral Vercel sandbox VMs (needs VERCEL_*
+    # credentials) — required in cloud mode. There is no cluster backend anymore.
     execution_backend: str = Field("", alias="SP_EVAL_EXECUTION_BACKEND")
     docker_socket: str = Field("/var/run/docker.sock", alias="SP_EVAL_DOCKER_SOCKET")
     docker_network: str = Field("signalpilot_eval_runtime", alias="SP_EVAL_DOCKER_NETWORK")

@@ -136,9 +136,6 @@ See third_party_licenses.txt for license texts.
 ├── package.json:  BSD-3-Clause
 └── readme files: BSD
 
-@signalpilot-team/frontend@0.0.0-placeholder [license(s): Apache-2.0]
-└── package.json:  Apache-2.0
-
 @signalpilot-team/sp-api@0.1.0 [license(s): Apache-2.0]
 └── package.json:  Apache-2.0
 
@@ -590,4 +587,3 @@ lsp@0.0.0 [license(s): Apache-2.0]
 └── package.json:  Apache-2.0
 
 LICENSES: Apache-2.0, https://docs.github.com/en/site-policy/github-terms/github-terms-for-additional-products-and-features
-

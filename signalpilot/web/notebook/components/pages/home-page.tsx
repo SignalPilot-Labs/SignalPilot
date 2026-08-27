@@ -3,6 +3,7 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   ChevronsDownUpIcon,
+  BookTextIcon,
   ClockIcon,
   ExternalLinkIcon,
   PlayCircleIcon,

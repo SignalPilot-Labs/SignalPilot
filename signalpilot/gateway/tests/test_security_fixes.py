@@ -870,7 +870,6 @@ def _set_cloud_base(monkeypatch, **overrides) -> None:
     # Ensure vars that should be absent are absent
     monkeypatch.delenv("SP_NOTEBOOK_DIRECT_URL", raising=False)
     monkeypatch.delenv("SP_DISABLE_SANDBOX", raising=False)
-    monkeypatch.delenv("SP_NOTEBOOK_NETWORK_POLICY_CLOUD_ACK", raising=False)
 
 
 class TestL1ClerkAudienceCloud:
@@ -911,7 +910,7 @@ class TestL1ClerkAudienceCloud:
         assert_cloud_hardening_intact()
 
 
-# ─── I-5: SP_NOTEBOOK_NETWORK_POLICY=false warns in cloud mode ───────────────
+# ─── L-6: org_id filter on session mutation helpers ──────────────────────────
 
 
 class TestL6SessionMutationsOrgFilter:

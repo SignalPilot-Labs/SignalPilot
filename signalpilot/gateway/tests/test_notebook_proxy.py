@@ -256,7 +256,7 @@ class TestNotebookSessionInternal:
         assert result is None
 
 
-# Verify the orchestrator pod command.
+# Verify the runtime boot command.
 
 
 class TestLaunchCredentialDelivery:
@@ -285,6 +285,49 @@ class TestLaunchCredentialDelivery:
         assert "--token-password-file" in command
         # The token itself must never appear in argv (process lists are readable).
         assert "pod-notebook-token" not in command
+
+    @pytest.mark.asyncio
+    async def test_reap_orphans_spares_launching_sandboxes(self, monkeypatch):
+        """A sandbox mid-launch has tags but no session row yet; the reaper
+        must not destroy it before the launch grace window elapses."""
+        import time as _time
+
+        from gateway.config.notebooks import NotebookSettings
+        from gateway.notebooks.backends import VercelNotebookBackend
+        from gateway.sandbox_runtime.base import SandboxInfo
+
+        now = _time.time()
+
+        class FakeRuntime:
+            def __init__(self):
+                self.destroyed = []
+
+            async def list(self, *, tags=None):
+                return [
+                    SandboxInfo("young", "running", created_at_epoch=now - 30),
+                    SandboxInfo("old-orphan", "running", created_at_epoch=now - 7200),
+                    SandboxInfo("kept", "running", created_at_epoch=now - 7200),
+                    SandboxInfo("unknown-age", "running"),
+                ]
+
+            async def destroy(self, sandbox_id):
+                self.destroyed.append(sandbox_id)
+
+        monkeypatch.setenv("SP_NOTEBOOK_VERCEL_IMAGE", "reg/img@sha256:" + "0" * 64)
+        runtime = FakeRuntime()
+        backend = VercelNotebookBackend(NotebookSettings(), runtime=runtime)
+        reaped = await backend.reap_orphans({"kept"})
+        assert reaped == 2
+        assert sorted(runtime.destroyed) == ["old-orphan", "unknown-age"]
+
+    def test_boot_command_works_without_sudo(self):
+        """The custom notebook image has no sudo and a writable /workspace;
+        sudo is only the fallback for stock sandbox images."""
+        from gateway.notebooks.backends import _boot_command
+
+        command = _boot_command(self._launch_request())
+        assert "{ mkdir -p /workspace && test -w /workspace ; }" in command
+        assert "|| { sudo mkdir -p /workspace" in command
 
     def test_boot_command_includes_base_url(self):
         from gateway.notebooks.backends import _boot_command

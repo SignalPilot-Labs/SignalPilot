@@ -167,9 +167,8 @@ def discover() -> tuple[list[RouteSpec], list[RouteSpec]]:
     env = dict(os.environ)
     env |= {
         "SP_DEPLOYMENT_MODE": "cloud",
-        # Cloud K8s settings are validated when the module is imported, even
-        # though discovery never launches a pod. Digest-pinned by requirement.
-        "SP_NOTEBOOK_IMAGE": "registry.invalid/notebook@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        # Cloud gateway settings are validated when the module is imported,
+        # even though discovery never launches a runtime.
         "SP_PUBLIC_GATEWAY_URL": "https://gateway.invalid",
         "CLERK_PUBLISHABLE_KEY": f"pk_test_{dummy_domain}",
         "PYTHONPATH": str(Path(__file__).resolve().parents[2]),

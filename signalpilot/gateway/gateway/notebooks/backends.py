@@ -32,7 +32,8 @@ logger = logging.getLogger(__name__)
 
 NOTEBOOK_PORT = 2718
 NOTEBOOK_SANDBOX_TAG = {"sp-purpose": "notebook"}
-_TOKEN_FILE = "/tmp/sp-notebook-token"
+# This path exists only inside the isolated notebook sandbox.
+_TOKEN_FILE = "/tmp/sp-notebook-token"  # nosec B108
 # Tight poll: the exec round trip itself takes ~300ms, and a cold server
 # boots in ~2s — a 2s sleep added up to 2s of pure wait to every launch.
 _HEALTH_POLL_SECONDS = 0.5

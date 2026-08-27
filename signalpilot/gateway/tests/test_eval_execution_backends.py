@@ -1,20 +1,17 @@
 """Tests for the eval execution-backend seam (gateway/evals/backends.py).
 
-Covers backend selection (cloud never touches the Docker socket), every pod
-hardening item, and the full mocked-K8s pod lifecycle including timeout and
-failure paths.
+Covers backend selection (cloud never touches the Docker socket) and the
+Docker backend's hardening.
 """
 
 from __future__ import annotations
 
-import base64
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from gateway.config.evals import EvalRunSettings
 from gateway.evals.backends import (
-    TIMED_OUT,
     ContainerRun,
     DockerBackend,
     get_execution_backend,
@@ -78,8 +75,8 @@ class TestBackendSelection:
         backend = get_execution_backend(_settings(), org_id="org-1")
         assert isinstance(backend, DockerBackend)
 
-    def test_cloud_mode_without_vercel_refuses(self, monkeypatch):
-        """The Kubernetes backend is retired: cloud requires vercel explicitly."""
+    def test_cloud_mode_without_vercel_backend_raises(self, monkeypatch):
+        """The Kubernetes eval backend was removed; cloud requires vercel."""
         monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
         with pytest.raises(RuntimeError, match="SP_EVAL_EXECUTION_BACKEND=vercel"):
             get_execution_backend(_settings(), org_id="org-1")
@@ -88,10 +85,8 @@ class TestBackendSelection:
         """Verify that cloud mode does not construct a Unix socket transport."""
         monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
         with patch("httpx.AsyncHTTPTransport") as transport:
-            try:
+            with pytest.raises(RuntimeError):
                 get_execution_backend(_settings(), org_id="org-1")
-            except RuntimeError:
-                pass  # cloud without vercel refuses — the point is no socket
         transport.assert_not_called()
 
     def test_local_mode_does_construct_a_docker_transport(self, monkeypatch):
@@ -100,6 +95,9 @@ class TestBackendSelection:
             get_execution_backend(_settings(), org_id="org-1")
         transport.assert_called_once()
         assert transport.call_args[1]["uds"] == "/var/run/docker.sock"
+
+
+# Verify Docker backend security controls.
 
 
 class TestDockerBackendHardened:
@@ -282,5 +280,3 @@ class TestRunnerSpecs:
         cmd = spec.command[-1]
         assert "git clone" in cmd
         assert "python3" in cmd  # .py scripts run under python3
-
-

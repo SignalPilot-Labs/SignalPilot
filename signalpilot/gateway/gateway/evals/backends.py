@@ -5,19 +5,17 @@ One seam, two implementations. `runner.py` describes a short-lived container
 not know where that ran.
 
     local mode  -> DockerBackend  (host Docker Engine API over the unix socket)
-    cloud mode  -> VercelBackend  (ephemeral Vercel sandbox VM; required)
+    cloud mode  -> VercelBackend  (ephemeral Vercel sandbox VMs; SP_EVAL_EXECUTION_BACKEND=vercel)
 
 In cloud mode the Docker path is unreachable: `get_execution_backend` raises
 rather than falling back, so a misconfiguration can never silently hand
-eval workloads the host daemon. (The Kubernetes backend was retired with the
-EKS estate; eval workloads no longer run on cluster pods.)
+eval workloads the host daemon.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -42,11 +40,11 @@ class ContainerRun:
     """One short-lived container: what to run and what it may consume.
 
     `secret_env` carries credentials (Anthropic tokens, the per-run MCP API key
-    embedded in the MCP config). Backends must keep those out of anything an
-    operator can read back.
+    embedded in the MCP config). Backends must keep those out of any spec an
+    operator can read back from the provider API.
 
     `binds` and `extra_network` are Docker-only host affordances used by the
-    state-setup path; other backends refuse them rather than silently
+    state-setup path; the Vercel backend refuses them rather than silently
     dropping the mount a setup script depends on.
 
     `on_start` fires once the workload exists and carries its identity
@@ -173,18 +171,11 @@ class DockerBackend:
             await docker.delete(f"{_DOCKER_API}/containers/{cid}", params={"force": "1"})
 
 
-# Kubernetes.
+# Vercel.
 
-# Everything the runner script writes goes to one of these emptyDirs, so the
-# image's root filesystem can stay read-only: /work is the claude CLI's project
-# dir (.mcp.json, .claude/settings.local.json) and doubles as HOME, /tmp is
-# scratch for node and the CLI, /repo is where a setup script's `git clone`
-# lands (unused by question pods, and an empty dir costs nothing there).
-_WORK_DIR = "/work"
-_TMP_DIR = "/tmp"  # nosec B108 - This path is a mounted container directory.
-_REPO_DIR = "/repo"
-
-
+# Prepares a fresh Vercel sandbox for the runner script: the script assumes
+# /work exists and `claude` is on PATH — both baked into the runner image on
+# the container backends, neither present in a stock sandbox.
 _VERCEL_BOOTSTRAP = (
     "sudo mkdir -p /work && sudo chown \"$(id -u):$(id -g)\" /work && "
     "command -v claude >/dev/null 2>&1 || sudo npm install -g @anthropic-ai/claude-code"
@@ -196,7 +187,8 @@ _VERCEL_MAX_LIFETIME = 2700
 _VERCEL_LIFETIME_HEADROOM = 300
 # The run's combined output is tee'd here inside the sandbox so the panel can
 # poll a live tail (exec only returns output when the command finishes).
-_VERCEL_LOG_PATH = "/tmp/sp-eval-output.log"
+# This is an isolated provider sandbox path, not a shared host temp file.
+_VERCEL_LOG_PATH = "/tmp/sp-eval-output.log"  # nosec B108
 
 
 class VercelBackend:
@@ -303,21 +295,16 @@ class VercelBackend:
             await runtime.destroy(sandbox_id)
 
 
-# Reaper.
-
-# Terminal pods linger this long so the sandbox panel can still show their
-# outcome, then they are removed. The run path deletes its own pod in a
-# finally block; this only catches pods stranded by a gateway crash/restart
-# mid-run — bare pods have no TTL, so without it they live forever.
+# Selection.
 
 
 def get_execution_backend(settings: EvalRunSettings, *, org_id: str) -> ExecutionBackend:
     """Pick the backend for the current deployment mode.
 
     SP_EVAL_EXECUTION_BACKEND=vercel opts eval workloads onto ephemeral Vercel
-    sandbox VMs in any mode. Otherwise cloud never reaches DockerBackend: a
-    cluster this gateway cannot talk to is a failed run, not a reason to hand
-    untrusted eval workloads the host daemon.
+    sandbox VMs in any mode. Cloud mode never falls back to DockerBackend: a
+    misconfigured backend is a failed run, not a reason to hand untrusted eval
+    workloads the host daemon.
     """
     from ..runtime.mode import is_cloud_mode
 
@@ -325,8 +312,7 @@ def get_execution_backend(settings: EvalRunSettings, *, org_id: str) -> Executio
         return VercelBackend(settings, org_id=org_id)
     if is_cloud_mode():
         raise RuntimeError(
-            "Cloud mode requires SP_EVAL_EXECUTION_BACKEND=vercel — the "
-            "Kubernetes eval backend was retired with the EKS estate, and "
-            "cloud never hands eval workloads the host Docker daemon."
+            "Eval execution backend not configured for cloud mode: set "
+            "SP_EVAL_EXECUTION_BACKEND=vercel (the Kubernetes eval backend was removed)."
         )
     return DockerBackend(settings)

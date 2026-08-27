@@ -3,7 +3,7 @@
 Covers selection via SP_EVAL_EXECUTION_BACKEND, credential gating, the
 bootstrap/exec/destroy lifecycle against a fake runtime, secret handling
 (exec env only, never the creation spec), timeout mapping, and the
-bind-mount refusal shared with the Kubernetes backend.
+bind-mount refusal.
 """
 
 from __future__ import annotations

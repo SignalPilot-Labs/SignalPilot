@@ -201,12 +201,12 @@ class TestGatewayUrlFromConfig:
     async def test_runtime_env_uses_config_url_not_request_host(self, monkeypatch):
         from unittest.mock import AsyncMock, MagicMock
 
-        from gateway.config.gateway_public import GatewayPublicSettings
+        from gateway.config.gateway import GatewaySettings
         from gateway.notebooks import session_service
 
-        fake_settings = MagicMock(spec=GatewayPublicSettings)
+        fake_settings = MagicMock(spec=GatewaySettings)
         fake_settings.sp_public_gateway_url = "http://configured-gateway:3300"
-        monkeypatch.setattr(session_service, "get_gateway_public_settings", lambda: fake_settings)
+        monkeypatch.setattr(session_service, "get_gateway_settings", lambda: fake_settings)
         monkeypatch.delenv("SP_WEB_URL", raising=False)
         monkeypatch.delenv("SIGNALPILOT_WEB_URL", raising=False)
         monkeypatch.setattr(

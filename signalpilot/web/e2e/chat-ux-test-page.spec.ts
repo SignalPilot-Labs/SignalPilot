@@ -75,6 +75,28 @@ test.describe("chat UX test harness", () => {
     await expect(groups.nth(1)).toContainText("Published a chart");
   });
 
+  test("expands charts and reports in a fullscreen viewer", async ({
+    page,
+  }) => {
+    await page.goto(at(21_200));
+    const expandButtons = page.getByTestId("artifact-expand");
+    // One for the Vega chart, one for the HTML report.
+    await expect(expandButtons).toHaveCount(2);
+    await expandButtons.first().click();
+    const lightbox = page.getByTestId("artifact-lightbox");
+    await expect(lightbox).toBeVisible();
+    await expect(lightbox).toContainText("q3_growth_by_region.vl.json");
+    await page.keyboard.press("Escape");
+    await expect(lightbox).not.toBeVisible();
+    await expandButtons.nth(1).click();
+    await expect(lightbox).toBeVisible();
+    await expect(
+      lightbox.locator("iframe[title*='q3_regional_review']"),
+    ).toBeVisible();
+    await page.getByLabel("Close viewer").click();
+    await expect(lightbox).not.toBeVisible();
+  });
+
   test("replay controls scrub the run deterministically", async ({ page }) => {
     await page.goto(at(0));
     await expect(page.getByTestId("chat-test-scrub")).toBeVisible();

@@ -6,13 +6,13 @@ import { RefreshCw, Search, X } from "lucide-react";
 import { useReports, invalidateReports } from "~/lib/hooks/use-gateway-data";
 import { PageHeader } from "~/components/ui/page-header";
 import { ReportList, ReportViewer } from "~/components/reports/report-view";
+import { ChatReportLibrary } from "~/components/reports/chat-report-library";
 import "../knowledge/knowledge.css";
 
-function ReportsPageInner() {
-  const searchParams = useSearchParams();
+function LegacyReportsPage({ reportId }: { reportId: string }) {
   // Selection is local state; the address bar is updated via history.replaceState
   // (no Next navigation) so deep-links work without re-render/Suspense churn.
-  const [selectedId, setSelectedId] = useState<string | null>(() => searchParams.get("report"));
+  const [selectedId, setSelectedId] = useState<string | null>(reportId);
   const [searchQ, setSearchQ] = useState("");
 
   const { data: reports, isLoading } = useReports();
@@ -67,6 +67,18 @@ function ReportsPageInner() {
         </div>
       </div>
     </div>
+  );
+}
+
+function ReportsPageInner() {
+  const searchParams = useSearchParams();
+  const legacyReportId = searchParams.get("report");
+  // Existing Notion/MCP links keep their isolated compatibility viewer. The
+  // default route is the Data Chat artifact and saved-report library.
+  return legacyReportId ? (
+    <LegacyReportsPage reportId={legacyReportId} />
+  ) : (
+    <ChatReportLibrary />
   );
 }
 

@@ -45,11 +45,11 @@ class TestCloneUrlHostHeader:
     async def test_clone_url_ignores_spoofed_host_in_cloud_mode(self, monkeypatch) -> None:
         """Cloud mode: clone URL uses configured gateway URL; Host header is ignored."""
         from gateway.api.workspace_projects import get_clone_url
-        from gateway.config.gateway_public import GatewayPublicSettings
+        from gateway.config.gateway import GatewaySettings
 
         monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
 
-        fake_settings = MagicMock(spec=GatewayPublicSettings)
+        fake_settings = MagicMock(spec=GatewaySettings)
         fake_settings.sp_public_gateway_url = "https://configured-gw.example.com"
 
         fake_store = MagicMock()
@@ -57,7 +57,7 @@ class TestCloneUrlHostHeader:
 
         request = _make_request(host="attacker.evil", scheme="https")
 
-        with patch("gateway.api.workspace_projects.get_gateway_public_settings", return_value=fake_settings), \
+        with patch("gateway.api.workspace_projects.get_gateway_settings", return_value=fake_settings), \
              patch("gateway.api.workspace_projects.is_cloud_mode", return_value=True), \
              patch("gateway.git.repos.repo_exists", return_value=True):
             result = await get_clone_url(
@@ -73,11 +73,11 @@ class TestCloneUrlHostHeader:
     async def test_clone_url_uses_host_header_in_local_mode_with_default(self, monkeypatch) -> None:
         """Local mode + compose default: clone URL falls back to inbound Host header."""
         from gateway.api.workspace_projects import get_clone_url
-        from gateway.config.gateway_public import _LOCAL_GATEWAY_URL_DEFAULT, GatewayPublicSettings
+        from gateway.config.gateway import _LOCAL_GATEWAY_URL_DEFAULT, GatewaySettings
 
         monkeypatch.setenv("SP_DEPLOYMENT_MODE", "local")
 
-        fake_settings = MagicMock(spec=GatewayPublicSettings)
+        fake_settings = MagicMock(spec=GatewaySettings)
         # Simulate the local default — should trigger Host header fallback
         fake_settings.sp_public_gateway_url = _LOCAL_GATEWAY_URL_DEFAULT
 
@@ -86,7 +86,7 @@ class TestCloneUrlHostHeader:
 
         request = _make_request(host="localhost:12345", scheme="http")
 
-        with patch("gateway.api.workspace_projects.get_gateway_public_settings", return_value=fake_settings), \
+        with patch("gateway.api.workspace_projects.get_gateway_settings", return_value=fake_settings), \
              patch("gateway.api.workspace_projects.is_cloud_mode", return_value=False), \
              patch("gateway.git.repos.repo_exists", return_value=True):
             result = await get_clone_url(
@@ -101,11 +101,11 @@ class TestCloneUrlHostHeader:
     async def test_clone_url_uses_host_header_in_local_mode_with_loopback_public_url(self, monkeypatch) -> None:
         """Local Compose: browser public URL is loopback, but notebook clone URL uses gateway host."""
         from gateway.api.workspace_projects import get_clone_url
-        from gateway.config.gateway_public import GatewayPublicSettings
+        from gateway.config.gateway import GatewaySettings
 
         monkeypatch.setenv("SP_DEPLOYMENT_MODE", "local")
 
-        fake_settings = MagicMock(spec=GatewayPublicSettings)
+        fake_settings = MagicMock(spec=GatewaySettings)
         fake_settings.sp_public_gateway_url = "http://localhost:3300"
 
         fake_store = MagicMock()
@@ -113,7 +113,7 @@ class TestCloneUrlHostHeader:
 
         request = _make_request(host="gateway:3300", scheme="http")
 
-        with patch("gateway.api.workspace_projects.get_gateway_public_settings", return_value=fake_settings), \
+        with patch("gateway.api.workspace_projects.get_gateway_settings", return_value=fake_settings), \
              patch("gateway.api.workspace_projects.is_cloud_mode", return_value=False), \
              patch("gateway.git.repos.repo_exists", return_value=True):
             result = await get_clone_url(

@@ -132,47 +132,9 @@ async def _seed_run(factory, org_id: str, run_id: str, *, pod: str, task_id: str
             run_id=run_id,
             task_id=task_id,
             status="running",
-            sandbox={"backend": "kubernetes", "name": pod, "namespace": f"sp-nb-{org_id}"},
+            sandbox={"backend": "vercel", "name": pod, "namespace": ""},
         )
         await evals_store.update_run(session, org_id=org_id, run_id=run_id, status="running")
-
-
-def _pod(name: str, *, phase: str = "Running", waiting: str = "", node: str = "ip-10-0-1-7") -> dict:
-    state: dict = {"running": {"started_at": "2026-01-01T00:00:11+00:00"}}
-    if waiting:
-        state = {"waiting": {"reason": waiting, "message": f"pulling with {OAUTH_TOKEN}"}}
-    return {
-        "metadata": {
-            "name": name,
-            "namespace": "sp-nb-org",
-            "labels": {
-                "signalpilot.ai/eval": "1",
-                "signalpilot.ai/eval-run": RUN_A,
-                "signalpilot.ai/eval-question": "t1-fan-out",
-            },
-            "creation_timestamp": "2026-01-01T00:00:00+00:00",
-        },
-        "spec": {
-            "node_name": node,
-            # The real pod spec carries these; the panel must never echo them back.
-            "containers": [
-                {
-                    "name": "eval",
-                    "env": [
-                        {"name": "SP_MCP_JSON_B64", "value": MCP_KEY_B64},
-                        {"name": "ANTHROPIC_API_KEY", "value": ANTHROPIC_KEY},
-                    ],
-                }
-            ],
-        },
-        "status": {
-            "phase": phase,
-            "start_time": "2026-01-01T00:00:05+00:00",
-            "container_statuses": [
-                {"name": "eval", "ready": phase == "Running" and not waiting, "restart_count": 1, "state": state}
-            ],
-        },
-    }
 
 
 def _patch_owners(monkeypatch, owners: dict[str, dict] | None = None) -> None:
@@ -312,34 +274,17 @@ class TestRedaction:
 
 
 class TestInventory:
-
-
-
-
-
     def test_view_requires_an_org(self) -> None:
         with pytest.raises(ValueError, match="org_id"):
             sandboxes.DockerSandboxView(EvalRunSettings(), org_id="")
+        with pytest.raises(ValueError, match="org_id"):
+            sandboxes.VercelSandboxView(EvalRunSettings(), org_id="")
 
 
 # Verify events.
 
 
-def _event(reason: str, message: str, *, type_: str = "Warning") -> dict:
-    return {
-        "type": type_,
-        "reason": reason,
-        "message": message,
-        "count": 3,
-        "first_timestamp": "2026-01-01T00:00:00+00:00",
-        "last_timestamp": "2026-01-01T00:00:30+00:00",
-        "source": {"component": "kubelet"},
-    }
-
-
 class TestEvents:
-
-
     async def test_docker_says_events_are_unsupported_rather_than_faking_them(self) -> None:
         view = sandboxes.DockerSandboxView(EvalRunSettings(), org_id="org-a")
         try:
@@ -354,7 +299,6 @@ class TestEvents:
 
 
 class TestCrossOrgIsolation:
-
     async def test_sandbox_index_is_per_org(self, db) -> None:
         await _seed_run(db, "org-a", RUN_A, pod=POD_A)
         await _seed_run(db, "org-b", RUN_B, pod=POD_B)
@@ -394,7 +338,7 @@ class TestCrossOrgIsolation:
         class _View:
             async def inventory(self):
                 return {
-                    "backend": "kubernetes",
+                    "backend": "vercel",
                     "live": True,
                     "sandboxes": [],
                     "namespace": "",
@@ -427,8 +371,6 @@ class TestNoSecretLeakage:
     def _assert_clean(self, body: str) -> None:
         for secret in self._SECRETS:
             assert secret not in body, f"leaked {secret[:12]}… in response"
-
-
 
     def test_log_stream_is_clean(self) -> None:
 
@@ -514,9 +456,6 @@ class TestLogStream:
         assert resp.status_code == 429
         assert resp.headers.get("Retry-After") == "15"
 
-
-
-
     async def test_docker_stream_refuses_a_container_this_org_does_not_own(self, monkeypatch) -> None:
         async def fake_run_exists(org_id: str, run_id: str) -> bool:
             return False  # org-b owns nothing
@@ -536,26 +475,6 @@ class TestLogStream:
 class _LockedSemaphore:
     def locked(self) -> bool:
         return True
-
-
-class _FakeLogResponse:
-    """Stands in for the aiohttp response kubernetes_asyncio returns with
-    _preload_content=False."""
-
-    def __init__(self, chunks: list[bytes]) -> None:
-        self._chunks = chunks
-        self.released = False
-        self.content = self
-
-    def iter_chunked(self, _size: int):
-        async def gen():
-            for chunk in self._chunks:
-                yield chunk
-
-        return gen()
-
-    def release(self) -> None:
-        self.released = True
 
 
 # Verify run progress.
@@ -610,7 +529,7 @@ class TestRunnerMarkers:
             timeout_seconds=1,
             on_start=seen.append,
         )
-        _notify_start(spec, {"backend": "kubernetes", "name": POD_A, "namespace": "sp-nb-org"})
+        _notify_start(spec, {"backend": "vercel", "name": POD_A, "namespace": ""})
         assert seen[0]["name"] == POD_A
         assert seen[0]["started_at"]
 

@@ -9,10 +9,12 @@ import {
   Copy,
   FileChartColumn,
   Loader2,
+  Maximize2,
   MessageSquarePlus,
   MoreHorizontal,
   PanelLeft,
   Play,
+  Save,
   Share2,
   Sparkles,
   Table2,
@@ -37,6 +39,7 @@ import useSWR, { useSWRConfig } from "swr";
 import type { VisualizationSpec } from "vega-embed";
 import {
   archiveStandaloneConversation,
+  approveChatReportSuggestion,
   cancelStandaloneRun,
   clarifyStandaloneRun,
   createStandaloneConversation,
@@ -47,8 +50,10 @@ import {
   getStandaloneChatBootstrap,
   getStandaloneChatProjectReadiness,
   getStandaloneConversation,
+  getSavedChatReport,
   listStandaloneConversations,
   openStandaloneNotebookArchive,
+  promoteChatArtifact,
   renameStandaloneConversation,
   retryStandaloneRun,
   revokeStandaloneConversationShare,
@@ -61,7 +66,10 @@ import {
   type StandaloneChatRunStatus,
   type StandaloneConversation,
   type StandaloneConversationDetail,
+  type ChatReportMention,
+  type ChatReportSuggestion,
 } from "~/lib/api";
+import { ArtifactLightbox } from "~/components/chat/artifact-lightbox";
 import { StandaloneArtifactContext } from "~/components/chat/standalone-artifact-context";
 import { StandaloneChatComposer } from "~/components/chat/standalone-chat-composer";
 import { ProjectChip, ProjectPicker } from "~/components/chat/project-picker";
@@ -98,6 +106,9 @@ type ChatUiContextValue = {
   artifacts: StandaloneChatArtifact[];
   onStop: (runId: string) => Promise<void>;
   onRetry: (runId: string) => Promise<void>;
+  onApproveReportSuggestion: (
+    messageId: string,
+  ) => Promise<{ report_id: string }>;
 };
 
 export const ChatUiContext = createContext<ChatUiContextValue | null>(null);
@@ -193,6 +204,10 @@ export type ArtifactPreviewData = Pick<
   | "assumptions"
   | "exclusions"
   | "caveats"
+  | "saved_report_id"
+  | "saved_report_version_id"
+  | "saved_report_title"
+  | "report_action"
   | "created_at"
   | "download_formats"
 >;
@@ -211,6 +226,8 @@ function RuntimeChartPreview({
   filename: string;
 }) {
   const [url, setUrl] = useState<string | null>(null);
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [zoomed, setZoomed] = useState(false);
   useEffect(() => {
     let active = true;
     let objectUrl: string | null = null;
@@ -226,11 +243,43 @@ function RuntimeChartPreview({
     };
   }, [artifactId]);
   return url ? (
-    <img
-      src={url}
-      alt={filename}
-      className="mx-auto max-h-[520px] max-w-full"
-    />
+    <>
+      <button
+        type="button"
+        title="Click to view full size"
+        aria-label={`View ${filename} full size`}
+        onClick={() => {
+          setZoomed(false);
+          setViewerOpen(true);
+        }}
+        className="group relative mx-auto block cursor-zoom-in"
+      >
+        <img
+          src={url}
+          alt={filename}
+          className="mx-auto max-h-[520px] max-w-full"
+        />
+        <span className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)]/90 text-[var(--color-text-muted)] opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
+          <Maximize2 className="h-3.5 w-3.5" />
+        </span>
+      </button>
+      <ArtifactLightbox
+        open={viewerOpen}
+        title={filename}
+        onClose={() => setViewerOpen(false)}
+      >
+        <img
+          src={url}
+          alt={filename}
+          onClick={() => setZoomed((value) => !value)}
+          className={
+            zoomed
+              ? "max-w-none cursor-zoom-out"
+              : "max-h-full max-w-full cursor-zoom-in object-contain"
+          }
+        />
+      </ArtifactLightbox>
+    </>
   ) : (
     <div className="flex min-h-64 items-center justify-center text-xs text-[var(--color-text-dim)]">
       Loading chart preview…
@@ -238,16 +287,42 @@ function RuntimeChartPreview({
   );
 }
 
+/** Header button that opens an artifact in the fullscreen viewer. */
+function ExpandButton({
+  label,
+  onClick,
+}: {
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      data-testid="artifact-expand"
+      onClick={onClick}
+      className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-text-muted)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)]"
+    >
+      <Maximize2 className="h-3 w-3" />
+      Expand
+    </button>
+  );
+}
+
 function ArtifactDownloads({
   artifact,
   onDownload,
+  canSaveAsReport = false,
 }: {
   artifact: ArtifactPreviewData;
   onDownload: ArtifactDownload;
+  canSaveAsReport?: boolean;
 }) {
   const { toast } = useToast();
   return (
     <div className="flex flex-wrap items-center gap-2">
+      {canSaveAsReport && <SaveArtifactAsReportAction artifact={artifact} />}
       {artifact.download_formats.map((format) => (
         <button
           key={format}
@@ -267,14 +342,151 @@ function ArtifactDownloads({
   );
 }
 
+function SaveArtifactAsReportAction({
+  artifact,
+}: {
+  artifact: ArtifactPreviewData;
+}) {
+  const router = useRouter();
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const isUpdate =
+    artifact.report_action === "update" && Boolean(artifact.saved_report_id);
+
+  if (artifact.report_action === "open" && artifact.saved_report_id) {
+    return (
+      <button
+        type="button"
+        onClick={() => router.push(`/reports/${artifact.saved_report_id}`)}
+        className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--color-text)] px-2 py-1 text-[11px] text-[var(--color-bg)]"
+      >
+        <FileChartColumn className="h-3 w-3" />
+        Open report
+      </button>
+    );
+  }
+
+  const begin = () => {
+    setTitle(
+      isUpdate && artifact.saved_report_title
+        ? artifact.saved_report_title
+        : artifact.filename.replace(/\.[^.]+$/, ""),
+    );
+    setOpen(true);
+  };
+
+  const submit = async () => {
+    const cleanTitle = title.trim();
+    if (!cleanTitle || submitting) return;
+    setSubmitting(true);
+    try {
+      const result = await promoteChatArtifact(artifact.id, cleanTitle);
+      setOpen(false);
+      toast(
+        result.status === "created"
+          ? "Report saved"
+          : result.status === "updated"
+            ? "Report updated"
+            : "Report already up to date",
+        "success",
+      );
+      router.push(`/reports/${result.report_id}`);
+    } catch (error) {
+      toast(
+        error instanceof Error
+          ? error.message
+          : isUpdate
+            ? "Could not update report"
+            : "Could not save report",
+        "error",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={begin}
+        className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--color-text)] px-2 py-1 text-[11px] text-[var(--color-bg)]"
+      >
+        <Save className="h-3 w-3" />
+        {isUpdate ? "Update report" : "Save as report"}
+      </button>
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={`save-report-title-${artifact.id}`}
+            className="w-full max-w-md rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-5 text-left shadow-2xl"
+          >
+            <h2
+              id={`save-report-title-${artifact.id}`}
+              className="text-base text-[var(--color-text)]"
+            >
+              {isUpdate ? "Update report" : "Save as report"}
+            </h2>
+            <p className="mt-1 text-xs text-[var(--color-text-dim)]">
+              {isUpdate
+                ? `This artifact will become a new version of “${title}”.`
+                : "Save this artifact as a report you can refresh and share later."}
+            </p>
+            {!isUpdate && (
+              <label className="mt-4 block text-xs text-[var(--color-text-muted)]">
+                Report title
+                <input
+                  autoFocus
+                  value={title}
+                  onChange={(event) => setTitle(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void submit();
+                  }}
+                  className="mt-2 w-full rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-border-hover)]"
+                />
+              </label>
+            )}
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={() => setOpen(false)}
+                className="rounded-xl px-3 py-2 text-xs text-[var(--color-text-muted)] disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!title.trim() || submitting}
+                onClick={() => void submit()}
+                className="inline-flex items-center gap-2 rounded-xl bg-[var(--color-text)] px-3 py-2 text-xs text-[var(--color-bg)] disabled:opacity-50"
+              >
+                {submitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {isUpdate ? "Update report" : "Save report"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 export function ArtifactPreview({
   artifact,
   onDownload = downloadStandaloneArtifact,
+  canSaveAsReport = false,
 }: {
   artifact: ArtifactPreviewData;
   onDownload?: ArtifactDownload;
+  canSaveAsReport?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [viewerOpen, setViewerOpen] = useState(false);
   const snapshot = artifact.snapshot;
   if (artifact.kind === "table") {
     const columns = Array.isArray(snapshot.columns)
@@ -313,7 +525,11 @@ export function ArtifactPreview({
                 {expanded ? "Collapse" : "Open"}
               </button>
             )}
-            <ArtifactDownloads artifact={artifact} onDownload={onDownload} />
+            <ArtifactDownloads
+              artifact={artifact}
+              onDownload={onDownload}
+              canSaveAsReport={canSaveAsReport}
+            />
           </div>
         </div>
         <div
@@ -397,7 +613,19 @@ export function ArtifactPreview({
               {artifact.filename}
             </span>
           </div>
-          <ArtifactDownloads artifact={artifact} onDownload={onDownload} />
+          <div className="flex items-center gap-2">
+            {snapshot.runtime_png !== true && (
+              <ExpandButton
+                label={`Expand ${artifact.filename}`}
+                onClick={() => setViewerOpen(true)}
+              />
+            )}
+            <ArtifactDownloads
+              artifact={artifact}
+              onDownload={onDownload}
+              canSaveAsReport={canSaveAsReport}
+            />
+          </div>
         </div>
         <div className="min-h-64 overflow-x-auto p-4">
           {snapshot.runtime_png === true ? (
@@ -414,6 +642,38 @@ export function ArtifactPreview({
             </div>
           )}
         </div>
+        {viewerOpen && snapshot.runtime_png !== true && (
+          <ArtifactLightbox
+            open={viewerOpen}
+            title={artifact.filename}
+            onClose={() => setViewerOpen(false)}
+          >
+            <div className="rounded-xl bg-[var(--color-bg-card)] p-6">
+              <VegaEmbed
+                spec={{
+                  ...spec,
+                  width: Math.max(
+                    640,
+                    Math.floor(
+                      (typeof window !== "undefined"
+                        ? window.innerWidth
+                        : 1280) * 0.78,
+                    ),
+                  ),
+                  height: Math.max(
+                    400,
+                    Math.floor(
+                      (typeof window !== "undefined"
+                        ? window.innerHeight
+                        : 800) * 0.66,
+                    ),
+                  ),
+                }}
+                options={{ actions: false, mode: "vega-lite", renderer: "svg" }}
+              />
+            </div>
+          </ArtifactLightbox>
+        )}
         {displayLimited && (
           <p className="border-t border-[var(--color-border)] px-3 py-2 text-[11px] text-[var(--color-text-muted)]">
             Preview shows up to {categoryLimit} categories and {legendLimit}{" "}
@@ -447,16 +707,43 @@ export function ArtifactPreview({
             {artifact.filename}
           </span>
         </div>
-        <ArtifactDownloads artifact={artifact} onDownload={onDownload} />
+        <div className="flex items-center gap-2">
+          {hasRenderableReport && (
+            <ExpandButton
+              label={`Expand ${artifact.filename}`}
+              onClick={() => setViewerOpen(true)}
+            />
+          )}
+          <ArtifactDownloads
+            artifact={artifact}
+            onDownload={onDownload}
+            canSaveAsReport={canSaveAsReport}
+          />
+        </div>
       </div>
       {hasRenderableReport ? (
-        <iframe
-          title={artifact.filename}
-          sandbox=""
-          referrerPolicy="no-referrer"
-          srcDoc={html}
-          className="h-[440px] w-full border-0 bg-white"
-        />
+        <>
+          <iframe
+            title={artifact.filename}
+            sandbox=""
+            referrerPolicy="no-referrer"
+            srcDoc={html}
+            className="h-[440px] w-full border-0 bg-white"
+          />
+          <ArtifactLightbox
+            open={viewerOpen}
+            title={artifact.filename}
+            onClose={() => setViewerOpen(false)}
+          >
+            <iframe
+              title={`${artifact.filename} (expanded)`}
+              sandbox=""
+              referrerPolicy="no-referrer"
+              srcDoc={html}
+              className="h-full max-h-[86vh] w-[92vw] rounded-xl border-0 bg-white"
+            />
+          </ArtifactLightbox>
+        </>
       ) : (
         <div className="flex min-h-48 items-center justify-center px-6 py-10 text-center">
           <div className="max-w-sm">
@@ -473,6 +760,123 @@ export function ArtifactPreview({
       <StandaloneArtifactContext artifact={artifact} />
     </div>
   );
+}
+
+function ReportSuggestionCard({
+  messageId,
+  suggestion,
+}: {
+  messageId: string;
+  suggestion: ChatReportSuggestion;
+}) {
+  const router = useRouter();
+  const { toast } = useToast();
+  const { onApproveReportSuggestion } = useChatUi();
+  const [dismissed, setDismissed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [approvedReportId, setApprovedReportId] = useState(
+    suggestion.approval?.report_id ?? null,
+  );
+  if (dismissed) return null;
+  const reportId = approvedReportId || suggestion.report_id;
+  const openOnly = suggestion.action === "open";
+  const label =
+    suggestion.action === "create"
+      ? "Create report"
+      : suggestion.action === "update"
+        ? "Update existing report"
+        : "Open report";
+
+  const approve = async () => {
+    if (busy) return;
+    if (openOnly && reportId) {
+      router.push(`/reports/${reportId}`);
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await onApproveReportSuggestion(messageId);
+      setApprovedReportId(result.report_id);
+      toast(
+        suggestion.action === "create" ? "Report created" : "Report updated",
+        "success",
+      );
+    } catch (error) {
+      toast(
+        error instanceof Error
+          ? error.message
+          : "Could not publish the report action",
+        "error",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="mt-4 rounded-xl border border-[var(--color-success)]/25 bg-[var(--color-bg-card)] p-4">
+      <div className="flex items-start gap-3">
+        <FileChartColumn className="mt-0.5 h-4 w-4 flex-none text-[var(--color-success)]" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm text-[var(--color-text)]">
+            {suggestion.action === "create"
+              ? `Save “${suggestion.title}” as a durable report?`
+              : `Matched “${suggestion.title}”`}
+          </p>
+          <p className="mt-1 text-xs leading-5 text-[var(--color-text-muted)]">
+            {suggestion.reason}
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {approvedReportId ? (
+              <button
+                type="button"
+                onClick={() => router.push(`/reports/${approvedReportId}`)}
+                className="rounded-lg bg-[var(--color-text)] px-3 py-2 text-xs text-[var(--color-bg)]"
+              >
+                Open report
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={busy || (!reportId && openOnly)}
+                onClick={() => void approve()}
+                className="inline-flex items-center gap-2 rounded-lg bg-[var(--color-text)] px-3 py-2 text-xs text-[var(--color-bg)] disabled:opacity-50"
+              >
+                {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {label}
+              </button>
+            )}
+            {!approvedReportId && !openOnly && (
+              <button
+                type="button"
+                onClick={() => setDismissed(true)}
+                className="rounded-lg px-3 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
+              >
+                Not now
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function messageReportSuggestion(
+  metadata: Record<string, unknown>,
+): ChatReportSuggestion | null {
+  const value = metadata.report_suggestion;
+  if (!value || typeof value !== "object") return null;
+  const suggestion = value as Partial<ChatReportSuggestion>;
+  if (
+    !["create", "update", "open"].includes(suggestion.action || "") ||
+    typeof suggestion.artifact_id !== "string" ||
+    typeof suggestion.title !== "string" ||
+    typeof suggestion.reason !== "string"
+  ) {
+    return null;
+  }
+  return suggestion as ChatReportSuggestion;
 }
 
 function AssistantMessage({
@@ -514,6 +918,9 @@ function AssistantMessage({
   const running = runStatus === "queued" || runStatus === "running";
   const runtimeArchiveAvailable =
     message.metadata.runtime_archive_available === true;
+  const reportSuggestion = successful
+    ? messageReportSuggestion(message.metadata)
+    : null;
   return (
     <article
       data-chat-message-id={message.id}
@@ -545,9 +952,19 @@ function AssistantMessage({
           {attachedArtifacts.length > 0 && (
             <div className="mt-5 space-y-4">
               {attachedArtifacts.map((artifact) => (
-                <ArtifactPreview key={artifact.id} artifact={artifact} />
+                <ArtifactPreview
+                  key={artifact.id}
+                  artifact={artifact}
+                  canSaveAsReport={successful}
+                />
               ))}
             </div>
+          )}
+          {reportSuggestion && (
+            <ReportSuggestionCard
+              messageId={message.id}
+              suggestion={reportSuggestion}
+            />
           )}
           {runStatus === "failed" && (
             <p className="mt-3 text-xs text-[var(--color-error)]">
@@ -560,76 +977,76 @@ function AssistantMessage({
             </p>
           )}
           {!replayMode && (
-          <div className="mt-3 flex flex-wrap items-center gap-1.5">
-            {successful && (
-              <button
-                type="button"
-                onClick={() =>
-                  void navigator.clipboard
-                    .writeText(message.content)
-                    .catch(() => toast("Could not copy answer", "error"))
-                }
-                className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
-              >
-                <Copy className="h-3 w-3" />
-                Copy
-              </button>
-            )}
-            {onReplay && successful && (
-              <button
-                type="button"
-                data-testid="chat-replay-button"
-                onClick={onReplay}
-                className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
-              >
-                <Play className="h-3 w-3" />
-                Replay
-              </button>
-            )}
-            {runId && (runtimeArchiveAvailable || steps.length === 0) && (
-              <button
-                type="button"
-                onClick={() => {
-                  if (runtimeArchiveAvailable) {
-                    void openStandaloneNotebookArchive(runId).catch(() =>
-                      toast("Archived notebook is unavailable", "error"),
-                    );
-                  } else {
-                    setShowWork((value) => !value);
+            <div className="mt-3 flex flex-wrap items-center gap-1.5">
+              {successful && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    void navigator.clipboard
+                      .writeText(message.content)
+                      .catch(() => toast("Could not copy answer", "error"))
                   }
-                }}
-                className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
-              >
-                <Wrench className="h-3 w-3" />
-                View work
-                {!runtimeArchiveAvailable && (
-                  <ChevronRight
-                    className={`h-3 w-3 transition-transform ${showWork ? "rotate-90" : ""}`}
-                  />
-                )}
-              </button>
-            )}
-            {running && runId && (
-              <button
-                type="button"
-                onClick={() => void onStop(runId)}
-                className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-error)]"
-              >
-                <CircleStop className="h-3 w-3" />
-                Stop
-              </button>
-            )}
-            {runStatus === "failed" && runId && (
-              <button
-                type="button"
-                onClick={() => void onRetry(runId)}
-                className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
-              >
-                <Play className="h-3 w-3" />
-                Retry
-              </button>
-            )}
-          </div>
+                  className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+                >
+                  <Copy className="h-3 w-3" />
+                  Copy
+                </button>
+              )}
+              {onReplay && successful && (
+                <button
+                  type="button"
+                  data-testid="chat-replay-button"
+                  onClick={onReplay}
+                  className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+                >
+                  <Play className="h-3 w-3" />
+                  Replay
+                </button>
+              )}
+              {runId && (runtimeArchiveAvailable || steps.length === 0) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (runtimeArchiveAvailable) {
+                      void openStandaloneNotebookArchive(runId).catch(() =>
+                        toast("Archived notebook is unavailable", "error"),
+                      );
+                    } else {
+                      setShowWork((value) => !value);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+                >
+                  <Wrench className="h-3 w-3" />
+                  View work
+                  {!runtimeArchiveAvailable && (
+                    <ChevronRight
+                      className={`h-3 w-3 transition-transform ${showWork ? "rotate-90" : ""}`}
+                    />
+                  )}
+                </button>
+              )}
+              {running && runId && (
+                <button
+                  type="button"
+                  onClick={() => void onStop(runId)}
+                  className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-error)]"
+                >
+                  <CircleStop className="h-3 w-3" />
+                  Stop
+                </button>
+              )}
+              {runStatus === "failed" && runId && (
+                <button
+                  type="button"
+                  onClick={() => void onRetry(runId)}
+                  className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+                >
+                  <Play className="h-3 w-3" />
+                  Retry
+                </button>
+              )}
+            </div>
           )}
           {showWork && runId && !runtimeArchiveAvailable && (
             <div className="mt-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-input)] p-4">
@@ -675,20 +1092,39 @@ function AssistantMessageReplay({
   runId: string;
   onExit: () => void;
 }) {
-  const { events, artifacts, onStop, onRetry } = useChatUi();
+  const {
+    events,
+    artifacts,
+    onStop,
+    onRetry,
+    onApproveReportSuggestion,
+  } = useChatUi();
   const replay = useChatReplay(events, artifacts, runId);
+  // Runs that streamed text carry text_delta events, and the blocks rebuild
+  // the message from the replayed deltas. Runs that only produced a final
+  // message have no deltas — for those, reveal the persisted content at the
+  // moment it actually appeared: when the run completed.
+  const runStreamedText = useMemo(
+    () =>
+      events.some(
+        (event) => event.run_id === runId && event.type === "text_delta",
+      ),
+    [events, runId],
+  );
   const replayMessage = useMemo<UiMessage>(
     () => ({
       ...message,
-      // Blocks reconstruct the text from replayed deltas; suppress the
-      // persisted content so it does not render ahead of the stream.
-      content: "",
+      content: runStreamedText
+        ? ""
+        : replay.finished
+          ? message.content
+          : "",
       runId,
       runStatus: replay.finished
         ? (message.runStatus ?? "completed")
         : "running",
     }),
-    [message, replay.finished, runId],
+    [message, replay.finished, runId, runStreamedText],
   );
   return (
     <div data-testid="chat-replay">
@@ -709,6 +1145,7 @@ function AssistantMessageReplay({
           artifacts: replay.visibleArtifacts,
           onStop,
           onRetry,
+          onApproveReportSuggestion,
         }}
       >
         <AssistantMessage message={replayMessage} replayMode />
@@ -888,7 +1325,9 @@ function ConversationRail({
                   <span className="min-w-0 flex-1 truncate">
                     {conversation.title}
                   </span>
-                  {isImprovementConversation(conversation) && <AutomatedBadge />}
+                  {isImprovementConversation(conversation) && (
+                    <AutomatedBadge />
+                  )}
                   {loadingConversationId === conversation.id && (
                     <Loader2 className="h-3 w-3 flex-none animate-spin text-[var(--color-text-dim)]" />
                   )}
@@ -1071,8 +1510,10 @@ function ConversationMessagesSkeleton() {
 
 export function StandaloneDataChat({
   conversationId,
+  embedded = false,
 }: {
   conversationId?: string;
+  embedded?: boolean;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -1106,13 +1547,23 @@ export function StandaloneDataChat({
     },
   );
   const requestedProject = searchParams.get("project");
+  const requestedReportId = searchParams.get("report");
+  const [selectedReport, setSelectedReport] =
+    useState<ChatReportMention | null>(null);
+  const attachedReportReference = selectedReport
+    ? {
+        report_id: selectedReport.report_id,
+        version_id: selectedReport.current_version_id,
+      }
+    : undefined;
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     null,
   );
   const [perQueryBudgetUsd, setPerQueryBudgetUsd] = useState(0.25);
   const [chatBudgetUsd, setChatBudgetUsd] = useState(1);
   const [draft, setDraft] = useState("");
-  const [isConversationRailOpen, setIsConversationRailOpen] = useState(true);
+  const [isConversationRailOpen, setIsConversationRailOpen] =
+    useState(!embedded);
   const [pendingSubmission, setPendingSubmission] =
     useState<OptimisticUserMessage | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1142,6 +1593,30 @@ export function StandaloneDataChat({
     setChatBudgetUsd(bootstrap.default_chat_budget_usd);
     selectedInitialized.current = true;
   }, [bootstrap, requestedProject]);
+
+  useEffect(() => {
+    if (!requestedReportId || selectedReport?.report_id === requestedReportId)
+      return;
+    let active = true;
+    void getSavedChatReport(requestedReportId)
+      .then((report) => {
+        if (!active) return;
+        setSelectedProjectId(report.project_id);
+        setSelectedReport({
+          report_id: report.id,
+          title: report.title,
+          kind: report.kind,
+          project_id: report.project_id,
+          current_version_id: report.current_version_id,
+        });
+      })
+      .catch(() => {
+        if (active) toast("The attached report is unavailable", "error");
+      });
+    return () => {
+      active = false;
+    };
+  }, [requestedReportId, selectedReport?.report_id, toast]);
 
   useEffect(() => {
     if (detail?.conversation.project_id) {
@@ -1441,7 +1916,9 @@ export function StandaloneDataChat({
             text,
             perQueryBudgetUsd,
             chatBudgetUsd,
+            attachedReportReference,
           );
+          setSelectedReport(null);
           await mutateCache(
             `standalone-chat-conversation:${created.conversation.id}`,
             created,
@@ -1471,7 +1948,14 @@ export function StandaloneDataChat({
         if (currentRun?.status === "waiting_for_user") {
           run = await clarifyStandaloneRun(currentRun.id, text);
         } else {
-          run = await createStandaloneRun(conversationId, text);
+          run = await createStandaloneRun(
+            conversationId,
+            text,
+            attachedReportReference,
+          );
+          if (attachedReportReference)
+            router.replace(`/chats/${conversationId}`);
+          setSelectedReport(null);
         }
         await mutateDetail(
           (current) =>
@@ -1555,6 +2039,7 @@ export function StandaloneDataChat({
       selectedProjectId,
       perQueryBudgetUsd,
       chatBudgetUsd,
+      attachedReportReference,
       toast,
     ],
   );
@@ -1625,6 +2110,20 @@ export function StandaloneDataChat({
       }
     },
     [mutateDetail, mutateHistory, toast],
+  );
+  const onApproveReportSuggestion = useCallback(
+    async (messageId: string) => {
+      const result = await approveChatReportSuggestion(messageId);
+      await mutateDetail();
+      await mutateCache(
+        (key) =>
+          typeof key === "string" &&
+          (key.startsWith("chat-report-library:") ||
+            key.startsWith("saved-chat-report:")),
+      );
+      return { report_id: result.report_id };
+    },
+    [mutateCache, mutateDetail],
   );
 
   const loadConversation = useCallback(
@@ -1979,26 +2478,35 @@ export function StandaloneDataChat({
         artifacts: detail?.artifacts ?? [],
         onStop,
         onRetry,
+        onApproveReportSuggestion,
       }}
     >
-      <div className="h-screen min-w-[960px] overflow-hidden p-4">
+      <div
+        className={
+          embedded
+            ? "h-full min-w-0 overflow-hidden"
+            : "h-screen min-w-[960px] overflow-hidden p-4"
+        }
+      >
         <div className="relative flex h-full overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)] shadow-2xl shadow-black/20">
-          <button
-            type="button"
-            aria-label={
-              isConversationRailOpen
-                ? "Collapse chat history"
-                : "Expand chat history"
-            }
-            aria-expanded={isConversationRailOpen}
-            onClick={() => setIsConversationRailOpen((isOpen) => !isOpen)}
-            className={`absolute top-3 z-30 flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-dim)] shadow-lg shadow-black/20 transition-[left,color,background-color] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] ${
-              isConversationRailOpen ? "left-[17rem]" : "left-3"
-            }`}
-          >
-            <PanelLeft className="h-4 w-4" />
-          </button>
-          {isConversationRailOpen && (
+          {!embedded && (
+            <button
+              type="button"
+              aria-label={
+                isConversationRailOpen
+                  ? "Collapse chat history"
+                  : "Expand chat history"
+              }
+              aria-expanded={isConversationRailOpen}
+              onClick={() => setIsConversationRailOpen((isOpen) => !isOpen)}
+              className={`absolute top-3 z-30 flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-dim)] shadow-lg shadow-black/20 transition-[left,color,background-color] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] ${
+                isConversationRailOpen ? "left-[17rem]" : "left-3"
+              }`}
+            >
+              <PanelLeft className="h-4 w-4" />
+            </button>
+          )}
+          {!embedded && isConversationRailOpen && (
             <ConversationRail
               conversations={conversations}
               activeId={conversationId}
@@ -2019,7 +2527,8 @@ export function StandaloneDataChat({
             />
           )}
           <main className="relative flex min-w-0 flex-1 flex-col">
-            {conversationId &&
+            {!embedded &&
+              conversationId &&
               detail &&
               bootstrap.enterprise_features.organization_sharing && (
                 <button
@@ -2049,8 +2558,33 @@ export function StandaloneDataChat({
                 <ReadinessNotice
                   message={unreadyMessage}
                   showSetup={showSetupCta}
-                  onSetup={() => router.push(projectSettingsHref(selectedProjectId))}
+                  onSetup={() =>
+                    router.push(projectSettingsHref(selectedProjectId))
+                  }
                 />
+              </div>
+            )}
+            {selectedReport && (
+              <div className="flex-none px-6 pt-4">
+                <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 rounded-xl border border-[var(--color-success)]/25 bg-[var(--color-bg-card)] px-4 py-3 text-xs text-[var(--color-text-muted)]">
+                  <span>
+                    @{selectedReport.title} is attached to your next message.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedReport(null);
+                      router.replace(
+                        conversationId
+                          ? `/chats/${conversationId}`
+                          : `/chats?project=${encodeURIComponent(selectedProjectId || "")}`,
+                      );
+                    }}
+                    className="text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
+                  >
+                    Remove
+                  </button>
+                </div>
               </div>
             )}
             <div

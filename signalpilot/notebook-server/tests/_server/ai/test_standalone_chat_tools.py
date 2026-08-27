@@ -9,7 +9,12 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from mcp.types import CallToolRequest, CallToolRequestParams, TextContent
+from mcp.types import (
+    CallToolRequest,
+    CallToolRequestParams,
+    ListToolsRequest,
+    TextContent,
+)
 from PIL import Image
 from starlette.exceptions import HTTPException
 
@@ -43,9 +48,11 @@ from signalpilot._server.api.endpoints.standalone_chat import (
     STANDALONE_ALLOWED_TOOLS,
     STANDALONE_DISALLOWED_MCP_TOOLS,
     STANDALONE_SYSTEM_PROMPT,
+    _allowed_tools_for_features,
     _require_execution_scope,
     _runtime_auth_override,
     _scoped_gateway_mcp_config,
+    _system_prompt_for_features,
 )
 
 
@@ -68,7 +75,14 @@ def test_restricted_python_allows_in_memory_analysis_only():
 
 
 def test_chat_runtime_notebook_outputs_are_redacted_and_preview_bounded():
-    payload = json.dumps({"rows": [{"token": "secret-token", "value": value} for value in range(100)]})
+    payload = json.dumps(
+        {
+            "rows": [
+                {"token": "secret-token", "value": value}
+                for value in range(100)
+            ]
+        }
+    )
     rendered = compact_chat_runtime_output(
         payload,
         mimetype="application/json",
@@ -85,10 +99,18 @@ def test_chat_runtime_notebook_tools_are_bound_to_the_current_kernel():
     def authorize(session_id: str) -> bool:
         return session_id == "run-kernel"
 
-    authorize_chat_runtime_session("run_cells", {"session_id": "run-kernel"}, authorize)
-    with pytest.raises(ChatRuntimeSessionScopeError, match="NOTEBOOK_SESSION_SCOPE_MISMATCH"):
-        authorize_chat_runtime_session("run_cells", {"session_id": "other-kernel"}, authorize)
-    with pytest.raises(ChatRuntimeSessionScopeError, match="NOTEBOOK_SESSION_SCOPE_MISMATCH"):
+    authorize_chat_runtime_session(
+        "run_cells", {"session_id": "run-kernel"}, authorize
+    )
+    with pytest.raises(
+        ChatRuntimeSessionScopeError, match="NOTEBOOK_SESSION_SCOPE_MISMATCH"
+    ):
+        authorize_chat_runtime_session(
+            "run_cells", {"session_id": "other-kernel"}, authorize
+        )
+    with pytest.raises(
+        ChatRuntimeSessionScopeError, match="NOTEBOOK_SESSION_SCOPE_MISMATCH"
+    ):
         authorize_chat_runtime_session("start_notebook_session", {}, authorize)
 
 
@@ -119,7 +141,357 @@ async def test_publication_failures_are_mcp_tool_errors():
     )
 
     assert response.root.isError is True
-    assert "governed structured result ID is required" in response.root.content[0].text
+    assert (
+        "governed structured result ID is required"
+        in response.root.content[0].text
+    )
+
+
+@pytest.mark.asyncio
+async def test_report_tools_require_a_complete_catalog_scan_and_one_valid_proposal():
+    collector = StandaloneArtifactCollector(
+        artifacts=[
+            {
+                "kind": "table",
+                "filename": "revenue.csv",
+                "payload": {
+                    "columns": [{"name": "revenue"}],
+                    "rows": [{"revenue": 100}],
+                    "completeness": "complete",
+                    "truncated": False,
+                },
+            }
+        ]
+    )
+
+    async def load_catalog(cursor: str | None) -> dict[str, Any]:
+        return {
+            "items": [],
+            "next_cursor": "page-2" if cursor is None else None,
+            "catalog_revision": "revision-a",
+            "total_reports": 51,
+            "proactive_creation_allowed": True,
+        }
+
+    config = build_standalone_chat_mcp_server(
+        collector,
+        report_catalog_loader=load_catalog,
+    )
+    server = config["instance"]
+    await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="list_saved_report_catalog",
+                arguments={},
+            )
+        )
+    )
+    incomplete = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="propose_report_action",
+                arguments={
+                    "action": "create",
+                    "artifact_kind": "table",
+                    "artifact_filename": "revenue.csv",
+                    "title": "Revenue",
+                    "reason": "No semantic match exists.",
+                },
+            )
+        )
+    )
+    assert incomplete.root.isError is True
+    assert "every saved report catalog page" in incomplete.root.content[0].text
+
+    final_page = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="list_saved_report_catalog",
+                arguments={"cursor": "page-2"},
+            )
+        )
+    )
+    assert final_page.root.isError is False
+    proposed = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="propose_report_action",
+                arguments={
+                    "action": "create",
+                    "artifact_kind": "table",
+                    "artifact_filename": "revenue.csv",
+                    "title": "Revenue",
+                    "reason": "No semantic match exists.",
+                },
+            )
+        )
+    )
+    assert proposed.root.isError is False
+    assert collector.report_proposal == {
+        "action": "create",
+        "artifact_kind": "table",
+        "artifact_filename": "revenue.csv",
+        "title": "Revenue",
+        "reason": "No semantic match exists.",
+        "existing_report_id": None,
+        "catalog_revision": "revision-a",
+        "catalog_scan_complete": True,
+        "proactive_creation_allowed": True,
+        "loaded_report_ids": [],
+        "attached_report_id": None,
+    }
+    repeated = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="propose_report_action",
+                arguments={
+                    "action": "create",
+                    "artifact_kind": "table",
+                    "artifact_filename": "revenue.csv",
+                    "title": "Revenue copy",
+                    "reason": "Try again.",
+                },
+            )
+        )
+    )
+    assert repeated.root.isError is True
+    assert "Only one report action outcome" in repeated.root.content[0].text
+
+
+@pytest.mark.asyncio
+async def test_complete_publication_requires_a_catalog_backed_report_outcome():
+    collector = StandaloneArtifactCollector()
+
+    async def load_catalog(_cursor: str | None) -> dict[str, Any]:
+        return {
+            "items": [],
+            "next_cursor": None,
+            "catalog_revision": "revision-empty",
+            "total_reports": 0,
+            "proactive_creation_allowed": True,
+        }
+
+    server = build_standalone_chat_mcp_server(
+        collector,
+        report_catalog_loader=load_catalog,
+    )["instance"]
+    published = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="publish_report",
+                arguments={
+                    "filename": "revenue.html",
+                    "html": "<html><body>Revenue</body></html>",
+                },
+            )
+        )
+    )
+    publication = json.loads(published.root.content[0].text)
+    assert publication["published"] is True
+    assert publication["next_required_action"].startswith(
+        "REQUIRED BEFORE YOUR FINAL ANSWER"
+    )
+
+    unscanned = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="propose_report_action",
+                arguments={
+                    "action": "no_suggestion",
+                    "artifact_kind": "report",
+                    "artifact_filename": "revenue.html",
+                    "title": "Revenue",
+                    "reason": "This is a one-off diagnostic.",
+                },
+            )
+        )
+    )
+    assert unscanned.root.isError is True
+    assert "every saved report catalog page" in unscanned.root.content[0].text
+
+    await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="list_saved_report_catalog",
+                arguments={},
+            )
+        )
+    )
+    recorded = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="propose_report_action",
+                arguments={
+                    "action": "no_suggestion",
+                    "artifact_kind": "report",
+                    "artifact_filename": "revenue.html",
+                    "title": "Revenue",
+                    "reason": "This is a one-off diagnostic.",
+                },
+            )
+        )
+    )
+
+    assert recorded.root.isError is False
+    assert json.loads(recorded.root.content[0].text) == {
+        "recorded": True,
+        "proposed": False,
+        "action": "no_suggestion",
+    }
+    assert collector.report_proposal is None
+    assert collector.report_action_outcome == {
+        "action": "no_suggestion",
+        "artifact_kind": "report",
+        "artifact_filename": "revenue.html",
+        "title": "Revenue",
+        "reason": "This is a one-off diagnostic.",
+        "existing_report_id": None,
+        "catalog_revision": "revision-empty",
+        "catalog_scan_complete": True,
+        "proactive_creation_allowed": True,
+        "loaded_report_ids": [],
+        "attached_report_id": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_report_creation_fails_closed_above_500_catalog_entries():
+    collector = StandaloneArtifactCollector(
+        artifacts=[
+            {
+                "kind": "table",
+                "filename": "revenue.csv",
+                "payload": {
+                    "columns": [{"name": "revenue"}],
+                    "rows": [{"revenue": 100}],
+                    "completeness": "complete",
+                    "truncated": False,
+                },
+            }
+        ]
+    )
+
+    async def load_catalog(_cursor: str | None) -> dict[str, Any]:
+        return {
+            "items": [],
+            "next_cursor": None,
+            "catalog_revision": "revision-large",
+            "total_reports": 501,
+            "proactive_creation_allowed": False,
+        }
+
+    server = build_standalone_chat_mcp_server(
+        collector,
+        report_catalog_loader=load_catalog,
+    )["instance"]
+    scanned = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="list_saved_report_catalog",
+                arguments={},
+            )
+        )
+    )
+    assert scanned.root.isError is False
+
+    blocked = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="propose_report_action",
+                arguments={
+                    "action": "create",
+                    "artifact_kind": "table",
+                    "artifact_filename": "revenue.csv",
+                    "title": "Revenue",
+                    "reason": "No semantic match exists.",
+                },
+            )
+        )
+    )
+    assert blocked.root.isError is True
+    assert (
+        "Proactive report creation is unavailable"
+        in blocked.root.content[0].text
+    )
+    assert collector.report_proposal is None
+
+
+@pytest.mark.asyncio
+async def test_report_update_requires_loaded_context_unless_the_report_is_attached():
+    artifact = {
+        "kind": "chart",
+        "filename": "revenue.png",
+        "payload": {
+            "source": {"completeness": "complete", "truncated": False},
+        },
+    }
+
+    async def load_context(report_id: str) -> dict[str, Any]:
+        return {"report_id": report_id, "title": "Revenue"}
+
+    async def load_catalog(_cursor: str | None) -> dict[str, Any]:
+        return {
+            "items": [{"report_id": "report-a", "title": "Revenue"}],
+            "next_cursor": None,
+            "catalog_revision": "revision-a",
+            "total_reports": 1,
+            "proactive_creation_allowed": True,
+        }
+
+    collector = StandaloneArtifactCollector(artifacts=[artifact])
+    server = build_standalone_chat_mcp_server(
+        collector,
+        report_context_loader=load_context,
+        report_catalog_loader=load_catalog,
+    )["instance"]
+    blocked = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="propose_report_action",
+                arguments={
+                    "action": "update",
+                    "artifact_kind": "chart",
+                    "artifact_filename": "revenue.png",
+                    "title": "Revenue",
+                    "reason": "Only the date range changed.",
+                    "existing_report_id": "report-a",
+                },
+            )
+        )
+    )
+    assert blocked.root.isError is True
+    await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="list_saved_report_catalog",
+                arguments={},
+            )
+        )
+    )
+    await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="load_report_context",
+                arguments={"report_id": "report-a"},
+            )
+        )
+    )
+    accepted = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="propose_report_action",
+                arguments={
+                    "action": "update",
+                    "artifact_kind": "chart",
+                    "artifact_filename": "revenue.png",
+                    "title": "Revenue",
+                    "reason": "Only the date range changed.",
+                    "existing_report_id": "report-a",
+                },
+            )
+        )
+    )
+    assert accepted.root.isError is False
 
 
 @pytest.mark.asyncio
@@ -130,9 +502,15 @@ async def test_analysis_notebook_start_is_plan_gated_and_uses_only_the_seeded_pa
     seeded.write_text("import marimo\n", encoding="utf-8")
     calls: list[dict[str, Any]] = []
 
-    def start_notebook(_context: Any, arguments: dict[str, Any]) -> list[TextContent]:
+    def start_notebook(
+        _context: Any, arguments: dict[str, Any]
+    ) -> list[TextContent]:
         calls.append(arguments)
-        return [TextContent(type="text", text=json.dumps({"session_id": "session-a"}))]
+        return [
+            TextContent(
+                type="text", text=json.dumps({"session_id": "session-a"})
+            )
+        ]
 
     runtime_session = SimpleNamespace()
 
@@ -155,7 +533,10 @@ async def test_analysis_notebook_start_is_plan_gated_and_uses_only_the_seeded_pa
         CallToolRequest(
             params=CallToolRequestParams(
                 name="start_analysis_notebook",
-                arguments={"plan_id": "plan-a", "file_path": "/tmp/attacker.py"},
+                arguments={
+                    "plan_id": "plan-a",
+                    "file_path": "/tmp/attacker.py",
+                },
             )
         )
     )
@@ -460,6 +841,29 @@ def test_agent_contract_excludes_mutating_and_external_tools():
         "mcp__signalpilot__map_columns",
     }
     assert not set(IMPROVEMENT_EXTRA_TOOLS) & set(STANDALONE_ALLOWED_TOOLS)
+
+
+@pytest.mark.asyncio
+async def test_disabled_notebook_feature_removes_tools_and_prompt_instructions():
+    allowed_tools = _allowed_tools_for_features(
+        notebook_analysis_enabled=False
+    )
+    prompt = _system_prompt_for_features(notebook_analysis_enabled=False)
+    server = build_standalone_chat_mcp_server(
+        StandaloneArtifactCollector(), notebook_mcp_app=None
+    )["instance"]
+    response = await server.request_handlers[ListToolsRequest](
+        ListToolsRequest()
+    )
+
+    assert "mcp__standalone-chat__start_analysis_notebook" not in allowed_tools
+    assert not any("signalpilot-notebook" in tool for tool in allowed_tools)
+    assert "Notebook analysis is disabled for this run" in prompt
+    assert "call start_analysis_notebook" not in prompt
+    assert "marimo reactive notebook" not in prompt
+    assert "start_analysis_notebook" not in {
+        tool.name for tool in response.root.tools
+    }
 
 
 def test_runtime_publication_sdk_is_exposed_from_top_level_package():

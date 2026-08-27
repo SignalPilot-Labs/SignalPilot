@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.auth.notebook_jwt import mint_session_jwt
-from gateway.config.gateway_public import get_gateway_public_settings
+from gateway.config.gateway import get_gateway_settings
 from gateway.db.models import (
     GatewayChatConversation,
     GatewayChatObjectDeletion,
@@ -38,13 +38,15 @@ def _join_base_path(base: str, path: str) -> str:
     return f"{base.rstrip('/')}/{path.lstrip('/')}"
 
 
-def _notebook_auth_headers() -> dict[str, str]:
-    """Authenticate direct-mode notebook requests with the shared server token.
+def _notebook_auth_headers(session_token: str | None = None) -> dict[str, str]:
+    """Authenticate direct notebook requests, mirroring the notebook proxy.
 
-    The shared notebook container runs with --token-password-file, so every
-    /api request needs the token. Kubernetes-mode pods resolve auth through
-    the notebook proxy instead, and the token file is absent there.
+    Sandbox-backed sessions (Runtime v2) carry a per-session token on the
+    session row; prefer it. Local direct mode falls back to the shared
+    --token-password-file the compose notebook container runs with.
     """
+    if session_token:
+        return {"Authorization": f"Bearer {session_token}"}
     token_file = os.getenv("SP_NOTEBOOK_TOKEN_FILE", "")
     if not token_file:
         return {}
@@ -167,7 +169,7 @@ async def prepare_execution(
             # warm reuse ~0.2s). Keeps the `chat:` prefix for identity checks.
             execution_identity=f"chat:conv-{run.conversation_id}",
             scopes=["read", "query", "execute"],
-            ttl=get_gateway_public_settings().sp_session_jwt_ttl_seconds,
+            ttl=get_gateway_settings().sp_session_jwt_ttl_seconds,
         ),
         "prompt": prompt,
         "messages": messages,
@@ -197,7 +199,7 @@ async def prepare_execution(
         "X-Gateway-Branch-Id": branch,
         "X-Gateway-Connection-Name": connection_name,
         "X-Gateway-Commit-Sha": commit_sha,
-        **_notebook_auth_headers(),
+        **_notebook_auth_headers(runtime.access_token),
     }
     return PreparedExecution(
         url=_join_base_path(runtime.internal_base_url, "/api/standalone-chat/execute"),
@@ -244,7 +246,7 @@ async def cancel_execution_session(db: AsyncSession, run: GatewayChatRun) -> boo
                     runtime.internal_base_url,
                     f"/api/standalone-chat/cancel/{run.id}",
                 ),
-                headers=_notebook_auth_headers(),
+                headers=_notebook_auth_headers(runtime.access_token),
             )
         return response.is_success
     except httpx.HTTPError:

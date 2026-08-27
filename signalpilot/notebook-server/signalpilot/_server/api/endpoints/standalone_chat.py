@@ -31,11 +31,13 @@ from signalpilot._server.ai.claude_agent import (
 from signalpilot._server.ai.standalone_chat_tools import (
     StandaloneArtifactCollector,
     StandaloneNotebookLifecycle,
+    _collected_artifact_is_complete,
     build_standalone_chat_mcp_server,
 )
 from signalpilot._server.files.workspace import PROJECTS_ROOT
 from signalpilot._server.router import APIRouter
 from signalpilot._types.ids import SessionId
+from signalpilot._utils.requests import RequestError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -74,6 +76,9 @@ STANDALONE_ALLOWED_TOOLS = [
     "mcp__standalone-chat__publish_chart",
     "mcp__standalone-chat__publish_report",
     "mcp__standalone-chat__publish_table",
+    "mcp__standalone-chat__list_saved_report_catalog",
+    "mcp__standalone-chat__load_report_context",
+    "mcp__standalone-chat__propose_report_action",
     "mcp__standalone-chat__inspect_dbt",
     "mcp__standalone-chat__start_analysis_notebook",
     "mcp__signalpilot-notebook__edit_notebook",
@@ -125,6 +130,62 @@ def _load_prompt(name: str) -> str:
 # .md file; this just materializes it at import time.
 STANDALONE_SYSTEM_PROMPT = _load_prompt("standalone_chat_system.md")
 
+
+_NOTEBOOK_ONLY_RULE_PREFIXES = (
+    "- If the route is notebook_sdk or dataset_ref",
+    "- Never call start_analysis_notebook with a plan whose route is mcp",
+    "- The analysis notebook is a marimo reactive notebook",
+    "- Define shared imports and reusable DataFrames once",
+    "- If edit_notebook returns MultipleDefinitionError",
+    "- Never edit, remove, or redefine the seeded",
+    "- For notebook_sdk, first define `plan_id`",
+    '- `source["rows"]` is JSON transport',
+    "- Never copy MCP previews into notebook DataFrames",
+    "- Keep complete bounded DataFrames inside the kernel",
+    "- Publish derived rows from the kernel",
+    "- Publish a runtime file with exactly",
+    "- Verify every chart before publishing it",
+    "- PublishedResult exposes only",
+    "- Do not catch or suppress publication exceptions",
+    "- Prefer governed SDK structured-result IDs",
+)
+
+
+def _system_prompt_for_features(*, notebook_analysis_enabled: bool) -> str:
+    if notebook_analysis_enabled:
+        return STANDALONE_SYSTEM_PROMPT
+    lines = [
+        line
+        for line in STANDALONE_SYSTEM_PROMPT.splitlines()
+        if not line.startswith(_NOTEBOOK_ONLY_RULE_PREFIXES)
+    ]
+    disabled_rule = (
+        "- Notebook analysis is disabled for this run. Do not call notebook "
+        "tools; use an exact MCP plan or rewrite aggregate_required work as "
+        "bounded warehouse SQL."
+    )
+    insert_at = (
+        lines.index(
+            "- Use query_database with the returned plan_id only when the plan route is mcp."
+        )
+        + 1
+    )
+    lines.insert(insert_at, disabled_rule)
+    return "\n".join(lines)
+
+
+def _allowed_tools_for_features(
+    *,
+    notebook_analysis_enabled: bool,
+) -> list[str]:
+    if notebook_analysis_enabled:
+        return list(STANDALONE_ALLOWED_TOOLS)
+    return [
+        tool
+        for tool in STANDALONE_ALLOWED_TOOLS
+        if "signalpilot-notebook" not in tool
+        and not tool.endswith("start_analysis_notebook")
+    ]
 
 
 def _require_execution_scope(
@@ -492,15 +553,16 @@ async def _archive_analysis_notebook(
                 include_code=False,
             ),
         )
-    except FileNotFoundError:
+    except (FileNotFoundError, RequestError, httpx.HTTPError) as exc:
         # The slim runtime image intentionally omits the notebook frontend
         # bundle. Preserve the validated evidence in a bounded, code-free HTML
         # archive instead of rejecting an otherwise clean analysis.
         LOGGER.warning(
             "Notebook frontend assets unavailable; using safe archive fallback "
-            "run_id=%s session_id=%s",
+            "run_id=%s session_id=%s error_type=%s",
             run_id,
             session_id,
+            type(exc).__name__,
         )
         html = _fallback_archive_html(
             session,
@@ -698,7 +760,7 @@ def _materialize_snapshot_checkout(
                     raise ValueError(
                         f"Unsafe member in snapshot tarball: {member.name!r}"
                     )
-            tar.extractall(checkout)  # noqa: S202 — members validated above
+            tar.extractall(checkout, filter="data")
     return checkout
 
 
@@ -732,13 +794,23 @@ async def _execution_project_directory(
     return checkout, True
 
 
+# Ephemeral outputs that dbt/python tooling drops into the checkout during a
+# read-only analysis. They are not project source, so they must not trip the
+# integrity check — only human-authored files are frozen.
+_DIGEST_IGNORED_DIRS = frozenset(
+    {"target", "logs", "dbt_packages", "__pycache__", ".ruff_cache", ".pytest_cache"}
+)
+_DIGEST_IGNORED_FILES = frozenset({".user.yml", "package-lock.yml"})
+
+
 def _tree_digest(directory: Path) -> str:
     """Content digest of a materialized checkout.
 
     Replaces the git-status integrity check from the worktree era: the frozen
     checkout has no git, so 'unchanged' means every file's bytes hash the same
     as when the run started. Path order is normalized so the digest is stable
-    across platforms.
+    across platforms. Generated artifacts (dbt target/, logs/, caches) are
+    excluded on both the baseline and the final check.
     """
     import hashlib
 
@@ -746,7 +818,12 @@ def _tree_digest(directory: Path) -> str:
     for path in sorted(directory.rglob("*"), key=lambda p: p.as_posix()):
         if not path.is_file():
             continue
-        digest.update(path.relative_to(directory).as_posix().encode("utf-8"))
+        relative = path.relative_to(directory)
+        if any(part in _DIGEST_IGNORED_DIRS for part in relative.parts[:-1]):
+            continue
+        if relative.name in _DIGEST_IGNORED_FILES or relative.name.endswith(".log"):
+            continue
+        digest.update(relative.as_posix().encode("utf-8"))
         digest.update(b"\0")
         digest.update(hashlib.sha256(path.read_bytes()).digest())
     return digest.hexdigest()
@@ -877,6 +954,55 @@ async def execute(*, request: Request) -> StreamingResponse:
             raise ValueError("Invalid governed query plan")
         return value
 
+    async def load_report_catalog(cursor: str | None) -> dict[str, Any]:
+        params = {"limit": "50"}
+        if cursor:
+            params["cursor"] = cursor
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{gateway_api_url}/api/chat/runs/{run_id}/report-catalog",
+                params=params,
+                headers={"Authorization": f"Bearer {scoped_token}"},
+            )
+        response.raise_for_status()
+        value = response.json()
+        if not isinstance(value, dict):
+            raise ValueError("Invalid saved report catalog")
+        return value
+
+    async def load_report_context(report_id: str) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{gateway_api_url}/api/chat/runs/{run_id}/report-context/{report_id}",
+                headers={"Authorization": f"Bearer {scoped_token}"},
+            )
+        if response.status_code == 404:
+            raise ValueError("Saved report not found")
+        response.raise_for_status()
+        value = response.json()
+        if not isinstance(value, dict):
+            raise ValueError("Invalid saved report context")
+        return value
+
+    async def check_published_artifact(
+        artifact_kind: str,
+        artifact_filename: str,
+    ) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{gateway_api_url}/api/chat/runs/{run_id}/published-report-artifact",
+                params={
+                    "artifact_kind": artifact_kind,
+                    "artifact_filename": artifact_filename,
+                },
+                headers={"Authorization": f"Bearer {scoped_token}"},
+            )
+        response.raise_for_status()
+        value = response.json()
+        if not isinstance(value, dict):
+            raise ValueError("Invalid published artifact state")
+        return value
+
     auth_config_override = _runtime_auth_override(body)
     session_id = SessionId(f"standalone-{run_id}")
     remove_project_directory = False
@@ -993,6 +1119,19 @@ async def execute(*, request: Request) -> StreamingResponse:
                     event_sink=lifecycle_event,
                     notebook_lifecycle=lifecycle,
                     runtime_redactions=(scoped_token,),
+                    report_catalog_loader=load_report_catalog,
+                    report_context_loader=load_report_context,
+                    published_artifact_checker=check_published_artifact,
+                    attached_report_id=str(
+                        (
+                            (body.get("warm_context") or {}).get(
+                                "report_reference"
+                            )
+                            or {}
+                        ).get("report_id")
+                        or ""
+                    )
+                    or None,
                 )
                 attempt_prompt = prompt
                 if recovery_failure is not None:
@@ -1007,6 +1146,7 @@ async def execute(*, request: Request) -> StreamingResponse:
 
                 final_text = ""
                 streamed_text = ""
+                text_blocks: list[str] = []
                 tool_names_by_id: dict[str, str] = {}
                 successful_run_cells = False
                 agent_failed = False
@@ -1043,17 +1183,14 @@ async def execute(*, request: Request) -> StreamingResponse:
                         *([] if sandbox_runtime_enabled else [REFRESH_MART_TOOL]),
                     ],
                     allowed_tools=(
-                        (
-                            STANDALONE_ALLOWED_TOOLS
-                            if notebook_analysis_enabled
-                            else [
-                                tool
-                                for tool in STANDALONE_ALLOWED_TOOLS
-                                if "signalpilot-notebook" not in tool
-                                and not tool.endswith("start_analysis_notebook")
-                            ]
+                        _allowed_tools_for_features(
+                            notebook_analysis_enabled=notebook_analysis_enabled
                         )
-                        + (SANDBOX_TOOLS if is_improvement_run else [])
+                        + (
+                            IMPROVEMENT_EXTRA_TOOLS
+                            if is_improvement_run
+                            else []
+                        )
                         + ([REFRESH_MART_TOOL] if sandbox_runtime_enabled else [])
                     ),
                     additional_mcp_servers={
@@ -1075,9 +1212,30 @@ async def execute(*, request: Request) -> StreamingResponse:
                         continue
                     if event.type == "text_delta":
                         streamed_text += event.content
+                        # Forward narration live so the gateway records it in
+                        # sequence with tool events — the chat UI interleaves
+                        # text with the tool chains it narrates. The accepted
+                        # ANSWER still ships only via the validated final
+                        # event; a rejected run never emits final.
+                        yield (
+                            json.dumps(
+                                {
+                                    "type": "text_delta",
+                                    "content": event.content,
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8")
                         continue
                     if event.type == "text":
-                        final_text = event.content
+                        # A run interleaves narration and the closing summary
+                        # as separate text blocks. Overwriting would keep only
+                        # the LAST block, which silently dropped the rest of
+                        # the answer whenever the closing block did not arrive
+                        # complete. Accumulate every block instead.
+                        if event.content.strip():
+                            text_blocks.append(event.content)
+                            final_text = "\n\n".join(text_blocks)
                         continue
                     if event.type == "error":
                         agent_failed = True
@@ -1268,11 +1426,51 @@ async def execute(*, request: Request) -> StreamingResponse:
                     _ANALYSIS_SESSIONS_BY_RUN.pop(run_id, None)
                     lifecycle.session_id = None
                 accepted_text = (final_text or streamed_text).strip()
+                complete_artifacts = [
+                    artifact
+                    for artifact in collector.artifacts
+                    if _collected_artifact_is_complete(artifact)
+                ]
+                if (
+                    complete_artifacts
+                    and collector.report_action_outcome is None
+                ):
+                    artifact = complete_artifacts[-1]
+                    LOGGER.warning(
+                        "Completed standalone artifact had no report action outcome "
+                        "run_id=%s kind=%s filename=%s",
+                        run_id,
+                        artifact.get("kind"),
+                        artifact.get("filename"),
+                    )
+                    collector.report_action_outcome = {
+                        "action": "no_suggestion",
+                        "artifact_kind": artifact.get("kind"),
+                        "artifact_filename": artifact.get("filename"),
+                        "title": artifact.get("filename"),
+                        "reason": (
+                            "The analysis agent completed without recording the required "
+                            "catalog-backed report decision."
+                        ),
+                        "source": "completion_check",
+                        "catalog_revision": collector.report_catalog_revision,
+                        "catalog_scan_complete": (
+                            collector.report_catalog_scan_complete
+                        ),
+                    }
                 final_payload = {
                     "type": "final",
                     "content": accepted_text,
                     "artifacts": collector.artifacts,
                 }
+                if collector.report_proposal is not None:
+                    final_payload["report_proposal"] = (
+                        collector.report_proposal
+                    )
+                if collector.report_action_outcome is not None:
+                    final_payload["report_action_outcome"] = (
+                        collector.report_action_outcome
+                    )
                 if archive_id is not None:
                     final_payload["archive_id"] = archive_id
                     final_payload["kernel_stopped"] = kernel_stopped
@@ -1294,7 +1492,21 @@ async def execute(*, request: Request) -> StreamingResponse:
             if remove_project_directory:
                 shutil.rmtree(project_directory, ignore_errors=True)
 
-    return StreamingResponse(stream(), media_type="application/x-ndjson")
+    # The body is newline-delimited JSON and the gateway worker parses it
+    # line-by-line regardless of content type. It is declared as an event
+    # stream because intermediary proxies (the Vercel sandbox route URL in
+    # production) buffer generic streaming responses into multi-second
+    # bursts but exempt Server-Sent Events; the extra headers disable the
+    # remaining common proxy buffers. Do not "fix" the media type without
+    # re-verifying live event pacing through a sandbox route URL.
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/cancel/{run_id}")

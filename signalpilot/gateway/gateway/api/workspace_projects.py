@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..auth import DBSession, OrgID, UserID
-from ..config.gateway_public import _LOCAL_GATEWAY_URL_DEFAULT, get_gateway_public_settings
+from ..config.gateway import _LOCAL_GATEWAY_URL_DEFAULT, get_gateway_settings
 from ..models.workspace import (
     WorkspaceProjectCreate,
     WorkspaceProjectInfo,
@@ -110,8 +110,8 @@ async def get_clone_url(project_id: str, store: StoreD, request: Request):
 
     # R11-S-1: never reflect the inbound Host header in cloud mode — a spoofed
     # Host would steer the pod's authenticated git clone to an attacker origin.
-    k8s = get_gateway_public_settings()
-    configured = (k8s.sp_public_gateway_url or "").rstrip("/")
+    gw = get_gateway_settings()
+    configured = (gw.sp_public_gateway_url or "").rstrip("/")
     if is_cloud_mode():
         # Use the public gateway URL (served via Caddy :443 -> gateway :3300). The
         # in-pod git client clones/pushes through this; hitting the gateway's

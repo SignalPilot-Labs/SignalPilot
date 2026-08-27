@@ -2,21 +2,16 @@
 
 backends.py owns the write side: creating, waiting on and deleting the
 container that runs one eval question. This is the read side: what is alive
-right now, why a stalled sandbox is stalled, and a bounded live tail of its
-output. Nothing here mutates runtime state.
+right now, and a bounded live tail of its output. Nothing here mutates daemon
+or provider state.
 
-Org scoping differs by backend and is enforced here:
-
-    docker      no namespaces exist, so a container is visible only when the
-                run id in its labels resolves to a run under the caller's own
-                eval root
-    vercel      sandboxes are listed by org-scoped tags
-
-(The Kubernetes view was retired with the EKS estate.)
+Org scoping is enforced here: no namespaces exist, so a container or sandbox
+is visible only when the run id it is attributed to resolves to a run under
+the caller's own eval root.
 
 Nothing that could carry a credential is emitted. Container specs are never
-returned (that is where env lives); free text a runtime can put in front of
-us — event messages, container state messages — goes through `redact` first.
+returned (that is where env lives); free text a daemon can put in front of
+us — container state messages — goes through `redact` first.
 """
 
 from __future__ import annotations
@@ -34,7 +29,7 @@ import httpx
 
 from ..config.evals import EvalRunSettings, get_eval_run_settings
 from . import runner
-from .backends import _DOCKER_API, _EVAL_POD_LABEL
+from .backends import _DOCKER_API
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +37,6 @@ logger = logging.getLogger(__name__)
 LOG_STREAM_MAX_BYTES = 2_000_000
 LOG_STREAM_MAX_SECONDS = 1800
 
-_POD_LABEL_SELECTOR = f"{_EVAL_POD_LABEL}=1"
 _DOCKER_LABEL = "signalpilot.eval"
 
 # The Vercel alternative requires >=3 lowercase words plus a random suffix
@@ -183,20 +177,14 @@ def _age_seconds(value) -> int | None:
     return max(0, int((datetime.now(UTC) - moment).total_seconds()))
 
 
-def _pick(d: dict, *names, default=None):
-    """Read the first present key: some SDKs serialize snake_case
-    but a raw manifest dict is camelCase, and tests feed both."""
-    for name in names:
-        if name in d and d[name] is not None:
-            return d[name]
-    return default
-
-
 class SandboxView(Protocol):
     async def inventory(self) -> dict: ...
     async def events(self, name: str) -> dict: ...
     def stream_logs(self, name: str, *, tail_lines: int) -> AsyncIterator[tuple[str, str]]: ...
     async def aclose(self) -> None: ...
+
+
+# Docker.
 
 
 class DockerSandboxView:
@@ -529,7 +517,7 @@ def get_sandbox_view(org_id: str) -> SandboxView:
         return VercelSandboxView(settings, org_id=org_id)
     if is_cloud_mode():
         raise RuntimeError(
-            "Cloud mode requires SP_EVAL_EXECUTION_BACKEND=vercel — the "
-            "Kubernetes eval estate was retired."
+            "Eval execution backend not configured for cloud mode: set "
+            "SP_EVAL_EXECUTION_BACKEND=vercel (the Kubernetes eval backend was removed)."
         )
     return DockerSandboxView(settings, org_id=org_id)

@@ -39,8 +39,12 @@ const StandaloneDataChat = dynamic(
 
 export function StandaloneDataChatLoader({
   conversationId,
+  embedded = false,
 }: {
   conversationId?: string;
+  embedded?: boolean;
 }) {
-  return <StandaloneDataChat conversationId={conversationId} />;
+  return (
+    <StandaloneDataChat conversationId={conversationId} embedded={embedded} />
+  );
 }

@@ -295,6 +295,11 @@ function stepHasBody(step: RunStep): boolean {
 }
 
 function stepPreview(step: RunStep): string | null {
+  // Planning steps carry their reasoning (purpose / route reason) in detail;
+  // that reads far better inline than the raw SQL snippet.
+  if (step.category === "plan" && step.detail) {
+    return step.detail.length > 90 ? `${step.detail.slice(0, 90)}…` : step.detail;
+  }
   if (step.file) return step.file;
   if (step.sql) {
     const flat = step.sql.replace(/\s+/g, " ").trim();

@@ -92,6 +92,32 @@ def _make_clerk_jwt(user_id: str = "clerk-user", org_id: str = "clerk-org") -> s
     return jwt.encode(payload, "clerk-secret", algorithm="HS256")
 
 
+@pytest.mark.asyncio
+async def test_chat_force_oauth_omits_org_api_key_from_runtime_env(
+    monkeypatch,
+):
+    from gateway.notebooks import session_service
+
+    monkeypatch.setenv("SP_CHAT_FORCE_OAUTH_TOKEN", "true")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-test")
+    resolve_org_key = AsyncMock(return_value="depleted-org-key")
+    monkeypatch.setattr(
+        session_service.org_secrets_store,
+        "resolve_anthropic_key",
+        resolve_org_key,
+    )
+
+    runtime_env = await session_service._runtime_env(
+        MagicMock(),
+        org_id="org-1",
+        extra_env={"SP_CHAT_PROJECT_ID": "project-1"},
+    )
+
+    assert runtime_env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat-test"
+    assert "ANTHROPIC_API_KEY" not in runtime_env
+    resolve_org_key.assert_not_awaited()
+
+
 class FakeBackend:
     """In-memory NotebookBackend covering the whole protocol."""
 
@@ -144,17 +170,17 @@ class FakeBackend:
 def _session_info(**overrides):
     from gateway.models.notebook_sessions import NotebookSessionInfo
 
-    defaults = dict(
-        id="sess-1",
-        org_id="org-1",
-        user_id="user-1",
-        project_id="proj-1",
-        branch="main",
-        backend="vercel",
-        status="running",
-        last_ping=time.time(),
-        created_at=time.time(),
-    )
+    defaults = {
+        "id": "sess-1",
+        "org_id": "org-1",
+        "user_id": "user-1",
+        "project_id": "proj-1",
+        "branch": "main",
+        "backend": "vercel",
+        "status": "running",
+        "last_ping": time.time(),
+        "created_at": time.time(),
+    }
     defaults.update(overrides)
     return NotebookSessionInfo(**defaults)
 
@@ -162,19 +188,19 @@ def _session_info(**overrides):
 def _internal(**overrides):
     from gateway.store.notebook_sessions import NotebookSessionInternal
 
-    defaults = dict(
-        session_id="sess-1",
-        org_id="org-1",
-        user_id="user-1",
-        status="running",
-        backend="vercel",
-        runtime_handle="sbx-live",
-        upstream_url="https://sbx-live.vercel.run",
-        snapshot_id=None,
-        access_token="tok-1",
-        project_id="proj-1",
-        branch="main",
-    )
+    defaults = {
+        "session_id": "sess-1",
+        "org_id": "org-1",
+        "user_id": "user-1",
+        "status": "running",
+        "backend": "vercel",
+        "runtime_handle": "sbx-live",
+        "upstream_url": "https://sbx-live.vercel.run",
+        "snapshot_id": None,
+        "access_token": "tok-1",
+        "project_id": "proj-1",
+        "branch": "main",
+    }
     defaults.update(overrides)
     return NotebookSessionInternal(**defaults)
 
@@ -971,3 +997,44 @@ class TestTerminateSession:
         await ns_api.delete_session(_make_mock_store(), _make_mock_response())
         terminate.assert_awaited_once()
         assert terminate.await_args.kwargs["session_info"] == session
+
+
+class TestStandaloneChatWarmSession:
+    """A warm notebook is conversation-scoped, never frozen to its first run."""
+
+    @pytest.mark.asyncio
+    async def test_session_launch_contains_only_conversation_stable_scope(
+        self, monkeypatch
+    ):
+        from gateway.notebooks import session_service as service
+
+        selected = SimpleNamespace(id="session-a")
+        ensure = AsyncMock(return_value=selected)
+        runtime = SimpleNamespace(session_id="session-a")
+        monkeypatch.setattr(service, "ensure_notebook_session", ensure)
+        monkeypatch.setattr(
+            service, "runtime_for_session", AsyncMock(return_value=runtime)
+        )
+
+        result = await service.ensure_standalone_chat_notebook_session(
+            AsyncMock(),
+            org_id="org-a",
+            user_id="user-a",
+            conversation_id="conversation-a",
+            project_id="project-a",
+            branch="main",
+            connection_name="production",
+            commit_sha="a" * 40,
+        )
+
+        assert result is runtime
+        kwargs = ensure.await_args.kwargs
+        assert kwargs["user_id"] == "chat:conv-conversation-a"
+        assert kwargs["extra_env"] == {
+            "SP_CHAT_PROJECT_ID": "project-a",
+            "SP_CHAT_BRANCH": "main",
+            "SP_CHAT_CONNECTION_NAME": "production",
+            "SP_CHAT_COMMIT_SHA": "a" * 40,
+            "SP_PROJECT_COMMIT_SHA": "a" * 40,
+        }
+        assert "SP_CHAT_RUN_ID" not in kwargs["extra_env"]

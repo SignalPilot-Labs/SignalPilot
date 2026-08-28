@@ -16,13 +16,14 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.auth.notebook_jwt import mint_session_jwt
 from gateway.config.gateway import get_gateway_settings
-from gateway.config.notebooks import get_notebook_settings
+from gateway.config.notebooks import chat_force_oauth_token, get_notebook_settings
 from gateway.models.notebook_sessions import NotebookSessionInfo
 from gateway.notebooks.backends import (
     LaunchRequest,
@@ -118,9 +119,11 @@ async def _runtime_env(
     web_url = _web_url()
     if web_url:
         env["SP_WEB_URL"] = web_url
-    anthropic_key = await org_secrets_store.resolve_anthropic_key(session, org_id)
-    if anthropic_key:
-        env["ANTHROPIC_API_KEY"] = anthropic_key
+    is_standalone_chat = bool(extra_env and extra_env.get("SP_CHAT_PROJECT_ID"))
+    if not (is_standalone_chat and chat_force_oauth_token()):
+        anthropic_key = await org_secrets_store.resolve_anthropic_key(session, org_id)
+        if anthropic_key:
+            env["ANTHROPIC_API_KEY"] = anthropic_key
     if extra_env:
         env.update(extra_env)
     return env
@@ -227,8 +230,9 @@ async def _try_resume(
     await ns.update_session_runtime(
         session, session_id=existing.id, org_id=org_id, status="running", upstream_url=upstream
     )
-    refreshed = await ns.get_session_by_id(session, session_id=existing.id, org_id=org_id)
-    return refreshed
+    return await ns.get_session_by_id(
+        session, session_id=existing.id, org_id=org_id
+    )
 
 
 async def ensure_notebook_session(
@@ -250,9 +254,15 @@ async def ensure_notebook_session(
     token_execution_identity: str | None = None,
     token_scopes: list[str] | None = None,
     backend: NotebookBackend | None = None,
+    on_cold_boot: Callable[[str], Awaitable[None]] | None = None,
 ) -> NotebookSessionInfo:
     """Create, reuse, or resume the notebook session for one
-    (org, user, project, branch)."""
+    (org, user, project, branch).
+
+    `on_cold_boot` fires only when real boot work is about to start —
+    "resuming" before a snapshot resume, "provisioning" before a fresh sandbox
+    launch. A warm running session never fires it, which lets callers surface
+    boot progress exclusively on cold paths."""
     if not org_id:
         raise NotebookOrgRequiredError("org_id required")
 
@@ -280,6 +290,8 @@ async def ensure_notebook_session(
         await terminate_session(session, session_info=existing, backend=backend)
         existing = None
     elif existing and existing.status == "snapshotted":
+        if on_cold_boot is not None:
+            await on_cold_boot("resuming")
         resumed = await _try_resume(session, backend, existing, org_id=org_id)
         if resumed is not None:
             return resumed
@@ -290,6 +302,9 @@ async def ensure_notebook_session(
         existing = None
 
     await ns.delete_stopped(session, org_id=org_id, user_id=user_id)
+
+    if on_cold_boot is not None:
+        await on_cold_boot("provisioning")
 
     if backend.name == "vercel":
         running = await ns.count_running_for_org(session, org_id=org_id)
@@ -521,13 +536,13 @@ async def ensure_standalone_chat_notebook_session(
     *,
     org_id: str,
     user_id: str,
-    run_id: str,
     conversation_id: str,
     project_id: str,
     branch: str,
     connection_name: str,
     commit_sha: str,
     frozen_revision: int | None = None,
+    on_cold_boot: Callable[[str], Awaitable[None]] | None = None,
 ) -> NotebookRuntime:
     """Start (or reuse) the notebook runtime for a chat CONVERSATION.
 
@@ -551,7 +566,6 @@ async def ensure_standalone_chat_notebook_session(
         frozen_revision=frozen_revision,
         read_only=True,
         extra_env={
-            "SP_CHAT_RUN_ID": run_id,
             "SP_CHAT_PROJECT_ID": project_id,
             "SP_CHAT_BRANCH": branch,
             "SP_CHAT_CONNECTION_NAME": connection_name,
@@ -572,5 +586,6 @@ async def ensure_standalone_chat_notebook_session(
         ],
         token_execution_identity=execution_identity,
         token_scopes=["read", "query", "execute"],
+        on_cold_boot=on_cold_boot,
     )
     return await runtime_for_session(session, session_info)

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import os
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -15,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.auth.notebook_jwt import mint_session_jwt
 from gateway.config.gateway import get_gateway_settings
+from gateway.config.notebooks import chat_force_oauth_token
 from gateway.db.models import (
     GatewayChatConversation,
     GatewayChatObjectDeletion,
@@ -32,6 +35,8 @@ from gateway.standalone_chat.object_storage import chat_object_storage
 from gateway.store import notebook_sessions as notebook_session_store
 from gateway.store import org_secrets as org_secrets_store
 from gateway.store.standalone_chat import set_execution_session
+
+logger = logging.getLogger(__name__)
 
 
 def _join_base_path(base: str, path: str) -> str:
@@ -60,6 +65,16 @@ def _notebook_auth_headers(session_token: str | None = None) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _bearer_fingerprint(headers: dict[str, str]) -> str:
+    """Return a non-reversible request correlation value for auth diagnostics."""
+    authorization = headers.get("Authorization", "")
+    if not authorization.startswith("Bearer "):
+        return "missing"
+    token = authorization.removeprefix("Bearer ")
+    digest = hashlib.sha256(token.encode()).hexdigest()[:12]
+    return f"sha256:{digest}:len{len(token)}"
+
+
 @dataclass(frozen=True)
 class PreparedExecution:
     url: str
@@ -75,17 +90,18 @@ async def ensure_execution_runtime(
     branch: str,
     connection_name: str,
     commit_sha: str,
+    on_cold_boot: Callable[[str], Awaitable[None]] | None = None,
 ) -> NotebookRuntime:
     runtime = await ensure_standalone_chat_notebook_session(
         db,
         org_id=run.org_id,
         user_id=run.user_id,
-        run_id=run.id,
         conversation_id=run.conversation_id,
         project_id=run.project_id,
         branch=branch,
         connection_name=connection_name,
         commit_sha=commit_sha,
+        on_cold_boot=on_cold_boot,
     )
     if not await set_execution_session(
         db,
@@ -108,7 +124,36 @@ async def prepare_execution(
     prompt: str,
     messages: list[dict[str, str]],
     warm_context: dict[str, Any],
+    on_cold_boot: Callable[[str], Awaitable[None]] | None = None,
 ) -> PreparedExecution:
+    conversation = await db.get(GatewayChatConversation, run.conversation_id)
+    is_improvement_run = bool(conversation and getattr(conversation, "origin", "user") == "improvement")
+    force_oauth = chat_force_oauth_token() and not is_improvement_run
+    runtime_auth: dict[str, str] | None = None
+    _local_oauth = os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or os.getenv("OAUTH_TOKEN")
+    if force_oauth:
+        if not _local_oauth:
+            raise RuntimeError(
+                "SP_CHAT_FORCE_OAUTH_TOKEN is enabled but no Claude OAuth token is configured"
+            )
+        runtime_auth = {"type": "oauth", "token": _local_oauth}
+    elif os.getenv("SP_RUNTIME_PREFER_OAUTH_TOKEN") and _local_oauth and not is_improvement_run:
+        # Local/staging testing override: bill agent runs to the OAuth token in
+        # the environment instead of the org's stored API key. Off in
+        # production (the flag lives only in the local container env), so the
+        # normal org-key-first resolution below is unchanged there.
+        runtime_auth = {"type": "oauth", "token": _local_oauth}
+    elif is_improvement_run and (improvement_key := os.getenv("SP_IMPROVEMENT_ANTHROPIC_KEY")):
+        # Automated improvement runs bill to a dedicated Claude Code OAuth
+        # token (sk-ant-oat...), never to the author's personal credential.
+        # OAuth only for now — no API-key path.
+        runtime_auth = {"type": "oauth", "token": improvement_key}
+    elif anthropic_api_key := await org_secrets_store.resolve_anthropic_key(db, run.org_id):
+        runtime_auth = {"type": "api_key", "token": anthropic_api_key}
+    elif oauth_token := (os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or os.getenv("OAUTH_TOKEN")):
+        runtime_auth = {"type": "oauth", "token": oauth_token}
+    elif server_api_key := os.getenv("ANTHROPIC_API_KEY"):
+        runtime_auth = {"type": "api_key", "token": server_api_key}
     runtime = await ensure_execution_runtime(
         db,
         run=run,
@@ -116,22 +161,8 @@ async def prepare_execution(
         branch=branch,
         connection_name=connection_name,
         commit_sha=commit_sha,
+        on_cold_boot=on_cold_boot,
     )
-    conversation = await db.get(GatewayChatConversation, run.conversation_id)
-    is_improvement_run = bool(conversation and getattr(conversation, "origin", "user") == "improvement")
-    anthropic_api_key = await org_secrets_store.resolve_anthropic_key(db, run.org_id)
-    runtime_auth: dict[str, str] | None = None
-    if is_improvement_run and (improvement_key := os.getenv("SP_IMPROVEMENT_ANTHROPIC_KEY")):
-        # Automated improvement runs bill to a dedicated Claude Code OAuth
-        # token (sk-ant-oat...), never to the author's personal credential.
-        # OAuth only for now — no API-key path.
-        runtime_auth = {"type": "oauth", "token": improvement_key}
-    elif anthropic_api_key:
-        runtime_auth = {"type": "api_key", "token": anthropic_api_key}
-    elif oauth_token := (os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or os.getenv("OAUTH_TOKEN")):
-        runtime_auth = {"type": "oauth", "token": oauth_token}
-    elif server_api_key := os.getenv("ANTHROPIC_API_KEY"):
-        runtime_auth = {"type": "api_key", "token": server_api_key}
     capabilities = [
         "artifact:publish",
         "dbt:read",
@@ -178,6 +209,9 @@ async def prepare_execution(
         "messages": messages,
         "warm_context": warm_context,
         "run_origin": "improvement" if is_improvement_run else "user",
+        # Optional model override. When SP_CHAT_AGENT_MODEL is set (local/staging)
+        # the notebook agent uses it; unset -> the notebook keeps its own default.
+        **({"model": _chat_model} if (_chat_model := os.getenv("SP_CHAT_AGENT_MODEL")) else {}),
         "features": {
             "sandbox_runtime": enterprise_chat_feature_flags().sandbox_runtime,
             "size_router": enterprise_chat_feature_flags().size_router,
@@ -222,6 +256,13 @@ async def stream_execution(execution: PreparedExecution) -> AsyncGenerator[dict[
             json=execution.payload,
         ) as response,
     ):
+        if response.is_error:
+            logger.warning(
+                "Notebook execute failed status=%s url=%s bearer=%s",
+                response.status_code,
+                execution.url,
+                _bearer_fingerprint(execution.headers),
+            )
         response.raise_for_status()
         async for line in response.aiter_lines():
             if not line.strip():

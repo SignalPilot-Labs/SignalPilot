@@ -5,21 +5,39 @@ import json
 import os
 import stat
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Self
 
 import anyio
 import httpx
+import jwt
 import pytest
 from mcp.types import CallToolRequest, CallToolRequestParams
+from starlette.exceptions import HTTPException
 from starlette.requests import Request
 
 from signalpilot._config.settings import GLOBAL_SETTINGS
 from signalpilot._server.ai.claude_agent import AgentEvent
-from signalpilot._server.api.endpoints import standalone_chat
+from signalpilot._server.api.endpoints import (
+    standalone_chat_cancel as chat_cancel,
+    standalone_chat_execution as standalone_chat,
+    standalone_chat_runtime as chat_runtime,
+    standalone_chat_workspace as chat_workspace,
+)
+from signalpilot._server.errors import handle_error
 from signalpilot._utils import requests
 from signalpilot._utils.requests import RequestError
+
+# The notebook /execute endpoint HS256-verifies the per-run gateway_session_token
+# with this secret (SP_SESSION_JWT_SECRET). Tests mint real signed tokens with it.
+_TEST_JWT_SECRET = "test-notebook-session-secret-at-least-32-bytes"
+
+
+@pytest.fixture(autouse=True)
+def _session_jwt_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SP_SESSION_JWT_SECRET", _TEST_JWT_SECRET)
 
 
 def test_seeded_analysis_notebooks_keep_run_tokens_out_of_source_and_isolated(
@@ -29,7 +47,7 @@ def test_seeded_analysis_notebooks_keep_run_tokens_out_of_source_and_isolated(
     second_scratch = tmp_path / "run-b"
     first_scratch.mkdir()
     second_scratch.mkdir()
-    first = standalone_chat._seed_analysis_notebook(
+    first = chat_runtime._seed_analysis_notebook(
         scratch=first_scratch,
         run_id="run-a",
         project_id="project-a",
@@ -37,7 +55,7 @@ def test_seeded_analysis_notebooks_keep_run_tokens_out_of_source_and_isolated(
         gateway_url="http://gateway:3300",
         scoped_token="token-a-secret",
     )
-    second = standalone_chat._seed_analysis_notebook(
+    second = chat_runtime._seed_analysis_notebook(
         scratch=second_scratch,
         run_id="run-b",
         project_id="project-b",
@@ -63,21 +81,33 @@ def test_seeded_analysis_notebooks_keep_run_tokens_out_of_source_and_isolated(
         )
 
 
-def _scoped_token(*, run_id: str, project_id: str, commit_sha: str) -> str:
+def _scoped_token(
+    *,
+    run_id: str,
+    project_id: str,
+    commit_sha: str,
+    branch: str = "main",
+    connection_name: str = "production",
+    scopes: list[str] | None = None,
+    secret: str = _TEST_JWT_SECRET,
+) -> str:
+    now = int(time.time())
     claims = {
+        "iss": "signalpilot-notebook-session",
+        "aud": "signalpilot-gateway",
+        "sub": "test-user",
+        "org_id": "test-org",
+        "session_id": "test-session",
         "execution_identity": f"chat:{run_id}",
         "project_id": project_id,
-        "branch": "main",
-        "connection_name": "production",
+        "branch": branch,
+        "connection_name": connection_name,
         "commit_sha": commit_sha,
-        "scopes": ["read", "query", "execute"],
+        "scopes": scopes or ["read", "query", "execute"],
+        "iat": now,
+        "exp": now + 600,
     }
-    payload = (
-        base64.urlsafe_b64encode(json.dumps(claims).encode())
-        .decode()
-        .rstrip("=")
-    )
-    return f"header.{payload}.signature"
+    return jwt.encode(claims, secret, algorithm="HS256")
 
 
 def _request(body: dict[str, object], *, app: object | None = None) -> Request:
@@ -104,6 +134,90 @@ def _request(body: dict[str, object], *, app: object | None = None) -> Request:
     if app is not None:
         scope["app"] = app
     return Request(scope, receive)
+
+
+def _error_request(path: str, *, accept: str = "") -> Request:
+    headers = [(b"accept", accept.encode())] if accept else []
+    return Request(
+        {"type": "http", "method": "POST", "path": path, "headers": headers}
+    )
+
+
+def _cancel_request(run_id: str) -> Request:
+    from starlette.authentication import AuthCredentials, SimpleUser
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": f"/api/standalone-chat/cancel/{run_id}",
+            "path_params": {"run_id": run_id},
+            "headers": [],
+            "auth": AuthCredentials(["edit"]),
+            "user": SimpleUser("test-user"),
+        }
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/standalone-chat/execute",
+        "/notebook/session-a/api/standalone-chat/execute",
+    ],
+)
+async def test_api_forbidden_response_preserves_status_and_detail(
+    path: str,
+) -> None:
+    response = await handle_error(
+        _error_request(path),
+        HTTPException(status_code=403, detail="Execution scope mismatch"),
+    )
+
+    assert response.status_code == 403
+    assert json.loads(response.body) == {"detail": "Execution scope mismatch"}
+    assert "www-authenticate" not in response.headers
+
+
+@pytest.mark.asyncio
+async def test_json_api_forbidden_response_preserves_detail() -> None:
+    response = await handle_error(
+        _error_request("/custom/execute", accept="application/json"),
+        HTTPException(status_code=403, detail="Invalid scoped gateway identity"),
+    )
+
+    assert response.status_code == 403
+    assert json.loads(response.body) == {
+        "detail": "Invalid scoped gateway identity"
+    }
+
+
+@pytest.mark.asyncio
+async def test_page_forbidden_response_still_requests_basic_auth() -> None:
+    response = await handle_error(
+        _error_request("/notebook/session-a/"),
+        HTTPException(status_code=403, detail="Forbidden"),
+    )
+
+    assert response.status_code == 401
+    assert json.loads(response.body) == {"detail": "Authorization header required"}
+    assert response.headers["www-authenticate"] == "Basic"
+
+
+@pytest.mark.asyncio
+async def test_cancel_accepts_a_later_run_in_the_warm_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SP_CHAT_RUN_ID", "run-11111111")
+    monkeypatch.setattr(chat_cancel, "stop_agent", lambda _session: True)
+
+    response = await chat_cancel.cancel(
+        request=_cancel_request("run-22222222")
+    )
+
+    assert response.status_code == 200
+    assert json.loads(response.body) == {"stopped": True, "kernel_stopped": False}
 
 
 def _runtime_session(*, dirty: bool = False) -> Any:
@@ -152,12 +266,12 @@ def test_terminal_validation_ignores_deleted_cell_notifications(
         ),
     )
     monkeypatch.setattr(
-        standalone_chat,
+        chat_runtime,
         "_analysis_session",
         lambda _app, _session_id: session,
     )
 
-    assert standalone_chat._notebook_failure(object(), "session-a") is None
+    assert chat_runtime._notebook_failure(object(), "session-a") is None
 
 
 def test_recovery_context_keeps_prior_graph_errors(
@@ -180,12 +294,12 @@ def test_recovery_context_keeps_prior_graph_errors(
         data=[SimpleNamespace()],
     )
     monkeypatch.setattr(
-        standalone_chat,
+        chat_runtime,
         "_analysis_session",
         lambda _app, _session_id: session,
     )
 
-    failure = standalone_chat._notebook_failure(object(), "session-a")
+    failure = chat_runtime._notebook_failure(object(), "session-a")
 
     assert failure is not None
     assert failure["errors"] == [
@@ -200,7 +314,7 @@ def test_recovery_context_keeps_prior_graph_errors(
             "cell_ids": ["current"],
         },
     ]
-    recovery = standalone_chat._recovery_context(failure)
+    recovery = chat_runtime._recovery_context(failure)
     assert "MultipleDefinitionError" in recovery
     assert '"variable": "segment"' in recovery
     assert '"summary"' in recovery
@@ -276,7 +390,7 @@ async def test_archive_uses_safe_fallback_when_frontend_export_is_unavailable(
             return FakeResponse()
 
     monkeypatch.setattr(
-        standalone_chat,
+        chat_runtime,
         "_analysis_session",
         lambda _app, _session_id: session,
     )
@@ -292,7 +406,7 @@ async def test_archive_uses_safe_fallback_when_frontend_export_is_unavailable(
     )
     monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
 
-    archive_id = await standalone_chat._archive_analysis_notebook(
+    archive_id = await chat_runtime._archive_analysis_notebook(
         app=object(),
         session_id="session-a",
         run_id="run-fallback",
@@ -316,7 +430,7 @@ async def test_execute_materializes_the_frozen_project_before_starting_the_agent
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The execution checkout is pulled from the gateway snapshot endpoint
-    (S3 tarball) into disposable scratch — no git, disk is never the truth."""
+    (S3 tarball) into disposable scratch â€” no git, disk is never the truth."""
     import io
     import tarfile
 
@@ -326,10 +440,9 @@ async def test_execute_materializes_the_frozen_project_before_starting_the_agent
     projects_root = tmp_path / "projects"
     captured: dict[str, str] = {}
 
-    monkeypatch.setattr(standalone_chat, "PROJECTS_ROOT", projects_root)
+    monkeypatch.setattr(chat_runtime, "PROJECTS_ROOT", projects_root)
     monkeypatch.setenv("SP_CHAT_SCRATCH_ROOT", str(tmp_path / "scratch"))
     for name in (
-        "SP_CHAT_RUN_ID",
         "SP_CHAT_PROJECT_ID",
         "SP_CHAT_BRANCH",
         "SP_CHAT_CONNECTION_NAME",
@@ -380,8 +493,8 @@ async def test_execute_materializes_the_frozen_project_before_starting_the_agent
         captured["dbt_project_yml"] = (cwd / "dbt_project.yml").read_text(encoding="utf-8")
         yield AgentEvent(type="text", content="Done")
 
-    monkeypatch.setattr(standalone_chat.httpx, "get", gateway_get)
-    monkeypatch.setattr(standalone_chat.httpx, "stream", gateway_stream)
+    monkeypatch.setattr(httpx, "get", gateway_get)
+    monkeypatch.setattr(httpx, "stream", gateway_stream)
     monkeypatch.setattr(standalone_chat, "run_notebook_agent", run_agent)
 
     token = _scoped_token(
@@ -502,7 +615,7 @@ async def test_first_turn_complete_artifact_returns_a_proactive_create_proposal(
         yield AgentEvent(type="text", content="Revenue is growing.")
 
     monkeypatch.setattr(
-        standalone_chat, "_execution_project_directory", execution_directory
+        chat_workspace, "_execution_project_directory", execution_directory
     )
     monkeypatch.setattr(httpx, "AsyncClient", CatalogClient)
     monkeypatch.setattr(standalone_chat, "run_notebook_agent", run_agent)
@@ -572,7 +685,7 @@ async def test_completion_check_is_non_fatal_when_agent_skips_report_decision(
 
     monkeypatch.setenv("SP_CHAT_SCRATCH_ROOT", str(tmp_path / "scratch"))
     monkeypatch.setattr(
-        standalone_chat, "_execution_project_directory", execution_directory
+        chat_workspace, "_execution_project_directory", execution_directory
     )
     monkeypatch.setattr(
         standalone_chat, "build_standalone_chat_mcp_server", build_server
@@ -752,12 +865,17 @@ async def test_validated_retry_survives_offline_development_archive(
         SimpleNamespace(ExportAsHTMLRequest=lambda **kwargs: kwargs),
     )
     monkeypatch.setattr(
-        standalone_chat, "_execution_project_directory", execution_directory
+        chat_workspace, "_execution_project_directory", execution_directory
     )
     monkeypatch.setattr(
         standalone_chat, "build_standalone_chat_mcp_server", build_server
     )
     monkeypatch.setattr(standalone_chat, "run_notebook_agent", run_agent)
+    monkeypatch.setattr(
+        chat_runtime,
+        "_analysis_session",
+        lambda _app, session_id: sessions[session_id],
+    )
     monkeypatch.setattr(
         standalone_chat,
         "_analysis_session",
@@ -896,12 +1014,17 @@ async def test_two_dirty_attempts_emit_one_validation_error_and_no_final(
 
     monkeypatch.setenv("SP_CHAT_SCRATCH_ROOT", str(tmp_path / "scratch"))
     monkeypatch.setattr(
-        standalone_chat, "_execution_project_directory", execution_directory
+        chat_workspace, "_execution_project_directory", execution_directory
     )
     monkeypatch.setattr(
         standalone_chat, "build_standalone_chat_mcp_server", build_server
     )
     monkeypatch.setattr(standalone_chat, "run_notebook_agent", run_agent)
+    monkeypatch.setattr(
+        chat_runtime,
+        "_analysis_session",
+        lambda _app, session_id: sessions[session_id],
+    )
     monkeypatch.setattr(
         standalone_chat,
         "_analysis_session",
@@ -979,10 +1102,10 @@ def test_tree_digest_ignores_generated_tooling_artifacts(tmp_path: Path) -> None
     (tmp_path / "models").mkdir()
     (tmp_path / "models" / "orders.sql").write_text("select 1", encoding="utf-8")
     (tmp_path / "dbt_project.yml").write_text("name: demo", encoding="utf-8")
-    baseline = standalone_chat._tree_digest(tmp_path)
+    baseline = chat_runtime._tree_digest(tmp_path)
 
     # dbt/python tooling side effects during a read-only analysis must not
-    # change the digest — only project source is frozen.
+    # change the digest â€” only project source is frozen.
     (tmp_path / "target").mkdir()
     (tmp_path / "target" / "manifest.json").write_text("{}", encoding="utf-8")
     (tmp_path / "logs").mkdir()
@@ -990,9 +1113,9 @@ def test_tree_digest_ignores_generated_tooling_artifacts(tmp_path: Path) -> None
     (tmp_path / ".user.yml").write_text("id: x", encoding="utf-8")
     (tmp_path / "models" / "__pycache__").mkdir()
     (tmp_path / "models" / "__pycache__" / "m.pyc").write_bytes(b"\x00")
-    assert standalone_chat._tree_digest(tmp_path) == baseline
-    assert standalone_chat._project_is_unchanged(tmp_path, baseline)
+    assert chat_runtime._tree_digest(tmp_path) == baseline
+    assert chat_runtime._project_is_unchanged(tmp_path, baseline)
 
     # Real source edits still trip the check.
     (tmp_path / "models" / "orders.sql").write_text("select 2", encoding="utf-8")
-    assert not standalone_chat._project_is_unchanged(tmp_path, baseline)
+    assert not chat_runtime._project_is_unchanged(tmp_path, baseline)

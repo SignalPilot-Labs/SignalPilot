@@ -49,10 +49,11 @@ from signalpilot._server.api.endpoints.standalone_chat import (
     STANDALONE_DISALLOWED_MCP_TOOLS,
     STANDALONE_SYSTEM_PROMPT,
     _allowed_tools_for_features,
-    _require_execution_scope,
     _runtime_auth_override,
-    _scoped_gateway_mcp_config,
     _system_prompt_for_features,
+)
+from signalpilot._server.api.endpoints.standalone_chat_prompt import (
+    _execution_prompt_values,
 )
 
 
@@ -588,12 +589,34 @@ def test_runtime_auth_is_request_scoped_and_validated():
         {"type": "api_key", "token": "sk-ant-user"},
     )
     assert execution_env["ANTHROPIC_API_KEY"] == "sk-ant-user"
-    assert "CLAUDE_CODE_OAUTH_TOKEN" not in execution_env
-    assert "OAUTH_TOKEN" not in execution_env
+    assert execution_env["CLAUDE_CODE_OAUTH_TOKEN"] == ""
+    assert execution_env["OAUTH_TOKEN"] == ""
+    assert execution_env["ANTHROPIC_AUTH_TOKEN"] == ""
     assert process_env == {
         "CLAUDE_CODE_OAUTH_TOKEN": "old-oauth",
         "OAUTH_TOKEN": "old-alias",
     }
+
+    process_env = {
+        "ANTHROPIC_API_KEY": "depleted-org-key",
+        "ANTHROPIC_AUTH_TOKEN": "old-auth-token",
+    }
+    execution_env = dict(process_env)
+    _apply_auth_config(
+        execution_env,
+        {"type": "oauth", "token": "working-oauth"},
+    )
+    assert execution_env == {
+        "ANTHROPIC_API_KEY": "",
+        "ANTHROPIC_AUTH_TOKEN": "",
+        "OAUTH_TOKEN": "",
+        "CLAUDE_CODE_OAUTH_TOKEN": "working-oauth",
+    }
+    # This mirrors the Agent SDK's subprocess environment merge. Deleting the
+    # competing keys would preserve the inherited values; empty overrides do not.
+    merged = {**process_env, **execution_env}
+    assert merged["ANTHROPIC_API_KEY"] == ""
+    assert merged["ANTHROPIC_AUTH_TOKEN"] == ""
 
 
 def test_chart_renderer_produces_a_real_png():
@@ -731,81 +754,6 @@ def test_horizontal_bar_renderer_handles_long_categories_and_negative_values():
     assert image.size == (1_200, 750)
 
 
-def test_execution_scope_is_frozen_to_claimed_run(monkeypatch):
-    monkeypatch.setenv("SP_CHAT_RUN_ID", "run-12345678")
-    monkeypatch.setenv("SP_CHAT_PROJECT_ID", "project-a")
-    monkeypatch.setenv("SP_CHAT_BRANCH", "main")
-    monkeypatch.setenv("SP_CHAT_CONNECTION_NAME", "production")
-    monkeypatch.setenv("SP_CHAT_COMMIT_SHA", "a" * 40)
-
-    assert _require_execution_scope(
-        {
-            "run_id": "run-12345678",
-            "project_id": "project-a",
-            "branch": "main",
-            "connection_name": "production",
-            "commit_sha": "a" * 40,
-        }
-    ) == ("run-12345678", "project-a", "main", "production", "a" * 40)
-    with pytest.raises(HTTPException, match="Execution scope mismatch"):
-        _require_execution_scope(
-            {
-                "run_id": "run-12345678",
-                "project_id": "project-a",
-                "branch": "main",
-                "connection_name": "another-connection",
-                "commit_sha": "a" * 40,
-            }
-        )
-
-
-def test_gateway_mcp_uses_the_per_run_read_only_identity(monkeypatch):
-    claims = {
-        "execution_identity": "chat:run-12345678",
-        "project_id": "project-a",
-        "branch": "main",
-        "connection_name": "production",
-        "commit_sha": "a" * 40,
-        "scopes": ["read", "query", "execute"],
-    }
-    payload = (
-        base64.urlsafe_b64encode(json.dumps(claims).encode())
-        .decode()
-        .rstrip("=")
-    )
-    token = f"header.{payload}.signature"
-    monkeypatch.setenv("SP_GATEWAY_INTERNAL_URL", "http://gateway:3300")
-    config = _scoped_gateway_mcp_config(
-        {"gateway_session_token": token},
-        run_id="run-12345678",
-        project_id="project-a",
-        branch="main",
-        connection_name="production",
-        commit_sha="a" * 40,
-    )
-    server = config["mcpServers"]["signalpilot"]
-    assert server["url"] == "http://gateway:3300/mcp"
-    assert server["headers"]["Authorization"] == f"Bearer {token}"
-
-    claims["connection_name"] = "another-connection"
-    bad_payload = (
-        base64.urlsafe_b64encode(json.dumps(claims).encode())
-        .decode()
-        .rstrip("=")
-    )
-    with pytest.raises(
-        HTTPException, match="Scoped gateway identity mismatch"
-    ):
-        _scoped_gateway_mcp_config(
-            {"gateway_session_token": f"header.{bad_payload}.signature"},
-            run_id="run-12345678",
-            project_id="project-a",
-            branch="main",
-            connection_name="production",
-            commit_sha="a" * 40,
-        )
-
-
 def test_agent_contract_excludes_mutating_and_external_tools():
     # The prompt file wraps lines; compare against whitespace-collapsed text.
     _prompt_flat = " ".join(STANDALONE_SYSTEM_PROMPT.split())
@@ -864,6 +812,14 @@ async def test_disabled_notebook_feature_removes_tools_and_prompt_instructions()
     assert "start_analysis_notebook" not in {
         tool.name for tool in response.root.tools
     }
+    *_, execution_prompt = _execution_prompt_values(
+        {"prompt": "Summarize revenue", "features": {"notebook_analysis": False}},
+        project_id="project-a",
+        branch="main",
+        commit_sha="a" * 40,
+        connection_name="warehouse",
+    )
+    assert "marimo reactive notebook" not in execution_prompt
 
 
 def test_runtime_publication_sdk_is_exposed_from_top_level_package():

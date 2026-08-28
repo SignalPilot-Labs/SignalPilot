@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gateway.config.notebooks import chat_force_oauth_token
 from gateway.db.models import (
     GatewayChatConversation,
     GatewayChatStarterCache,
@@ -235,14 +236,17 @@ async def evaluate_project_readiness(
             None,
         )
 
+    oauth_token = os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or os.getenv("OAUTH_TOKEN")
     has_runtime_credentials = bool(
-        os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
-        or os.getenv("OAUTH_TOKEN")
-        or os.getenv("ANTHROPIC_API_KEY")
-        # The improvement-run billing key also satisfies the runtime
-        # requirement; execution.py picks the right credential per run.
-        or os.getenv("SP_IMPROVEMENT_ANTHROPIC_KEY")
-        or await org_secrets_store.resolve_anthropic_key(db, org_id)
+        oauth_token
+        if chat_force_oauth_token()
+        else (
+            os.getenv("ANTHROPIC_API_KEY")
+            # The improvement-run billing key also satisfies the runtime
+            # requirement; execution.py picks the right credential per run.
+            or os.getenv("SP_IMPROVEMENT_ANTHROPIC_KEY")
+            or await org_secrets_store.resolve_anthropic_key(db, org_id)
+        )
     )
     if not has_runtime_credentials:
         return ProjectReadiness(

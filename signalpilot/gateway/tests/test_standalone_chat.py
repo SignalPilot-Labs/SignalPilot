@@ -1087,6 +1087,83 @@ async def test_execution_uses_org_anthropic_key_as_request_scoped_auth(
 
 
 @pytest.mark.asyncio
+async def test_execution_force_oauth_never_resolves_org_api_key(
+    db_session,
+    monkeypatch,
+):
+    _, run = await _conversation_and_run(db_session)
+    monkeypatch.setenv("SP_CHAT_FORCE_OAUTH_TOKEN", "true")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-test")
+    ensure_runtime = AsyncMock(
+        return_value=SimpleNamespace(
+            session_id="session-a",
+            internal_base_url="http://notebook.internal",
+            access_token=None,
+        )
+    )
+    monkeypatch.setattr(chat_execution, "ensure_execution_runtime", ensure_runtime)
+    resolve_org_key = AsyncMock(side_effect=AssertionError("org key must not be resolved"))
+    monkeypatch.setattr(
+        chat_execution.org_secrets_store,
+        "resolve_anthropic_key",
+        resolve_org_key,
+    )
+    monkeypatch.setattr(chat_execution, "mint_session_jwt", lambda **_kwargs: "session-jwt")
+    monkeypatch.setattr(
+        chat_execution,
+        "get_gateway_settings",
+        lambda: SimpleNamespace(sp_session_jwt_ttl_seconds=300),
+    )
+
+    prepared = await chat_execution.prepare_execution(
+        db_session,
+        run=run,
+        worker_id="worker-a",
+        branch="main",
+        connection_name="production",
+        commit_sha="a" * 40,
+        prompt="Analyze revenue",
+        messages=[],
+        warm_context={},
+    )
+
+    assert prepared.payload["runtime_auth"] == {
+        "type": "oauth",
+        "token": "sk-ant-oat-test",
+    }
+    resolve_org_key.assert_not_awaited()
+    ensure_runtime.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_execution_force_oauth_fails_before_starting_runtime_when_missing(
+    db_session,
+    monkeypatch,
+):
+    _, run = await _conversation_and_run(db_session)
+    monkeypatch.setenv("SP_CHAT_FORCE_OAUTH_TOKEN", "true")
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.delenv("OAUTH_TOKEN", raising=False)
+    ensure_runtime = AsyncMock()
+    monkeypatch.setattr(chat_execution, "ensure_execution_runtime", ensure_runtime)
+
+    with pytest.raises(RuntimeError, match="no Claude OAuth token"):
+        await chat_execution.prepare_execution(
+            db_session,
+            run=run,
+            worker_id="worker-a",
+            branch="main",
+            connection_name="production",
+            commit_sha="a" * 40,
+            prompt="Analyze revenue",
+            messages=[],
+            warm_context={},
+        )
+
+    ensure_runtime.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_one_nonterminal_run_and_atomic_initial_state(db_session):
     conversation_id, run = await _conversation_and_run(db_session)
     detail = await chat_store.get_conversation_detail(

@@ -6,13 +6,13 @@ import asyncio
 import logging
 import os
 import socket
+import time
 import uuid
 from contextlib import suppress
 from typing import Any
 
 import httpx
 
-from gateway import __version__ as gateway_version
 from gateway.db.engine import get_session_factory, init_db
 from gateway.db.models import GatewayChatRun
 from gateway.standalone_chat.config import (
@@ -30,7 +30,15 @@ from gateway.standalone_chat.execution import (
     prepare_execution,
     stream_execution,
 )
-from gateway.standalone_chat.projects import project_metadata_context
+from gateway.standalone_chat.worker_context import (
+    merge_text_delta as _merge_text_delta,
+)
+from gateway.standalone_chat.worker_context import (
+    message_context as _message_context,
+)
+from gateway.standalone_chat.worker_context import (
+    warm_context as _warm_context,
+)
 from gateway.store import standalone_chat as chat_store
 
 logger = logging.getLogger(__name__)
@@ -39,140 +47,6 @@ _CLARIFICATION_PREFIX = "CLARIFICATION_REQUESTED:"
 
 def _worker_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
-
-
-def _message_context(context: dict[str, Any]) -> list[dict[str, str]]:
-    return [
-        {"role": row.role, "content": row.content} for row in context["messages"] if row.role in {"user", "assistant"}
-    ]
-
-
-def _merge_text_delta(current: str, delta: str, *, starts_new_block: bool) -> tuple[str, str]:
-    if not delta:
-        return current, ""
-    separator = ""
-    if current and starts_new_block:
-        trailing_newlines = len(current) - len(current.rstrip("\n"))
-        leading_newlines = len(delta) - len(delta.lstrip("\n"))
-        separator = "\n" * max(0, 2 - trailing_newlines - leading_newlines)
-    emitted = f"{separator}{delta}"
-    return f"{current}{emitted}", emitted
-
-
-def _warm_context(
-    context: dict[str, Any],
-    *,
-    summary_override: str | None = None,
-) -> dict[str, Any]:
-    conversation = context["conversation"]
-    project = context["project"]
-    artifact_refs: list[dict[str, Any]] = []
-    artifacts = context["artifacts"]
-    for index, artifact in enumerate(artifacts):
-        snapshot = artifact.snapshot_json or {}
-        reference: dict[str, Any] = {
-            "id": artifact.id,
-            "kind": artifact.kind,
-            "filename": artifact.filename,
-            "parent_artifact_id": artifact.parent_artifact_id,
-            "schema": {
-                "columns": snapshot.get("columns") or (snapshot.get("source") or {}).get("columns"),
-                "truncated": snapshot.get("truncated", False),
-            },
-            "provenance": artifact.provenance_json,
-            "freshness_at": artifact.freshness_at.isoformat() if artifact.freshness_at else None,
-            "assumptions": artifact.assumptions,
-            "exclusions": artifact.exclusions,
-            "caveats": artifact.caveats,
-        }
-        # Keep schemas for every artifact and bounded snapshot data for the five
-        # most recent artifacts so follow-up questions can refine exact results.
-        if index >= max(0, len(artifacts) - 5):
-            if artifact.kind == "report":
-                reference["snapshot"] = {
-                    "html_excerpt": str(snapshot.get("html") or "")[:20_000],
-                }
-            else:
-                rows = (snapshot.get("source") or {}).get("rows") if artifact.kind == "chart" else snapshot.get("rows")
-                reference["snapshot"] = {
-                    "spec": snapshot.get("spec") if artifact.kind == "chart" else None,
-                    "rows": list(rows or [])[:200],
-                    "snapshot_row_count": len(rows or []),
-                }
-        artifact_refs.append(reference)
-    artifact_refs.reverse()
-    approvals_by_proposal = {approval.proposal_id: approval for approval in context.get("query_approvals", [])}
-    query_decisions = [
-        {
-            "proposal_id": proposal.id,
-            "purpose": proposal.purpose,
-            "sql_hash": proposal.sql_hash,
-            "status": proposal.status,
-            "estimated_cost_usd": proposal.estimated_cost_usd,
-            "decision": (approvals_by_proposal[proposal.id].decision if proposal.id in approvals_by_proposal else None),
-        }
-        for proposal in context.get("query_proposals", [])
-    ]
-    executions_by_id = {execution.id: execution for execution in context.get("query_executions", [])}
-    result_refs = [
-        {
-            "result_id": result.id,
-            "execution_id": result.execution_id,
-            "columns": result.columns_json,
-            "query_row_count": result.query_row_count,
-            "saved_row_count": result.saved_row_count,
-            "completeness": result.result_completeness,
-            "truncation_reason": result.truncation_reason,
-            "provenance": result.provenance_json,
-            "connection_name": (
-                executions_by_id[result.execution_id].connection_name
-                if result.execution_id in executions_by_id
-                else None
-            ),
-        }
-        for result in context.get("query_results", [])
-    ]
-    report_reference = next(
-        (
-            message.metadata_json.get("report_reference")
-            for message in reversed(context.get("messages", []))
-            if message.role == "user"
-            and isinstance(message.metadata_json, dict)
-            and isinstance(message.metadata_json.get("report_reference"), dict)
-        ),
-        None,
-    )
-    dashboard_chart_reference = next(
-        (
-            message.metadata_json.get("dashboard_chart_reference")
-            for message in reversed(context.get("messages", []))
-            if message.role == "user"
-            and isinstance(message.metadata_json, dict)
-            and isinstance(message.metadata_json.get("dashboard_chart_reference"), dict)
-        ),
-        None,
-    )
-    return {
-        "project": {
-            "id": project.id,
-            "name": project.display_name or project.name,
-            "description": project.description,
-            "default_branch": conversation.branch,
-            "commit_sha": conversation.commit_sha,
-            "connection_name": project.connection_name,
-            "dbt_metadata": project_metadata_context(project, conversation.branch or "main"),
-        },
-        "conversation_summary": summary_override or conversation.internal_summary,
-        "prior_artifacts": artifact_refs,
-        "query_decisions": query_decisions,
-        "structured_results": result_refs,
-        "report_reference": report_reference,
-        "dashboard_chart_reference": dashboard_chart_reference,
-        "runtime": {
-            "gateway_version": gateway_version,
-            "plugin_version": os.getenv("SIGNALPILOT_PLUGIN_VERSION", "deployed"),
-        },
-    }
 
 
 async def _append(run_id: str, event_type: str, payload: dict[str, Any]) -> None:
@@ -356,11 +230,15 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
             "status",
             {"status": "running", "reset_text": recovering},
         )
-        await _append(
-            run_id,
-            "progress",
-            {"label": "Exploring the project and relevant data"},
-        )
+
+        # Runtime boot progress: emitted ONLY when the sandbox is actually
+        # cold (fresh provision or snapshot resume). A warm conversation
+        # reuses its running sandbox and the UI shows nothing.
+        boot_started_at: dict[str, float] = {}
+
+        async def _on_cold_boot(phase: str) -> None:
+            boot_started_at.setdefault("t0", time.monotonic())
+            await _append(run_id, "runtime_boot", {"phase": phase})
 
         last_error: Exception | None = None
         for notebook_attempt in range(2):
@@ -373,13 +251,6 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                     )
                     if active_run is None:
                         return
-                    # Sandbox cold starts take 30-60s; without a progress
-                    # event the run looks hung before the first agent event.
-                    await _append(
-                        run_id,
-                        "progress",
-                        {"label": "Starting the secure analysis runtime"},
-                    )
                     execution = await prepare_execution(
                         db,
                         run=active_run,
@@ -390,12 +261,17 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                         prompt=prompt,
                         messages=messages,
                         warm_context=warm_context,
+                        on_cold_boot=_on_cold_boot,
                     )
-                    await _append(
-                        run_id,
-                        "progress",
-                        {"label": "Analysis runtime ready"},
-                    )
+                    if "t0" in boot_started_at:
+                        await _append(
+                            run_id,
+                            "runtime_boot",
+                            {
+                                "phase": "ready",
+                                "boot_ms": int((time.monotonic() - boot_started_at.pop("t0")) * 1000),
+                            },
+                        )
                 async for event in stream_execution(execution):
                     if stop.is_set():
                         raise asyncio.CancelledError
@@ -414,6 +290,13 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                                 {"delta": emitted_content},
                             )
                             starts_new_text_block = False
+                    elif event_type == "thinking_delta":
+                        if content:
+                            await _append(
+                                run_id,
+                                "thinking_delta",
+                                {"delta": content},
+                            )
                     elif event_type == "text":
                         final_text = content
                     elif event_type == "progress":
@@ -546,14 +429,6 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
         if not answer:
             raise RuntimeError("The analysis runtime returned no answer")
 
-        await _append(
-            run_id,
-            "progress",
-            {
-                "label": "Answer complete",
-                "summary": "Reviewed governed project metadata, relevant sources, and query results.",
-            },
-        )
         async with factory() as db:
             message = await chat_store.complete_run(
                 db,

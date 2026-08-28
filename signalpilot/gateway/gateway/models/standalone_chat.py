@@ -21,7 +21,9 @@ ChatRunStatus = Literal[
 ChatEventType = Literal[
     "status",
     "progress",
+    "runtime_boot",
     "text_delta",
+    "thinking_delta",
     "tool_started",
     "tool_completed",
     "sql",

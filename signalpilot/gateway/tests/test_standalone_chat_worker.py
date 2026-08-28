@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from gateway.standalone_chat import worker
+from gateway.standalone_chat import worker, worker_context
 
 
 def test_dashboard_chart_reference_is_preloaded_into_existing_chat_runtime(
@@ -45,7 +45,9 @@ def test_dashboard_chart_reference_is_preloaded_into_existing_chat_runtime(
         "query_executions": [],
         "query_results": [],
     }
-    monkeypatch.setattr(worker, "project_metadata_context", lambda *_args: {"models": []})
+    monkeypatch.setattr(
+        worker_context, "project_metadata_context", lambda *_args: {"models": []}
+    )
 
     warm = worker._warm_context(context)
 

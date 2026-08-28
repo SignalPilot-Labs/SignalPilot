@@ -1,0 +1,614 @@
+"""Streaming execution and cancellation routes for standalone chat."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import shutil
+from typing import TYPE_CHECKING, Any
+
+from signalpilot import _loggers
+from signalpilot._server.ai.claude_agent import (
+    clear_chat_session,
+    run_notebook_agent,
+)
+from signalpilot._server.ai.standalone_chat_tools import (
+    StandaloneArtifactCollector,
+    StandaloneNotebookLifecycle,
+    _collected_artifact_is_complete,
+    build_standalone_chat_mcp_server,
+)
+from signalpilot._server.api.endpoints.standalone_chat_gateway import (
+    StandaloneGatewayClient,
+)
+from signalpilot._server.api.endpoints.standalone_chat_prompt import (
+    DBT_EXECUTE_TOOL,
+    IMPROVEMENT_EXTRA_TOOLS,
+    REFRESH_MART_TOOL,
+    SANDBOX_TOOLS,
+    STANDALONE_DISALLOWED_MCP_TOOLS,
+    _allowed_tools_for_features,
+    _execution_prompt_values,
+)
+from signalpilot._server.api.endpoints.standalone_chat_response import (
+    stream_response,
+)
+from signalpilot._server.api.endpoints.standalone_chat_runtime import (
+    _ANALYSIS_SESSIONS_BY_RUN,
+    _analysis_session,
+    _archive_analysis_notebook,
+    _close_analysis_kernel,
+    _log_notebook_failure,
+    _notebook_failure,
+    _project_is_unchanged,
+    _recovery_context,
+    _runtime_auth_override,
+    _start_analysis_kernel,
+    _with_recorded_notebook_errors,
+)
+from signalpilot._server.api.endpoints.standalone_chat_workspace import (
+    prepare_execution_workspace,
+)
+from signalpilot._server.auth.standalone_chat import (
+    authorize_execution,
+    gateway_mcp_config,
+)
+from signalpilot._server.router import APIRouter
+from starlette.authentication import requires
+from signalpilot._types.ids import SessionId
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
+    from starlette.requests import Request
+    from starlette.responses import StreamingResponse
+
+router = APIRouter()
+LOGGER = _loggers.sp_logger()
+
+
+@router.post("/execute")
+@requires("edit")
+async def execute(*, request: Request) -> StreamingResponse:
+    body = await request.json()
+    authorization = authorize_execution(body)
+    scope = authorization.scope
+    run_id = scope.run_id
+    project_id = scope.project_id
+    branch = scope.branch
+    connection_name = scope.connection_name
+    commit_sha = scope.commit_sha
+    mcp_config = gateway_mcp_config(authorization)
+    (
+        prompt,
+        history,
+        notebook_analysis_enabled,
+        is_improvement_run,
+        sandbox_runtime_enabled,
+        system_prompt,
+    ) = _execution_prompt_values(
+        body,
+        project_id=project_id,
+        branch=branch,
+        commit_sha=commit_sha,
+        connection_name=connection_name,
+    )
+    scoped_token = authorization.gateway_token
+    gateway_api_url = str(
+        os.getenv("SP_GATEWAY_INTERNAL_URL")
+        or os.getenv("SP_GATEWAY_URL")
+        or "http://gateway:3300"
+    ).rstrip("/")
+    if gateway_api_url.endswith("/mcp"):
+        gateway_api_url = gateway_api_url.removesuffix("/mcp")
+
+    gateway = StandaloneGatewayClient(
+        gateway_url=gateway_api_url,
+        token=scoped_token,
+        run_id=run_id,
+        notebook_analysis_enabled=notebook_analysis_enabled,
+    )
+    load_result = gateway.load_result
+    check_plan = gateway.check_plan
+    load_report_catalog = gateway.load_report_catalog
+    load_report_context = gateway.load_report_context
+    check_published_artifact = gateway.check_published_artifact
+
+    auth_config_override = _runtime_auth_override(body)
+    session_id = SessionId(f"standalone-{run_id}")
+    (
+        scratch,
+        analysis_notebook_path,
+        seeded_notebook_source,
+        project_directory,
+        remove_project_directory,
+        project_baseline_digest,
+    ) = await prepare_execution_workspace(
+        run_id=run_id,
+        project_id=project_id,
+        branch=branch,
+        connection_name=connection_name,
+        gateway_url=gateway_api_url,
+        gateway_token=scoped_token,
+    )
+
+    async def stream() -> AsyncGenerator[bytes, None]:
+        current_lifecycle: StandaloneNotebookLifecycle | None = None
+        try:
+            recovery_failure: dict[str, Any] | None = None
+            previous_notebook_session_id: str | None = None
+            recovery_plan_id: str | None = None
+            for attempt in (1, 2):
+                collector = StandaloneArtifactCollector()
+                lifecycle = StandaloneNotebookLifecycle()
+                current_lifecycle = lifecycle
+
+                async def lifecycle_event(
+                    event_type: str,
+                    payload: dict[str, Any],
+                    lifecycle: StandaloneNotebookLifecycle = lifecycle,
+                    attempt: int = attempt,
+                ) -> None:
+                    del payload
+                    if (
+                        event_type != "notebook_started"
+                        or not lifecycle.session_id
+                    ):
+                        return
+                    _ANALYSIS_SESSIONS_BY_RUN[run_id] = lifecycle.session_id
+                    runtime_session = _analysis_session(
+                        request.app, lifecycle.session_id
+                    )
+                    runtime_session._signalpilot_chat_run_id = run_id
+                    runtime_session._signalpilot_chat_session_id = (
+                        lifecycle.session_id
+                    )
+                    runtime_session._signalpilot_chat_attempt = attempt
+
+                if recovery_failure is not None:
+                    if not recovery_plan_id:
+                        yield (
+                            json.dumps(
+                                {
+                                    "type": "error",
+                                    "content": "The failed notebook did not retain a governed recovery plan.",
+                                    "is_error": True,
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8")
+                        return
+                    try:
+                        lifecycle.session_id = _start_analysis_kernel(
+                            request.app, analysis_notebook_path
+                        )
+                    except Exception:
+                        LOGGER.exception(
+                            "Clean notebook kernel start failed run_id=%s attempt=%s",
+                            run_id,
+                            attempt,
+                        )
+                        yield (
+                            json.dumps(
+                                {
+                                    "type": "error",
+                                    "content": "The failed notebook kernel could not be restarted safely.",
+                                    "is_error": True,
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8")
+                        return
+                    lifecycle.plan_id = recovery_plan_id
+                    clean_session = _analysis_session(
+                        request.app, lifecycle.session_id
+                    )
+                    clean_session._signalpilot_chat_runtime = True
+                    clean_session._signalpilot_chat_redactions = (
+                        scoped_token,
+                    )
+                    await lifecycle_event(
+                        "notebook_started", {"plan_id": recovery_plan_id}
+                    )
+
+                artifact_server = build_standalone_chat_mcp_server(
+                    collector,
+                    result_loader=load_result,
+                    project_directory=project_directory,
+                    scratch_directory=scratch,
+                    notebook_mcp_app=(
+                        request.app if notebook_analysis_enabled else None
+                    ),
+                    analysis_notebook_path=analysis_notebook_path,
+                    plan_checker=check_plan,
+                    event_sink=lifecycle_event,
+                    notebook_lifecycle=lifecycle,
+                    runtime_redactions=(scoped_token,),
+                    report_catalog_loader=load_report_catalog,
+                    report_context_loader=load_report_context,
+                    published_artifact_checker=check_published_artifact,
+                    attached_report_id=str(
+                        (
+                            (body.get("warm_context") or {}).get(
+                                "report_reference"
+                            )
+                            or {}
+                        ).get("report_id")
+                        or ""
+                    )
+                    or None,
+                )
+                attempt_prompt = prompt
+                if recovery_failure is not None:
+                    attempt_prompt = (
+                        f"{prompt}\n\n<notebook_recovery>\n"
+                        f"{_recovery_context(recovery_failure)}\n"
+                        "The clean notebook kernel is already running. Use "
+                        f"session_id `{lifecycle.session_id}` and governed plan_id "
+                        f"`{recovery_plan_id}`; do not create a different session.\n"
+                        "</notebook_recovery>"
+                    )
+
+                final_text = ""
+                streamed_text = ""
+                text_blocks: list[str] = []
+                tool_names_by_id: dict[str, str] = {}
+                successful_run_cells = False
+                agent_failed = False
+                async for event in run_notebook_agent(
+                    attempt_prompt,
+                    session_id,
+                    model=str(
+                        body.get("model")
+                        or os.getenv("SIGNALPILOT_ANALYSIS_AGENT_MODEL")
+                        or "claude-sonnet-4-5-20250929"
+                    ),
+                    max_turns=40,
+                    new_chat=bool(body.get("new_execution", False))
+                    or attempt > 1,
+                    message_history=history,
+                    system_prompt_override=system_prompt,
+                    mcp_config=mcp_config,
+                    thread_id=f"standalone:{run_id}",
+                    notebook_mcp_app=(
+                        request.app if notebook_analysis_enabled else None
+                    ),
+                    cwd=str(project_directory),
+                    disallow_file_edits=True,
+                    additional_disallowed_tools=[
+                        "WebFetch",
+                        "WebSearch",
+                        *STANDALONE_DISALLOWED_MCP_TOOLS,
+                        # One agent sandbox: sandbox_exec is improvement-only,
+                        # never chat.
+                        *([] if is_improvement_run else SANDBOX_TOOLS),
+                        # dbt_execute is retired for chat (refresh_mart replaces
+                        # it); refresh_mart only when the sandbox runtime is on.
+                        DBT_EXECUTE_TOOL,
+                        *([] if sandbox_runtime_enabled else [REFRESH_MART_TOOL]),
+                    ],
+                    allowed_tools=(
+                        _allowed_tools_for_features(
+                            notebook_analysis_enabled=notebook_analysis_enabled
+                        )
+                        + (
+                            IMPROVEMENT_EXTRA_TOOLS
+                            if is_improvement_run
+                            else []
+                        )
+                        + ([REFRESH_MART_TOOL] if sandbox_runtime_enabled else [])
+                    ),
+                    additional_mcp_servers={
+                        "standalone-chat": artifact_server
+                    },
+                    persist_session_mapping=False,
+                    auth_config_override=auth_config_override,
+                    notebook_session_authorizer=(
+                        lambda candidate, lifecycle=lifecycle: (
+                            lifecycle.session_id == candidate
+                        )
+                    ),
+                ):
+                    if event.type in {
+                        "thinking",
+                        "block_start",
+                    }:
+                        # `thinking` is the authoritative block that repeats the
+                        # already-streamed thinking_delta content — forwarding
+                        # both would duplicate it in the transcript.
+                        continue
+                    if event.type == "thinking_delta":
+                        yield (
+                            json.dumps(
+                                {
+                                    "type": "thinking_delta",
+                                    "content": event.content,
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8")
+                        continue
+                    if event.type == "text_delta":
+                        streamed_text += event.content
+                        # Forward narration live so the gateway records it in
+                        # sequence with tool events â€” the chat UI interleaves
+                        # text with the tool chains it narrates. The accepted
+                        # ANSWER still ships only via the validated final
+                        # event; a rejected run never emits final.
+                        yield (
+                            json.dumps(
+                                {
+                                    "type": "text_delta",
+                                    "content": event.content,
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8")
+                        continue
+                    if event.type == "text":
+                        # A run interleaves narration and the closing summary
+                        # as separate text blocks. Overwriting would keep only
+                        # the LAST block, which silently dropped the rest of
+                        # the answer whenever the closing block did not arrive
+                        # complete. Accumulate every block instead.
+                        if event.content.strip():
+                            text_blocks.append(event.content)
+                            final_text = "\n\n".join(text_blocks)
+                        continue
+                    if event.type == "error":
+                        agent_failed = True
+                        yield (
+                            json.dumps(
+                                {
+                                    "type": "error",
+                                    "content": "The analysis agent failed before validation.",
+                                    "is_error": True,
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8")
+                        break
+                    if event.type == "tool_use" and event.tool_call_id:
+                        tool_names_by_id[event.tool_call_id] = event.tool_name
+                    if event.type == "tool_result":
+                        completed_tool = tool_names_by_id.get(
+                            event.tool_call_id, ""
+                        )
+                        if (
+                            completed_tool.endswith("run_cells")
+                            and not event.is_error
+                        ):
+                            successful_run_cells = True
+                    payload = {
+                        "type": event.type,
+                        "content": event.content,
+                        "tool_name": event.tool_name,
+                        "tool_input": event.tool_input,
+                        "tool_call_id": event.tool_call_id,
+                        "is_error": event.is_error,
+                    }
+                    yield (json.dumps(payload, default=str) + "\n").encode(
+                        "utf-8"
+                    )
+                if agent_failed:
+                    return
+
+                if project_directory is not None and not await asyncio.to_thread(
+                    _project_is_unchanged, project_directory, project_baseline_digest
+                ):
+                    yield (
+                        json.dumps(
+                            {
+                                "type": "error",
+                                "content": "The frozen project workspace changed; the run was rejected.",
+                                "is_error": True,
+                            }
+                        )
+                        + "\n"
+                    ).encode("utf-8")
+                    return
+
+                notebook_failure: dict[str, Any] | None = None
+                if lifecycle.session_id:
+                    notebook_failure = _notebook_failure(
+                        request.app, lifecycle.session_id
+                    )
+                    if (
+                        recovery_failure is not None
+                        and lifecycle.session_id
+                        == previous_notebook_session_id
+                    ):
+                        notebook_failure = {
+                            "error": {
+                                "type": "NotebookSessionReuseError",
+                                "variable": None,
+                                "cell_ids": [],
+                            }
+                        }
+                    elif not successful_run_cells:
+                        notebook_failure = {
+                            "error": {
+                                "type": "NotebookEvidenceNotValidatedError",
+                                "variable": None,
+                                "cell_ids": [],
+                            }
+                        }
+                    if notebook_failure is not None:
+                        notebook_failure = _with_recorded_notebook_errors(
+                            _analysis_session(
+                                request.app, lifecycle.session_id
+                            ),
+                            notebook_failure,
+                        )
+                elif recovery_failure is not None:
+                    notebook_failure = {
+                        "error": {
+                            "type": "NotebookNotRestartedError",
+                            "variable": None,
+                            "cell_ids": [],
+                        }
+                    }
+
+                if notebook_failure is not None:
+                    active_session_id = str(lifecycle.session_id or "")
+                    _log_notebook_failure(
+                        run_id=run_id,
+                        session_id=active_session_id,
+                        attempt=attempt,
+                        failure=notebook_failure,
+                    )
+                    if attempt == 1 and lifecycle.session_id:
+                        previous_notebook_session_id = lifecycle.session_id
+                        recovery_plan_id = lifecycle.plan_id
+                        kernel_closed = _close_analysis_kernel(
+                            request.app, lifecycle.session_id
+                        )
+                        _ANALYSIS_SESSIONS_BY_RUN.pop(run_id, None)
+                        lifecycle.session_id = None
+                        if not kernel_closed:
+                            yield (
+                                json.dumps(
+                                    {
+                                        "type": "error",
+                                        "content": "The failed notebook kernel could not be reset safely.",
+                                        "is_error": True,
+                                    }
+                                )
+                                + "\n"
+                            ).encode("utf-8")
+                            return
+                        clear_chat_session(
+                            f"standalone:{run_id}", persist=False
+                        )
+                        analysis_notebook_path.write_text(
+                            seeded_notebook_source, encoding="utf-8"
+                        )
+                        recovery_failure = notebook_failure
+                        yield (
+                            json.dumps(
+                                {
+                                    "type": "progress",
+                                    "content": "Restarting analysis in a clean notebook",
+                                    "is_error": False,
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8")
+                        continue
+                    yield (
+                        json.dumps(
+                            {
+                                "type": "error",
+                                "content": "Notebook validation failed after one clean retry; the answer was rejected.",
+                                "is_error": True,
+                            }
+                        )
+                        + "\n"
+                    ).encode("utf-8")
+                    return
+
+                archive_id = None
+                kernel_stopped = False
+                if lifecycle.session_id:
+                    try:
+                        archive_id = await _archive_analysis_notebook(
+                            app=request.app,
+                            session_id=lifecycle.session_id,
+                            run_id=run_id,
+                            gateway_api_url=gateway_api_url,
+                            scoped_token=scoped_token,
+                        )
+                    except Exception as exc:
+                        LOGGER.error(
+                            "Standalone notebook archive failed run_id=%s "
+                            "session_id=%s attempt=%s error_type=%s",
+                            run_id,
+                            lifecycle.session_id,
+                            attempt,
+                            type(exc).__name__,
+                        )
+                        yield (
+                            json.dumps(
+                                {
+                                    "type": "error",
+                                    "content": "The validated notebook could not be archived; the answer was rejected.",
+                                    "is_error": True,
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8")
+                        return
+                    kernel_stopped = _close_analysis_kernel(
+                        request.app, lifecycle.session_id
+                    )
+                    _ANALYSIS_SESSIONS_BY_RUN.pop(run_id, None)
+                    lifecycle.session_id = None
+                accepted_text = (final_text or streamed_text).strip()
+                complete_artifacts = [
+                    artifact
+                    for artifact in collector.artifacts
+                    if _collected_artifact_is_complete(artifact)
+                ]
+                if (
+                    complete_artifacts
+                    and collector.report_action_outcome is None
+                ):
+                    artifact = complete_artifacts[-1]
+                    LOGGER.warning(
+                        "Completed standalone artifact had no report action outcome "
+                        "run_id=%s kind=%s filename=%s",
+                        run_id,
+                        artifact.get("kind"),
+                        artifact.get("filename"),
+                    )
+                    collector.report_action_outcome = {
+                        "action": "no_suggestion",
+                        "artifact_kind": artifact.get("kind"),
+                        "artifact_filename": artifact.get("filename"),
+                        "title": artifact.get("filename"),
+                        "reason": (
+                            "The analysis agent completed without recording the required "
+                            "catalog-backed report decision."
+                        ),
+                        "source": "completion_check",
+                        "catalog_revision": collector.report_catalog_revision,
+                        "catalog_scan_complete": (
+                            collector.report_catalog_scan_complete
+                        ),
+                    }
+                final_payload = {
+                    "type": "final",
+                    "content": accepted_text,
+                    "artifacts": collector.artifacts,
+                }
+                if collector.report_proposal is not None:
+                    final_payload["report_proposal"] = (
+                        collector.report_proposal
+                    )
+                if collector.report_action_outcome is not None:
+                    final_payload["report_action_outcome"] = (
+                        collector.report_action_outcome
+                    )
+                if archive_id is not None:
+                    final_payload["archive_id"] = archive_id
+                    final_payload["kernel_stopped"] = kernel_stopped
+                yield (json.dumps(final_payload, default=str) + "\n").encode(
+                    "utf-8"
+                )
+                return
+        finally:
+            if current_lifecycle and current_lifecycle.session_id:
+                try:
+                    _close_analysis_kernel(
+                        request.app, current_lifecycle.session_id
+                    )
+                except Exception:
+                    pass
+            _ANALYSIS_SESSIONS_BY_RUN.pop(run_id, None)
+            clear_chat_session(f"standalone:{run_id}", persist=False)
+            shutil.rmtree(scratch, ignore_errors=True)
+            if remove_project_directory:
+                shutil.rmtree(project_directory, ignore_errors=True)
+
+    return stream_response(stream())

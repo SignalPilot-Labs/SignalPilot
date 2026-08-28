@@ -28,6 +28,7 @@ vi.mock("~/lib/api", () => ({
 import {
   DashboardAuthoringPanel,
   DashboardAuthoringWorkspace,
+  dashboardAuthoringErrorMessage,
   dashboardRepairPrompt,
   type DashboardAuthoringSession,
 } from "~/components/dashboard/dashboard-authoring-panel";
@@ -191,5 +192,27 @@ describe("DashboardAuthoringWorkspace", () => {
     expect(overlay?.textContent).toContain(
       "the saved dashboard changes only after Apply",
     );
+  });
+});
+
+describe("dashboardAuthoringErrorMessage", () => {
+  it("shows a safe API detail without the raw response envelope", () => {
+    expect(
+      dashboardAuthoringErrorMessage(
+        new Error(
+          '502: {"detail":"Dashboard authoring could not complete because Anthropic rejected the request."}',
+        ),
+      ),
+    ).toBe(
+      "Dashboard authoring could not complete because Anthropic rejected the request.",
+    );
+  });
+
+  it("does not expose an unstructured server response", () => {
+    expect(
+      dashboardAuthoringErrorMessage(
+        new Error("500: provider response contained internal details"),
+      ),
+    ).toBe("The dashboard draft could not be updated. Please try again.");
   });
 });

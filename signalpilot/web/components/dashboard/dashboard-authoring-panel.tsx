@@ -50,6 +50,34 @@ export type DashboardRepairIssue = {
   message: string;
 };
 
+const AUTHORING_ERROR_FALLBACK =
+  "The dashboard draft could not be updated. Please try again.";
+
+export function dashboardAuthoringErrorMessage(cause: unknown): string {
+  if (!(cause instanceof Error)) return AUTHORING_ERROR_FALLBACK;
+  const response = /^\d{3}:\s*([\s\S]*)$/.exec(cause.message);
+  if (!response) return cause.message || AUTHORING_ERROR_FALLBACK;
+  try {
+    const payload = JSON.parse(response[1]) as {
+      detail?: string | { message?: string };
+    };
+    if (typeof payload.detail === "string" && payload.detail.trim()) {
+      return payload.detail;
+    }
+    if (
+      payload.detail &&
+      typeof payload.detail === "object" &&
+      typeof payload.detail.message === "string" &&
+      payload.detail.message.trim()
+    ) {
+      return payload.detail.message;
+    }
+  } catch {
+    // Never show a raw provider or server response in dashboard authoring.
+  }
+  return AUTHORING_ERROR_FALLBACK;
+}
+
 export function dashboardRepairPrompt(issues: DashboardRepairIssue[]): string {
   const errorList = issues
     .map((issue) => `- ${issue.chartTitle}: ${issue.message}`)
@@ -131,11 +159,7 @@ export function DashboardAuthoringWorkspace({
       onSession(updated);
       return updated;
     } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "The draft could not be updated",
-      );
+      setError(dashboardAuthoringErrorMessage(cause));
       await refreshSession();
     } finally {
       setBusy(false);

@@ -10,9 +10,11 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from gateway.analysis_delivery.model_client import AnthropicMessagesError
 from gateway.api import dashboards as dashboard_api
 from gateway.dashboard import store as dashboard_store
 from gateway.dashboard.authoring import DashboardAgentDraft, DashboardAuthoringAgent, materialize_agent_draft
@@ -378,6 +380,23 @@ class _ModelClient:
         }
 
 
+class _ProviderFailingAgent:
+    model = "claude-provider-test"
+
+    def __init__(self, *, api_key: str) -> None:
+        assert api_key == "test-key"
+
+    async def draft(self, **_kwargs) -> DashboardAgentDraft:
+        raise AnthropicMessagesError(
+            status_code=400,
+            error_type="invalid_request_error",
+            provider_message="messages.0.content: Input is too long for the model context window",
+            request_id="req-provider-1",
+            request_body_chars=250_000,
+            retry_after=None,
+        )
+
+
 @pytest.mark.asyncio
 async def test_agent_update_is_forced_through_typed_operations() -> None:
     client = _ModelClient(
@@ -670,6 +689,98 @@ async def test_create_authoring_session_canonicalizes_model_filter_targets(
     )
 
     assert session.definition.filters.dimensions[0].target.fieldId == "orders.order_date"
+
+
+@pytest.mark.asyncio
+async def test_create_authoring_session_returns_safe_provider_failure(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def resolve_context(*_args, **_kwargs) -> DashboardSemanticContext:
+        return _orders_context()
+
+    async def resolve_key(*_args, **_kwargs) -> str:
+        return "test-key"
+
+    monkeypatch.setattr(dashboard_api.resolver, "resolve", resolve_context)
+    monkeypatch.setattr(dashboard_api, "DashboardAuthoringAgent", _ProviderFailingAgent)
+    monkeypatch.setattr(dashboard_api.org_secrets_store, "resolve_anthropic_key", resolve_key)
+    store = SimpleNamespace(
+        session=db_session,
+        user_id="owner-a",
+        _require_org_id=lambda: "org-a",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await dashboard_api.create_dashboard_authoring_session(
+            DashboardAuthoringRequest(
+                prompt="Create an executive dashboard",
+                project_id="project-1",
+                commit_sha="a" * 40,
+            ),
+            store,
+        )
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail == dashboard_api._AUTHORING_PROVIDER_REJECTED
+    assert "Input is too long" not in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_follow_up_provider_failure_preserves_draft_and_records_safe_message(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    definition = _definition_with_filter()
+    preview = await dashboard_store.create_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        dashboard_id=None,
+        base_version_id=None,
+        definition=definition,
+        operations=[],
+        prompt="Create a dashboard",
+        summary="Created the dashboard.",
+        agent_run_id="run-1",
+        model="test-model",
+        requires_custom_sql_confirmation=False,
+        custom_sql_confirmed=False,
+    )
+
+    async def verified_context(*_args, **_kwargs) -> DashboardSemanticContext:
+        return _orders_context()
+
+    async def resolve_key(*_args, **_kwargs) -> str:
+        return "test-key"
+
+    monkeypatch.setattr(dashboard_api, "_verified_context", verified_context)
+    monkeypatch.setattr(dashboard_api, "DashboardAuthoringAgent", _ProviderFailingAgent)
+    monkeypatch.setattr(dashboard_api.org_secrets_store, "resolve_anthropic_key", resolve_key)
+    store = SimpleNamespace(
+        session=db_session,
+        user_id="owner-a",
+        _require_org_id=lambda: "org-a",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await dashboard_api.continue_dashboard_authoring_session(
+            preview.id,
+            DashboardAuthoringMessageRequest(prompt="Add a margin chart"),
+            store,
+        )
+
+    assert exc_info.value.status_code == 502
+    restored = await dashboard_store.get_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        session_id=preview.id,
+    )
+    assert restored is not None
+    assert restored.definition_json == definition.model_dump(mode="json", by_alias=True, exclude_none=True)
+    assert restored.events_json[-1]["message"] == dashboard_api._AUTHORING_PROVIDER_REJECTED
+    assert "Input is too long" not in restored.events_json[-1]["message"]
 
 
 @pytest.mark.asyncio

@@ -23,11 +23,8 @@ from signalpilot._server.api.endpoints.standalone_chat_gateway import (
     StandaloneGatewayClient,
 )
 from signalpilot._server.api.endpoints.standalone_chat_prompt import (
-    DBT_EXECUTE_TOOL,
     IMPROVEMENT_EXTRA_TOOLS,
     REFRESH_MART_TOOL,
-    SANDBOX_TOOLS,
-    STANDALONE_DISALLOWED_MCP_TOOLS,
     _allowed_tools_for_features,
     _execution_prompt_values,
 )
@@ -254,6 +251,8 @@ async def execute(*, request: Request) -> StreamingResponse:
                 streamed_text = ""
                 text_blocks: list[str] = []
                 tool_names_by_id: dict[str, str] = {}
+                agent_cost_usd: float | None = None
+                agent_usage: dict[str, Any] | None = None
                 successful_run_cells = False
                 agent_failed = False
                 async for event in run_notebook_agent(
@@ -275,19 +274,12 @@ async def execute(*, request: Request) -> StreamingResponse:
                         request.app if notebook_analysis_enabled else None
                     ),
                     cwd=str(project_directory),
-                    disallow_file_edits=True,
-                    additional_disallowed_tools=[
-                        "WebFetch",
-                        "WebSearch",
-                        *STANDALONE_DISALLOWED_MCP_TOOLS,
-                        # One agent sandbox: sandbox_exec is improvement-only,
-                        # never chat.
-                        *([] if is_improvement_run else SANDBOX_TOOLS),
-                        # dbt_execute is retired for chat (refresh_mart replaces
-                        # it); refresh_mart only when the sandbox runtime is on.
-                        DBT_EXECUTE_TOOL,
-                        *([] if sandbox_runtime_enabled else [REFRESH_MART_TOOL]),
-                    ],
+                    # All tools enabled for chat agents: no client-side deny
+                    # list. Server-side enforcement remains the boundary —
+                    # sandbox/dbt execution still require the matching JWT
+                    # capabilities, and the frozen-workspace digest check
+                    # still rejects runs that mutate the project checkout.
+                    disallow_file_edits=False,
                     allowed_tools=(
                         _allowed_tools_for_features(
                             notebook_analysis_enabled=notebook_analysis_enabled
@@ -318,21 +310,33 @@ async def execute(*, request: Request) -> StreamingResponse:
                         # already-streamed thinking_delta content — forwarding
                         # both would duplicate it in the transcript.
                         continue
+                    subagent_parent = getattr(
+                        event, "parent_tool_call_id", ""
+                    )
                     if event.type == "thinking_delta":
                         yield (
                             json.dumps(
                                 {
                                     "type": "thinking_delta",
                                     "content": event.content,
+                                    **(
+                                        {"parent_tool_call_id": subagent_parent}
+                                        if subagent_parent
+                                        else {}
+                                    ),
                                 }
                             )
                             + "\n"
                         ).encode("utf-8")
                         continue
                     if event.type == "text_delta":
-                        streamed_text += event.content
+                        # Subagent narration must NOT enter the run's own
+                        # narration or answer fallback — it is grouped under
+                        # its Agent spawn in the UX instead.
+                        if not subagent_parent:
+                            streamed_text += event.content
                         # Forward narration live so the gateway records it in
-                        # sequence with tool events â€” the chat UI interleaves
+                        # sequence with tool events — the chat UI interleaves
                         # text with the tool chains it narrates. The accepted
                         # ANSWER still ships only via the validated final
                         # event; a rejected run never emits final.
@@ -341,6 +345,11 @@ async def execute(*, request: Request) -> StreamingResponse:
                                 {
                                     "type": "text_delta",
                                     "content": event.content,
+                                    **(
+                                        {"parent_tool_call_id": subagent_parent}
+                                        if subagent_parent
+                                        else {}
+                                    ),
                                 }
                             )
                             + "\n"
@@ -351,8 +360,10 @@ async def execute(*, request: Request) -> StreamingResponse:
                         # as separate text blocks. Overwriting would keep only
                         # the LAST block, which silently dropped the rest of
                         # the answer whenever the closing block did not arrive
-                        # complete. Accumulate every block instead.
-                        if event.content.strip():
+                        # complete. Accumulate every block instead. Subagent
+                        # text never joins the answer: its report reaches the
+                        # transcript through the Agent tool result.
+                        if event.content.strip() and not subagent_parent:
                             text_blocks.append(event.content)
                             final_text = "\n\n".join(text_blocks)
                         continue
@@ -369,6 +380,14 @@ async def execute(*, request: Request) -> StreamingResponse:
                             + "\n"
                         ).encode("utf-8")
                         break
+                    if event.type == "done":
+                        # Per-turn accounting from the SDK's ResultMessage;
+                        # forwarded on the final event so the gateway can
+                        # persist cost and token usage per run.
+                        if event.cost_usd is not None:
+                            agent_cost_usd = event.cost_usd
+                        if getattr(event, "usage", None):
+                            agent_usage = event.usage
                     if event.type == "tool_use" and event.tool_call_id:
                         tool_names_by_id[event.tool_call_id] = event.tool_name
                     if event.type == "tool_result":
@@ -388,6 +407,8 @@ async def execute(*, request: Request) -> StreamingResponse:
                         "tool_call_id": event.tool_call_id,
                         "is_error": event.is_error,
                     }
+                    if subagent_parent:
+                        payload["parent_tool_call_id"] = subagent_parent
                     yield (json.dumps(payload, default=str) + "\n").encode(
                         "utf-8"
                     )
@@ -582,6 +603,10 @@ async def execute(*, request: Request) -> StreamingResponse:
                     "content": accepted_text,
                     "artifacts": collector.artifacts,
                 }
+                if agent_cost_usd is not None:
+                    final_payload["cost_usd"] = agent_cost_usd
+                if agent_usage is not None:
+                    final_payload["usage"] = agent_usage
                 if collector.report_proposal is not None:
                     final_payload["report_proposal"] = (
                         collector.report_proposal

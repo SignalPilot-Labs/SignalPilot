@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -13,9 +14,11 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import TypeVar
 
+import httpx
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
 
+from gateway.analysis_delivery.model_client import AnthropicMessagesError
 from gateway.dashboard import store as dashboard_store
 from gateway.dashboard.authoring import DashboardAuthoringAgent, materialize_agent_draft
 from gateway.dashboard.cache import dashboard_query_cache_key
@@ -87,6 +90,48 @@ from .deps import StoreD
 
 router = APIRouter(prefix="/api")
 resolver = DashboardSemanticResolver()
+logger = logging.getLogger(__name__)
+
+_AUTHORING_PROVIDER_REJECTED = (
+    "Dashboard authoring could not complete because Anthropic rejected the request. "
+    "Try again; if this continues, ask an administrator to verify the Anthropic integration."
+)
+_AUTHORING_PROVIDER_AUTH_REJECTED = (
+    "The organization Anthropic key was rejected. Ask an administrator to update it in Integrations."
+)
+_AUTHORING_PROVIDER_UNAVAILABLE = "Dashboard authoring is temporarily unavailable. Please try again."
+
+
+def _authoring_provider_http_exception(
+    exc: AnthropicMessagesError,
+    *,
+    model: str,
+) -> HTTPException:
+    logger.error(
+        "Dashboard authoring Anthropic request failed status=%s type=%s request_id=%s "
+        "model=%s request_body_chars=%s error=%s",
+        exc.status_code,
+        exc.error_type or "unknown",
+        exc.request_id or "unknown",
+        model,
+        exc.request_body_chars,
+        exc.provider_message or "<empty response body>",
+    )
+    headers = {"Retry-After": exc.retry_after} if exc.retry_after else None
+    if exc.status_code in {401, 403}:
+        return HTTPException(status_code=502, detail=_AUTHORING_PROVIDER_AUTH_REJECTED)
+    if exc.status_code == 429 or exc.status_code >= 500:
+        return HTTPException(status_code=503, detail=_AUTHORING_PROVIDER_UNAVAILABLE, headers=headers)
+    return HTTPException(status_code=502, detail=_AUTHORING_PROVIDER_REJECTED)
+
+
+def _authoring_transport_http_exception(exc: httpx.RequestError, *, model: str) -> HTTPException:
+    logger.error(
+        "Dashboard authoring could not reach Anthropic model=%s error_type=%s",
+        model,
+        type(exc).__name__,
+    )
+    return HTTPException(status_code=503, detail=_AUTHORING_PROVIDER_UNAVAILABLE)
 
 DashboardResultT = TypeVar("DashboardResultT")
 
@@ -711,6 +756,10 @@ async def create_dashboard_authoring_session(body: DashboardAuthoringRequest, st
         definition = canonicalize_dashboard_filter_targets(definition, verified)
         validate_dashboard_semantics(definition, verified)
         validate_time_series_default_windows(definition, verified)
+    except AnthropicMessagesError as exc:
+        raise _authoring_provider_http_exception(exc, model=agent.model) from exc
+    except httpx.RequestError as exc:
+        raise _authoring_transport_http_exception(exc, model=agent.model) from exc
     except (DashboardCompileError, ValueError) as exc:
         await record_dashboard_event(
             store.session,
@@ -852,6 +901,28 @@ async def continue_dashboard_authoring_session(session_id: str, body: DashboardA
         validate_time_series_default_windows(definition, verified)
     except HTTPException:
         raise
+    except AnthropicMessagesError as exc:
+        safe_error = _authoring_provider_http_exception(exc, model=agent.model)
+        await dashboard_store.record_authoring_failure(
+            store.session,
+            org_id=org_id,
+            user_id=user_id,
+            session_id=session_id,
+            prompt=body.prompt,
+            safe_message=str(safe_error.detail),
+        )
+        raise safe_error from exc
+    except httpx.RequestError as exc:
+        safe_error = _authoring_transport_http_exception(exc, model=agent.model)
+        await dashboard_store.record_authoring_failure(
+            store.session,
+            org_id=org_id,
+            user_id=user_id,
+            session_id=session_id,
+            prompt=body.prompt,
+            safe_message=str(safe_error.detail),
+        )
+        raise safe_error from exc
     except (DashboardCompileError, ValueError) as exc:
         await dashboard_store.record_authoring_failure(
             store.session,

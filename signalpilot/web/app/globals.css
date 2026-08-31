@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+/* streamdown ships pre-built markup with Tailwind classes; scan it so those
+   utilities are emitted (used by notebook/components/markdown). */
+@source "../node_modules/streamdown/dist/index.js";
+
 /* Design tokens — aligned with the landing-page system (see UX.md).
    Warm ink surfaces, translucent borders, mint reserved for live/primary,
    DM Sans for chrome + JetBrains Mono for evidence (SQL, metrics, ids). */

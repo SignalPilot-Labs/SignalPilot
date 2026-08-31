@@ -27,6 +27,9 @@ from gateway.models.dashboards import (
 )
 from gateway.store import Store
 from gateway.verification import compare_columns
+from gateway.workspace_store.objects import workspace_object_storage
+
+from .project_snapshot import hydrate_github_mirror, materialize_workspace_snapshot
 
 SUPPORTED_AGGREGATIONS = {"sum", "count", "count_distinct", "average", "min", "max"}
 
@@ -255,6 +258,40 @@ def _scan_commit(project_id: str, commit_sha: str) -> ProjectMap:
         return scan_project(checkout_path)
 
 
+async def _scan_pinned_project(
+    store: Store,
+    *,
+    org_id: str,
+    project_id: str,
+    commit_sha: str,
+) -> ProjectMap:
+    """Scan a durable workspace snapshot, with git commits kept for compatibility."""
+    with tempfile.TemporaryDirectory(prefix="sp-dashboard-workspace-") as temp_dir:
+        checkout_path = Path(temp_dir) / "project"
+        if await materialize_workspace_snapshot(
+            store.session,
+            workspace_object_storage(),
+            org_id=org_id,
+            project_id=project_id,
+            snapshot_ref=commit_sha,
+            destination=checkout_path,
+        ):
+            return scan_project(checkout_path)
+    try:
+        return _scan_commit(project_id, commit_sha)
+    except DashboardSemanticError as original:
+        # Older dashboard versions store a real Git commit rather than a
+        # workspace snapshot reference. Rehydrate the replaceable GitHub
+        # mirror lazily so those versions survive gateway replacement too.
+        if await hydrate_github_mirror(
+            store.session,
+            org_id=org_id,
+            project_id=project_id,
+        ):
+            return _scan_commit(project_id, commit_sha)
+        raise original
+
+
 class DashboardSemanticResolver:
     async def resolve(self, store: Store, *, project_id: str, commit_sha: str) -> DashboardSemanticContext:
         org_id = store._require_org_id()
@@ -306,7 +343,12 @@ class DashboardSemanticResolver:
             )
             and not any(fnmatch.fnmatch(str(value.get("schema") or "").lower(), item.lower()) for item in excludes)
         }
-        project_map = _scan_commit(project_id, commit_sha)
+        project_map = await _scan_pinned_project(
+            store,
+            org_id=org_id,
+            project_id=project_id,
+            commit_sha=commit_sha,
+        )
         from gateway.api.schema._semantic_store import _load_semantic_model
 
         return resolve_from_authorities(

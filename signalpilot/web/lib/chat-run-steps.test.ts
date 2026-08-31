@@ -74,6 +74,35 @@ describe("foldRunSteps", () => {
     expect(foldRunSteps(allEvents, "other-run")).toEqual([]);
   });
 
+  it("keeps the redacted trace and safe diagnostics on run errors", () => {
+    const error = foldRunSteps(
+      [
+        {
+          run_id: "failed-run",
+          sequence: 1,
+          type: "error" as const,
+          payload: {
+            message: "CLIConnectionError: authentication failed",
+            full_trace: "CLIConnectionError: authentication failed\n[traceback]",
+            diagnostic_context: {
+              auth_mode: "oauth",
+              credential_present: true,
+            },
+          },
+          created_at: "2026-08-31T00:00:00Z",
+        },
+      ],
+      "failed-run",
+    )[0];
+
+    expect(error.detail).toBe("CLIConnectionError: authentication failed");
+    expect(error.fullTrace).toContain("[traceback]");
+    expect(error.diagnostics).toEqual({
+      auth_mode: "oauth",
+      credential_present: true,
+    });
+  });
+
   it("leaves an unmatched tool start running", () => {
     const partial = foldRunSteps(
       materializeFixtureEvents(5_000),

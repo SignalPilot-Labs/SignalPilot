@@ -62,6 +62,9 @@ export type RunStep = {
   report: string | null;
   /** Subagent spawns only: the subagent's streamed narration so far. */
   liveText: string;
+  /** Sanitized support data present only on terminal run errors. */
+  fullTrace?: string | null;
+  diagnostics?: Record<string, unknown> | null;
 };
 
 export type RunStepSummary = {
@@ -555,6 +558,8 @@ export function foldRunSteps(
         startedAt: event.created_at,
         endedAt: event.created_at,
         durationMs: null,
+        fullTrace: text(event.payload.full_trace),
+        diagnostics: asRecord(event.payload.diagnostic_context),
         ...emptyStepExtras(),
       });
       continue;

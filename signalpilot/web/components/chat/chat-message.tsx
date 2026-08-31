@@ -208,6 +208,11 @@ function AssistantMessage({
     [blocks],
   );
   const blocksHaveText = blocks.some((block) => block.kind === "text");
+  const runError = steps.find((step) => step.category === "error")?.detail;
+  const messageRepeatsRunError =
+    runStatus === "failed" &&
+    Boolean(runError) &&
+    message.content.trim() === runError?.trim();
   const attachedArtifacts = artifacts.filter(
     (artifact) =>
       artifact.assistant_message_id === message.id || artifact.run_id === runId,
@@ -255,7 +260,7 @@ function AssistantMessage({
               />
             </div>
           )}
-          {!blocksHaveText && message.content && (
+          {!blocksHaveText && message.content && !messageRepeatsRunError && (
             <div className="chat-markdown">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {message.content}
@@ -278,11 +283,6 @@ function AssistantMessage({
               messageId={message.id}
               suggestion={reportSuggestion}
             />
-          )}
-          {runStatus === "failed" && (
-            <p className="mt-3 text-xs text-[var(--color-error)]">
-              The run failed before a completed answer was produced.
-            </p>
           )}
           {runStatus === "cancelled" && (
             <p className="mt-3 text-xs text-[var(--color-text-dim)]">

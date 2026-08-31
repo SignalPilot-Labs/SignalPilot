@@ -124,6 +124,11 @@ async def execute(*, request: Request) -> StreamingResponse:
     check_published_artifact = gateway.check_published_artifact
 
     auth_config_override = _runtime_auth_override(body)
+    agent_model = str(
+        body.get("model")
+        or os.getenv("SIGNALPILOT_ANALYSIS_AGENT_MODEL")
+        or "claude-sonnet-4-5-20250929"
+    )
     session_id = SessionId(f"standalone-{run_id}")
     # Multi-turn continuity: adopt the conversation's kept-alive kernel and
     # notebook from the previous turn when it is still running — the agent
@@ -278,9 +283,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                     clean_session._signalpilot_chat_redactions = (
                         scoped_token,
                     )
-                    await lifecycle_event(
-                        "notebook_started", {}
-                    )
+                    await lifecycle_event("notebook_started", {})
                     # Tell the gateway (and through it the browser's live
                     # notebook panel) that a replacement kernel session now
                     # owns the analysis notebook. The normal path announces
@@ -358,11 +361,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                 async for event in run_notebook_agent(
                     attempt_prompt,
                     session_id,
-                    model=str(
-                        body.get("model")
-                        or os.getenv("SIGNALPILOT_ANALYSIS_AGENT_MODEL")
-                        or "claude-sonnet-4-5-20250929"
-                    ),
+                    model=agent_model,
                     max_turns=MAX_ANALYSIS_AGENT_TURNS,
                     new_chat=False,
                     message_history=history,
@@ -407,9 +406,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                         # already-streamed thinking_delta content — forwarding
                         # both would duplicate it in the transcript.
                         continue
-                    subagent_parent = getattr(
-                        event, "parent_tool_call_id", ""
-                    )
+                    subagent_parent = getattr(event, "parent_tool_call_id", "")
                     if event.type == "thinking_delta":
                         yield (
                             json.dumps(
@@ -417,7 +414,9 @@ async def execute(*, request: Request) -> StreamingResponse:
                                     "type": "thinking_delta",
                                     "content": event.content,
                                     **(
-                                        {"parent_tool_call_id": subagent_parent}
+                                        {
+                                            "parent_tool_call_id": subagent_parent
+                                        }
                                         if subagent_parent
                                         else {}
                                     ),
@@ -443,7 +442,9 @@ async def execute(*, request: Request) -> StreamingResponse:
                                     "type": "text_delta",
                                     "content": event.content,
                                     **(
-                                        {"parent_tool_call_id": subagent_parent}
+                                        {
+                                            "parent_tool_call_id": subagent_parent
+                                        }
                                         if subagent_parent
                                         else {}
                                     ),
@@ -470,7 +471,62 @@ async def execute(*, request: Request) -> StreamingResponse:
                             json.dumps(
                                 {
                                     "type": "error",
-                                    "content": "The analysis agent failed before validation.",
+                                    # The gateway is the public trust boundary: it
+                                    # sanitizes this diagnostic before persisting or
+                                    # displaying it. Do not discard the SDK's root
+                                    # cause here or every failure becomes impossible
+                                    # for the user to diagnose.
+                                    "content": event.content.strip()
+                                    or "AgentError: empty error response",
+                                    "full_trace": event.content.strip(),
+                                    "diagnostic_context": {
+                                        "model": agent_model,
+                                        "auth_mode": (
+                                            auth_config_override.get("type")
+                                            if auth_config_override
+                                            else "runtime_default"
+                                        ),
+                                        "credential_present": bool(
+                                            auth_config_override
+                                            and auth_config_override.get(
+                                                "token"
+                                            )
+                                        ),
+                                        "resume_requested": resume_agent_session,
+                                        "notebook_analysis_enabled": notebook_analysis_enabled,
+                                        "max_turns": MAX_ANALYSIS_AGENT_TURNS,
+                                        # Report presence only. Values are never
+                                        # included in an author-visible event.
+                                        "environment": {
+                                            "CLAUDE_CONFIG_DIR": "configured",
+                                            "CLAUDE_CODE_OAUTH_TOKEN": (
+                                                "configured"
+                                                if auth_config_override
+                                                and auth_config_override.get("type")
+                                                == "oauth"
+                                                else "cleared"
+                                            ),
+                                            "ANTHROPIC_API_KEY": (
+                                                "configured"
+                                                if auth_config_override
+                                                and auth_config_override.get("type")
+                                                == "api_key"
+                                                else "cleared"
+                                            ),
+                                            "SP_GATEWAY_URL": (
+                                                "configured"
+                                                if (
+                                                    os.getenv(
+                                                        "SP_GATEWAY_INTERNAL_URL"
+                                                    )
+                                                    or os.getenv(
+                                                        "SP_GATEWAY_URL"
+                                                    )
+                                                )
+                                                else "defaulted"
+                                            ),
+                                        },
+                                    },
                                     "is_error": True,
                                 }
                             )
@@ -514,8 +570,13 @@ async def execute(*, request: Request) -> StreamingResponse:
                 if agent_failed:
                     return
 
-                if project_directory is not None and not await asyncio.to_thread(
-                    _project_is_unchanged, project_directory, project_baseline_digest
+                if (
+                    project_directory is not None
+                    and not await asyncio.to_thread(
+                        _project_is_unchanged,
+                        project_directory,
+                        project_baseline_digest,
+                    )
                 ):
                     yield (
                         json.dumps(
@@ -675,7 +736,9 @@ async def execute(*, request: Request) -> StreamingResponse:
                         # Adopted turn: this run's unused seeded scratch still
                         # holds a token copy — remove it.
                         try:
-                            (scratch / ".gateway-token").unlink(missing_ok=True)
+                            (scratch / ".gateway-token").unlink(
+                                missing_ok=True
+                            )
                         except OSError:
                             pass
                     keep_workspace = True

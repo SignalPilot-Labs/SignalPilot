@@ -5,20 +5,26 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
+import traceback
 from contextlib import suppress
 from typing import Any
 
 import httpx
 
 from gateway.db.engine import get_session_factory, init_db
+from gateway.errors.mcp import sanitize_mcp_error
 from gateway.standalone_chat.config import (
     lease_seconds,
     standalone_chat_enabled,
     worker_concurrency,
     worker_poll_seconds,
 )
-from gateway.standalone_chat.domain import select_context_for_summary
+from gateway.standalone_chat.domain import (
+    redact_public_payload,
+    select_context_for_summary,
+)
 from gateway.standalone_chat.execution import (
     cancel_execution_session,
     cleanup_expired_approval_sandboxes,
@@ -49,6 +55,93 @@ from gateway.store import standalone_chat as chat_store
 
 logger = logging.getLogger(__name__)
 _CLARIFICATION_PREFIX = "CLARIFICATION_REQUESTED:"
+_SECRET_VALUE_RE = re.compile(
+    r"(?i)(authorization\s*[:=]\s*(?:bearer\s+)?|"
+    r"(?:api[_-]?key|token|secret|password)\s*[:=]\s*)[^\s,;]+"
+)
+_TOKEN_LITERAL_RE = re.compile(
+    r"(?i)\b(?:sk-ant-[A-Za-z0-9_-]+|xox[abprs]-[A-Za-z0-9-]+|"
+    r"gh[pousr]_[A-Za-z0-9_]+|sp_[A-Za-z0-9_-]{16,})\b"
+)
+
+
+class _AnalysisRuntimeError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        full_trace: str = "",
+        diagnostic_context: Any = None,
+    ) -> None:
+        super().__init__(message)
+        self.full_trace = full_trace
+        self.diagnostic_context = diagnostic_context
+
+
+def _sanitize_error_text(raw: str, *, cap: int) -> str:
+    redacted = str(redact_public_payload(raw))
+    redacted = _SECRET_VALUE_RE.sub(lambda match: f"{match.group(1)}[REDACTED]", redacted)
+    redacted = _TOKEN_LITERAL_RE.sub("[REDACTED]", redacted)
+    return sanitize_mcp_error(redacted, cap=cap).strip()
+
+
+def _public_error_message(exc: Exception) -> str:
+    """Return the real root cause without exposing a traceback or credentials."""
+    raw = str(exc).strip() or type(exc).__name__
+    # Agent errors include a useful exception/stderr header followed by a full
+    # Python traceback. The traceback is operator detail, not useful chat UI.
+    raw = re.split(r"\nTraceback \(most recent call last\):", raw, maxsplit=1)[0]
+    lines = [line.rstrip() for line in raw.splitlines()]
+    while lines and (not lines[-1].strip() or lines[-1].strip().lower() == "stderr:"):
+        lines.pop()
+    diagnostic = "\n".join(lines).strip() or type(exc).__name__
+    return _sanitize_error_text(diagnostic, cap=1000) or type(exc).__name__
+
+
+def _public_full_trace(exc: Exception) -> str:
+    raw = str(getattr(exc, "full_trace", "") or "").strip()
+    if not raw:
+        raw = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    return _sanitize_error_text(raw, cap=12_000)
+
+
+def _public_diagnostic_context(exc: Exception) -> dict[str, Any]:
+    """Allowlist safe support metadata; never forward arbitrary env values."""
+    source = getattr(exc, "diagnostic_context", None)
+    if not isinstance(source, dict):
+        return {"error_type": type(exc).__name__}
+    allowed = {
+        "model",
+        "auth_mode",
+        "credential_present",
+        "resume_requested",
+        "notebook_analysis_enabled",
+        "max_turns",
+    }
+    root = _public_error_message(exc)
+    root_type = re.match(r"^([A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception)):", root)
+    result: dict[str, Any] = {
+        "error_type": root_type.group(1) if root_type else type(exc).__name__
+    }
+    for key in allowed:
+        value = source.get(key)
+        if isinstance(value, (str, bool, int, float)):
+            result[key] = _sanitize_error_text(value, cap=200) if isinstance(value, str) else value
+    environment = source.get("environment")
+    if isinstance(environment, dict):
+        result["environment"] = {
+            str(key): value
+            for key, value in environment.items()
+            if str(key)
+            in {
+                "CLAUDE_CONFIG_DIR",
+                "CLAUDE_CODE_OAUTH_TOKEN",
+                "ANTHROPIC_API_KEY",
+                "SP_GATEWAY_URL",
+            }
+            and value in {"configured", "cleared", "defaulted", "missing"}
+        }
+    return result
 
 
 async def _append(run_id: str, event_type: str, payload: dict[str, Any]) -> None:
@@ -210,9 +303,7 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                         raise asyncio.CancelledError
                     event_type = str(event.get("type") or "")
                     content = str(event.get("content") or "")
-                    parent_tool_call_id = str(
-                        event.get("parent_tool_call_id") or ""
-                    )
+                    parent_tool_call_id = str(event.get("parent_tool_call_id") or "")
                     if event_type == "text_delta":
                         if parent_tool_call_id:
                             # Subagent narration: recorded for its spawn card,
@@ -246,11 +337,7 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                                 "thinking_delta",
                                 {
                                     "delta": content,
-                                    **(
-                                        {"parent_tool_call_id": parent_tool_call_id}
-                                        if parent_tool_call_id
-                                        else {}
-                                    ),
+                                    **({"parent_tool_call_id": parent_tool_call_id} if parent_tool_call_id else {}),
                                 },
                             )
                     elif event_type == "text":
@@ -280,11 +367,7 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                                 # (parallel subagents complete out of order);
                                 # parent groups the step under its spawn.
                                 "tool_call_id": tool_call_id or None,
-                                **(
-                                    {"parent_tool_call_id": parent_tool_call_id}
-                                    if parent_tool_call_id
-                                    else {}
-                                ),
+                                **({"parent_tool_call_id": parent_tool_call_id} if parent_tool_call_id else {}),
                             },
                         )
                         # Side events (sql/source) attach to the latest OPEN
@@ -334,16 +417,12 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                         completed_payload: dict[str, Any] = {
                             "tool_call_id": event.get("tool_call_id"),
                             "summary": (
-                                "The governed tool returned an error."
-                                if is_error
-                                else "The governed tool completed."
+                                "The governed tool returned an error." if is_error else "The governed tool completed."
                             ),
                             "error": is_error,
                         }
                         if parent_tool_call_id:
-                            completed_payload["parent_tool_call_id"] = (
-                                parent_tool_call_id
-                            )
+                            completed_payload["parent_tool_call_id"] = parent_tool_call_id
                         if completed_tool == "Agent" and not is_error and content:
                             # The Agent tool result IS the subagent's final
                             # report — surfaced in its card, same disclosure
@@ -381,7 +460,11 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                             recovery_payload["notebook_path"] = str(event["notebook_path"])
                         await _announce_notebook(run_id, recovery_payload)
                     elif event_type == "error":
-                        raise RuntimeError(content or "Notebook analysis failed")
+                        raise _AnalysisRuntimeError(
+                            content or "Notebook analysis failed",
+                            full_trace=str(event.get("full_trace") or content or ""),
+                            diagnostic_context=event.get("diagnostic_context"),
+                        )
                     elif event_type == "final":
                         final_text = content or final_text or streamed_text
                         # Operator accounting: cost + token usage reported by
@@ -395,16 +478,8 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                                         db,
                                         run_id=run_id,
                                         worker_id=worker_id,
-                                        cost_usd=(
-                                            raw_cost
-                                            if isinstance(raw_cost, (int, float))
-                                            else None
-                                        ),
-                                        usage=(
-                                            raw_usage
-                                            if isinstance(raw_usage, dict)
-                                            else None
-                                        ),
+                                        cost_usd=(raw_cost if isinstance(raw_cost, (int, float)) else None),
+                                        usage=(raw_usage if isinstance(raw_usage, dict) else None),
                                     )
                         raw_report_proposal = event.get("report_proposal")
                         report_proposal = raw_report_proposal if isinstance(raw_report_proposal, dict) else None
@@ -490,7 +565,10 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
             type(exc).__name__,
             exc_info=True,
         )
-        public_message = "I could not complete this analysis. You can inspect the work and retry."
+        public_message = _public_error_message(exc)
+        full_trace = _public_full_trace(exc)
+        diagnostic_context = _public_diagnostic_context(exc)
+        diagnostic_context["run_id"] = run_id
         with suppress(Exception):
             await _append(
                 run_id,
@@ -498,7 +576,8 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                 {
                     "code": "analysis_failed",
                     "message": public_message,
-                    "technical_detail": type(exc).__name__,
+                    "full_trace": full_trace,
+                    "diagnostic_context": diagnostic_context,
                 },
             )
         async with get_session_factory()() as db:

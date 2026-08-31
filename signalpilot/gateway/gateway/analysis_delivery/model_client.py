@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
+import tempfile
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 import httpx
@@ -41,20 +46,16 @@ class MessagesModelClient(Protocol):
 
 
 class AnthropicMessagesClient:
-    """Call Anthropic Messages with shared auth, timeout, and response handling."""
+    """Call Anthropic Messages with an API key, timeout, and response handling."""
 
     def __init__(
         self,
         *,
         api_key: str | None = None,
-        oauth_token: str | None = None,
         timeout_seconds: float,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
-        if api_key and oauth_token:
-            raise ValueError("Configure only one Anthropic credential")
         self.api_key = api_key
-        self.oauth_token = oauth_token
         self.timeout_seconds = max(float(timeout_seconds), 0.1)
         self._http_client = http_client
 
@@ -62,12 +63,8 @@ class AnthropicMessagesClient:
         headers = {
             "anthropic-version": ANTHROPIC_VERSION,
             "content-type": "application/json",
+            "x-api-key": self.api_key or "",
         }
-        if self.oauth_token:
-            headers["authorization"] = f"Bearer {self.oauth_token}"
-            headers["anthropic-beta"] = "oauth-2025-04-20"
-        else:
-            headers["x-api-key"] = self.api_key or ""
         if self._http_client is not None:
             return await self._post(self._http_client, headers, request_body)
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
@@ -96,6 +93,186 @@ class AnthropicMessagesClient:
         if not isinstance(data, dict):
             raise TypeError("Anthropic Messages API returned a non-object response")
         return data
+
+
+@dataclass(frozen=True)
+class ClaudeAgentSDKResult:
+    """Provider-neutral subset of a completed Claude Agent SDK query."""
+
+    structured_output: Any
+    is_error: bool
+    api_error_status: int | None = None
+    error_type: str | None = None
+    provider_message: str | None = None
+    request_id: str | None = None
+    usage: dict[str, Any] | None = None
+
+
+ClaudeAgentSDKRunner = Callable[[str, dict[str, Any]], Awaitable[ClaudeAgentSDKResult]]
+
+
+class ClaudeAgentSDKStructuredClient:
+    """Run OAuth-backed structured output through Claude Code's supported SDK."""
+
+    def __init__(
+        self,
+        *,
+        oauth_token: str,
+        timeout_seconds: float,
+        query_runner: ClaudeAgentSDKRunner | None = None,
+    ) -> None:
+        if not oauth_token:
+            raise ValueError("Claude OAuth token is required")
+        self.oauth_token = oauth_token
+        self.timeout_seconds = max(float(timeout_seconds), 0.1)
+        self._query_runner = query_runner or _run_claude_agent_sdk_query
+
+    async def create_message(self, request_body: dict[str, Any]) -> dict[str, Any]:
+        prompt, system, tool_name, schema = _structured_request(request_body)
+        agent_env = dict(os.environ)
+        agent_env.update(
+            {
+                "ANTHROPIC_API_KEY": "",
+                "ANTHROPIC_AUTH_TOKEN": "",
+                "OAUTH_TOKEN": "",
+                "CLAUDE_CODE_OAUTH_TOKEN": self.oauth_token,
+            }
+        )
+        with tempfile.TemporaryDirectory(prefix="signalpilot-dashboard-authoring-") as runtime_dir:
+            agent_env["CLAUDE_CONFIG_DIR"] = runtime_dir
+            options = {
+                "model": request_body.get("model"),
+                "max_turns": 1,
+                "permission_mode": "dontAsk",
+                "tools": [],
+                "setting_sources": ["user"],
+                "system_prompt": {
+                    "type": "preset",
+                    "preset": "claude_code",
+                    "append": system,
+                },
+                "output_format": {"type": "json_schema", "schema": schema},
+                "cwd": runtime_dir,
+                "env": agent_env,
+                "effort": _agent_effort(),
+            }
+            try:
+                async with asyncio.timeout(self.timeout_seconds):
+                    result = await self._query_runner(prompt, options)
+            except TimeoutError as exc:
+                raise _sdk_error(
+                    request_body,
+                    status_code=504,
+                    error_type="claude_agent_sdk_timeout",
+                    provider_message="Claude Agent SDK request timed out",
+                ) from exc
+            except AnthropicMessagesError:
+                raise
+            except Exception as exc:
+                raise _sdk_error(
+                    request_body,
+                    status_code=503,
+                    error_type="claude_agent_sdk_transport_error",
+                    provider_message=type(exc).__name__,
+                ) from exc
+
+        if result.is_error:
+            raise _sdk_error(
+                request_body,
+                status_code=result.api_error_status or 502,
+                error_type=result.error_type or "claude_agent_sdk_error",
+                provider_message=result.provider_message,
+                request_id=result.request_id,
+            )
+        if result.structured_output is None:
+            raise _sdk_error(
+                request_body,
+                status_code=502,
+                error_type="missing_structured_output",
+                provider_message="Claude Agent SDK returned no structured output",
+                request_id=result.request_id,
+            )
+        return {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "name": tool_name,
+                    "input": result.structured_output,
+                }
+            ],
+            "usage": result.usage or {},
+        }
+
+
+async def _run_claude_agent_sdk_query(prompt: str, options: dict[str, Any]) -> ClaudeAgentSDKResult:
+    from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
+
+    completed = None
+    async for message in query(prompt=prompt, options=ClaudeAgentOptions(**options)):
+        if isinstance(message, ResultMessage):
+            completed = message
+    if completed is None:
+        raise RuntimeError("Claude Agent SDK query ended without a result")
+    errors = getattr(completed, "errors", None)
+    provider_message = completed.result
+    if not provider_message and isinstance(errors, list):
+        provider_message = "; ".join(str(error) for error in errors)
+    return ClaudeAgentSDKResult(
+        structured_output=completed.structured_output,
+        is_error=completed.is_error,
+        api_error_status=completed.api_error_status,
+        error_type=completed.subtype,
+        provider_message=_clean_detail(provider_message),
+        request_id=completed.uuid or completed.session_id,
+        usage=completed.usage if isinstance(completed.usage, dict) else None,
+    )
+
+
+def _structured_request(request_body: dict[str, Any]) -> tuple[str, str, str, dict[str, Any]]:
+    system = request_body.get("system")
+    messages = request_body.get("messages")
+    tools = request_body.get("tools")
+    tool_choice = request_body.get("tool_choice")
+    if not isinstance(system, str) or not isinstance(messages, list) or not messages:
+        raise ValueError("Claude Agent SDK structured request requires system and messages")
+    if not isinstance(tool_choice, dict) or not isinstance(tool_choice.get("name"), str):
+        raise ValueError("Claude Agent SDK structured request requires a named tool choice")
+    tool_name = tool_choice["name"]
+    tool = next(
+        (item for item in tools or [] if isinstance(item, dict) and item.get("name") == tool_name),
+        None,
+    )
+    if not isinstance(tool, dict) or not isinstance(tool.get("input_schema"), dict):
+        raise ValueError("Claude Agent SDK structured request requires a tool input schema")
+    prompt_parts: list[str] = []
+    for message in messages:
+        if not isinstance(message, dict) or not isinstance(message.get("content"), str):
+            raise ValueError("Claude Agent SDK structured request supports text messages only")
+        prompt_parts.append(message["content"])
+    return "\n\n".join(prompt_parts), system, tool_name, tool["input_schema"]
+
+
+def _agent_effort() -> str:
+    effort = os.getenv("SP_AGENT_EFFORT", "medium").strip().lower()
+    return effort if effort in {"low", "medium", "high", "xhigh", "max"} else "medium"
+
+
+def _sdk_error(
+    request_body: dict[str, Any],
+    *,
+    status_code: int,
+    error_type: str,
+    provider_message: str | None,
+    request_id: str | None = None,
+) -> AnthropicMessagesError:
+    return AnthropicMessagesError(
+        status_code=status_code,
+        error_type=error_type,
+        provider_message=_clean_detail(provider_message),
+        request_id=request_id,
+        request_body_chars=_request_body_chars(request_body),
+        retry_after=None,
+    )
 
 
 def _anthropic_error(response: httpx.Response) -> tuple[str | None, str | None]:

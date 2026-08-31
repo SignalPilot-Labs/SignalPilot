@@ -10,7 +10,11 @@ from typing import Any
 
 from pydantic import Field, model_validator
 
-from gateway.analysis_delivery.model_client import AnthropicMessagesClient, MessagesModelClient
+from gateway.analysis_delivery.model_client import (
+    AnthropicMessagesClient,
+    ClaudeAgentSDKStructuredClient,
+    MessagesModelClient,
+)
 from gateway.dashboard.domain import CartesianChartConfig, ContractModel, DashboardDefinition, SemanticChartQuery
 from gateway.dashboard.operations import DashboardOperation, apply_dashboard_operations
 from gateway.models.dashboards import DashboardSemanticContext
@@ -125,12 +129,18 @@ class DashboardAuthoringAgent:
         oauth_token: str | None = None,
         model_client: MessagesModelClient | None = None,
     ) -> None:
+        if api_key and oauth_token:
+            raise ValueError("Configure only one dashboard authoring credential")
         self.model = os.getenv("SIGNALPILOT_DASHBOARD_AUTHORING_MODEL") or DEFAULT_DASHBOARD_AUTHORING_MODEL
-        self.model_client = model_client or AnthropicMessagesClient(
-            api_key=api_key,
-            oauth_token=oauth_token,
-            timeout_seconds=90,
-        )
+        if model_client is not None:
+            self.model_client = model_client
+        elif oauth_token:
+            self.model_client = ClaudeAgentSDKStructuredClient(
+                oauth_token=oauth_token,
+                timeout_seconds=90,
+            )
+        else:
+            self.model_client = AnthropicMessagesClient(api_key=api_key, timeout_seconds=90)
 
     async def draft(
         self,

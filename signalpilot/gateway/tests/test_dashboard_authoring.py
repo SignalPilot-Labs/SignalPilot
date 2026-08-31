@@ -551,6 +551,37 @@ async def test_explicit_filter_opt_out_allows_a_filterless_draft() -> None:
 
 
 @pytest.mark.asyncio
+async def test_agent_adds_a_governed_bounded_date_filter_without_an_extra_model_turn() -> None:
+    empty = _definition()
+    client = _ModelClient(
+        {"summary": "Created the dashboard.", "definition": empty.model_dump(mode="json", by_alias=True)}
+    )
+    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
+
+    draft = await agent.draft(
+        prompt="Create an executive dashboard for revenue, margins and customers",
+        context=_orders_context(),
+        base_definition=None,
+    )
+
+    assert draft.definition is not None
+    assert len(client.requests) == 1
+    assert len(draft.definition.filters.dimensions) == 1
+    rule = draft.definition.filters.dimensions[0]
+    assert rule.target.tableName == "orders"
+    assert rule.target.fieldId == "orders.month"
+    assert rule.operator == "inThePast"
+    assert rule.values == [30]
+    assert rule.settings is not None
+    assert rule.settings.unitOfTime == "days"
+    assert rule.tileTargets is not None
+    assert set(rule.tileTargets) == {tile.uuid for tile in draft.definition.tiles}
+    assert all(target is not False for target in rule.tileTargets.values())
+    validate_dashboard_semantics(draft.definition, _orders_context())
+    validate_time_series_default_windows(draft.definition, _orders_context())
+
+
+@pytest.mark.asyncio
 async def test_agent_rejects_a_second_filterless_response() -> None:
     empty = _definition()
     client = _ModelClient(
@@ -699,6 +730,38 @@ async def test_agent_repairs_refusal_shaped_creation_with_mode_specific_feedback
     assert "refusal or empty payload" in repair_payload["validation_feedback"]
     assert "closest faithful dashboard" in repair_payload["validation_feedback"]
     assert "omit only that unsupported element" in repair_payload["validation_feedback"]
+
+
+@pytest.mark.asyncio
+async def test_agent_canonicalizes_unambiguous_visualization_aliases_before_contract_validation() -> None:
+    payload = _definition_with_filter().model_dump(mode="json", by_alias=True)
+    kpi = next(chart for chart in payload["charts"] if chart["id"] == "chart-kpi")
+    kpi["visualization"]["config"] = {"field": "total_revenue", "format": "percent"}
+    line = next(chart for chart in payload["charts"] if chart["id"] == "chart-line")
+    line["visualization"]["config"]["layout"] = {
+        "xField": "month",
+        "yField": ["revenue"],
+    }
+    context_payload = _orders_context().model_dump(mode="json")
+    context_payload["explores"][0]["metrics"][0]["format"] = "currency:USD"
+    context = DashboardSemanticContext.model_validate(context_payload)
+    client = _ModelClient({"summary": "Created executive dashboard.", "definition": payload})
+    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
+
+    draft = await agent.draft(
+        prompt="Create an executive dashboard for revenue, margins and customers",
+        context=context,
+        base_definition=None,
+    )
+
+    assert draft.definition is not None
+    normalized_kpi = next(chart for chart in draft.definition.charts if chart.id == "chart-kpi")
+    assert normalized_kpi.visualization.config.field == "orders.revenue"
+    assert normalized_kpi.visualization.config.format == "currency:USD"
+    normalized_line = next(chart for chart in draft.definition.charts if chart.id == "chart-line")
+    assert normalized_line.visualization.config.layout.xField == "orders.month"
+    assert normalized_line.visualization.config.layout.yField == ["orders.revenue"]
+    assert len(client.requests) == 1
 
 
 @pytest.mark.asyncio

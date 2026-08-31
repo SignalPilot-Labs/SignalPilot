@@ -70,6 +70,42 @@ FILE_EDIT_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"]
 _EFFORT_LEVELS = {"low", "medium", "high", "xhigh", "max"}
 
 
+def _result_message_content(message: Any) -> str:
+    """Preserve the diagnostic fields carried by an SDK ResultMessage."""
+    subtype = str(getattr(message, "subtype", "") or "").strip()
+    if subtype == "error_max_turns":
+        return "The agent reached its turn limit before completing."
+
+    details: list[str] = []
+    result = str(getattr(message, "result", "") or "").strip()
+    if result:
+        details.append(result)
+
+    errors = getattr(message, "errors", None)
+    if isinstance(errors, (list, tuple)):
+        for error in errors:
+            text = str(error or "").strip()
+            if text and text not in details:
+                details.append(text)
+    elif errors:
+        text = str(errors).strip()
+        if text and text not in details:
+            details.append(text)
+
+    stop_reason = str(getattr(message, "stop_reason", "") or "").strip()
+    metadata = []
+    if subtype:
+        metadata.append(f"subtype={subtype}")
+    if stop_reason:
+        metadata.append(f"stop_reason={stop_reason}")
+    if metadata:
+        details.append(f"Claude Agent SDK result: {', '.join(metadata)}")
+
+    if details:
+        return "\n".join(details)
+    return "Claude Agent SDK returned an error without diagnostic details."
+
+
 def _agent_effort() -> str:
     """Reasoning effort for the agent CLI. Defaults to medium."""
     effort = os.getenv("SP_AGENT_EFFORT", "medium").strip().lower()
@@ -308,8 +344,8 @@ def _run_agent_in_thread(
                             AgentEvent(
                                 type="error" if result_is_error else "done",
                                 content=(
-                                    "The agent reached its turn limit before completing."
-                                    if subtype == "error_max_turns"
+                                    _result_message_content(msg)
+                                    if result_is_error
                                     else ""
                                 ),
                                 is_error=result_is_error,

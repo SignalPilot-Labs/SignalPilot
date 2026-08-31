@@ -1,0 +1,30 @@
+{
+  "cells": [
+    {
+      "code": "s = \"\"\"\n@app.cell\ndef _():\n    return\n\"\"\"\nt = '''\nwith app.setup:\n    pass\nif __name__ == \"__main__\":\n    app.run()\n'''",
+      "code_hash": "8eaf4648020c63f286bb739c711c1dc0",
+      "config": {
+        "column": null,
+        "disabled": false,
+        "hide_code": false
+      },
+      "id": "Hbol",
+      "name": "strings"
+    },
+    {
+      "code": "combined = s + t\nprint(combined)",
+      "code_hash": "9470eaec67cd6fd28eccacbfc483c936",
+      "config": {
+        "column": null,
+        "disabled": false,
+        "hide_code": false
+      },
+      "id": "MJUe",
+      "name": "_"
+    }
+  ],
+  "metadata": {
+    "signalpilot_version": "0.1.0"
+  },
+  "version": "1"
+}

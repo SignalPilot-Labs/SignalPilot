@@ -137,6 +137,14 @@ export const viewStateAtom = atom<ViewState>({
 export const kioskModeAtom = atom<boolean>(false);
 
 /**
+ * Pure viewer surfaces (the chat live notebook panel): the document is the
+ * product and the kernel websocket is a background enhancement. When true,
+ * connection loss renders NOTHING — no disconnected banner, no noise
+ * overlay, no washed-out cells.
+ */
+export const viewerOnlyAtom = atom<boolean>(false);
+
+/**
  * Whether installing packages is allowed in the current view. False in read
  * mode, since end-users of a deployed notebook cannot mutate its environment.
  */

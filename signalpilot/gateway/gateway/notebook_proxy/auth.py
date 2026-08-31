@@ -19,7 +19,10 @@ Auth chain (runs on every HTTP and WS request, before ws.accept()):
      the Sec-WebSocket-Protocol two-token form ["signalpilot.auth", "<jwt>"];
      we verify it via auth/user.verify_jwt_token.
 3. Load the session (no org filter — the checks below are the gate).
-4. Ownership: session.user_id == caller user_id (same-user only). 404 otherwise
+4. Ownership: session.user_id == caller user_id (same-user only). One carve-out:
+   standalone-chat runtime sessions are owned by the synthetic identity
+   "chat:conv-<conversation_id>"; for those the caller must own that
+   conversation (same user AND same org as the conversation row). 404 otherwise
    (404 not 403 so we don't reveal that a session id exists for another user).
 5. Active org: session.org_id == the caller's currently-active org. 404 otherwise.
    User identity alone is not enough — a user in two orgs keeps their user_id
@@ -52,6 +55,9 @@ SESSION_ID_PATTERN = re.compile(SESSION_ID_PATTERN_STR)
 # Sentinel the client offers as the first WS subprotocol; the JWT is the second.
 # Server echoes ONLY the sentinel back, never the token (RFC 6455).
 _WS_AUTH_SENTINEL = "signalpilot.auth"
+# Synthetic owner identity of standalone-chat runtime sessions
+# (gateway/notebooks/session_service.py ensure_standalone_chat_notebook_session).
+_CHAT_SESSION_USER_PREFIX = "chat:conv-"
 # Subprotocol tokens must be URL-safe (no whitespace/control chars). A JWT is
 # base64url segments joined by dots, so this charset covers it.
 _URLSAFE_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9\-._~]+$")
@@ -180,14 +186,36 @@ async def resolve_proxy_session(
     factory = get_session_factory()
     async with factory() as db_session:
         session = await ns.get_session_internal(db_session, session_id=session_id)
+        # Standalone-chat runtime sessions are owned by the synthetic identity
+        # "chat:conv-<conversation_id>" (session_service.py). The browser user
+        # never matches that directly; they may attach the live notebook view
+        # if — and only if — they own the conversation itself.
+        chat_conversation_owner = False
+        if (
+            session is not None
+            and session.user_id != user_id
+            and session.user_id.startswith(_CHAT_SESSION_USER_PREFIX)
+        ):
+            from ..db.models import GatewayChatConversation
+
+            conversation = await db_session.get(
+                GatewayChatConversation,
+                session.user_id.removeprefix(_CHAT_SESSION_USER_PREFIX),
+            )
+            chat_conversation_owner = (
+                conversation is not None
+                and conversation.user_id == user_id
+                and (conversation.org_id or LOCAL_ORG_ID) == org_id
+            )
 
     if session is None:
         _log.warning("REJECT: session not found in DB for id=%s", session_id)
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Step 3: ownership — same user only. 404 (not 403) to avoid revealing that
-    # the session exists for a different user.
-    if session.user_id != user_id:
+    # Step 3: ownership — same user only, or the owner of the standalone-chat
+    # conversation the session belongs to. 404 (not 403) to avoid revealing
+    # that the session exists for a different user.
+    if session.user_id != user_id and not chat_conversation_owner:
         _log.warning("REJECT: session %s owned by %s, caller %s", session_id, session.user_id, user_id)
         raise HTTPException(status_code=404, detail="Session not found")
 

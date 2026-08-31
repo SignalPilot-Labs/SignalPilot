@@ -97,7 +97,6 @@ class TestBackendSelection:
         assert transport.call_args[1]["uds"] == "/var/run/docker.sock"
 
 
-
 # Verify Docker backend security controls.
 
 

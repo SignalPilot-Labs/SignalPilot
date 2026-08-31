@@ -206,11 +206,13 @@ class MCPAuthMiddleware:
             from ..auth.notebook_jwt import NotebookSessionJWTError, verify_session_jwt
             from ..mcp.context import (
                 mcp_allowed_connection_var,
+                mcp_branch_var,
                 mcp_capabilities_var,
                 mcp_client_ip_var,
                 mcp_eval_doc_ids_var,
                 mcp_execution_identity_var,
                 mcp_org_id_var,
+                mcp_project_id_var,
                 mcp_raw_key_var,
                 mcp_scopes_var,
                 mcp_user_agent_var,
@@ -247,6 +249,8 @@ class MCPAuthMiddleware:
             mcp_allowed_connection_var.set(claims.get("connection_name"))
             mcp_capabilities_var.set(list(claims.get("capabilities") or []))
             mcp_execution_identity_var.set(claims.get("execution_identity"))
+            mcp_project_id_var.set(claims.get("project_id"))
+            mcp_branch_var.set(claims.get("branch"))
             mcp_client_ip_var.set(_extract_client_ip(scope))
             mcp_user_agent_var.set(_extract_user_agent(scope))
             mcp_eval_doc_ids_var.set(None)
@@ -256,9 +260,11 @@ class MCPAuthMiddleware:
         from ..db.engine import get_session_factory
         from ..mcp import (
             mcp_allowed_connection_var,
+            mcp_branch_var,
             mcp_capabilities_var,
             mcp_execution_identity_var,
             mcp_org_id_var,
+            mcp_project_id_var,
             mcp_user_id_var,
         )
         from ..store import Store
@@ -293,6 +299,8 @@ class MCPAuthMiddleware:
                     mcp_allowed_connection_var.set(None)
                     mcp_capabilities_var.set(None)
                     mcp_execution_identity_var.set(None)
+                    mcp_project_id_var.set(None)
+                    mcp_branch_var.set(None)
                     from ..mcp import mcp_client_ip_var, mcp_raw_key_var, mcp_user_agent_var
 
                     mcp_raw_key_var.set(None)
@@ -375,6 +383,8 @@ class MCPAuthMiddleware:
                 mcp_allowed_connection_var.set(None)
                 mcp_capabilities_var.set(None)
                 mcp_execution_identity_var.set(None)
+                mcp_project_id_var.set(None)
+                mcp_branch_var.set(None)
                 from ..mcp import mcp_client_ip_var, mcp_raw_key_var, mcp_scopes_var, mcp_user_agent_var
 
                 mcp_scopes_var.set(list(matched.scopes or []))

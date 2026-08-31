@@ -54,7 +54,7 @@ export function getConnectionTooltip(state: WebSocketState): string {
     case WebSocketState.CLOSED:
       return "App disconnected";
     case WebSocketState.CONNECTING:
-      return "Connecting to a runtime ...";
+      return "Starting your kernel…";
     case WebSocketState.CLOSING:
       return "App disconnecting...";
     case WebSocketState.OPEN:

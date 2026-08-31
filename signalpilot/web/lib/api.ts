@@ -844,7 +844,12 @@ export type StandaloneChatEvent = {
   type:
     | "status"
     | "progress"
+    | "runtime_boot"
+    | "steering_queued"
+    | "steering_picked_up"
+    | "steering_not_delivered"
     | "text_delta"
+    | "thinking_delta"
     | "tool_started"
     | "tool_completed"
     | "sql"
@@ -1092,6 +1097,11 @@ export const cancelStandaloneRun = (runId: string) =>
       method: "POST",
     },
   );
+export const steerStandaloneRun = (runId: string, message: string) =>
+  request<StandaloneChatMessage>(
+    `/api/chat/runs/${encodeURIComponent(runId)}/steer`,
+    { method: "POST", body: JSON.stringify({ message }) },
+  );
 export const clarifyStandaloneRun = (runId: string, message: string) =>
   request<StandaloneChatRun>(
     `/api/chat/runs/${encodeURIComponent(runId)}/clarification`,
@@ -1180,6 +1190,30 @@ export async function getSavedReportVersionObjectUrl(
     throw new Error(`Report preview failed (${response.status})`);
   return URL.createObjectURL(await response.blob());
 }
+
+export async function getStandaloneNotebookArchiveHtml(
+  runId: string,
+): Promise<string> {
+  const headers = await getAuthHeaders();
+  const response = await fetch(
+    `${GATEWAY_URL}/api/chat/runs/${encodeURIComponent(runId)}/notebook`,
+    { headers },
+  );
+  if (!response.ok)
+    throw new Error(`Notebook archive unavailable (${response.status})`);
+  return response.text();
+}
+
+export type StandaloneNotebookDocument = {
+  source: string;
+  session: Record<string, unknown> | null;
+};
+
+/** Archived notebook document (source + outputs snapshot) for a finished run. */
+export const getStandaloneNotebookDocument = (runId: string) =>
+  request<StandaloneNotebookDocument>(
+    `/api/chat/runs/${encodeURIComponent(runId)}/notebook-document`,
+  );
 
 export async function openStandaloneNotebookArchive(
   runId: string,
@@ -2103,6 +2137,22 @@ export const linkGitHubRepo = (body: {
     body: JSON.stringify(body),
   });
 
+export const getGitHubImportStatus = (repoFullName: string) =>
+  request<{ stage: string; done?: number; total?: number; error?: string }>(
+    `/api/github/import/status?repo_full_name=${encodeURIComponent(repoFullName)}`,
+  );
+
+export const importGitHubRepo = (body: {
+  installation_id: string;
+  repo_full_name: string;
+  repo_id: number;
+  default_branch: string;
+}) =>
+  request<GitHubRepoImportResult>("/api/github/import", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
 export const unlinkGitHubRepo = (linkId: string) =>
   request<void>(`/api/github/repo-links/${linkId}`, { method: "DELETE" });
 
@@ -2113,6 +2163,28 @@ export const getGitHubRepoLinks = (projectId?: string) =>
 
 export const getGitCredentials = (projectId: string) =>
   request<GitCredentials>(`/api/github/credentials/${projectId}`);
+
+export const getDbtProjectDir = (projectId: string, branch?: string) =>
+  request<{ dbt_project_dir: string | null; detected: string[]; source: string }>(
+    `/api/workspace-projects/${projectId}/dbt-project-dir${branch ? `?branch=${encodeURIComponent(branch)}` : ""}`,
+  );
+
+// The following functions support the centrally stored dbt map.
+export const getDbtMap = (projectId: string, branch?: string, includeGraph = true) => {
+  const qs = new URLSearchParams();
+  if (branch) qs.set("branch", branch);
+  if (!includeGraph) qs.set("include_graph", "false");
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return request<DbtMapResponse>(
+    `/api/workspace-projects/${projectId}/dbt-map${suffix}`,
+  );
+};
+
+export const compileDbtMap = (projectId: string, branch?: string) =>
+  request<{ scheduled: boolean; map: DbtMapInfo | null }>(
+    `/api/workspace-projects/${projectId}/dbt-map/compile${branch ? `?branch=${encodeURIComponent(branch)}` : ""}`,
+    { method: "POST" },
+  );
 
 // The following function returns gateway health.
 export const getHealth = () => request<Record<string, unknown>>("/health");
@@ -2508,7 +2580,10 @@ import type {
   GitHubInstallation,
   GitHubRepo,
   GitHubRepoLink,
+  GitHubRepoImportResult,
   GitCredentials,
+  DbtMapInfo,
+  DbtMapResponse,
 } from "./types";
 
 export const listKnowledge = (params?: {

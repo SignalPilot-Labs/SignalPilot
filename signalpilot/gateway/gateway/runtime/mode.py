@@ -73,7 +73,9 @@ def assert_cloud_hardening_intact() -> None:
     Enforced kill-switches and required settings (final list — extend only via spec revision):
       CLERK_JWT_AUDIENCE          — optional Clerk client binding; when set,
                                     auth/user.py validates JWT aud at request time.
-      SP_NOTEBOOK_DIRECT_URL      — any non-empty value is forbidden
+      SP_NOTEBOOK_DIRECT_URL      — any non-empty value is forbidden (cloud
+                                    notebooks run on isolated sandboxes, never
+                                    a shared direct container)
       SP_DISABLE_SANDBOX          — case-insensitive "true", "1", "yes" is forbidden
       SP_ALLOWED_ORIGINS          — must be set; no wildcards; all entries must be
                                     https:// or http://localhost / http://127.0.0.1 (L-5)

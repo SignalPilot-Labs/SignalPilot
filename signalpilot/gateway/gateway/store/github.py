@@ -218,6 +218,35 @@ async def create_repo_link(
     default_branch: str = "main",
 ) -> GitHubRepoLinkInfo:
     now = time.time()
+
+    # The (org, project) uniqueness spans soft-disconnected rows too — a
+    # re-link after unlink must reactivate the old row, not fight the
+    # constraint with an insert.
+    existing = (
+        await session.execute(
+            select(GatewayGitHubRepoLink).where(
+                GatewayGitHubRepoLink.org_id == org_id,
+                GatewayGitHubRepoLink.project_id == project_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        if existing.status == "active":
+            raise ValueError("uq_gw_ghrepo_org_project: project already linked")
+        existing.installation_id = installation_id
+        existing.repo_full_name = repo_full_name
+        existing.repo_id = repo_id
+        existing.default_branch = default_branch
+        existing.status = "active"
+        existing.updated_at = now
+        await session.execute(
+            update(GatewayWorkspaceProject)
+            .where(GatewayWorkspaceProject.id == project_id, GatewayWorkspaceProject.org_id == org_id)
+            .values(source="github", git_remote=f"https://github.com/{repo_full_name}.git", updated_at=now)
+        )
+        await session.commit()
+        return _link_to_info(existing)
+
     row = GatewayGitHubRepoLink(
         org_id=org_id,
         project_id=project_id,
@@ -253,6 +282,39 @@ async def list_repo_links(
     return [_link_to_info(r) for r in result.scalars().all()]
 
 
+async def get_active_link_for_org_repo(
+    session: AsyncSession, *, org_id: str, repo_full_name: str
+) -> GitHubRepoLinkInfo | None:
+    """Oldest active link for a repo within one org (one-click import idempotency)."""
+    result = await session.execute(
+        select(GatewayGitHubRepoLink)
+        .where(
+            GatewayGitHubRepoLink.org_id == org_id,
+            GatewayGitHubRepoLink.repo_full_name == repo_full_name,
+            GatewayGitHubRepoLink.status == "active",
+        )
+        .order_by(GatewayGitHubRepoLink.created_at)
+    )
+    row = result.scalars().first()
+    return _link_to_info(row) if row else None
+
+
+async def get_active_links_for_repo(
+    session: AsyncSession, *, repo_full_name: str
+) -> list[GitHubRepoLinkInfo]:
+    """All active links for a repo across orgs (webhook fan-out: one push may
+    concern the same repo linked in several orgs/projects)."""
+    result = await session.execute(
+        select(GatewayGitHubRepoLink)
+        .where(
+            GatewayGitHubRepoLink.repo_full_name == repo_full_name,
+            GatewayGitHubRepoLink.status == "active",
+        )
+        .order_by(GatewayGitHubRepoLink.created_at)
+    )
+    return [_link_to_info(r) for r in result.scalars().all()]
+
+
 async def get_repo_link_for_project(
     session: AsyncSession, *, org_id: str, project_id: str
 ) -> GatewayGitHubRepoLink | None:
@@ -264,6 +326,15 @@ async def get_repo_link_for_project(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def list_all_active_repo_links(session: AsyncSession) -> list[GatewayGitHubRepoLink]:
+    """Every active repo link across all orgs — used by startup mirror
+    reconciliation to heal missing bare repos wholesale."""
+    result = await session.execute(
+        select(GatewayGitHubRepoLink).where(GatewayGitHubRepoLink.status == "active")
+    )
+    return list(result.scalars().all())
 
 
 async def delete_repo_link(session: AsyncSession, *, org_id: str, link_id: str) -> bool:

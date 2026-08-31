@@ -25,6 +25,7 @@ from gateway.db.models import (
     GatewayChatUserPreference,
     GatewayConnection,
     GatewayCredential,
+    GatewayDbtManifest,
     GatewayStructuredQueryResult,
     GatewayWorkspaceProject,
 )
@@ -916,6 +917,123 @@ async def test_project_readiness_accepts_org_anthropic_key(db_session, monkeypat
     resolve_org_key.assert_awaited_once_with(db_session, "org-a")
 
 
+async def _add_production_connection(db: AsyncSession) -> None:
+    db.add_all(
+        [
+            GatewayConnection(
+                org_id="org-a",
+                user_id="user-a",
+                name="production",
+                db_type="postgres",
+                status="connected",
+                created_at=1.0,
+                description="",
+                tags=[],
+                schema_filter_include=[],
+                schema_filter_exclude=[],
+            ),
+            GatewayCredential(
+                org_id="org-a",
+                user_id="user-a",
+                connection_name="production",
+                connection_string_enc=b"encrypted",
+            ),
+        ]
+    )
+    await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_readiness_recognizes_a_nested_dbt_project(db_session, monkeypatch):
+    """Most real repos nest the dbt project in a subfolder. Readiness must find
+    it the same way compile/execute do, not assume `dbt_project.yml` at root."""
+    project = await _project(db_session)
+    await _add_production_connection(db_session)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "configured")
+    # dbt project lives under `dumpsters_dbt/`, and there is decoy content
+    # (design docs, a second broken copy) that must not fool detection.
+    monkeypatch.setattr(
+        chat_projects,
+        "_project_tree",
+        lambda *_args: (
+            [
+                "README.md",
+                "design/models/fct_orders.md",
+                "dumpsters_dbt/dbt_project.yml",
+                "dumpsters_dbt/models/marts/fct_orders.sql",
+                "dumpsters_dbt_broken/dbt_project.yml",
+            ],
+            "head-sha",
+        ),
+    )
+
+    readiness = await evaluate_project_readiness(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        project=project,
+    )
+
+    assert readiness.ready
+    assert readiness.code == "ready"
+
+
+@pytest.mark.asyncio
+async def test_readiness_trusts_a_successful_compile_when_tree_is_bare(
+    db_session, monkeypatch
+):
+    """A green dbt-map manifest is proof metadata exists even when the local git
+    mirror can't surface the files (sparse/generated models)."""
+    project = await _project(db_session)
+    await _add_production_connection(db_session)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "configured")
+    # Tree carries no dbt project at all — only the compiled manifest vouches.
+    monkeypatch.setattr(
+        chat_projects,
+        "_project_tree",
+        lambda *_args: (["README.md", "notes.txt"], "head-sha"),
+    )
+    db_session.add(
+        GatewayDbtManifest(
+            org_id="org-a",
+            project_id=project.id,
+            branch="main",
+            revision=1,
+            status="success",
+            trigger="manual",
+            node_count=5,
+            created_at=1.0,
+            updated_at=1.0,
+        )
+    )
+    await db_session.commit()
+
+    readiness = await evaluate_project_readiness(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        project=project,
+    )
+
+    assert readiness.ready
+
+    # A failed compile is NOT proof — flip the manifest and readiness must fail.
+    manifest = (
+        await db_session.execute(select(GatewayDbtManifest))
+    ).scalar_one()
+    manifest.status = "failed"
+    await db_session.commit()
+
+    readiness = await evaluate_project_readiness(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        project=project,
+    )
+    assert not readiness.ready
+    assert readiness.code == "metadata_unavailable"
+
+
 @pytest.mark.asyncio
 async def test_execution_uses_org_anthropic_key_as_request_scoped_auth(
     db_session,
@@ -933,6 +1051,7 @@ async def test_execution_uses_org_anthropic_key_as_request_scoped_auth(
             return_value=SimpleNamespace(
                 session_id="session-a",
                 internal_base_url="http://notebook.internal",
+                access_token=None,
             )
         ),
     )
@@ -964,7 +1083,89 @@ async def test_execution_uses_org_anthropic_key_as_request_scoped_auth(
         "type": "api_key",
         "token": "sk-ant-org",
     }
+    assert prepared.payload["conversation_id"] == run.conversation_id
+    assert prepared.payload["agent_session"] == {
+        "session_id": run.conversation_id,
+        "storage": "unavailable",
+    }
     resolve_org_key.assert_awaited_once_with(db_session, "org-a")
+
+
+@pytest.mark.asyncio
+async def test_execution_force_oauth_never_resolves_org_api_key(
+    db_session,
+    monkeypatch,
+):
+    _, run = await _conversation_and_run(db_session)
+    monkeypatch.setenv("SP_CHAT_FORCE_OAUTH_TOKEN", "true")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-test")
+    ensure_runtime = AsyncMock(
+        return_value=SimpleNamespace(
+            session_id="session-a",
+            internal_base_url="http://notebook.internal",
+            access_token=None,
+        )
+    )
+    monkeypatch.setattr(chat_execution, "ensure_execution_runtime", ensure_runtime)
+    resolve_org_key = AsyncMock(side_effect=AssertionError("org key must not be resolved"))
+    monkeypatch.setattr(
+        chat_execution.org_secrets_store,
+        "resolve_anthropic_key",
+        resolve_org_key,
+    )
+    monkeypatch.setattr(chat_execution, "mint_session_jwt", lambda **_kwargs: "session-jwt")
+    monkeypatch.setattr(
+        chat_execution,
+        "get_gateway_settings",
+        lambda: SimpleNamespace(sp_session_jwt_ttl_seconds=300),
+    )
+
+    prepared = await chat_execution.prepare_execution(
+        db_session,
+        run=run,
+        worker_id="worker-a",
+        branch="main",
+        connection_name="production",
+        commit_sha="a" * 40,
+        prompt="Analyze revenue",
+        messages=[],
+        warm_context={},
+    )
+
+    assert prepared.payload["runtime_auth"] == {
+        "type": "oauth",
+        "token": "sk-ant-oat-test",
+    }
+    resolve_org_key.assert_not_awaited()
+    ensure_runtime.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_execution_force_oauth_fails_before_starting_runtime_when_missing(
+    db_session,
+    monkeypatch,
+):
+    _, run = await _conversation_and_run(db_session)
+    monkeypatch.setenv("SP_CHAT_FORCE_OAUTH_TOKEN", "true")
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.delenv("OAUTH_TOKEN", raising=False)
+    ensure_runtime = AsyncMock()
+    monkeypatch.setattr(chat_execution, "ensure_execution_runtime", ensure_runtime)
+
+    with pytest.raises(RuntimeError, match="no Claude OAuth token"):
+        await chat_execution.prepare_execution(
+            db_session,
+            run=run,
+            worker_id="worker-a",
+            branch="main",
+            connection_name="production",
+            commit_sha="a" * 40,
+            prompt="Analyze revenue",
+            messages=[],
+            warm_context={},
+        )
+
+    ensure_runtime.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -988,6 +1189,88 @@ async def test_one_nonterminal_run_and_atomic_initial_state(db_session):
             conversation_id=conversation_id,
             message="A second question",
         )
+
+
+@pytest.mark.asyncio
+async def test_running_run_steering_is_durable_and_marked_picked_up(db_session):
+    conversation_id, run = await _conversation_and_run(db_session)
+    assert await chat_store.claim_runs(
+        db_session,
+        worker_id="worker-a",
+        limit=1,
+        lease_seconds=45,
+    ) == [run.id]
+
+    queued = await chat_store.queue_steering_message(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        run_id=run.id,
+        message="Focus on retention instead.",
+    )
+    assert queued is not None
+    assert queued.metadata_json == {
+        "surface": "standalone",
+        "steering_for_run_id": run.id,
+        "steering_status": "queued",
+    }
+    pending = await chat_store.pending_steering_messages(
+        db_session,
+        run_id=run.id,
+        worker_id="worker-a",
+    )
+    assert [message.id for message in pending] == [queued.id]
+
+    assert await chat_store.mark_steering_message_picked_up(
+        db_session,
+        run_id=run.id,
+        worker_id="worker-a",
+        message_id=queued.id,
+    )
+    await db_session.refresh(queued)
+    assert queued.metadata_json["steering_status"] == "picked_up"
+    assert await chat_store.pending_steering_messages(
+        db_session,
+        run_id=run.id,
+        worker_id="worker-a",
+    ) == []
+    undelivered = await chat_store.queue_steering_message(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        run_id=run.id,
+        message="This one loses the runtime race.",
+    )
+    assert undelivered is not None
+    assert await chat_store.finalize_undelivered_steering(
+        db_session,
+        run_id=run.id,
+    ) == 1
+    await db_session.refresh(undelivered)
+    assert undelivered.metadata_json["steering_status"] == "not_delivered"
+    events = await chat_store.list_run_events(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        run_id=run.id,
+    )
+    assert events is not None
+    assert [event.type for event in events] == [
+        "steering_queued",
+        "steering_picked_up",
+        "steering_queued",
+        "steering_not_delivered",
+    ]
+    detail = await chat_store.get_conversation_detail(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation_id,
+    )
+    assert detail is not None
+    assert detail.messages[-2].content == "Focus on retention instead."
+    assert detail.messages[-2].metadata["steering_status"] == "picked_up"
+    assert detail.messages[-1].metadata["steering_status"] == "not_delivered"
 
 
 @pytest.mark.asyncio
@@ -1538,7 +1821,12 @@ def test_standalone_session_claims_and_mcp_allowlist(monkeypatch):
         assert standalone_chat_tool_denial("query_database", "production") is None
         assert standalone_chat_tool_denial("plan_query", "production") is None
         assert "outside" in (standalone_chat_tool_denial("query_database", "secondary") or "")
-        assert "unavailable" in (standalone_chat_tool_denial("notion_create_page", None) or "")
+        assert standalone_chat_tool_denial("notion_create_page", None) is None
+        assert standalone_chat_tool_denial("get_knowledge", None) is None
+        assert standalone_chat_tool_denial("propose_knowledge", None) is None
+        assert "unavailable" in (
+            standalone_chat_tool_denial("create_xata_branch", None) or ""
+        )
     finally:
         mcp_execution_identity_var.reset(identity_token)
         mcp_allowed_connection_var.reset(connection_token)

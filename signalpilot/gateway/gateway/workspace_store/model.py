@@ -46,6 +46,25 @@ def snapshot_key(org_id: str, project_id: str, branch: str, revision: int) -> st
     )
 
 
+# dbt map artifacts (note: `manifests/` above means workspace *file* manifests;
+# dbt artifacts get their own `dbt/` segment). Nested under the project prefix
+# so delete_prefix on project deletion covers them.
+
+
+def dbt_manifest_key(org_id: str, project_id: str, branch: str, revision: int) -> str:
+    return (
+        f"{project_prefix(org_id, project_id)}/branches/{_branch_part(branch)}"
+        f"/dbt/{revision:012d}-manifest.json.gz"
+    )
+
+
+def dbt_graph_key(org_id: str, project_id: str, branch: str, revision: int) -> str:
+    return (
+        f"{project_prefix(org_id, project_id)}/branches/{_branch_part(branch)}"
+        f"/dbt/{revision:012d}-graph.json.gz"
+    )
+
+
 @dataclass(frozen=True)
 class FileEntry:
     path: str

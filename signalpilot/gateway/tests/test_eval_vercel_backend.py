@@ -107,6 +107,8 @@ class TestSelection:
         assert isinstance(backend, VercelBackend)
 
     def test_default_backend_unchanged(self, monkeypatch):
+        # Cloud without an explicit vercel opt-in refuses (the Kubernetes
+        # backend was retired with the EKS estate); local still gets Docker.
         monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
         with pytest.raises(RuntimeError, match="SP_EVAL_EXECUTION_BACKEND=vercel"):
             get_execution_backend(_settings(SP_EVAL_EXECUTION_BACKEND=""), org_id="org_1")

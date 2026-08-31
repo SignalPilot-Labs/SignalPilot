@@ -7,8 +7,9 @@ RUN npm install -g @anthropic-ai/claude-code
 # Create test workspace
 WORKDIR /workspace
 
-# Copy plugin directory
-COPY plugin/ /workspace/plugin/
+# Copy the canonical in-repo plugin source. The legacy plugin/ submodule is
+# intentionally not part of this test or any runtime build.
+COPY signalpilot-plugin/ /workspace/signalpilot-plugin/
 
 # Copy test script
 COPY tests/test_plugin_install.sh /workspace/test_plugin_install.sh

@@ -21,7 +21,12 @@ ChatRunStatus = Literal[
 ChatEventType = Literal[
     "status",
     "progress",
+    "runtime_boot",
+    "steering_queued",
+    "steering_picked_up",
+    "steering_not_delivered",
     "text_delta",
+    "thinking_delta",
     "tool_started",
     "tool_completed",
     "sql",
@@ -139,6 +144,10 @@ class StandaloneClarificationCreate(StrictChatRequest):
         if not cleaned:
             raise ValueError("Message cannot be empty")
         return cleaned
+
+
+class StandaloneSteeringCreate(StandaloneClarificationCreate):
+    """A follow-up instruction queued onto an in-progress run."""
 
 
 class ChatRunInfo(BaseModel):

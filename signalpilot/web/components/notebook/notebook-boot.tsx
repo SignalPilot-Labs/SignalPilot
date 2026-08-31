@@ -48,10 +48,18 @@ export default function NotebookBoot({
   children,
   onPhaseChange,
   onReady,
+  view,
 }: {
   children?: React.ReactNode;
   onPhaseChange?: (phase: string) => void;
   onReady?: () => void;
+  /**
+   * Page mode override forwarded to the editor embed. "read" mounts the run
+   * view (cells + live outputs, no editing chrome) regardless of the host
+   * URL — used by the chat page's live notebook panel. Omit for the normal
+   * URL-derived edit surface.
+   */
+  view?: "edit" | "read";
 }) {
   const config = useNotebookConfig();
   const router = useRouter();
@@ -193,6 +201,8 @@ export default function NotebookBoot({
     <>
       <EditorComponent
         client={clientRef.current}
+        mode={view}
+        kernelSessionId={view ? config.kernelSessionId : undefined}
         config={{
           gatewayUrl: config.gatewayUrl,
           gatewayApiKey: staticData.gatewayToken,

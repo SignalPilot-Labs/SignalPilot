@@ -82,7 +82,7 @@ class TestCapabilityGate:
                 sandbox_read_file(path="/x"),
             ):
                 result = await call
-                assert "only available to automated improvement runs" in result
+                assert "not enabled for this session" in result
         finally:
             mcp_scopes_var.reset(scope_token)
             mcp_capabilities_var.reset(cap_token)

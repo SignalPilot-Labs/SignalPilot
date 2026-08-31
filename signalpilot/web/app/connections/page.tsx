@@ -3064,6 +3064,13 @@ export default function ConnectionsPage() {
         description="Manage governed warehouse access, health, schema visibility, and credential controls."
         actions={
           <div className="flex items-center gap-2">
+            <a
+              href="/query"
+              className="flex items-center gap-1.5 px-3 py-2 border border-[var(--color-border)] rounded-[10px] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-colors duration-150"
+              title="Open the governed SQL query console"
+            >
+              query console
+            </a>
             <button
               onClick={handleExport}
               className="flex items-center gap-1.5 px-3 py-2 border border-[var(--color-border)] rounded-[10px] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-colors duration-150"

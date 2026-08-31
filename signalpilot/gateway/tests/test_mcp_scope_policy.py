@@ -6,7 +6,12 @@ import pytest
 
 from gateway.http.middleware.auth import _eval_rest_path_allowed
 from gateway.mcp import mcp
-from gateway.mcp.audit import EVAL_ALLOWED_MCP_TOOLS, MCP_TOOL_SCOPES
+from gateway.mcp.audit import (
+    EVAL_ALLOWED_MCP_TOOLS,
+    MCP_TOOL_SCOPES,
+    STANDALONE_CHAT_BLOCKED_TOOLS,
+    STANDALONE_CHAT_TOOL_ALLOWLIST,
+)
 from gateway.mcp.context import (
     _require_mcp_scope,
     mcp_eval_run_var,
@@ -20,6 +25,28 @@ def test_every_registered_tool_has_exactly_one_valid_scope() -> None:
     registered = set(mcp._tool_manager._tools)
     assert registered == set(MCP_TOOL_SCOPES)
     assert set(MCP_TOOL_SCOPES.values()) <= set(VALID_API_KEY_SCOPES)
+
+
+def test_standalone_chat_gets_the_default_mcp_surface_except_xata_branches() -> None:
+    assert (
+        STANDALONE_CHAT_TOOL_ALLOWLIST | STANDALONE_CHAT_BLOCKED_TOOLS
+    ) == set(MCP_TOOL_SCOPES)
+    assert not STANDALONE_CHAT_TOOL_ALLOWLIST & STANDALONE_CHAT_BLOCKED_TOOLS
+    assert {
+        "get_knowledge",
+        "search_knowledge",
+        "read_knowledge",
+        "propose_knowledge",
+        "archive_knowledge",
+        "query_history",
+        "connection_health",
+        "analyze_project_db",
+        "map_columns",
+        "get_dbt_profile",
+        "notion_create_page",
+        "sandbox_exec",
+        "dbt_execute",
+    } <= STANDALONE_CHAT_TOOL_ALLOWLIST
 
 
 def test_eval_mcp_surface_is_explicit_and_excludes_history_and_branch_control() -> None:

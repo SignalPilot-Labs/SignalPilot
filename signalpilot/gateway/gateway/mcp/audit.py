@@ -70,6 +70,8 @@ MCP_TOOL_SCOPES: dict[str, str] = {
     "sandbox_exec": "execute",
     "sandbox_write_file": "execute",
     "sandbox_read_file": "execute",
+    "dbt_execute": "execute",
+    "refresh_mart": "execute",
     "describe_table": "query",
     "list_tables": "query",
     "get_date_boundaries": "query",
@@ -138,35 +140,22 @@ EVAL_ALLOWED_MCP_TOOLS: frozenset[str] = frozenset(
     }
 )
 
-STANDALONE_CHAT_TOOL_ALLOWLIST = frozenset(
+# Standalone chat gets the normal SignalPilot MCP surface. Keep this derived
+# from the registration scope map so adding a regular MCP tool does not create
+# a second, stale chat-only denylist. Xata branch control remains excluded:
+# chat runs use a frozen project/branch and must not create or delete database
+# branches as a side effect of analysis.
+STANDALONE_CHAT_BLOCKED_TOOLS = frozenset(
     {
-        "check_budget",
-        "connector_capabilities",
-        "debug_cte_query",
-        "describe_table",
-        "estimate_query_cost",
-        "explain_query",
-        "explore_column",
-        "explore_columns",
-        "explore_table",
-        "find_join_path",
-        "get_date_boundaries",
-        "get_relationships",
-        "list_database_connections",
-        "list_semantic_metrics",
-        "list_tables",
-        "plan_query",
-        "query_database",
-        "sandbox_exec",
-        "sandbox_read_file",
-        "sandbox_write_file",
-        "schema_ddl",
-        "schema_link",
-        "schema_overview",
-        "schema_statistics",
-        "validate_sql",
-        "verify_metric_conformance",
+        "schema_diff_branches",
+        "xata_branch_diff",
+        "xata_list_branches",
+        "create_xata_branch",
+        "delete_xata_branch",
     }
+)
+STANDALONE_CHAT_TOOL_ALLOWLIST = (
+    frozenset(MCP_TOOL_SCOPES) - STANDALONE_CHAT_BLOCKED_TOOLS
 )
 
 

@@ -1,0 +1,30 @@
+{
+  "cells": [
+    {
+      "code": "import json\nCONST = 42",
+      "code_hash": "2056980adec6f6b5d36176b7c0a3cd4c",
+      "config": {
+        "column": null,
+        "disabled": false,
+        "hide_code": false
+      },
+      "id": "setup",
+      "name": "setup"
+    },
+    {
+      "code": "data = json.dumps({'v': CONST})",
+      "code_hash": "61671ab5a882b707f75c7e282009febf",
+      "config": {
+        "column": null,
+        "disabled": false,
+        "hide_code": false
+      },
+      "id": "Hbol",
+      "name": "_"
+    }
+  ],
+  "metadata": {
+    "signalpilot_version": "0.1.0"
+  },
+  "version": "1"
+}

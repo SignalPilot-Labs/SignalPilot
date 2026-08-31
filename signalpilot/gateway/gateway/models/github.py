@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from .workspace import WorkspaceProjectInfo
+
 
 class GitHubInstallationInfo(BaseModel):
     id: str
@@ -47,6 +49,19 @@ class GitHubRepoLinkInfo(BaseModel):
     last_sync_at: float | None = None
     created_at: float
     updated_at: float
+
+
+class GitHubRepoImportRequest(BaseModel):
+    installation_id: str
+    repo_full_name: str
+    repo_id: int
+    default_branch: str = "main"
+
+
+class GitHubRepoImportResult(BaseModel):
+    project: WorkspaceProjectInfo
+    link: GitHubRepoLinkInfo
+    created: bool
 
 
 class GitCredentialsResponse(BaseModel):

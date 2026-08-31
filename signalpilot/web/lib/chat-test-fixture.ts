@@ -13,6 +13,13 @@ import type {
 export const FIXTURE_RUN_ID = "run-fixture-0001";
 const BASE_EPOCH = Date.UTC(2026, 0, 15, 17, 30, 0);
 
+// Live notebook panel wiring: the ids the enriched notebook_started event
+// carries so the chat page can attach the notebook inner view.
+export const FIXTURE_GATEWAY_SESSION_ID = "gw-session-fixture-1";
+export const FIXTURE_KERNEL_SESSION_ID = "s_fixt01";
+export const FIXTURE_NOTEBOOK_PATH =
+  "/tmp/signalpilot-chat-runs/run-fixture-0001/analysis.py";
+
 export type FixtureEvent = Omit<StandaloneChatEvent, "created_at"> & {
   at: number;
 };
@@ -43,15 +50,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-`;
-
-const SCRATCH_PYTHON = `q3 = {"EMEA": 4_812_400, "AMER": 9_204_100, "APAC": 2_118_800}
-q2 = {"EMEA": 4_101_900, "AMER": 8_930_600, "APAC": 1_611_200}
-
-result = {
-    region: round((q3[region] - q2[region]) / q2[region] * 100, 1)
-    for region in q3
-}
 `;
 
 const BAD_SQL = `select region_name, sum(net_revenue) as revenue
@@ -92,7 +90,37 @@ const MID_RUN_CHUNKS: { at: number; delta: string }[] = [
   { at: 7_780, delta: "I'll spin up the analysis runtime to compute exact growth rates from the query snapshot, then publish a table and a Q2-vs-Q3 comparison chart." },
 ];
 
+/** Extended-thinking stretch before the first tool chain. */
+const THINKING_CHUNKS: { at: number; delta: string }[] = [
+  { at: 240, delta: "The user wants Q3 vs Q2 revenue growth by region. " },
+  { at: 300, delta: "I should confirm which model carries net revenue first — fct_orders looks right, but regions may live on a dimension table. " },
+  { at: 360, delta: "Plan: check the schema, query both quarters in one governed pass, then compute growth rates in the sandbox so the numbers match the published table exactly." },
+];
+
 const RAW_EVENTS: FixtureEvent[] = [
+  // Cold-start boot: present in this fixture so the boot UX is replayable.
+  // Warm runs simply have no runtime_boot events.
+  {
+    at: 40,
+    run_id: FIXTURE_RUN_ID,
+    sequence: 0,
+    type: "runtime_boot",
+    payload: { phase: "provisioning" },
+  },
+  {
+    at: 180,
+    run_id: FIXTURE_RUN_ID,
+    sequence: 0,
+    type: "runtime_boot",
+    payload: { phase: "ready", boot_ms: 41_200 },
+  },
+  ...THINKING_CHUNKS.map((chunk) => ({
+    at: chunk.at,
+    run_id: FIXTURE_RUN_ID,
+    sequence: 0,
+    type: "thinking_delta" as const,
+    payload: { delta: chunk.delta },
+  })),
   {
     at: 400,
     run_id: FIXTURE_RUN_ID,
@@ -176,9 +204,11 @@ const RAW_EVENTS: FixtureEvent[] = [
     type: "tool_completed",
     payload: {
       tool_call_id: "t3",
-      summary: "The governed tool returned an error.",
+      // The worker writes the failure text as `summary` (chat-run-steps reads
+      // summary first, message only as a legacy fallback).
+      summary:
+        'column "region_name" does not exist on analytics.fct_orders — regions live on dim_regions',
       error: true,
-      message: 'column "region_name" does not exist on analytics.fct_orders — regions live on dim_regions',
     },
   },
   {
@@ -206,6 +236,102 @@ const RAW_EVENTS: FixtureEvent[] = [
     payload: {
       tool: "mcp__signalpilot__query_database",
       table_name: "dim_regions",
+    },
+  },
+  // A subagent explores the dbt project in parallel with the warehouse query.
+  {
+    at: 4_900,
+    run_id: FIXTURE_RUN_ID,
+    sequence: 0,
+    type: "tool_started",
+    payload: {
+      tool: "Agent",
+      tool_call_id: "sub-1",
+      input: {
+        subagent_type: "Explore",
+        description: "Map the revenue marts and their grain",
+        prompt: "Find every mart that touches net_revenue and report its grain.",
+      },
+    },
+  },
+  {
+    at: 5_100,
+    run_id: FIXTURE_RUN_ID,
+    sequence: 0,
+    type: "tool_started",
+    payload: {
+      tool: "Glob",
+      tool_call_id: "sub-1-c1",
+      parent_tool_call_id: "sub-1",
+      input: { pattern: "models/marts/**/*.sql" },
+    },
+  },
+  {
+    at: 5_400,
+    run_id: FIXTURE_RUN_ID,
+    sequence: 0,
+    type: "tool_completed",
+    payload: { tool_call_id: "sub-1-c1", parent_tool_call_id: "sub-1", summary: "The governed tool completed.", error: false },
+  },
+  {
+    at: 5_600,
+    run_id: FIXTURE_RUN_ID,
+    sequence: 0,
+    type: "text_delta",
+    payload: {
+      delta: "Three marts reference net_revenue; checking each one's grain.",
+      parent_tool_call_id: "sub-1",
+    },
+  },
+  {
+    at: 5_800,
+    run_id: FIXTURE_RUN_ID,
+    sequence: 0,
+    type: "tool_started",
+    payload: {
+      tool: "Read",
+      tool_call_id: "sub-1-c2",
+      parent_tool_call_id: "sub-1",
+      input: { file_path: "models/marts/fct_orders.sql" },
+    },
+  },
+  {
+    at: 6_300,
+    run_id: FIXTURE_RUN_ID,
+    sequence: 0,
+    type: "tool_completed",
+    payload: { tool_call_id: "sub-1-c2", parent_tool_call_id: "sub-1", summary: "The governed tool completed.", error: false },
+  },
+  {
+    at: 6_500,
+    run_id: FIXTURE_RUN_ID,
+    sequence: 0,
+    type: "tool_started",
+    payload: {
+      tool: "Grep",
+      tool_call_id: "sub-1-c3",
+      parent_tool_call_id: "sub-1",
+      input: { pattern: "net_revenue", path: "models/" },
+    },
+  },
+  {
+    at: 6_900,
+    run_id: FIXTURE_RUN_ID,
+    sequence: 0,
+    type: "tool_completed",
+    payload: { tool_call_id: "sub-1-c3", parent_tool_call_id: "sub-1", summary: "The governed tool completed.", error: false },
+  },
+  {
+    at: 7_350,
+    run_id: FIXTURE_RUN_ID,
+    sequence: 0,
+    type: "tool_completed",
+    payload: {
+      tool_call_id: "sub-1",
+      summary: "The governed tool completed.",
+      error: false,
+      report:
+        "**Three marts touch `net_revenue`.** `fct_orders` is order-grain and joins regions via `region_id`; `rpt_daily_revenue` and `rpt_region_rollup` both aggregate from it, so the Q2/Q3 comparison should read from `fct_orders` directly.",
     },
   },
   {
@@ -244,7 +370,12 @@ const RAW_EVENTS: FixtureEvent[] = [
     run_id: FIXTURE_RUN_ID,
     sequence: 16,
     type: "notebook_started",
-    payload: { status: "running" },
+    payload: {
+      status: "running",
+      gateway_session_id: FIXTURE_GATEWAY_SESSION_ID,
+      kernel_session_id: FIXTURE_KERNEL_SESSION_ID,
+      notebook_path: FIXTURE_NOTEBOOK_PATH,
+    },
   },
   {
     at: 9_200,
@@ -279,23 +410,6 @@ const RAW_EVENTS: FixtureEvent[] = [
     sequence: 20,
     type: "tool_completed",
     payload: { tool_call_id: "t7", summary: "The governed tool completed.", error: false },
-  },
-  {
-    at: 12_300,
-    run_id: FIXTURE_RUN_ID,
-    sequence: 21,
-    type: "tool_started",
-    payload: {
-      tool: "mcp__standalone-chat__run_scratch_python",
-      input: { source: SCRATCH_PYTHON },
-    },
-  },
-  {
-    at: 13_900,
-    run_id: FIXTURE_RUN_ID,
-    sequence: 22,
-    type: "tool_completed",
-    payload: { tool_call_id: "t8", summary: "The governed tool completed.", error: false },
   },
   {
     at: 14_300,
@@ -383,6 +497,20 @@ const RAW_EVENTS: FixtureEvent[] = [
     type: "text_delta" as const,
     payload: { delta: chunk.delta },
   })),
+  {
+    at: 20_800,
+    run_id: FIXTURE_RUN_ID,
+    sequence: 0,
+    type: "archive_completed",
+    payload: { archive_id: "archive-fixture-1" },
+  },
+  {
+    at: 20_900,
+    run_id: FIXTURE_RUN_ID,
+    sequence: 0,
+    type: "kernel_stopped",
+    payload: { status: "stopped" },
+  },
   {
     at: 21_000,
     run_id: FIXTURE_RUN_ID,

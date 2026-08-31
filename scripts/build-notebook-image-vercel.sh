@@ -29,6 +29,7 @@ need docker
 need git
 
 [[ -f Dockerfile.notebook ]] || die "run from the SignalPilot repo; Dockerfile.notebook not found"
+[[ -f signalpilot-plugin/.claude-plugin/plugin.json ]] || die "canonical SignalPilot plugin is missing from signalpilot-plugin/"
 [[ -n "${VERCEL_REGISTRY:-}" ]] || die "VERCEL_REGISTRY is required (e.g. registry.vercel.com/<team>)"
 
 IMAGE_REPO="${NOTEBOOK_IMAGE_REPO:-sp-notebook}"

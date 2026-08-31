@@ -26,12 +26,14 @@ function NavIconDashboard({ active }: { active: boolean }) {
     </svg>
   );
 }
-function NavIconQuery({ active }: { active: boolean }) {
+function NavIconLineage({ active }: { active: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path d="M2 3H12M2 7H8M2 11H10" stroke="currentColor" strokeWidth="1" strokeLinecap="square" />
-      <path d="M10 8L12 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="square" />
-      {active && <circle cx="11" cy="9" r="1" fill="var(--color-success)" />}
+      <rect x="1" y="5.5" width="3" height="3" stroke="currentColor" strokeWidth="1" />
+      <rect x="10" y="1.5" width="3" height="3" stroke="currentColor" strokeWidth="1" />
+      <rect x="10" y="9.5" width="3" height="3" stroke="currentColor" strokeWidth="1" />
+      <path d="M4 7H6.5C7.5 7 7.5 3 8.5 3H10M4 7H6.5C7.5 7 7.5 11 8.5 11H10" stroke="currentColor" strokeWidth="1" fill="none" />
+      {active && <rect x="1.75" y="6.25" width="1.5" height="1.5" fill="var(--color-success)" />}
     </svg>
   );
 }
@@ -197,7 +199,7 @@ const navGroups: { label: string | null; items: NavItem[] }[] = [
     items: [
       { href: "/connections", label: "Connections", icon: NavIconDatabase, shortcut: "2" },
       { href: "/schema", label: "Schema", icon: NavIconSchema, shortcut: "4" },
-      { href: "/query", label: "Query", icon: NavIconQuery, shortcut: "6" },
+      { href: "/lineage", label: "Lineage", icon: NavIconLineage, shortcut: "6" },
     ],
   },
   {

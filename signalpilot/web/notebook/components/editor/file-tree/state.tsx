@@ -2,6 +2,14 @@ import { atom } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 import { dbtProjectDirAtom } from "@/components/editor/dbt/use-dbt";
 import { apiCall, apiCallMultipart } from "@/core/network/api-call";
+import {
+  gwCopyFileOrFolder,
+  gwCreateFileOrFolder,
+  gwDeleteFileOrFolder,
+  gwListFiles,
+  gwRenameFileOrFolder,
+  hasGatewayFilePlane,
+} from "@/core/network/gateway-file-api";
 import type {
   FileCopyRequest,
   FileCopyResponse,
@@ -20,6 +28,11 @@ import { RequestingTree } from "./requesting-tree";
 function createFileOrFolder(
   request: FileCreateInput,
 ): Promise<FileCreateResponse> {
+  // Gateway project set → talk to the gateway workspace store directly (no
+  // notebook session/sandbox needed). Otherwise the sandbox proxy path.
+  if (hasGatewayFilePlane()) {
+    return gwCreateFileOrFolder(request);
+  }
   const formData = new FormData();
   formData.append("path", request.path);
   formData.append("type", request.type);
@@ -37,14 +50,22 @@ export const treeAtom = atom<RequestingTree>((get) => {
   return new RequestingTree(
     {
       listFiles: (req: FileListRequest) =>
-        apiCall<FileListResponse>("/files/list_files", req),
+        hasGatewayFilePlane()
+          ? gwListFiles(req)
+          : apiCall<FileListResponse>("/files/list_files", req),
       createFileOrFolder,
       deleteFileOrFolder: (req: FileDeleteRequest) =>
-        apiCall<FileDeleteResponse>("/files/delete", req),
+        hasGatewayFilePlane()
+          ? gwDeleteFileOrFolder(req)
+          : apiCall<FileDeleteResponse>("/files/delete", req),
       copyFileOrFolder: (req: FileCopyRequest) =>
-        apiCall<FileCopyResponse>("/files/copy", req),
+        hasGatewayFilePlane()
+          ? gwCopyFileOrFolder(req)
+          : apiCall<FileCopyResponse>("/files/copy", req),
       renameFileOrFolder: (req: FileMoveRequest) =>
-        apiCall<FileMoveResponse>("/files/move", req),
+        hasGatewayFilePlane()
+          ? gwRenameFileOrFolder(req)
+          : apiCall<FileMoveResponse>("/files/move", req),
     },
     dbtProjectDir || undefined,
   );

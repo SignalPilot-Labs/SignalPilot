@@ -396,6 +396,34 @@ export interface GitHubRepoLink {
   updated_at: number;
 }
 
+export interface GitHubRepoImportResult {
+  project: WorkspaceProjectInfo;
+  link: GitHubRepoLink;
+  created: boolean;
+}
+
+export interface DbtMapInfo {
+  id: string;
+  project_id: string;
+  branch: string;
+  revision: number;
+  status: string;
+  trigger: string;
+  error: string | null;
+  dbt_version: string | null;
+  node_count: number;
+  manifest_bytes: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface DbtMapResponse {
+  status: "none" | "queued" | "running" | "success" | "failed";
+  map: DbtMapInfo | null;
+  // A manifest-shaped subset: nodes/sources records + parent_map/child_map.
+  graph: Record<string, unknown> | null;
+}
+
 export interface GitCredentials {
   source: string;
   clone_url: string | null;

@@ -380,8 +380,12 @@ const VerticalCell = memo(
         />
       );
 
-      // Hide the code if it's pure markdown and there's an output, or if the code is empty
-      const hideCode = shouldHideCode(code, output);
+      // Hide the code if it's pure markdown and there's an output, or if the
+      // code is empty. Cells explicitly marked hide_code render no code tray
+      // at all in the read view (scaffold/plumbing cells — e.g. the chat
+      // analysis notebook's seeded setup cells); kiosk viewers still get the
+      // collapsed-but-expandable tray for ordinary cells below.
+      const hideCode = shouldHideCode(code, output) || config.hide_code === true;
 
       return (
         <div

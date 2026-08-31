@@ -15,6 +15,7 @@ Runtime v2: compute is a sandbox behind the NotebookBackend seam. Tests cover:
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from types import SimpleNamespace
@@ -92,6 +93,32 @@ def _make_clerk_jwt(user_id: str = "clerk-user", org_id: str = "clerk-org") -> s
     return jwt.encode(payload, "clerk-secret", algorithm="HS256")
 
 
+@pytest.mark.asyncio
+async def test_chat_force_oauth_omits_org_api_key_from_runtime_env(
+    monkeypatch,
+):
+    from gateway.notebooks import session_service
+
+    monkeypatch.setenv("SP_CHAT_FORCE_OAUTH_TOKEN", "true")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-test")
+    resolve_org_key = AsyncMock(return_value="depleted-org-key")
+    monkeypatch.setattr(
+        session_service.org_secrets_store,
+        "resolve_anthropic_key",
+        resolve_org_key,
+    )
+
+    runtime_env = await session_service._runtime_env(
+        MagicMock(),
+        org_id="org-1",
+        extra_env={"SP_CHAT_PROJECT_ID": "project-1"},
+    )
+
+    assert runtime_env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat-test"
+    assert "ANTHROPIC_API_KEY" not in runtime_env
+    resolve_org_key.assert_not_awaited()
+
+
 class FakeBackend:
     """In-memory NotebookBackend covering the whole protocol."""
 
@@ -100,7 +127,7 @@ class FakeBackend:
     def __init__(self) -> None:
         self.launches: list = []
         self.terminated: list[str] = []
-        self.resumed: list[str] = []
+        self.resumed: list[tuple[str, object]] = []
         self.extends: list[tuple[str, int]] = []
         self.alive = True
         self.launch_error: Exception | None = None
@@ -122,10 +149,10 @@ class FakeBackend:
     async def is_alive(self, runtime_handle: str) -> bool:
         return self.alive
 
-    async def resume(self, runtime_handle: str) -> str:
+    async def resume(self, runtime_handle: str, request) -> str:
         if self.resume_url is None:
             raise RuntimeError("resume failed")
-        self.resumed.append(runtime_handle)
+        self.resumed.append((runtime_handle, request))
         return self.resume_url
 
     async def snapshot_and_stop(self, runtime_handle: str):
@@ -144,17 +171,17 @@ class FakeBackend:
 def _session_info(**overrides):
     from gateway.models.notebook_sessions import NotebookSessionInfo
 
-    defaults = dict(
-        id="sess-1",
-        org_id="org-1",
-        user_id="user-1",
-        project_id="proj-1",
-        branch="main",
-        backend="vercel",
-        status="running",
-        last_ping=time.time(),
-        created_at=time.time(),
-    )
+    defaults = {
+        "id": "sess-1",
+        "org_id": "org-1",
+        "user_id": "user-1",
+        "project_id": "proj-1",
+        "branch": "main",
+        "backend": "vercel",
+        "status": "running",
+        "last_ping": time.time(),
+        "created_at": time.time(),
+    }
     defaults.update(overrides)
     return NotebookSessionInfo(**defaults)
 
@@ -162,19 +189,19 @@ def _session_info(**overrides):
 def _internal(**overrides):
     from gateway.store.notebook_sessions import NotebookSessionInternal
 
-    defaults = dict(
-        session_id="sess-1",
-        org_id="org-1",
-        user_id="user-1",
-        status="running",
-        backend="vercel",
-        runtime_handle="sbx-live",
-        upstream_url="https://sbx-live.vercel.run",
-        snapshot_id=None,
-        access_token="tok-1",
-        project_id="proj-1",
-        branch="main",
-    )
+    defaults = {
+        "session_id": "sess-1",
+        "org_id": "org-1",
+        "user_id": "user-1",
+        "status": "running",
+        "backend": "vercel",
+        "runtime_handle": "sbx-live",
+        "upstream_url": "https://sbx-live.vercel.run",
+        "snapshot_id": None,
+        "access_token": "tok-1",
+        "project_id": "proj-1",
+        "branch": "main",
+    }
     defaults.update(overrides)
     return NotebookSessionInternal(**defaults)
 
@@ -576,13 +603,15 @@ class TestLaunchCredentials:
         assert 2718 in spec.ports
         assert spec.tags["sp-purpose"] == "notebook"
 
-        runtime.write_file.assert_awaited_once()
-        write_args = runtime.write_file.await_args.args
-        assert write_args[2] == b"nb-token"
+        # The token rides the process env (never the creation spec); the boot
+        # command stages it into the 0400 token file and unsets it before
+        # exec'ing the server. No provider write_file on the critical path.
+        runtime.write_file.assert_not_awaited()
 
         process_env = runtime.start_process.await_args.kwargs["env"]
         assert process_env["SP_SESSION_JWT"] == "jwt.value.here"
         assert process_env["SP_SESSION_ID"] == "sess-abc"
+        assert process_env["SP_NOTEBOOK_TOKEN"] == "nb-token"
         assert "SP_API_KEY" not in process_env
 
     @pytest.mark.asyncio
@@ -737,10 +766,46 @@ class TestSessionLifecycleService:
             backend=backend,
         )
         assert result.status == "running"
-        assert backend.resumed == ["sbx-live"]
+        assert len(backend.resumed) == 1
+        resumed_handle, resume_request = backend.resumed[0]
+        assert resumed_handle == "sbx-live"
+        assert resume_request.session_id == "sess-1"
+        assert resume_request.notebook_token == "tok-1"
+        assert resume_request.snapshot_url is None
         assert backend.launches == []
         update_kwargs = svc.update_session_runtime.await_args.kwargs
         assert update_kwargs["upstream_url"] == "https://resumed.vercel.run"
+
+    @pytest.mark.asyncio
+    async def test_hung_resume_falls_back_to_fresh_launch(self, svc, monkeypatch):
+        _patch_jwt_secret(monkeypatch)
+        from gateway.notebooks import session_service as service
+
+        backend = FakeBackend()
+        svc.get_active_session.return_value = _session_info(status="snapshotted")
+        svc.get_session_internal.return_value = _internal(
+            status="snapshotted", snapshot_id="snap-9", upstream_url=None
+        )
+        svc.create_session.return_value = _session_info(id="fresh-sess", status="creating")
+
+        async def hung_resume(_runtime_handle, _request):
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(backend, "resume", hung_resume)
+        monkeypatch.setattr(service, "_NOTEBOOK_RESUME_TIMEOUT_SECONDS", 0.01)
+
+        result = await service.ensure_notebook_session(
+            AsyncMock(),
+            org_id="org-1",
+            user_id="user-1",
+            project_id="proj-1",
+            branch="main",
+            backend=backend,
+        )
+
+        assert result.id == "fresh-sess"
+        assert backend.terminated == ["sbx-live"]
+        assert len(backend.launches) == 1
 
     @pytest.mark.asyncio
     async def test_project_or_branch_switch_replaces_the_session(self, svc, monkeypatch):
@@ -832,6 +897,33 @@ class TestSessionLifecycleService:
                 branch="main",
                 backend=backend,
             )
+        statuses = [c.kwargs.get("status") for c in svc.update_session_runtime.await_args_list]
+        assert "error" in statuses
+        service.release_lease.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_launch_timeout_marks_session_error(self, svc, monkeypatch):
+        _patch_jwt_secret(monkeypatch)
+        from gateway.notebooks import session_service as service
+
+        backend = FakeBackend()
+
+        async def hung_launch(_request):
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(backend, "launch", hung_launch)
+        monkeypatch.setattr(service, "_NOTEBOOK_LAUNCH_TIMEOUT_SECONDS", 0.01)
+
+        with pytest.raises(service.NotebookSessionError, match="TimeoutError"):
+            await service.ensure_notebook_session(
+                AsyncMock(),
+                org_id="org-1",
+                user_id="user-1",
+                project_id="proj-1",
+                branch="main",
+                backend=backend,
+            )
+
         statuses = [c.kwargs.get("status") for c in svc.update_session_runtime.await_args_list]
         assert "error" in statuses
         service.release_lease.assert_awaited()
@@ -969,3 +1061,44 @@ class TestTerminateSession:
         await ns_api.delete_session(_make_mock_store(), _make_mock_response())
         terminate.assert_awaited_once()
         assert terminate.await_args.kwargs["session_info"] == session
+
+
+class TestStandaloneChatWarmSession:
+    """A warm notebook is conversation-scoped, never frozen to its first run."""
+
+    @pytest.mark.asyncio
+    async def test_session_launch_contains_only_conversation_stable_scope(
+        self, monkeypatch
+    ):
+        from gateway.notebooks import session_service as service
+
+        selected = SimpleNamespace(id="session-a")
+        ensure = AsyncMock(return_value=selected)
+        runtime = SimpleNamespace(session_id="session-a")
+        monkeypatch.setattr(service, "ensure_notebook_session", ensure)
+        monkeypatch.setattr(
+            service, "runtime_for_session", AsyncMock(return_value=runtime)
+        )
+
+        result = await service.ensure_standalone_chat_notebook_session(
+            AsyncMock(),
+            org_id="org-a",
+            user_id="user-a",
+            conversation_id="conversation-a",
+            project_id="project-a",
+            branch="main",
+            connection_name="production",
+            commit_sha="a" * 40,
+        )
+
+        assert result is runtime
+        kwargs = ensure.await_args.kwargs
+        assert kwargs["user_id"] == "chat:conv-conversation-a"
+        assert kwargs["extra_env"] == {
+            "SP_CHAT_PROJECT_ID": "project-a",
+            "SP_CHAT_BRANCH": "main",
+            "SP_CHAT_CONNECTION_NAME": "production",
+            "SP_CHAT_COMMIT_SHA": "a" * 40,
+            "SP_PROJECT_COMMIT_SHA": "a" * 40,
+        }
+        assert "SP_CHAT_RUN_ID" not in kwargs["extra_env"]

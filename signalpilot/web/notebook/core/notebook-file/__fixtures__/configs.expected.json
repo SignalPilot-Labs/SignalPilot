@@ -1,0 +1,41 @@
+{
+  "cells": [
+    {
+      "code": "a = 1",
+      "code_hash": "fd352b68bf83391284e044021cab0339",
+      "config": {
+        "column": null,
+        "disabled": false,
+        "hide_code": true
+      },
+      "id": "Hbol",
+      "name": "_"
+    },
+    {
+      "code": "b = a + 1",
+      "code_hash": "ba548d3b729a1422b80e25a6bd768af1",
+      "config": {
+        "column": null,
+        "disabled": true,
+        "hide_code": false
+      },
+      "id": "MJUe",
+      "name": "hidden"
+    },
+    {
+      "code": "c = b + 1",
+      "code_hash": "4775cc4b9fbf70d20de56666f81dde5b",
+      "config": {
+        "column": 1,
+        "disabled": true,
+        "hide_code": true
+      },
+      "id": "vblA",
+      "name": "_"
+    }
+  ],
+  "metadata": {
+    "signalpilot_version": "0.1.0"
+  },
+  "version": "1"
+}

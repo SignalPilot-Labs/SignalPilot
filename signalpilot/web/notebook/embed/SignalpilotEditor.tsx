@@ -1,4 +1,6 @@
 import { lazy, Suspense } from "react";
+import { forcedModeAtom, kioskModeAtom, viewerOnlyAtom } from "@/core/mode";
+import { sessionIdAtom, type SessionId } from "@/core/kernel/session";
 import { adaptMountConfig } from "./adaptMountConfig";
 import { SpEmbedProviders } from "./SpEmbedProviders";
 import type { SignalpilotEditorProps } from "./types";
@@ -27,8 +29,42 @@ export function SignalpilotEditor({
   client,
   config,
   className,
+  mode,
+  kernelSessionId,
 }: SignalpilotEditorProps): React.ReactElement {
-  const options = adaptMountConfig({ config, client, mode: "edit" });
+  const options = adaptMountConfig({ config, client, mode: mode ?? "edit" });
+
+  // Attach target for hosts connecting to an EXISTING kernel session (the
+  // chat live notebook panel). sessionIdAtom's per-store initial value is
+  // derived from the page URL's ?session_id — absent on non-notebook routes,
+  // where it falls back to a RANDOM id and the websocket would silently
+  // create a fresh empty session instead of attaching. Written on the
+  // per-client store during render: idempotent, and it must be visible to
+  // the first kernel-connection read.
+  if (kernelSessionId) {
+    client.store.set(sessionIdAtom, kernelSessionId as SessionId);
+  }
+
+  // Hosts that embed the editor on a non-notebook route (the chat page's
+  // live notebook panel) have no ?file= in the page URL, so the URL-derived
+  // mode would render the notebook HOME page. An explicit mode prop forces
+  // the page choice. Only set when provided — the notebook surfaces keep
+  // URL-derived navigation (e.g. dropping ?file= returns home).
+  // Written on the per-client store during render: idempotent, and it must
+  // be visible to SpApp's very first read.
+  if (mode !== undefined) {
+    client.store.set(forcedModeAtom, mode);
+  }
+  // Read-mode embeds are pure viewers: the rendered document must never be
+  // replaced or washed out by connection-state chrome. Kiosk mode makes the
+  // read view render CODE (collapsed-but-expandable) with outputs — without
+  // it the run view is outputs-only and a document with no outputs renders
+  // blank. Set eagerly: a live kernel-ready would set it too, but the
+  // kernel-free document render must not depend on one.
+  if (mode === "read") {
+    client.store.set(viewerOnlyAtom, true);
+    client.store.set(kioskModeAtom, true);
+  }
 
   return (
     <div

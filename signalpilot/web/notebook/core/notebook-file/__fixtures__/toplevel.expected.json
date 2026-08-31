@@ -1,0 +1,41 @@
+{
+  "cells": [
+    {
+      "code": "def add(a, b):\n    return a + b",
+      "code_hash": "ef232b6686b295ed7aed82ebd2510ae8",
+      "config": {
+        "column": null,
+        "disabled": false,
+        "hide_code": false
+      },
+      "id": "Hbol",
+      "name": "*add"
+    },
+    {
+      "code": "class Point:\n    def __init__(self, x):\n        self.x = x",
+      "code_hash": "6d62b24d4403c4444764c9b30ae4cdda",
+      "config": {
+        "column": null,
+        "disabled": false,
+        "hide_code": false
+      },
+      "id": "MJUe",
+      "name": "*Point"
+    },
+    {
+      "code": "result = add(1, 2)",
+      "code_hash": "8ea7286f8af41628e18e5eeec9b8d18c",
+      "config": {
+        "column": null,
+        "disabled": false,
+        "hide_code": false
+      },
+      "id": "vblA",
+      "name": "_"
+    }
+  ],
+  "metadata": {
+    "signalpilot_version": "0.1.0"
+  },
+  "version": "1"
+}

@@ -48,17 +48,44 @@ export async function resolveFileKind(path: string): Promise<FileKind> {
     return cached;
   }
 
-  const pending = (async () => {
-    const headers = await getApiHeaders();
-    const response = await fetch(
-      spApiUrl(`/notebook/static?file=${encodeURIComponent(path)}`),
-      { headers },
+  const pending = (async (): Promise<FileKind> => {
+    // Gateway-first classification (project mode): fetch + parse the file
+    // client-side. No sandbox, no session, no dependence on kernel state —
+    // the sandbox path 404s "Session not found" whenever there is no live
+    // session (sessionless boot, or a session that died since connecting).
+    const { hasGatewayFilePlane, gwFileDetails } = await import(
+      "@/core/network/gateway-file-api"
     );
-    if (!response.ok) {
-      throw new Error(`Could not classify file (${response.status})`);
+    const gatewayBound = hasGatewayFilePlane();
+    if (gatewayBound && path.endsWith(".py")) {
+      const details = await gwFileDetails({ path });
+      if (typeof details?.contents !== "string" || details.isBase64) {
+        return "raw";
+      }
+      const { parseNotebookPy } = await import("@/core/notebook-file/parse");
+      return parseNotebookPy(details.contents) ? "notebook" : "raw";
     }
-    const payload = (await response.json()) as { rawFallback?: boolean };
-    return payload.rawFallback ? "raw" : "notebook";
+
+    // .md/.qmd notebooks can only be classified by the server. Try it, but
+    // degrade to a raw view instead of failing the file open when there is
+    // no live session to ask.
+    try {
+      const headers = await getApiHeaders();
+      const response = await fetch(
+        spApiUrl(`/notebook/static?file=${encodeURIComponent(path)}`),
+        { headers },
+      );
+      if (!response.ok) {
+        throw new Error(`Could not classify file (${response.status})`);
+      }
+      const payload = (await response.json()) as { rawFallback?: boolean };
+      return payload.rawFallback ? "raw" : "notebook";
+    } catch (error) {
+      if (gatewayBound) {
+        return "raw";
+      }
+      throw error;
+    }
   })();
   fileKindCache.set(key, pending);
 

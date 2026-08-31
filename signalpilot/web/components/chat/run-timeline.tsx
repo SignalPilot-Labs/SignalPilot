@@ -18,13 +18,17 @@ import {
   Table2,
   Waypoints,
 } from "lucide-react";
+import { Bot, Brain } from "lucide-react";
 import { memo, useEffect, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { format as formatSql } from "sql-formatter";
 import { ChatCode, CopyButton, type ChatCodeLanguage } from "~/components/chat/chat-code";
+import { AgentThinkingIndicator } from "~/components/chat/agent-thinking-indicator";
 import {
+  describeSubagentWork,
   formatStepDuration,
+  shouldShowAgentThinking,
   summarizeRunSteps,
   type RunBlock,
   type RunStep,
@@ -315,27 +319,27 @@ function stepPreview(step: RunStep): string | null {
 function StatusDot({ status }: { status: RunStep["status"] }) {
   if (status === "running") {
     return (
-      <span className="relative z-10 flex h-[19px] w-[19px] flex-none items-center justify-center rounded-full border border-[var(--color-success)]/40 bg-[var(--color-bg)]">
+      <span className="relative z-10 flex h-[18px] w-[18px] flex-none items-center justify-center rounded-full border border-[var(--color-success)]/40 bg-[var(--color-bg)]">
         <span className="chat-dot-live h-1.5 w-1.5 rounded-full bg-[var(--color-success)]" />
       </span>
     );
   }
   if (status === "failed") {
     return (
-      <span className="relative z-10 flex h-[19px] w-[19px] flex-none items-center justify-center rounded-full border border-[var(--color-error)]/40 bg-[var(--color-bg)]">
+      <span className="relative z-10 flex h-[18px] w-[18px] flex-none items-center justify-center rounded-full border border-[var(--color-error)]/40 bg-[var(--color-bg)]">
         <AlertCircle className="h-3 w-3 text-[var(--color-error)]" />
       </span>
     );
   }
   if (status === "succeeded") {
     return (
-      <span className="relative z-10 flex h-[19px] w-[19px] flex-none items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-bg)]">
+      <span className="relative z-10 flex h-[18px] w-[18px] flex-none items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-bg)]">
         <Check className="h-3 w-3 text-[var(--color-success)]/80" />
       </span>
     );
   }
   return (
-    <span className="relative z-10 flex h-[19px] w-[19px] flex-none items-center justify-center rounded-full bg-[var(--color-bg)]">
+    <span className="relative z-10 flex h-[18px] w-[18px] flex-none items-center justify-center rounded-full bg-[var(--color-bg)]">
       <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-border-active)]" />
     </span>
   );
@@ -429,6 +433,176 @@ const StepRow = memo(function StepRow({ step }: { step: RunStep }) {
   );
 });
 
+/** Elapsed time for a live subagent from its OWN event clock (latest child
+ * activity minus spawn start) — correct under replay and clock skew, where
+ * wall-clock deltas are nonsense. */
+function subagentElapsedMs(step: RunStep): number | null {
+  const start = Date.parse(step.startedAt);
+  if (!Number.isFinite(start)) return null;
+  let latest = start;
+  for (const child of step.children) {
+    for (const stamp of [child.startedAt, child.endedAt]) {
+      const parsed = stamp ? Date.parse(stamp) : Number.NaN;
+      if (Number.isFinite(parsed) && parsed > latest) latest = parsed;
+    }
+  }
+  return latest > start ? latest - start : null;
+}
+
+function lastNarrationLine(liveText: string): string | null {
+  const lines = liveText
+    .split("\n")
+    // Strip markdown emphasis/heading markers but keep identifier
+    // characters like the underscores in column names.
+    .map((line) => line.replace(/[*`]/g, "").replace(/^[#>\s-]+/, "").trim())
+    .filter(Boolean);
+  const last = lines[lines.length - 1];
+  if (!last) return null;
+  return last.length > 110 ? `${last.slice(0, 110)}…` : last;
+}
+
+/**
+ * One subagent spawn rendered as its own live card: an autonomous worker
+ * with a mission, a heartbeat, and a report. While it runs the card shows
+ * the exact tool it is on plus a running tally; expanded, the full child
+ * timeline and the final report are inspectable.
+ */
+const SubagentRow = memo(function SubagentRow({ step }: { step: RunStep }) {
+  const running = step.status === "running";
+  const [userToggle, setUserToggle] = useState<boolean | null>(null);
+  // Reopen if it starts working again; collapse once the report lands.
+  useEffect(() => {
+    if (running) setUserToggle(null);
+  }, [running]);
+  const open = userToggle ?? running;
+  const currentChild = [...step.children]
+    .reverse()
+    .find((child) => child.status === "running");
+  const narration = lastNarrationLine(step.liveText);
+  const tally = describeSubagentWork(step);
+  const elapsed = formatStepDuration(
+    running ? subagentElapsedMs(step) : step.durationMs,
+  );
+  return (
+    <li className="chat-step-in relative">
+      <div className="flex items-start gap-2.5">
+        <StatusDot status={step.status} />
+        <div className="min-w-0 flex-1 pb-1">
+          <section
+            data-testid="chat-subagent-card"
+            className={`overflow-hidden rounded-lg border bg-[var(--color-bg-card)]/70 ${
+              running
+                ? "border-[var(--color-success)]/25"
+                : step.status === "failed"
+                  ? "border-[var(--color-error)]/30"
+                  : "border-[var(--color-border)]"
+            }`}
+          >
+            <button
+              type="button"
+              aria-expanded={open}
+              onClick={() => setUserToggle(!open)}
+              className="flex w-full items-center gap-2.5 px-3 py-2 text-left hover:bg-[var(--color-bg-hover)]"
+            >
+              <span className="relative h-7 w-7 flex-none" aria-hidden>
+                <span className="absolute inset-0 rounded-lg border border-[var(--color-border)]" />
+                {running && (
+                  <span
+                    className="chat-boot-orbit absolute inset-0"
+                    style={{ borderRadius: "0.5rem" }}
+                  />
+                )}
+                <span className="absolute inset-0 flex items-center justify-center">
+                  <Bot
+                    className={`h-3.5 w-3.5 ${
+                      running
+                        ? "text-[var(--color-success)]"
+                        : "text-[var(--color-text-muted)]"
+                    }`}
+                  />
+                </span>
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-2">
+                  <span className="text-[9px] font-medium uppercase tracking-[0.16em] text-[var(--color-text-dim)]">
+                    Subagent
+                  </span>
+                  {step.subagentType && (
+                    <span className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-input)] px-1.5 py-px font-mono text-[9px] text-[var(--color-text-muted)]">
+                      {step.subagentType}
+                    </span>
+                  )}
+                </span>
+                <span
+                  className={`block truncate text-[12px] font-medium ${
+                    running
+                      ? "chat-live-label"
+                      : step.status === "failed"
+                        ? "text-[var(--color-error)]"
+                        : "text-[var(--color-text)]"
+                  }`}
+                >
+                  {step.title}
+                </span>
+              </span>
+              <span className="ml-auto flex flex-none items-center gap-2 text-[10px] text-[var(--color-text-dim)]">
+                <span className="hidden tabular-nums sm:inline">{tally}</span>
+                {elapsed && <span className="tabular-nums">{elapsed}</span>}
+                <ChevronRight
+                  className={`h-3 w-3 transition-transform ${open ? "rotate-90" : ""}`}
+                />
+              </span>
+            </button>
+            {running && (currentChild || narration) && (
+              <div className="flex items-center gap-2 border-t border-[var(--color-border)]/60 px-3 py-1.5 text-[11px] text-[var(--color-text-muted)]">
+                <span className="chat-dot-live h-1.5 w-1.5 flex-none rounded-full bg-[var(--color-success)]" />
+                {currentChild ? (
+                  <span className="truncate">
+                    {currentChild.title}
+                    {currentChild.file && (
+                      <span className="font-mono text-[var(--color-text-dim)]">
+                        {" "}
+                        {currentChild.file}
+                      </span>
+                    )}
+                  </span>
+                ) : (
+                  <span className="truncate italic">{narration}</span>
+                )}
+              </div>
+            )}
+            <div className="chat-collapse" data-open={open}>
+              <div>
+                <div className="border-t border-[var(--color-border)]/60 px-3 py-2.5">
+                  {step.children.length ? (
+                    <RunTimeline steps={step.children} />
+                  ) : (
+                    <p className="px-1 text-[11px] text-[var(--color-text-dim)]">
+                      The subagent is reading its instructions.
+                    </p>
+                  )}
+                  {step.report && (
+                    <div className="mt-2.5 border-t border-[var(--color-border)]/60 pt-2.5">
+                      <p className="mb-1 text-[9px] font-medium uppercase tracking-[0.16em] text-[var(--color-text-dim)]">
+                        Report
+                      </p>
+                      <div className="chat-markdown text-[12px]">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {step.report}
+                        </ReactMarkdown>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </li>
+  );
+});
+
 export function describeRunWork(steps: RunStep[]): string {
   const summary = summarizeRunSteps(steps);
   const parts: string[] = [];
@@ -458,9 +632,13 @@ export function RunTimeline({ steps }: { steps: RunStep[] }) {
   }
   return (
     <ol className="chat-step-rail space-y-1.5" aria-label="Agent activity">
-      {steps.map((step) => (
-        <StepRow key={step.key} step={step} />
-      ))}
+      {steps.map((step) =>
+        step.category === "subagent" ? (
+          <SubagentRow key={step.key} step={step} />
+        ) : (
+          <StepRow key={step.key} step={step} />
+        ),
+      )}
     </ol>
   );
 }
@@ -532,6 +710,50 @@ export function ActivityGroup({
 }
 
 /**
+ * A stretch of the model's extended thinking. Streams open with a live
+ * shimmer while tokens arrive, then folds down to a quiet one-line toggle
+ * so reasoning is inspectable without crowding the answer.
+ */
+function ThinkingBlockView({ text, live }: { text: string; live: boolean }) {
+  const [userToggle, setUserToggle] = useState<boolean | null>(null);
+  // Streaming shows the thought as it forms; once done it folds closed.
+  useEffect(() => {
+    if (live) setUserToggle(null);
+  }, [live]);
+  const open = userToggle ?? live;
+  return (
+    <section
+      data-testid="chat-thinking-block"
+      className="my-3"
+    >
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setUserToggle(!open)}
+        className="flex items-center gap-2 rounded-md px-1 py-0.5 text-left text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-muted)]"
+      >
+        <Brain className="h-3.5 w-3.5 flex-none" />
+        <span className={live ? "chat-live-label font-medium" : ""}>
+          {live ? "Thinking…" : "Thought process"}
+        </span>
+        <ChevronRight
+          className={`h-3 w-3 flex-none transition-transform ${open ? "rotate-90" : ""}`}
+        />
+      </button>
+      <div className="chat-collapse" data-open={open}>
+        <div>
+          <div className="mt-1.5 max-h-64 overflow-y-auto border-l-2 border-[var(--color-border)] py-0.5 pl-3 pr-1">
+            <p className="chat-thinking-text text-[12px] leading-5 text-[var(--color-text-dim)] italic">
+              {text}
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/**
  * Full interleaved view of a run: markdown for streamed narration, an
  * ActivityGroup per tool chain, in the order they actually happened. Only
  * the trailing group is treated as live while the run streams.
@@ -543,8 +765,9 @@ export function RunActivityBlocks({
   blocks: RunBlock[];
   running: boolean;
 }) {
+  const showThinking = shouldShowAgentThinking(blocks, running);
   if (!blocks.length) {
-    return running ? <ActivityGroup steps={[]} live /> : null;
+    return showThinking ? <AgentThinkingIndicator /> : null;
   }
   const lastStepsIndex = blocks.reduce(
     (latest, block, index) => (block.kind === "steps" ? index : latest),
@@ -561,14 +784,26 @@ export function RunActivityBlocks({
               {block.text}
             </ReactMarkdown>
           </div>
+        ) : block.kind === "thinking" ? (
+          <ThinkingBlockView
+            key={block.key}
+            text={block.text}
+            live={running && index === blocks.length - 1}
+          />
         ) : (
           <ActivityGroup
             key={block.key}
             steps={block.steps}
-            live={running && trailingSteps && index === lastStepsIndex}
+            live={
+              running &&
+              !showThinking &&
+              trailingSteps &&
+              index === lastStepsIndex
+            }
           />
         ),
       )}
+      {showThinking && <AgentThinkingIndicator />}
     </>
   );
 }

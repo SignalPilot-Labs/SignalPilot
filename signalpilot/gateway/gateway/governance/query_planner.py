@@ -21,7 +21,6 @@ from gateway.governance.cost_estimator import CostEstimate, CostEstimator
 from gateway.governance.query_executor import GovernedQueryContext, normalize_sql
 from gateway.standalone_chat.config import enterprise_chat_feature_flags
 from gateway.store import Store
-from gateway.store import standalone_chat as chat_store
 
 MCP_MAX_ROWS = 10_000
 TRACK_A_MAX_ROWS = 100_000
@@ -72,6 +71,13 @@ class QueryPlanDecision:
             "expires_at": self.expires_at,
             "scout_row_limit": self.scout_row_limit,
             "shadow": self.shadow,
+        }
+
+    def as_agent_dict(self) -> dict[str, object]:
+        """The decision surface an agent can act on; diagnostics stay internal."""
+        return {
+            "route": self.route,
+            "approval_required": self.approval_required,
         }
 
 
@@ -128,6 +134,12 @@ def choose_query_route(
     if raw_export_requested:
         return "refuse", "Raw exports are not permitted by the chat runtime policy.", None
     if estimated_output_rows is None or estimated_output_bytes is None or estimate_quality == "unknown":
+        if execution_need == "python" and notebook_analysis_enabled:
+            return (
+                "notebook_sdk",
+                "Output cardinality is unknown; the notebook SDK receives a bounded scouting result.",
+                UNKNOWN_SCOUT_ROWS,
+            )
         return (
             "mcp",
             "Output cardinality is unknown; only a 1,000-row scouting query is permitted before a bounded aggregate.",
@@ -234,10 +246,14 @@ async def create_query_plan(
     connection_name: str,
     sql: str,
     purpose: str,
-    execution_need: ExecutionNeed,
+    execution_need: ExecutionNeed | None = None,
     context: GovernedQueryContext,
     row_level_analysis_justified: bool = False,
 ) -> QueryPlanDecision:
+    # The transport already determines the execution path. Keep the persisted
+    # legacy field for migrations/audit compatibility without asking agents to
+    # repeat that fact on every call.
+    execution_need = execution_need or ("python" if context.path == "sdk" else "sql")
     info = await store.get_connection(connection_name)
     if info is None:
         raise QueryPlanError("connection_not_found", "Connection not found")
@@ -256,9 +272,11 @@ async def create_query_plan(
     sql_hash = hashlib.sha256(normalized_sql.encode("utf-8")).hexdigest()
     policy_hash = _policy_hash(db_type=info.db_type, blocked_tables=blocked_tables)
     expires_at = datetime.now(UTC) + timedelta(minutes=15)
+    flags = enterprise_chat_feature_flags()
 
     estimate = CostEstimate(warning="Query is unsafe")
-    if validation.ok:
+    needs_estimate = flags.size_router or flags.size_router_shadow or flags.query_approval
+    if validation.ok and needs_estimate:
         conn_str = await store.get_connection_string(connection_name)
         if not conn_str:
             raise QueryPlanError("credentials_missing", "No credentials stored for this connection")
@@ -289,7 +307,6 @@ async def create_query_plan(
         route_reason = validation.blocked_reason or "The query is unsafe."
         scout_limit = None
     else:
-        flags = enterprise_chat_feature_flags()
         route, route_reason, scout_limit = choose_query_route(
             execution_need=execution_need,
             estimated_output_rows=estimate.estimated_output_rows,
@@ -303,16 +320,12 @@ async def create_query_plan(
         )
     approval_required = await _approval_required(store, context, max(0.0, estimate.estimated_usd))
     plan_id = str(uuid.uuid4())
-    shadow = bool(context.run_id and not enterprise_chat_feature_flags().size_router)
-    shadow_route: str | None = None
-    shadow_reason: str | None = None
-    if shadow and validation.ok:
-        # Size routing is DISABLED (SP_FEATURE_CHAT_SIZE_ROUTER unset). The
-        # would-be decision is recorded for telemetry only; the surfaced route
-        # must never block the agent, otherwise "shadow" mode still gates.
+    shadow = bool(context.run_id and flags.size_router_shadow)
+    if not flags.size_router and validation.ok:
+        # Disabled and shadow modes never gate execution. Shadow controls only
+        # whether we pay for and retain a would-be routing estimate.
         permissive: QueryRoute = "notebook_sdk" if execution_need == "python" else "mcp"
         if route != permissive or scout_limit is not None:
-            shadow_route, shadow_reason = route, route_reason
             route = permissive
             route_reason = "Size routing is disabled; the planned query is approved for execution."
             scout_limit = None
@@ -347,39 +360,6 @@ async def create_query_plan(
     )
     store.session.add(row)
     await store.session.commit()
-    if context.run_id:
-        await chat_store.append_event(
-            store.session,
-            run_id=context.run_id,
-            event_type="plan_created",
-            payload={
-                "plan_id": plan_id,
-                "sql_hash": sql_hash,
-                "estimate_quality": quality,
-                "shadow": shadow,
-                # Chat-visible context: what the agent wanted and the SQL it
-                # planned. The same user already sees raw SQL via `sql` events.
-                "purpose": (purpose or "")[:300],
-                "sql": (sql or "")[:4000],
-                "estimated_output_rows": estimate.estimated_output_rows,
-                "estimated_cost_usd": round(max(0.0, estimate.estimated_usd or 0.0), 6),
-            },
-        )
-        await chat_store.append_event(
-            store.session,
-            run_id=context.run_id,
-            event_type="route_selected",
-            payload={
-                "plan_id": plan_id,
-                "route": route,
-                "route_reason": route_reason,
-                **(
-                    {"shadow_route": shadow_route, "shadow_reason": shadow_reason}
-                    if shadow_route
-                    else {}
-                ),
-            },
-        )
     return QueryPlanDecision(
         plan_id=plan_id,
         sql_hash=sql_hash,

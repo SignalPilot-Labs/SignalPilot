@@ -116,7 +116,6 @@ async def execute(*, request: Request) -> StreamingResponse:
         gateway_url=gateway_api_url,
         token=scoped_token,
         run_id=run_id,
-        notebook_analysis_enabled=notebook_analysis_enabled,
     )
     load_result = gateway.load_result
     load_report_catalog = gateway.load_report_catalog

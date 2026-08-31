@@ -375,7 +375,7 @@ def test_recovery_context_keeps_prior_graph_errors(
     assert '"summary"' in recovery
     assert "underscore-prefixed scratch names" in recovery
     assert "cell-local and cannot be read from another cell" in recovery
-    assert "changed SQL requires a new plan_query result" in recovery
+    assert "Re-run changed SQL through the SDK" in recovery
     assert "Never replace SDK query evidence" in recovery
 
 

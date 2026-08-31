@@ -14,12 +14,10 @@ class StandaloneGatewayClient:
         gateway_url: str,
         token: str,
         run_id: str,
-        notebook_analysis_enabled: bool,
     ) -> None:
         self.gateway_url = gateway_url
         self.token = token
         self.run_id = run_id
-        self.notebook_analysis_enabled = notebook_analysis_enabled
 
     @property
     def _headers(self) -> dict[str, str]:
@@ -52,15 +50,6 @@ class StandaloneGatewayClient:
             f"/api/query/results/{result_id}",
             missing="Governed structured result not found",
             invalid="Invalid governed structured result",
-        )
-
-    async def check_plan(self, plan_id: str) -> dict[str, Any]:
-        if not self.notebook_analysis_enabled:
-            raise ValueError("Notebook analysis is not enabled for this run")
-        return await self._get_json(
-            f"/api/query/plans/{plan_id}",
-            missing="Governed query plan not found",
-            invalid="Invalid governed query plan",
         )
 
     async def load_report_catalog(self, cursor: str | None) -> dict[str, Any]:

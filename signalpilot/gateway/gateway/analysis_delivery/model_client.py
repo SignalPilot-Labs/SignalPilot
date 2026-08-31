@@ -106,6 +106,7 @@ class ClaudeAgentSDKResult:
     provider_message: str | None = None
     request_id: str | None = None
     usage: dict[str, Any] | None = None
+    result_text: str | None = None
 
 
 ClaudeAgentSDKRunner = Callable[[str, dict[str, Any]], Awaitable[ClaudeAgentSDKResult]]
@@ -119,12 +120,14 @@ class ClaudeAgentSDKStructuredClient:
         *,
         oauth_token: str,
         timeout_seconds: float,
+        use_native_structured_output: bool = True,
         query_runner: ClaudeAgentSDKRunner | None = None,
     ) -> None:
         if not oauth_token:
             raise ValueError("Claude OAuth token is required")
         self.oauth_token = oauth_token
         self.timeout_seconds = max(float(timeout_seconds), 0.1)
+        self.use_native_structured_output = use_native_structured_output
         self._query_runner = query_runner or _run_claude_agent_sdk_query
 
     async def create_message(self, request_body: dict[str, Any]) -> dict[str, Any]:
@@ -140,9 +143,11 @@ class ClaudeAgentSDKStructuredClient:
         )
         with tempfile.TemporaryDirectory(prefix="signalpilot-dashboard-authoring-") as runtime_dir:
             agent_env["CLAUDE_CONFIG_DIR"] = runtime_dir
-            options = {
+            options: dict[str, Any] = {
                 "model": request_body.get("model"),
-                "max_turns": 1,
+                # Structured output requires a second SDK turn to emit the
+                # validated JSON result after the initial model response.
+                "max_turns": 2,
                 "permission_mode": "dontAsk",
                 "tools": [],
                 "setting_sources": ["user"],
@@ -151,11 +156,14 @@ class ClaudeAgentSDKStructuredClient:
                     "preset": "claude_code",
                     "append": system,
                 },
-                "output_format": {"type": "json_schema", "schema": schema},
                 "cwd": runtime_dir,
                 "env": agent_env,
                 "effort": _agent_effort(),
             }
+            if self.use_native_structured_output:
+                options["output_format"] = {"type": "json_schema", "schema": schema}
+            else:
+                prompt = _append_json_contract(prompt, tool_name=tool_name, schema=schema)
             try:
                 async with asyncio.timeout(self.timeout_seconds):
                     result = await self._query_runner(prompt, options)
@@ -184,12 +192,17 @@ class ClaudeAgentSDKStructuredClient:
                 provider_message=result.provider_message,
                 request_id=result.request_id,
             )
-        if result.structured_output is None:
+        structured_output = result.structured_output
+        if structured_output is None and not self.use_native_structured_output:
+            structured_output = _parse_json_result(result.result_text)
+        if structured_output is None:
             raise _sdk_error(
                 request_body,
                 status_code=502,
                 error_type="missing_structured_output",
-                provider_message="Claude Agent SDK returned no structured output",
+                provider_message=(
+                    result.provider_message or "Claude Agent SDK returned no structured output"
+                ),
                 request_id=result.request_id,
             )
         return {
@@ -197,7 +210,7 @@ class ClaudeAgentSDKStructuredClient:
                 {
                     "type": "tool_use",
                     "name": tool_name,
-                    "input": result.structured_output,
+                    "input": structured_output,
                 }
             ],
             "usage": result.usage or {},
@@ -225,7 +238,31 @@ async def _run_claude_agent_sdk_query(prompt: str, options: dict[str, Any]) -> C
         provider_message=_clean_detail(provider_message),
         request_id=completed.uuid or completed.session_id,
         usage=completed.usage if isinstance(completed.usage, dict) else None,
+        result_text=completed.result,
     )
+
+
+def _append_json_contract(prompt: str, *, tool_name: str, schema: dict[str, Any]) -> str:
+    return (
+        f"{prompt}\n\nReturn only the JSON object for {tool_name}. Do not use Markdown fences or add "
+        "commentary. The object must match this JSON Schema:\n"
+        f"{json.dumps(schema, ensure_ascii=True, separators=(',', ':'))}"
+    )
+
+
+def _parse_json_result(value: str | None) -> dict[str, Any] | None:
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip()
+    if candidate.startswith("```") and candidate.endswith("```"):
+        lines = candidate.splitlines()
+        if len(lines) >= 3:
+            candidate = "\n".join(lines[1:-1]).strip()
+    try:
+        parsed = json.loads(candidate)
+    except (TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def _structured_request(request_body: dict[str, Any]) -> tuple[str, str, str, dict[str, Any]]:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from collections.abc import Callable
@@ -20,6 +21,8 @@ from gateway.dashboard.operations import DashboardOperation, apply_dashboard_ope
 from gateway.models.dashboards import DashboardSemanticContext
 
 DEFAULT_DASHBOARD_AUTHORING_MODEL = "claude-sonnet-4-5-20250929"
+DASHBOARD_AUTHORING_TIMEOUT_SECONDS = 180
+logger = logging.getLogger(__name__)
 
 FILTER_OPT_OUT_PATTERNS = (
     r"\bwithout (?:any )?(?:dashboard )?filters?\b",
@@ -89,38 +92,6 @@ def compact_semantic_projection(context: DashboardSemanticContext) -> dict[str, 
     }
 
 
-def charts_missing_usable_drills(
-    definition: DashboardDefinition,
-    context: DashboardSemanticContext,
-) -> list[str]:
-    """Return applicable Cartesian charts without a distinct next drill level."""
-    dimensions_by_explore = {
-        explore.name: {field.field_id for field in explore.dimensions} for explore in context.explores
-    }
-    missing: list[str] = []
-    for chart in definition.charts:
-        if not isinstance(chart.query, SemanticChartQuery) or not isinstance(chart.visualization, CartesianChartConfig):
-            continue
-        query_dimensions = set(chart.query.dimensions)
-        if not query_dimensions:
-            continue
-        explore_dimensions = dimensions_by_explore.get(chart.query.exploreName, set())
-        candidates = explore_dimensions - query_dimensions
-        if not candidates:
-            continue
-        drill_dimensions = chart.signalPilot.drillDimensions or []
-        if (
-            not drill_dimensions
-            or len(drill_dimensions) != len(set(drill_dimensions))
-            or any(field_id not in explore_dimensions for field_id in drill_dimensions)
-        ):
-            missing.append(chart.id)
-            continue
-        if any(field_id in query_dimensions for field_id in drill_dimensions):
-            missing.append(chart.id)
-    return missing
-
-
 class DashboardAuthoringAgent:
     def __init__(
         self,
@@ -137,10 +108,17 @@ class DashboardAuthoringAgent:
         elif oauth_token:
             self.model_client = ClaudeAgentSDKStructuredClient(
                 oauth_token=oauth_token,
-                timeout_seconds=90,
+                timeout_seconds=DASHBOARD_AUTHORING_TIMEOUT_SECONDS,
+                # The dashboard schema is too large for Claude Code's native
+                # constrained decoder. Pydantic and compiler validation below
+                # remain authoritative for the returned JSON object.
+                use_native_structured_output=False,
             )
         else:
-            self.model_client = AnthropicMessagesClient(api_key=api_key, timeout_seconds=90)
+            self.model_client = AnthropicMessagesClient(
+                api_key=api_key,
+                timeout_seconds=DASHBOARD_AUTHORING_TIMEOUT_SECONDS,
+            )
 
     async def draft(
         self,
@@ -165,7 +143,9 @@ class DashboardAuthoringAgent:
             "requested dashboard composition allows it. Arrange every dashboard row on the 36-column grid so tile "
             "widths sum to exactly 36, tiles use increasing x and y positions, and no row leaves unused horizontal space. "
             "Every dashboard must include useful global filter controls unless the user's request explicitly says to omit "
-            "filters. Prefer a date filter when a governed date or timestamp dimension is available, then add a small "
+            "filters. For dashboards with time-series charts, include an applicable governed date or timestamp filter "
+            "with a valid bounded default window and use a time aggregation coarse enough for that window. Otherwise, "
+            "prefer a date filter when a governed date or timestamp dimension is available, then add a small "
             "number of business-relevant categorical controls. Use explicit per-tile targets across explores and mark "
             "incompatible tiles as false. Copy each filter target exactly from the dimension's filter_target object; fieldId "
             "must remain the complete supplied field_id, including its explore prefix. When updating a draft that has no "
@@ -223,6 +203,7 @@ class DashboardAuthoringAgent:
             )
 
         last_error: ValueError | None = None
+        validation_errors: list[str] = []
         for attempt in range(MAX_DRAFT_ATTEMPTS):
             rejected_draft: Any = None
             try:
@@ -239,19 +220,20 @@ class DashboardAuthoringAgent:
                         "Dashboard authoring requires at least one governed filter control. Add a useful governed "
                         "filter, prefer a bounded date filter when available, and include explicit per-tile targets."
                     )
-                if base_definition is None and draft.definition is not None:
-                    missing_drills = charts_missing_usable_drills(draft.definition, context)
-                    if missing_drills:
-                        raise ValueError(
-                            "Dashboard authoring requires usable drill hierarchies for applicable charts: "
-                            f"{', '.join(missing_drills)}. Add a meaningful lower-grain drill hierarchy using exact "
-                            "same-explore field_id values without repeating query dimensions or drill levels."
-                        )
                 if validator is not None:
                     validator(draft)
                 return draft
             except ValueError as exc:
                 last_error = exc
+                error_text = str(exc)[:6000]
+                if error_text not in validation_errors:
+                    validation_errors.append(error_text)
+                logger.warning(
+                    "Dashboard authoring draft rejected attempt=%s/%s error=%s",
+                    attempt + 1,
+                    MAX_DRAFT_ATTEMPTS,
+                    str(exc)[:1000],
+                )
                 if attempt + 1 >= MAX_DRAFT_ATTEMPTS:
                     raise
                 repair_payload = {
@@ -261,7 +243,9 @@ class DashboardAuthoringAgent:
                         "copy explore and field identifiers exactly from semantic_context, preserve otherwise valid "
                         f"work, and resubmit the complete {mode} payload. Valid exploreName values: "
                         f"{', '.join(explore.name for explore in context.explores) or 'none'}. Never use <UNKNOWN> "
-                        f"or another placeholder.\n{str(exc)[:6000]}"
+                        "or another placeholder. Preserve every correction from earlier attempts. All validation "
+                        "failures reported so far must be fixed together:\n- "
+                        + "\n- ".join(validation_errors)
                     ),
                 }
                 if rejected_draft is not None:

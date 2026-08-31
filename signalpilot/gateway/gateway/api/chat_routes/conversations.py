@@ -1,6 +1,8 @@
 """Conversation lifecycle, sharing, and fork routes."""
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from typing import Annotated
+
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from gateway.auth import OrgRole
 from gateway.git.repos import branch_head_sha
@@ -31,12 +33,18 @@ router = APIRouter()
 
 
 @router.get("/conversations", dependencies=[RequireScope("read")])
-async def list_conversations(store: StoreD):
+async def list_conversations(
+    store: StoreD,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+):
     _require_enabled()
     conversations = await chat_store.list_conversations(
         store.session,
         org_id=store._require_org_id(),
         user_id=store.user_id or "local",
+        limit=limit,
+        offset=offset,
     )
     return {"conversations": conversations}
 

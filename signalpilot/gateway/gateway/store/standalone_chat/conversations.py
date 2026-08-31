@@ -116,8 +116,99 @@ async def list_conversations(
     *,
     org_id: str,
     user_id: str,
+    limit: int = 100,
+    offset: int = 0,
 ) -> list[StandaloneConversationInfo]:
+    """List the caller's active conversations, newest first.
+
+    One round trip. The latest run status per conversation comes from a
+    window-function subquery instead of one query per conversation. The
+    database is remote, so query count is the latency budget.
+    """
+    latest_runs = (
+        select(
+            GatewayChatRun.conversation_id,
+            GatewayChatRun.status,
+            func.row_number()
+            .over(
+                partition_by=GatewayChatRun.conversation_id,
+                order_by=GatewayChatRun.created_at.desc(),
+            )
+            .label("recency"),
+        )
+        .where(
+            GatewayChatRun.org_id == org_id,
+            GatewayChatRun.user_id == user_id,
+        )
+        .subquery()
+    )
     rows = (
+        await db.execute(
+            select(
+                GatewayChatConversation,
+                GatewayWorkspaceProject,
+                latest_runs.c.status,
+            )
+            .join(
+                GatewayWorkspaceProject,
+                and_(
+                    GatewayWorkspaceProject.id == GatewayChatConversation.project_id,
+                    GatewayWorkspaceProject.org_id == GatewayChatConversation.org_id,
+                ),
+                isouter=True,
+            )
+            .join(
+                latest_runs,
+                and_(
+                    latest_runs.c.conversation_id == GatewayChatConversation.id,
+                    latest_runs.c.recency == 1,
+                ),
+                isouter=True,
+            )
+            .where(
+                GatewayChatConversation.org_id == org_id,
+                GatewayChatConversation.user_id == user_id,
+                GatewayChatConversation.surface == "standalone",
+                GatewayChatConversation.status == "active",
+            )
+            .order_by(GatewayChatConversation.updated_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+    ).all()
+    return [
+        StandaloneConversationInfo(
+            id=conversation.id,
+            project_id=conversation.project_id or "",
+            project_name=(project.display_name or project.name) if project else None,
+            branch=conversation.branch or "main",
+            title=conversation.title or "New chat",
+            status=conversation.status,
+            origin=conversation.origin,
+            created_at=conversation.created_at,
+            updated_at=conversation.updated_at,
+            run_status=run_status,
+            commit_sha=conversation.commit_sha,
+            per_query_budget_usd=conversation.per_query_budget_usd,
+            chat_budget_usd=conversation.chat_budget_usd,
+            estimated_spend_usd=conversation.estimated_spend_usd,
+            actual_spend_usd=conversation.actual_spend_usd,
+            reserved_spend_usd=conversation.reserved_spend_usd,
+        )
+        for conversation, project, run_status in rows
+    ]
+
+
+async def get_conversation_detail(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    conversation_id: str,
+) -> StandaloneConversationDetail | None:
+    # One round trip for the conversation and its project together. The
+    # database is remote, so every merged query saves a full RTT.
+    conversation_row = (
         await db.execute(
             select(GatewayChatConversation, GatewayWorkspaceProject)
             .join(
@@ -129,70 +220,17 @@ async def list_conversations(
                 isouter=True,
             )
             .where(
+                GatewayChatConversation.id == conversation_id,
                 GatewayChatConversation.org_id == org_id,
                 GatewayChatConversation.user_id == user_id,
                 GatewayChatConversation.surface == "standalone",
                 GatewayChatConversation.status == "active",
             )
-            .order_by(GatewayChatConversation.updated_at.desc())
         )
-    ).all()
-    result: list[StandaloneConversationInfo] = []
-    for conversation, project in rows:
-        latest_run = (
-            await db.execute(
-                select(GatewayChatRun)
-                .where(GatewayChatRun.conversation_id == conversation.id)
-                .order_by(GatewayChatRun.created_at.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        result.append(
-            StandaloneConversationInfo(
-                id=conversation.id,
-                project_id=conversation.project_id or "",
-                project_name=(project.display_name or project.name) if project else None,
-                branch=conversation.branch or "main",
-                title=conversation.title or "New chat",
-                status=conversation.status,
-                origin=conversation.origin,
-                created_at=conversation.created_at,
-                updated_at=conversation.updated_at,
-                run_status=latest_run.status if latest_run else None,
-                commit_sha=conversation.commit_sha,
-                per_query_budget_usd=conversation.per_query_budget_usd,
-                chat_budget_usd=conversation.chat_budget_usd,
-                estimated_spend_usd=conversation.estimated_spend_usd,
-                actual_spend_usd=conversation.actual_spend_usd,
-                reserved_spend_usd=conversation.reserved_spend_usd,
-            )
-        )
-    return result
-
-
-async def get_conversation_detail(
-    db: AsyncSession,
-    *,
-    org_id: str,
-    user_id: str,
-    conversation_id: str,
-) -> StandaloneConversationDetail | None:
-    conversation = await _owned_conversation_row(
-        db,
-        org_id=org_id,
-        user_id=user_id,
-        conversation_id=conversation_id,
-    )
-    if conversation is None:
+    ).first()
+    if conversation_row is None:
         return None
-    project = (
-        await db.execute(
-            select(GatewayWorkspaceProject).where(
-                GatewayWorkspaceProject.id == conversation.project_id,
-                GatewayWorkspaceProject.org_id == org_id,
-            )
-        )
-    ).scalar_one_or_none()
+    conversation, project = conversation_row
     messages = (
         (
             await db.execute(

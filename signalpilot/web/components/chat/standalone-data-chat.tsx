@@ -86,7 +86,14 @@ export function StandaloneDataChat({
     isLoading: historyLoading,
     mutate: mutateHistory,
   } = useSWR("standalone-chat-conversations", listStandaloneConversations, {
-    refreshInterval: 4_000,
+    // Poll fast only while a run streams (the rail shows its status change).
+    // An idle page refreshes slowly; submit/stop paths mutate on demand.
+    refreshInterval: (latest) =>
+      latest?.conversations.some((conversation) =>
+        isStreamingStatus(conversation.run_status ?? undefined),
+      )
+        ? 4_000
+        : 30_000,
   });
   const {
     data: detail,

@@ -21,7 +21,6 @@ class StandaloneArtifactCollector:
 @dataclass
 class StandaloneNotebookLifecycle:
     session_id: str | None = None
-    plan_id: str | None = None
 
 
 def _clean_metadata(arguments: dict[str, Any]) -> dict[str, Any]:

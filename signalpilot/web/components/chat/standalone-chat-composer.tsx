@@ -220,7 +220,7 @@ export function StandaloneChatComposer({
                 )}
               </div>
             )}
-            {running && onStop ? (
+            {running && onStop && (
               <button
                 type="button"
                 onClick={onStop}
@@ -229,17 +229,16 @@ export function StandaloneChatComposer({
               >
                 <Square className="h-3 w-3 fill-current" />
               </button>
-            ) : (
-              <button
-                type="button"
-                disabled={!canSubmit}
-                onClick={submit}
-                aria-label="Send message"
-                className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--color-text)] text-[var(--color-bg)] transition-opacity disabled:cursor-not-allowed disabled:opacity-30"
-              >
-                <Send className="h-3.5 w-3.5" />
-              </button>
             )}
+            <button
+              type="button"
+              disabled={!canSubmit}
+              onClick={submit}
+              aria-label={running ? "Queue message for the running agent" : "Send message"}
+              className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--color-text)] text-[var(--color-bg)] transition-opacity disabled:cursor-not-allowed disabled:opacity-30"
+            >
+              <Send className="h-3.5 w-3.5" />
+            </button>
           </div>
         </div>
       </div>
@@ -255,7 +254,9 @@ export function StandaloneChatComposer({
         </p>
       ) : (
         <p className="mt-2.5 text-center text-xs text-[var(--color-text-muted)]">
-          Enter to send · Shift+Enter for a new line · @ to mention a model
+          {running
+            ? "Enter to queue for the next turn · Shift+Enter for a new line"
+            : "Enter to send · Shift+Enter for a new line · @ to mention a model"}
         </p>
       )}
     </div>

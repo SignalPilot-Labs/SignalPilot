@@ -30,6 +30,7 @@ from gateway.notebooks.session_service import (
     ensure_standalone_chat_notebook_session,
     runtime_for_session,
 )
+from gateway.standalone_chat.agent_sessions import agent_session_transfer
 from gateway.standalone_chat.config import enterprise_chat_feature_flags
 from gateway.standalone_chat.object_storage import chat_object_storage
 from gateway.store import notebook_sessions as notebook_session_store
@@ -80,6 +81,10 @@ class PreparedExecution:
     url: str
     headers: dict[str, str]
     payload: dict[str, Any]
+    # Gateway notebook session backing this execution. The worker forwards it
+    # on notebook_started events so the browser can attach the live notebook
+    # view through the notebook proxy.
+    session_id: str | None = None
 
 
 async def ensure_execution_runtime(
@@ -171,17 +176,13 @@ async def prepare_execution(
         "schema:read",
         "runtime:publish",
     ]
-    flags = enterprise_chat_feature_flags()
-    if is_improvement_run:
-        # sandbox_exec is improvement-only. Chat collapsed to one sandbox (the
-        # notebook session) + refresh_mart, so chat runs do not get this.
-        capabilities.append("sandbox:execute")
-    if flags.sandbox_runtime:
-        # refresh_mart via the gateway-held executor sandbox (credentials never
-        # reach the agent). The only warehouse write the chat agent can request.
-        capabilities.append("dbt:execute")
+    # The standalone agent runs the same SignalPilot workflow as a regular MCP
+    # client. Tool implementations still enforce their own frozen-project,
+    # connection, SQL-governance, and dev-database boundaries.
+    capabilities.extend(["sandbox:execute", "dbt:execute"])
     payload = {
         "run_id": run.id,
+        "conversation_id": run.conversation_id,
         "project_id": run.project_id,
         "branch": branch,
         "connection_name": connection_name,
@@ -202,7 +203,7 @@ async def prepare_execution(
             # window. (The notebook SESSION warm-reuse is keyed separately by
             # conversation in session_service and is unaffected.)
             execution_identity=f"chat:{run.id}",
-            scopes=["read", "query", "execute"],
+            scopes=["read", "query", "execute", "write", "admin"],
             ttl=get_gateway_settings().sp_session_jwt_ttl_seconds,
         ),
         "prompt": prompt,
@@ -221,9 +222,13 @@ async def prepare_execution(
             "runtime_artifacts": enterprise_chat_feature_flags().runtime_artifacts,
             "dataset_refs": enterprise_chat_feature_flags().dataset_refs,
         },
-        # Standalone runs are reconstructed from gateway state. Never resume
-        # a Claude/runtime-local session, including retries of the same run.
-        "new_execution": True,
+        # Native Claude Agent SDK continuity. The sandbox restores this archive
+        # before a cold resume and saves it after every run. Database history
+        # remains the fallback when no valid SDK session exists.
+        "agent_session": await agent_session_transfer(
+            org_id=run.org_id,
+            conversation_id=run.conversation_id,
+        ),
     }
     if runtime_auth:
         # Direct-mode notebooks are shared and outlive individual requests.
@@ -242,6 +247,7 @@ async def prepare_execution(
         url=_join_base_path(runtime.internal_base_url, "/api/standalone-chat/execute"),
         headers=headers,
         payload=payload,
+        session_id=runtime.session_id,
     )
 
 
@@ -257,11 +263,17 @@ async def stream_execution(execution: PreparedExecution) -> AsyncGenerator[dict[
         ) as response,
     ):
         if response.is_error:
+            # Error responses are small JSON/plain-text diagnostics from the
+            # notebook runtime. Read them before the streaming context closes;
+            # otherwise every 4xx collapses to an opaque HTTPStatusError and
+            # the real authorization/workspace failure is lost.
+            error_body = (await response.aread()).decode(errors="replace")[:500]
             logger.warning(
-                "Notebook execute failed status=%s url=%s bearer=%s",
+                "Notebook execute failed status=%s url=%s bearer=%s body=%r",
                 response.status_code,
                 execution.url,
                 _bearer_fingerprint(execution.headers),
+                error_body,
             )
         response.raise_for_status()
         async for line in response.aiter_lines():
@@ -270,6 +282,27 @@ async def stream_execution(execution: PreparedExecution) -> AsyncGenerator[dict[
             event = json.loads(line)
             if isinstance(event, dict):
                 yield event
+
+
+async def steer_execution(
+    execution: PreparedExecution,
+    *,
+    run_id: str,
+    steering_id: str,
+    message: str,
+) -> bool:
+    """Offer a durable queued message to the live notebook agent."""
+    url = execution.url.rsplit("/execute", 1)[0] + f"/steer/{run_id}"
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.post(
+            url,
+            headers=execution.headers,
+            json={"steering_id": steering_id, "message": message},
+        )
+    if response.status_code == 409:
+        return False
+    response.raise_for_status()
+    return True
 
 
 async def cancel_execution_session(db: AsyncSession, run: GatewayChatRun) -> bool:

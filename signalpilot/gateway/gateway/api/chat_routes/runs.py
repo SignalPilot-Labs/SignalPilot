@@ -23,7 +23,9 @@ from gateway.models.standalone_chat import (
     ChatRunInfo,
     QueryApprovalDecision,
     StandaloneClarificationCreate,
+    StandaloneMessageInfo,
     StandaloneRunCreate,
+    StandaloneSteeringCreate,
 )
 from gateway.security.scope_guard import RequireScope
 from gateway.standalone_chat.query_approvals import decide_query_proposal
@@ -255,6 +257,29 @@ async def cancel_run(run_id: str, store: StoreD):
         except Exception:
             pass
     return chat_store._run_info(run)
+
+
+@router.post(
+    "/runs/{run_id}/steer",
+    status_code=202,
+    response_model=StandaloneMessageInfo,
+    dependencies=[RequireScope("write")],
+)
+async def steer_run(run_id: str, body: StandaloneSteeringCreate, store: StoreD):
+    _require_enabled()
+    try:
+        message = await chat_store.queue_steering_message(
+            store.session,
+            org_id=store._require_org_id(),
+            user_id=store.user_id or "local",
+            run_id=run_id,
+            message=body.message,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if message is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return chat_store._message_info(message)
 
 
 @router.post(

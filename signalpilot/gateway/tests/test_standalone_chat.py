@@ -1083,6 +1083,11 @@ async def test_execution_uses_org_anthropic_key_as_request_scoped_auth(
         "type": "api_key",
         "token": "sk-ant-org",
     }
+    assert prepared.payload["conversation_id"] == run.conversation_id
+    assert prepared.payload["agent_session"] == {
+        "session_id": run.conversation_id,
+        "storage": "unavailable",
+    }
     resolve_org_key.assert_awaited_once_with(db_session, "org-a")
 
 
@@ -1184,6 +1189,88 @@ async def test_one_nonterminal_run_and_atomic_initial_state(db_session):
             conversation_id=conversation_id,
             message="A second question",
         )
+
+
+@pytest.mark.asyncio
+async def test_running_run_steering_is_durable_and_marked_picked_up(db_session):
+    conversation_id, run = await _conversation_and_run(db_session)
+    assert await chat_store.claim_runs(
+        db_session,
+        worker_id="worker-a",
+        limit=1,
+        lease_seconds=45,
+    ) == [run.id]
+
+    queued = await chat_store.queue_steering_message(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        run_id=run.id,
+        message="Focus on retention instead.",
+    )
+    assert queued is not None
+    assert queued.metadata_json == {
+        "surface": "standalone",
+        "steering_for_run_id": run.id,
+        "steering_status": "queued",
+    }
+    pending = await chat_store.pending_steering_messages(
+        db_session,
+        run_id=run.id,
+        worker_id="worker-a",
+    )
+    assert [message.id for message in pending] == [queued.id]
+
+    assert await chat_store.mark_steering_message_picked_up(
+        db_session,
+        run_id=run.id,
+        worker_id="worker-a",
+        message_id=queued.id,
+    )
+    await db_session.refresh(queued)
+    assert queued.metadata_json["steering_status"] == "picked_up"
+    assert await chat_store.pending_steering_messages(
+        db_session,
+        run_id=run.id,
+        worker_id="worker-a",
+    ) == []
+    undelivered = await chat_store.queue_steering_message(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        run_id=run.id,
+        message="This one loses the runtime race.",
+    )
+    assert undelivered is not None
+    assert await chat_store.finalize_undelivered_steering(
+        db_session,
+        run_id=run.id,
+    ) == 1
+    await db_session.refresh(undelivered)
+    assert undelivered.metadata_json["steering_status"] == "not_delivered"
+    events = await chat_store.list_run_events(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        run_id=run.id,
+    )
+    assert events is not None
+    assert [event.type for event in events] == [
+        "steering_queued",
+        "steering_picked_up",
+        "steering_queued",
+        "steering_not_delivered",
+    ]
+    detail = await chat_store.get_conversation_detail(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation_id,
+    )
+    assert detail is not None
+    assert detail.messages[-2].content == "Focus on retention instead."
+    assert detail.messages[-2].metadata["steering_status"] == "picked_up"
+    assert detail.messages[-1].metadata["steering_status"] == "not_delivered"
 
 
 @pytest.mark.asyncio
@@ -1734,7 +1821,12 @@ def test_standalone_session_claims_and_mcp_allowlist(monkeypatch):
         assert standalone_chat_tool_denial("query_database", "production") is None
         assert standalone_chat_tool_denial("plan_query", "production") is None
         assert "outside" in (standalone_chat_tool_denial("query_database", "secondary") or "")
-        assert "unavailable" in (standalone_chat_tool_denial("notion_create_page", None) or "")
+        assert standalone_chat_tool_denial("notion_create_page", None) is None
+        assert standalone_chat_tool_denial("get_knowledge", None) is None
+        assert standalone_chat_tool_denial("propose_knowledge", None) is None
+        assert "unavailable" in (
+            standalone_chat_tool_denial("create_xata_branch", None) or ""
+        )
     finally:
         mcp_execution_identity_var.reset(identity_token)
         mcp_allowed_connection_var.reset(connection_token)

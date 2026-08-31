@@ -65,7 +65,10 @@ function computeInitialSessionId(): SessionId {
   if (isSessionId(id)) {
     const isNotebookSurfaceWithoutProject =
       (url.pathname.startsWith("/projects") ||
-        url.pathname.startsWith("/notebook")) &&
+        url.pathname.startsWith("/notebook") ||
+        // Chat's live notebook embed attaches to an existing kernel session
+        // addressed entirely by URL params — never strip them.
+        url.pathname.startsWith("/chat-notebook")) &&
       !url.searchParams.has(KnownQueryParams.project);
     const shouldPreserveSessionId =
       Boolean(notionRequestIdFromSessionId(id)) || isNotebookSurfaceWithoutProject;

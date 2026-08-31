@@ -879,22 +879,26 @@ kbd {
 }
 .chat-step-in { animation: chat-step-in 0.25s ease-out both; }
 
+/* The highlight band is narrow (38%→62% of a 300% image) and the sweep
+   overshoots both edges, so the loop restarts on identical frames — no jump. */
 @keyframes chat-live-sheen {
-  0% { background-position: 120% 0; }
-  100% { background-position: -20% 0; }
+  0% { background-position: 130% 0; }
+  100% { background-position: -30% 0; }
 }
 .chat-live-label {
   background: linear-gradient(
     90deg,
     var(--color-text-dim) 0%,
+    var(--color-text-dim) 38%,
     var(--color-text) 50%,
+    var(--color-text-dim) 62%,
     var(--color-text-dim) 100%
   );
-  background-size: 200% 100%;
+  background-size: 300% 100%;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: chat-live-sheen 1.8s linear infinite;
+  animation: chat-live-sheen 2s linear infinite;
 }
 
 .chat-step-rail {
@@ -925,10 +929,118 @@ kbd {
 .chat-collapse[data-open="true"] { grid-template-rows: 1fr; }
 .chat-collapse > div { overflow: hidden; min-width: 0; }
 
+/* ── Runtime boot card (cold sandbox starts) ─────────────────────────── */
+
+@keyframes chat-boot-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.chat-boot-in { animation: chat-boot-in 0.35s ease-out both; }
+
+/* Comet tracing the chip's rounded-square border. The gradient ANGLE is
+   animated (via @property) instead of rotating the element, so the square
+   silhouette stays still while the light travels around it. */
+@property --chat-boot-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+@keyframes chat-boot-orbit {
+  to { --chat-boot-angle: 360deg; }
+}
+.chat-boot-orbit {
+  border-radius: 0.75rem;
+  padding: 1.5px;
+  background: conic-gradient(
+    from var(--chat-boot-angle),
+    transparent 0deg 250deg,
+    rgba(0, 255, 136, 0.9) 330deg,
+    transparent 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: chat-boot-orbit 2.4s linear infinite;
+}
+
+@keyframes chat-boot-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.75; }
+  50% { transform: scale(1.35); opacity: 1; }
+}
+.chat-boot-core {
+  animation: chat-boot-breathe 1.8s ease-in-out infinite;
+  box-shadow: 0 0 12px rgba(0, 255, 136, 0.35);
+}
+
+@keyframes chat-boot-check-pop {
+  0% { transform: scale(0.4); opacity: 0; }
+  60% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.chat-boot-check { animation: chat-boot-check-pop 0.45s cubic-bezier(0.2, 1.4, 0.4, 1) both; }
+
+@keyframes chat-boot-fact-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.chat-boot-fact { animation: chat-boot-fact-in 0.5s ease-out both; }
+
+/* Indeterminate scanner: the bar starts and ends fully off-screen, so the
+   loop is seamless by construction. */
+@keyframes chat-boot-scan {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+.chat-boot-scan { animation: chat-boot-scan 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+
+@keyframes chat-boot-fill {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+.chat-boot-fill {
+  transform-origin: left;
+  animation: chat-boot-fill 0.5s ease-out both;
+}
+
+/* ── Thinking blocks ─────────────────────────────────────────────────── */
+
+.chat-thinking-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@keyframes chat-thinking-pulse {
+  0%, 100% { opacity: 0.25; transform: scale(0.92); }
+  50% { opacity: 0.8; transform: scale(1.08); }
+}
+.chat-thinking-pulse { animation: chat-thinking-pulse 1.8s ease-in-out infinite; }
+
+@keyframes chat-thinking-dot {
+  0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-3px); }
+}
+.chat-thinking-dot { animation: chat-thinking-dot 1.2s ease-in-out infinite; }
+.chat-thinking-dot:nth-child(2) { animation-delay: 0.15s; }
+.chat-thinking-dot:nth-child(3) { animation-delay: 0.3s; }
+
 @media (prefers-reduced-motion: reduce) {
   .chat-step-in,
   .chat-live-label,
-  .chat-dot-live {
+  .chat-dot-live,
+  .chat-boot-in,
+  .chat-boot-orbit,
+  .chat-boot-core,
+  .chat-boot-check,
+  .chat-boot-fact,
+  .chat-boot-scan,
+  .chat-boot-fill,
+  .chat-thinking-pulse,
+  .chat-thinking-dot {
     animation: none !important;
   }
   .chat-collapse { transition: none; }

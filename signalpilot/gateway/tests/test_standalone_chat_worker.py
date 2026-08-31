@@ -314,3 +314,85 @@ async def test_terminal_notebook_validation_error_persists_no_answer_or_artifact
     assert completed_runs == []
     assert persisted_artifacts == []
     assert failed_runs == ["run-dirty"]
+
+
+class TestNotebookStartedPayload:
+    """worker.py: notebook_started carries the ids the live panel attaches with."""
+
+    def test_enriches_from_tool_result_and_runtime(self):
+        import json
+
+        from gateway.standalone_chat.worker import _notebook_started_payload
+
+        payload = _notebook_started_payload(
+            tool_result_content=json.dumps(
+                {
+                    "session_id": "s_abc123",
+                    "status": "started",
+                    "plan_id": "plan-1",
+                    "notebook_path": "/tmp/signalpilot-chat-runs/run-1/analysis.py",
+                }
+            ),
+            gateway_session_id="gw-sess-1",
+        )
+        assert payload == {
+            "status": "running",
+            "gateway_session_id": "gw-sess-1",
+            "kernel_session_id": "s_abc123",
+            "notebook_path": "/tmp/signalpilot-chat-runs/run-1/analysis.py",
+        }
+
+    def test_tolerates_non_json_tool_result(self):
+        from gateway.standalone_chat.worker import _notebook_started_payload
+
+        payload = _notebook_started_payload(
+            tool_result_content="kernel started",
+            gateway_session_id="gw-sess-1",
+        )
+        assert payload == {"status": "running", "gateway_session_id": "gw-sess-1"}
+
+    def test_tolerates_missing_everything(self):
+        from gateway.standalone_chat.worker import _notebook_started_payload
+
+        payload = _notebook_started_payload(
+            tool_result_content="",
+            gateway_session_id=None,
+        )
+        assert payload == {"status": "running"}
+
+    def test_extracts_ids_from_content_block_repr(self):
+        """The agent SDK forwards MCP tool results as str(content_blocks) —
+        a Python repr of a block list wrapping the JSON — not raw JSON."""
+        from gateway.standalone_chat.worker import _notebook_started_payload
+
+        wrapped = (
+            "[TextContent(type='text', text='{\"session_id\": \"s_abc123\", "
+            '"status": "started", "plan_id": "plan-1", "cell_ids": [], '
+            '"notebook_path": "/tmp/signalpilot-chat-runs/run-1/analysis.py"}\')]'
+        )
+        payload = _notebook_started_payload(
+            tool_result_content=wrapped,
+            gateway_session_id="gw-sess-1",
+        )
+        assert payload["kernel_session_id"] == "s_abc123"
+        assert (
+            payload["notebook_path"]
+            == "/tmp/signalpilot-chat-runs/run-1/analysis.py"
+        )
+
+    def test_extracts_ids_from_dict_block_repr(self):
+        from gateway.standalone_chat.worker import _notebook_started_payload
+
+        wrapped = (
+            "[{'type': 'text', 'text': '{\"session_id\": \"s_def456\", "
+            '"notebook_path": "/tmp/signalpilot-chat-runs/run-2/analysis.py"}\'}]'
+        )
+        payload = _notebook_started_payload(
+            tool_result_content=wrapped,
+            gateway_session_id=None,
+        )
+        assert payload["kernel_session_id"] == "s_def456"
+        assert (
+            payload["notebook_path"]
+            == "/tmp/signalpilot-chat-runs/run-2/analysis.py"
+        )

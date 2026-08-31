@@ -68,6 +68,28 @@ async def get_notebook_static(*, request: Request) -> JSONResponse:
 
     directory = _get_directory(request, app_state)
 
+    # A live kernel session may own a file OUTSIDE the workspace — the chat
+    # analysis notebook lives in a run-scoped scratch directory. When the
+    # request names exactly a session-owned path, the session is the
+    # authority: serve it rooted at its own directory instead of running
+    # workspace path validation (which would 403).
+    import os as _os
+
+    for _sess in app_state.session_manager.sessions.values():
+        _path = _sess.app_file_manager.path
+        if _path and _os.path.normpath(str(_path)) == _os.path.normpath(
+            raw_file
+        ):
+            from pathlib import Path as _Path
+
+            owned = _Path(str(_path))
+            if owned.is_file():
+                payload = await asyncio.to_thread(
+                    _build_static_payload, owned, str(owned.parent)
+                )
+                return JSONResponse(payload)
+            break
+
     resolved = _resolve_and_validate(raw_file, directory)
 
     if not resolved.is_file():

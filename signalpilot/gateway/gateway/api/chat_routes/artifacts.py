@@ -13,6 +13,7 @@ from contextlib import suppress
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -110,6 +111,11 @@ class RuntimeArchiveCreate(BaseModel):
     source_base64: str = Field(..., min_length=1, max_length=3 * 1024 * 1024)
     html_base64: str = Field(..., min_length=1, max_length=14 * 1024 * 1024)
     manifest_base64: str = Field(..., min_length=1, max_length=3 * 1024 * 1024)
+    # Structured outputs snapshot (NotebookSessionV1) — optional; enables
+    # kernel-free rehydration of the real notebook view.
+    session_base64: str | None = Field(
+        default=None, min_length=1, max_length=27 * 1024 * 1024
+    )
 
 
 @router.post("/runtime-artifacts", status_code=201, dependencies=[RequireScope("query")])
@@ -257,9 +263,16 @@ async def publish_runtime_archive(body: RuntimeArchiveCreate, store: StoreD, req
         source = base64.b64decode(body.source_base64, validate=True)
         html = base64.b64decode(body.html_base64, validate=True)
         manifest = base64.b64decode(body.manifest_base64, validate=True)
+        session_snapshot = (
+            base64.b64decode(body.session_base64, validate=True)
+            if body.session_base64
+            else None
+        )
     except Exception as exc:
         raise HTTPException(status_code=422, detail="Runtime archive payload is not valid base64") from exc
     if len(source) > 2 * 1024 * 1024 or len(html) > 10 * 1024 * 1024 or len(manifest) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Runtime archive payload exceeds its bounded size")
+    if session_snapshot is not None and len(session_snapshot) > 20 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Runtime archive payload exceeds its bounded size")
     try:
         source.decode("utf-8")
@@ -269,6 +282,19 @@ async def publish_runtime_archive(body: RuntimeArchiveCreate, store: StoreD, req
         raise HTTPException(status_code=422, detail="Runtime archive payload is invalid") from exc
     if not isinstance(manifest_value, dict) or "<html" not in html_text[:10_000].lower():
         raise HTTPException(status_code=422, detail="Runtime archive payload is invalid")
+    if session_snapshot is not None:
+        # NotebookSessionV1 shape check; a bad snapshot degrades to no
+        # outputs rather than rejecting the whole archive.
+        try:
+            session_value = json.loads(session_snapshot)
+            if not isinstance(session_value, dict) or not {
+                "version",
+                "metadata",
+                "cells",
+            }.issubset(session_value.keys()):
+                session_snapshot = None
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            session_snapshot = None
     html_text = _sanitize_runtime_archive_html(html_text)
     html = html_text.encode("utf-8")
     archive_hashes = tuple(hashlib.sha256(value).hexdigest() for value in (source, html, manifest))
@@ -287,6 +313,11 @@ async def publish_runtime_archive(body: RuntimeArchiveCreate, store: StoreD, req
             ("source", "analysis.py", source, "text/x-python"),
             ("html", "analysis.html", html, "text/html"),
             ("manifest", "manifest.json", manifest, "application/json"),
+            *(
+                (("session", "session.json", session_snapshot, "application/json"),)
+                if session_snapshot is not None
+                else ()
+            ),
         ):
             key = runtime_object_key(
                 org_id=run.org_id,
@@ -311,9 +342,11 @@ async def publish_runtime_archive(body: RuntimeArchiveCreate, store: StoreD, req
         source_object_key=objects[0].key,
         html_object_key=objects[1].key,
         manifest_object_key=objects[2].key,
+        session_object_key=objects[3].key if len(objects) > 3 else None,
         source_hash=objects[0].content_hash,
         html_hash=objects[1].content_hash,
         manifest_hash=objects[2].content_hash,
+        session_hash=objects[3].content_hash if len(objects) > 3 else None,
     )
     store.session.add(archive)
     run.runtime_archive_id = archive.id
@@ -379,6 +412,45 @@ async def get_runtime_notebook(run_id: str, store: StoreD):
             "X-Content-Type-Options": "nosniff",
             "Referrer-Policy": "no-referrer",
         },
+    )
+
+
+@router.get("/runs/{run_id}/notebook-document", dependencies=[RequireScope("read")])
+async def get_runtime_notebook_document(run_id: str, store: StoreD):
+    """Structured archived notebook: source + outputs snapshot.
+
+    Lets the chat live notebook panel rehydrate the REAL notebook view with
+    no kernel after the run's sandbox is gone. `session` is null for legacy
+    archives (pre-snapshot) — the panel then renders code without outputs.
+    """
+    archive = (
+        await store.session.execute(
+            select(GatewayChatRuntimeArchive)
+            .join(GatewayChatRun, GatewayChatRun.id == GatewayChatRuntimeArchive.run_id)
+            .where(
+                GatewayChatRuntimeArchive.run_id == run_id,
+                GatewayChatRuntimeArchive.org_id == store._require_org_id(),
+                GatewayChatRuntimeArchive.user_id == (store.user_id or "local"),
+                GatewayChatRun.conversation_id == GatewayChatRuntimeArchive.conversation_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if archive is None:
+        raise HTTPException(status_code=404, detail="Runtime notebook archive not found")
+    storage = chat_object_storage()
+    source = await storage.get_bytes(archive.source_object_key, max_bytes=2 * 1024 * 1024)
+    if hashlib.sha256(source).hexdigest() != archive.source_hash:
+        raise HTTPException(status_code=500, detail="Runtime notebook archive failed integrity validation")
+    session_value = None
+    if archive.session_object_key and archive.session_hash:
+        snapshot = await storage.get_bytes(archive.session_object_key, max_bytes=20 * 1024 * 1024)
+        if hashlib.sha256(snapshot).hexdigest() != archive.session_hash:
+            raise HTTPException(status_code=500, detail="Runtime notebook archive failed integrity validation")
+        with suppress(UnicodeDecodeError, json.JSONDecodeError):
+            session_value = json.loads(snapshot)
+    return JSONResponse(
+        {"source": source.decode("utf-8"), "session": session_value},
+        headers={"Cache-Control": "private, no-store"},
     )
 
 

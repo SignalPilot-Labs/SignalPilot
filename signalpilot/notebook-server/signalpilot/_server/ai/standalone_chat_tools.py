@@ -22,9 +22,6 @@ from signalpilot._server.ai.standalone_chat_dbt import (
     _resolve_dbt_project_dir,
     _write_stub_dbt_profiles,
 )
-from signalpilot._server.ai.standalone_chat_python import (
-    _run_restricted_python,
-)
 from signalpilot._server.ai.standalone_chat_tool_schemas import (
     standalone_chat_tools,
 )
@@ -42,7 +39,6 @@ def build_standalone_chat_mcp_server(
     scratch_directory: Path | None = None,
     notebook_mcp_app: Any | None = None,
     analysis_notebook_path: Path | None = None,
-    plan_checker: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     event_sink: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     notebook_lifecycle: StandaloneNotebookLifecycle | None = None,
     runtime_redactions: tuple[str, ...] = (),
@@ -225,20 +221,12 @@ def build_standalone_chat_mcp_server(
                     )
                 ]
             if name == "start_analysis_notebook":
-                plan_id = str(arguments.get("plan_id") or "").strip()
                 if (
-                    not plan_id
-                    or plan_checker is None
-                    or notebook_mcp_app is None
+                    notebook_mcp_app is None
                     or analysis_notebook_path is None
                 ):
                     raise ValueError(
                         "The run-bound analysis notebook is unavailable"
-                    )
-                plan = await plan_checker(plan_id)
-                if plan.get("route") not in {"notebook_sdk", "dataset_ref"}:
-                    raise ValueError(
-                        "The selected plan does not permit a notebook kernel"
                     )
                 if (
                     notebook_lifecycle is not None
@@ -251,7 +239,9 @@ def build_standalone_chat_mcp_server(
                                 {
                                     "session_id": notebook_lifecycle.session_id,
                                     "status": "already_running",
-                                    "plan_id": notebook_lifecycle.plan_id,
+                                    "notebook_path": str(
+                                        analysis_notebook_path
+                                    ),
                                 }
                             ),
                         )
@@ -293,7 +283,6 @@ def build_standalone_chat_mcp_server(
                     raise ValueError("Notebook kernel did not start")
                 if notebook_lifecycle is not None:
                     notebook_lifecycle.session_id = session_id
-                    notebook_lifecycle.plan_id = plan_id
                 if notebook_session_resolver is not None:
                     runtime_session = notebook_session_resolver(session_id)
                 else:
@@ -307,7 +296,7 @@ def build_standalone_chat_mcp_server(
                     runtime_redactions
                 )
                 if event_sink is not None:
-                    await event_sink("notebook_started", {"plan_id": plan_id})
+                    await event_sink("notebook_started", {})
                 return [
                     TextContent(
                         type="text",
@@ -315,8 +304,8 @@ def build_standalone_chat_mcp_server(
                             {
                                 "session_id": session_id,
                                 "status": "started",
-                                "plan_id": plan_id,
                                 "cell_ids": started.get("cell_ids") or [],
+                                "notebook_path": str(analysis_notebook_path),
                             }
                         ),
                     )
@@ -431,13 +420,6 @@ def build_standalone_chat_mcp_server(
                         ),
                     )
                 ]
-            if name == "run_scratch_python":
-                result = _run_restricted_python(
-                    str(arguments.get("source") or ""),
-                    arguments.get("data"),
-                )
-                return [TextContent(type="text", text=json.dumps(result))]
-
             metadata = _clean_metadata(arguments)
             loaded_result: dict[str, Any] | None = None
             result_id = str(arguments.get("result_id") or "").strip()

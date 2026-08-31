@@ -22,6 +22,7 @@ export type RunStepCategory =
   | "plan"
   | "approval"
   | "progress"
+  | "subagent"
   | "error"
   | "generic";
 
@@ -53,6 +54,14 @@ export type RunStep = {
   startedAt: string;
   endedAt: string | null;
   durationMs: number | null;
+  /** Subagent spawns only: the child steps executed inside the subagent. */
+  children: RunStep[];
+  /** Subagent spawns only: the agent type (e.g. "Explore"). */
+  subagentType: string | null;
+  /** Subagent spawns only: the final report the subagent returned. */
+  report: string | null;
+  /** Subagent spawns only: the subagent's streamed narration so far. */
+  liveText: string;
 };
 
 export type RunStepSummary = {
@@ -71,7 +80,7 @@ const SQL_TOOLS = new Set([
   "plan_query",
   "preview_query",
 ]);
-const PYTHON_TOOLS = new Set(["run_scratch_python", "run_cells"]);
+const PYTHON_TOOLS = new Set(["run_cells"]);
 const NOTEBOOK_TOOLS = new Set([
   "start_analysis_notebook",
   "edit_notebook",
@@ -126,7 +135,6 @@ function humanizeTool(tool: string): string {
     explain_query: "Explained query plan",
     validate_sql: "Validated SQL",
     plan_query: "Planned the query",
-    run_scratch_python: "Ran Python calculation",
     run_cells: "Executed notebook cells",
     edit_notebook: "Edited the analysis notebook",
     start_analysis_notebook: "Started the analysis notebook",
@@ -190,7 +198,6 @@ function extractCode(
   input: Record<string, unknown> | null,
 ): string | null {
   if (!input) return null;
-  if (tool === "run_scratch_python") return text(input.source);
   if (tool === "Bash") return text(input.command);
   if (tool === "Write" || tool === "NotebookEdit") {
     return text(input.content) ?? text(input.new_source);
@@ -229,6 +236,17 @@ function extractSources(input: Record<string, unknown> | null): string[] {
     .filter((value): value is string => Boolean(value));
 }
 
+/** Fresh per-step defaults for the subagent fields (never share the array). */
+function emptyStepExtras(): Pick<
+  RunStep,
+  "children" | "subagentType" | "report" | "liveText"
+> {
+  return { children: [], subagentType: null, report: null, liveText: "" };
+}
+
+/** Tool names that spawn a subagent whose work is grouped under the spawn. */
+const SUBAGENT_SPAWN_TOOLS = new Set(["Agent", "Task"]);
+
 const durationBetween = (start: string, end: string): number | null => {
   const startMs = Date.parse(start);
   const endMs = Date.parse(end);
@@ -243,10 +261,14 @@ export function foldRunSteps(
 ): RunStep[] {
   const steps: RunStep[] = [];
   /** Open tool steps awaiting their tool_completed, in start order (fallback
-   * when no tool_call_id is present). */
+   * when no tool_call_id is present). Subagent children never join this
+   * queue — they pair strictly by tool_call_id so parallel subagents cannot
+   * steal a top-level completion. */
   const open: RunStep[] = [];
   /** Open steps keyed by tool_call_id — the reliable pairing when present. */
   const openById = new Map<string, RunStep>();
+  /** Subagent spawn steps keyed by the Agent tool_call_id. */
+  const subagentsById = new Map<string, RunStep>();
   const runEvents = events
     .filter((event) => event.run_id === runId)
     .sort((a, b) => a.sequence - b.sequence);
@@ -256,15 +278,19 @@ export function foldRunSteps(
     if (event.type === "tool_started") {
       const rawTool = text(event.payload.tool) ?? "analysis tool";
       const { tool, origin } = normalizeToolName(rawTool);
-      const category = categorizeTool(tool);
       const toolCallId = text(event.payload.tool_call_id);
+      const parentId = text(event.payload.parent_tool_call_id);
       const input = asRecord(event.payload.input);
+      const isSpawn = SUBAGENT_SPAWN_TOOLS.has(tool);
+      const category = isSpawn ? "subagent" : categorizeTool(tool);
       const step: RunStep = {
         key,
         sequence: event.sequence,
         category,
         status: "running",
-        title: humanizeTool(tool),
+        title: isSpawn
+          ? (text(input?.description) ?? "Subagent")
+          : humanizeTool(tool),
         tool,
         toolOrigin: origin,
         input,
@@ -279,10 +305,20 @@ export function foldRunSteps(
         startedAt: event.created_at,
         endedAt: null,
         durationMs: null,
+        ...emptyStepExtras(),
+        subagentType: isSpawn ? text(input?.subagent_type) : null,
       };
-      steps.push(step);
-      open.push(step);
+      const parent = parentId ? subagentsById.get(parentId) : undefined;
+      if (parent) {
+        parent.children.push(step);
+      } else {
+        // Top level (or an orphaned child from a legacy event stream —
+        // degrade to the flat rendering rather than dropping it).
+        steps.push(step);
+        open.push(step);
+      }
       if (toolCallId) openById.set(toolCallId, step);
+      if (isSpawn && toolCallId) subagentsById.set(toolCallId, step);
       continue;
     }
     if (event.type === "tool_completed") {
@@ -303,6 +339,9 @@ export function foldRunSteps(
       step.status = failed ? "failed" : "succeeded";
       step.endedAt = event.created_at;
       step.durationMs = durationBetween(step.startedAt, event.created_at);
+      if (step.category === "subagent") {
+        step.report = text(event.payload.report);
+      }
       if (failed) {
         // The worker writes the failure text as `summary`; `message` is the
         // legacy field kept as a fallback.
@@ -310,6 +349,18 @@ export function foldRunSteps(
           text(event.payload.summary) ??
           text(event.payload.message) ??
           "The tool returned an error.";
+      }
+      continue;
+    }
+    if (event.type === "text_delta") {
+      // Subagent narration streams tagged with its spawn id; surface it as
+      // the live line on the subagent card. Main narration is handled by
+      // foldRunBlocks.
+      const parentId = text(event.payload.parent_tool_call_id);
+      const delta = event.payload.delta;
+      if (parentId && typeof delta === "string") {
+        const parent = subagentsById.get(parentId);
+        if (parent) parent.liveText += delta;
       }
       continue;
     }
@@ -340,6 +391,7 @@ export function foldRunSteps(
         startedAt: event.created_at,
         endedAt: event.created_at,
         durationMs: null,
+        ...emptyStepExtras(),
       });
       continue;
     }
@@ -374,6 +426,7 @@ export function foldRunSteps(
         startedAt: event.created_at,
         endedAt: event.created_at,
         durationMs: null,
+        ...emptyStepExtras(),
       });
       continue;
     }
@@ -400,6 +453,7 @@ export function foldRunSteps(
         startedAt: event.created_at,
         endedAt: event.created_at,
         durationMs: null,
+        ...emptyStepExtras(),
       });
       continue;
     }
@@ -430,6 +484,7 @@ export function foldRunSteps(
         startedAt: event.created_at,
         endedAt: event.created_at,
         durationMs: null,
+        ...emptyStepExtras(),
       });
       continue;
     }
@@ -478,6 +533,7 @@ export function foldRunSteps(
         startedAt: event.created_at,
         endedAt: event.created_at,
         durationMs: null,
+        ...emptyStepExtras(),
       });
       continue;
     }
@@ -499,6 +555,7 @@ export function foldRunSteps(
         startedAt: event.created_at,
         endedAt: event.created_at,
         durationMs: null,
+        ...emptyStepExtras(),
       });
       continue;
     }
@@ -520,7 +577,143 @@ export function foldRunSteps(
 
 export type RunBlock =
   | { kind: "text"; key: string; text: string }
+  | { kind: "thinking"; key: string; text: string }
   | { kind: "steps"; key: string; steps: RunStep[] };
+
+/**
+ * Infers the quiet gap after a tool finishes while the run is still active.
+ * This drives a presence indicator only; it never fabricates thought text.
+ */
+export function shouldShowAgentThinking(
+  blocks: RunBlock[],
+  running: boolean,
+): boolean {
+  if (!running) return false;
+  const trailing = blocks.at(-1);
+  if (!trailing) return true;
+  return (
+    trailing.kind === "steps" &&
+    !trailing.steps.some((step) => step.status === "running")
+  );
+}
+
+export type RuntimeBootPhase = "provisioning" | "resuming" | "ready";
+
+export type RuntimeBootState = {
+  phase: RuntimeBootPhase;
+  startedAt: string;
+  readyAt: string | null;
+  bootMs: number | null;
+};
+
+/** Never leave an unresolved cold-boot card in a terminal transcript. */
+export function shouldShowRuntimeBoot(
+  boot: RuntimeBootState | null,
+  running: boolean,
+): boolean {
+  return Boolean(boot && (running || boot.phase === "ready"));
+}
+
+/**
+ * Extracts the sandbox boot lifecycle for a run from its `runtime_boot`
+ * events. Returns null when the run reused a warm sandbox (no boot events),
+ * which is exactly when the boot UI should not render.
+ */
+export function extractRuntimeBoot(
+  events: StandaloneChatEvent[],
+  runId: string,
+): RuntimeBootState | null {
+  let state: RuntimeBootState | null = null;
+  for (const event of events) {
+    if (event.run_id !== runId || event.type !== "runtime_boot") continue;
+    const phase = text(event.payload.phase) as RuntimeBootPhase | null;
+    if (!phase) continue;
+    if (phase === "ready") {
+      if (state) {
+        state.phase = "ready";
+        state.readyAt = event.created_at;
+        const ms = event.payload.boot_ms;
+        state.bootMs = typeof ms === "number" && ms >= 0 ? ms : null;
+      }
+      continue;
+    }
+    if (state) {
+      // A snapshot resume can fall back to a fresh provision; keep the
+      // original start time but show the latest real phase.
+      state.phase = phase;
+    } else {
+      state = { phase, startedAt: event.created_at, readyAt: null, bootMs: null };
+    }
+  }
+  return state;
+}
+
+export type PlanItemStatus = "pending" | "in_progress" | "completed";
+
+export type PlanItem = {
+  content: string;
+  /** Present-tense label shown while the item is in progress. */
+  activeForm: string | null;
+  status: PlanItemStatus;
+};
+
+export type RunPlan = {
+  items: PlanItem[];
+  completed: number;
+  /** The in-progress item, preferring its activeForm for display. */
+  currentLabel: string | null;
+  /** Sequence of the TodoWrite event the plan came from. */
+  sequence: number;
+};
+
+/**
+ * The latest plan the agent published via TodoWrite, for the pinned plan
+ * tracker. Subagent TodoWrites are ignored — the tracker shows the main
+ * run's plan only. Returns null until the run publishes a plan.
+ */
+export function extractRunPlan(
+  events: StandaloneChatEvent[],
+  runId: string,
+): RunPlan | null {
+  let latest: { sequence: number; input: Record<string, unknown> } | null =
+    null;
+  for (const event of events) {
+    if (event.run_id !== runId || event.type !== "tool_started") continue;
+    if (text(event.payload.parent_tool_call_id)) continue;
+    const rawTool = text(event.payload.tool);
+    if (!rawTool || normalizeToolName(rawTool).tool !== "TodoWrite") continue;
+    const input = asRecord(event.payload.input);
+    if (!input) continue;
+    if (!latest || event.sequence > latest.sequence) {
+      latest = { sequence: event.sequence, input };
+    }
+  }
+  if (!latest) return null;
+  const todos = Array.isArray(latest.input.todos) ? latest.input.todos : [];
+  const items: PlanItem[] = [];
+  for (const todo of todos) {
+    const record = asRecord(todo);
+    const content = text(record?.content);
+    if (!content) continue;
+    const status = text(record?.status);
+    items.push({
+      content,
+      activeForm: text(record?.activeForm),
+      status:
+        status === "completed" || status === "in_progress"
+          ? status
+          : "pending",
+    });
+  }
+  if (!items.length) return null;
+  const current = items.find((item) => item.status === "in_progress") ?? null;
+  return {
+    items,
+    completed: items.filter((item) => item.status === "completed").length,
+    currentLabel: current ? (current.activeForm ?? current.content) : null,
+    sequence: latest.sequence,
+  };
+}
 
 /**
  * Reconstructs the natural interleaving of an agent run: contiguous streamed
@@ -540,6 +733,8 @@ export function foldRunBlocks(
   const blocks: RunBlock[] = [];
   let textBuffer = "";
   let textKey = "";
+  let thinkingBuffer = "";
+  let thinkingKey = "";
   const flushText = () => {
     if (!textBuffer.trim()) {
       textBuffer = "";
@@ -548,12 +743,42 @@ export function foldRunBlocks(
     blocks.push({ kind: "text", key: `text-${textKey}`, text: textBuffer });
     textBuffer = "";
   };
+  const flushThinking = () => {
+    if (!thinkingBuffer.trim()) {
+      thinkingBuffer = "";
+      return;
+    }
+    blocks.push({
+      kind: "thinking",
+      key: `thinking-${thinkingKey}`,
+      text: thinkingBuffer,
+    });
+    thinkingBuffer = "";
+  };
   for (const event of runEvents) {
+    // Subagent-internal streams belong to their spawn card, never to the
+    // run's own narration or thinking.
+    if (
+      (event.type === "text_delta" || event.type === "thinking_delta") &&
+      text(event.payload.parent_tool_call_id)
+    ) {
+      continue;
+    }
     if (event.type === "text_delta") {
+      flushThinking();
       const delta = event.payload.delta;
       if (typeof delta === "string") {
         if (!textBuffer) textKey = `${event.run_id}-${event.sequence}`;
         textBuffer += delta;
+      }
+      continue;
+    }
+    if (event.type === "thinking_delta") {
+      flushText();
+      const delta = event.payload.delta;
+      if (typeof delta === "string") {
+        if (!thinkingBuffer) thinkingKey = `${event.run_id}-${event.sequence}`;
+        thinkingBuffer += delta;
       }
       continue;
     }
@@ -563,13 +788,17 @@ export function foldRunBlocks(
     ) {
       // A retry restarted the answer: drop the streamed text so far.
       textBuffer = "";
+      thinkingBuffer = "";
       for (let index = blocks.length - 1; index >= 0; index -= 1) {
-        if (blocks[index].kind === "text") blocks.splice(index, 1);
+        if (blocks[index].kind === "text" || blocks[index].kind === "thinking") {
+          blocks.splice(index, 1);
+        }
       }
       continue;
     }
     const step = stepsBySequence.get(event.sequence);
     if (!step) continue;
+    flushThinking();
     flushText();
     const last = blocks[blocks.length - 1];
     if (last?.kind === "steps") {
@@ -578,26 +807,50 @@ export function foldRunBlocks(
       blocks.push({ kind: "steps", key: `steps-${step.key}`, steps: [step] });
     }
   }
+  flushThinking();
   flushText();
   return blocks;
 }
 
 export function summarizeRunSteps(steps: RunStep[]): RunStepSummary {
+  // Subagent children count toward the totals — the work happened even
+  // though it renders nested under the spawn card.
+  const all = steps.flatMap((step) => [step, ...step.children]);
   return {
-    total: steps.length,
-    queries: steps.filter((step) => step.category === "sql").length,
-    codeRuns: steps.filter(
+    total: all.length,
+    queries: all.filter((step) => step.category === "sql").length,
+    codeRuns: all.filter(
       (step) => step.category === "python" || step.category === "terminal",
     ).length,
-    files: steps.filter(
+    files: all.filter(
       (step) =>
         step.category === "file-write" ||
         step.category === "file-edit" ||
         step.category === "artifact",
     ).length,
-    errors: steps.filter((step) => step.status === "failed").length,
-    running: steps.some((step) => step.status === "running"),
+    errors: all.filter((step) => step.status === "failed").length,
+    running: all.some((step) => step.status === "running"),
   };
+}
+
+/** Compact tally for one subagent's child work, e.g. "12 reads · 2 queries". */
+export function describeSubagentWork(step: RunStep): string {
+  const counts = new Map<string, number>();
+  const bump = (label: string) =>
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  for (const child of step.children) {
+    if (child.category === "sql") bump("query");
+    else if (child.category === "file-read") bump("read");
+    else if (child.category === "file-write" || child.category === "file-edit")
+      bump("edit");
+    else if (child.category === "python" || child.category === "terminal")
+      bump("run");
+    else bump("tool call");
+  }
+  if (!counts.size) return "starting";
+  return [...counts.entries()]
+    .map(([label, count]) => `${count} ${label}${count === 1 ? "" : "s"}`)
+    .join(" · ");
 }
 
 export function formatStepDuration(durationMs: number | null): string | null {

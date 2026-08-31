@@ -857,7 +857,7 @@ class TestSessionLifecycle:
         resumed route URL replaces the cleared upstream."""
         from unittest.mock import AsyncMock
 
-        from gateway.notebooks.backends import VercelNotebookBackend
+        from gateway.notebooks.backends import LaunchRequest, VercelNotebookBackend
 
         runtime = AsyncMock()
         runtime.routes.return_value = {2718: "https://sbx-idle.vercel.run"}
@@ -865,8 +865,23 @@ class TestSessionLifecycle:
         from gateway.config.notebooks import NotebookSettings
 
         backend = VercelNotebookBackend(NotebookSettings(), runtime=runtime)
-        upstream = await backend.resume("sbx-idle")
+        request = LaunchRequest(
+            org_id="org-1",
+            user_id="user-1",
+            session_id="sess-idle",
+            project_id="proj-1",
+            branch="main",
+            session_jwt="fresh-jwt",
+            notebook_token="notebook-token",
+        )
+        upstream = await backend.resume("sbx-idle", request)
         runtime.resume.assert_awaited_once_with("sbx-idle")
+        runtime.start_process.assert_awaited_once()
+        process_command = runtime.start_process.await_args.args[1]
+        process_env = runtime.start_process.await_args.kwargs["env"]
+        assert "SP_SNAPSHOT_URL" not in process_env
+        assert process_env["SP_SESSION_JWT"] == "fresh-jwt"
+        assert "sp edit" in process_command
         runtime.create.assert_not_awaited()
         assert upstream == "https://sbx-idle.vercel.run"
 

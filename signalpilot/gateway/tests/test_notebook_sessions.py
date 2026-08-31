@@ -15,6 +15,7 @@ Runtime v2: compute is a sandbox behind the NotebookBackend seam. Tests cover:
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from types import SimpleNamespace
@@ -126,7 +127,7 @@ class FakeBackend:
     def __init__(self) -> None:
         self.launches: list = []
         self.terminated: list[str] = []
-        self.resumed: list[str] = []
+        self.resumed: list[tuple[str, object]] = []
         self.extends: list[tuple[str, int]] = []
         self.alive = True
         self.launch_error: Exception | None = None
@@ -148,10 +149,10 @@ class FakeBackend:
     async def is_alive(self, runtime_handle: str) -> bool:
         return self.alive
 
-    async def resume(self, runtime_handle: str) -> str:
+    async def resume(self, runtime_handle: str, request) -> str:
         if self.resume_url is None:
             raise RuntimeError("resume failed")
-        self.resumed.append(runtime_handle)
+        self.resumed.append((runtime_handle, request))
         return self.resume_url
 
     async def snapshot_and_stop(self, runtime_handle: str):
@@ -765,10 +766,46 @@ class TestSessionLifecycleService:
             backend=backend,
         )
         assert result.status == "running"
-        assert backend.resumed == ["sbx-live"]
+        assert len(backend.resumed) == 1
+        resumed_handle, resume_request = backend.resumed[0]
+        assert resumed_handle == "sbx-live"
+        assert resume_request.session_id == "sess-1"
+        assert resume_request.notebook_token == "tok-1"
+        assert resume_request.snapshot_url is None
         assert backend.launches == []
         update_kwargs = svc.update_session_runtime.await_args.kwargs
         assert update_kwargs["upstream_url"] == "https://resumed.vercel.run"
+
+    @pytest.mark.asyncio
+    async def test_hung_resume_falls_back_to_fresh_launch(self, svc, monkeypatch):
+        _patch_jwt_secret(monkeypatch)
+        from gateway.notebooks import session_service as service
+
+        backend = FakeBackend()
+        svc.get_active_session.return_value = _session_info(status="snapshotted")
+        svc.get_session_internal.return_value = _internal(
+            status="snapshotted", snapshot_id="snap-9", upstream_url=None
+        )
+        svc.create_session.return_value = _session_info(id="fresh-sess", status="creating")
+
+        async def hung_resume(_runtime_handle, _request):
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(backend, "resume", hung_resume)
+        monkeypatch.setattr(service, "_NOTEBOOK_RESUME_TIMEOUT_SECONDS", 0.01)
+
+        result = await service.ensure_notebook_session(
+            AsyncMock(),
+            org_id="org-1",
+            user_id="user-1",
+            project_id="proj-1",
+            branch="main",
+            backend=backend,
+        )
+
+        assert result.id == "fresh-sess"
+        assert backend.terminated == ["sbx-live"]
+        assert len(backend.launches) == 1
 
     @pytest.mark.asyncio
     async def test_project_or_branch_switch_replaces_the_session(self, svc, monkeypatch):
@@ -860,6 +897,33 @@ class TestSessionLifecycleService:
                 branch="main",
                 backend=backend,
             )
+        statuses = [c.kwargs.get("status") for c in svc.update_session_runtime.await_args_list]
+        assert "error" in statuses
+        service.release_lease.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_launch_timeout_marks_session_error(self, svc, monkeypatch):
+        _patch_jwt_secret(monkeypatch)
+        from gateway.notebooks import session_service as service
+
+        backend = FakeBackend()
+
+        async def hung_launch(_request):
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(backend, "launch", hung_launch)
+        monkeypatch.setattr(service, "_NOTEBOOK_LAUNCH_TIMEOUT_SECONDS", 0.01)
+
+        with pytest.raises(service.NotebookSessionError, match="TimeoutError"):
+            await service.ensure_notebook_session(
+                AsyncMock(),
+                org_id="org-1",
+                user_id="user-1",
+                project_id="proj-1",
+                branch="main",
+                backend=backend,
+            )
+
         statuses = [c.kwargs.get("status") for c in svc.update_session_runtime.await_args_list]
         assert "error" in statuses
         service.release_lease.assert_awaited()

@@ -120,6 +120,14 @@ export async function bootRuntime(
   // embed client gets the getToken thunk so it always uses a fresh token.
   const bootToken = await config.getToken();
 
+  // Kiosk viewer (chat live notebook panel): DOCUMENT-FIRST, kernel-free.
+  // Renders immediately from the best available document; the websocket is
+  // attached in the background purely for live updates and its failure is
+  // silent. No health gate, no session provisioning, ever.
+  if (config.kioskAttach) {
+    return bootKioskViewer(config, bootToken, onPhase, navigate, signal);
+  }
+
   // Sessionless boot (Runtime v2): a project notebook opens with NO sandbox.
   // The document and file tree come straight from the gateway workspace
   // store; the kernel sandbox is provisioned lazily on the first Run.
@@ -295,6 +303,106 @@ export async function bootRuntime(
   }
 
   onPhase("ready");
+  return { client, staticData };
+}
+
+// ── Kiosk viewer boot (document-first, kernel-free) ──────────────
+
+/**
+ * Boot the chat live notebook viewer without ANY kernel dependency.
+ *
+ * Document sources, best first:
+ * 1. The live sandbox's static endpoint (freshest code + outputs) — a single
+ *    quick attempt; a stopped/absent sandbox answers 404/409 immediately.
+ * 2. The run's archived document (source + outputs snapshot) via
+ *    `config.loadDocument`.
+ * Either way the editor mounts right away; the kiosk websocket connects in
+ * the background and, when the kernel is alive, its replay reconciles the
+ * view and live updates stream in. When it isn't, the document stands alone.
+ */
+async function bootKioskViewer(
+  config: NotebookConfig,
+  bootToken: string | null,
+  onPhase: (phase: BootPhase) => void,
+  navigate: (href: string) => void,
+  signal: AbortSignal,
+): Promise<BootResult> {
+  onPhase("ready");
+  const runtimeBase = resolveRuntimeBase(config);
+  const runtimeUrl = `${runtimeBase}/notebook/${config.sessionId}`;
+  const client = createSignalpilotClient({
+    runtimeConfig: {
+      // kiosk=true rides into the WS URL: the server attaches this
+      // connection as a viewer next to the kernel's active client.
+      url: `${runtimeUrl}?kiosk=true`,
+      authToken: async () => (await config.getToken()) ?? "",
+      lazy: false,
+      healthVerified: true,
+    },
+    writeDocumentTitle: false,
+    navigate,
+  });
+
+  const staticData: NotebookStaticData = {
+    filename: config.file,
+    gatewayToken: bootToken ?? "",
+    rawFallback: false,
+  };
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(bootToken ? { Authorization: `Bearer ${bootToken}` } : {}),
+  };
+
+  if (config.sessionId && config.file) {
+    try {
+      const staticResp = await fetch(
+        `${runtimeUrl}/api/notebook/static?file=${encodeURIComponent(config.file)}`,
+        { headers, signal },
+      );
+      if (staticResp.ok) {
+        const payload = (await staticResp.json()) as {
+          code?: string;
+          filename?: string;
+          session?: unknown;
+          notebook?: unknown;
+          rawFallback?: boolean;
+        };
+        staticData.code = payload.code;
+        staticData.filename = payload.filename || config.file;
+        staticData.session = payload.session;
+        staticData.notebook = payload.notebook;
+        staticData.rawFallback = payload.rawFallback ?? false;
+      }
+    } catch (err) {
+      if (signal.aborted) throw new Error("Boot cancelled");
+      Logger.debug("Kiosk live document fetch failed (non-fatal):", err);
+    }
+  }
+
+  if (
+    staticData.code == null &&
+    staticData.notebook == null &&
+    config.loadDocument
+  ) {
+    try {
+      const doc = await config.loadDocument();
+      if (doc?.source) {
+        staticData.code = doc.source;
+        const { parseNotebookPy } = await import("@/core/notebook-file/parse");
+        const parsed = parseNotebookPy(doc.source);
+        if (parsed) {
+          staticData.notebook = parsed.notebook;
+          staticData.session = doc.session ?? null;
+        } else {
+          staticData.rawFallback = true;
+        }
+      }
+    } catch (err) {
+      if (signal.aborted) throw new Error("Boot cancelled");
+      Logger.debug("Kiosk archived document fetch failed (non-fatal):", err);
+    }
+  }
+
   return { client, staticData };
 }
 

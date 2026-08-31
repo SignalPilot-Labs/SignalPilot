@@ -12,6 +12,7 @@ import {
   Maximize2,
   MessageSquarePlus,
   MoreHorizontal,
+  NotebookPen,
   PanelLeft,
   Play,
   Save,
@@ -59,6 +60,7 @@ import {
   revokeStandaloneConversationShare,
   setDefaultStandaloneChatProject,
   shareStandaloneConversation,
+  steerStandaloneRun,
   streamStandaloneRunEvents,
   type StandaloneChatArtifact,
   type StandaloneChatEvent,
@@ -75,8 +77,16 @@ import { StandaloneChatComposer } from "~/components/chat/standalone-chat-compos
 import { ProjectChip, ProjectPicker } from "~/components/chat/project-picker";
 import { getDbtMap } from "~/lib/api";
 import { RunActivityBlocks, RunTimeline } from "~/components/chat/run-timeline";
+import { RuntimeBootCard } from "~/components/chat/runtime-boot-card";
 import { ReplayControls } from "~/components/chat/replay-controls";
-import { foldRunBlocks, foldRunSteps } from "~/lib/chat-run-steps";
+import {
+  extractRunPlan,
+  extractRuntimeBoot,
+  foldRunBlocks,
+  foldRunSteps,
+  shouldShowRuntimeBoot,
+} from "~/lib/chat-run-steps";
+import { PlanTracker } from "~/components/chat/plan-tracker";
 import { useChatReplay } from "~/lib/chat-replay";
 import { useToast } from "~/components/ui/toast";
 import {
@@ -93,6 +103,8 @@ import {
   type StandaloneRunActivity,
 } from "~/lib/standalone-chat-state";
 import { projectSettingsHref } from "~/lib/project-settings-route";
+import { LiveNotebookPanel } from "~/components/chat/live-notebook-panel";
+import { deriveLiveNotebookLink } from "~/lib/chat-live-notebook";
 
 export type UiMessage = StandaloneChatMessage & {
   runId?: string;
@@ -905,6 +917,18 @@ function AssistantMessage({
     () => (runId ? foldRunBlocks(events, runId) : []),
     [events, runId],
   );
+  // Present only on cold sandbox starts — warm follow-ups emit no boot events.
+  const runtimeBoot = useMemo(
+    () => (runId ? extractRuntimeBoot(events, runId) : null),
+    [events, runId],
+  );
+  // The agent's published plan, shown as a first-class card in the message
+  // flow — pinned to the top of the viewport while the run streams, folded
+  // into the transcript afterwards.
+  const runPlan = useMemo(
+    () => (runId ? extractRunPlan(events, runId) : null),
+    [events, runId],
+  );
   const steps = useMemo(
     () => blocks.flatMap((block) => (block.kind === "steps" ? block.steps : [])),
     [blocks],
@@ -937,9 +961,24 @@ function AssistantMessage({
           )}
         </div>
         <div className="min-w-0 flex-1">
+          {shouldShowRuntimeBoot(runtimeBoot, running) && runtimeBoot && (
+            <RuntimeBootCard boot={runtimeBoot} />
+          )}
+          {runPlan && (
+            <div className={running ? "sticky top-2 z-20 mb-3" : "mb-3"}>
+              <PlanTracker plan={runPlan} running={running} />
+            </div>
+          )}
           {(running || blocks.length > 0) && (
             <div role="status" aria-live="polite">
-              <RunActivityBlocks blocks={blocks} running={running} />
+              <RunActivityBlocks
+                blocks={blocks}
+                running={
+                  running &&
+                  runtimeBoot?.phase !== "provisioning" &&
+                  runtimeBoot?.phase !== "resuming"
+                }
+              />
             </div>
           )}
           {!blocksHaveText && message.content && (
@@ -1060,6 +1099,7 @@ function AssistantMessage({
 }
 
 function UserMessage({ message }: { message: UiMessage }) {
+  const steeringStatus = message.metadata.steering_status;
   return (
     <article
       data-chat-message-id={message.id}
@@ -1067,6 +1107,22 @@ function UserMessage({ message }: { message: UiMessage }) {
     >
       <div className="ml-auto max-w-[80%] rounded-2xl rounded-br-md bg-[#2a2a2e] px-4 py-3 text-[15.5px] leading-7 text-[var(--color-text)]">
         <div className="whitespace-pre-wrap">{message.content}</div>
+        {steeringStatus === "queued" && (
+          <div className="mt-2 flex items-center justify-end gap-1.5 text-[11px] text-[var(--color-text-muted)]">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Queued · It will be picked up on the next turn
+          </div>
+        )}
+        {steeringStatus === "picked_up" && (
+          <div className="mt-2 text-right text-[11px] text-[var(--color-success)]">
+            Picked up
+          </div>
+        )}
+        {steeringStatus === "not_delivered" && (
+          <div className="mt-2 text-right text-[11px] text-[var(--color-warning)]">
+            Not delivered · The run finished before pickup
+          </div>
+        )}
       </div>
     </article>
   );
@@ -1637,6 +1693,47 @@ export function StandaloneDataChat({
   useEffect(() => {
     eventsRef.current = events;
   }, [events]);
+
+  // Live notebook panel: attach the notebook inner view to the run's kernel
+  // session as soon as the agent starts one; fall back to the archived HTML
+  // notebook once the kernel stops.
+  const derivedNotebookLink = useMemo(
+    () => deriveLiveNotebookLink(events, currentRun?.id),
+    [events, currentRun?.id],
+  );
+  // A new run has no notebook_started for a moment (or none at all when the
+  // turn doesn't touch the notebook) — hold the last known link so the panel
+  // doesn't flash empty between turns. The kernel is conversation-scoped and
+  // kept alive across runs, so the previous link stays attachable.
+  const lastNotebookLinkRef = useRef<typeof derivedNotebookLink>(null);
+  if (derivedNotebookLink) lastNotebookLinkRef.current = derivedNotebookLink;
+  useEffect(() => {
+    lastNotebookLinkRef.current = null;
+  }, [conversationId]);
+  const liveNotebookLink = derivedNotebookLink ?? lastNotebookLinkRef.current;
+  const [notebookPanelOpen, setNotebookPanelOpen] = useState(false);
+  const notebookPanelAutoOpenedRunRef = useRef<string | null>(null);
+  useEffect(() => {
+    // Auto-open once per run when a live link first appears; a manual close
+    // stays closed for the rest of that run.
+    if (
+      liveNotebookLink?.live &&
+      notebookPanelAutoOpenedRunRef.current !== liveNotebookLink.runId
+    ) {
+      notebookPanelAutoOpenedRunRef.current = liveNotebookLink.runId;
+      setNotebookPanelOpen(true);
+    }
+  }, [liveNotebookLink?.live, liveNotebookLink?.runId]);
+  useEffect(() => {
+    setNotebookPanelOpen(false);
+    notebookPanelAutoOpenedRunRef.current = null;
+  }, [conversationId]);
+  // Legacy fallback only: conversations whose events carry no attach ids
+  // (old gateways) can still show the static HTML archive.
+  const legacyArchiveRunId =
+    !liveNotebookLink && currentRun?.runtime_archive_available
+      ? currentRun.id
+      : null;
   const conversationLoading = Boolean(
     conversationId && !detail && !detailError && detailLoading,
   );
@@ -1944,6 +2041,25 @@ export function StandaloneDataChat({
               : current,
           { revalidate: false },
         );
+        if (currentRun?.status === "running") {
+          const queuedMessage = await steerStandaloneRun(currentRun.id, text);
+          await mutateDetail(
+            (current) =>
+              current
+                ? {
+                    ...current,
+                    messages: current.messages.map((message) =>
+                      message.id === optimistic.id ? queuedMessage : message,
+                    ),
+                  }
+                : current,
+            { revalidate: false },
+          );
+          setPendingSubmission(null);
+          void mutateDetail();
+          void mutateHistory();
+          return;
+        }
         let run;
         if (currentRun?.status === "waiting_for_user") {
           run = await clarifyStandaloneRun(currentRun.id, text);
@@ -2181,7 +2297,6 @@ export function StandaloneDataChat({
     !selectedProjectId ||
     (readiness?.ready === false && currentRun?.status !== "waiting_for_user") ||
     currentRun?.status === "queued" ||
-    currentRun?.status === "running" ||
     currentRun?.status === "waiting_for_query_approval";
 
   const runIsStreaming =
@@ -2192,8 +2307,8 @@ export function StandaloneDataChat({
     ? "Choose a project to start."
     : readiness?.ready === false && currentRun?.status !== "waiting_for_user"
       ? readiness?.message || "This project isn't ready for chat yet."
-      : runIsStreaming
-        ? "Working on your last question…"
+      : currentRun?.status === "queued"
+        ? "Starting your last question…"
         : currentRun?.status === "waiting_for_query_approval"
           ? "Approve or decline the proposed query above."
           : undefined;
@@ -2409,6 +2524,8 @@ export function StandaloneDataChat({
       placeholder={
         currentRun?.status === "waiting_for_user"
           ? "Answer the clarification…"
+          : currentRun?.status === "running"
+            ? "Add an instruction for the agent's next turn…"
           : currentRun?.status === "waiting_for_query_approval"
             ? "Approve or decline the proposed query above…"
             : "Ask anything about this project…"
@@ -2485,7 +2602,9 @@ export function StandaloneDataChat({
         className={
           embedded
             ? "h-full min-w-0 overflow-hidden"
-            : "h-screen min-w-[960px] overflow-hidden p-4"
+            : `h-screen overflow-hidden p-4 ${
+                notebookPanelOpen ? "min-w-[1360px]" : "min-w-[960px]"
+              }`
         }
       >
         <div className="relative flex h-full overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)] shadow-2xl shadow-black/20">
@@ -2657,7 +2776,28 @@ export function StandaloneDataChat({
               </div>
             )}
             </div>
+            {conversationId &&
+              (liveNotebookLink || legacyArchiveRunId) &&
+              !notebookPanelOpen && (
+              <button
+                type="button"
+                aria-label="Open the analysis notebook panel"
+                title="Open the analysis notebook panel"
+                data-testid="live-notebook-toggle"
+                onClick={() => setNotebookPanelOpen(true)}
+                className="absolute right-16 top-4 z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-muted)] shadow-lg shadow-black/20 hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+              >
+                <NotebookPen className="h-4 w-4" />
+              </button>
+            )}
           </main>
+          {conversationId && notebookPanelOpen && (
+            <LiveNotebookPanel
+              link={liveNotebookLink}
+              archiveRunId={legacyArchiveRunId}
+              onClose={() => setNotebookPanelOpen(false)}
+            />
+          )}
         </div>
       </div>
     </ChatUiContext.Provider>

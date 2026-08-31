@@ -26,6 +26,90 @@ from signalpilot._utils.requests import RequestError
 LOGGER = _loggers.sp_logger()
 _ANALYSIS_SESSIONS_BY_RUN: dict[str, str] = {}
 
+# Completed runs keep their analysis kernel and notebook ALIVE so the chat
+# page's live notebook panel can stay attached (or attach late) and show the
+# real rendered outputs. One keepalive per conversation: the next run in the
+# conversation replaces it; the sandbox's own lifecycle bounds it otherwise.
+_KEEPALIVE_BY_CONVERSATION: dict[str, tuple[str, Path]] = {}
+
+
+def register_keepalive_analysis_session(
+    *,
+    conversation_id: str,
+    session_id: str,
+    scratch: Path,
+) -> None:
+    """Keep a finished run's kernel + notebook for the live notebook panel.
+
+    The scoped gateway token file is deleted immediately: the browser view is
+    read-only and the kernel already holds its credentials in memory.
+    """
+    _KEEPALIVE_BY_CONVERSATION[conversation_id] = (session_id, scratch)
+    try:
+        (scratch / ".gateway-token").unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def close_keepalive_analysis_session(app: Any, conversation_id: str) -> None:
+    """Close and clean the previous run's kept-alive kernel, if any."""
+    entry = _KEEPALIVE_BY_CONVERSATION.pop(conversation_id, None)
+    if entry is None:
+        return
+    session_id, scratch = entry
+    try:
+        _close_analysis_kernel(app, session_id)
+    except Exception:
+        LOGGER.warning(
+            "Keepalive analysis kernel close failed conversation_id=%s",
+            conversation_id,
+            exc_info=True,
+        )
+    shutil.rmtree(scratch, ignore_errors=True)
+
+
+def adopt_keepalive_analysis_session(
+    app: Any,
+    conversation_id: str,
+    *,
+    scoped_token: str,
+) -> tuple[str, Path] | None:
+    """Adopt the conversation's kept-alive kernel for a NEW run.
+
+    Returns (session_id, notebook_path) when the previous turn's kernel is
+    still alive so the run continues in the SAME notebook — the agent keeps
+    its session id across turns and the live notebook panel stays attached.
+    Writes the new run's scoped token where the notebook's setup cell reads
+    it, so re-running that cell refreshes credentials.
+
+    Returns None (after cleanup) when there is no live kernel to adopt.
+    """
+    entry = _KEEPALIVE_BY_CONVERSATION.get(conversation_id)
+    if entry is None:
+        return None
+    session_id, scratch = entry
+    notebook_path = scratch / "analysis.py"
+    session = None
+    try:
+        session = _analysis_session(app, session_id)
+    except Exception:
+        session = None
+    if session is None or not notebook_path.is_file():
+        _KEEPALIVE_BY_CONVERSATION.pop(conversation_id, None)
+        try:
+            _close_analysis_kernel(app, session_id)
+        except Exception:
+            pass
+        shutil.rmtree(scratch, ignore_errors=True)
+        return None
+    token_file = scratch / ".gateway-token"
+    token_file.write_text(scoped_token, encoding="utf-8")
+    try:
+        token_file.chmod(0o600)
+    except OSError:
+        pass
+    return session_id, notebook_path
+
 
 def _scratch_directory(run_id: str) -> Path:
     root = Path(
@@ -79,26 +163,26 @@ def _():
     return Path, runtime_context, sp
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(Path, sp):
     sp.init(gateway_url={gateway_url!r}, session_token=Path({str(token_file)!r}).read_text(encoding="utf-8"))
     db = sp.connect({connection_name!r})
     return (db,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(db):
     analysis_summary = {{"status": "pending", "preview": []}}
     return (analysis_summary,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(analysis_summary):
     analysis_checks = {{"nulls": None, "duplicates": None, "freshness": None, "reconciled": False}}
     return (analysis_checks,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(analysis_checks, analysis_summary, sp):
     sp.md("## Analysis output\\n\\nPending governed notebook analysis.")
 
@@ -336,6 +420,37 @@ async def _archive_analysis_notebook(
         {"version": 1, "run_id": run_id, "cells": cells},
         separators=(",", ":"),
     ).encode("utf-8")
+    # Structured outputs snapshot (NotebookSessionV1): lets the chat page
+    # rehydrate the REAL notebook view kernel-free after the sandbox is gone,
+    # instead of the static HTML fallback.
+    session_payload: dict[str, str] = {}
+    try:
+        from signalpilot._server.export._session_cache import (
+            serialize_session_snapshot,
+        )
+
+        snapshot = serialize_session_snapshot(
+            session.session_view,
+            notebook_path=session.app_file_manager.path,
+            cell_ids=[
+                cell.cell_id
+                for cell in session.app_file_manager.app.cell_manager.cell_data()
+            ],
+        )
+        snapshot_bytes = json.dumps(snapshot, separators=(",", ":")).encode(
+            "utf-8"
+        )
+        if scoped_token.encode("utf-8") not in snapshot_bytes:
+            session_payload["session_base64"] = base64.b64encode(
+                snapshot_bytes
+            ).decode("ascii")
+    except Exception:
+        LOGGER.warning(
+            "Session snapshot serialization failed; archiving without "
+            "outputs run_id=%s",
+            run_id,
+            exc_info=True,
+        )
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
             f"{gateway_api_url}/api/chat/runtime-archives",
@@ -346,6 +461,7 @@ async def _archive_analysis_notebook(
                     "ascii"
                 ),
                 "manifest_base64": base64.b64encode(manifest).decode("ascii"),
+                **session_payload,
             },
         )
     response.raise_for_status()

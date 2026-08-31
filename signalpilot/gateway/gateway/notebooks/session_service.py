@@ -14,6 +14,7 @@ Every handle is persisted; a gateway restart reattaches by runtime_handle.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from collections.abc import Awaitable, Callable
@@ -42,6 +43,11 @@ logger = logging.getLogger(__name__)
 _AI_CREDENTIAL_ENV_NAMES = ("CLAUDE_CODE_OAUTH_TOKEN", "OAUTH_TOKEN")
 _NOTEBOOK_MODEL_ENV_NAMES = ("SIGNALPILOT_ANALYSIS_AGENT_MODEL", "SIGNALPILOT_WORKER_AGENT_MODEL")
 _DEFAULT_CLOUD_WEB_URL = "https://app.signalpilot.ai"
+# The run must leave its visible provisioning state even when the provider or
+# guest health check hangs. Provider execution limits and the orphan reaper are
+# still backstops, but callers receive a terminal failure within two minutes.
+_NOTEBOOK_LAUNCH_TIMEOUT_SECONDS = 120
+_NOTEBOOK_RESUME_TIMEOUT_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -213,6 +219,7 @@ async def _try_resume(
     session: AsyncSession,
     backend: NotebookBackend,
     existing: NotebookSessionInfo,
+    request: LaunchRequest,
     *,
     org_id: str,
 ) -> NotebookSessionInfo | None:
@@ -220,7 +227,7 @@ async def _try_resume(
     if internal is None or not internal.runtime_handle:
         return None
     try:
-        upstream = await backend.resume(internal.runtime_handle)
+        upstream = await backend.resume(internal.runtime_handle, request)
     except Exception:
         logger.info(
             "Resume of session %s failed; falling back to a cold start", existing.id, exc_info=True
@@ -270,6 +277,7 @@ async def ensure_notebook_session(
     project_id = project_id or None
     settings = get_notebook_settings()
     backend = backend or get_notebook_backend(settings)
+    boot_deadline = asyncio.get_running_loop().time() + _NOTEBOOK_LAUNCH_TIMEOUT_SECONDS
 
     existing = await ns.get_active_session(session, org_id=org_id, user_id=user_id)
     if existing and not _session_matches(existing, project_id=project_id, branch=branch):
@@ -292,7 +300,52 @@ async def ensure_notebook_session(
     elif existing and existing.status == "snapshotted":
         if on_cold_boot is not None:
             await on_cold_boot("resuming")
-        resumed = await _try_resume(session, backend, existing, org_id=org_id)
+        internal = await ns.get_session_internal(
+            session, session_id=existing.id, org_id=org_id
+        )
+        if internal is not None and internal.access_token:
+            resume_request = LaunchRequest(
+                org_id=org_id,
+                user_id=user_id,
+                session_id=existing.id,
+                project_id=project_id,
+                branch=branch,
+                session_jwt=mint_session_jwt(
+                    user_id=credential_user_id or user_id,
+                    org_id=org_id,
+                    session_id=existing.id,
+                    project_id=(
+                        token_project_id if token_project_id is not None else project_id
+                    ),
+                    branch=token_branch or branch,
+                    connection_name=token_connection_name,
+                    commit_sha=token_commit_sha,
+                    capabilities=token_capabilities,
+                    execution_identity=token_execution_identity,
+                    scopes=token_scopes,
+                    ttl=get_gateway_settings().sp_session_jwt_ttl_seconds,
+                ),
+                notebook_token=internal.access_token,
+                env=await _runtime_env(session, org_id=org_id, extra_env=extra_env),
+                base_revision=frozen_revision,
+                read_only=read_only,
+            )
+            try:
+                async with asyncio.timeout(_NOTEBOOK_RESUME_TIMEOUT_SECONDS):
+                    resumed = await _try_resume(
+                        session, backend, existing, resume_request, org_id=org_id
+                    )
+            except TimeoutError:
+                logger.info(
+                    "Resume of session %s exceeded %ss; falling back to a cold start",
+                    existing.id,
+                    _NOTEBOOK_RESUME_TIMEOUT_SECONDS,
+                )
+                if internal.runtime_handle:
+                    await backend.terminate(internal.runtime_handle)
+                resumed = None
+        else:
+            resumed = None
         if resumed is not None:
             return resumed
         await ns.mark_stopped(session, session_id=existing.id, org_id=org_id)
@@ -361,21 +414,26 @@ async def ensure_notebook_session(
     env = await _runtime_env(session, org_id=org_id, extra_env=extra_env)
 
     try:
-        launch = await backend.launch(
-            LaunchRequest(
-                org_id=org_id,
-                user_id=user_id,
-                session_id=session_info.id,
-                project_id=project_id,
-                branch=branch,
-                session_jwt=session_jwt,
-                notebook_token=notebook_token,
-                env=env,
-                snapshot_url=snapshot_url,
-                base_revision=base_revision,
-                read_only=read_only,
-            )
+        remaining_boot_seconds = max(
+            0.001,
+            boot_deadline - asyncio.get_running_loop().time(),
         )
+        async with asyncio.timeout(remaining_boot_seconds):
+            launch = await backend.launch(
+                LaunchRequest(
+                    org_id=org_id,
+                    user_id=user_id,
+                    session_id=session_info.id,
+                    project_id=project_id,
+                    branch=branch,
+                    session_jwt=session_jwt,
+                    notebook_token=notebook_token,
+                    env=env,
+                    snapshot_url=snapshot_url,
+                    base_revision=base_revision,
+                    read_only=read_only,
+                )
+            )
     except Exception as exc:
         await _mark_session_status_best_effort(
             session, session_id=session_info.id, org_id=org_id, status="error"

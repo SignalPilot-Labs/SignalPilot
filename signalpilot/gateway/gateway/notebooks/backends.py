@@ -71,7 +71,7 @@ class NotebookBackend(Protocol):
 
     async def is_alive(self, runtime_handle: str) -> bool: ...
 
-    async def resume(self, runtime_handle: str) -> str:
+    async def resume(self, runtime_handle: str, request: LaunchRequest) -> str:
         """Resume a snapshotted session; returns the (possibly new) upstream URL."""
         ...
 
@@ -103,7 +103,7 @@ class DirectNotebookBackend:
     async def is_alive(self, runtime_handle: str) -> bool:
         return True
 
-    async def resume(self, runtime_handle: str) -> str:
+    async def resume(self, runtime_handle: str, request: LaunchRequest) -> str:
         return self._direct_url
 
     async def snapshot_and_stop(self, runtime_handle: str) -> str | None:
@@ -128,7 +128,7 @@ def _boot_command(request: LaunchRequest) -> str:
     """
     hydrate = ""
     if request.snapshot_url:
-        hydrate = f'curl -fsSL "$SP_SNAPSHOT_URL" | tar xz -C /workspace && '
+        hydrate = 'curl -fsSL "$SP_SNAPSHOT_URL" | tar xz -C /workspace && '
     return (
         "set -e; "
         # The custom notebook image runs as its unprivileged user with
@@ -162,6 +162,31 @@ class VercelNotebookBackend:
         self._settings = settings or get_notebook_settings()
         self._runtime = runtime or get_sandbox_runtime()
 
+    @staticmethod
+    def _process_env(request: LaunchRequest) -> dict[str, str]:
+        from gateway.auth.jwt_secret import load_session_jwt_secret
+
+        process_env = {
+            **request.env,
+            "SP_NOTEBOOK_TOKEN": request.notebook_token,
+            "SP_SESSION_JWT": request.session_jwt,
+            "SP_SESSION_JWT_SECRET": load_session_jwt_secret(),
+            "SP_SESSION_ID": request.session_id,
+            "SP_ORG_ID": request.org_id,
+            "SP_USER_ID": request.user_id,
+            "SP_BRANCH": request.branch,
+            "SP_WORKSPACE_MODE": "s3",
+        }
+        if request.project_id:
+            process_env["SP_PROJECT_ID"] = request.project_id
+        if request.snapshot_url:
+            process_env["SP_SNAPSHOT_URL"] = request.snapshot_url
+        if request.base_revision is not None:
+            process_env["SP_WORKSPACE_BASE_REVISION"] = str(request.base_revision)
+        if request.read_only:
+            process_env["SP_PROJECT_READ_ONLY"] = "1"
+        return process_env
+
     async def launch(self, request: LaunchRequest) -> NotebookLaunch:
         settings = self._settings
         image = settings.require_vercel_image(cloud=is_cloud_mode())
@@ -184,33 +209,7 @@ class VercelNotebookBackend:
         )
         sandbox_id = await self._runtime.create(spec)
         try:
-            from gateway.auth.jwt_secret import load_session_jwt_secret
-
-            process_env = {
-                **request.env,
-                # The boot command stages this into _TOKEN_FILE itself —
-                # writing the file via the provider API cost a full extra
-                # attach round trip (~1s) on the launch critical path.
-                "SP_NOTEBOOK_TOKEN": request.notebook_token,
-                "SP_SESSION_JWT": request.session_jwt,
-                # The notebook server's tokens.py derives/verifies session tokens
-                # from this secret (same value the gateway signs with). Without
-                # it, /api/standalone-chat/execute rejects every call with 401.
-                "SP_SESSION_JWT_SECRET": load_session_jwt_secret(),
-                "SP_SESSION_ID": request.session_id,
-                "SP_ORG_ID": request.org_id,
-                "SP_USER_ID": request.user_id,
-                "SP_BRANCH": request.branch,
-                "SP_WORKSPACE_MODE": "s3",
-            }
-            if request.project_id:
-                process_env["SP_PROJECT_ID"] = request.project_id
-            if request.snapshot_url:
-                process_env["SP_SNAPSHOT_URL"] = request.snapshot_url
-            if request.base_revision is not None:
-                process_env["SP_WORKSPACE_BASE_REVISION"] = str(request.base_revision)
-            if request.read_only:
-                process_env["SP_PROJECT_READ_ONLY"] = "1"
+            process_env = self._process_env(request)
             await self._attach_retry(
                 lambda: self._runtime.start_process(
                     sandbox_id, _boot_command(request), env=process_env
@@ -227,7 +226,11 @@ class VercelNotebookBackend:
             except BaseException:
                 routes_task.cancel()
                 raise
-        except Exception:
+        except BaseException:
+            # Includes cancellation from the orchestration-level launch
+            # deadline. Once a handle exists we must destroy it before the
+            # cancellation escapes, otherwise the UI can fail while compute
+            # continues running invisibly.
             await self._runtime.destroy(sandbox_id)
             raise
         return NotebookLaunch(runtime_handle=sandbox_id, upstream_url=upstream)
@@ -331,18 +334,26 @@ class VercelNotebookBackend:
             return False
         return result.ok
 
-    async def resume(self, runtime_handle: str) -> str:
-        # A dead/expired sandbox raises SandboxNotFound from resume() or the
-        # first health probe — propagate immediately so the caller falls back
-        # to a cold start instead of burning the full launch window. A
-        # resumed snapshot that IS alive comes up fast, so the health window
-        # is much tighter than a cold boot's.
+    async def resume(self, runtime_handle: str, request: LaunchRequest) -> str:
+        # Vercel persistence restores the filesystem into a new VM session;
+        # it does not restore process memory. Restart the notebook server with
+        # fresh credentials before waiting for its port.
         await self._runtime.resume(runtime_handle)
-        await self._wait_healthy(
+        await self._runtime.start_process(
             runtime_handle,
-            timeout_seconds=min(90.0, float(self._settings.start_timeout_seconds)),
+            _boot_command(request),
+            env=self._process_env(request),
         )
-        return await self._route_url(runtime_handle)
+        routes_task = asyncio.ensure_future(self._route_url(runtime_handle))
+        try:
+            await self._wait_healthy(
+                runtime_handle,
+                timeout_seconds=min(30.0, float(self._settings.start_timeout_seconds)),
+            )
+            return await routes_task
+        except BaseException:
+            routes_task.cancel()
+            raise
 
     async def snapshot_and_stop(self, runtime_handle: str) -> str | None:
         try:
@@ -355,7 +366,11 @@ class VercelNotebookBackend:
         except Exception:
             logger.warning("Snapshot failed for %s; destroying without one", runtime_handle)
             snapshot_id = None
-        await self._runtime.stop(runtime_handle)
+        # snapshot() stops the Vercel session. Only issue an explicit stop if
+        # snapshotting failed, otherwise a second lifecycle call can race the
+        # provider's snapshot finalization.
+        if snapshot_id is None:
+            await self._runtime.stop(runtime_handle)
         return snapshot_id
 
     async def extend(self, runtime_handle: str, seconds: int) -> None:

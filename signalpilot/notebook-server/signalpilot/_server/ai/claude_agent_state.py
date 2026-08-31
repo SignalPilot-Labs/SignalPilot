@@ -49,12 +49,20 @@ class AgentEvent:
     tool_call_id: str = ""
     is_error: bool = False
     cost_usd: float | None = None
+    usage: dict[str, Any] | None = None
+    # Tool-use id of the Agent spawn this event belongs to. Empty for the
+    # top-level agent; set on every event produced inside a subagent so the
+    # UX can group a subagent's work under its spawn.
+    parent_tool_call_id: str = ""
     turn: int = 0
+    result_subtype: str = ""
+    stop_reason: str = ""
+    num_turns: int = 0
 
 
 @dataclass
 class _ActiveAgent:
-    """Tracks a running agent thread so it can be cancelled."""
+    """Tracks a running agent thread so it can be cancelled or steered."""
 
     event_queue: queue.Queue[AgentEvent | object] = field(
         default_factory=queue.Queue
@@ -62,6 +70,9 @@ class _ActiveAgent:
     thread: threading.Thread | None = None
     loop: asyncio.AbstractEventLoop | None = None
     task: asyncio.Task[None] | None = None
+    client: Any | None = None
+    accepted_steering_ids: set[str] = field(default_factory=set)
+    pending_steering_turns: int = 0
 
 
 _active_agents: dict[str, _ActiveAgent] = {}

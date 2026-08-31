@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Self
+from unittest.mock import AsyncMock
 
 import anyio
 import httpx
@@ -36,8 +37,14 @@ _TEST_JWT_SECRET = "test-notebook-session-secret-at-least-32-bytes"
 
 
 @pytest.fixture(autouse=True)
-def _session_jwt_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+def _session_jwt_secret(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("SP_SESSION_JWT_SECRET", _TEST_JWT_SECRET)
+    monkeypatch.setenv(
+        "SP_CHAT_CLAUDE_STATE_ROOT",
+        str(tmp_path / "claude-sessions"),
+    )
 
 
 def test_seeded_analysis_notebooks_keep_run_tokens_out_of_source_and_isolated(
@@ -159,6 +166,33 @@ def _cancel_request(run_id: str) -> Request:
     )
 
 
+def _steer_request(run_id: str, payload: dict[str, Any]) -> Request:
+    from starlette.authentication import AuthCredentials, SimpleUser
+
+    body = json.dumps(payload).encode()
+    sent = False
+
+    async def receive() -> dict[str, Any]:
+        nonlocal sent
+        if sent:
+            return {"type": "http.disconnect"}
+        sent = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": f"/api/standalone-chat/steer/{run_id}",
+            "path_params": {"run_id": run_id},
+            "headers": [(b"content-type", b"application/json")],
+            "auth": AuthCredentials(["edit"]),
+            "user": SimpleUser("test-user"),
+        },
+        receive,
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "path",
@@ -218,6 +252,27 @@ async def test_cancel_accepts_a_later_run_in_the_warm_process(
 
     assert response.status_code == 200
     assert json.loads(response.body) == {"stopped": True, "kernel_stopped": False}
+
+
+@pytest.mark.asyncio
+async def test_steer_queues_on_the_live_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    steer = AsyncMock(return_value=True)
+    monkeypatch.setattr(chat_cancel, "steer_agent", steer)
+
+    response = await chat_cancel.steer(
+        request=_steer_request(
+            "run-22222222",
+            {"steering_id": "message-1", "message": "Use weekly data."},
+        )
+    )
+
+    assert response.status_code == 200
+    assert json.loads(response.body) == {"accepted": True}
+    steer.assert_awaited_once_with(
+        "standalone-run-22222222", "Use weekly data.", "message-1"
+    )
 
 
 def _runtime_session(*, dirty: bool = False) -> Any:
@@ -435,6 +490,7 @@ async def test_execute_materializes_the_frozen_project_before_starting_the_agent
     import tarfile
 
     project_id = "1dbf5492-81e6-4683-835f-f1785c9cfe78"
+    conversation_id = "22222222-3333-4444-8555-666666666666"
     run_id = "run-12345678"
     commit_sha = "a" * 40
     projects_root = tmp_path / "projects"
@@ -488,6 +544,12 @@ async def test_execute_materializes_the_frozen_project_before_starting_the_agent
     async def run_agent(_prompt: str, _session_id: object, **kwargs: object):
         # Capture while the run is live: the disposable checkout is removed
         # when the stream finishes, so nothing can be read after the fact.
+        captured["max_turns"] = str(kwargs["max_turns"])
+        captured["chat_session_id"] = str(kwargs["chat_session_id_override"])
+        captured["resume_session"] = str(kwargs["resume_session_override"])
+        captured["claude_config_dir"] = str(
+            kwargs["agent_env_overrides"]["CLAUDE_CONFIG_DIR"]
+        )
         cwd = Path(str(kwargs["cwd"]))
         captured["cwd"] = str(cwd)
         captured["dbt_project_yml"] = (cwd / "dbt_project.yml").read_text(encoding="utf-8")
@@ -506,6 +568,7 @@ async def test_execute_materializes_the_frozen_project_before_starting_the_agent
         request=_request(
             {
                 "run_id": run_id,
+                "conversation_id": conversation_id,
                 "project_id": project_id,
                 "branch": "main",
                 "connection_name": "production",
@@ -524,8 +587,13 @@ async def test_execute_materializes_the_frozen_project_before_starting_the_agent
     }
     checkout = Path(captured["cwd"])
     assert checkout.is_relative_to(projects_root / ".standalone-chat" / project_id)
+    assert checkout.name == conversation_id
     assert captured["dbt_project_yml"] == "name: test_project\n"
     assert captured["snapshot_auth"] == f"Bearer {token}"
+    assert captured["max_turns"] == "200"
+    assert captured["chat_session_id"] == conversation_id
+    assert captured["resume_session"] == "False"
+    assert Path(captured["claude_config_dir"]).name == conversation_id
     # Disposable scratch: the checkout is gone once the stream completes.
     assert not await anyio.Path(checkout).exists()
 
@@ -768,7 +836,6 @@ async def test_validated_retry_survives_offline_development_archive(
         lifecycle = lifecycles[-1]
         if attempt == 1:
             lifecycle.session_id = "kernel-1"
-            lifecycle.plan_id = "plan-1"
             sessions[lifecycle.session_id] = _runtime_session(dirty=True)
             sessions[lifecycle.session_id]._signalpilot_notebook_failures = [
                 {
@@ -788,7 +855,6 @@ async def test_validated_retry_survives_offline_development_archive(
             ]
         else:
             assert lifecycle.session_id == "kernel-2"
-            assert lifecycle.plan_id == "plan-1"
         await event_sinks[-1]("notebook_started", {})
         if attempt == 1:
             collectors[-1].artifacts.append({"filename": "rejected.csv"})
@@ -804,7 +870,7 @@ async def test_validated_retry_survives_offline_development_archive(
         assert '"variable": "segment"' in prompt
         assert "SpExceptionRaisedError" in prompt
         assert "session_id `kernel-2`" in prompt
-        assert "plan_id `plan-1`" in prompt
+        assert "Plan each database query before executing it" in prompt
         collectors[-1].artifacts.append({"filename": "accepted.csv"})
         yield AgentEvent(
             type="tool_use",
@@ -934,6 +1000,7 @@ async def test_validated_retry_survives_offline_development_archive(
     assert [event["type"] for event in events] == [
         "text_delta",
         "progress",
+        "notebook_started",
         "tool_use",
         "tool_result",
         "text_delta",
@@ -944,14 +1011,17 @@ async def test_validated_retry_survives_offline_development_archive(
         "archive_id": "archive-clean",
         "artifacts": [{"filename": "accepted.csv"}],
         "content": "Accepted answer",
-        "kernel_stopped": True,
+        # The validated kernel is kept ALIVE after the run for the chat
+        # page's live notebook panel; only the rejected attempt's kernel
+        # closes.
+        "kernel_stopped": False,
         "type": "final",
     }
     # Narration streams live (including from the rejected attempt), but the
     # accepted answer is built only from the validated attempt's text blocks.
     assert events[0]["content"] == "REJECTED LEAK"
     assert "REJECTED LEAK" not in events[-1]["content"]
-    assert closed == ["kernel-1", "kernel-2"]
+    assert closed == ["kernel-1"]
     assert clean_starts == [seeded_paths[0]]
     archived_html = base64.b64decode(archived["html_base64"]).decode()
     assert "Validated analysis notebook" in archived_html
@@ -988,11 +1058,9 @@ async def test_two_dirty_attempts_emit_one_validation_error_and_no_final(
         lifecycle = lifecycles[-1]
         if attempt == 1:
             lifecycle.session_id = "dirty-kernel-1"
-            lifecycle.plan_id = "plan-dirty"
             sessions[lifecycle.session_id] = _runtime_session(dirty=True)
         else:
             assert lifecycle.session_id == "dirty-kernel-2"
-            assert lifecycle.plan_id == "plan-dirty"
         await event_sinks[-1]("notebook_started", {})
         if attempt == 2:
             yield AgentEvent(
@@ -1083,6 +1151,7 @@ async def test_two_dirty_attempts_emit_one_validation_error_and_no_final(
     assert [event["type"] for event in events] == [
         "text_delta",
         "progress",
+        "notebook_started",
         "tool_use",
         "tool_result",
         "text_delta",

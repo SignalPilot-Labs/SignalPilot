@@ -1033,6 +1033,11 @@ class GatewayChatRun(GatewayBase):
     cancellation_requested_at: Mapped[datetime | None] = mapped_column(TZDateTime)
     public_error_code: Mapped[str | None] = mapped_column(String(100))
     public_error_message: Mapped[str | None] = mapped_column(Text)
+    # Operator-facing accounting from the agent SDK's result: total API cost
+    # and the aggregate token usage dict (input/output/cache tokens) for the
+    # turn. Never shown in the user UX.
+    cost_usd: Mapped[float | None] = mapped_column(Float)
+    usage_json: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
     started_at: Mapped[datetime | None] = mapped_column(TZDateTime)
     terminal_at: Mapped[datetime | None] = mapped_column(TZDateTime)
@@ -1613,9 +1618,13 @@ class GatewayChatRuntimeArchive(GatewayBase):
     source_object_key: Mapped[str] = mapped_column(Text, nullable=False)
     html_object_key: Mapped[str] = mapped_column(Text, nullable=False)
     manifest_object_key: Mapped[str] = mapped_column(Text, nullable=False)
+    # Structured outputs snapshot (NotebookSessionV1). Nullable: legacy
+    # archives and runs whose snapshot serialization failed have none.
+    session_object_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     html_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     manifest_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    session_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
 
     __table_args__ = (Index("ix_gw_chat_archive_owner", "org_id", "user_id", "run_id"),)

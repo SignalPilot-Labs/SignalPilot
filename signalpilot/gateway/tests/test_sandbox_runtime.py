@@ -261,6 +261,30 @@ class TestVercelRuntime:
         assert call["source"] is None
         assert call["destroy"] is False
 
+    async def test_create_retries_until_pushed_image_is_ready(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runtime = VercelSandboxRuntime(project_id="prj_x")
+        attempts = 0
+        delays: list[float] = []
+
+        def create(_spec: SandboxSpec) -> str:
+            nonlocal attempts
+            attempts += 1
+            if attempts < 3:
+                raise RuntimeError("HTTP 409: Image is not ready. (code=image_not_ready)")
+            return "sbx_ready"
+
+        async def sleep(delay: float) -> None:
+            delays.append(delay)
+
+        monkeypatch.setattr(runtime, "_create_sync", create)
+        monkeypatch.setattr("gateway.sandbox_runtime.vercel.asyncio.sleep", sleep)
+
+        assert await runtime.create(SandboxSpec(image="vcr/image@sha256:abc")) == "sbx_ready"
+        assert attempts == 3
+        assert delays == [5.0, 15.0]
+
     async def test_create_maps_git_source(self, fake_sdk: FakeSdk) -> None:
         pytest.importorskip("vercel")
         runtime = VercelSandboxRuntime(project_id="prj_x")

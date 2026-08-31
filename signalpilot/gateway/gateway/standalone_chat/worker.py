@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import re
 import socket
 import time
 import uuid
@@ -28,6 +30,7 @@ from gateway.standalone_chat.execution import (
     cleanup_expired_runtime_objects,
     cleanup_finished_execution,
     prepare_execution,
+    steer_execution,
     stream_execution,
 )
 from gateway.standalone_chat.worker_context import (
@@ -47,6 +50,47 @@ _CLARIFICATION_PREFIX = "CLARIFICATION_REQUESTED:"
 
 def _worker_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+
+
+# The agent SDK forwards MCP tool results as str(content_blocks) — a Python
+# repr of a block list, not JSON. Extract the ids textually in that case.
+_TOOL_RESULT_ID_RE = re.compile(
+    r"[\"'](session_id|notebook_path)\\?[\"']\s*:\s*\\?[\"']([^\"'\\]+)"
+)
+
+
+def _notebook_started_payload(
+    *,
+    tool_result_content: str,
+    gateway_session_id: str | None,
+) -> dict[str, Any]:
+    """Build the notebook_started event the live notebook panel attaches with.
+
+    The start_analysis_notebook tool result is a JSON document carrying the
+    kernel session id and notebook path inside the sandbox; combined with the
+    gateway notebook session id the browser has everything it needs to open
+    the run's notebook through the notebook proxy.
+    """
+    payload: dict[str, Any] = {"status": "running"}
+    if gateway_session_id:
+        payload["gateway_session_id"] = gateway_session_id
+    started: dict[str, Any] = {}
+    try:
+        parsed = json.loads(tool_result_content or "{}")
+        if isinstance(parsed, dict):
+            started = parsed
+    except (json.JSONDecodeError, TypeError):
+        pass
+    if not started:
+        for key, value in _TOOL_RESULT_ID_RE.findall(
+            tool_result_content or ""
+        ):
+            started.setdefault(key, value)
+    if started.get("session_id"):
+        payload["kernel_session_id"] = str(started["session_id"])
+    if started.get("notebook_path"):
+        payload["notebook_path"] = str(started["notebook_path"])
+    return payload
 
 
 async def _append(run_id: str, event_type: str, payload: dict[str, Any]) -> None:
@@ -102,6 +146,48 @@ async def _cancellation_monitor(
                 stop.set()
                 worker_task.cancel()
                 return
+
+
+async def _steering_monitor(
+    run_id: str,
+    worker_id: str,
+    execution: Any,
+    stop: asyncio.Event,
+) -> None:
+    """Deliver persisted interjections in order, retrying until accepted."""
+    factory = get_session_factory()
+    while not stop.is_set():
+        async with factory() as db:
+            pending = await chat_store.pending_steering_messages(
+                db,
+                run_id=run_id,
+                worker_id=worker_id,
+            )
+        for message in pending:
+            if stop.is_set():
+                return
+            try:
+                accepted = await steer_execution(
+                    execution,
+                    run_id=run_id,
+                    steering_id=message.id,
+                    message=message.content,
+                )
+            except (httpx.HTTPError, OSError):
+                accepted = False
+            if not accepted:
+                break
+            async with factory() as db:
+                await chat_store.mark_steering_message_picked_up(
+                    db,
+                    run_id=run_id,
+                    worker_id=worker_id,
+                    message_id=message.id,
+                )
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=0.35)
+        except TimeoutError:
+            pass
 
 
 async def _persist_artifacts(
@@ -170,6 +256,7 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
     worker_task = asyncio.current_task()
     assert worker_task is not None
     cancellation = asyncio.create_task(_cancellation_monitor(run_id, worker_id, stop, worker_task))
+    steering: asyncio.Task[None] | None = None
     final_text = ""
     streamed_text = ""
     report_proposal: dict[str, Any] | None = None
@@ -272,12 +359,37 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                                 "boot_ms": int((time.monotonic() - boot_started_at.pop("t0")) * 1000),
                             },
                         )
+                    if steering is None:
+                        steering = asyncio.create_task(
+                            _steering_monitor(
+                                run_id,
+                                worker_id,
+                                execution,
+                                stop,
+                            )
+                        )
                 async for event in stream_execution(execution):
                     if stop.is_set():
                         raise asyncio.CancelledError
                     event_type = str(event.get("type") or "")
                     content = str(event.get("content") or "")
+                    parent_tool_call_id = str(
+                        event.get("parent_tool_call_id") or ""
+                    )
                     if event_type == "text_delta":
+                        if parent_tool_call_id:
+                            # Subagent narration: recorded for its spawn card,
+                            # never merged into the run's own narration.
+                            if content:
+                                await _append(
+                                    run_id,
+                                    "text_delta",
+                                    {
+                                        "delta": content,
+                                        "parent_tool_call_id": parent_tool_call_id,
+                                    },
+                                )
+                            continue
                         streamed_text, emitted_content = _merge_text_delta(
                             streamed_text,
                             content,
@@ -295,7 +407,14 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                             await _append(
                                 run_id,
                                 "thinking_delta",
-                                {"delta": content},
+                                {
+                                    "delta": content,
+                                    **(
+                                        {"parent_tool_call_id": parent_tool_call_id}
+                                        if parent_tool_call_id
+                                        else {}
+                                    ),
+                                },
                             )
                     elif event_type == "text":
                         final_text = content
@@ -306,7 +425,9 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                             {"label": content or "Analysis is continuing"},
                         )
                     elif event_type == "tool_use":
-                        starts_new_text_block = bool(streamed_text)
+                        # Subagent tool calls don't split the main narration.
+                        if not parent_tool_call_id:
+                            starts_new_text_block = bool(streamed_text)
                         tool_name = str(event.get("tool_name") or "analysis tool")
                         tool_input = event.get("tool_input") or {}
                         tool_call_id = str(event.get("tool_call_id") or "")
@@ -315,8 +436,26 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                         await _append(
                             run_id,
                             "tool_started",
-                            {"tool": tool_name, "input": tool_input},
+                            {
+                                "tool": tool_name,
+                                "input": tool_input,
+                                # tool_call_id makes completion pairing exact
+                                # (parallel subagents complete out of order);
+                                # parent groups the step under its spawn.
+                                "tool_call_id": tool_call_id or None,
+                                **(
+                                    {"parent_tool_call_id": parent_tool_call_id}
+                                    if parent_tool_call_id
+                                    else {}
+                                ),
+                            },
                         )
+                        # Side events (sql/source) attach to the latest OPEN
+                        # top-level step in the UI — suppress them for
+                        # subagent tools, whose SQL still shows on the child
+                        # step from its input.
+                        if parent_tool_call_id:
+                            continue
                         if tool_name.endswith(("query_database", "explain_query", "validate_sql")):
                             sql = tool_input.get("sql") if isinstance(tool_input, dict) else None
                             if sql:
@@ -340,7 +479,8 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                                 {"tool": tool_name, **source_refs},
                             )
                     elif event_type == "tool_result":
-                        starts_new_text_block = bool(streamed_text)
+                        if not parent_tool_call_id:
+                            starts_new_text_block = bool(streamed_text)
                         is_error = bool(event.get("is_error"))
                         tool_call_id = str(event.get("tool_call_id") or "")
                         completed_tool = tool_names_by_id.get(tool_call_id, "")
@@ -354,31 +494,82 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                                 run_id,
                                 (content or "")[:2000],
                             )
+                        completed_payload: dict[str, Any] = {
+                            "tool_call_id": event.get("tool_call_id"),
+                            "summary": (
+                                "The governed tool returned an error."
+                                if is_error
+                                else "The governed tool completed."
+                            ),
+                            "error": is_error,
+                        }
+                        if parent_tool_call_id:
+                            completed_payload["parent_tool_call_id"] = (
+                                parent_tool_call_id
+                            )
+                        if completed_tool == "Agent" and not is_error and content:
+                            # The Agent tool result IS the subagent's final
+                            # report — surfaced in its card, same disclosure
+                            # level as the agent's own streamed narration.
+                            completed_payload["report"] = content[:4000]
                         await _append(
                             run_id,
                             "tool_completed",
-                            {
-                                "tool_call_id": event.get("tool_call_id"),
-                                "summary": (
-                                    "The governed tool returned an error."
-                                    if is_error
-                                    else "The governed tool completed."
-                                ),
-                                "error": is_error,
-                            },
+                            completed_payload,
                         )
                         if not is_error and completed_tool.endswith("start_analysis_notebook"):
-                            await _append(run_id, "notebook_started", {"status": "running"})
+                            await _append(
+                                run_id,
+                                "notebook_started",
+                                _notebook_started_payload(
+                                    tool_result_content=content,
+                                    gateway_session_id=execution.session_id,
+                                ),
+                            )
                         if completed_tool.endswith("run_cells"):
                             await _append(
                                 run_id,
                                 "cell_executed",
                                 {"status": "failed" if is_error else "completed"},
                             )
+                    elif event_type == "notebook_started":
+                        # Emitted by the runtime when it starts a replacement
+                        # kernel (notebook recovery). The normal path derives
+                        # this event from the start_analysis_notebook result.
+                        recovery_payload: dict[str, Any] = {"status": "running"}
+                        if execution.session_id:
+                            recovery_payload["gateway_session_id"] = execution.session_id
+                        if event.get("session_id"):
+                            recovery_payload["kernel_session_id"] = str(event["session_id"])
+                        if event.get("notebook_path"):
+                            recovery_payload["notebook_path"] = str(event["notebook_path"])
+                        await _append(run_id, "notebook_started", recovery_payload)
                     elif event_type == "error":
                         raise RuntimeError(content or "Notebook analysis failed")
                     elif event_type == "final":
                         final_text = content or final_text or streamed_text
+                        # Operator accounting: cost + token usage reported by
+                        # the agent SDK, persisted on the run row.
+                        raw_usage = event.get("usage")
+                        raw_cost = event.get("cost_usd")
+                        if raw_cost is not None or isinstance(raw_usage, dict):
+                            with suppress(Exception):
+                                async with factory() as db:
+                                    await chat_store.record_run_usage(
+                                        db,
+                                        run_id=run_id,
+                                        worker_id=worker_id,
+                                        cost_usd=(
+                                            raw_cost
+                                            if isinstance(raw_cost, (int, float))
+                                            else None
+                                        ),
+                                        usage=(
+                                            raw_usage
+                                            if isinstance(raw_usage, dict)
+                                            else None
+                                        ),
+                                    )
                         raw_report_proposal = event.get("report_proposal")
                         report_proposal = raw_report_proposal if isinstance(raw_report_proposal, dict) else None
                         raw_report_action_outcome = event.get("report_action_outcome")
@@ -484,10 +675,18 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
             )
     finally:
         stop.set()
-        for task in (renewer, cancellation):
+        for task in (renewer, cancellation, steering):
+            if task is None:
+                continue
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
+        with suppress(Exception):
+            async with get_session_factory()() as db:
+                await chat_store.finalize_undelivered_steering(
+                    db,
+                    run_id=run_id,
+                )
         with suppress(Exception):
             async with get_session_factory()() as db:
                 await cleanup_finished_execution(db, run_id=run_id)

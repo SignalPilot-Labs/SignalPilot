@@ -91,7 +91,6 @@ def test_conversation_stable_scope_remains_pinned() -> None:
         {"session_id": "another-session"},
         {"org_id": "another-org"},
         {"scopes": ["read", "query"]},
-        {"scopes": ["read", "query", "execute", "write"]},
     ],
 )
 def test_request_claims_must_match_the_run_and_process(
@@ -103,10 +102,46 @@ def test_request_claims_must_match_the_run_and_process(
         )
 
 
+def test_write_and_admin_scopes_are_allowed_for_the_full_mcp_workflow() -> None:
+    authorization = authorize_execution(
+        _body(
+            "run-11111111",
+            claim_overrides={
+                "scopes": ["read", "query", "execute", "write", "admin"]
+            },
+        )
+    )
+
+    assert authorization.scope.run_id == "run-11111111"
+
+
 def test_token_signature_is_verified() -> None:
     with pytest.raises(HTTPException, match="Invalid scoped gateway identity"):
         authorize_execution(
             _body("run-11111111", secret="wrong-secret-that-is-also-at-least-32-bytes")
+        )
+
+
+def test_small_cold_runtime_clock_skew_is_tolerated() -> None:
+    now = int(time.time())
+    authorization = authorize_execution(
+        _body(
+            "run-11111111",
+            claim_overrides={"iat": now + 20, "exp": now + 320},
+        )
+    )
+
+    assert authorization.scope.run_id == "run-11111111"
+
+
+def test_large_future_issued_at_is_rejected() -> None:
+    now = int(time.time())
+    with pytest.raises(HTTPException, match="Invalid scoped gateway identity"):
+        authorize_execution(
+            _body(
+                "run-11111111",
+                claim_overrides={"iat": now + 60, "exp": now + 360},
+            )
         )
 
 

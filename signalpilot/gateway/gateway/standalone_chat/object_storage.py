@@ -189,6 +189,15 @@ class ChatObjectStorage:
             ExpiresIn=min(300, max(30, expires_seconds)),
         )
 
+    async def presign_put(self, key: str, *, expires_seconds: int = 3600) -> str:
+        client = self._require_client()
+        return await asyncio.to_thread(
+            client.generate_presigned_url,
+            "put_object",
+            Params={"Bucket": self.bucket, "Key": key},
+            ExpiresIn=min(3600, max(30, expires_seconds)),
+        )
+
     async def multipart_writer(self, *, key: str, content_type: str) -> MultipartUploadWriter:
         writer = MultipartUploadWriter(
             client=self._require_client(),

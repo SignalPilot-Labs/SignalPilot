@@ -17,13 +17,14 @@ def standalone_chat_tools(*, notebook_enabled: bool) -> list[Tool]:
         Tool(
             name="start_analysis_notebook",
             description=(
-                "Start the run-bound analysis notebook only after plan_query selects notebook_sdk or dataset_ref. "
+                "Start the run-bound analysis notebook whenever notebook work is useful. "
+                "Starting a notebook does not execute a database query; each database query must still be planned separately. "
                 "The notebook path is fixed by the runtime and cannot be supplied by the caller."
             ),
             inputSchema={
                 "type": "object",
-                "properties": {"plan_id": {"type": "string"}},
-                "required": ["plan_id"],
+                "properties": {},
+                "additionalProperties": False,
             },
         ),
         Tool(
@@ -41,22 +42,6 @@ def standalone_chat_tools(*, notebook_enabled: bool) -> list[Tool]:
                     "select": {"type": ["string", "null"], "maxLength": 500},
                 },
                 "required": ["command"],
-            },
-        ),
-        Tool(
-            name="run_scratch_python",
-            description=(
-                "Run restricted, in-memory Python for calculations. Imports, files, networking, "
-                "environment access, shell commands, and dynamic code are unavailable. Put the "
-                "JSON-serializable output in a variable named result."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "source": {"type": "string"},
-                    "data": {},
-                },
-                "required": ["source"],
             },
         ),
         Tool(

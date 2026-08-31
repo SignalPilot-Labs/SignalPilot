@@ -118,4 +118,39 @@ describe("StandaloneChatComposer", () => {
     expect(onSubmit).toHaveBeenCalledWith("show me daily revenue");
     expect(textarea?.value).toBe("");
   });
+
+  it("shows send and stop together while an agent is running", async () => {
+    const onSubmit = vi.fn();
+    const onStop = vi.fn();
+
+    function Harness() {
+      const [value, setValue] = useState("Use weekly data");
+      return (
+        <StandaloneChatComposer
+          value={value}
+          onValueChange={setValue}
+          onSubmit={onSubmit}
+          submitDisabled={false}
+          running
+          onStop={onStop}
+          placeholder="Add an instruction"
+        />
+      );
+    }
+
+    await act(async () => root.render(<Harness />));
+    const queueButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Queue message for the running agent"]',
+    );
+    const stopButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Stop the running analysis"]',
+    );
+    expect(queueButton).not.toBeNull();
+    expect(stopButton).not.toBeNull();
+    expect(container.textContent).toContain("Enter to queue for the next turn");
+
+    await act(async () => queueButton?.click());
+    expect(onSubmit).toHaveBeenCalledWith("Use weekly data");
+    expect(onStop).not.toHaveBeenCalled();
+  });
 });

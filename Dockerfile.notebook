@@ -43,6 +43,14 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 COPY --chown=notebook:notebook signalpilot/notebook-server/signalpilot/ signalpilot/
 
+# Claude Agent SDK loads the production SignalPilot skills and verifier agents
+# as a local plugin. Keep this in the immutable image: Vercel runtimes have no
+# repository checkout at boot, and MCP registration alone does not install
+# skills.
+COPY --chown=notebook:notebook signalpilot-plugin/.claude-plugin/ /opt/signalpilot-plugin/.claude-plugin/
+COPY --chown=notebook:notebook signalpilot-plugin/skills/ /opt/signalpilot-plugin/skills/
+COPY --chown=notebook:notebook signalpilot-plugin/agents/ /opt/signalpilot-plugin/agents/
+
 # Install only the local package after copying source. Source edits should not
 # invalidate the heavyweight dependency layer above.
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -62,6 +70,7 @@ HEALTHCHECK --interval=10s --timeout=5s --start-period=30s \
 ENV SP_GATEWAY_URL=""
 ENV SP_API_KEY=""
 ENV SP_LOG_LEVEL="10"
+ENV SP_AGENT_PLUGIN_PATH="/opt/signalpilot-plugin"
 
 # Fallback for a bare `docker run` of this image: auth is always on, with a
 # self-provisioned token file (see _server/local_token.py). In a Vercel

@@ -61,11 +61,19 @@ __all__ = [
     "clear_event_buffer",
     "get_buffered_events",
     "run_notebook_agent",
+    "steer_agent",
     "stop_agent",
 ]
 
 _DONE = object()
 FILE_EDIT_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"]
+_EFFORT_LEVELS = {"low", "medium", "high", "xhigh", "max"}
+
+
+def _agent_effort() -> str:
+    """Reasoning effort for the agent CLI. Defaults to medium."""
+    effort = os.getenv("SP_AGENT_EFFORT", "medium").strip().lower()
+    return effort if effort in _EFFORT_LEVELS else "medium"
 
 
 def _run_agent_in_thread(
@@ -83,6 +91,7 @@ def _run_agent_in_thread(
     cwd: str | None = None,
     auth_config: dict[str, str] | None = None,
     notebook_session_authorizer: Callable[[str], bool] | None = None,
+    agent_env_overrides: dict[str, str] | None = None,
 ) -> None:
     """Run the agent SDK in a separate thread with session resume support."""
     event_queue = agent_state.event_queue
@@ -118,6 +127,8 @@ def _run_agent_in_thread(
 
         agent_env = dict(os.environ)
         _apply_auth_config(agent_env, auth_config)
+        if agent_env_overrides:
+            agent_env.update(agent_env_overrides)
         if _normalized_sp_api_key(agent_env.get("SP_API_KEY", "")) == "":
             agent_env.pop("SP_API_KEY", None)
         # On Windows, python3 doesn't exist — create a shim so skills work
@@ -161,7 +172,26 @@ def _run_agent_in_thread(
             },
             "cwd": cwd or os.getcwd(),
             "env": agent_env,
+            # Reasoning effort. Medium keeps extended thinking useful without
+            # long stalls before the first tool call. Override with
+            # SP_AGENT_EFFORT (low|medium|high|xhigh|max).
+            "effort": _agent_effort(),
         }
+        plugin_path = os.getenv("SP_AGENT_PLUGIN_PATH", "").strip()
+        if plugin_path:
+            if Path(plugin_path).is_dir():  # noqa: ASYNC240 - agent runs in a worker thread
+                # MCP servers provide tools; the local plugin independently
+                # provides SignalPilot's workflow skills and verifier agents.
+                # The SDK's skills option also enables the Skill tool without
+                # weakening the explicit allowed-tool policy below.
+                agent_options_kwargs["plugins"] = [
+                    {"type": "local", "path": plugin_path}
+                ]
+                agent_options_kwargs["skills"] = "all"
+            else:
+                LOGGER.warning(
+                    "SignalPilot agent plugin path does not exist: %s", plugin_path
+                )
         if disallowed_tools:
             agent_options_kwargs["disallowed_tools"] = disallowed_tools
         if allowed_tools:
@@ -202,10 +232,14 @@ def _run_agent_in_thread(
 
         try:
             async with ClaudeSDKClient(options=options) as client:
+                agent_state.client = client
                 await client.query(message)
                 async for msg in client.receive_messages():
                     if isinstance(msg, AssistantMessage):
                         turn_count += 1
+                        # Set when this message was produced inside a subagent
+                        # (an Agent tool spawn) — used to group its work.
+                        parent_id = getattr(msg, "parent_tool_use_id", None) or ""
                         for block in msg.content:
                             if isinstance(block, ThinkingBlock):
                                 # Final authoritative thinking — replaces accumulated deltas
@@ -213,6 +247,7 @@ def _run_agent_in_thread(
                                     AgentEvent(
                                         type="thinking",
                                         content=block.thinking,
+                                        parent_tool_call_id=parent_id,
                                         turn=turn_count,
                                     )
                                 )
@@ -222,6 +257,7 @@ def _run_agent_in_thread(
                                     AgentEvent(
                                         type="text",
                                         content=block.text,
+                                        parent_tool_call_id=parent_id,
                                         turn=turn_count,
                                     )
                                 )
@@ -232,12 +268,14 @@ def _run_agent_in_thread(
                                         tool_name=block.name,
                                         tool_input=block.input,
                                         tool_call_id=getattr(block, "id", ""),
+                                        parent_tool_call_id=parent_id,
                                         turn=turn_count,
                                     )
                                 )
 
                     elif isinstance(msg, UserMessage):
                         content = msg.content
+                        parent_id = getattr(msg, "parent_tool_use_id", None) or ""
                         if isinstance(content, list):
                             for block in content:
                                 if isinstance(block, ToolResultBlock):
@@ -256,20 +294,46 @@ def _run_agent_in_thread(
                                             is_error=getattr(
                                                 block, "is_error", False
                                             ),
+                                            parent_tool_call_id=parent_id,
                                             turn=turn_count,
                                         )
                                     )
 
                     elif isinstance(msg, ResultMessage):
                         cost = getattr(msg, "total_cost_usd", None)
+                        usage = getattr(msg, "usage", None)
+                        subtype = str(getattr(msg, "subtype", "") or "")
+                        result_is_error = bool(getattr(msg, "is_error", False))
                         event_queue.put(
                             AgentEvent(
-                                type="done",
-                                content="",
+                                type="error" if result_is_error else "done",
+                                content=(
+                                    "The agent reached its turn limit before completing."
+                                    if subtype == "error_max_turns"
+                                    else ""
+                                ),
+                                is_error=result_is_error,
                                 cost_usd=cost,
+                                usage=usage if isinstance(usage, dict) else None,
                                 turn=turn_count,
+                                result_subtype=subtype,
+                                stop_reason=str(
+                                    getattr(msg, "stop_reason", "") or ""
+                                ),
+                                num_turns=int(
+                                    getattr(msg, "num_turns", turn_count) or 0
+                                ),
                             )
                         )
+                        # A ResultMessage terminates one SDK query, not
+                        # necessarily this live client. Give the durable
+                        # gateway queue a brief chance to deliver an
+                        # interjection that was accepted while the run was
+                        # still marked running, then consume its next result.
+                        await asyncio.sleep(1.0)
+                        if agent_state.pending_steering_turns > 0:
+                            agent_state.pending_steering_turns -= 1
+                            continue
                         break  # Session complete for this query
 
                     elif isinstance(msg, RateLimitEvent):
@@ -291,12 +355,14 @@ def _run_agent_in_thread(
                         delta = event.get("delta", {})
                         text = delta.get("text", "")
                         thinking = delta.get("thinking", "")
+                        parent_id = getattr(msg, "parent_tool_use_id", None) or ""
 
                         if text:
                             event_queue.put(
                                 AgentEvent(
                                     type="text_delta",
                                     content=text,
+                                    parent_tool_call_id=parent_id,
                                     turn=turn_count,
                                 )
                             )
@@ -305,6 +371,7 @@ def _run_agent_in_thread(
                                 AgentEvent(
                                     type="thinking_delta",
                                     content=thinking,
+                                    parent_tool_call_id=parent_id,
                                     turn=turn_count,
                                 )
                             )
@@ -357,6 +424,7 @@ def _run_agent_in_thread(
             )
         )
     finally:
+        agent_state.client = None
         try:
             loop.close()
         except Exception:
@@ -381,6 +449,35 @@ def stop_agent(session_id: str) -> bool:
     agent.event_queue.put(_DONE)
 
     LOGGER.info(f"Agent stopped for session {session_id}")
+    return True
+
+
+async def steer_agent(session_id: str, message: str, steering_id: str) -> bool:
+    """Queue a user message on a live SDK client without interrupting it."""
+    agent = _active_agents.get(session_id)
+    if (
+        agent is None
+        or agent.client is None
+        or agent.loop is None
+        or agent.loop.is_closed()
+        or agent.task is None
+        or agent.task.done()
+    ):
+        return False
+    if steering_id in agent.accepted_steering_ids:
+        return True
+    agent.accepted_steering_ids.add(steering_id)
+    future = asyncio.run_coroutine_threadsafe(
+        agent.client.query(message),
+        agent.loop,
+    )
+    try:
+        await asyncio.wrap_future(future)
+        agent.pending_steering_turns += 1
+    except Exception:
+        agent.accepted_steering_ids.discard(steering_id)
+        raise
+    LOGGER.info("Queued steering message for session %s", session_id)
     return True
 
 
@@ -419,6 +516,9 @@ async def run_notebook_agent(
     persist_session_mapping: bool = True,
     auth_config_override: dict[str, str] | None = None,
     notebook_session_authorizer: Callable[[str], bool] | None = None,
+    chat_session_id_override: str | None = None,
+    resume_session_override: bool | None = None,
+    agent_env_overrides: dict[str, str] | None = None,
 ) -> AsyncGenerator[AgentEvent, None]:
     """
     Run the Claude Agent SDK for a chat message.
@@ -434,13 +534,16 @@ async def run_notebook_agent(
     effective_app = notebook_mcp_app or app
     chat_session_key = thread_id or str(session_id)
 
-    if new_chat:
-        clear_chat_session(chat_session_key, persist=persist_session_mapping)
-
-    chat_session_id, is_resume = _get_or_create_chat_session(
-        chat_session_key,
-        persist=persist_session_mapping,
-    )
+    if chat_session_id_override is not None:
+        chat_session_id = chat_session_id_override
+        is_resume = bool(resume_session_override)
+    else:
+        if new_chat:
+            clear_chat_session(chat_session_key, persist=persist_session_mapping)
+        chat_session_id, is_resume = _get_or_create_chat_session(
+            chat_session_key,
+            persist=persist_session_mapping,
+        )
 
     effective_cwd = cwd or os.getcwd()
     mcp_servers = _get_mcp_servers_config(mcp_config)
@@ -566,6 +669,7 @@ async def run_notebook_agent(
             effective_cwd,
             auth,
             notebook_session_authorizer,
+            agent_env_overrides,
         ),
         daemon=True,
     )

@@ -9,6 +9,14 @@ import { expect, test } from "@playwright/test";
 const BASE = process.env.SP_WEB_BASE_URL ?? "http://localhost:3200";
 const at = (ms: number) => `${BASE}/chats/test?at=${ms}&paused=1`;
 
+/** Clicks before React hydration are silently lost — gate on the harness flag. */
+async function waitForHydration(page: import("@playwright/test").Page) {
+  await expect(page.getByTestId("chat-test-harness")).toHaveAttribute(
+    "data-hydrated",
+    "1",
+  );
+}
+
 test.describe("chat UX test harness", () => {
   test("shows a live working header while the first chain streams", async ({
     page,
@@ -41,7 +49,7 @@ test.describe("chat UX test harness", () => {
     const groups = page.getByTestId("chat-activity-group");
     await expect(groups).toHaveCount(2);
     // The first chain has collapsed to a summary line.
-    await expect(groups.first()).toContainText("Worked through 5 steps");
+    await expect(groups.first()).toContainText("Worked through 9 steps");
     // The streamed narration sits between the two chains.
     await expect(
       page.getByText("growth stories differ sharply by region"),
@@ -57,10 +65,11 @@ test.describe("chat UX test harness", () => {
     page,
   }) => {
     await page.goto(at(21_200));
+    await waitForHydration(page);
     const groups = page.getByTestId("chat-activity-group");
     await expect(groups).toHaveCount(2);
     await expect(groups.first()).toContainText(
-      "Worked through 5 steps · 2 queries · 1 error",
+      "Worked through 9 steps · 2 queries · 1 error",
     );
     await expect(groups.nth(1)).toContainText(
       "Worked through 8 steps · 2 code runs · 4 files",
@@ -79,6 +88,7 @@ test.describe("chat UX test harness", () => {
     page,
   }) => {
     await page.goto(at(21_200));
+    await waitForHydration(page);
     const expandButtons = page.getByTestId("artifact-expand");
     // One for the Vega chart, one for the HTML report.
     await expect(expandButtons).toHaveCount(2);
@@ -97,13 +107,45 @@ test.describe("chat UX test harness", () => {
     await expect(lightbox).not.toBeVisible();
   });
 
+  test("shows the agent plan as an always-visible card in the main window", async ({
+    page,
+  }) => {
+    // First TodoWrite has landed: 0/4, first item live, list expanded.
+    await page.goto(at(2_000));
+    await waitForHydration(page);
+    const tracker = page.getByTestId("chat-plan-tracker");
+    await expect(tracker).toBeVisible();
+    await expect(tracker).toContainText("0/4");
+    await expect(tracker).toContainText(
+      "Confirm the revenue model and region join",
+    );
+    await expect(tracker).toContainText("Publish a table and comparison chart");
+    // The header toggle collapses the checklist to the one-line summary.
+    const header = tracker.locator("button").first();
+    await expect(header).toHaveAttribute("aria-expanded", "true");
+    await header.click();
+    await expect(header).toHaveAttribute("aria-expanded", "false");
+    // Late in the run the second TodoWrite advances the plan to 3/4.
+    await page.goto(at(16_000));
+    await expect(tracker).toContainText("3/4");
+    // After the run completes the plan stays in the transcript, folded.
+    await page.goto(at(30_000));
+    await expect(tracker).toBeVisible();
+    await expect(tracker).toContainText("3/4");
+    await expect(tracker.locator("button").first()).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
   test("replay controls scrub the run deterministically", async ({ page }) => {
     await page.goto(at(0));
+    await waitForHydration(page);
     await expect(page.getByTestId("chat-test-scrub")).toBeVisible();
     await page.getByTestId("chat-test-skip").click();
     await expect(
       page.getByTestId("chat-activity-group").first(),
-    ).toContainText("Worked through 5 steps");
+    ).toContainText("Worked through 9 steps");
     await page.getByTestId("chat-test-restart").click();
     await expect(
       page.getByTestId("chat-activity-group").first(),

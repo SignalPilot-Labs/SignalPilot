@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 async def prepare_execution_workspace(
     *,
     run_id: str,
+    conversation_id: str,
     project_id: str,
     branch: str,
     connection_name: str,
@@ -39,7 +40,10 @@ async def prepare_execution_workspace(
     try:
         project_directory, remove_project_directory = (
             await _execution_project_directory(
-                run_id=run_id,
+                # Claude Agent SDK sessions are scoped to cwd. Keep this path
+                # stable across turns while still rematerializing its contents
+                # from the frozen snapshot for every run.
+                run_id=conversation_id,
                 project_id=project_id,
                 branch=branch,
                 gateway_url=gateway_url,

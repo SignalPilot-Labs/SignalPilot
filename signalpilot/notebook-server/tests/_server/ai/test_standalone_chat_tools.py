@@ -40,7 +40,6 @@ from signalpilot._server.ai.standalone_chat_tools import (
     StandaloneArtifactCollector,
     StandaloneNotebookLifecycle,
     _render_chart_png,
-    _run_restricted_python,
     build_standalone_chat_mcp_server,
 )
 from signalpilot._server.api.endpoints.standalone_chat import (
@@ -55,24 +54,6 @@ from signalpilot._server.api.endpoints.standalone_chat import (
 from signalpilot._server.api.endpoints.standalone_chat_prompt import (
     _execution_prompt_values,
 )
-
-
-def test_restricted_python_allows_in_memory_analysis_only():
-    assert _run_restricted_python(
-        "result = {'total': sum(row['value'] for row in data)}",
-        [{"value": 2}, {"value": 3}],
-    ) == {"result": {"total": 5}}
-
-    for source in (
-        "import os\nresult = os.environ",
-        "result = open('/etc/passwd').read()",
-        "result = __import__('subprocess').run(['id'])",
-        "result = (1).__class__",
-        "while True:\n    pass\nresult = 1",
-        "result = [0] * 1000000",
-    ):
-        with pytest.raises(ValueError):
-            _run_restricted_python(source, None)
 
 
 def test_chat_runtime_notebook_outputs_are_redacted_and_preview_bounded():
@@ -496,7 +477,7 @@ async def test_report_update_requires_loaded_context_unless_the_report_is_attach
 
 
 @pytest.mark.asyncio
-async def test_analysis_notebook_start_is_plan_gated_and_uses_only_the_seeded_path(
+async def test_analysis_notebook_start_needs_no_plan_and_uses_only_the_seeded_path(
     tmp_path: Path,
 ) -> None:
     seeded = tmp_path / "analysis.py"
@@ -515,16 +496,11 @@ async def test_analysis_notebook_start_is_plan_gated_and_uses_only_the_seeded_pa
 
     runtime_session = SimpleNamespace()
 
-    async def check_plan(plan_id: str) -> dict[str, str]:
-        assert plan_id == "plan-a"
-        return {"route": "notebook_sdk"}
-
     lifecycle = StandaloneNotebookLifecycle()
     config = build_standalone_chat_mcp_server(
         StandaloneArtifactCollector(),
         notebook_mcp_app=object(),
         analysis_notebook_path=seeded,
-        plan_checker=check_plan,
         notebook_lifecycle=lifecycle,
         notebook_starter=start_notebook,
         notebook_session_resolver=lambda _session_id: runtime_session,
@@ -534,10 +510,7 @@ async def test_analysis_notebook_start_is_plan_gated_and_uses_only_the_seeded_pa
         CallToolRequest(
             params=CallToolRequestParams(
                 name="start_analysis_notebook",
-                arguments={
-                    "plan_id": "plan-a",
-                    "file_path": "/tmp/attacker.py",
-                },
+                arguments={},
             )
         )
     )
@@ -545,7 +518,6 @@ async def test_analysis_notebook_start_is_plan_gated_and_uses_only_the_seeded_pa
     assert response.root.isError is False
     assert calls == [{"file_path": str(seeded), "auto_run": True}]
     assert lifecycle.session_id == "session-a"
-    assert lifecycle.plan_id == "plan-a"
     assert runtime_session._signalpilot_chat_runtime is True
 
 
@@ -754,7 +726,7 @@ def test_horizontal_bar_renderer_handles_long_categories_and_negative_values():
     assert image.size == (1_200, 750)
 
 
-def test_agent_contract_excludes_mutating_and_external_tools():
+def test_agent_contract_includes_default_signalpilot_mcp_tools():
     # The prompt file wraps lines; compare against whitespace-collapsed text.
     _prompt_flat = " ".join(STANDALONE_SYSTEM_PROMPT.split())
     assert "in English" in _prompt_flat
@@ -773,9 +745,14 @@ def test_agent_contract_excludes_mutating_and_external_tools():
     assert "as a fallback during recovery" in _prompt_flat
     assert "same unchanged notebook code hash" in _prompt_flat
     assert "MultipleDefinitionError" in _prompt_flat
-    assert all(
-        "notion" not in tool.lower() for tool in STANDALONE_ALLOWED_TOOLS
-    )
+    assert {
+        "mcp__signalpilot__get_knowledge",
+        "mcp__signalpilot__propose_knowledge",
+        "mcp__signalpilot__notion_search",
+        "mcp__signalpilot__notion_create_page",
+        "mcp__signalpilot__sandbox_exec",
+        "mcp__signalpilot__dbt_execute",
+    } <= set(STANDALONE_ALLOWED_TOOLS)
     assert all(
         "github" not in tool.lower() for tool in STANDALONE_ALLOWED_TOOLS
     )
@@ -784,11 +761,27 @@ def test_agent_contract_excludes_mutating_and_external_tools():
         for forbidden in ("Bash", "Write", "Edit", "WebFetch", "WebSearch")
     )
     assert set(STANDALONE_DISALLOWED_MCP_TOOLS) == {
-        "mcp__signalpilot__analyze_project_db",
-        "mcp__signalpilot__get_dbt_profile",
-        "mcp__signalpilot__map_columns",
+        "mcp__signalpilot__schema_diff_branches",
+        "mcp__signalpilot__xata_branch_diff",
+        "mcp__signalpilot__xata_list_branches",
+        "mcp__signalpilot__create_xata_branch",
+        "mcp__signalpilot__delete_xata_branch",
     }
-    assert not set(IMPROVEMENT_EXTRA_TOOLS) & set(STANDALONE_ALLOWED_TOOLS)
+    assert set(IMPROVEMENT_EXTRA_TOOLS) <= set(STANDALONE_ALLOWED_TOOLS)
+
+
+@pytest.mark.asyncio
+async def test_scratch_python_tool_is_not_exposed():
+    server = build_standalone_chat_mcp_server(
+        StandaloneArtifactCollector(), notebook_mcp_app=None
+    )["instance"]
+    response = await server.request_handlers[ListToolsRequest](
+        ListToolsRequest()
+    )
+
+    assert "run_scratch_python" not in {
+        tool.name for tool in response.root.tools
+    }
 
 
 @pytest.mark.asyncio

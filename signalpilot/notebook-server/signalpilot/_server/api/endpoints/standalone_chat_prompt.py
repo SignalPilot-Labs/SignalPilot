@@ -8,8 +8,17 @@ from typing import Any
 from starlette.exceptions import HTTPException
 
 STANDALONE_ALLOWED_TOOLS = [
+    "mcp__signalpilot__analyze_grain",
+    "mcp__signalpilot__analyze_project_db",
+    "mcp__signalpilot__archive_knowledge",
+    "mcp__signalpilot__audit_model_sources",
     "mcp__signalpilot__check_budget",
+    "mcp__signalpilot__check_model_schema",
+    "mcp__signalpilot__compare_join_types",
+    "mcp__signalpilot__connection_health",
     "mcp__signalpilot__connector_capabilities",
+    "mcp__signalpilot__dbt_error_parser",
+    "mcp__signalpilot__dbt_execute",
     "mcp__signalpilot__debug_cte_query",
     "mcp__signalpilot__describe_table",
     "mcp__signalpilot__estimate_query_cost",
@@ -18,18 +27,41 @@ STANDALONE_ALLOWED_TOOLS = [
     "mcp__signalpilot__explore_columns",
     "mcp__signalpilot__explore_table",
     "mcp__signalpilot__find_join_path",
+    "mcp__signalpilot__find_column_producers",
+    "mcp__signalpilot__generate_sql_skeleton",
     "mcp__signalpilot__get_date_boundaries",
+    "mcp__signalpilot__get_dbt_profile",
+    "mcp__signalpilot__get_knowledge",
     "mcp__signalpilot__get_relationships",
     "mcp__signalpilot__list_database_connections",
+    "mcp__signalpilot__list_notion_integrations",
     "mcp__signalpilot__list_semantic_metrics",
     "mcp__signalpilot__list_tables",
+    "mcp__signalpilot__list_workspace_projects",
+    "mcp__signalpilot__map_columns",
+    "mcp__signalpilot__notion_create_page",
+    "mcp__signalpilot__notion_fetch_page",
+    "mcp__signalpilot__notion_search",
     "mcp__signalpilot__plan_query",
+    "mcp__signalpilot__propose_knowledge",
     "mcp__signalpilot__query_database",
+    "mcp__signalpilot__query_history",
+    "mcp__signalpilot__read_knowledge",
+    "mcp__signalpilot__read_notebook",
+    "mcp__signalpilot__refresh_mart",
+    "mcp__signalpilot__run_notebook",
+    "mcp__signalpilot__sandbox_exec",
+    "mcp__signalpilot__sandbox_read_file",
+    "mcp__signalpilot__sandbox_write_file",
+    "mcp__signalpilot__schema_diff",
     "mcp__signalpilot__schema_ddl",
     "mcp__signalpilot__schema_link",
     "mcp__signalpilot__schema_overview",
     "mcp__signalpilot__schema_statistics",
+    "mcp__signalpilot__search_knowledge",
     "mcp__signalpilot__validate_sql",
+    "mcp__signalpilot__validate_model_output",
+    "mcp__signalpilot__verify_model_values",
     "mcp__signalpilot__verify_metric_conformance",
     "mcp__standalone-chat__publish_chart",
     "mcp__standalone-chat__publish_report",
@@ -45,33 +77,25 @@ STANDALONE_ALLOWED_TOOLS = [
     "mcp__signalpilot-notebook__get_notebook_errors",
 ]
 
-# Sandbox VM tools: for improvement runs always; for user chats when the
-# gateway forwards features.sandbox_runtime (SP_FEATURE_CHAT_SANDBOX_RUNTIME).
-# The gateway enforces this server-side through the sandbox:execute JWT
-# capability; these lists only widen the agent-side allowlist.
+# Compatibility aliases retained for callers that group these tools. All are
+# now part of the default standalone tool surface.
 SANDBOX_TOOLS = [
     "mcp__signalpilot__sandbox_exec",
     "mcp__signalpilot__sandbox_write_file",
     "mcp__signalpilot__sandbox_read_file",
 ]
 IMPROVEMENT_EXTRA_TOOLS = SANDBOX_TOOLS  # historical alias
-# refresh_mart is the chat agent's ONLY warehouse write action: rebuild a stale
-# mart into the dev DB via the gateway's credential-holding executor. The agent
-# has one sandbox (the notebook session); it does not get sandbox_exec or the
-# retired dbt_execute. sandbox_exec stays available to improvement runs only.
 REFRESH_MART_TOOL = "mcp__signalpilot__refresh_mart"
-# Retired for chat (superseded by refresh_mart). Kept as a constant so it can be
-# explicitly disallowed on the chat surface.
 DBT_EXECUTE_TOOL = "mcp__signalpilot__dbt_execute"
 
-# Gateway MCP tools that must not be offered to the ordinary Data Chat agent.
-# analyze_project_db and map_columns can return after they use the governed
-# plan/result and frozen-project boundaries. get_dbt_profile is intentionally
-# reserved for writable dbt/Xata administration.
+# Xata branch control is not part of chat analysis. The selected project and
+# database connection remain fixed for the lifetime of the run.
 STANDALONE_DISALLOWED_MCP_TOOLS = [
-    "mcp__signalpilot__analyze_project_db",
-    "mcp__signalpilot__get_dbt_profile",
-    "mcp__signalpilot__map_columns",
+    "mcp__signalpilot__schema_diff_branches",
+    "mcp__signalpilot__xata_branch_diff",
+    "mcp__signalpilot__xata_list_branches",
+    "mcp__signalpilot__create_xata_branch",
+    "mcp__signalpilot__delete_xata_branch",
 ]
 
 # System prompts live in standalone .md files â€” easy to read and modify
@@ -90,8 +114,8 @@ STANDALONE_SYSTEM_PROMPT = _load_prompt("standalone_chat_system.md")
 
 
 _NOTEBOOK_ONLY_RULE_PREFIXES = (
-    "- If the route is notebook_sdk or dataset_ref",
-    "- Never call start_analysis_notebook with a plan whose route is mcp",
+    "- Start the analysis notebook whenever",
+    "- `notebook_sdk` or `dataset_ref`",
     "- The analysis notebook is a marimo reactive notebook",
     "- Define shared imports and reusable DataFrames once",
     "- If edit_notebook returns MultipleDefinitionError",

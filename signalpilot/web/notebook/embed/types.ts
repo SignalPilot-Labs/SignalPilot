@@ -92,6 +92,21 @@ export interface SignalpilotEditorProps {
   config: SignalpilotMountConfig;
   /** Optional CSS class applied to the `.sp-root` wrapper div. */
   className?: string;
+  /**
+   * Optional page mode override. When set, the embed forces this page
+   * instead of deriving it from the host URL — required on non-notebook
+   * routes (e.g. the chat page's live notebook panel), whose URL carries no
+   * ?file= param. "read" renders the run view: cells and live outputs with
+   * no editing chrome. Default: "edit" with URL-derived page choice.
+   */
+  mode?: "edit" | "read";
+  /**
+   * Kernel session id to ATTACH to (an existing session inside the runtime).
+   * Without it the session id derives from the host URL's ?session_id or a
+   * random fresh id. Set by hosts whose URL carries no session param — the
+   * chat live notebook panel attaching to the agent's kernel.
+   */
+  kernelSessionId?: string;
 }
 
 export interface SignalpilotHomeProps {

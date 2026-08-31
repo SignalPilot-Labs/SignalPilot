@@ -551,6 +551,37 @@ async def test_explicit_filter_opt_out_allows_a_filterless_draft() -> None:
 
 
 @pytest.mark.asyncio
+async def test_agent_adds_a_governed_bounded_date_filter_without_an_extra_model_turn() -> None:
+    empty = _definition()
+    client = _ModelClient(
+        {"summary": "Created the dashboard.", "definition": empty.model_dump(mode="json", by_alias=True)}
+    )
+    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
+
+    draft = await agent.draft(
+        prompt="Create an executive dashboard for revenue, margins and customers",
+        context=_orders_context(),
+        base_definition=None,
+    )
+
+    assert draft.definition is not None
+    assert len(client.requests) == 1
+    assert len(draft.definition.filters.dimensions) == 1
+    rule = draft.definition.filters.dimensions[0]
+    assert rule.target.tableName == "orders"
+    assert rule.target.fieldId == "orders.month"
+    assert rule.operator == "inThePast"
+    assert rule.values == [30]
+    assert rule.settings is not None
+    assert rule.settings.unitOfTime == "days"
+    assert rule.tileTargets is not None
+    assert set(rule.tileTargets) == {tile.uuid for tile in draft.definition.tiles}
+    assert all(target is not False for target in rule.tileTargets.values())
+    validate_dashboard_semantics(draft.definition, _orders_context())
+    validate_time_series_default_windows(draft.definition, _orders_context())
+
+
+@pytest.mark.asyncio
 async def test_agent_rejects_a_second_filterless_response() -> None:
     empty = _definition()
     client = _ModelClient(

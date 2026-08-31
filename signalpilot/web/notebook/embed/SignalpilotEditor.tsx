@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
 import { forcedModeAtom, kioskModeAtom, viewerOnlyAtom } from "@/core/mode";
 import { sessionIdAtom, type SessionId } from "@/core/kernel/session";
 import { adaptMountConfig } from "./adaptMountConfig";
@@ -31,6 +31,7 @@ export function SignalpilotEditor({
   className,
   mode,
   kernelSessionId,
+  readShowCode,
 }: SignalpilotEditorProps): React.ReactElement {
   const options = adaptMountConfig({ config, client, mode: mode ?? "edit" });
 
@@ -56,15 +57,23 @@ export function SignalpilotEditor({
     client.store.set(forcedModeAtom, mode);
   }
   // Read-mode embeds are pure viewers: the rendered document must never be
-  // replaced or washed out by connection-state chrome. Kiosk mode makes the
-  // read view render CODE (collapsed-but-expandable) with outputs — without
-  // it the run view is outputs-only and a document with no outputs renders
-  // blank. Set eagerly: a live kernel-ready would set it too, but the
-  // kernel-free document render must not depend on one.
-  if (mode === "read") {
+  // replaced or washed out by connection-state chrome. The kiosk flag picks
+  // the view: true renders code with outputs, false renders the traditional
+  // outputs-only app view. The first write happens during render so the
+  // first paint is correct; later toggles apply in an effect because a
+  // changed atom value must not notify subscribers mid-render. viewerOnly
+  // also stops kernel replays from overwriting the choice.
+  const readInitializedRef = useRef(false);
+  if (mode === "read" && !readInitializedRef.current) {
+    readInitializedRef.current = true;
     client.store.set(viewerOnlyAtom, true);
-    client.store.set(kioskModeAtom, true);
+    client.store.set(kioskModeAtom, readShowCode !== false);
   }
+  useEffect(() => {
+    if (mode === "read") {
+      client.store.set(kioskModeAtom, readShowCode !== false);
+    }
+  }, [mode, readShowCode, client]);
 
   return (
     <div

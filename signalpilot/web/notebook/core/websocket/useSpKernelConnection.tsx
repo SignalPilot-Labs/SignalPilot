@@ -58,7 +58,7 @@ import { isSwitchingNotebookAtom as isSwitchingNotebookAtom_ } from "../notebook
 import { store } from "../state/jotai";
 import { kernelStateAtom } from "../kernel/state";
 import { type LayoutState, useLayoutActions } from "../layout/layout";
-import { kioskModeAtom } from "../mode";
+import { kioskModeAtom, viewerOnlyAtom } from "../mode";
 import { connectionAtom } from "../network/connection";
 import type { RequestId } from "../network/DeferredRequestRegistry";
 import { useRuntimeManager } from "../runtime/config";
@@ -234,6 +234,9 @@ export function useSpKernelConnection(opts: {
   const { addBanner } = useBannersActions();
   const { addPackageAlert, addStartupLog } = useAlertActions();
   const setKioskMode = useSetAtom(kioskModeAtom);
+  // Viewer embeds (the chat notebook panel) own the kiosk flag: it backs
+  // the user's Code/App view toggle there. Set before mount, never changes.
+  const viewerOnly = useAtomValue(viewerOnlyAtom);
   const setCapabilities = useSetAtom(capabilitiesAtom);
   const runtimeManager = useRuntimeManager();
   const setCacheInfo = useSetAtom(cacheInfoAtom);
@@ -262,7 +265,10 @@ export function useSpKernelConnection(opts: {
           onError: showBoundary,
           existingCells,
         });
-        setKioskMode(msg.data.kiosk);
+        // Do not let a kernel replay overwrite the viewer's Code/App choice.
+        if (!viewerOnly) {
+          setKioskMode(msg.data.kiosk);
+        }
         // Clear notebook switching state
         store.set(isSwitchingNotebookAtom_, false);
         return;

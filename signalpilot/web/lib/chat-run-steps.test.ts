@@ -74,6 +74,35 @@ describe("foldRunSteps", () => {
     expect(foldRunSteps(allEvents, "other-run")).toEqual([]);
   });
 
+  it("keeps the redacted trace and safe diagnostics on run errors", () => {
+    const error = foldRunSteps(
+      [
+        {
+          run_id: "failed-run",
+          sequence: 1,
+          type: "error" as const,
+          payload: {
+            message: "CLIConnectionError: authentication failed",
+            full_trace: "CLIConnectionError: authentication failed\n[traceback]",
+            diagnostic_context: {
+              auth_mode: "oauth",
+              credential_present: true,
+            },
+          },
+          created_at: "2026-08-31T00:00:00Z",
+        },
+      ],
+      "failed-run",
+    )[0];
+
+    expect(error.detail).toBe("CLIConnectionError: authentication failed");
+    expect(error.fullTrace).toContain("[traceback]");
+    expect(error.diagnostics).toEqual({
+      auth_mode: "oauth",
+      credential_present: true,
+    });
+  });
+
   it("leaves an unmatched tool start running", () => {
     const partial = foldRunSteps(
       materializeFixtureEvents(5_000),
@@ -134,7 +163,6 @@ describe("plan and route step enrichment", () => {
         payload: {
           plan_id: "p1",
           route: "aggregate_required",
-          route_reason: "The projected output exceeds the direct-query row budget.",
         },
       },
     ],
@@ -147,9 +175,10 @@ describe("plan and route step enrichment", () => {
     expect(steps[0].sql).toBe("select 1");
   });
 
-  it("explains the chosen route with its reason", () => {
+  it("shows only the actionable route", () => {
     expect(steps[1].title).toContain("needs a bounded aggregate");
-    expect(steps[1].detail).toContain("row budget");
+    expect(steps[1].detail).toBeNull();
+    expect(steps[1].input).toBeNull();
   });
 });
 

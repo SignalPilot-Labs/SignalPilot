@@ -3,34 +3,34 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import re
-import socket
 import time
-import uuid
+import traceback
 from contextlib import suppress
 from typing import Any
 
 import httpx
 
 from gateway.db.engine import get_session_factory, init_db
-from gateway.db.models import GatewayChatRun
+from gateway.errors.mcp import sanitize_mcp_error
 from gateway.standalone_chat.config import (
     lease_seconds,
     standalone_chat_enabled,
     worker_concurrency,
     worker_poll_seconds,
 )
-from gateway.standalone_chat.domain import select_context_for_summary
+from gateway.standalone_chat.domain import (
+    redact_public_payload,
+    select_context_for_summary,
+)
 from gateway.standalone_chat.execution import (
     cancel_execution_session,
     cleanup_expired_approval_sandboxes,
     cleanup_expired_runtime_objects,
     cleanup_finished_execution,
     prepare_execution,
-    steer_execution,
     stream_execution,
 )
 from gateway.standalone_chat.worker_context import (
@@ -42,55 +42,106 @@ from gateway.standalone_chat.worker_context import (
 from gateway.standalone_chat.worker_context import (
     warm_context as _warm_context,
 )
+from gateway.standalone_chat.worker_events import (
+    _cancellation_monitor,
+    _lease_renewer,
+    _notebook_started_payload,
+    _persist_artifacts,
+    _steering_monitor,
+    _update_summary,
+    _worker_id,
+)
 from gateway.store import standalone_chat as chat_store
 
 logger = logging.getLogger(__name__)
 _CLARIFICATION_PREFIX = "CLARIFICATION_REQUESTED:"
-
-
-def _worker_id() -> str:
-    return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
-
-
-# The agent SDK forwards MCP tool results as str(content_blocks) — a Python
-# repr of a block list, not JSON. Extract the ids textually in that case.
-_TOOL_RESULT_ID_RE = re.compile(
-    r"[\"'](session_id|notebook_path)\\?[\"']\s*:\s*\\?[\"']([^\"'\\]+)"
+_SECRET_VALUE_RE = re.compile(
+    r"(?i)(authorization\s*[:=]\s*(?:bearer\s+)?|"
+    r"(?:api[_-]?key|token|secret|password)\s*[:=]\s*)[^\s,;]+"
+)
+_TOKEN_LITERAL_RE = re.compile(
+    r"(?i)\b(?:sk-ant-[A-Za-z0-9_-]+|xox[abprs]-[A-Za-z0-9-]+|"
+    r"gh[pousr]_[A-Za-z0-9_]+|sp_[A-Za-z0-9_-]{16,})\b"
 )
 
 
-def _notebook_started_payload(
-    *,
-    tool_result_content: str,
-    gateway_session_id: str | None,
-) -> dict[str, Any]:
-    """Build the notebook_started event the live notebook panel attaches with.
+class _AnalysisRuntimeError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        full_trace: str = "",
+        diagnostic_context: Any = None,
+    ) -> None:
+        super().__init__(message)
+        self.full_trace = full_trace
+        self.diagnostic_context = diagnostic_context
 
-    The start_analysis_notebook tool result is a JSON document carrying the
-    kernel session id and notebook path inside the sandbox; combined with the
-    gateway notebook session id the browser has everything it needs to open
-    the run's notebook through the notebook proxy.
-    """
-    payload: dict[str, Any] = {"status": "running"}
-    if gateway_session_id:
-        payload["gateway_session_id"] = gateway_session_id
-    started: dict[str, Any] = {}
-    try:
-        parsed = json.loads(tool_result_content or "{}")
-        if isinstance(parsed, dict):
-            started = parsed
-    except (json.JSONDecodeError, TypeError):
-        pass
-    if not started:
-        for key, value in _TOOL_RESULT_ID_RE.findall(
-            tool_result_content or ""
-        ):
-            started.setdefault(key, value)
-    if started.get("session_id"):
-        payload["kernel_session_id"] = str(started["session_id"])
-    if started.get("notebook_path"):
-        payload["notebook_path"] = str(started["notebook_path"])
-    return payload
+
+def _sanitize_error_text(raw: str, *, cap: int) -> str:
+    redacted = str(redact_public_payload(raw))
+    redacted = _SECRET_VALUE_RE.sub(lambda match: f"{match.group(1)}[REDACTED]", redacted)
+    redacted = _TOKEN_LITERAL_RE.sub("[REDACTED]", redacted)
+    return sanitize_mcp_error(redacted, cap=cap).strip()
+
+
+def _public_error_message(exc: Exception) -> str:
+    """Return the real root cause without exposing a traceback or credentials."""
+    raw = str(exc).strip() or type(exc).__name__
+    # Agent errors include a useful exception/stderr header followed by a full
+    # Python traceback. The traceback is operator detail, not useful chat UI.
+    raw = re.split(r"\nTraceback \(most recent call last\):", raw, maxsplit=1)[0]
+    lines = [line.rstrip() for line in raw.splitlines()]
+    while lines and (not lines[-1].strip() or lines[-1].strip().lower() == "stderr:"):
+        lines.pop()
+    diagnostic = "\n".join(lines).strip() or type(exc).__name__
+    return _sanitize_error_text(diagnostic, cap=1000) or type(exc).__name__
+
+
+def _public_full_trace(exc: Exception) -> str:
+    raw = str(getattr(exc, "full_trace", "") or "").strip()
+    if not raw:
+        raw = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    return _sanitize_error_text(raw, cap=12_000)
+
+
+def _public_diagnostic_context(exc: Exception) -> dict[str, Any]:
+    """Allowlist safe support metadata; never forward arbitrary env values."""
+    source = getattr(exc, "diagnostic_context", None)
+    if not isinstance(source, dict):
+        return {"error_type": type(exc).__name__}
+    allowed = {
+        "model",
+        "auth_mode",
+        "credential_present",
+        "resume_requested",
+        "notebook_analysis_enabled",
+        "max_turns",
+    }
+    root = _public_error_message(exc)
+    root_type = re.match(r"^([A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception)):", root)
+    result: dict[str, Any] = {
+        "error_type": root_type.group(1) if root_type else type(exc).__name__
+    }
+    for key in allowed:
+        value = source.get(key)
+        if isinstance(value, (str, bool, int, float)):
+            result[key] = _sanitize_error_text(value, cap=200) if isinstance(value, str) else value
+    environment = source.get("environment")
+    if isinstance(environment, dict):
+        result["environment"] = {
+            str(key): value
+            for key, value in environment.items()
+            if str(key)
+            in {
+                "CLAUDE_CONFIG_DIR",
+                "CLAUDE_CODE_OAUTH_TOKEN",
+                "ANTHROPIC_API_KEY",
+                "SP_GATEWAY_URL",
+            }
+            and value in {"configured", "cleared", "defaulted", "missing"}
+        }
+    return result
 
 
 async def _append(run_id: str, event_type: str, payload: dict[str, Any]) -> None:
@@ -104,150 +155,29 @@ async def _append(run_id: str, event_type: str, payload: dict[str, Any]) -> None
         )
 
 
-async def _lease_renewer(run_id: str, worker_id: str, stop: asyncio.Event) -> None:
-    interval = max(5.0, lease_seconds() / 3)
-    factory = get_session_factory()
-    while not stop.is_set():
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=interval)
-            return
-        except TimeoutError:
-            pass
-        async with factory() as db:
-            if not await chat_store.renew_lease(
-                db,
-                run_id=run_id,
-                worker_id=worker_id,
-                lease_seconds=lease_seconds(),
-            ):
-                stop.set()
-                return
+async def _announce_notebook(run_id: str, payload: dict[str, Any]) -> None:
+    """Append the notebook_started event and persist the conversation pointer.
 
-
-async def _cancellation_monitor(
-    run_id: str,
-    worker_id: str,
-    stop: asyncio.Event,
-    worker_task: asyncio.Task[None],
-) -> None:
-    factory = get_session_factory()
-    while not stop.is_set():
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=1.0)
-            return
-        except TimeoutError:
-            pass
-        async with factory() as db:
-            run = await chat_store.get_worker_run(db, run_id=run_id, worker_id=worker_id)
-            if run is None:
-                stop.set()
-                return
-            if run.cancellation_requested_at:
-                stop.set()
-                worker_task.cancel()
-                return
-
-
-async def _steering_monitor(
-    run_id: str,
-    worker_id: str,
-    execution: Any,
-    stop: asyncio.Event,
-) -> None:
-    """Deliver persisted interjections in order, retrying until accepted."""
-    factory = get_session_factory()
-    while not stop.is_set():
-        async with factory() as db:
-            pending = await chat_store.pending_steering_messages(
-                db,
-                run_id=run_id,
-                worker_id=worker_id,
-            )
-        for message in pending:
-            if stop.is_set():
-                return
-            try:
-                accepted = await steer_execution(
-                    execution,
-                    run_id=run_id,
-                    steering_id=message.id,
-                    message=message.content,
-                )
-            except (httpx.HTTPError, OSError):
-                accepted = False
-            if not accepted:
-                break
-            async with factory() as db:
-                await chat_store.mark_steering_message_picked_up(
-                    db,
-                    run_id=run_id,
-                    worker_id=worker_id,
-                    message_id=message.id,
-                )
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=0.35)
-        except TimeoutError:
-            pass
-
-
-async def _persist_artifacts(
-    *,
-    run_id: str,
-    worker_id: str,
-    artifacts: list[dict[str, Any]],
-) -> None:
-    factory = get_session_factory()
-    for artifact_payload in artifacts:
-        normalized = {
-            **artifact_payload,
-            "snapshot": artifact_payload.get("snapshot") or artifact_payload.get("payload"),
-        }
-        async with factory() as db:
-            run = await chat_store.get_worker_run(db, run_id=run_id, worker_id=worker_id)
-            if run is None or run.cancellation_requested_at:
-                return
-            artifact = await chat_store.persist_artifact(db, run=run, payload=normalized)
-        await _append(
-            run_id,
-            "artifact_created",
-            {
-                "artifact_id": artifact.id,
-                "kind": artifact.kind,
-                "filename": artifact.filename,
-            },
-        )
-
-
-async def _update_summary(run_id: str) -> None:
-    factory = get_session_factory()
-    async with factory() as db:
-        run = await db.get(GatewayChatRun, run_id)
-        if run is None:
-            return
-        context = await chat_store.worker_context(db, run=run)
-    messages = _message_context(context)
-    artifact_refs = [
-        {
-            "id": artifact.id,
-            "kind": artifact.kind,
-            "filename": artifact.filename,
-            "provenance": artifact.provenance_json,
-        }
-        for artifact in context["artifacts"]
-    ]
-    selection = select_context_for_summary(
-        messages,
-        artifact_refs=artifact_refs,
-        usable_context_chars=400_000,
-    )
-    if selection is None:
+    The pointer makes the conversation row the single source of truth for
+    where the notebook lives. Persist only a complete id set: a partial
+    payload cannot be attached to and must not clobber a good pointer.
+    """
+    await _append(run_id, "notebook_started", payload)
+    gateway_session_id = payload.get("gateway_session_id")
+    kernel_session_id = payload.get("kernel_session_id")
+    notebook_path = payload.get("notebook_path")
+    if not (gateway_session_id and kernel_session_id and notebook_path):
         return
-    async with factory() as db:
-        await chat_store.update_internal_summary(
-            db,
-            conversation_id=context["conversation"].id,
-            summary=str(selection["summary"]),
-        )
+    with suppress(Exception):
+        factory = get_session_factory()
+        async with factory() as db:
+            await chat_store.set_conversation_notebook_for_run(
+                db,
+                run_id=run_id,
+                gateway_session_id=str(gateway_session_id),
+                kernel_session_id=str(kernel_session_id),
+                notebook_path=str(notebook_path),
+            )
 
 
 async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
@@ -373,9 +303,7 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                         raise asyncio.CancelledError
                     event_type = str(event.get("type") or "")
                     content = str(event.get("content") or "")
-                    parent_tool_call_id = str(
-                        event.get("parent_tool_call_id") or ""
-                    )
+                    parent_tool_call_id = str(event.get("parent_tool_call_id") or "")
                     if event_type == "text_delta":
                         if parent_tool_call_id:
                             # Subagent narration: recorded for its spawn card,
@@ -409,11 +337,7 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                                 "thinking_delta",
                                 {
                                     "delta": content,
-                                    **(
-                                        {"parent_tool_call_id": parent_tool_call_id}
-                                        if parent_tool_call_id
-                                        else {}
-                                    ),
+                                    **({"parent_tool_call_id": parent_tool_call_id} if parent_tool_call_id else {}),
                                 },
                             )
                     elif event_type == "text":
@@ -443,11 +367,7 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                                 # (parallel subagents complete out of order);
                                 # parent groups the step under its spawn.
                                 "tool_call_id": tool_call_id or None,
-                                **(
-                                    {"parent_tool_call_id": parent_tool_call_id}
-                                    if parent_tool_call_id
-                                    else {}
-                                ),
+                                **({"parent_tool_call_id": parent_tool_call_id} if parent_tool_call_id else {}),
                             },
                         )
                         # Side events (sql/source) attach to the latest OPEN
@@ -497,16 +417,12 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                         completed_payload: dict[str, Any] = {
                             "tool_call_id": event.get("tool_call_id"),
                             "summary": (
-                                "The governed tool returned an error."
-                                if is_error
-                                else "The governed tool completed."
+                                "The governed tool returned an error." if is_error else "The governed tool completed."
                             ),
                             "error": is_error,
                         }
                         if parent_tool_call_id:
-                            completed_payload["parent_tool_call_id"] = (
-                                parent_tool_call_id
-                            )
+                            completed_payload["parent_tool_call_id"] = parent_tool_call_id
                         if completed_tool == "Agent" and not is_error and content:
                             # The Agent tool result IS the subagent's final
                             # report — surfaced in its card, same disclosure
@@ -518,9 +434,8 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                             completed_payload,
                         )
                         if not is_error and completed_tool.endswith("start_analysis_notebook"):
-                            await _append(
+                            await _announce_notebook(
                                 run_id,
-                                "notebook_started",
                                 _notebook_started_payload(
                                     tool_result_content=content,
                                     gateway_session_id=execution.session_id,
@@ -543,9 +458,13 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                             recovery_payload["kernel_session_id"] = str(event["session_id"])
                         if event.get("notebook_path"):
                             recovery_payload["notebook_path"] = str(event["notebook_path"])
-                        await _append(run_id, "notebook_started", recovery_payload)
+                        await _announce_notebook(run_id, recovery_payload)
                     elif event_type == "error":
-                        raise RuntimeError(content or "Notebook analysis failed")
+                        raise _AnalysisRuntimeError(
+                            content or "Notebook analysis failed",
+                            full_trace=str(event.get("full_trace") or content or ""),
+                            diagnostic_context=event.get("diagnostic_context"),
+                        )
                     elif event_type == "final":
                         final_text = content or final_text or streamed_text
                         # Operator accounting: cost + token usage reported by
@@ -559,16 +478,8 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                                         db,
                                         run_id=run_id,
                                         worker_id=worker_id,
-                                        cost_usd=(
-                                            raw_cost
-                                            if isinstance(raw_cost, (int, float))
-                                            else None
-                                        ),
-                                        usage=(
-                                            raw_usage
-                                            if isinstance(raw_usage, dict)
-                                            else None
-                                        ),
+                                        cost_usd=(raw_cost if isinstance(raw_cost, (int, float)) else None),
+                                        usage=(raw_usage if isinstance(raw_usage, dict) else None),
                                     )
                         raw_report_proposal = event.get("report_proposal")
                         report_proposal = raw_report_proposal if isinstance(raw_report_proposal, dict) else None
@@ -654,7 +565,10 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
             type(exc).__name__,
             exc_info=True,
         )
-        public_message = "I could not complete this analysis. You can inspect the work and retry."
+        public_message = _public_error_message(exc)
+        full_trace = _public_full_trace(exc)
+        diagnostic_context = _public_diagnostic_context(exc)
+        diagnostic_context["run_id"] = run_id
         with suppress(Exception):
             await _append(
                 run_id,
@@ -662,7 +576,8 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                 {
                     "code": "analysis_failed",
                     "message": public_message,
-                    "technical_detail": type(exc).__name__,
+                    "full_trace": full_trace,
+                    "diagnostic_context": diagnostic_context,
                 },
             )
         async with get_session_factory()() as db:

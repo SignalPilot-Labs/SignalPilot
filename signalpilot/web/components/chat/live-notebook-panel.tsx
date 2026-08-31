@@ -1,16 +1,16 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { ExternalLink, Loader2, NotebookPen, X } from "lucide-react";
 import {
   buildChatNotebookPopoutUrl,
-  type LiveNotebookLink,
+  chatNotebookMountKey,
 } from "~/lib/chat-live-notebook";
-import { getStandaloneNotebookArchiveHtml } from "~/lib/api";
+import type { ConversationNotebook } from "~/lib/api";
 
-// The notebook runtime graph is heavy — load it only when a live link is
-// actually shown, so /chats stays light until the agent starts a notebook.
+// The notebook runtime graph is heavy. Load it only when the panel shows a
+// notebook, so /chats stays light until then.
 const ChatNotebookView = dynamic(
   () => import("~/components/chat/chat-notebook-view"),
   {
@@ -24,63 +24,29 @@ const ChatNotebookView = dynamic(
 );
 
 /**
- * Right-side panel on the standalone chat page that shows the notebook the
- * chat agent is working on.
+ * Right-side panel on the chat page that shows the conversation's analysis
+ * notebook.
  *
- * Document-first and kernel-free: the notebook inner view (read mode)
- * mounts INLINE from the best stored document; when the agent's kernel is
- * alive a kiosk websocket streams live updates on top. The sandboxed srcDoc
- * iframe of the static HTML archive remains only for legacy conversations
- * whose events carry no attach ids.
+ * The panel renders the gateway's notebook resource as-is. "Live" means the
+ * gateway verified the kernel sandbox is running; anything else renders the
+ * saved document with a "Finished" badge.
  */
 export function LiveNotebookPanel({
-  link,
-  archiveRunId,
+  conversationId,
+  notebook,
   onClose,
   liveViewOverride,
-  archiveHtmlOverride,
 }: {
-  link: LiveNotebookLink | null;
-  /** Legacy fallback: run id whose archived HTML to show when there is no link. */
-  archiveRunId: string | null;
+  conversationId: string;
+  notebook: ConversationNotebook | null;
   onClose: () => void;
-  /** Test-only: rendered instead of the live notebook view (fixture harness has no gateway). */
+  /** Test-only: rendered instead of the notebook view (the fixture harness has no gateway). */
   liveViewOverride?: ReactNode;
-  /** Test-only: archived notebook HTML, skipping the gateway fetch. */
-  archiveHtmlOverride?: string;
 }) {
-  // Document-first: whenever a link exists the REAL notebook view renders —
-  // kernel-free from the stored document, with the kiosk websocket as a
-  // background enhancement. The static HTML archive iframe remains only for
-  // legacy conversations whose events carry no attach ids.
-  const showLive = Boolean(link);
-  const showArchive = !showLive && Boolean(archiveRunId);
-  const [archiveHtml, setArchiveHtml] = useState<string | null>(null);
-  const [archiveError, setArchiveError] = useState(false);
-
-  useEffect(() => {
-    if (!showArchive || !archiveRunId || archiveHtmlOverride !== undefined) {
-      setArchiveHtml(null);
-      setArchiveError(false);
-      return;
-    }
-    let cancelled = false;
-    setArchiveError(false);
-    getStandaloneNotebookArchiveHtml(archiveRunId)
-      .then((html) => {
-        if (!cancelled) setArchiveHtml(html);
-      })
-      .catch(() => {
-        if (!cancelled) setArchiveError(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [showArchive, archiveRunId, archiveHtmlOverride]);
-
-  const resolvedArchiveHtml = showArchive
-    ? (archiveHtmlOverride ?? archiveHtml)
-    : null;
+  const live = notebook?.status === "live";
+  const showNotebook = Boolean(
+    notebook && (live || notebook.document !== null),
+  );
 
   return (
     <aside
@@ -93,7 +59,7 @@ export function LiveNotebookPanel({
           <span className="truncate text-xs font-medium text-[var(--color-text)]">
             Analysis notebook
           </span>
-          {showLive && link?.live ? (
+          {live ? (
             <span
               data-testid="live-notebook-status-live"
               className="flex flex-none items-center gap-1.5 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-600 dark:text-emerald-400"
@@ -101,26 +67,19 @@ export function LiveNotebookPanel({
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
               Live
             </span>
-          ) : showLive ? (
+          ) : (
             <span
               data-testid="live-notebook-status-finished"
               className="flex-none rounded-full bg-[var(--color-bg-card)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-[var(--color-text-dim)]"
             >
               Finished
             </span>
-          ) : (
-            <span
-              data-testid="live-notebook-status-ended"
-              className="flex-none rounded-full bg-[var(--color-bg-card)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-[var(--color-text-dim)]"
-            >
-              {showArchive ? "Archived" : "Ended"}
-            </span>
           )}
         </div>
         <div className="flex flex-none items-center gap-1">
-          {link && showLive && (
+          {showNotebook && (
             <a
-              href={buildChatNotebookPopoutUrl(link)}
+              href={buildChatNotebookPopoutUrl(conversationId)}
               target="_blank"
               rel="noopener noreferrer"
               title="Open notebook in a new tab"
@@ -144,31 +103,15 @@ export function LiveNotebookPanel({
         </div>
       </div>
       <div className="relative min-h-0 flex-1" data-testid="live-notebook-body">
-        {link && showLive ? (
-          <div
-            className="h-full w-full"
-            data-testid="live-notebook-inline"
-          >
+        {showNotebook && notebook ? (
+          <div className="h-full w-full" data-testid="live-notebook-inline">
             {liveViewOverride ?? (
               <ChatNotebookView
-                gatewaySessionId={link.gatewaySessionId}
-                kernelSessionId={link.kernelSessionId}
-                notebookPath={link.notebookPath}
-                runId={link.runId}
+                key={chatNotebookMountKey(notebook)}
+                notebook={notebook}
               />
             )}
           </div>
-        ) : resolvedArchiveHtml != null ? (
-          // Static archived HTML (scripts included for chart interactivity).
-          // Sandboxed srcDoc iframe — the established pattern for rendering
-          // generated HTML artifacts in the chat transcript.
-          <iframe
-            data-testid="archived-notebook-frame"
-            title="Archived analysis notebook"
-            sandbox="allow-scripts"
-            srcDoc={resolvedArchiveHtml}
-            className="h-full w-full border-0 bg-white"
-          />
         ) : (
           <div
             data-testid="live-notebook-empty"
@@ -176,13 +119,7 @@ export function LiveNotebookPanel({
           >
             <NotebookPen className="h-6 w-6 text-[var(--color-text-dim)]" />
             <p className="text-sm text-[var(--color-text-muted)]">
-              {archiveError
-                ? "The archived notebook could not be loaded."
-                : showArchive
-                  ? "Loading the archived notebook…"
-                  : link
-                    ? "This notebook run has ended."
-                    : "The agent hasn't started a notebook yet."}
+              The agent hasn&apos;t started a notebook yet.
             </p>
           </div>
         )}

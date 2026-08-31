@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import inspect
 import logging as _logging
 import time
 import uuid
@@ -238,9 +239,14 @@ def _audited_tool(fn):
         # Generate a unique ID for this tool call so child SQL can link back
         audit_id = str(uuid.uuid4())
         token = mcp_audit_id_var.set(audit_id)
-        # Extract connection_name and sql from kwargs if present
-        conn = kwargs.get("connection_name") or (args[0] if args and isinstance(args[0], str) else None)
-        sql_arg = kwargs.get("sql")
+        # Bind against the actual signature: tool contracts do not all put the
+        # connection first, and chat-bound query tools no longer require it.
+        try:
+            bound_args = dict(inspect.signature(fn).bind_partial(*args, **kwargs).arguments)
+        except TypeError:
+            bound_args = dict(kwargs)
+        conn = bound_args.get("connection_name")
+        sql_arg = bound_args.get("sql")
         try:
             from gateway.mcp.context import mcp_eval_run_var
 
@@ -267,7 +273,7 @@ def _audited_tool(fn):
             asyncio.create_task(
                 _audit_tool_call(
                     tool_name=tool_name,
-                    args=kwargs,
+                    args=bound_args,
                     result=result_str[:200],
                     duration_ms=duration_ms,
                     connection_name=conn,
@@ -284,7 +290,7 @@ def _audited_tool(fn):
             asyncio.create_task(
                 _audit_tool_call(
                     tool_name=tool_name,
-                    args=kwargs,
+                    args=bound_args,
                     result=None,
                     duration_ms=duration_ms,
                     error=str(exc)[:200],

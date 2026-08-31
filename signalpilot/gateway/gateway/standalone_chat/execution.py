@@ -138,9 +138,7 @@ async def prepare_execution(
     _local_oauth = os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or os.getenv("OAUTH_TOKEN")
     if force_oauth:
         if not _local_oauth:
-            raise RuntimeError(
-                "SP_CHAT_FORCE_OAUTH_TOKEN is enabled but no Claude OAuth token is configured"
-            )
+            raise RuntimeError("SP_CHAT_FORCE_OAUTH_TOKEN is enabled but no Claude OAuth token is configured")
         runtime_auth = {"type": "oauth", "token": _local_oauth}
     elif os.getenv("SP_RUNTIME_PREFER_OAUTH_TOKEN") and _local_oauth and not is_improvement_run:
         # Local/staging testing override: bill agent runs to the OAuth token in
@@ -275,7 +273,8 @@ async def stream_execution(execution: PreparedExecution) -> AsyncGenerator[dict[
                 _bearer_fingerprint(execution.headers),
                 error_body,
             )
-        response.raise_for_status()
+            reason = error_body.strip() or response.reason_phrase
+            raise RuntimeError(f"Notebook runtime returned HTTP {response.status_code}: {reason}")
         async for line in response.aiter_lines():
             if not line.strip():
                 continue
@@ -344,9 +343,7 @@ async def cleanup_finished_execution(db: AsyncSession, *, run_id: str) -> None:
     ):
         return
     conversation = await db.get(GatewayChatConversation, run.conversation_id)
-    is_improvement = bool(
-        conversation and getattr(conversation, "origin", "user") == "improvement"
-    )
+    is_improvement = bool(conversation and getattr(conversation, "origin", "user") == "improvement")
     if not is_improvement:
         # Keep the interactive chat session warm for the next message. The idle
         # lifecycle loop (main._notebook_lifecycle_loop) snapshots it after

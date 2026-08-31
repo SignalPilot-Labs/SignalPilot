@@ -175,7 +175,9 @@ class GovernedQueryExecutor:
         normalized_sql = normalize_sql(governance_sql, dialect)
         sql_hash = hashlib.sha256(normalized_sql.encode()).hexdigest()
         persisted_plan = None
-        if context.run_id and enterprise_chat_feature_flags().size_router:
+        if context.run_id and (
+            context.plan_id or enterprise_chat_feature_flags().size_router
+        ):
             if not context.plan_id:
                 raise GovernedQueryError("plan_required", "Chat query execution requires a valid plan_id")
             from gateway.governance.query_planner import QueryPlanError, require_execution_plan

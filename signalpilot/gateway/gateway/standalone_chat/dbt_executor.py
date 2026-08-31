@@ -463,10 +463,17 @@ async def sync_from_agent_sandbox(agent_sandbox_id: str, executor_sandbox_id: st
         size = -1
     if size > _MAX_SYNC_TAR_BYTES:
         raise DbtExecutorError(f"workspace too large to sync ({size} bytes)")
-    data = await runtime.read_file(agent_sandbox_id, "/tmp/sp-sync.tgz")
+    data = await runtime.read_file(
+        agent_sandbox_id,
+        "/tmp/sp-sync.tgz",  # nosec B108 - fixed path is inside an isolated sandbox
+    )
     if data is None:
         raise DbtExecutorError("agent workspace tarball disappeared")
-    await runtime.write_file(executor_sandbox_id, "/tmp/sp-sync.tgz", data)
+    await runtime.write_file(
+        executor_sandbox_id,
+        "/tmp/sp-sync.tgz",  # nosec B108 - fixed path is inside an isolated sandbox
+        data,
+    )
     unpack = await runtime.exec(
         executor_sandbox_id,
         "tar xzf /tmp/sp-sync.tgz -C /workspace && rm -f /tmp/sp-sync.tgz",

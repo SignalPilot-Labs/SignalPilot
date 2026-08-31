@@ -94,8 +94,6 @@ export function fieldProps(
   };
 }
 
-/* ── Connection form state ── */
-
 
 
 

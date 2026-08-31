@@ -57,7 +57,7 @@ export interface ConnectionForm {
   ssh_password: string;
   ssh_private_key: string;
   ssh_key_passphrase: string;
-  // HTTP proxy for SSH (HEX pattern — for VPCs that block direct SSH)
+  // Use these fields when the network requires an HTTP proxy for SSH.
   ssh_proxy_enabled: boolean;
   ssh_proxy_host: string;
   ssh_proxy_port: string;
@@ -101,10 +101,8 @@ export interface ConnectionForm {
   // Scheduled schema refresh
   schema_refresh_enabled: boolean;
   schema_refresh_interval: string; // seconds as string for form input
-  // Connection scoping (HEX pattern)
   scope: "workspace" | "project";
   read_only: boolean;
-  // Schema filtering (HEX pattern)
   schema_filter_include: string; // comma-separated schema names
   schema_filter_exclude: string; // comma-separated schema names
   // Timeouts
@@ -115,5 +113,4 @@ export interface ConnectionForm {
   pool_min_size: string;
   pool_max_size: string;
 }
-
 

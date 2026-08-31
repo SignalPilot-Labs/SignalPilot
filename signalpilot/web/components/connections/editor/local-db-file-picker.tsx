@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState, type Ref } from "react";
-import { ArrowLeft, FileText, Folder, Loader2 } from "lucide-react";
+import { ArrowLeft, FileText, Folder, HardDrive, Loader2 } from "lucide-react";
 
 import { browseFiles } from "~/lib/api";
 
@@ -157,5 +157,3 @@ export function LocalDbFilePicker({ value, onChange, pattern = "*.duckdb", place
     </div>
   );
 }
-
-/* ── DB type configuration ── */

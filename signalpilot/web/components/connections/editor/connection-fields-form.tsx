@@ -1,13 +1,17 @@
 "use client";
 
 import { useState, type MutableRefObject, type Ref } from "react";
-import { AlertTriangle, ChevronDown, ChevronRight, Lock, Server } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, Lock, Server, Shield } from "lucide-react";
 
 import { LocalDbFilePicker } from "./local-db-file-picker";
 import { FormInput, FormTextArea, fieldProps } from "./form-controls";
+import { UrlConnectionFields } from "./url-connection-fields";
+import { SnowflakeFields } from "./snowflake-fields";
+import { BigQueryFields } from "./bigquery-fields";
 import { DB_CONFIGS } from "~/lib/connections/connector-catalog";
-import { detectDbTypeFromUrl, parseConnectionUrl } from "~/lib/connections/connection-url";
 import type { ConnectionForm as FormState } from "~/lib/connections/types";
+
+const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 
 export function ConnectionFieldsForm({
   form, setForm, formErrors, fieldRefs, clearServerError,
@@ -19,227 +23,34 @@ export function ConnectionFieldsForm({
   clearServerError: (key: string) => void;
 }) {
   const config = DB_CONFIGS[form.db_type];
-  const [showSnowflakeAdvanced, setShowSnowflakeAdvanced] = useState(false);
   const [showXataAdvanced, setShowXataAdvanced] = useState(false);
 
-  /** Wrap onChange to also clear the server error for this field key. */
   function field(key: keyof FormState, update: (v: string) => void) {
     return (v: string) => { update(v); clearServerError(key as string); };
   }
 
-  // URL mode
   if (form.connectionMode === "url") {
-    const urlHints: Record<string, string> = {
-      postgres: "postgresql://user:pass@host:5432/dbname",
-      mysql: "mysql://user:pass@host:3306/dbname",
-      redshift: "redshift://user:pass@cluster.region.redshift.amazonaws.com:5439/dev",
-      clickhouse: "clickhouse://user:pass@host:9000/default  (or clickhouse+http:// for HTTP)",
-      snowflake: "snowflake://user:pass@account/db/schema?warehouse=WH&role=ROLE",
-      databricks: "databricks://token@host.databricks.com/sql/1.0/warehouses/abc?catalog=main",
-      mssql: "mssql://sa:password@host:1433/mydb",
-      trino: "trino://user@host:8080/catalog/schema",
-    };
-    const parsed = form.connection_string ? parseConnectionUrl(form.connection_string, form.db_type) : null;
-    const hasValidUrl = parsed && Object.values(parsed).some(v => v);
     return (
-      <>
-        <FormInput
-          label="connection string"
-          value={form.connection_string}
-          onChange={(v) => {
-            clearServerError("connection_string");
-            const detected = detectDbTypeFromUrl(v);
-            if (detected && detected !== form.db_type) {
-              // Auto-switch DB type when URL scheme is recognized
-              setForm({ ...form, connection_string: v, db_type: detected, port: String(DB_CONFIGS[detected].defaultPort) });
-            } else {
-              setForm({ ...form, connection_string: v });
-            }
-          }}
-          type="password"
-          placeholder={urlHints[form.db_type] || "paste any connection string — db type auto-detected"}
-          hint={form.db_type === "clickhouse" ? "native: clickhouse://... | HTTP: clickhouse+http://..." : "paste a URL — database type is auto-detected from the scheme"}
-          className="col-span-2"
-          {...fieldProps("connection_string", formErrors, fieldRefs)}
-        />
-        {hasValidUrl && (
-          <div className="col-span-2 -mt-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px]">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] text-[var(--color-text-dim)]">parsed components:</span>
-              <button
-                type="button"
-                onClick={() => {
-                  // Switch to fields mode with parsed values pre-filled
-                  setForm({
-                    ...form,
-                    connectionMode: "fields",
-                    connection_string: "",
-                    ...(parsed as Partial<FormState>),
-                  });
-                }}
-                className="text-[11px] text-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors"
-              >
-                switch to fields &rarr;
-              </button>
-            </div>
-            <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-1">
-              {parsed.host && <span className="text-[11px]"><span className="text-[var(--color-text-dim)]">host:</span> <span className="text-[var(--color-text)]">{parsed.host}</span></span>}
-              {parsed.port && <span className="text-[11px]"><span className="text-[var(--color-text-dim)]">port:</span> <span className="text-[var(--color-text)]">{parsed.port}</span></span>}
-              {parsed.database && <span className="text-[11px]"><span className="text-[var(--color-text-dim)]">db:</span> <span className="text-[var(--color-text)]">{parsed.database}</span></span>}
-              {parsed.username && <span className="text-[11px]"><span className="text-[var(--color-text-dim)]">user:</span> <span className="text-[var(--color-text)]">{parsed.username}</span></span>}
-              {parsed.account && <span className="text-[11px]"><span className="text-[var(--color-text-dim)]">account:</span> <span className="text-[var(--color-text)]">{parsed.account}</span></span>}
-              {parsed.warehouse && <span className="text-[11px]"><span className="text-[var(--color-text-dim)]">warehouse:</span> <span className="text-[var(--color-text)]">{parsed.warehouse}</span></span>}
-              {parsed.catalog && <span className="text-[11px]"><span className="text-[var(--color-text-dim)]">catalog:</span> <span className="text-[var(--color-text)]">{parsed.catalog}</span></span>}
-              {parsed.password && <span className="text-[11px] text-[var(--color-success)]">password: ****</span>}
-            </div>
-          </div>
-        )}
-      </>
+      <UrlConnectionFields
+        form={form}
+        setForm={setForm}
+        formErrors={formErrors}
+        fieldRefs={fieldRefs}
+        clearServerError={clearServerError}
+      />
     );
   }
-
-  // Snowflake fields
   if (form.db_type === "snowflake") {
     return (
-      <>
-        <FormInput label="account identifier" value={form.account} onChange={field("account", (v) => setForm({ ...form, account: v }))} placeholder="org-account" hint="e.g., xy12345.us-east-1" required {...fieldProps("account", formErrors, fieldRefs)} />
-        <FormInput label="username" value={form.username} onChange={field("username", (v) => setForm({ ...form, username: v }))} placeholder="ANALYTICS_USER" required {...fieldProps("username", formErrors, fieldRefs)} />
-        <div className="col-span-2 mb-1">
-          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">authentication method</label>
-          <div className="flex flex-wrap gap-2">
-            {([
-              ["password", "password"],
-              ["key_pair", "key pair (RSA)"],
-              ["oauth", "OAuth"],
-              ["pat", "programmatic access token"],
-              ["okta", "Okta SSO"],
-              ["mfa", "username+password+MFA"],
-            ] as const).map(([method, label]) => (
-              <button
-                key={method}
-                type="button"
-                onClick={() => setForm({ ...form, snowflake_auth_method: method })}
-                className={`px-2.5 py-1 text-[12px] border rounded-[6px] transition-colors duration-150 ${
-                  form.snowflake_auth_method === method
-                    ? "border-[var(--color-text)] text-[var(--color-text)]"
-                    : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-        {form.snowflake_auth_method === "password" ? (
-          <>
-            <FormInput label="password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} type="password" required className="col-span-2" />
-            <div className="col-span-2 px-3 py-2 border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/5 rounded-[10px] text-[11px] text-[var(--color-warning)]">
-              <AlertTriangle className="w-3 h-3 inline mr-1" strokeWidth={1.5} />
-              snowflake is enforcing mandatory MFA for all accounts. password-only connections will stop working. switch to <button type="button" onClick={() => setForm({ ...form, snowflake_auth_method: "key_pair" })} className="underline hover:text-[var(--color-text)]">key pair</button> or <button type="button" onClick={() => setForm({ ...form, snowflake_auth_method: "oauth" })} className="underline hover:text-[var(--color-text)]">OAuth</button> authentication.
-            </div>
-          </>
-        ) : form.snowflake_auth_method === "key_pair" ? (
-          <>
-            <FormTextArea
-              label="private key (PEM)"
-              value={form.sf_private_key}
-              onChange={(v) => setForm({ ...form, sf_private_key: v })}
-              placeholder="-----BEGIN ENCRYPTED PRIVATE KEY-----"
-              hint="RSA private key for Snowflake key-pair authentication"
-              rows={4}
-              className="col-span-2"
-              {...(fieldProps("sf_private_key", formErrors, fieldRefs) as { id: string; inputRef: Ref<HTMLTextAreaElement>; error: string | undefined })}
-            />
-            <FormInput label="key passphrase" value={form.sf_private_key_passphrase} onChange={(v) => setForm({ ...form, sf_private_key_passphrase: v })} type="password" hint="leave empty if key is unencrypted" className="col-span-2" />
-          </>
-        ) : form.snowflake_auth_method === "oauth" ? (
-          <>
-            <FormInput label="OAuth access token" value={form.sf_oauth_token} onChange={(v) => setForm({ ...form, sf_oauth_token: v })} type="password" required className="col-span-2" hint="from your identity provider (Okta, Azure AD, etc.)" {...fieldProps("sf_oauth_token", formErrors, fieldRefs)} />
-            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
-              <div><span className="text-[var(--color-text-muted)]">setup:</span> Create a Snowflake security integration (CREATE SECURITY INTEGRATION ... TYPE = EXTERNAL_OAUTH) and configure your IdP to issue tokens.</div>
-              <div><span className="text-[var(--color-text-muted)]">local dev:</span> Use Snowflake&apos;s built-in SNOWFLAKE$LOCAL_APPLICATION integration for quick setup without admin involvement.</div>
-            </div>
-          </>
-        ) : form.snowflake_auth_method === "pat" ? (
-          <>
-            <FormInput label="programmatic access token" value={form.sf_pat} onChange={field("sf_pat", (v) => setForm({ ...form, sf_pat: v }))} type="password" required className="col-span-2" hint="Snowflake PAT (Admin → Users → Programmatic Access Tokens)" {...fieldProps("sf_pat", formErrors, fieldRefs)} />
-          </>
-        ) : form.snowflake_auth_method === "mfa" ? (
-          <>
-            <FormInput label="password" value={form.password} onChange={field("password", (v) => setForm({ ...form, password: v }))} type="password" required className="col-span-2" {...fieldProps("password", formErrors, fieldRefs)} />
-            <FormInput label="MFA passcode" value={form.sf_passcode} onChange={(v) => setForm({ ...form, sf_passcode: v })} placeholder="123456" className="col-span-2" hint="optional — TOTP passcode from your authenticator app. leave empty to receive a Duo push." />
-          </>
-        ) : (
-          <>
-            <FormInput label="Okta URL" value={form.sf_okta_url} onChange={field("sf_okta_url", (v) => setForm({ ...form, sf_okta_url: v }))} placeholder="https://your-org.okta.com" required className="col-span-2" hint="your Okta organization URL — sent as the Snowflake authenticator" {...fieldProps("sf_okta_url", formErrors, fieldRefs)} />
-            <FormInput label="password" value={form.password} onChange={field("password", (v) => setForm({ ...form, password: v }))} type="password" required className="col-span-2" {...fieldProps("password", formErrors, fieldRefs)} />
-            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
-              <div><span className="text-[var(--color-text-muted)]">native SSO:</span> Snowflake authenticates directly against Okta using your Okta username and password. Requires Snowflake to be federated with this Okta org.</div>
-            </div>
-          </>
-        )}
-        <FormInput label="warehouse" value={form.warehouse} onChange={(v) => setForm({ ...form, warehouse: v })} placeholder="COMPUTE_WH" hint="optional — default warehouse" />
-        <FormInput label="database" value={form.database} onChange={(v) => setForm({ ...form, database: v })} placeholder="PROD_DB" hint="optional — default database" />
-        <FormInput label="schema" value={form.schema_name} onChange={(v) => setForm({ ...form, schema_name: v })} placeholder="PUBLIC" hint="optional — default schema" />
-        <FormInput label="role" value={form.role} onChange={(v) => setForm({ ...form, role: v })} placeholder="ANALYST_ROLE" hint="optional — Snowflake role" />
-        <div className="col-span-2">
-          <button
-            type="button"
-            onClick={() => setShowSnowflakeAdvanced(!showSnowflakeAdvanced)}
-            className="flex items-center gap-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors mb-2"
-          >
-            {showSnowflakeAdvanced ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-            advanced — host override
-            {(form.snowflake_host.trim() !== "" || form.snowflake_protocol !== "https") && (
-              <span className="text-[var(--color-success)] text-[11px] ml-1">
-                {[form.snowflake_host.trim() !== "" && "host", form.snowflake_protocol !== "https" && "http"].filter(Boolean).join(" + ")}
-              </span>
-            )}
-          </button>
-          {showSnowflakeAdvanced && (
-            <div className="animate-fade-in grid grid-cols-2 gap-3">
-              <FormInput
-                label="host override"
-                value={form.snowflake_host}
-                onChange={field("snowflake_host", (v) => setForm({ ...form, snowflake_host: v }))}
-                placeholder="org-account.privatelink.snowflakecomputing.com"
-                hint="explicit host — for PrivateLink, China (.cn), SnowGov, or VPS"
-                className="col-span-2"
-                {...fieldProps("snowflake_host", formErrors, fieldRefs)}
-              />
-              <div className="col-span-2">
-                <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">protocol</label>
-                <div className="flex gap-2">
-                  {(["https", "http"] as const).map((proto) => (
-                    <button
-                      key={proto}
-                      type="button"
-                      onClick={() => setForm({ ...form, snowflake_protocol: proto })}
-                      className={`px-2.5 py-1 text-[12px] border rounded-[6px] transition-colors duration-150 ${
-                        form.snowflake_protocol === proto
-                          ? "border-[var(--color-text)] text-[var(--color-text)]"
-                          : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
-                      }`}
-                    >
-                      {proto}
-                    </button>
-                  ))}
-                </div>
-                <p className="text-[11px] text-[var(--color-text-dim)] mt-1 opacity-60">defaults to https — leave host override blank unless you need a non-standard endpoint</p>
-              </div>
-            </div>
-          )}
-        </div>
-        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
-          <div><span className="text-[var(--color-text-muted)]">network policy:</span> Add this server&apos;s IP to ALLOWED_IP_LIST. Snowflake Admin → Security → Network Policies.</div>
-          <div><span className="text-[var(--color-text-muted)]">private link:</span> For AWS PrivateLink or Azure Private Link, use the private account URL (e.g., org-account.privatelink.snowflakecomputing.com).</div>
-          <div><span className="text-[var(--color-text-muted)]">vpn:</span> If your Snowflake is behind a VPN, ensure SignalPilot has network access to the Snowflake endpoint.</div>
-        </div>
-      </>
+      <SnowflakeFields
+        form={form}
+        setForm={setForm}
+        formErrors={formErrors}
+        fieldRefs={fieldRefs}
+        clearServerError={clearServerError}
+      />
     );
   }
-
-  // Xata fields — a connection is org + project + branch; the agent never sees a raw DB URL.
   if (form.db_type === "xata") {
     const xataAdvancedSet = form.xata_api_url.trim() !== "" && form.xata_api_url.trim() !== "https://api.xata.tech";
     return (
@@ -274,98 +85,17 @@ export function ConnectionFieldsForm({
     );
   }
 
-  // BigQuery fields
   if (form.db_type === "bigquery") {
-    const bqAuthMethods = ["service_account", "oauth", "adc"] as const;
-    const bqAuthLabels: Record<string, string> = { service_account: "service account", oauth: "OAuth token", adc: "application default" };
     return (
-      <>
-        <FormInput label="gcp project id" value={form.project} onChange={field("project", (v) => setForm({ ...form, project: v }))} placeholder="my-project-123" required {...fieldProps("project", formErrors, fieldRefs)} />
-        <FormInput label="default dataset" value={form.dataset} onChange={(v) => setForm({ ...form, dataset: v })} placeholder="analytics" hint="optional — default dataset for queries" />
-
-        {/* Auth method selector */}
-        <div className="col-span-2 mb-1">
-          <label className="block text-[12px] text-[var(--color-text-dim)] mb-1.5">authentication method</label>
-          <div className="flex gap-2">
-            {bqAuthMethods.map((method) => (
-              <button
-                key={method}
-                type="button"
-                onClick={() => setForm({ ...form, bq_auth_method: method })}
-                className={`px-2.5 py-1 text-[12px] border rounded-[6px] transition-colors duration-150 ${
-                  form.bq_auth_method === method
-                    ? "border-[var(--color-text)] text-[var(--color-text)]"
-                    : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
-                }`}
-              >
-                {bqAuthLabels[method]}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Auth-specific fields */}
-        {form.bq_auth_method === "service_account" && (
-          <FormTextArea
-            label="service account json"
-            value={form.credentials_json}
-            onChange={field("credentials_json", (v) => setForm({ ...form, credentials_json: v }))}
-            placeholder='{"type": "service_account", "project_id": "...", ...}'
-            hint="paste the full service account JSON key file contents"
-            rows={6}
-            className="col-span-2"
-            {...(fieldProps("credentials_json", formErrors, fieldRefs) as { id: string; inputRef: Ref<HTMLTextAreaElement>; error: string | undefined })}
-          />
-        )}
-        {form.bq_auth_method === "oauth" && (
-          <>
-            <FormInput label="OAuth access token" value={form.bq_oauth_token} onChange={(v) => setForm({ ...form, bq_oauth_token: v })} type="password" required className="col-span-2" hint="from Google Cloud OAuth flow or gcloud auth print-access-token" {...fieldProps("bq_oauth_token", formErrors, fieldRefs)} />
-            <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
-              <div><span className="text-[var(--color-text-muted)]">setup:</span> Create an OAuth client in GCP Console → APIs & Services → Credentials → OAuth 2.0 Client ID.</div>
-              <div><span className="text-[var(--color-text-muted)]">scopes:</span> Token must include https://www.googleapis.com/auth/bigquery scope.</div>
-            </div>
-          </>
-        )}
-        {form.bq_auth_method === "adc" && (
-          <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
-            <div><span className="text-[var(--color-text-muted)]">setup:</span> Run <code className="bg-[var(--color-bg-hover)] px-1">gcloud auth application-default login</code> on the server, or set GOOGLE_APPLICATION_CREDENTIALS env var.</div>
-            <div><span className="text-[var(--color-text-muted)]">gke:</span> On GKE, workload identity is used automatically. Ensure the KSA is bound to a GCP SA with BigQuery roles.</div>
-          </div>
-        )}
-
-        {/* Impersonation (cross-project access) */}
-        <FormInput
-          label="impersonate service account"
-          value={form.bq_impersonate_sa}
-          onChange={(v) => setForm({ ...form, bq_impersonate_sa: v })}
-          placeholder="analytics-reader@target-project.iam.gserviceaccount.com"
-          hint="optional — act as another service account for cross-project access"
-          className="col-span-2"
-        />
-
-        <FormInput
-          label="location"
-          value={form.bq_location}
-          onChange={(v) => setForm({ ...form, bq_location: v })}
-          placeholder="US"
-          hint="optional — dataset location (US, EU, us-east1, europe-west1, etc.)"
-        />
-        <FormInput
-          label="max bytes billed"
-          value={form.bq_max_bytes_billed}
-          onChange={(v) => setForm({ ...form, bq_max_bytes_billed: v })}
-          placeholder="10737418240"
-          hint="safety limit — query fails if scan exceeds this (10GB = 10737418240)"
-        />
-        <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
-          <div><span className="text-[var(--color-text-muted)]">cost control:</span> Set max bytes billed to prevent runaway costs. 2026 pricing: $6.25/TB on-demand (first 1TB free).</div>
-          <div><span className="text-[var(--color-text-muted)]">vpc:</span> For VPC Service Controls, ensure the service account has access from SignalPilot&apos;s network perimeter.</div>
-        </div>
-      </>
+      <BigQueryFields
+        form={form}
+        setForm={setForm}
+        formErrors={formErrors}
+        fieldRefs={fieldRefs}
+        clearServerError={clearServerError}
+      />
     );
   }
-
-  // Databricks fields
   if (form.db_type === "databricks") {
     return (
       <>
@@ -835,7 +565,7 @@ export function ConnectionFieldsForm({
           </div>
         </>
       )}
-      {/* Connection guidance (HEX pattern — contextual setup instructions) */}
+      {/* Explain connector-specific setup requirements. */}
       <div className="col-span-2 px-3 py-2 bg-[var(--color-bg)]/50 border border-[var(--color-border)] border-dashed rounded-[10px] text-[11px] text-[var(--color-text-dim)] space-y-1">
         {form.db_type === "postgres" ? (
           <>
@@ -856,5 +586,3 @@ export function ConnectionFieldsForm({
     </>
   );
 }
-
-/* ── SSL Config Section ── */

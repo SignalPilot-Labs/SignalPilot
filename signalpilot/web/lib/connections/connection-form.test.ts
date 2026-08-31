@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildConnectionPayload } from "./connection-payload";
+import { connectionToForm, connectionUsesAdvancedSettings } from "./connection-to-form";
 import { buildConnectionPreview, detectDbTypeFromUrl, parseConnectionUrl } from "./connection-url";
 import { validateConnectionForm } from "./connection-validation";
 import { DEFAULT_CONNECTION_FORM } from "./defaults";
@@ -143,5 +144,69 @@ describe("connection payloads", () => {
     expect(payload.authenticator).toBe("key_pair");
     expect(payload.private_key).toBe("-----BEGIN PRIVATE KEY-----");
     expect(payload.password).toBeUndefined();
+  });
+});
+
+describe("connection edit mapping", () => {
+  const connection = {
+    id: "connection-1",
+    name: "warehouse",
+    db_type: "postgres" as const,
+    host: "db.example.com",
+    port: 5432,
+    database: "analytics",
+    username: "my_user",
+    ssl: false,
+    ssl_config: null,
+    ssh_tunnel: null,
+    account: null,
+    warehouse: null,
+    schema_name: null,
+    role: null,
+    authenticator: null,
+    passcode: null,
+    snowflake_host: null,
+    snowflake_protocol: null,
+    project: null,
+    dataset: null,
+    location: null,
+    maximum_bytes_billed: null,
+    http_path: null,
+    catalog: null,
+    branch: null,
+    xata_organization: null,
+    xata_project: null,
+    xata_database: null,
+    xata_api_url: null,
+    description: "Primary warehouse",
+    tags: ["production"],
+    schema_refresh_interval: null,
+    last_schema_refresh: null,
+    created_at: 1,
+    last_used: null,
+    status: "active",
+    connection_timeout: 15,
+    query_timeout: 120,
+    keepalive_interval: 0,
+    schema_filter_include: null,
+    schema_filter_exclude: null,
+  };
+
+  it("maps persisted values without copying secrets", () => {
+    const mapped = connectionToForm(connection);
+    expect(mapped).toMatchObject({
+      name: "warehouse",
+      host: "db.example.com",
+      database: "analytics",
+      tags: ["production"],
+      password: "",
+      aws_access_key_id: "",
+      aws_secret_access_key: "",
+    });
+  });
+
+  it("opens advanced settings only when the connection uses them", () => {
+    expect(connectionUsesAdvancedSettings(connection)).toBe(false);
+    expect(connectionUsesAdvancedSettings({ ...connection, ssl: true })).toBe(true);
   });
 });

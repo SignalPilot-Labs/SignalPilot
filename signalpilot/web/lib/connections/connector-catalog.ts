@@ -153,7 +153,6 @@ export const DB_TYPE_ORDER: DBType[] = [
   "clickhouse", "databricks", "trino", "xata", "duckdb", "sqlite",
 ];
 
-/* ── Connector tier classification (HEX pattern) ── */
 export const CONNECTOR_TIERS: Record<DBType, { tier: number; label: string; color: string }> = {
   postgres:   { tier: 1, label: "T1", color: "text-emerald-400 border-emerald-500/30" },
   mysql:      { tier: 1, label: "T1", color: "text-emerald-400 border-emerald-500/30" },
@@ -176,10 +175,7 @@ export const CATEGORY_LABELS: Record<string, string> = {
   embedded: "embedded databases",
 };
 
-/* ── Connection variants: step 2 of the picker (database type → variant) ──
-   Each database type lists where/how it is hosted. "Default" is a plain
-   self-managed instance; the others prefill SSL, auth method, ports, and
-   connector modes for that hosting flavor. */
+// Each variant supplies defaults for one hosting environment.
 export interface ConnectionVariant {
   key: string;
   label: string;
@@ -250,6 +246,5 @@ export const DB_VARIANTS: Record<DBType, ConnectionVariant[]> = {
 export const DB_TYPE_LABELS: Record<string, string> = Object.fromEntries(
   Object.entries(DB_CONFIGS).map(([k, v]) => [k, v.shortLabel])
 );
-
 
 

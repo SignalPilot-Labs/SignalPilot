@@ -20,24 +20,22 @@ export function validateConnectionForm(form: ConnectionForm): Record<string, str
     if (isNaN(port) || port < 1 || port > 65535) errors.port = "port must be 1-65535";
   }
 
-  // §9 gap-fill: username required for connectors that use it
+  // Require a username for connectors that authenticate with one.
   if (["postgres", "mysql", "redshift", "clickhouse", "mssql", "snowflake"].includes(form.db_type) && !form.connection_string) {
     if (!form.username.trim()) errors.username = "username is required";
   }
 
-  // §9 gap-fill: catalog required for trino
+  // Trino requires a catalog for field-based connections.
   if (form.db_type === "trino" && !form.connection_string) {
     if (!form.catalog.trim()) errors.catalog = "catalog is required";
   }
 
-  // §9 gap-fill: database required for duckdb/sqlite (local mode)
+  // Local database connectors require a file path.
   if ((form.db_type === "duckdb" || form.db_type === "sqlite") && !form.connection_string) {
     if (!form.database.trim()) errors.database = "database file path is required";
   }
 
-  // Gap 1+2: database required for standard relational connectors.
-  // mssql is exempt: an empty database means multi-database mode — the
-  // connector discovers every accessible database on the server.
+  // SQL Server permits an empty database to enable multi-database discovery.
   if (["postgres", "mysql", "clickhouse", "redshift"].includes(form.db_type) && !form.connection_string) {
     if (!form.database.trim()) errors.database = "database is required";
   }
@@ -47,7 +45,6 @@ export function validateConnectionForm(form: ConnectionForm): Record<string, str
     else if (!form.account.includes(".") && !form.account.includes("-")) {
       errors.account = "use full identifier: org-account or account.region";
     }
-    // Gap 4: key-pair / OAuth token validation
     if (form.snowflake_auth_method === "key_pair" && !form.sf_private_key.trim()) {
       errors.sf_private_key = "private key (PEM) is required for key-pair auth";
     }
@@ -90,13 +87,11 @@ export function validateConnectionForm(form: ConnectionForm): Record<string, str
     } else if (form.bq_auth_method === "service_account" && form.credentials_json.trim()) {
       try { JSON.parse(form.credentials_json); } catch { errors.credentials_json = "invalid JSON format"; }
     }
-    // Gap 5: bq_oauth_token required when OAuth method selected
     if (form.bq_auth_method === "oauth" && !form.bq_oauth_token.trim()) {
       errors.bq_oauth_token = "OAuth access token is required";
     }
   }
 
-  // Gap 3: Azure AD required fields
   if (form.db_type === "mssql" && form.azure_ad_auth) {
     if (!form.azure_tenant_id.trim()) errors.azure_tenant_id = "tenant ID is required for Azure AD auth";
     if (!form.azure_client_id.trim()) errors.azure_client_id = "client ID is required for Azure AD auth";
@@ -127,12 +122,11 @@ export function validateConnectionForm(form: ConnectionForm): Record<string, str
     if (isNaN(sshPort) || sshPort < 1 || sshPort > 65535) errors.ssh_port = "SSH port must be 1-65535";
   }
 
-  // Gap 7: SSL CA cert required for verify modes
   if (form.ssl_enabled && form.ssl_mode.startsWith("verify") && !form.ssl_ca_cert.trim()) {
     errors.ssl_ca_cert = "CA certificate is required for verify-ca / verify-full mode";
   }
 
-  // Timeout validation (if provided, must be positive integers)
+  // Validate timeout values when the user provides them.
   if (form.connection_timeout) {
     const ct = parseInt(form.connection_timeout);
     if (isNaN(ct) || ct < 1 || ct > 300) errors.connection_timeout = "connection timeout must be 1-300 seconds";
@@ -144,5 +138,4 @@ export function validateConnectionForm(form: ConnectionForm): Record<string, str
 
   return errors;
 }
-
 

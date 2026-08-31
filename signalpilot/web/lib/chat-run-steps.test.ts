@@ -163,7 +163,6 @@ describe("plan and route step enrichment", () => {
         payload: {
           plan_id: "p1",
           route: "aggregate_required",
-          route_reason: "The projected output exceeds the direct-query row budget.",
         },
       },
     ],
@@ -176,9 +175,10 @@ describe("plan and route step enrichment", () => {
     expect(steps[0].sql).toBe("select 1");
   });
 
-  it("explains the chosen route with its reason", () => {
+  it("shows only the actionable route", () => {
     expect(steps[1].title).toContain("needs a bounded aggregate");
-    expect(steps[1].detail).toContain("row budget");
+    expect(steps[1].detail).toBeNull();
+    expect(steps[1].input).toBeNull();
   });
 });
 

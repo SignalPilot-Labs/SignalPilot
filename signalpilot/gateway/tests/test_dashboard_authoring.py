@@ -14,7 +14,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from gateway.analysis_delivery.model_client import AnthropicMessagesError
+from gateway.analysis_delivery.model_client import AnthropicMessagesError, ClaudeAgentSDKStructuredClient
 from gateway.api import dashboards as dashboard_api
 from gateway.dashboard import store as dashboard_store
 from gateway.dashboard.authoring import DashboardAgentDraft, DashboardAuthoringAgent, materialize_agent_draft
@@ -156,9 +156,7 @@ async def _seed_apply_receipts(
     receipt_dashboard_id = dashboard_id or preview.dashboard_id or f"draft:{preview.id}"
     receipt_version_id = version_id or f"draft:{preview.id}"
     requested_filters = [
-        rule
-        for rule in definition.filters.dimensions
-        if rule.values or rule.operator in {"isNull", "notNull"}
+        rule for rule in definition.filters.dimensions if rule.values or rule.operator in {"isNull", "notNull"}
     ]
     rows = []
     for chart in definition.charts:
@@ -324,9 +322,7 @@ def test_unknown_explore_is_not_recovered_from_invented_fields() -> None:
 
 def test_time_series_authoring_rejects_an_empty_applicable_date_window() -> None:
     payload = _definition_with_filter().model_dump(mode="json", by_alias=True)
-    payload["filters"]["dimensions"][0].update(
-        {"operator": "inBetween", "values": []}
-    )
+    payload["filters"]["dimensions"][0].update({"operator": "inBetween", "values": []})
 
     with pytest.raises(
         DashboardTimeSeriesWindowError,
@@ -426,6 +422,13 @@ async def test_agent_update_is_forced_through_typed_operations() -> None:
     }
     chart_schema = client.request["tools"][0]["input_schema"]["$defs"]["ChartDefinition"]
     assert "question" in chart_schema["properties"]
+
+
+def test_dashboard_authoring_uses_agent_sdk_for_oauth() -> None:
+    agent = DashboardAuthoringAgent(oauth_token="oauth-token")
+
+    assert isinstance(agent.model_client, ClaudeAgentSDKStructuredClient)
+    assert agent.model_client.oauth_token == "oauth-token"
 
 
 @pytest.mark.asyncio
@@ -1029,12 +1032,14 @@ async def test_apply_reuses_complete_base_receipts_for_unchanged_charts(
     )
 
     all_results = (
-        await db_session.execute(
-            select(GatewayDashboardResult).where(
-                GatewayDashboardResult.dashboard_id == created.dashboard.id
+        (
+            await db_session.execute(
+                select(GatewayDashboardResult).where(GatewayDashboardResult.dashboard_id == created.dashboard.id)
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert {row.version_id for row in base_receipts} == {created.version.id}
     assert sum(row.version_id == applied.version.id for row in all_results) == len(definition.charts)
 
@@ -1164,12 +1169,14 @@ async def test_new_dashboard_apply_promotes_only_the_exact_complete_preview_resu
         visible_complete_result_ids=[result.id for result in results],
     )
     promoted = (
-        await db_session.execute(
-            select(GatewayDashboardResult).where(
-                GatewayDashboardResult.id.in_([result.id for result in results])
+        (
+            await db_session.execute(
+                select(GatewayDashboardResult).where(GatewayDashboardResult.id.in_([result.id for result in results]))
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert {row.dashboard_id for row in promoted} == {applied.dashboard.id}
     assert {row.version_id for row in promoted} == {applied.version.id}
     assert {row.chart_id for row in promoted} == {chart.id for chart in applied.version.definition.charts}

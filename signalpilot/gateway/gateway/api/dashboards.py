@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
+import os
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -13,9 +15,12 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import TypeVar
 
+import httpx
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
 
+from gateway.analysis_delivery.model_client import AnthropicMessagesError
+from gateway.config.notebooks import chat_force_oauth_token
 from gateway.dashboard import store as dashboard_store
 from gateway.dashboard.authoring import DashboardAuthoringAgent, materialize_agent_draft
 from gateway.dashboard.cache import dashboard_query_cache_key
@@ -28,11 +33,13 @@ from gateway.dashboard.compiler import (
 from gateway.dashboard.confidence import semantic_query_signature
 from gateway.dashboard.domain import DashboardDefinition, FieldTarget, FilterRule, SemanticChartQuery
 from gateway.dashboard.operations import (
+    canonicalize_dashboard_explore_names,
     canonicalize_dashboard_filter_targets,
     has_custom_sql,
     validate_dashboard_semantics,
     validate_time_series_default_windows,
 )
+from gateway.dashboard.project_snapshot import ensure_branch_snapshot
 from gateway.dashboard.semantic_resolver import DashboardSemanticError, DashboardSemanticResolver
 from gateway.dashboard.telemetry import DashboardTelemetryEvent, record_dashboard_event
 from gateway.db.models import (
@@ -79,13 +86,78 @@ from gateway.standalone_chat.projects import evaluate_project_readiness
 from gateway.store import org_secrets as org_secrets_store
 from gateway.store import standalone_chat as chat_store
 from gateway.verification import compare_columns
+from gateway.workspace_store.objects import workspace_object_storage
 
 from .deps import StoreD
 
 router = APIRouter(prefix="/api")
 resolver = DashboardSemanticResolver()
+logger = logging.getLogger(__name__)
+
+_AUTHORING_PROVIDER_REJECTED = (
+    "Dashboard authoring could not complete because Anthropic rejected the request. "
+    "Try again; if this continues, ask an administrator to verify the Anthropic integration."
+)
+_AUTHORING_PROVIDER_AUTH_REJECTED = (
+    "The organization Anthropic key was rejected. Ask an administrator to update it in Integrations."
+)
+_AUTHORING_PROVIDER_OAUTH_REJECTED = (
+    "The configured Claude OAuth token was rejected. Ask an operator to refresh it."
+)
+_AUTHORING_PROVIDER_UNAVAILABLE = "Dashboard authoring is temporarily unavailable. Please try again."
+
+
+def _authoring_provider_http_exception(
+    exc: AnthropicMessagesError,
+    *,
+    model: str,
+    uses_oauth: bool = False,
+) -> HTTPException:
+    logger.error(
+        "Dashboard authoring Anthropic request failed status=%s type=%s request_id=%s "
+        "model=%s request_body_chars=%s error=%s",
+        exc.status_code,
+        exc.error_type or "unknown",
+        exc.request_id or "unknown",
+        model,
+        exc.request_body_chars,
+        exc.provider_message or "<empty response body>",
+    )
+    headers = {"Retry-After": exc.retry_after} if exc.retry_after else None
+    if exc.status_code in {401, 403}:
+        detail = _AUTHORING_PROVIDER_OAUTH_REJECTED if uses_oauth else _AUTHORING_PROVIDER_AUTH_REJECTED
+        return HTTPException(status_code=502, detail=detail)
+    if exc.status_code == 429 or exc.status_code >= 500:
+        return HTTPException(status_code=503, detail=_AUTHORING_PROVIDER_UNAVAILABLE, headers=headers)
+    return HTTPException(status_code=502, detail=_AUTHORING_PROVIDER_REJECTED)
+
+
+def _authoring_transport_http_exception(exc: httpx.RequestError, *, model: str) -> HTTPException:
+    logger.error(
+        "Dashboard authoring could not reach Anthropic model=%s error_type=%s",
+        model,
+        type(exc).__name__,
+    )
+    return HTTPException(status_code=503, detail=_AUTHORING_PROVIDER_UNAVAILABLE)
 
 DashboardResultT = TypeVar("DashboardResultT")
+
+
+async def _dashboard_authoring_agent(store: StoreD, org_id: str) -> tuple[DashboardAuthoringAgent, bool]:
+    """Resolve authoring auth with the same fail-closed force-OAuth behavior as Data Chat."""
+    if chat_force_oauth_token():
+        oauth_token = os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or os.getenv("OAUTH_TOKEN")
+        if not oauth_token:
+            raise HTTPException(
+                status_code=409,
+                detail="SP_CHAT_FORCE_OAUTH_TOKEN is enabled but no Claude OAuth token is configured",
+            )
+        return DashboardAuthoringAgent(oauth_token=oauth_token), True
+
+    api_key = await org_secrets_store.resolve_anthropic_key(store.session, org_id)
+    if not api_key:
+        raise HTTPException(status_code=409, detail="Dashboard authoring requires the organization Anthropic key")
+    return DashboardAuthoringAgent(api_key=api_key), False
 
 
 def _visualization_type(chart) -> str:
@@ -247,6 +319,33 @@ def _dashboard_failure(
 
 def _user_id(store: StoreD) -> str:
     return store.user_id or "local"
+
+
+async def _resolve_project_immutable_head(
+    store: StoreD,
+    *,
+    org_id: str,
+    project_id: str,
+    branch: str,
+) -> str | None:
+    storage = workspace_object_storage()
+    durable = await ensure_branch_snapshot(
+        store.session,
+        storage,
+        org_id=org_id,
+        project_id=project_id,
+        branch=branch,
+    )
+    if durable:
+        return durable
+    if storage.enabled:
+        # Never persist a gateway-local commit as cloud dashboard lineage. A
+        # later replica would be unable to resolve it after this pod exits.
+        return None
+    # Compatibility for local/self-hosted projects that predate the durable
+    # workspace store. Cloud authoring uses the snapshot path above and
+    # therefore survives gateway replacement.
+    return branch_head_sha(project_id, branch)
 
 
 async def _verified_context(store: StoreD, definition: DashboardDefinition) -> DashboardSemanticContext:
@@ -622,19 +721,36 @@ async def create_dashboard_authoring_session(body: DashboardAuthoringRequest, st
             if project is None:
                 raise HTTPException(status_code=404, detail="Dashboard project not found")
             branch = body.branch or project.default_branch or "main"
-            commit_sha = branch_head_sha(project.id, branch)
+            commit_sha = await _resolve_project_immutable_head(
+                store,
+                org_id=org_id,
+                project_id=project.id,
+                branch=branch,
+            )
             if not commit_sha:
-                raise HTTPException(status_code=409, detail="The selected project branch has no immutable head")
+                raise HTTPException(
+                    status_code=409,
+                    detail="The selected project branch has no durable workspace snapshot or immutable Git head",
+                )
     try:
         context = await resolver.resolve(store, project_id=project_id, commit_sha=commit_sha)
     except DashboardSemanticError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    api_key = await org_secrets_store.resolve_anthropic_key(store.session, org_id)
-    if not api_key:
-        raise HTTPException(status_code=409, detail="Dashboard authoring requires the organization Anthropic key")
-    agent = DashboardAuthoringAgent(api_key=api_key)
+    agent, uses_oauth = await _dashboard_authoring_agent(store, org_id)
     try:
-        draft = await agent.draft(prompt=body.prompt, context=context, base_definition=base_definition)
+        def validate_candidate(candidate):
+            candidate_definition = materialize_agent_draft(candidate, base_definition=base_definition)
+            candidate_definition = canonicalize_dashboard_explore_names(candidate_definition, context)
+            candidate_definition = canonicalize_dashboard_filter_targets(candidate_definition, context)
+            validate_dashboard_semantics(candidate_definition, context)
+            validate_time_series_default_windows(candidate_definition, context)
+
+        draft = await agent.draft(
+            prompt=body.prompt,
+            context=context,
+            base_definition=base_definition,
+            validator=validate_candidate,
+        )
         definition = materialize_agent_draft(draft, base_definition=base_definition)
         if base_definition is None:
             binding = definition.signalPilot.model_copy(
@@ -657,9 +773,14 @@ async def create_dashboard_authoring_session(body: DashboardAuthoringRequest, st
                 definition.model_copy(update={"signalPilot": binding, "charts": charts})
             )
         verified = await _verified_context(store, definition)
+        definition = canonicalize_dashboard_explore_names(definition, verified)
         definition = canonicalize_dashboard_filter_targets(definition, verified)
         validate_dashboard_semantics(definition, verified)
         validate_time_series_default_windows(definition, verified)
+    except AnthropicMessagesError as exc:
+        raise _authoring_provider_http_exception(exc, model=agent.model, uses_oauth=uses_oauth) from exc
+    except httpx.RequestError as exc:
+        raise _authoring_transport_http_exception(exc, model=agent.model) from exc
     except (DashboardCompileError, ValueError) as exc:
         await record_dashboard_event(
             store.session,
@@ -776,18 +897,50 @@ async def continue_dashboard_authoring_session(session_id: str, body: DashboardA
         base_version_id = row.base_version_id
     try:
         context = await _verified_context(store, current_definition)
-        api_key = await org_secrets_store.resolve_anthropic_key(store.session, org_id)
-        if not api_key:
-            raise HTTPException(status_code=409, detail="Dashboard authoring requires the organization Anthropic key")
-        agent = DashboardAuthoringAgent(api_key=api_key)
-        draft = await agent.draft(prompt=body.prompt, context=context, base_definition=current_definition)
+        agent, uses_oauth = await _dashboard_authoring_agent(store, org_id)
+        def validate_candidate(candidate):
+            candidate_definition = materialize_agent_draft(candidate, base_definition=current_definition)
+            candidate_definition = canonicalize_dashboard_explore_names(candidate_definition, context)
+            candidate_definition = canonicalize_dashboard_filter_targets(candidate_definition, context)
+            validate_dashboard_semantics(candidate_definition, context)
+            validate_time_series_default_windows(candidate_definition, context)
+
+        draft = await agent.draft(
+            prompt=body.prompt,
+            context=context,
+            base_definition=current_definition,
+            validator=validate_candidate,
+        )
         definition = materialize_agent_draft(draft, base_definition=current_definition)
         verified = await _verified_context(store, definition)
+        definition = canonicalize_dashboard_explore_names(definition, verified)
         definition = canonicalize_dashboard_filter_targets(definition, verified)
         validate_dashboard_semantics(definition, verified)
         validate_time_series_default_windows(definition, verified)
     except HTTPException:
         raise
+    except AnthropicMessagesError as exc:
+        safe_error = _authoring_provider_http_exception(exc, model=agent.model, uses_oauth=uses_oauth)
+        await dashboard_store.record_authoring_failure(
+            store.session,
+            org_id=org_id,
+            user_id=user_id,
+            session_id=session_id,
+            prompt=body.prompt,
+            safe_message=str(safe_error.detail),
+        )
+        raise safe_error from exc
+    except httpx.RequestError as exc:
+        safe_error = _authoring_transport_http_exception(exc, model=agent.model)
+        await dashboard_store.record_authoring_failure(
+            store.session,
+            org_id=org_id,
+            user_id=user_id,
+            session_id=session_id,
+            prompt=body.prompt,
+            safe_message=str(safe_error.detail),
+        )
+        raise safe_error from exc
     except (DashboardCompileError, ValueError) as exc:
         await dashboard_store.record_authoring_failure(
             store.session,

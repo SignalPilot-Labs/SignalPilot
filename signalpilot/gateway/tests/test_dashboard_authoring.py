@@ -10,9 +10,11 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from gateway.analysis_delivery.model_client import AnthropicMessagesError
 from gateway.api import dashboards as dashboard_api
 from gateway.dashboard import store as dashboard_store
 from gateway.dashboard.authoring import DashboardAgentDraft, DashboardAuthoringAgent, materialize_agent_draft
@@ -22,6 +24,7 @@ from gateway.dashboard.operations import (
     DashboardTimeSeriesWindowError,
     RenameDashboard,
     apply_dashboard_operations,
+    canonicalize_dashboard_explore_names,
     canonicalize_dashboard_filter_targets,
     validate_dashboard_semantics,
     validate_time_series_default_windows,
@@ -272,6 +275,53 @@ def test_unknown_dashboard_filter_target_still_fails_after_canonicalization() ->
         validate_dashboard_semantics(definition, _orders_context())
 
 
+def test_unknown_filter_explore_is_recovered_from_an_exact_field_id() -> None:
+    payload = _definition_with_filter().model_dump(mode="json", by_alias=True)
+    payload["filters"]["dimensions"][0]["target"]["tableName"] = "<UNKNOWN>"
+    payload["filters"]["dimensions"][0]["tileTargets"] = {
+        "tile-bar": {"tableName": "<UNKNOWN>", "fieldId": "orders.order_date"}
+    }
+
+    canonical = canonicalize_dashboard_filter_targets(
+        DashboardDefinition.model_validate(payload),
+        _orders_context(),
+    )
+
+    rule = canonical.filters.dimensions[0]
+    assert rule.target.tableName == "orders"
+    assert rule.tileTargets is not None
+    assert rule.tileTargets["tile-bar"] is not False
+    assert rule.tileTargets["tile-bar"].tableName == "orders"
+    validate_dashboard_semantics(canonical, _orders_context())
+
+
+def test_unknown_explore_is_recovered_from_exact_unambiguous_field_ids() -> None:
+    payload = _single_bar_definition(drill_dimensions=["orders.customer"]).model_dump(mode="json", by_alias=True)
+    payload["charts"][0]["query"]["exploreName"] = "<UNKNOWN>"
+
+    canonical = canonicalize_dashboard_explore_names(
+        DashboardDefinition.model_validate(payload),
+        _orders_context(),
+    )
+
+    assert canonical.charts[0].query.exploreName == "orders"
+    validate_dashboard_semantics(canonical, _orders_context())
+
+
+def test_unknown_explore_is_not_recovered_from_invented_fields() -> None:
+    payload = _single_bar_definition(drill_dimensions=["orders.customer"]).model_dump(mode="json", by_alias=True)
+    payload["charts"][0]["query"].update({"exploreName": "<UNKNOWN>", "metrics": ["unknown.revenue"]})
+    payload["charts"][0]["visualization"]["config"]["layout"]["yField"] = ["unknown.revenue"]
+    definition = canonicalize_dashboard_explore_names(
+        DashboardDefinition.model_validate(payload),
+        _orders_context(),
+    )
+
+    assert definition.charts[0].query.exploreName == "<UNKNOWN>"
+    with pytest.raises(ValueError, match="Unknown explore: <UNKNOWN>"):
+        validate_dashboard_semantics(definition, _orders_context())
+
+
 def test_time_series_authoring_rejects_an_empty_applicable_date_window() -> None:
     payload = _definition_with_filter().model_dump(mode="json", by_alias=True)
     payload["filters"]["dimensions"][0].update(
@@ -330,6 +380,23 @@ class _ModelClient:
         }
 
 
+class _ProviderFailingAgent:
+    model = "claude-provider-test"
+
+    def __init__(self, *, api_key: str) -> None:
+        assert api_key == "test-key"
+
+    async def draft(self, **_kwargs) -> DashboardAgentDraft:
+        raise AnthropicMessagesError(
+            status_code=400,
+            error_type="invalid_request_error",
+            provider_message="messages.0.content: Input is too long for the model context window",
+            request_id="req-provider-1",
+            request_body_chars=250_000,
+            retry_after=None,
+        )
+
+
 @pytest.mark.asyncio
 async def test_agent_update_is_forced_through_typed_operations() -> None:
     client = _ModelClient(
@@ -349,6 +416,7 @@ async def test_agent_update_is_forced_through_typed_operations() -> None:
     assert client.request is not None
     assert client.request["tool_choice"] == {"type": "tool", "name": "submit_dashboard_draft"}
     assert "question is a concise natural-language question" in client.request["system"]
+    assert "never invent an explore or use placeholders" in client.request["system"]
     assert "Copy each filter target exactly" in client.request["system"]
     assert "meaningful lower-grain drill hierarchy" in client.request["system"]
     request_payload = json.loads(client.request["messages"][0]["content"])
@@ -431,7 +499,7 @@ async def test_agent_rejects_a_second_creation_without_usable_drills() -> None:
             base_definition=None,
         )
 
-    assert len(client.requests) == 2
+    assert len(client.requests) == 3
 
 
 @pytest.mark.asyncio
@@ -500,7 +568,79 @@ async def test_agent_rejects_a_second_filterless_response() -> None:
             context=_context(),
             base_definition=None,
         )
+    assert len(client.requests) == 3
+
+
+@pytest.mark.asyncio
+async def test_agent_repairs_semantic_validation_failures_before_returning_the_draft() -> None:
+    invalid_payload = _single_bar_definition(drill_dimensions=["orders.customer"]).model_dump(
+        mode="json", by_alias=True
+    )
+    invalid_payload["charts"][0]["query"]["exploreName"] = "sales"
+    repaired = _single_bar_definition(drill_dimensions=["orders.customer"])
+    client = _ModelClient(
+        [
+            {
+                "summary": "Created the dashboard.",
+                "definition": invalid_payload,
+            },
+            {
+                "summary": "Created the dashboard with governed identifiers.",
+                "definition": repaired.model_dump(mode="json", by_alias=True),
+            },
+        ]
+    )
+    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
+
+    def validate_candidate(draft: DashboardAgentDraft) -> None:
+        assert draft.definition is not None
+        validate_dashboard_semantics(draft.definition, _orders_context())
+
+    draft = await agent.draft(
+        prompt="Create an executive revenue dashboard",
+        context=_orders_context(),
+        base_definition=None,
+        validator=validate_candidate,
+    )
+
+    assert draft.definition is not None
+    assert draft.definition.charts[0].query.exploreName == "orders"
     assert len(client.requests) == 2
+    repair_payload = json.loads(client.requests[1]["messages"][0]["content"])
+    assert "Unknown explore: sales" in repair_payload["validation_feedback"]
+    assert "Valid exploreName values: orders" in repair_payload["validation_feedback"]
+    assert "Never use <UNKNOWN>" in repair_payload["validation_feedback"]
+    assert repair_payload["rejected_draft"]["definition"]["charts"][0]["query"]["exploreName"] == "sales"
+
+
+@pytest.mark.asyncio
+async def test_agent_repairs_invalid_tool_contract_before_returning_the_draft() -> None:
+    repaired = _definition_with_filter()
+    client = _ModelClient(
+        [
+            {
+                "summary": "Returned both payload types.",
+                "definition": repaired.model_dump(mode="json", by_alias=True),
+                "operations": [{"operation": "rename_dashboard", "name": "Wrong mode"}],
+            },
+            {
+                "summary": "Created one complete dashboard definition.",
+                "definition": repaired.model_dump(mode="json", by_alias=True),
+            },
+        ]
+    )
+    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
+
+    draft = await agent.draft(
+        prompt="Create an executive revenue dashboard",
+        context=_context(),
+        base_definition=None,
+    )
+
+    assert draft.definition is not None
+    assert len(client.requests) == 2
+    repair_payload = json.loads(client.requests[1]["messages"][0]["content"])
+    assert "either a complete definition or typed operations" in repair_payload["validation_feedback"]
 
 
 @pytest.mark.asyncio
@@ -549,6 +689,167 @@ async def test_create_authoring_session_canonicalizes_model_filter_targets(
     )
 
     assert session.definition.filters.dimensions[0].target.fieldId == "orders.order_date"
+
+
+@pytest.mark.asyncio
+async def test_create_authoring_session_force_oauth_never_resolves_org_api_key(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_definition = _definition_with_filter()
+
+    class OAuthAuthoringAgent:
+        model = "test-model"
+
+        def __init__(self, *, oauth_token: str) -> None:
+            assert oauth_token == "oauth-token"
+
+        async def draft(self, **_kwargs) -> DashboardAgentDraft:
+            return DashboardAgentDraft(
+                summary="Created a dashboard using forced OAuth.",
+                definition=model_definition,
+            )
+
+    async def resolve_context(*_args, **_kwargs) -> DashboardSemanticContext:
+        return _orders_context()
+
+    async def reject_org_key(*_args, **_kwargs) -> str:
+        raise AssertionError("organization key must not be resolved")
+
+    monkeypatch.setenv("SP_CHAT_FORCE_OAUTH_TOKEN", "true")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-token")
+    monkeypatch.setattr(dashboard_api.resolver, "resolve", resolve_context)
+    monkeypatch.setattr(dashboard_api, "DashboardAuthoringAgent", OAuthAuthoringAgent)
+    monkeypatch.setattr(dashboard_api.org_secrets_store, "resolve_anthropic_key", reject_org_key)
+    store = SimpleNamespace(
+        session=db_session,
+        user_id="owner-a",
+        _require_org_id=lambda: "org-a",
+    )
+
+    session = await dashboard_api.create_dashboard_authoring_session(
+        DashboardAuthoringRequest(
+            prompt="Create an executive dashboard",
+            project_id=model_definition.signalPilot.projectId,
+            commit_sha=model_definition.signalPilot.commitSha,
+        ),
+        store,
+    )
+
+    assert session.summary == "Created a dashboard using forced OAuth."
+
+
+@pytest.mark.asyncio
+async def test_dashboard_authoring_force_oauth_fails_closed_when_token_is_missing(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def reject_org_key(*_args, **_kwargs) -> str:
+        raise AssertionError("organization key must not be resolved")
+
+    monkeypatch.setenv("SP_CHAT_FORCE_OAUTH_TOKEN", "true")
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.delenv("OAUTH_TOKEN", raising=False)
+    monkeypatch.setattr(dashboard_api.org_secrets_store, "resolve_anthropic_key", reject_org_key)
+    store = SimpleNamespace(session=db_session)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await dashboard_api._dashboard_authoring_agent(store, "org-a")
+
+    assert exc_info.value.status_code == 409
+    assert "no Claude OAuth token" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_create_authoring_session_returns_safe_provider_failure(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def resolve_context(*_args, **_kwargs) -> DashboardSemanticContext:
+        return _orders_context()
+
+    async def resolve_key(*_args, **_kwargs) -> str:
+        return "test-key"
+
+    monkeypatch.setattr(dashboard_api.resolver, "resolve", resolve_context)
+    monkeypatch.setattr(dashboard_api, "DashboardAuthoringAgent", _ProviderFailingAgent)
+    monkeypatch.setattr(dashboard_api.org_secrets_store, "resolve_anthropic_key", resolve_key)
+    store = SimpleNamespace(
+        session=db_session,
+        user_id="owner-a",
+        _require_org_id=lambda: "org-a",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await dashboard_api.create_dashboard_authoring_session(
+            DashboardAuthoringRequest(
+                prompt="Create an executive dashboard",
+                project_id="project-1",
+                commit_sha="a" * 40,
+            ),
+            store,
+        )
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail == dashboard_api._AUTHORING_PROVIDER_REJECTED
+    assert "Input is too long" not in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_follow_up_provider_failure_preserves_draft_and_records_safe_message(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    definition = _definition_with_filter()
+    preview = await dashboard_store.create_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        dashboard_id=None,
+        base_version_id=None,
+        definition=definition,
+        operations=[],
+        prompt="Create a dashboard",
+        summary="Created the dashboard.",
+        agent_run_id="run-1",
+        model="test-model",
+        requires_custom_sql_confirmation=False,
+        custom_sql_confirmed=False,
+    )
+
+    async def verified_context(*_args, **_kwargs) -> DashboardSemanticContext:
+        return _orders_context()
+
+    async def resolve_key(*_args, **_kwargs) -> str:
+        return "test-key"
+
+    monkeypatch.setattr(dashboard_api, "_verified_context", verified_context)
+    monkeypatch.setattr(dashboard_api, "DashboardAuthoringAgent", _ProviderFailingAgent)
+    monkeypatch.setattr(dashboard_api.org_secrets_store, "resolve_anthropic_key", resolve_key)
+    store = SimpleNamespace(
+        session=db_session,
+        user_id="owner-a",
+        _require_org_id=lambda: "org-a",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await dashboard_api.continue_dashboard_authoring_session(
+            preview.id,
+            DashboardAuthoringMessageRequest(prompt="Add a margin chart"),
+            store,
+        )
+
+    assert exc_info.value.status_code == 502
+    restored = await dashboard_store.get_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        session_id=preview.id,
+    )
+    assert restored is not None
+    assert restored.definition_json == definition.model_dump(mode="json", by_alias=True, exclude_none=True)
+    assert restored.events_json[-1]["message"] == dashboard_api._AUTHORING_PROVIDER_REJECTED
+    assert "Input is too long" not in restored.events_json[-1]["message"]
 
 
 @pytest.mark.asyncio

@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import AsyncAdaptedQueuePool
 
 from .legacy_bootstrap import run_legacy_bootstrap
-from .migrate import stamp_head, upgrade_to_head
+from .migrate import stamp_head, upgrade_to_head_tolerating_newer
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +137,7 @@ async def init_db() -> None:
                 await run_legacy_bootstrap(engine)
                 await asyncio.to_thread(stamp_head, database_url)
             else:
-                await asyncio.to_thread(upgrade_to_head, database_url)
+                await asyncio.to_thread(upgrade_to_head_tolerating_newer, database_url)
         finally:
             await conn.execute(text("SELECT pg_advisory_unlock(hashtext('gateway_schema_migration'))"))
     from gateway.store.chat_reports import backfill_inline_artifact_hashes

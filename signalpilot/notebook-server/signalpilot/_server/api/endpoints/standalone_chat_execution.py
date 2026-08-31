@@ -164,6 +164,9 @@ async def execute(*, request: Request) -> StreamingResponse:
         gateway_url=gateway_api_url,
         gateway_token=scoped_token,
     )
+    # The agent writes user-facing files here. The env override below points
+    # SP_CHAT_ARTIFACTS_DIRECTORY at it.
+    (scratch / "artifacts").mkdir(exist_ok=True)
     if adopted is not None:
         # Continue in the previous turn's notebook document.
         analysis_notebook_path = adopted[1]
@@ -398,6 +401,12 @@ async def execute(*, request: Request) -> StreamingResponse:
                     resume_session_override=resume_agent_session,
                     agent_env_overrides={
                         "CLAUDE_CONFIG_DIR": str(agent_session.config_dir),
+                        # The system prompt directs every scratch file here.
+                        # Without this the agent's shell resolves the path to
+                        # an empty string and files land outside the mirrored
+                        # scratch root, invisible to the artifacts panel.
+                        "SP_CHAT_SCRATCH_DIRECTORY": str(scratch),
+                        "SP_CHAT_ARTIFACTS_DIRECTORY": str(scratch / "artifacts"),
                     },
                     notebook_session_authorizer=(
                         lambda candidate, lifecycle=lifecycle: (

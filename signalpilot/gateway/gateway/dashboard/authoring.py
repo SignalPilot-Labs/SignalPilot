@@ -7,6 +7,7 @@ import logging
 import os
 import re
 from collections.abc import Callable
+from copy import deepcopy
 from typing import Any
 
 from pydantic import Field, model_validator
@@ -16,7 +17,7 @@ from gateway.analysis_delivery.model_client import (
     ClaudeAgentSDKStructuredClient,
     MessagesModelClient,
 )
-from gateway.dashboard.domain import CartesianChartConfig, ContractModel, DashboardDefinition, SemanticChartQuery
+from gateway.dashboard.domain import ContractModel, DashboardDefinition
 from gateway.dashboard.operations import DashboardOperation, apply_dashboard_operations
 from gateway.models.dashboards import DashboardSemanticContext
 
@@ -48,6 +49,78 @@ class DashboardAgentDraft(ContractModel):
         if (self.definition is None) == (not self.operations):
             raise ValueError("Agent draft must contain either a complete definition or typed operations")
         return self
+
+
+def canonicalize_agent_draft_query_encodings(
+    value: Any,
+    context: DashboardSemanticContext,
+) -> Any:
+    """Repair only unambiguous raw visualization references before contract validation."""
+    if not isinstance(value, dict) or not isinstance(value.get("definition"), dict):
+        return value
+    normalized = deepcopy(value)
+    charts = normalized["definition"].get("charts")
+    if not isinstance(charts, list):
+        return normalized
+    metric_formats = {
+        metric.field_id: metric.format
+        for explore in context.explores
+        for metric in explore.metrics
+        if metric.format
+    }
+
+    def resolve(reference: Any, candidates: list[str], *, singleton: bool = False) -> Any:
+        if not isinstance(reference, str) or reference in candidates:
+            return reference
+        folded = reference.casefold()
+        matches = [
+            candidate
+            for candidate in candidates
+            if candidate.casefold() == folded or candidate.rsplit(".", 1)[-1].casefold() == folded
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if singleton and len(candidates) == 1:
+            return candidates[0]
+        return reference
+
+    for chart in charts:
+        if not isinstance(chart, dict):
+            continue
+        query = chart.get("query")
+        visualization = chart.get("visualization")
+        if (
+            not isinstance(query, dict)
+            or query.get("kind") != "semantic"
+            or not isinstance(visualization, dict)
+        ):
+            continue
+        dimensions = [item for item in query.get("dimensions", []) if isinstance(item, str)]
+        metrics = [item for item in query.get("metrics", []) if isinstance(item, str)]
+        config = visualization.get("config")
+        if not isinstance(config, dict):
+            continue
+        if visualization.get("type") == "big_number":
+            config["field"] = resolve(config.get("field"), metrics, singleton=True)
+            governed_format = metric_formats.get(config["field"])
+            if governed_format:
+                config["format"] = "decimal" if governed_format == "number" else governed_format
+        elif visualization.get("type") == "cartesian":
+            layout = config.get("layout")
+            if not isinstance(layout, dict):
+                continue
+            layout["xField"] = resolve(layout.get("xField"), dimensions, singleton=True)
+            y_fields = layout.get("yField")
+            if isinstance(y_fields, list):
+                singleton = len(y_fields) == 1
+                layout["yField"] = [resolve(item, metrics, singleton=singleton) for item in y_fields]
+        elif visualization.get("type") == "table":
+            outputs = [*dimensions, *metrics]
+            for key in ("columns", "groups"):
+                references = config.get(key)
+                if isinstance(references, list):
+                    config[key] = [resolve(item, outputs) for item in references]
+    return normalized
 
 
 def compact_semantic_projection(context: DashboardSemanticContext) -> dict[str, Any]:
@@ -151,6 +224,9 @@ class DashboardAuthoringAgent:
             "must remain the complete supplied field_id, including its explore prefix. When updating a draft that has no "
             "controls, add them in the same typed operation "
             "set unless the current request explicitly opts out. Do not treat silence about filters as an opt-out. "
+            "Every visualization encoding must copy an exact field ID already present in that chart's query: KPI field "
+            "and Cartesian yField values come from query.metrics, while Cartesian xField comes from query.dimensions. "
+            "For KPI format, copy the governed metric format when supplied; use percentage, never percent. "
             "For every applicable semantic bar, line, or area chart, configure a meaningful lower-grain drill hierarchy "
             "in signalPilot.drillDimensions when the same explore supplies a dimension below the chart's current business "
             "grain. Order drill dimensions from the immediate next level to the deepest level and copy complete field_id "
@@ -212,6 +288,7 @@ class DashboardAuthoringAgent:
             rejected_draft: Any = None
             try:
                 rejected_draft = await request_tool_input(request_body)
+                rejected_draft = canonicalize_agent_draft_query_encodings(rejected_draft, context)
                 draft = DashboardAgentDraft.model_validate(rejected_draft)
                 if base_definition is None and draft.definition is None:
                     raise ValueError("Dashboard creation requires a complete definition")

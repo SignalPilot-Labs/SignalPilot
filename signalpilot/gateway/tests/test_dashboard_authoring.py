@@ -702,6 +702,38 @@ async def test_agent_repairs_refusal_shaped_creation_with_mode_specific_feedback
 
 
 @pytest.mark.asyncio
+async def test_agent_canonicalizes_unambiguous_visualization_aliases_before_contract_validation() -> None:
+    payload = _definition_with_filter().model_dump(mode="json", by_alias=True)
+    kpi = next(chart for chart in payload["charts"] if chart["id"] == "chart-kpi")
+    kpi["visualization"]["config"] = {"field": "total_revenue", "format": "percent"}
+    line = next(chart for chart in payload["charts"] if chart["id"] == "chart-line")
+    line["visualization"]["config"]["layout"] = {
+        "xField": "month",
+        "yField": ["revenue"],
+    }
+    context_payload = _orders_context().model_dump(mode="json")
+    context_payload["explores"][0]["metrics"][0]["format"] = "currency:USD"
+    context = DashboardSemanticContext.model_validate(context_payload)
+    client = _ModelClient({"summary": "Created executive dashboard.", "definition": payload})
+    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
+
+    draft = await agent.draft(
+        prompt="Create an executive dashboard for revenue, margins and customers",
+        context=context,
+        base_definition=None,
+    )
+
+    assert draft.definition is not None
+    normalized_kpi = next(chart for chart in draft.definition.charts if chart.id == "chart-kpi")
+    assert normalized_kpi.visualization.config.field == "orders.revenue"
+    assert normalized_kpi.visualization.config.format == "currency:USD"
+    normalized_line = next(chart for chart in draft.definition.charts if chart.id == "chart-line")
+    assert normalized_line.visualization.config.layout.xField == "orders.month"
+    assert normalized_line.visualization.config.layout.yField == ["orders.revenue"]
+    assert len(client.requests) == 1
+
+
+@pytest.mark.asyncio
 async def test_create_authoring_session_canonicalizes_model_filter_targets(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,

@@ -24,23 +24,28 @@ def init(
     gateway_url: str | None = None,
     api_key: str | None = None,
     session_token: str | None = None,
+    session_token_file: str | os.PathLike[str] | None = None,
 ) -> None:
     """Initialize the SignalPilot Data SDK.
 
     Local:    sp.init()
     Cloud:    sp.init(api_key="sp_...")
-    Sandbox:  sp.init(gateway_url=..., session_token=...)   # internal
+    Sandbox:  sp.init(gateway_url=..., session_token_file=...)   # internal
+
+    session_token_file points at a run-scoped credential the runtime rotates
+    between chat turns. The client reads it per request, so a kernel kept
+    alive across turns always presents the active run's token.
     """
     from signalpilot._utils.localhost import fix_localhost_url
     global _gw
     url = fix_localhost_url(gateway_url or os.environ.get("SP_GATEWAY_URL") or "http://localhost:3300")
     token = session_token or api_key or load_session_jwt() or os.environ.get("SP_API_KEY")
-    if not _is_local_url(url) and not token:
+    if not _is_local_url(url) and not token and not session_token_file:
         raise ValueError(
             "API key required for remote gateway. "
             "Pass api_key= or set SP_API_KEY env var."
         )
-    _gw = GatewayClient(url, token)
+    _gw = GatewayClient(url, token, token_file=session_token_file)
     if os.getenv("SP_CHAT_SCRATCH_DIRECTORY"):
         _apply_runtime_chart_theme()
 

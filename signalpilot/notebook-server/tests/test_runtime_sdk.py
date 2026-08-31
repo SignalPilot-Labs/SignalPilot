@@ -160,3 +160,25 @@ def test_runtime_chart_theme_uses_signalpilot_defaults():
             "#CC79A7",
             "#B3B3B3",
         ]
+
+
+def test_gateway_client_reads_rotated_token_file_per_request(tmp_path: Path):
+    """A kept-alive kernel must present the ACTIVE run's token.
+
+    Adoption rotates the token file between chat turns. The client reads the
+    file per request and keeps the last token when the file is removed at
+    run end.
+    """
+    token_file = tmp_path / ".gateway-token"
+    token_file.write_text("token-run-1", encoding="utf-8")
+    client = GatewayClient("https://gw.example", token_file=token_file)
+    assert client._headers()["Authorization"] == "Bearer token-run-1"
+
+    import os as _os
+
+    token_file.write_text("token-run-2", encoding="utf-8")
+    _os.utime(token_file, (1_700_000_000, 1_700_000_000))
+    assert client._headers()["Authorization"] == "Bearer token-run-2"
+
+    token_file.unlink()
+    assert client._headers()["Authorization"] == "Bearer token-run-2"

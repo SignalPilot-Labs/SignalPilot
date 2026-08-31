@@ -220,6 +220,44 @@ function GenericInput({ step }: { step: RunStep }) {
 
 function StepBody({ step }: { step: RunStep }) {
   const running = step.status === "running";
+  if (step.category === "error" && (step.fullTrace || step.diagnostics)) {
+    const diagnostics = step.diagnostics
+      ? Object.entries(step.diagnostics).map(([key, value]) =>
+          `${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`,
+        )
+      : [];
+    const supportBundle = [
+      step.detail ? `Root cause: ${step.detail}` : "",
+      diagnostics.length ? `Diagnostics:\n${diagnostics.join("\n")}` : "",
+      step.fullTrace ? `Full trace:\n${step.fullTrace}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    return (
+      <CardShell label="Full trace" copyText={supportBundle} accent="error">
+        {diagnostics.length > 0 && (
+          <dl className="grid grid-cols-[auto,1fr] gap-x-4 gap-y-1.5 border-b border-[var(--color-border)] px-3.5 py-3 text-[11px]">
+            {diagnostics.map((line) => {
+              const separator = line.indexOf(": ");
+              return (
+                <div key={line} className="contents">
+                  <dt className="font-mono text-[var(--color-text-dim)]">
+                    {line.slice(0, separator)}
+                  </dt>
+                  <dd className="break-all font-mono text-[var(--color-text-muted)]">
+                    {line.slice(separator + 2)}
+                  </dd>
+                </div>
+              );
+            })}
+          </dl>
+        )}
+        {step.fullTrace && (
+          <ChatCode code={step.fullTrace} language="text" maxHeightClass="max-h-80" />
+        )}
+      </CardShell>
+    );
+  }
   if (step.category === "sql" && step.sql) {
     return (
       <CardShell label="SQL" copyText={step.sql}>
@@ -286,6 +324,9 @@ function StepBody({ step }: { step: RunStep }) {
 }
 
 function stepHasBody(step: RunStep): boolean {
+  if (step.category === "error") {
+    return Boolean(step.fullTrace || step.diagnostics);
+  }
   if (step.sql || step.code) return true;
   if (step.category === "file-edit") {
     return Boolean(step.input?.old_string || step.input?.new_string);

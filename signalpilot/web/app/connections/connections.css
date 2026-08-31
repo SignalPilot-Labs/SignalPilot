@@ -160,7 +160,7 @@
   .connection-schema-detail header dl div:first-child { border-left: 0; }
 }
 
-/* ── Database picker step (schema browser) ── */
+/* Style the database selection step. */
 .connection-schema-db-picker { padding: 0.65rem 0.75rem 0.85rem; }
 .connection-schema-db-picker > header { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.55rem; color: var(--color-text-dim); font-size: 8px; white-space: nowrap; }
 .connection-schema-db-picker > header strong { color: var(--color-text-muted); font-family: var(--font-mono); font-weight: 500; }

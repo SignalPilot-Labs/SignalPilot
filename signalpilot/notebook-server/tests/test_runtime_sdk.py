@@ -9,7 +9,7 @@ import pytest
 
 from signalpilot._sdk._checks import checks
 from signalpilot._sdk._client import GatewayClient
-from signalpilot._sdk._connection import DatasetRef
+from signalpilot._sdk._connection import Connection, DatasetRef
 from signalpilot._sdk._runtime_publication import (
     _scratch_path,
     apply_runtime_chart_theme,
@@ -18,6 +18,43 @@ from signalpilot._sdk._runtime_publication import (
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+def test_notebook_queries_hide_internal_plan_ids_and_execution_need():
+    class RecordingClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        def post(self, path: str, body: dict, **_kwargs: object):
+            self.calls.append((path, body))
+            if path == "/api/query":
+                return {"rows": [{"value": 7}], "result_id": "result-a"}
+            if path == "/api/query/datasets":
+                return {
+                    "dataset_id": "dataset-a",
+                    "schema": [],
+                    "row_count": 1,
+                    "byte_size": 8,
+                    "completeness": "complete",
+                    "expires_at": "2026-09-01T00:00:00Z",
+                }
+            raise AssertionError(path)
+
+    client = RecordingClient()
+    connection = Connection("production", client)  # type: ignore[arg-type]
+
+    assert connection.query_result("select 7")["rows"] == [{"value": 7}]
+    assert connection.query_dataset("select 7").id == "dataset-a"
+    assert client.calls == [
+        (
+            "/api/query",
+            {"connection_name": "production", "sql": "select 7", "row_limit": 100_000},
+        ),
+        (
+            "/api/query/datasets",
+            {"connection_name": "production", "sql": "select 7"},
+        ),
+    ]
 
 
 def test_dataset_ref_representation_never_exposes_gateway_token():

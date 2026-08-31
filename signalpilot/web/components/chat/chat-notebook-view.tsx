@@ -1,75 +1,95 @@
 "use client";
 
 import { useState } from "react";
+import { Code2, LayoutTemplate } from "lucide-react";
 import NotebookBoot from "~/components/notebook/notebook-boot";
 import {
   NotebookProvider,
   type NotebookConfig,
 } from "~/components/notebook/notebook-context";
-import {
-  getGatewayAuthToken,
-  getStandaloneNotebookDocument,
-} from "~/lib/api";
+import { getGatewayAuthToken, type ConversationNotebook } from "~/lib/api";
 
 const GATEWAY_URL =
   process.env.NEXT_PUBLIC_GATEWAY_URL ?? "http://localhost:3300";
 const NOTEBOOK_PROXY_URL = process.env.NEXT_PUBLIC_NOTEBOOK_PROXY_URL ?? "";
 
 /**
- * Inline view of the chat agent's analysis notebook — DOCUMENT-FIRST and
- * kernel-free.
+ * Inline read-only view of a conversation's analysis notebook.
  *
- * Mounts the real notebook runtime (NotebookProvider + NotebookBoot) in read
- * mode. The document renders immediately from the best available source
- * (live sandbox document, else the run's archived source + outputs
- * snapshot); the kiosk websocket attaches in the background purely for live
- * updates while the agent works, and its absence is silent. The viewer can
- * never run or edit cells and never provisions compute.
+ * Renders the gateway's notebook resource: the saved document paints first,
+ * and when the resource says the kernel is live, a kiosk websocket streams
+ * updates on top. The viewer never runs cells and never provisions compute.
  */
 export function ChatNotebookView({
-  gatewaySessionId,
-  kernelSessionId,
-  notebookPath,
-  runId,
+  notebook,
 }: {
-  /** Gateway notebook session id — the /notebook/{id} proxy path segment. */
-  gatewaySessionId: string;
-  /** Kernel session id inside the runtime (s_xxxxxx). */
-  kernelSessionId: string;
-  /** Absolute path of the analysis notebook inside the sandbox. */
-  notebookPath: string;
-  /** Run id — used to fetch the archived document when the sandbox is gone. */
-  runId?: string;
+  notebook: ConversationNotebook;
 }) {
-  // Latched once: the attach target of a mounted view never changes — a new
-  // notebook/kernel remounts via the key derived from these ids.
+  // Latched once. The mount key below covers every input that requires a
+  // fresh boot, so a mounted view never changes its target.
   const [config] = useState<NotebookConfig>(() => ({
     gatewayUrl: GATEWAY_URL,
     notebookProxyUrl: NOTEBOOK_PROXY_URL,
     product: "notebooks",
-    sessionId: gatewaySessionId,
-    kernelSessionId,
-    file: notebookPath,
+    sessionId: notebook.gateway_session_id ?? "",
+    kernelSessionId: notebook.kernel_session_id ?? undefined,
+    file: notebook.notebook_path ?? undefined,
     getToken: getGatewayAuthToken,
     kioskAttach: true,
-    loadDocument: runId
-      ? async () => {
-          const doc = await getStandaloneNotebookDocument(runId).catch(
-            () => null,
-          );
-          return doc ? { source: doc.source, session: doc.session } : null;
-        }
-      : undefined,
+    kioskLive: notebook.status === "live",
+    loadDocument: async () =>
+      notebook.document
+        ? {
+            source: notebook.document.source,
+            session: notebook.document.session,
+          }
+        : null,
   }));
 
-  const bootKey = `${gatewaySessionId}:${kernelSessionId}:${notebookPath}`;
+  // Code view shows each cell's code above its output; app view is the
+  // traditional outputs-only marimo render. Both read the same document
+  // and the same live kernel stream.
+  const [showCode, setShowCode] = useState(true);
+
   return (
     <div
       data-testid="chat-notebook-view"
-      className="flex h-full min-h-0 w-full flex-col overflow-hidden"
+      className="relative flex h-full min-h-0 w-full flex-col overflow-hidden"
     >
-      <NotebookProvider key={bootKey} value={config}>
-        <NotebookBoot key={bootKey} view="read" />
+      <div className="absolute right-3 top-2 z-30 flex overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] shadow-sm">
+        <button
+          type="button"
+          data-testid="chat-notebook-mode-code"
+          title="Show code and outputs"
+          aria-pressed={showCode}
+          onClick={() => setShowCode(true)}
+          className={`flex items-center gap-1 px-2 py-1 text-[10px] font-medium uppercase tracking-wider transition-colors ${
+            showCode
+              ? "bg-[var(--color-bg-hover)] text-[var(--color-text)]"
+              : "text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
+          }`}
+        >
+          <Code2 className="h-3 w-3" />
+          Code
+        </button>
+        <button
+          type="button"
+          data-testid="chat-notebook-mode-app"
+          title="Show outputs only (app view)"
+          aria-pressed={!showCode}
+          onClick={() => setShowCode(false)}
+          className={`flex items-center gap-1 px-2 py-1 text-[10px] font-medium uppercase tracking-wider transition-colors ${
+            !showCode
+              ? "bg-[var(--color-bg-hover)] text-[var(--color-text)]"
+              : "text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
+          }`}
+        >
+          <LayoutTemplate className="h-3 w-3" />
+          App
+        </button>
+      </div>
+      <NotebookProvider value={config}>
+        <NotebookBoot view="read" readShowCode={showCode} />
       </NotebookProvider>
     </div>
   );

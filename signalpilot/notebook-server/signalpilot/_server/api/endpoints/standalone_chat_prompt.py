@@ -42,7 +42,6 @@ STANDALONE_ALLOWED_TOOLS = [
     "mcp__signalpilot__notion_create_page",
     "mcp__signalpilot__notion_fetch_page",
     "mcp__signalpilot__notion_search",
-    "mcp__signalpilot__plan_query",
     "mcp__signalpilot__propose_knowledge",
     "mcp__signalpilot__query_database",
     "mcp__signalpilot__query_history",
@@ -115,12 +114,15 @@ STANDALONE_SYSTEM_PROMPT = _load_prompt("standalone_chat_system.md")
 
 _NOTEBOOK_ONLY_RULE_PREFIXES = (
     "- Start the analysis notebook whenever",
-    "- `notebook_sdk` or `dataset_ref`",
+    "Start the notebook at any time",
+    "Use `db.query_result(sql)`",
+    "- `notebook_sdk`",
+    "- `dataset_ref`",
     "- The analysis notebook is a marimo reactive notebook",
     "- Define shared imports and reusable DataFrames once",
     "- If edit_notebook returns MultipleDefinitionError",
     "- Never edit, remove, or redefine the seeded",
-    "- For notebook_sdk, first define `plan_id`",
+    "- For `notebook_sdk`, execute with",
     '- `source["rows"]` is JSON transport',
     "- Never copy MCP previews into notebook DataFrames",
     "- Keep complete bounded DataFrames inside the kernel",
@@ -150,10 +152,10 @@ def _system_prompt_for_features(*, notebook_analysis_enabled: bool) -> str:
             lines.append(line)
     disabled_rule = (
         "- Notebook analysis is disabled for this run. Do not call notebook "
-        "tools; use an exact MCP plan or rewrite aggregate_required work as "
+        "tools; use query_database or rewrite aggregate_required work as "
         "bounded warehouse SQL."
     )
-    anchor = "- Use query_database with the returned plan_id only when the plan route is mcp."
+    anchor = "Use `query_database(sql)` for MCP-sized work."
     insert_at = lines.index(anchor) + 1 if anchor in lines else len(lines)
     lines.insert(insert_at, disabled_rule)
     return "\n".join(lines)

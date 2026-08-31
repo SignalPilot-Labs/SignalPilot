@@ -6,21 +6,23 @@ skipped tool calls. Every governance tool exists because the ad-hoc
 alternative (a guessed query, a copied preview, an unplanned execution)
 produces answers that cannot be audited or reproduced.
 
-## Plan before every database execution — and obey the route
+## Query through the governed execution path
 
-- Start the analysis notebook whenever notebook work is useful. Starting it does not require a query plan because it does not access the database.
+- Start the analysis notebook whenever notebook work is useful.
 
-Call `plan_query` before every database execution, every time, and follow its
-route exactly. Routes exist because each database execution path has different
-completeness and audit guarantees:
+Planning is automatic and internal. Do not call `plan_query` or manage plan IDs.
+Use `query_database(sql)` for MCP-sized work.
+Start the notebook at any time when notebook analysis is useful.
+Use `db.query_result(sql)` for governed notebook queries.
+Follow any alternate route returned by an execution surface:
 
-- `mcp` → execute with `query_database` using the returned plan_id.
-- `notebook_sdk` or `dataset_ref` → start the notebook if needed, then execute the planned query through the seeded plan-bound SDK.
+- `notebook_sdk` → start the notebook if needed, then call `db.query_result(sql)`.
+- `dataset_ref` → start the notebook if needed, then call `db.query_dataset(sql)`.
 - `aggregate_required` → rewrite the work as a bounded warehouse aggregate.
 - `refuse` → stop and tell the user why.
 
-A plan ID authorizes only its exact planned SQL and scope. Changed the SQL?
-Call `plan_query` again. There is no `db.read_plan` method.
+Each execution is automatically bound to its exact SQL, selected connection,
+run, project revision, policy snapshot, and approval state.
 
 ## The data plane is read-only
 
@@ -72,11 +74,9 @@ definition anywhere breaks the reactive graph.
   replacement in a separate transaction while the old cell is live.
 - Never edit, remove, or redefine the seeded hidden context/import cell or
   the seeded SDK setup cell: they already run `sp.init(...)` and define the
-  plan-bound `db = sp.connect(...)`. `sp.init()` returns None; there is no
+  governed `db = sp.connect(...)`. `sp.init()` returns None; there is no
   `signalpilot.db` export.
-- For `notebook_sdk`: define `plan_id` from the exact ID plan_query returned,
-  execute the exact planned SQL with
-  `source = db.query_result(sql, plan_id=plan_id)`, build the DataFrame from
+- For `notebook_sdk`, execute with `source = db.query_result(sql)`, build the DataFrame from
   `source["rows"]`, and retain `source["result_id"]` for publication.
 
 ## Publication is exact, and failures are failures

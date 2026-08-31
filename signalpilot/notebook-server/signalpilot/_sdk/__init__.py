@@ -6,11 +6,7 @@ from typing import Any
 
 from signalpilot._sdk._checks import checks as checks
 from signalpilot._sdk._client import GatewayClient, _is_local_url
-from signalpilot._sdk._connection import (
-    Connection,
-    DatasetRef,
-    QueryPlan as QueryPlan,
-)
+from signalpilot._sdk._connection import Connection, DatasetRef
 from signalpilot._sdk._runtime_publication import (
     PublishedArtifact,
     PublishedResult,

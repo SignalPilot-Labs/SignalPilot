@@ -49,6 +49,7 @@ export default function NotebookBoot({
   onPhaseChange,
   onReady,
   view,
+  readShowCode,
 }: {
   children?: React.ReactNode;
   onPhaseChange?: (phase: string) => void;
@@ -60,6 +61,8 @@ export default function NotebookBoot({
    * URL-derived edit surface.
    */
   view?: "edit" | "read";
+  /** Read view only: code + outputs (true, default) or outputs-only app view. */
+  readShowCode?: boolean;
 }) {
   const config = useNotebookConfig();
   const router = useRouter();
@@ -202,6 +205,7 @@ export default function NotebookBoot({
       <EditorComponent
         client={clientRef.current}
         mode={view}
+        readShowCode={readShowCode}
         kernelSessionId={view ? config.kernelSessionId : undefined}
         config={{
           gatewayUrl: config.gatewayUrl,

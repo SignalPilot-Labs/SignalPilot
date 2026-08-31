@@ -1,28 +1,28 @@
 import { describe, expect, it } from "vitest";
-import type { StandaloneChatEvent } from "~/lib/api";
+import type { ConversationNotebook, StandaloneChatEvent } from "~/lib/api";
 import {
   buildChatNotebookPopoutUrl,
-  deriveLiveNotebookLink,
+  canAttachLive,
+  chatNotebookMountKey,
+  hasNotebookContent,
+  notebookRefreshRevision,
 } from "~/lib/chat-live-notebook";
 import {
   FIXTURE_GATEWAY_SESSION_ID,
   FIXTURE_KERNEL_SESSION_ID,
   FIXTURE_NOTEBOOK_PATH,
-  FIXTURE_RUN_ID,
   FIXTURE_TOTAL_MS,
+  fixtureConversationNotebook,
   materializeFixtureEvents,
 } from "~/lib/chat-test-fixture";
-
-const RUN = "run-1";
 
 function event(
   sequence: number,
   type: StandaloneChatEvent["type"],
   payload: Record<string, unknown> = {},
-  runId = RUN,
 ): StandaloneChatEvent {
   return {
-    run_id: runId,
+    run_id: "run-1",
     sequence,
     type,
     payload,
@@ -30,123 +30,125 @@ function event(
   };
 }
 
-const startedPayload = {
-  status: "running",
-  gateway_session_id: "gw-1",
-  kernel_session_id: "s_abc123",
-  notebook_path: "/tmp/signalpilot-chat-runs/run-1/analysis.py",
-};
+function notebook(
+  overrides: Partial<ConversationNotebook> = {},
+): ConversationNotebook {
+  return {
+    status: "live",
+    gateway_session_id: "gw-1",
+    kernel_session_id: "s_abc123",
+    notebook_path: "/tmp/signalpilot-chat-runs/run-1/analysis.py",
+    document: null,
+    ...overrides,
+  };
+}
 
-describe("deriveLiveNotebookLink", () => {
-  it("returns null with no runId or no notebook events", () => {
-    expect(deriveLiveNotebookLink([], undefined)).toBeNull();
-    expect(deriveLiveNotebookLink([], RUN)).toBeNull();
+describe("notebookRefreshRevision", () => {
+  it("counts only notebook-related events", () => {
+    expect(notebookRefreshRevision([])).toBe(0);
     expect(
-      deriveLiveNotebookLink([event(1, "tool_started", { tool: "x" })], RUN),
-    ).toBeNull();
-  });
-
-  it("ignores legacy notebook_started events without attach ids", () => {
+      notebookRefreshRevision([
+        event(1, "tool_started", { tool: "x" }),
+        event(2, "text_delta", { delta: "hi" }),
+      ]),
+    ).toBe(0);
     expect(
-      deriveLiveNotebookLink([event(1, "notebook_started", { status: "running" })], RUN),
-    ).toBeNull();
+      notebookRefreshRevision([
+        event(1, "notebook_started"),
+        event(2, "tool_started", { tool: "x" }),
+        event(3, "archive_completed"),
+        event(4, "kernel_stopped"),
+      ]),
+    ).toBe(3);
+  });
+});
+
+describe("canAttachLive", () => {
+  it("requires live status and all attach ids", () => {
+    expect(canAttachLive(null)).toBe(false);
+    expect(canAttachLive(notebook())).toBe(true);
+    expect(canAttachLive(notebook({ status: "ended" }))).toBe(false);
+    expect(canAttachLive(notebook({ kernel_session_id: null }))).toBe(false);
+    expect(canAttachLive(notebook({ notebook_path: null }))).toBe(false);
+  });
+});
+
+describe("hasNotebookContent", () => {
+  it("is false for null and status none", () => {
+    expect(hasNotebookContent(null)).toBe(false);
+    expect(
+      hasNotebookContent(
+        notebook({ status: "none", gateway_session_id: null }),
+      ),
+    ).toBe(false);
   });
 
-  it("derives a live link from an enriched notebook_started", () => {
-    const link = deriveLiveNotebookLink(
-      [event(1, "notebook_started", startedPayload)],
-      RUN,
-    );
-    expect(link).toEqual({
-      runId: RUN,
-      gatewaySessionId: "gw-1",
-      kernelSessionId: "s_abc123",
-      notebookPath: "/tmp/signalpilot-chat-runs/run-1/analysis.py",
-      live: true,
-    });
+  it("is true for a live notebook without a document", () => {
+    expect(hasNotebookContent(notebook())).toBe(true);
   });
 
-  it("marks the link as not live after kernel_stopped", () => {
-    const link = deriveLiveNotebookLink(
-      [
-        event(1, "notebook_started", startedPayload),
-        event(2, "kernel_stopped", { status: "stopped" }),
-      ],
-      RUN,
-    );
-    expect(link?.live).toBe(false);
-    expect(link?.kernelSessionId).toBe("s_abc123");
-  });
-
-  it("re-arms on a replacement kernel (notebook recovery)", () => {
-    const link = deriveLiveNotebookLink(
-      [
-        event(1, "notebook_started", startedPayload),
-        event(2, "kernel_stopped", { status: "stopped" }),
-        event(3, "notebook_started", {
-          ...startedPayload,
-          kernel_session_id: "s_def456",
+  it("is true for an ended notebook with a saved document", () => {
+    expect(
+      hasNotebookContent(
+        notebook({
+          status: "ended",
+          document: { source: "code", session: null },
         }),
-      ],
-      RUN,
-    );
-    expect(link?.live).toBe(true);
-    expect(link?.kernelSessionId).toBe("s_def456");
+      ),
+    ).toBe(true);
   });
 
-  it("ignores events from other runs and sorts by sequence", () => {
-    const link = deriveLiveNotebookLink(
-      [
-        event(9, "kernel_stopped", {}, "other-run"),
-        event(2, "kernel_stopped", { status: "stopped" }),
-        event(1, "notebook_started", startedPayload),
-      ],
-      RUN,
-    );
-    expect(link?.live).toBe(false);
+  it("is false for an ended notebook without a saved document", () => {
+    expect(hasNotebookContent(notebook({ status: "ended" }))).toBe(false);
   });
 });
 
 describe("buildChatNotebookPopoutUrl", () => {
-  it("builds the /chat-notebook pop-out URL with attach params", () => {
-    const url = buildChatNotebookPopoutUrl({
-      runId: RUN,
-      gatewaySessionId: "gw-1",
-      kernelSessionId: "s_abc123",
-      notebookPath: "/tmp/signalpilot-chat-runs/run-1/analysis.py",
-      live: true,
-    });
+  it("builds the /chat-notebook pop-out URL for a conversation", () => {
+    const url = buildChatNotebookPopoutUrl("conv-1");
     expect(url.startsWith("/chat-notebook?")).toBe(true);
     const params = new URLSearchParams(url.split("?")[1]);
-    expect(params.get("gw_session")).toBe("gw-1");
-    expect(params.get("session_id")).toBe("s_abc123");
-    expect(params.get("file")).toBe(
-      "/tmp/signalpilot-chat-runs/run-1/analysis.py",
-    );
+    expect(params.get("conversation")).toBe("conv-1");
+  });
+});
+
+describe("chatNotebookMountKey", () => {
+  it("changes when liveness or the attach target changes", () => {
+    const base = chatNotebookMountKey(notebook());
+    expect(chatNotebookMountKey(notebook())).toBe(base);
+    expect(chatNotebookMountKey(notebook({ status: "ended" }))).not.toBe(base);
+    expect(
+      chatNotebookMountKey(notebook({ kernel_session_id: "s_other" })),
+    ).not.toBe(base);
   });
 });
 
 describe("fixture integration", () => {
-  it("the fixture stream yields a live link after notebook_started", () => {
-    const link = deriveLiveNotebookLink(
+  it("simulates a live resource after notebook_started", () => {
+    const resource = fixtureConversationNotebook(
       materializeFixtureEvents(9_000),
-      FIXTURE_RUN_ID,
     );
-    expect(link).toEqual({
-      runId: FIXTURE_RUN_ID,
-      gatewaySessionId: FIXTURE_GATEWAY_SESSION_ID,
-      kernelSessionId: FIXTURE_KERNEL_SESSION_ID,
-      notebookPath: FIXTURE_NOTEBOOK_PATH,
-      live: true,
+    expect(resource).toEqual({
+      status: "live",
+      gateway_session_id: FIXTURE_GATEWAY_SESSION_ID,
+      kernel_session_id: FIXTURE_KERNEL_SESSION_ID,
+      notebook_path: FIXTURE_NOTEBOOK_PATH,
+      document: null,
     });
   });
 
-  it("the fixture stream ends with a non-live link and an archive event", () => {
-    const events = materializeFixtureEvents(FIXTURE_TOTAL_MS);
-    const link = deriveLiveNotebookLink(events, FIXTURE_RUN_ID);
-    expect(link?.live).toBe(false);
-    expect(
-      events.some((candidate) => candidate.type === "archive_completed"),
-    ).toBe(true);
+  it("simulates an ended resource with a document after kernel_stopped", () => {
+    const resource = fixtureConversationNotebook(
+      materializeFixtureEvents(FIXTURE_TOTAL_MS),
+    );
+    expect(resource?.status).toBe("ended");
+    expect(resource?.document?.source).toContain("Q3 regional growth");
+    expect(hasNotebookContent(resource ?? null)).toBe(true);
+  });
+
+  it("returns null before any notebook starts", () => {
+    expect(fixtureConversationNotebook(materializeFixtureEvents(1_000))).toBe(
+      null,
+    );
   });
 });

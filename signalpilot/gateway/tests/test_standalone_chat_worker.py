@@ -11,6 +11,62 @@ import pytest
 from gateway.standalone_chat import worker, worker_context
 
 
+def test_public_error_message_preserves_root_cause_and_removes_traceback() -> None:
+    error = RuntimeError(
+        "CLIConnectionError: OAuth token expired\n"
+        "stderr: authentication failed\n"
+        "Traceback (most recent call last):\n"
+        '  File "/opt/runtime/agent.py", line 42, in run\n'
+        "RuntimeError: hidden implementation detail"
+    )
+
+    message = worker._public_error_message(error)
+
+    assert message == ("CLIConnectionError: OAuth token expired\nstderr: authentication failed")
+    assert "Traceback" not in message
+    assert "/opt/runtime" not in message
+
+
+def test_public_error_message_redacts_credentials() -> None:
+    message = worker._public_error_message(RuntimeError("Database failed: postgresql://admin:hunter2@db.internal/prod"))
+
+    assert message == "Database failed: [REDACTED_CONNECTION]"
+    assert "hunter2" not in message
+
+
+def test_public_full_trace_is_expandable_safe_diagnostic_content() -> None:
+    error = worker._AnalysisRuntimeError(
+        "CLIConnectionError: auth failed",
+        full_trace=(
+            "CLIConnectionError: auth failed\n"
+            "Authorization: Bearer oauth-secret\n"
+            "SDK token sk-ant-oat01-very-secret-token\n"
+            '  File "/opt/runtime/agent.py", line 42, in run'
+        ),
+        diagnostic_context={
+            "model": "claude-sonnet-test",
+            "auth_mode": "oauth",
+            "credential_present": True,
+            "environment": {
+                "CLAUDE_CONFIG_DIR": "configured",
+                "SECRET_TOKEN": "must-not-pass",
+            },
+        },
+    )
+
+    trace = worker._public_full_trace(error)
+    context = worker._public_diagnostic_context(error)
+
+    assert "oauth-secret" not in trace
+    assert "very-secret-token" not in trace
+    assert "Authorization: Bearer [REDACTED]" in trace
+    assert "/opt/runtime" not in trace
+    assert context["auth_mode"] == "oauth"
+    assert context["error_type"] == "CLIConnectionError"
+    assert context["credential_present"] is True
+    assert context["environment"] == {"CLAUDE_CONFIG_DIR": "configured"}
+
+
 def test_dashboard_chart_reference_is_preloaded_into_existing_chat_runtime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -45,9 +101,7 @@ def test_dashboard_chart_reference_is_preloaded_into_existing_chat_runtime(
         "query_executions": [],
         "query_results": [],
     }
-    monkeypatch.setattr(
-        worker_context, "project_metadata_context", lambda *_args: {"models": []}
-    )
+    monkeypatch.setattr(worker_context, "project_metadata_context", lambda *_args: {"models": []})
 
     warm = worker._warm_context(context)
 
@@ -366,7 +420,7 @@ class TestNotebookStartedPayload:
         from gateway.standalone_chat.worker import _notebook_started_payload
 
         wrapped = (
-            "[TextContent(type='text', text='{\"session_id\": \"s_abc123\", "
+            '[TextContent(type=\'text\', text=\'{"session_id": "s_abc123", '
             '"status": "started", "plan_id": "plan-1", "cell_ids": [], '
             '"notebook_path": "/tmp/signalpilot-chat-runs/run-1/analysis.py"}\')]'
         )
@@ -375,10 +429,7 @@ class TestNotebookStartedPayload:
             gateway_session_id="gw-sess-1",
         )
         assert payload["kernel_session_id"] == "s_abc123"
-        assert (
-            payload["notebook_path"]
-            == "/tmp/signalpilot-chat-runs/run-1/analysis.py"
-        )
+        assert payload["notebook_path"] == "/tmp/signalpilot-chat-runs/run-1/analysis.py"
 
     def test_extracts_ids_from_dict_block_repr(self):
         from gateway.standalone_chat.worker import _notebook_started_payload
@@ -392,7 +443,4 @@ class TestNotebookStartedPayload:
             gateway_session_id=None,
         )
         assert payload["kernel_session_id"] == "s_def456"
-        assert (
-            payload["notebook_path"]
-            == "/tmp/signalpilot-chat-runs/run-2/analysis.py"
-        )
+        assert payload["notebook_path"] == "/tmp/signalpilot-chat-runs/run-2/analysis.py"

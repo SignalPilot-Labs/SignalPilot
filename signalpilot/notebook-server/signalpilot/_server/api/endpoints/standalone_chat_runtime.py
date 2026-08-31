@@ -324,8 +324,8 @@ def _recovery_context(failure: dict[str, Any]) -> str:
         "to recreate those duplicate globals; use unique public names, private "
         "underscore-prefixed scratch names, or uniquely named functions. Private "
         "underscore-prefixed names are cell-local and cannot be read from another "
-        "cell. A governed plan ID can be reused only with its exact original SQL; "
-        "changed SQL requires a new plan_query result. Never replace SDK query "
+        "cell. Re-run changed SQL through the SDK so it is governed automatically. "
+        "Never replace SDK query "
         "evidence with copied MCP preview rows. "
         f"Recovery errors: {json.dumps(safe_errors, sort_keys=True)}"
     )

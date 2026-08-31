@@ -1,6 +1,8 @@
 """Conversation lifecycle, sharing, and fork routes."""
 
-from fastapi import APIRouter, HTTPException, Response
+from typing import Annotated
+
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from gateway.auth import OrgRole
 from gateway.git.repos import branch_head_sha
@@ -15,6 +17,9 @@ from gateway.models.standalone_chat import (
     StandaloneConversationPatch,
 )
 from gateway.security.scope_guard import RequireScope
+from gateway.standalone_chat.notebook_resource import (
+    get_conversation_notebook as resolve_conversation_notebook,
+)
 from gateway.store import standalone_chat as chat_store
 
 from ..deps import StoreD
@@ -28,12 +33,18 @@ router = APIRouter()
 
 
 @router.get("/conversations", dependencies=[RequireScope("read")])
-async def list_conversations(store: StoreD):
+async def list_conversations(
+    store: StoreD,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+):
     _require_enabled()
     conversations = await chat_store.list_conversations(
         store.session,
         org_id=store._require_org_id(),
         user_id=store.user_id or "local",
+        limit=limit,
+        offset=offset,
     )
     return {"conversations": conversations}
 
@@ -103,6 +114,32 @@ async def get_conversation(conversation_id: str, store: StoreD):
     if detail is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return detail
+
+
+@router.get(
+    "/conversations/{conversation_id}/notebook",
+    dependencies=[RequireScope("read")],
+)
+async def get_conversation_notebook(conversation_id: str, store: StoreD, request: Request):
+    """Return the conversation's notebook: live attach ids plus saved document.
+
+    This is the single source of truth for the chat notebook panel. The
+    client does not derive notebook state from run events.
+    """
+    _require_enabled()
+    conversation = await chat_store.get_owned_conversation(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=store.user_id or "local",
+        conversation_id=conversation_id,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return await resolve_conversation_notebook(
+        store.session,
+        conversation=conversation,
+        http_client=request.app.state.notebook_proxy_client,
+    )
 
 
 @router.patch(

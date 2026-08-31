@@ -9,8 +9,9 @@
     "start": "next start --port 3200",
     "lint": "next lint",
     "test:unit": "vitest run",
+    "check:connections-size": "node scripts/check-connection-file-sizes.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "release:check": "npm run typecheck && npm run test:unit && npm run build"
+    "release:check": "npm run check:connections-size && npm run typecheck && npm run test:unit && npm run build"
   },
   "dependencies": {
     "@anywidget/types": "^0.2.0",
@@ -125,6 +126,7 @@
     "react-grid-layout": "^1.5.3",
     "react-hook-form": "7.54.2",
     "react-markdown": "^9.1.0",
+    "react-resizable": "^3.2.0",
     "react-resizable-panels": "2.1.9",
     "react-responsive-carousel": "^3.2.23",
     "react-use-event-hook": "^0.9.6",
@@ -160,6 +162,7 @@
   },
   "devDependencies": {
     "@clerk/testing": "^2.2.31",
+    "@clerk/types": "^4.101.24",
     "@playwright/test": "^1.60.0",
     "@tailwindcss/postcss": "^4.0.0",
     "@types/lodash-es": "^4.17.12",
@@ -175,6 +178,7 @@
     "raw-loader": "^4.0.2",
     "tailwindcss": "^4.0.0",
     "typescript": "^5",
+    "vega-typings": "^2.1.0",
     "vitest": "^4.1.10"
   },
   "optionalDependencies": {

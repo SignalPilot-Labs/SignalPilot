@@ -62,6 +62,9 @@ export type RunStep = {
   report: string | null;
   /** Subagent spawns only: the subagent's streamed narration so far. */
   liveText: string;
+  /** Sanitized support data present only on terminal run errors. */
+  fullTrace?: string | null;
+  diagnostics?: Record<string, unknown> | null;
 };
 
 export type RunStepSummary = {
@@ -444,7 +447,7 @@ export function foldRunSteps(
         title: `Planned a governed query${rowsLabel}`,
         tool: null,
         toolOrigin: null,
-        input: asRecord(event.payload),
+        input: null,
         sql: text(event.payload.sql),
         code: null,
         file: null,
@@ -474,13 +477,12 @@ export function foldRunSteps(
         title: routeTitles[route] ?? `Route: ${route}`,
         tool: null,
         toolOrigin: null,
-        input: asRecord(event.payload),
+        input: null,
         sql: null,
         code: null,
         file: null,
         sources: [],
-        detail:
-          text(event.payload.route_reason) ?? text(event.payload.summary),
+        detail: null,
         startedAt: event.created_at,
         endedAt: event.created_at,
         durationMs: null,
@@ -555,6 +557,8 @@ export function foldRunSteps(
         startedAt: event.created_at,
         endedAt: event.created_at,
         durationMs: null,
+        fullTrace: text(event.payload.full_trace),
+        diagnostics: asRecord(event.payload.diagnostic_context),
         ...emptyStepExtras(),
       });
       continue;

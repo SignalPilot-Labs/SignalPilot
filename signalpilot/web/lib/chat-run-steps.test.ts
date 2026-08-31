@@ -134,6 +134,38 @@ describe("foldRunSteps", () => {
     expect(query?.status).toBe("running");
   });
 
+  it("normalizes governed-tool wording in persisted chat events", () => {
+    const [failed] = foldRunSteps(
+      [
+        {
+          run_id: "legacy-run",
+          sequence: 1,
+          type: "tool_started" as const,
+          payload: {
+            tool: "mcp__signalpilot__query_database",
+            tool_call_id: "legacy-tool",
+            input: {},
+          },
+          created_at: "2026-08-31T00:00:00Z",
+        },
+        {
+          run_id: "legacy-run",
+          sequence: 2,
+          type: "tool_completed" as const,
+          payload: {
+            tool_call_id: "legacy-tool",
+            summary: "The governed tool returned an error.",
+            error: true,
+          },
+          created_at: "2026-08-31T00:00:01Z",
+        },
+      ],
+      "legacy-run",
+    );
+
+    expect(failed.detail).toBe("The tool returned an error.");
+  });
+
   it("groups subagent work under its spawn with an exact tally", () => {
     const spawn = steps.find((step) => step.category === "subagent");
     expect(spawn?.title).toBe("Map the revenue marts and their grain");

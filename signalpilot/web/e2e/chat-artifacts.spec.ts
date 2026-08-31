@@ -8,6 +8,7 @@ import { expect, test } from "@playwright/test";
  * -  7 400ms  governed query completes → one SQL trace execution
  * -  8 720ms  notebook_started → notebook resource goes live
  * -  9 200ms  Write tool → one conversation file (analysis/q3_growth.py)
+ * - 20 800ms  archive_completed → second ("forecast") notebook lands
  *
  * The harness stubs both inner viewers (notebook + file) so the specs cover
  * panel structure, not the viewer internals.
@@ -79,6 +80,35 @@ test.describe("artifacts panel (fixture harness)", () => {
     await expect(page.getByTestId("chat-file-stub")).toBeVisible();
     await page.getByTestId("artifacts-file-back").click();
     await expect(page.getByTestId("artifacts-file-row")).toBeVisible();
+  });
+
+  test("multiple notebooks render a chip strip that switches the view", async ({
+    page,
+  }) => {
+    // Mid-run only the analysis notebook exists: no chip strip.
+    await page.goto(at(9_000));
+    await waitForHydration(page);
+    await expect(page.getByTestId("live-notebook-panel")).toBeVisible();
+    await expect(page.getByTestId("artifacts-notebook-chip")).toHaveCount(0);
+    // At the end the fixture's second ("forecast") notebook has landed.
+    await page.goto(at(21_200));
+    await waitForHydration(page);
+    await page.getByTestId("live-notebook-toggle").click();
+    const chips = page.getByTestId("artifacts-notebook-chip");
+    await expect(chips).toHaveCount(2);
+    await expect(chips.nth(0)).toContainText("analysis");
+    await expect(chips.nth(0)).toHaveAttribute("aria-pressed", "true");
+    await expect(chips.nth(1)).toContainText("forecast");
+    await expect(chips.nth(1)).toHaveAttribute("aria-pressed", "false");
+    // The active-notebook container is unique and carries the inline testid.
+    await expect(page.getByTestId("live-notebook-inline")).toHaveCount(1);
+    await expect(page.getByTestId("chat-notebook-stub")).toBeVisible();
+    // Switching moves the selection and keeps a single active container.
+    await chips.nth(1).click();
+    await expect(chips.nth(1)).toHaveAttribute("aria-pressed", "true");
+    await expect(chips.nth(0)).toHaveAttribute("aria-pressed", "false");
+    await expect(page.getByTestId("live-notebook-inline")).toHaveCount(1);
+    await expect(page.getByTestId("chat-notebook-stub")).toBeVisible();
   });
 
   test("queries tab shows the completed governed execution", async ({

@@ -36,24 +36,67 @@ export type { FixtureEvent } from "./chat-test-fixture-data";
 
 const BASE_EPOCH = Date.UTC(2026, 0, 15, 17, 30, 0);
 
+/** Name of the second fixture notebook; appears late in the replay. */
+export const FIXTURE_SECOND_NOTEBOOK_NAME = "forecast";
+export const FIXTURE_SECOND_NOTEBOOK_PATH =
+  "/tmp/signalpilot-chat-runs/run-fixture-0001/forecast.py";
+
+const FORECAST_FILE = `# %% [markdown]
+# ## Q4 forecast scratch notebook
+# Quick projection from the Q3 regional growth rates.
+
+# %%
+q3 = {"AMER": 9_204_100, "EMEA": 4_812_400, "APAC": 2_118_800}
+growth = {"AMER": 0.031, "EMEA": 0.173, "APAC": 0.315}
+q4 = {region: round(value * (1 + growth[region])) for region, value in q3.items()}
+q4
+`;
+
 /**
- * Simulate the gateway's conversation notebook resource from the replayed
- * events. Mirrors the server: live while the kernel runs, ended with a
- * saved document after it stops, null before any notebook starts.
+ * Simulate the gateway's conversation notebook list from the replayed
+ * events. Mirrors the server: the "analysis" notebook is live while the
+ * kernel runs and ends with a saved document after it stops; a second
+ * "forecast" notebook lands, already ended, once the archive completes.
  */
+export function fixtureConversationNotebooks(
+  events: StandaloneChatEvent[],
+): ConversationNotebook[] {
+  const notebooks: ConversationNotebook[] = [];
+  const started = events.some((event) => event.type === "notebook_started");
+  if (started) {
+    const stopped = events.some((event) => event.type === "kernel_stopped");
+    notebooks.push({
+      name: "analysis",
+      status: stopped ? "ended" : "live",
+      gateway_session_id: FIXTURE_GATEWAY_SESSION_ID,
+      kernel_session_id: FIXTURE_KERNEL_SESSION_ID,
+      notebook_path: FIXTURE_NOTEBOOK_PATH,
+      document: stopped ? { source: PYTHON_FILE, session: null } : null,
+    });
+  }
+  const archived = events.some((event) => event.type === "archive_completed");
+  if (archived) {
+    notebooks.push({
+      name: FIXTURE_SECOND_NOTEBOOK_NAME,
+      status: "ended",
+      gateway_session_id: FIXTURE_GATEWAY_SESSION_ID,
+      kernel_session_id: null,
+      notebook_path: FIXTURE_SECOND_NOTEBOOK_PATH,
+      document: { source: FORECAST_FILE, session: null },
+    });
+  }
+  return notebooks;
+}
+
+/** Compat accessor: the default ("analysis") notebook, or null. */
 export function fixtureConversationNotebook(
   events: StandaloneChatEvent[],
 ): ConversationNotebook | null {
-  const started = events.some((event) => event.type === "notebook_started");
-  if (!started) return null;
-  const stopped = events.some((event) => event.type === "kernel_stopped");
-  return {
-    status: stopped ? "ended" : "live",
-    gateway_session_id: FIXTURE_GATEWAY_SESSION_ID,
-    kernel_session_id: FIXTURE_KERNEL_SESSION_ID,
-    notebook_path: FIXTURE_NOTEBOOK_PATH,
-    document: stopped ? { source: PYTHON_FILE, session: null } : null,
-  };
+  return (
+    fixtureConversationNotebooks(events).find(
+      (notebook) => notebook.name === "analysis",
+    ) ?? null
+  );
 }
 
 /**

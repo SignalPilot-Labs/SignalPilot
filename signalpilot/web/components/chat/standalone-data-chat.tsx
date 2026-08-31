@@ -24,12 +24,15 @@ import {
 } from "~/lib/standalone-chat-state";
 import { projectSettingsHref } from "~/lib/project-settings-route";
 import { ArtifactsPanel } from "~/components/chat/artifacts-panel";
-import { useConversationNotebook } from "~/components/chat/use-conversation-notebook";
+import { useConversationNotebooks } from "~/components/chat/use-conversation-notebook";
 import {
   useConversationFiles,
   useConversationSqlTrace,
 } from "~/components/chat/use-conversation-files";
-import { notebookRefreshRevision } from "~/lib/chat-live-notebook";
+import {
+  notebookRefreshRevision,
+  pickDefaultNotebook,
+} from "~/lib/chat-live-notebook";
 import {
   filesRefreshRevision,
   hasArtifactsContent,
@@ -202,10 +205,12 @@ export function StandaloneDataChat({
     () => notebookRefreshRevision(events),
     [events],
   );
-  const conversationNotebook = useConversationNotebook(
+  const conversationNotebooks = useConversationNotebooks(
     conversationId ?? null,
     notebookRefreshRev,
   );
+  // Panel-open and auto-open follow the DEFAULT (analysis) notebook.
+  const defaultNotebook = pickDefaultNotebook(conversationNotebooks);
   // File manifest and SQL trace for the artifacts panel. Same contract as
   // the notebook: gateway resources, events only trigger refetches.
   const filesRefreshRev = useMemo(() => filesRefreshRevision(events), [events]);
@@ -223,7 +228,7 @@ export function StandaloneDataChat({
   );
   const [notebookPanelOpen, setNotebookPanelOpen] = useNotebookPanelState(
     conversationId,
-    conversationNotebook?.status,
+    defaultNotebook?.status,
     currentRun?.id,
   );
   const conversationLoading = Boolean(
@@ -560,7 +565,7 @@ export function StandaloneDataChat({
             </div>
             {conversationId &&
               hasArtifactsContent(
-                conversationNotebook,
+                conversationNotebooks,
                 conversationFiles,
                 sqlTraceExecutions,
               ) &&
@@ -580,7 +585,7 @@ export function StandaloneDataChat({
           {conversationId && notebookPanelOpen && (
             <ArtifactsPanel
               conversationId={conversationId}
-              notebook={conversationNotebook}
+              notebooks={conversationNotebooks}
               files={conversationFiles}
               executions={sqlTraceExecutions}
               onClose={() => setNotebookPanelOpen(false)}

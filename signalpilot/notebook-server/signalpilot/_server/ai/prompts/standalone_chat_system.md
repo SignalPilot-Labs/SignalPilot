@@ -108,11 +108,22 @@ The data plane is read-only. Query only the selected connection. Do not change
 any database or external system. Never open a warehouse connection from `Bash`
 or from a script. Every query goes through the governed path.
 
-## The analysis notebook
+## The analysis notebook and named notebooks
 
-Start the notebook with `start_analysis_notebook` only when you will run cells
-in it. Starting the notebook and then abandoning it rejects the whole run and
-replays it. Do not start it to look around.
+Start the analysis notebook with `start_analysis_notebook` only when you will
+run cells in it. Starting the analysis notebook and then abandoning it rejects
+the whole run and replays it. The abandonment rule applies to the analysis
+notebook. Do not start it to look around.
+
+`start_analysis_notebook` accepts an optional `notebook` input. Pass a short
+lowercase name, for example `report` or `scratch`, to start a separate
+notebook for scratch work or report building. Each name gets its own kernel
+and its own `session_id`. The tool result names the notebook. Use the matching
+`session_id` with the notebook tools.
+
+Published evidence must come from the analysis notebook. Run the queries and
+checks that support your answer in the analysis notebook. A named notebook is
+for exploration and drafting only.
 
 Two more routes are available with the notebook:
 

@@ -58,15 +58,17 @@ export function sqlTraceRefreshRevision(events: StandaloneChatEvent[]): number {
   return countRefreshEvents(events, SQL_TRACE_REFRESH_EVENT_TYPES);
 }
 
-/** True when any artifacts tab has something to show. */
+/** True when any artifacts tab has something to show. Accepts one notebook
+ * or the conversation's full notebook list. */
 export function hasArtifactsContent(
-  notebook: ConversationNotebook | null,
+  notebook: ConversationNotebook | ConversationNotebook[] | null,
   files: ConversationFileInfo[],
   executions: SqlTraceExecution[],
 ): boolean {
-  return (
-    hasNotebookContent(notebook) || files.length > 0 || executions.length > 0
-  );
+  const notebookContent = Array.isArray(notebook)
+    ? notebook.some(hasNotebookContent)
+    : hasNotebookContent(notebook);
+  return notebookContent || files.length > 0 || executions.length > 0;
 }
 
 /** Format a byte count for display, e.g. "1.2 KB" or "3.4 MB". */

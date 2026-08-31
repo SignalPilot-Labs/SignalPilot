@@ -163,7 +163,8 @@ async def test_paths_outside_the_scratch_root_are_rejected(env):
 async def test_skipped_basenames_and_segments(env):
     for path in (
         f"{ROOT}/run-1/.gateway-token",
-        f"{ROOT}/run-1/analysis.py",
+        f"{ROOT}/analysis.py",
+        f"{ROOT}/revenue.py",
         f"{ROOT}/run-1/.env",
         f"{ROOT}/run-1/__pycache__/mod.py",
         f"{ROOT}/run-1/.git/config",
@@ -171,6 +172,15 @@ async def test_skipped_basenames_and_segments(env):
         await _write(path)
     assert await _rows(env.factory) == []
     assert env.events == []
+
+
+@pytest.mark.asyncio
+async def test_python_files_in_subdirectories_are_mirrored(env):
+    # Only root-level .py files are notebooks; subdirectory scripts are
+    # real user files and must be mirrored.
+    await _write(f"{ROOT}/run-1/scripts/load.py", "print('x')")
+    rows = await _rows(env.factory)
+    assert [row.path for row in rows] == ["run-1/scripts/load.py"]
 
 
 # ── Edit and MultiEdit ───────────────────────────────────────────────────────

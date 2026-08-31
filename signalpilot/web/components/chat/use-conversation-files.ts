@@ -22,7 +22,7 @@ const REFETCH_DEBOUNCE_MS = 400;
  * Test override: pass `override` to skip fetching entirely. The fixture
  * harness has no gateway.
  */
-function useConversationResource<T>(
+export function useConversationResource<T>(
   conversationId: string | null,
   refreshRevision: number,
   fetchResource: (conversationId: string) => Promise<T>,

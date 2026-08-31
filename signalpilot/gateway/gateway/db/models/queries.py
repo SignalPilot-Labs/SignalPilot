@@ -302,7 +302,10 @@ class GatewayChatRuntimeArchive(GatewayBase):
     org_id: Mapped[str] = mapped_column(String, nullable=False)
     user_id: Mapped[str] = mapped_column(String, nullable=False)
     conversation_id: Mapped[str] = mapped_column(String, nullable=False)
-    run_id: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    run_id: Mapped[str] = mapped_column(String, nullable=False)
+    # Notebook this archive snapshots. NULL means the legacy "analysis"
+    # notebook from before multi-notebook support.
+    notebook_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
     source_object_key: Mapped[str] = mapped_column(Text, nullable=False)
     html_object_key: Mapped[str] = mapped_column(Text, nullable=False)
     manifest_object_key: Mapped[str] = mapped_column(Text, nullable=False)
@@ -315,7 +318,10 @@ class GatewayChatRuntimeArchive(GatewayBase):
     session_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
 
-    __table_args__ = (Index("ix_gw_chat_archive_owner", "org_id", "user_id", "run_id"),)
+    __table_args__ = (
+        UniqueConstraint("run_id", "notebook_name", name="uq_gw_chat_archive_run_notebook"),
+        Index("ix_gw_chat_archive_owner", "org_id", "user_id", "run_id"),
+    )
 
 
 class GatewayChatObjectDeletion(GatewayBase):

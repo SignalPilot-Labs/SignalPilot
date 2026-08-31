@@ -79,6 +79,30 @@ class GatewayChatConversation(GatewayBase):
     )
 
 
+class GatewayChatConversationNotebook(GatewayBase):
+    """One named notebook owned by a chat conversation.
+
+    "analysis" is the default notebook every conversation starts with. The
+    legacy pointer columns on the conversation row mirror the "analysis"
+    entry for older readers.
+    """
+
+    __tablename__ = "gateway_chat_conversation_notebooks"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    conversation_id: Mapped[str] = mapped_column(String, nullable=False)
+    name: Mapped[str] = mapped_column(String(50), nullable=False)
+    gateway_session_id: Mapped[str] = mapped_column(String, nullable=False)
+    kernel_session_id: Mapped[str] = mapped_column(String, nullable=False)
+    notebook_path: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "name", name="uq_gw_conv_notebook_name"),
+        Index("ix_gw_conv_notebooks", "conversation_id"),
+    )
+
+
 class GatewayChatMessage(GatewayBase):
     """Individual chat message within a conversation."""
 

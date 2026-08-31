@@ -16,6 +16,7 @@ import {
 } from "~/components/chat/standalone-data-chat";
 import { ArtifactsPanel } from "~/components/chat/artifacts-panel";
 import { hasArtifactsContent } from "~/lib/chat-artifacts";
+import { pickDefaultNotebook } from "~/lib/chat-live-notebook";
 import {
   FIXTURE_RUN_ID,
   FIXTURE_TOTAL_MS,
@@ -23,7 +24,7 @@ import {
   fixtureArtifacts,
   fixtureAssembledText,
   fixtureConversationFiles,
-  fixtureConversationNotebook,
+  fixtureConversationNotebooks,
   fixtureRunStatus,
   fixtureSqlTrace,
   materializeFixtureEvents,
@@ -79,10 +80,12 @@ export function StandaloneChatTestHarness() {
   // Notebook panel: the harness has no gateway, so it simulates the
   // conversation notebook resource from the replayed events. Auto-open
   // mirrors the chat page: once per run when the notebook goes live.
-  const conversationNotebook = useMemo(
-    () => fixtureConversationNotebook(events),
+  const conversationNotebooks = useMemo(
+    () => fixtureConversationNotebooks(events),
     [events],
   );
+  // Auto-open follows the default (analysis) notebook, as on the chat page.
+  const defaultNotebook = pickDefaultNotebook(conversationNotebooks);
   const conversationFiles = useMemo(
     () => fixtureConversationFiles(events),
     [events],
@@ -92,19 +95,19 @@ export function StandaloneChatTestHarness() {
   const notebookPanelAutoOpenedRunRef = useRef<string | null>(null);
   useEffect(() => {
     if (
-      conversationNotebook?.status === "live" &&
+      defaultNotebook?.status === "live" &&
       notebookPanelAutoOpenedRunRef.current !== FIXTURE_RUN_ID
     ) {
       notebookPanelAutoOpenedRunRef.current = FIXTURE_RUN_ID;
       setNotebookPanelOpen(true);
     }
-    if (!conversationNotebook) {
+    if (!defaultNotebook) {
       // Scrubbed back before notebook_started (or restarted): reset so the
       // panel auto-opens again when the notebook (re)starts.
       notebookPanelAutoOpenedRunRef.current = null;
       setNotebookPanelOpen(false);
     }
-  }, [conversationNotebook]);
+  }, [defaultNotebook]);
   const artifacts = useMemo(
     () =>
       fixtureArtifacts
@@ -249,7 +252,7 @@ export function StandaloneChatTestHarness() {
           </ChatUiContext.Provider>
         </div>
         {hasArtifactsContent(
-          conversationNotebook,
+          conversationNotebooks,
           conversationFiles,
           sqlTraceExecutions,
         ) &&
@@ -268,7 +271,7 @@ export function StandaloneChatTestHarness() {
         {notebookPanelOpen && (
           <ArtifactsPanel
             conversationId="conversation-fixture-1"
-            notebook={conversationNotebook}
+            notebooks={conversationNotebooks}
             files={conversationFiles}
             executions={sqlTraceExecutions}
             onClose={() => setNotebookPanelOpen(false)}

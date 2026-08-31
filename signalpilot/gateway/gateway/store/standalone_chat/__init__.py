@@ -111,6 +111,10 @@ from gateway.store.standalone_chat.lifecycle import (
     fail_run,
     wait_for_clarification,
 )
+from gateway.store.standalone_chat.notebooks import (
+    list_conversation_notebooks,
+    upsert_conversation_notebook,
+)
 from gateway.store.standalone_chat.runs import (
     append_event,
     create_run,
@@ -228,6 +232,7 @@ __all__ = [
     "get_worker_run",
     "hashlib",
     "list_conversation_files",
+    "list_conversation_notebooks",
     "list_conversations",
     "list_run_events",
     "mark_conversation_file_deleted",
@@ -261,6 +266,7 @@ __all__ = [
     "update",
     "update_internal_summary",
     "upsert_conversation_file",
+    "upsert_conversation_notebook",
     "uuid",
     "validate_artifact_size",
     "wait_for_clarification",

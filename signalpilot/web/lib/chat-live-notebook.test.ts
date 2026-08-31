@@ -6,6 +6,7 @@ import {
   chatNotebookMountKey,
   hasNotebookContent,
   notebookRefreshRevision,
+  pickDefaultNotebook,
 } from "~/lib/chat-live-notebook";
 import {
   FIXTURE_GATEWAY_SESSION_ID,
@@ -13,6 +14,7 @@ import {
   FIXTURE_NOTEBOOK_PATH,
   FIXTURE_TOTAL_MS,
   fixtureConversationNotebook,
+  fixtureConversationNotebooks,
   materializeFixtureEvents,
 } from "~/lib/chat-test-fixture";
 
@@ -34,6 +36,7 @@ function notebook(
   overrides: Partial<ConversationNotebook> = {},
 ): ConversationNotebook {
   return {
+    name: "analysis",
     status: "live",
     gateway_session_id: "gw-1",
     kernel_session_id: "s_abc123",
@@ -109,6 +112,38 @@ describe("buildChatNotebookPopoutUrl", () => {
     expect(url.startsWith("/chat-notebook?")).toBe(true);
     const params = new URLSearchParams(url.split("?")[1]);
     expect(params.get("conversation")).toBe("conv-1");
+    expect(params.get("notebook")).toBe(null);
+  });
+
+  it("omits the notebook param for the default analysis notebook", () => {
+    const url = buildChatNotebookPopoutUrl("conv-1", "analysis");
+    const params = new URLSearchParams(url.split("?")[1]);
+    expect(params.get("notebook")).toBe(null);
+  });
+
+  it("carries a non-default notebook name", () => {
+    const url = buildChatNotebookPopoutUrl("conv-1", "forecast");
+    const params = new URLSearchParams(url.split("?")[1]);
+    expect(params.get("conversation")).toBe("conv-1");
+    expect(params.get("notebook")).toBe("forecast");
+  });
+});
+
+describe("pickDefaultNotebook", () => {
+  it("returns null for an empty list", () => {
+    expect(pickDefaultNotebook([])).toBe(null);
+  });
+
+  it("prefers the analysis entry regardless of order", () => {
+    const forecast = notebook({ name: "forecast" });
+    const analysis = notebook();
+    expect(pickDefaultNotebook([forecast, analysis])).toBe(analysis);
+  });
+
+  it("falls back to the first entry without an analysis notebook", () => {
+    const forecast = notebook({ name: "forecast" });
+    const scratch = notebook({ name: "scratch" });
+    expect(pickDefaultNotebook([forecast, scratch])).toBe(forecast);
   });
 });
 
@@ -121,6 +156,11 @@ describe("chatNotebookMountKey", () => {
       chatNotebookMountKey(notebook({ kernel_session_id: "s_other" })),
     ).not.toBe(base);
   });
+
+  it("changes when the notebook name changes", () => {
+    const base = chatNotebookMountKey(notebook());
+    expect(chatNotebookMountKey(notebook({ name: "forecast" }))).not.toBe(base);
+  });
 });
 
 describe("fixture integration", () => {
@@ -129,6 +169,7 @@ describe("fixture integration", () => {
       materializeFixtureEvents(9_000),
     );
     expect(resource).toEqual({
+      name: "analysis",
       status: "live",
       gateway_session_id: FIXTURE_GATEWAY_SESSION_ID,
       kernel_session_id: FIXTURE_KERNEL_SESSION_ID,
@@ -150,5 +191,19 @@ describe("fixture integration", () => {
     expect(fixtureConversationNotebook(materializeFixtureEvents(1_000))).toBe(
       null,
     );
+  });
+
+  it("lists one notebook mid-run and two after the archive lands", () => {
+    expect(
+      fixtureConversationNotebooks(materializeFixtureEvents(9_000)).map(
+        (entry) => entry.name,
+      ),
+    ).toEqual(["analysis"]);
+    const final = fixtureConversationNotebooks(
+      materializeFixtureEvents(FIXTURE_TOTAL_MS),
+    );
+    expect(final.map((entry) => entry.name)).toEqual(["analysis", "forecast"]);
+    expect(final.every((entry) => hasNotebookContent(entry))).toBe(true);
+    expect(pickDefaultNotebook(final)?.name).toBe("analysis");
   });
 });

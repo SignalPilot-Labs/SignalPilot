@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { getConversationNotebook, type ConversationNotebook } from "~/lib/api";
+import {
+  getConversationNotebook,
+  getConversationNotebooks,
+  type ConversationNotebook,
+} from "~/lib/api";
+import { useConversationResource } from "~/components/chat/use-conversation-files";
 
 /** Delay before a refetch so bursts of events cause one request. */
 const REFETCH_DEBOUNCE_MS = 400;
@@ -59,4 +64,28 @@ export function useConversationNotebook(
   }, [conversationId, refreshRevision, override]);
 
   return override !== undefined ? (override ?? null) : notebook;
+}
+
+const NO_NOTEBOOKS: ConversationNotebook[] = [];
+
+const fetchNotebooks = (conversationId: string) =>
+  getConversationNotebooks(conversationId).then((result) => result.notebooks);
+
+/**
+ * Fetch ALL of the conversation's notebooks and keep them current. Same
+ * contract as the singular hook: the gateway decides everything, events
+ * only trigger refetches, and `override` skips fetching for fixtures.
+ */
+export function useConversationNotebooks(
+  conversationId: string | null,
+  refreshRevision: number,
+  override?: ConversationNotebook[] | null,
+): ConversationNotebook[] {
+  return useConversationResource(
+    conversationId,
+    refreshRevision,
+    fetchNotebooks,
+    NO_NOTEBOOKS,
+    override,
+  );
 }

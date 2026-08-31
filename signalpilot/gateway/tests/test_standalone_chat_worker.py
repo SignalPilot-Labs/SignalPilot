@@ -416,6 +416,7 @@ class TestNotebookStartedPayload:
             "gateway_session_id": "gw-sess-1",
             "kernel_session_id": "s_abc123",
             "notebook_path": "/tmp/signalpilot-chat-runs/run-1/analysis.py",
+            "notebook": "analysis",
         }
 
     def test_tolerates_non_json_tool_result(self):
@@ -425,7 +426,11 @@ class TestNotebookStartedPayload:
             tool_result_content="kernel started",
             gateway_session_id="gw-sess-1",
         )
-        assert payload == {"status": "running", "gateway_session_id": "gw-sess-1"}
+        assert payload == {
+            "status": "running",
+            "gateway_session_id": "gw-sess-1",
+            "notebook": "analysis",
+        }
 
     def test_tolerates_missing_everything(self):
         from gateway.standalone_chat.worker import _notebook_started_payload
@@ -434,7 +439,7 @@ class TestNotebookStartedPayload:
             tool_result_content="",
             gateway_session_id=None,
         )
-        assert payload == {"status": "running"}
+        assert payload == {"status": "running", "notebook": "analysis"}
 
     def test_extracts_ids_from_content_block_repr(self):
         """The agent SDK forwards MCP tool results as str(content_blocks) —

@@ -31,7 +31,7 @@ _MAX_WRITE_BYTES = 100 * 1024 * 1024
 _MAX_EDIT_SOURCE_BYTES = 10 * 1024 * 1024
 _EVENT_DEBOUNCE_SECONDS = 2.0
 _TOOL_SUFFIXES = ("Write", "Edit", "MultiEdit")
-_SKIPPED_BASENAMES = {".gateway-token", "analysis.py"}
+_SKIPPED_BASENAMES = {".gateway-token"}
 _SKIPPED_SEGMENTS = {"__pycache__", ".git"}
 
 # One files_changed event per run per debounce window.
@@ -64,6 +64,10 @@ def _relative_scratch_path(file_path: Any) -> str | None:
         return None
     basename = segments[-1]
     if basename.startswith(".") or basename in _SKIPPED_BASENAMES:
+        return None
+    # Notebook files are ".py" files directly in the run's scratch root.
+    # They are captured by the notebook archive, not the file mirror.
+    if len(segments) == 1 and basename.endswith(".py"):
         return None
     return relative
 

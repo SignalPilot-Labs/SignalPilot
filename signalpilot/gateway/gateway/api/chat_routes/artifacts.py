@@ -14,7 +14,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 
 from gateway.db.models import (
@@ -115,6 +115,8 @@ class RuntimeArchiveCreate(BaseModel):
     session_base64: str | None = Field(
         default=None, min_length=1, max_length=27 * 1024 * 1024
     )
+    # Notebook this archive snapshots. "analysis" is the default notebook.
+    notebook_name: str = Field(default="analysis", pattern=r"^[a-z][a-z0-9_-]{0,40}$")
 
 
 @router.post("/runtime-artifacts", status_code=201, dependencies=[RequireScope("query")])
@@ -297,23 +299,38 @@ async def publish_runtime_archive(body: RuntimeArchiveCreate, store: StoreD, req
     html_text = _sanitize_runtime_archive_html(html_text)
     html = html_text.encode("utf-8")
     archive_hashes = tuple(hashlib.sha256(value).hexdigest() for value in (source, html, manifest))
+    notebook_name = body.notebook_name
+    # Legacy rows predate notebook names; NULL means "analysis".
+    name_filter = GatewayChatRuntimeArchive.notebook_name == notebook_name
+    if notebook_name == "analysis":
+        name_filter = or_(name_filter, GatewayChatRuntimeArchive.notebook_name.is_(None))
     existing = (
-        await store.session.execute(select(GatewayChatRuntimeArchive).where(GatewayChatRuntimeArchive.run_id == run.id))
+        await store.session.execute(
+            select(GatewayChatRuntimeArchive).where(
+                GatewayChatRuntimeArchive.run_id == run.id, name_filter
+            )
+        )
     ).scalar_one_or_none()
     if existing is not None:
         if archive_hashes != (existing.source_hash, existing.html_hash, existing.manifest_hash):
             raise HTTPException(status_code=409, detail="Runtime archive is already bound to different content")
         return {"archive_id": existing.id, "run_id": run.id}
-    archive_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"signalpilot-runtime-archive:{run.id}"))
+    # Keep the legacy seed for "analysis" so re-publishes of existing runs
+    # stay idempotent.
+    seed = f"signalpilot-runtime-archive:{run.id}"
+    if notebook_name != "analysis":
+        seed = f"signalpilot-runtime-archive:{run.id}:{notebook_name}"
+    archive_id = str(uuid.uuid5(uuid.NAMESPACE_URL, seed))
+    prefix = "" if notebook_name == "analysis" else f"{notebook_name}-"
     storage = chat_object_storage()
     objects = []
     try:
         for _label, filename, data, content_type in (
-            ("source", "analysis.py", source, "text/x-python"),
-            ("html", "analysis.html", html, "text/html"),
-            ("manifest", "manifest.json", manifest, "application/json"),
+            ("source", f"{prefix}analysis.py", source, "text/x-python"),
+            ("html", f"{prefix}analysis.html", html, "text/html"),
+            ("manifest", f"{prefix}manifest.json", manifest, "application/json"),
             *(
-                (("session", "session.json", session_snapshot, "application/json"),)
+                (("session", f"{prefix}session.json", session_snapshot, "application/json"),)
                 if session_snapshot is not None
                 else ()
             ),
@@ -338,6 +355,7 @@ async def publish_runtime_archive(body: RuntimeArchiveCreate, store: StoreD, req
         user_id=run.user_id,
         conversation_id=run.conversation_id,
         run_id=run.id,
+        notebook_name=notebook_name,
         source_object_key=objects[0].key,
         html_object_key=objects[1].key,
         manifest_object_key=objects[2].key,
@@ -348,14 +366,17 @@ async def publish_runtime_archive(body: RuntimeArchiveCreate, store: StoreD, req
         session_hash=objects[3].content_hash if len(objects) > 3 else None,
     )
     store.session.add(archive)
-    run.runtime_archive_id = archive.id
+    if notebook_name == "analysis":
+        run.runtime_archive_id = archive.id
     try:
         await store.session.commit()
     except IntegrityError as exc:
         await store.session.rollback()
         winner = (
             await store.session.execute(
-                select(GatewayChatRuntimeArchive).where(GatewayChatRuntimeArchive.run_id == run.id)
+                select(GatewayChatRuntimeArchive).where(
+                    GatewayChatRuntimeArchive.run_id == run.id, name_filter
+                )
             )
         ).scalar_one_or_none()
         if winner is not None and archive_hashes == (

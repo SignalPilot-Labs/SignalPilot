@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
   ExternalLink,
@@ -18,6 +18,7 @@ import {
 import {
   buildChatNotebookPopoutUrl,
   chatNotebookMountKey,
+  pickDefaultNotebook,
 } from "~/lib/chat-live-notebook";
 import { formatByteSize } from "~/lib/chat-artifacts";
 import type {
@@ -180,8 +181,9 @@ function FilesTab({
 
 /**
  * Right-side panel on the chat page that shows everything the agent produced
- * for the conversation: the analysis notebook, written files, and the
- * governed SQL trace.
+ * for the conversation: its notebooks, written files, and the governed
+ * SQL trace. With more than one notebook a chip strip switches between
+ * them; "analysis" is the default selection.
  *
  * The gateway's conversation resources are rendered as-is. "Live" means the
  * gateway verified the kernel sandbox is running; anything else renders the
@@ -189,7 +191,7 @@ function FilesTab({
  */
 export function ArtifactsPanel({
   conversationId,
-  notebook,
+  notebooks,
   files,
   executions,
   onClose,
@@ -197,7 +199,7 @@ export function ArtifactsPanel({
   fileViewOverride,
 }: {
   conversationId: string;
-  notebook: ConversationNotebook | null;
+  notebooks: ConversationNotebook[];
   files: ConversationFileInfo[];
   executions: SqlTraceExecution[];
   onClose: () => void;
@@ -206,10 +208,23 @@ export function ArtifactsPanel({
   /** Test-only: rendered instead of the file viewer (the fixture harness has no gateway). */
   fileViewOverride?: ReactNode;
 }) {
-  const live = notebook?.status === "live";
-  const showNotebook = Boolean(
-    notebook && (live || notebook.document !== null),
+  // Notebooks that can render: live, or ended with a saved document.
+  const showableNotebooks = notebooks.filter(
+    (entry) => entry.status === "live" || entry.document !== null,
   );
+  // null means "auto": analysis when present, else the first notebook.
+  const [selectedNotebookName, setSelectedNotebookName] = useState<
+    string | null
+  >(null);
+  useEffect(() => {
+    // Selection is per conversation.
+    setSelectedNotebookName(null);
+  }, [conversationId]);
+  const activeNotebook =
+    showableNotebooks.find((entry) => entry.name === selectedNotebookName) ??
+    pickDefaultNotebook(showableNotebooks);
+  const live = activeNotebook?.status === "live";
+  const showNotebook = activeNotebook !== null;
   // null means "auto": follow the default tab until the user picks one.
   const [selectedTab, setSelectedTab] = useState<ArtifactsTab | null>(null);
   const activeTab =
@@ -227,7 +242,7 @@ export function ArtifactsPanel({
           <span className="truncate text-xs font-medium text-[var(--color-text)]">
             Artifacts
           </span>
-          {notebook &&
+          {activeNotebook &&
             (live ? (
               <span
                 data-testid="live-notebook-status-live"
@@ -248,7 +263,10 @@ export function ArtifactsPanel({
         <div className="flex flex-none items-center gap-1">
           {showNotebook && (
             <a
-              href={buildChatNotebookPopoutUrl(conversationId)}
+              href={buildChatNotebookPopoutUrl(
+                conversationId,
+                activeNotebook?.name,
+              )}
               target="_blank"
               rel="noopener noreferrer"
               title="Open notebook in a new tab"
@@ -302,17 +320,65 @@ export function ArtifactsPanel({
             would drop the kiosk websocket and re-boot the viewer on every
             return to the tab. Inactive tabs hide with display:none. */}
         <div
-          className={activeTab === "notebook" ? "h-full w-full" : "hidden"}
+          className={
+            activeTab === "notebook" ? "flex h-full w-full flex-col" : "hidden"
+          }
         >
-          {showNotebook && notebook ? (
-            <div className="h-full w-full" data-testid="live-notebook-inline">
-              {liveViewOverride ?? (
-                <ChatNotebookView
-                  key={chatNotebookMountKey(notebook)}
-                  notebook={notebook}
-                />
+          {showNotebook && activeNotebook ? (
+            <>
+              {showableNotebooks.length > 1 && (
+                <div className="flex flex-none items-center gap-1 overflow-x-auto border-b border-[var(--color-border)] px-2 py-1.5">
+                  {showableNotebooks.map((entry) => {
+                    const isActive = entry.name === activeNotebook.name;
+                    return (
+                      <button
+                        key={entry.name}
+                        type="button"
+                        data-testid="artifacts-notebook-chip"
+                        aria-pressed={isActive}
+                        onClick={() => setSelectedNotebookName(entry.name)}
+                        className={`flex flex-none items-center gap-1.5 rounded-full border px-2.5 py-0.5 font-mono text-[11px] transition-colors ${
+                          isActive
+                            ? "border-[var(--color-success)]/40 bg-[var(--color-bg-hover)] text-[var(--color-text)]"
+                            : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
+                        }`}
+                      >
+                        {entry.status === "live" && (
+                          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+                        )}
+                        {entry.name}
+                      </button>
+                    );
+                  })}
+                </div>
               )}
-            </div>
+              {/* Every showable notebook stays MOUNTED across selection
+                  switches, same rule as tab switching: unmounting would drop
+                  its kiosk websocket. Inactive ones hide with display:none.
+                  The test override renders only for the active notebook (a
+                  stub has no socket to preserve). */}
+              <div className="relative min-h-0 flex-1">
+                {showableNotebooks.map((entry) => {
+                  const isActive = entry.name === activeNotebook.name;
+                  return (
+                    <div
+                      key={entry.name}
+                      className={isActive ? "h-full w-full" : "hidden"}
+                      data-testid={isActive ? "live-notebook-inline" : undefined}
+                    >
+                      {liveViewOverride !== undefined ? (
+                        isActive ? liveViewOverride : null
+                      ) : (
+                        <ChatNotebookView
+                          key={chatNotebookMountKey(entry)}
+                          notebook={entry}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
           ) : (
             <div
               data-testid="live-notebook-empty"

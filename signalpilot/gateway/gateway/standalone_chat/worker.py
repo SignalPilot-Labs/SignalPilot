@@ -99,6 +99,7 @@ async def _announce_notebook(run_id: str, payload: dict[str, Any]) -> None:
                 gateway_session_id=str(gateway_session_id),
                 kernel_session_id=str(kernel_session_id),
                 notebook_path=str(notebook_path),
+                name=str(payload.get("notebook") or "analysis"),
             )
 
 
@@ -352,7 +353,9 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                         completed_payload: dict[str, Any] = {
                             "tool_call_id": event.get("tool_call_id"),
                             "summary": (
-                                "The governed tool returned an error." if is_error else "The governed tool completed."
+                                "The tool returned an error."
+                                if is_error
+                                else "The tool completed."
                             ),
                             "error": is_error,
                         }
@@ -393,6 +396,8 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                             recovery_payload["kernel_session_id"] = str(event["session_id"])
                         if event.get("notebook_path"):
                             recovery_payload["notebook_path"] = str(event["notebook_path"])
+                        if event.get("notebook"):
+                            recovery_payload["notebook"] = str(event["notebook"])
                         await _announce_notebook(run_id, recovery_payload)
                     elif event_type == "error":
                         raise _AnalysisRuntimeError(

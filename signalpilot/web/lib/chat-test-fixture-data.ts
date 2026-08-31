@@ -145,7 +145,7 @@ const RAW_EVENTS: FixtureEvent[] = [
     run_id: FIXTURE_RUN_ID,
     sequence: 3,
     type: "tool_completed",
-    payload: { tool_call_id: "t1", summary: "The governed tool completed.", error: false },
+    payload: { tool_call_id: "t1", summary: "The tool completed.", error: false },
   },
   {
     at: 1_500,
@@ -173,7 +173,7 @@ const RAW_EVENTS: FixtureEvent[] = [
     run_id: FIXTURE_RUN_ID,
     sequence: 6,
     type: "tool_completed",
-    payload: { tool_call_id: "t2", summary: "The governed tool completed.", error: false },
+    payload: { tool_call_id: "t2", summary: "The tool completed.", error: false },
   },
   {
     at: 3_200,
@@ -266,7 +266,7 @@ const RAW_EVENTS: FixtureEvent[] = [
     run_id: FIXTURE_RUN_ID,
     sequence: 0,
     type: "tool_completed",
-    payload: { tool_call_id: "sub-1-c1", parent_tool_call_id: "sub-1", summary: "The governed tool completed.", error: false },
+    payload: { tool_call_id: "sub-1-c1", parent_tool_call_id: "sub-1", summary: "The tool completed.", error: false },
   },
   {
     at: 5_600,
@@ -295,7 +295,7 @@ const RAW_EVENTS: FixtureEvent[] = [
     run_id: FIXTURE_RUN_ID,
     sequence: 0,
     type: "tool_completed",
-    payload: { tool_call_id: "sub-1-c2", parent_tool_call_id: "sub-1", summary: "The governed tool completed.", error: false },
+    payload: { tool_call_id: "sub-1-c2", parent_tool_call_id: "sub-1", summary: "The tool completed.", error: false },
   },
   {
     at: 6_500,
@@ -314,7 +314,7 @@ const RAW_EVENTS: FixtureEvent[] = [
     run_id: FIXTURE_RUN_ID,
     sequence: 0,
     type: "tool_completed",
-    payload: { tool_call_id: "sub-1-c3", parent_tool_call_id: "sub-1", summary: "The governed tool completed.", error: false },
+    payload: { tool_call_id: "sub-1-c3", parent_tool_call_id: "sub-1", summary: "The tool completed.", error: false },
   },
   {
     at: 7_350,
@@ -323,7 +323,7 @@ const RAW_EVENTS: FixtureEvent[] = [
     type: "tool_completed",
     payload: {
       tool_call_id: "sub-1",
-      summary: "The governed tool completed.",
+      summary: "The tool completed.",
       error: false,
       report:
         "**Three marts touch `net_revenue`.** `fct_orders` is order-grain and joins regions via `region_id`; `rpt_daily_revenue` and `rpt_region_rollup` both aggregate from it, so the Q2/Q3 comparison should read from `fct_orders` directly.",
@@ -334,7 +334,7 @@ const RAW_EVENTS: FixtureEvent[] = [
     run_id: FIXTURE_RUN_ID,
     sequence: 13,
     type: "tool_completed",
-    payload: { tool_call_id: "t4", summary: "The governed tool completed.", error: false },
+    payload: { tool_call_id: "t4", summary: "The tool completed.", error: false },
   },
   ...MID_RUN_CHUNKS.map((chunk) => ({
     at: chunk.at,
@@ -358,7 +358,7 @@ const RAW_EVENTS: FixtureEvent[] = [
     run_id: FIXTURE_RUN_ID,
     sequence: 15,
     type: "tool_completed",
-    payload: { tool_call_id: "t5", summary: "The governed tool completed.", error: false },
+    payload: { tool_call_id: "t5", summary: "The tool completed.", error: false },
   },
   {
     at: 8_720,
@@ -387,7 +387,7 @@ const RAW_EVENTS: FixtureEvent[] = [
     run_id: FIXTURE_RUN_ID,
     sequence: 18,
     type: "tool_completed",
-    payload: { tool_call_id: "t6", summary: "The governed tool completed.", error: false },
+    payload: { tool_call_id: "t6", summary: "The tool completed.", error: false },
   },
   // The gateway mirrors the Write to the conversation file store and
   // announces it. Content-free: the client only refetches the manifest.
@@ -413,7 +413,7 @@ const RAW_EVENTS: FixtureEvent[] = [
     run_id: FIXTURE_RUN_ID,
     sequence: 20,
     type: "tool_completed",
-    payload: { tool_call_id: "t7", summary: "The governed tool completed.", error: false },
+    payload: { tool_call_id: "t7", summary: "The tool completed.", error: false },
   },
   {
     at: 14_300,
@@ -434,7 +434,7 @@ const RAW_EVENTS: FixtureEvent[] = [
     run_id: FIXTURE_RUN_ID,
     sequence: 24,
     type: "tool_completed",
-    payload: { tool_call_id: "t9", summary: "The governed tool completed.", error: false },
+    payload: { tool_call_id: "t9", summary: "The tool completed.", error: false },
   },
   {
     at: 15_500,
@@ -458,7 +458,7 @@ const RAW_EVENTS: FixtureEvent[] = [
     run_id: FIXTURE_RUN_ID,
     sequence: 26,
     type: "tool_completed",
-    payload: { tool_call_id: "t10", summary: "The governed tool completed.", error: false },
+    payload: { tool_call_id: "t10", summary: "The tool completed.", error: false },
   },
   {
     at: 16_000,
@@ -475,7 +475,7 @@ const RAW_EVENTS: FixtureEvent[] = [
     run_id: FIXTURE_RUN_ID,
     sequence: 28,
     type: "tool_completed",
-    payload: { tool_call_id: "t11", summary: "The governed tool completed.", error: false },
+    payload: { tool_call_id: "t11", summary: "The tool completed.", error: false },
   },
   {
     at: 17_100,
@@ -492,7 +492,7 @@ const RAW_EVENTS: FixtureEvent[] = [
     run_id: FIXTURE_RUN_ID,
     sequence: 30,
     type: "tool_completed",
-    payload: { tool_call_id: "t12", summary: "The governed tool completed.", error: false },
+    payload: { tool_call_id: "t12", summary: "The tool completed.", error: false },
   },
   ...ANSWER_CHUNKS.map((chunk, index) => ({
     at: chunk.at,

@@ -65,6 +65,7 @@ function execution(overrides: Partial<SqlTraceExecution> = {}) {
 }
 
 const liveNotebook: ConversationNotebook = {
+  name: "analysis",
   status: "live",
   gateway_session_id: "gw-1",
   kernel_session_id: "k-1",
@@ -73,6 +74,7 @@ const liveNotebook: ConversationNotebook = {
 };
 
 const emptyNotebook: ConversationNotebook = {
+  name: "analysis",
   status: "none",
   gateway_session_id: null,
   kernel_session_id: null,
@@ -133,6 +135,14 @@ describe("hasArtifactsContent", () => {
 
   it("is true when executions exist", () => {
     expect(hasArtifactsContent(null, [], [execution()])).toBe(true);
+  });
+
+  it("accepts a notebook list and checks every entry", () => {
+    expect(hasArtifactsContent([], [], [])).toBe(false);
+    expect(hasArtifactsContent([emptyNotebook], [], [])).toBe(false);
+    expect(hasArtifactsContent([emptyNotebook, liveNotebook], [], [])).toBe(
+      true,
+    );
   });
 });
 

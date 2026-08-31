@@ -42,7 +42,9 @@ def register_keepalive_analysis_session(
     """Keep a finished run's kernel + notebook for the live notebook panel.
 
     The scoped gateway token file is deleted immediately: the browser view is
-    read-only and the kernel already holds its credentials in memory.
+    read-only and no gateway calls happen between runs. The next run's
+    adoption writes a fresh run-scoped token to the same path, and the
+    kernel's SDK client reads that file per request.
     """
     _KEEPALIVE_BY_CONVERSATION[conversation_id] = (session_id, scratch)
     try:
@@ -165,7 +167,7 @@ def _():
 
 @app.cell(hide_code=True)
 def _(Path, sp):
-    sp.init(gateway_url={gateway_url!r}, session_token=Path({str(token_file)!r}).read_text(encoding="utf-8"))
+    sp.init(gateway_url={gateway_url!r}, session_token_file=Path({str(token_file)!r}))
     db = sp.connect({connection_name!r})
     return (db,)
 

@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+import os
+from pathlib import Path
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _is_local_url(url: str) -> bool:
@@ -19,15 +18,40 @@ def _is_local_url(url: str) -> bool:
 class GatewayClient:
     """Thin HTTP wrapper around the SignalPilot gateway API."""
 
-    def __init__(self, gateway_url: str, token: str | None = None):
+    def __init__(
+        self,
+        gateway_url: str,
+        token: str | None = None,
+        token_file: str | os.PathLike[str] | None = None,
+    ):
         from signalpilot._utils.localhost import fix_localhost_url
         self._url = fix_localhost_url(gateway_url).rstrip("/")
         self._token = token
+        # Credentials rotate BETWEEN chat runs: a kernel kept alive across
+        # turns gets a fresh run-scoped token written to this file at
+        # adoption. Read it per request so the live kernel always presents
+        # the active run's token, not the one captured at sp.init().
+        self._token_file = Path(token_file) if token_file else None
+        self._token_file_mtime: float | None = None
+
+    def _resolve_token(self) -> str | None:
+        if self._token_file is None:
+            return self._token
+        try:
+            mtime = self._token_file.stat().st_mtime
+            if mtime != self._token_file_mtime:
+                self._token = self._token_file.read_text(encoding="utf-8").strip()
+                self._token_file_mtime = mtime
+        except OSError:
+            # The file is removed between runs. Keep the last token read.
+            pass
+        return self._token
 
     def _headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
         h: dict[str, str] = {"Content-Type": "application/json"}
-        if self._token:
-            h["Authorization"] = f"Bearer {self._token}"
+        token = self._resolve_token()
+        if token:
+            h["Authorization"] = f"Bearer {token}"
         if extra:
             h.update(extra)
         return h

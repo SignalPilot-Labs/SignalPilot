@@ -14,6 +14,8 @@ import {
   ChatUiContext,
   type UiMessage,
 } from "~/components/chat/standalone-data-chat";
+import { LiveNotebookPanel } from "~/components/chat/live-notebook-panel";
+import { deriveLiveNotebookLink } from "~/lib/chat-live-notebook";
 import {
   FIXTURE_RUN_ID,
   FIXTURE_TOTAL_MS,
@@ -23,6 +25,7 @@ import {
   fixtureRunStatus,
   materializeFixtureEvents,
 } from "~/lib/chat-test-fixture";
+import { NotebookPen } from "lucide-react";
 
 const SPEEDS = [1, 2, 4] as const;
 const TICK_MS = 50;
@@ -41,6 +44,11 @@ export function StandaloneChatTestHarness() {
   const initiallyPaused = searchParams.get("paused") === "1";
   const [elapsed, setElapsed] = useState(initialAt);
   const [playing, setPlaying] = useState(!initiallyPaused);
+  // Flipped by an effect, so it is observable only after React has hydrated
+  // and attached event handlers. Click-based Playwright specs gate on this —
+  // a click that lands before hydration is silently lost.
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => setHydrated(true), []);
   const [speed, setSpeed] = useState<(typeof SPEEDS)[number]>(1);
   const speedRef = useRef(speed);
   speedRef.current = speed;
@@ -64,6 +72,39 @@ export function StandaloneChatTestHarness() {
   }, [elapsed, playing]);
 
   const events = useMemo(() => materializeFixtureEvents(elapsed), [elapsed]);
+
+  // Live notebook panel: mirrors the chat page's auto-open-once-per-run
+  // behavior, with a stub iframe src because the harness has no gateway.
+  const liveNotebookLink = useMemo(
+    () => deriveLiveNotebookLink(events, FIXTURE_RUN_ID),
+    [events],
+  );
+  const [notebookPanelOpen, setNotebookPanelOpen] = useState(false);
+  const notebookPanelAutoOpenedRunRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      liveNotebookLink?.live &&
+      notebookPanelAutoOpenedRunRef.current !== liveNotebookLink.runId
+    ) {
+      notebookPanelAutoOpenedRunRef.current = liveNotebookLink.runId;
+      setNotebookPanelOpen(true);
+    }
+    if (!liveNotebookLink) {
+      // Scrubbed back before notebook_started (or restarted): reset so the
+      // panel auto-opens again when the notebook (re)starts.
+      notebookPanelAutoOpenedRunRef.current = null;
+      setNotebookPanelOpen(false);
+    }
+  }, [liveNotebookLink?.live, liveNotebookLink?.runId, liveNotebookLink]);
+  const notebookArchiveAvailable = useMemo(
+    () =>
+      events.some(
+        (event) =>
+          event.run_id === FIXTURE_RUN_ID &&
+          event.type === "archive_completed",
+      ),
+    [events],
+  );
   const artifacts = useMemo(
     () =>
       fixtureArtifacts
@@ -98,7 +139,11 @@ export function StandaloneChatTestHarness() {
 
   const progress = Math.round((elapsed / FIXTURE_TOTAL_MS) * 100);
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div
+      className="flex h-full min-h-0 flex-col"
+      data-testid="chat-test-harness"
+      data-hydrated={hydrated ? "1" : "0"}
+    >
       <header className="flex flex-none flex-wrap items-center gap-3 border-b border-[var(--color-border)] bg-[var(--color-bg-card)] px-4 py-2.5">
         <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-warning)]/25 bg-[var(--color-warning)]/5 px-2 py-0.5 text-[10px] uppercase tracking-[0.1em] text-[var(--color-warning)]">
           <FlaskConical className="h-3 w-3" />
@@ -180,27 +225,63 @@ export function StandaloneChatTestHarness() {
           {(elapsed / 1000).toFixed(1)}s · {progress}%
         </span>
       </header>
-      <div
-        className="min-h-0 flex-1 overflow-y-auto"
-        data-testid="chat-test-viewport"
-      >
-        <ChatUiContext.Provider
-          value={{
-            events,
-            artifacts,
-            onStop: async () => undefined,
-            onRetry: async () => undefined,
-            onApproveReportSuggestion: async () => ({
-              report_id: "test-harness-report",
-            }),
-          }}
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
+        <div
+          className="min-h-0 min-w-0 flex-1 overflow-y-auto"
+          data-testid="chat-test-viewport"
         >
-          <div className="py-6" data-testid="standalone-chat-messages">
-            {messages.map((message) => (
-              <ChatMessage key={message.id} message={message} />
-            ))}
-          </div>
-        </ChatUiContext.Provider>
+          <ChatUiContext.Provider
+            value={{
+              events,
+              artifacts,
+              onStop: async () => undefined,
+              onRetry: async () => undefined,
+              onApproveReportSuggestion: async () => ({
+                report_id: "test-harness-report",
+              }),
+            }}
+          >
+            <div className="py-6" data-testid="standalone-chat-messages">
+              {messages.map((message) => (
+                <ChatMessage key={message.id} message={message} />
+              ))}
+            </div>
+          </ChatUiContext.Provider>
+        </div>
+        {liveNotebookLink && !notebookPanelOpen && (
+          <button
+            type="button"
+            aria-label="Open the analysis notebook panel"
+            title="Open the analysis notebook panel"
+            data-testid="live-notebook-toggle"
+            onClick={() => setNotebookPanelOpen(true)}
+            className="absolute right-4 top-4 z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-muted)] shadow-lg shadow-black/20 hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+          >
+            <NotebookPen className="h-4 w-4" />
+          </button>
+        )}
+        {notebookPanelOpen && (
+          <LiveNotebookPanel
+            link={liveNotebookLink}
+            archiveRunId={
+              liveNotebookLink &&
+              !liveNotebookLink.live &&
+              notebookArchiveAvailable
+                ? liveNotebookLink.runId
+                : null
+            }
+            onClose={() => setNotebookPanelOpen(false)}
+            liveViewOverride={
+              <div
+                data-testid="chat-notebook-stub"
+                className="flex h-full items-center justify-center text-xs text-[var(--color-text-dim)]"
+              >
+                Live notebook view stub
+              </div>
+            }
+            archiveHtmlOverride="<p data-testid='archive-stub'>Archived notebook stub</p>"
+          />
+        )}
       </div>
     </div>
   );

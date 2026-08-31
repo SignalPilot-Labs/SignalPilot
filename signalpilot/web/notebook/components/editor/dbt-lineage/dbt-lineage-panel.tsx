@@ -13,7 +13,7 @@ import {
 } from "./use-dbt-lineage";
 
 const DbtLineagePanel: React.FC = () => {
-  const { data, loading, error, reload } = useDbtLineage();
+  const { data, loading, error, reload, recompile, compiling } = useDbtLineage();
   const [selectedNode, setSelectedNode] = useSelectedNode();
   const [layoutDirection, setLayoutDirection] = useLayoutDirection();
   const { filter, toggleLayer, setSearch } = useLineageFilter();
@@ -31,11 +31,23 @@ const DbtLineagePanel: React.FC = () => {
 
   if (error && !data) {
     return (
-      <PanelEmptyState
-        title="No lineage data"
-        description={error}
-        icon={<DatabaseIcon />}
-      />
+      <div className="flex flex-col h-full">
+        <PanelEmptyState
+          title="No lineage data"
+          description={error}
+          icon={<DatabaseIcon />}
+        />
+        <div className="flex justify-center pb-6">
+          <button
+            type="button"
+            onClick={recompile}
+            disabled={compiling}
+            className="text-[11px] px-3 py-1.5 rounded border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+          >
+            {compiling ? "Compiling on sandbox..." : "Compile dbt map"}
+          </button>
+        </div>
+      </div>
     );
   }
 
@@ -72,6 +84,8 @@ const DbtLineagePanel: React.FC = () => {
         onSetDirection={setLayoutDirection}
         onReload={reload}
         loading={loading}
+        onRecompile={recompile}
+        compiling={compiling}
         nodeCount={visibleNodes.length}
         edgeCount={visibleEdges.length}
       />

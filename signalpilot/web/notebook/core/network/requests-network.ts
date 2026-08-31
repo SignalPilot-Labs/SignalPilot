@@ -1,7 +1,17 @@
-import { once } from "@/utils/once";
 import { getRuntimeManager } from "../runtime/config";
 import { API, createClientWithRuntimeManager } from "./api";
 import { waitForConnectionOpen } from "./connection";
+import {
+  gwCopyFileOrFolder,
+  gwCreateFileOrFolder,
+  gwDeleteFileOrFolder,
+  gwFileDetails,
+  gwListFiles,
+  gwRenameFileOrFolder,
+  gwSearchFiles,
+  gwUpdateFile,
+  hasGatewayFilePlane,
+} from "./gateway-file-api";
 import type { EditRequests, RunRequests } from "./types";
 
 /**
@@ -20,10 +30,25 @@ function multipartInit(formData: FormData) {
 const { handleResponse, handleResponseReturnNull } = API;
 
 export function createNetworkRequests(): EditRequests & RunRequests {
-  const getClient = once(() => {
+  // The client bakes the runtime base URL in at creation, but a lazy runtime
+  // swaps its URL when the sandbox is provisioned (placeholder → real
+  // session). Cache per base URL instead of once(): the first kernel call
+  // after provisioning gets a client pointed at the live session.
+  let cachedClient: {
+    base: string;
+    client: ReturnType<typeof createClientWithRuntimeManager>;
+  } | null = null;
+  const getClient = () => {
     const runtimeManager = getRuntimeManager();
-    return createClientWithRuntimeManager(runtimeManager);
-  });
+    const base = runtimeManager.httpURL.toString();
+    if (!cachedClient || cachedClient.base !== base) {
+      cachedClient = {
+        base,
+        client: createClientWithRuntimeManager(runtimeManager),
+      };
+    }
+    return cachedClient.client;
+  };
 
   const getHeaders = () => {
     const runtimeManager = getRuntimeManager();
@@ -280,7 +305,13 @@ export function createNetworkRequests(): EditRequests & RunRequests {
         })
         .then(handleResponseReturnNull);
     },
+    // File operations: when a gateway workspace project is active, go
+    // straight to the gateway store (works with no notebook session or
+    // sandbox); otherwise use the sandbox proxy path.
     sendListFiles: (request) => {
+      if (hasGatewayFilePlane()) {
+        return gwListFiles(request);
+      }
       return getClient()
         .POST("/api/files/list_files", {
           body: request,
@@ -288,6 +319,9 @@ export function createNetworkRequests(): EditRequests & RunRequests {
         .then(handleResponse);
     },
     sendSearchFiles: (request) => {
+      if (hasGatewayFilePlane()) {
+        return gwSearchFiles(request);
+      }
       return getClient()
         .POST("/api/files/search", {
           body: request,
@@ -295,6 +329,9 @@ export function createNetworkRequests(): EditRequests & RunRequests {
         .then(handleResponse);
     },
     sendCreateFileOrFolder: (request) => {
+      if (hasGatewayFilePlane()) {
+        return gwCreateFileOrFolder(request);
+      }
       const formData = new FormData();
       formData.append("path", request.path);
       formData.append("type", request.type);
@@ -307,6 +344,9 @@ export function createNetworkRequests(): EditRequests & RunRequests {
         .then(handleResponse);
     },
     sendDeleteFileOrFolder: async (request) => {
+      if (hasGatewayFilePlane()) {
+        return gwDeleteFileOrFolder(request);
+      }
       return getClient()
         .POST("/api/files/delete", {
           body: request,
@@ -314,6 +354,9 @@ export function createNetworkRequests(): EditRequests & RunRequests {
         .then(handleResponse);
     },
     sendCopyFileOrFolder: async (request) => {
+      if (hasGatewayFilePlane()) {
+        return gwCopyFileOrFolder(request);
+      }
       return getClient()
         .POST("/api/files/copy", {
           body: request,
@@ -321,6 +364,9 @@ export function createNetworkRequests(): EditRequests & RunRequests {
         .then(handleResponse);
     },
     sendRenameFileOrFolder: async (request) => {
+      if (hasGatewayFilePlane()) {
+        return gwRenameFileOrFolder(request);
+      }
       return getClient()
         .POST("/api/files/move", {
           body: request,
@@ -328,6 +374,9 @@ export function createNetworkRequests(): EditRequests & RunRequests {
         .then(handleResponse);
     },
     sendUpdateFile: (request) => {
+      if (hasGatewayFilePlane()) {
+        return gwUpdateFile(request);
+      }
       return getClient()
         .POST("/api/files/update", {
           body: request,
@@ -335,6 +384,9 @@ export function createNetworkRequests(): EditRequests & RunRequests {
         .then(handleResponse);
     },
     sendFileDetails: (request) => {
+      if (hasGatewayFilePlane()) {
+        return gwFileDetails(request);
+      }
       return getClient()
         .POST("/api/files/file_details", {
           body: request,

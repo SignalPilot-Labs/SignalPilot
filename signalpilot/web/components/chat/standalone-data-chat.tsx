@@ -12,6 +12,7 @@ import {
   Maximize2,
   MessageSquarePlus,
   MoreHorizontal,
+  NotebookPen,
   PanelLeft,
   Play,
   Save,
@@ -59,6 +60,7 @@ import {
   revokeStandaloneConversationShare,
   setDefaultStandaloneChatProject,
   shareStandaloneConversation,
+  steerStandaloneRun,
   streamStandaloneRunEvents,
   type StandaloneChatArtifact,
   type StandaloneChatEvent,
@@ -72,9 +74,19 @@ import {
 import { ArtifactLightbox } from "~/components/chat/artifact-lightbox";
 import { StandaloneArtifactContext } from "~/components/chat/standalone-artifact-context";
 import { StandaloneChatComposer } from "~/components/chat/standalone-chat-composer";
+import { ProjectChip, ProjectPicker } from "~/components/chat/project-picker";
+import { getDbtMap } from "~/lib/api";
 import { RunActivityBlocks, RunTimeline } from "~/components/chat/run-timeline";
+import { RuntimeBootCard } from "~/components/chat/runtime-boot-card";
 import { ReplayControls } from "~/components/chat/replay-controls";
-import { foldRunBlocks, foldRunSteps } from "~/lib/chat-run-steps";
+import {
+  extractRunPlan,
+  extractRuntimeBoot,
+  foldRunBlocks,
+  foldRunSteps,
+  shouldShowRuntimeBoot,
+} from "~/lib/chat-run-steps";
+import { PlanTracker } from "~/components/chat/plan-tracker";
 import { useChatReplay } from "~/lib/chat-replay";
 import { useToast } from "~/components/ui/toast";
 import {
@@ -91,6 +103,8 @@ import {
   type StandaloneRunActivity,
 } from "~/lib/standalone-chat-state";
 import { projectSettingsHref } from "~/lib/project-settings-route";
+import { LiveNotebookPanel } from "~/components/chat/live-notebook-panel";
+import { deriveLiveNotebookLink } from "~/lib/chat-live-notebook";
 
 export type UiMessage = StandaloneChatMessage & {
   runId?: string;
@@ -903,6 +917,18 @@ function AssistantMessage({
     () => (runId ? foldRunBlocks(events, runId) : []),
     [events, runId],
   );
+  // Present only on cold sandbox starts — warm follow-ups emit no boot events.
+  const runtimeBoot = useMemo(
+    () => (runId ? extractRuntimeBoot(events, runId) : null),
+    [events, runId],
+  );
+  // The agent's published plan, shown as a first-class card in the message
+  // flow — pinned to the top of the viewport while the run streams, folded
+  // into the transcript afterwards.
+  const runPlan = useMemo(
+    () => (runId ? extractRunPlan(events, runId) : null),
+    [events, runId],
+  );
   const steps = useMemo(
     () => blocks.flatMap((block) => (block.kind === "steps" ? block.steps : [])),
     [blocks],
@@ -935,9 +961,24 @@ function AssistantMessage({
           )}
         </div>
         <div className="min-w-0 flex-1">
+          {shouldShowRuntimeBoot(runtimeBoot, running) && runtimeBoot && (
+            <RuntimeBootCard boot={runtimeBoot} />
+          )}
+          {runPlan && (
+            <div className={running ? "sticky top-2 z-20 mb-3" : "mb-3"}>
+              <PlanTracker plan={runPlan} running={running} />
+            </div>
+          )}
           {(running || blocks.length > 0) && (
             <div role="status" aria-live="polite">
-              <RunActivityBlocks blocks={blocks} running={running} />
+              <RunActivityBlocks
+                blocks={blocks}
+                running={
+                  running &&
+                  runtimeBoot?.phase !== "provisioning" &&
+                  runtimeBoot?.phase !== "resuming"
+                }
+              />
             </div>
           )}
           {!blocksHaveText && message.content && (
@@ -1058,13 +1099,30 @@ function AssistantMessage({
 }
 
 function UserMessage({ message }: { message: UiMessage }) {
+  const steeringStatus = message.metadata.steering_status;
   return (
     <article
       data-chat-message-id={message.id}
       className="mx-auto w-full max-w-3xl px-6 py-4"
     >
-      <div className="ml-auto max-w-[78%] rounded-2xl rounded-br-md border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-4 py-3 text-sm leading-6 text-[var(--color-text)]">
+      <div className="ml-auto max-w-[80%] rounded-2xl rounded-br-md bg-[#2a2a2e] px-4 py-3 text-[15.5px] leading-7 text-[var(--color-text)]">
         <div className="whitespace-pre-wrap">{message.content}</div>
+        {steeringStatus === "queued" && (
+          <div className="mt-2 flex items-center justify-end gap-1.5 text-[11px] text-[var(--color-text-muted)]">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Queued · It will be picked up on the next turn
+          </div>
+        )}
+        {steeringStatus === "picked_up" && (
+          <div className="mt-2 text-right text-[11px] text-[var(--color-success)]">
+            Picked up
+          </div>
+        )}
+        {steeringStatus === "not_delivered" && (
+          <div className="mt-2 text-right text-[11px] text-[var(--color-warning)]">
+            Not delivered · The run finished before pickup
+          </div>
+        )}
       </div>
     </article>
   );
@@ -1207,7 +1265,7 @@ function StarterQuestions({
                 ?.focus(),
             );
           }}
-          className="min-h-24 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)] p-4 text-left text-sm leading-5 text-[var(--color-text-muted)] hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+          className="min-h-24 rounded-xl border border-[var(--color-border)] bg-[#1a1a1d] p-4 text-left text-[14.5px] leading-6 text-[var(--color-text-muted)] transition-colors hover:border-[var(--color-border-hover)] hover:bg-[#212125] hover:text-[var(--color-text)]"
         >
           {question}
         </button>
@@ -1635,6 +1693,47 @@ export function StandaloneDataChat({
   useEffect(() => {
     eventsRef.current = events;
   }, [events]);
+
+  // Live notebook panel: attach the notebook inner view to the run's kernel
+  // session as soon as the agent starts one; fall back to the archived HTML
+  // notebook once the kernel stops.
+  const derivedNotebookLink = useMemo(
+    () => deriveLiveNotebookLink(events, currentRun?.id),
+    [events, currentRun?.id],
+  );
+  // A new run has no notebook_started for a moment (or none at all when the
+  // turn doesn't touch the notebook) — hold the last known link so the panel
+  // doesn't flash empty between turns. The kernel is conversation-scoped and
+  // kept alive across runs, so the previous link stays attachable.
+  const lastNotebookLinkRef = useRef<typeof derivedNotebookLink>(null);
+  if (derivedNotebookLink) lastNotebookLinkRef.current = derivedNotebookLink;
+  useEffect(() => {
+    lastNotebookLinkRef.current = null;
+  }, [conversationId]);
+  const liveNotebookLink = derivedNotebookLink ?? lastNotebookLinkRef.current;
+  const [notebookPanelOpen, setNotebookPanelOpen] = useState(false);
+  const notebookPanelAutoOpenedRunRef = useRef<string | null>(null);
+  useEffect(() => {
+    // Auto-open once per run when a live link first appears; a manual close
+    // stays closed for the rest of that run.
+    if (
+      liveNotebookLink?.live &&
+      notebookPanelAutoOpenedRunRef.current !== liveNotebookLink.runId
+    ) {
+      notebookPanelAutoOpenedRunRef.current = liveNotebookLink.runId;
+      setNotebookPanelOpen(true);
+    }
+  }, [liveNotebookLink?.live, liveNotebookLink?.runId]);
+  useEffect(() => {
+    setNotebookPanelOpen(false);
+    notebookPanelAutoOpenedRunRef.current = null;
+  }, [conversationId]);
+  // Legacy fallback only: conversations whose events carry no attach ids
+  // (old gateways) can still show the static HTML archive.
+  const legacyArchiveRunId =
+    !liveNotebookLink && currentRun?.runtime_archive_available
+      ? currentRun.id
+      : null;
   const conversationLoading = Boolean(
     conversationId && !detail && !detailError && detailLoading,
   );
@@ -1942,6 +2041,25 @@ export function StandaloneDataChat({
               : current,
           { revalidate: false },
         );
+        if (currentRun?.status === "running") {
+          const queuedMessage = await steerStandaloneRun(currentRun.id, text);
+          await mutateDetail(
+            (current) =>
+              current
+                ? {
+                    ...current,
+                    messages: current.messages.map((message) =>
+                      message.id === optimistic.id ? queuedMessage : message,
+                    ),
+                  }
+                : current,
+            { revalidate: false },
+          );
+          setPendingSubmission(null);
+          void mutateDetail();
+          void mutateHistory();
+          return;
+        }
         let run;
         if (currentRun?.status === "waiting_for_user") {
           run = await clarifyStandaloneRun(currentRun.id, text);
@@ -2179,8 +2297,66 @@ export function StandaloneDataChat({
     !selectedProjectId ||
     (readiness?.ready === false && currentRun?.status !== "waiting_for_user") ||
     currentRun?.status === "queued" ||
-    currentRun?.status === "running" ||
     currentRun?.status === "waiting_for_query_approval";
+
+  const runIsStreaming =
+    currentRun?.status === "queued" || currentRun?.status === "running";
+
+  // Why the composer is blocked — surfaced under the input, never silent.
+  const disabledReason = !selectedProjectId
+    ? "Choose a project to start."
+    : readiness?.ready === false && currentRun?.status !== "waiting_for_user"
+      ? readiness?.message || "This project isn't ready for chat yet."
+      : currentRun?.status === "queued"
+        ? "Starting your last question…"
+        : currentRun?.status === "waiting_for_query_approval"
+          ? "Approve or decline the proposed query above."
+          : undefined;
+
+  const selectedProject =
+    bootstrap?.projects.find((p) => p.id === selectedProjectId) ?? null;
+
+  // @-mention names: reuse the compiled dbt map's node names for the selected
+  // project (the same graph the Lineage page serves). Best-effort.
+  const [mentionOptions, setMentionOptions] = useState<string[]>([]);
+  useEffect(() => {
+    let active = true;
+    if (!selectedProjectId) {
+      setMentionOptions([]);
+      return;
+    }
+    void getDbtMap(selectedProjectId, undefined, true)
+      .then((res) => {
+        if (!active) return;
+        const graph = res.graph as { nodes?: Record<string, { name?: string }> } | null;
+        const names = graph?.nodes
+          ? Object.values(graph.nodes)
+              .map((n) => n.name)
+              .filter((n): n is string => Boolean(n))
+          : [];
+        setMentionOptions([...new Set(names)].sort());
+      })
+      .catch(() => {
+        if (active) setMentionOptions([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedProjectId]);
+
+  // Draft persistence: keep per-conversation (or "new") drafts across reloads.
+  const draftKey = `sp:chat-draft:${conversationId ?? "new"}`;
+  useEffect(() => {
+    const saved =
+      typeof localStorage !== "undefined" ? localStorage.getItem(draftKey) : null;
+    setDraft(saved ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey]);
+  useEffect(() => {
+    if (typeof localStorage === "undefined") return;
+    if (draft) localStorage.setItem(draftKey, draft);
+    else localStorage.removeItem(draftKey);
+  }, [draft, draftKey]);
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
@@ -2333,6 +2509,85 @@ export function StandaloneDataChat({
     );
   }
 
+  const isEmptyNewChat = empty && !conversationId;
+
+  const composerNode = (
+    <StandaloneChatComposer
+      value={draft}
+      onValueChange={setDraft}
+      onSubmit={(text) => void submitText(text)}
+      submitDisabled={submitDisabled}
+      disabledReason={disabledReason}
+      running={runIsStreaming}
+      onStop={currentRun ? () => void onStop(currentRun.id) : undefined}
+      mentionOptions={mentionOptions}
+      placeholder={
+        currentRun?.status === "waiting_for_user"
+          ? "Answer the clarification…"
+          : currentRun?.status === "running"
+            ? "Add an instruction for the agent's next turn…"
+          : currentRun?.status === "waiting_for_query_approval"
+            ? "Approve or decline the proposed query above…"
+            : "Ask anything about this project…"
+      }
+      projectPicker={
+        !conversationId ? (
+          <ProjectPicker
+            projects={bootstrap.projects}
+            selectedId={selectedProjectId}
+            onSelect={(projectId) => {
+              setSelectedProjectId(projectId);
+              void setDefaultStandaloneChatProject(projectId);
+              router.replace(`/chats?project=${encodeURIComponent(projectId)}`);
+            }}
+          />
+        ) : (
+          <ProjectChip project={selectedProject} />
+        )
+      }
+      settings={
+        !conversationId && bootstrap.enterprise_features.query_approval ? (
+          <div className="space-y-3">
+            <label className="block">
+              <span className="mb-1 block text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-dim)]">
+                Per-query budget (USD)
+              </span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={perQueryBudgetUsd}
+                onChange={(event) =>
+                  setPerQueryBudgetUsd(Math.max(0, Number(event.target.value)))
+                }
+                aria-label="Per-query budget in USD"
+                className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-input)] px-2 py-1.5 text-xs text-[var(--color-text)]"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-dim)]">
+                Chat budget (USD)
+              </span>
+              <input
+                type="number"
+                min={perQueryBudgetUsd}
+                step="0.01"
+                value={chatBudgetUsd}
+                onChange={(event) =>
+                  setChatBudgetUsd(
+                    Math.max(perQueryBudgetUsd, Number(event.target.value)),
+                  )
+                }
+                aria-label="Chat budget in USD"
+                className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-input)] px-2 py-1.5 text-xs text-[var(--color-text)]"
+              />
+            </label>
+          </div>
+        ) : undefined
+      }
+    />
+  );
+
   return (
     <ChatUiContext.Provider
       value={{
@@ -2347,7 +2602,9 @@ export function StandaloneDataChat({
         className={
           embedded
             ? "h-full min-w-0 overflow-hidden"
-            : "h-screen min-w-[960px] overflow-hidden p-4"
+            : `h-screen overflow-hidden p-4 ${
+                notebookPanelOpen ? "min-w-[1360px]" : "min-w-[960px]"
+              }`
         }
       >
         <div className="relative flex h-full overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)] shadow-2xl shadow-black/20">
@@ -2458,19 +2715,21 @@ export function StandaloneDataChat({
                 <ConversationMessagesSkeleton />
               ) : empty ? (
                 <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center px-6 py-12">
-                  <div className="mb-8">
-                    <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)]">
-                      <Sparkles className="h-4 w-4 text-[var(--color-success)]" />
+                  <div className="mb-6 text-center">
+                    <div className="mx-auto mb-5 flex h-11 w-11 items-center justify-center rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+                      <Sparkles className="h-5 w-5 text-[var(--color-success)]" />
                     </div>
-                    <h1 className="text-2xl font-medium tracking-[-0.025em] text-[var(--color-text)]">
+                    <h1 className="text-[32px] font-semibold leading-tight tracking-[-0.025em] text-[var(--color-text)]">
                       What would you like to understand?
                     </h1>
-                    <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--color-text-muted)]">
+                    <p className="mx-auto mt-3 max-w-xl text-[15px] leading-7 text-[var(--color-text-muted)]">
                       Ask in plain English. SignalPilot will inspect the
                       project, query governed production data, and choose the
                       clearest answer format.
                     </p>
                   </div>
+                  {/* The input is the focal point in the empty state. */}
+                  {!conversationId && <div className="-mx-6">{composerNode}</div>}
                   {unreadyMessage ? (
                     <ReadinessNotice
                       message={unreadyMessage}
@@ -2505,6 +2764,7 @@ export function StandaloneDataChat({
                   ))}
                 </div>
               )}
+              {!isEmptyNewChat && (
               <div className="sticky bottom-0 bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)] to-transparent pt-3">
                 {approvalEvent && (
                   <QueryApprovalCard
@@ -2512,98 +2772,32 @@ export function StandaloneDataChat({
                     onDecision={onQueryDecision}
                   />
                 )}
-                <StandaloneChatComposer
-                  value={draft}
-                  onValueChange={setDraft}
-                  onSubmit={(text) => void submitText(text)}
-                  submitDisabled={submitDisabled}
-                  placeholder={
-                    currentRun?.status === "waiting_for_user"
-                      ? "Answer the clarification…"
-                      : currentRun?.status === "waiting_for_query_approval"
-                        ? "Approve or decline the proposed query above…"
-                        : "Ask a question about this project…"
-                  }
-                  projectPicker={
-                    !conversationId ? (
-                      <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--color-text-dim)]">
-                        <label className="flex items-center gap-2">
-                          <span>Project</span>
-                          <select
-                            value={selectedProjectId ?? ""}
-                            onChange={(event) => {
-                              const projectId = event.target.value;
-                              setSelectedProjectId(projectId);
-                              setSelectedReport(null);
-                              void setDefaultStandaloneChatProject(projectId);
-                              router.replace(
-                                `/chats?project=${encodeURIComponent(projectId)}`,
-                              );
-                            }}
-                            aria-label="Select project"
-                            className="rounded-full border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-1.5 text-xs text-[var(--color-text-muted)] focus:outline-none"
-                          >
-                            {bootstrap.projects.map((project) => (
-                              <option key={project.id} value={project.id}>
-                                {project.display_name}
-                                {project.ready
-                                  ? ""
-                                  : projectSetupSuffix(
-                                      project.readiness_message,
-                                    )}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        {bootstrap.enterprise_features.query_approval && (
-                          <>
-                            <label className="flex items-center gap-2">
-                              <span>Per-query budget</span>
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                value={perQueryBudgetUsd}
-                                onChange={(event) =>
-                                  setPerQueryBudgetUsd(
-                                    Math.max(0, Number(event.target.value)),
-                                  )
-                                }
-                                aria-label="Per-query budget in USD"
-                                className="w-20 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-1.5"
-                              />
-                            </label>
-                            <label className="flex items-center gap-2">
-                              <span>Chat budget</span>
-                              <input
-                                type="number"
-                                min={perQueryBudgetUsd}
-                                step="0.01"
-                                value={chatBudgetUsd}
-                                onChange={(event) =>
-                                  setChatBudgetUsd(
-                                    Math.max(
-                                      perQueryBudgetUsd,
-                                      Number(event.target.value),
-                                    ),
-                                  )
-                                }
-                                aria-label="Chat budget in USD"
-                                className="w-20 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-1.5"
-                              />
-                            </label>
-                          </>
-                        )}
-                      </div>
-                    ) : undefined
-                  }
-                  projectId={selectedProjectId}
-                  selectedReport={selectedReport}
-                  onSelectedReportChange={setSelectedReport}
-                />
+                {composerNode}
               </div>
+            )}
             </div>
+            {conversationId &&
+              (liveNotebookLink || legacyArchiveRunId) &&
+              !notebookPanelOpen && (
+              <button
+                type="button"
+                aria-label="Open the analysis notebook panel"
+                title="Open the analysis notebook panel"
+                data-testid="live-notebook-toggle"
+                onClick={() => setNotebookPanelOpen(true)}
+                className="absolute right-16 top-4 z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-muted)] shadow-lg shadow-black/20 hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+              >
+                <NotebookPen className="h-4 w-4" />
+              </button>
+            )}
           </main>
+          {conversationId && notebookPanelOpen && (
+            <LiveNotebookPanel
+              link={liveNotebookLink}
+              archiveRunId={legacyArchiveRunId}
+              onClose={() => setNotebookPanelOpen(false)}
+            />
+          )}
         </div>
       </div>
     </ChatUiContext.Provider>

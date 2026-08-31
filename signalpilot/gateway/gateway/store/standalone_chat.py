@@ -16,7 +16,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.connectors.schema_cache import _schema_fingerprint, schema_cache
-from gateway.standalone_chat import config as chat_config
 from gateway.db.models import (
     GatewayChatArtifact,
     GatewayChatConversation,
@@ -48,6 +47,7 @@ from gateway.models.standalone_chat import (
     StandaloneConversationInfo,
     StandaloneMessageInfo,
 )
+from gateway.standalone_chat import config as chat_config
 from gateway.standalone_chat.artifacts import (
     normalize_table_snapshot,
     safe_filename,
@@ -1246,6 +1246,173 @@ async def submit_clarification(
     return run
 
 
+async def queue_steering_message(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    run_id: str,
+    message: str,
+) -> GatewayChatMessage | None:
+    """Persist a follow-up for delivery to the currently running SDK client."""
+    run = await _owned_run_row(
+        db, org_id=org_id, user_id=user_id, run_id=run_id, lock=True
+    )
+    if run is None:
+        return None
+    if run.status != RunStatus.running.value or run.cancellation_requested_at:
+        raise RuntimeError("This run is not accepting queued messages")
+    conversation = await _owned_conversation_row(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        conversation_id=run.conversation_id,
+        lock=True,
+    )
+    if conversation is None:
+        return None
+    sequence = conversation.message_count + 1
+    now = time.time()
+    queued = GatewayChatMessage(
+        id=str(uuid.uuid4()),
+        org_id=org_id,
+        user_id=user_id,
+        project_id=conversation.project_id,
+        conversation_id=conversation.id,
+        role="user",
+        content=message.strip(),
+        metadata_json={
+            "surface": "standalone",
+            "steering_for_run_id": run.id,
+            "steering_status": "queued",
+        },
+        sequence=sequence,
+        created_at=now,
+    )
+    db.add(queued)
+    conversation.message_count = sequence
+    conversation.updated_at = now
+    _stage_run_event(
+        db,
+        run=run,
+        event_type="steering_queued",
+        payload={"message_id": queued.id, "status": "queued"},
+    )
+    await db.commit()
+    await db.refresh(queued)
+    return queued
+
+
+async def pending_steering_messages(
+    db: AsyncSession,
+    *,
+    run_id: str,
+    worker_id: str,
+) -> list[GatewayChatMessage]:
+    """Return this worker's undelivered steering messages in transcript order."""
+    run = await get_worker_run(db, run_id=run_id, worker_id=worker_id)
+    if run is None:
+        return []
+    rows = list(
+        (
+            await db.execute(
+                select(GatewayChatMessage)
+                .where(
+                    GatewayChatMessage.conversation_id == run.conversation_id,
+                    GatewayChatMessage.role == "user",
+                )
+                .order_by(GatewayChatMessage.sequence)
+            )
+        ).scalars()
+    )
+    return [
+        row
+        for row in rows
+        if (row.metadata_json or {}).get("steering_for_run_id") == run.id
+        and (row.metadata_json or {}).get("steering_status") == "queued"
+    ]
+
+
+async def mark_steering_message_picked_up(
+    db: AsyncSession,
+    *,
+    run_id: str,
+    worker_id: str,
+    message_id: str,
+) -> bool:
+    run = await get_worker_run(db, run_id=run_id, worker_id=worker_id)
+    if run is None:
+        return False
+    message = (
+        await db.execute(
+            select(GatewayChatMessage)
+            .where(
+                GatewayChatMessage.id == message_id,
+                GatewayChatMessage.conversation_id == run.conversation_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if message is None:
+        return False
+    metadata = dict(message.metadata_json or {})
+    if (
+        metadata.get("steering_for_run_id") != run.id
+        or metadata.get("steering_status") != "queued"
+    ):
+        return False
+    metadata["steering_status"] = "picked_up"
+    message.metadata_json = metadata
+    _stage_run_event(
+        db,
+        run=run,
+        event_type="steering_picked_up",
+        payload={"message_id": message.id, "status": "picked_up"},
+    )
+    await db.commit()
+    return True
+
+
+async def finalize_undelivered_steering(
+    db: AsyncSession,
+    *,
+    run_id: str,
+) -> int:
+    """Resolve queued transcript labels after a run can no longer accept them."""
+    run = await db.get(GatewayChatRun, run_id)
+    if run is None:
+        return 0
+    messages = list(
+        (
+            await db.execute(
+                select(GatewayChatMessage).where(
+                    GatewayChatMessage.conversation_id == run.conversation_id,
+                    GatewayChatMessage.role == "user",
+                )
+            )
+        ).scalars()
+    )
+    unresolved = [
+        message
+        for message in messages
+        if (message.metadata_json or {}).get("steering_for_run_id") == run.id
+        and (message.metadata_json or {}).get("steering_status") == "queued"
+    ]
+    for message in unresolved:
+        metadata = dict(message.metadata_json or {})
+        metadata["steering_status"] = "not_delivered"
+        message.metadata_json = metadata
+        _stage_run_event(
+            db,
+            run=run,
+            event_type="steering_not_delivered",
+            payload={"message_id": message.id, "status": "not_delivered"},
+        )
+    if unresolved:
+        await db.commit()
+    return len(unresolved)
+
+
 async def retry_run(
     db: AsyncSession,
     *,
@@ -1819,6 +1986,39 @@ def _parse_datetime(value: Any) -> datetime | None:
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
     except ValueError:
         return None
+
+
+async def record_run_usage(
+    db: AsyncSession,
+    *,
+    run_id: str,
+    worker_id: str,
+    cost_usd: float | None,
+    usage: dict[str, Any] | None,
+) -> bool:
+    """Persist the agent's reported cost and token usage on the run row.
+
+    Operator accounting only (never surfaced in the chat UX). Written as soon
+    as the runtime reports it, so the numbers survive even when the run later
+    fails validation or cancels."""
+    if cost_usd is None and not usage:
+        return False
+    run = (
+        await db.execute(
+            select(GatewayChatRun).where(
+                GatewayChatRun.id == run_id,
+                GatewayChatRun.lease_owner == worker_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if run is None:
+        return False
+    if cost_usd is not None:
+        run.cost_usd = float(cost_usd)
+    if usage:
+        run.usage_json = usage
+    await db.commit()
+    return True
 
 
 async def complete_run(

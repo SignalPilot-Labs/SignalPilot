@@ -10,7 +10,6 @@ from signalpilot import _loggers
 from signalpilot._dependencies.errors import ManyModulesNotFoundError
 from signalpilot._messaging.notification import MissingPackageAlertNotification
 from signalpilot._runtime.packages.utils import is_python_isolated
-from signalpilot._server.api.deps import AppState
 from signalpilot._session import send_message_to_consumer
 from signalpilot._session.model import SessionMode
 from signalpilot._types.ids import ConsumerId
@@ -27,9 +26,10 @@ LOGGER = _loggers.sp_logger()
 
 def _is_api_request(request: Request) -> bool:
     """Check if the request is an API request (not a page navigation)."""
-    # Check path
-    path = request.scope.get("path", "")
-    if path.startswith("/api/"):
+    # Sandbox notebooks have a base path such as /notebook/{session_id}.
+    # Match the API path segment instead of assuming /api is at the origin root.
+    path = str(request.scope.get("path", ""))
+    if path == "/api" or "/api/" in path:
         return True
 
     # Check Accept header for application/json (case-insensitive)
@@ -42,20 +42,15 @@ def _is_api_request(request: Request) -> bool:
 # to install the missing package
 async def handle_error(request: Request, response: Any) -> Any:
     if isinstance(response, HTTPException):
-        # Turn 403s into 401s to collect auth
-        if response.status_code == 403:
-            # Only include WWW-Authenticate header for page requests,
-            # not API requests. The WWW-Authenticate header triggers
-            # browser Basic Auth popup, which is undesirable for API calls.
-            headers = (
-                None
-                if _is_api_request(request)
-                else {"WWW-Authenticate": "Basic"}
-            )
+        # Page navigations use a Basic-auth challenge to collect credentials.
+        # API callers must retain the real 403 and detail; rewriting application
+        # authorization failures as generic 401s makes them indistinguishable
+        # from a missing notebook bearer.
+        if response.status_code == 403 and not _is_api_request(request):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Authorization header required"},
-                headers=headers,
+                headers={"WWW-Authenticate": "Basic"},
             )
         return JSONResponse(
             {"detail": response.detail},
@@ -73,6 +68,10 @@ async def handle_error(request: Request, response: Any) -> Any:
     if isinstance(response, (ModuleNotFoundError, ManyModulesNotFoundError)):
         LOGGER.warning(response.msg)  # print to terminal
         try:
+            # Keep the error renderer importable without initializing the full
+            # session/plugin graph. AppState is needed only for this recovery path.
+            from signalpilot._server.api.deps import AppState
+
             app_state = AppState(request)
             session_id = app_state.get_current_session_id()
             session = app_state.get_current_session()

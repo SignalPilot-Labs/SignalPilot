@@ -4,7 +4,6 @@ import { Logger } from "@/utils/Logger";
 import { connectionAtom } from "../network/connection";
 import { store } from "../state/jotai";
 import { isAppNotStarted } from "../websocket/connection-utils";
-import { WebSocketState } from "../websocket/types";
 import { RuntimeManager } from "./runtime";
 import type { RuntimeConfig } from "./types";
 
@@ -33,12 +32,13 @@ export function useRuntimeManager(): RuntimeManager {
 }
 
 export function useConnectToRuntime(): () => Promise<void> {
-  const runtimeManager = useRuntimeManager();
-  const [connection, setConnection] = useAtom(connectionAtom);
+  const [connection] = useAtom(connectionAtom);
   return useEvent(async () => {
     if (isAppNotStarted(connection.state)) {
-      setConnection({ state: WebSocketState.CONNECTING });
-      await runtimeManager.init();
+      // Drive the shared launch state machine so every surface (run
+      // buttons, kernel island, footer chip) reflects this connect.
+      const { launchRuntime } = await import("./launch-state");
+      await launchRuntime("manual");
     } else {
       Logger.log("Runtime already started or starting...");
     }
@@ -50,6 +50,18 @@ export function useConnectToRuntime(): () => Promise<void> {
  */
 export function getRuntimeManager(): RuntimeManager {
   return store.get(runtimeManagerAtom);
+}
+
+/**
+ * Bring the runtime all the way up — provision (lazy), health, WebSocket
+ * open, kernel instantiated — and only then return. Safe to call when
+ * already connected. Used by run flows that must reconcile against
+ * kernel-ready state (fresh kernels re-id every cell) before building
+ * their request payloads.
+ */
+export async function connectToRuntimeAndWaitReady(): Promise<void> {
+  const { launchRuntime } = await import("./launch-state");
+  await launchRuntime("run");
 }
 
 export function asRemoteURL(path: string): URL {

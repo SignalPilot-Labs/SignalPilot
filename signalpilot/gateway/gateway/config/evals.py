@@ -46,7 +46,7 @@ class EvalRunSettings(_GatewaySettingsBase):
     setup_image: str = Field("", alias="SP_EVAL_SETUP_IMAGE")
     # "" = docker in local mode; unusable in cloud mode (the run fails with a
     # clear error). "vercel" = ephemeral Vercel sandbox VMs (needs VERCEL_*
-    # credentials) — required in cloud mode.
+    # credentials) — required in cloud mode. There is no cluster backend anymore.
     execution_backend: str = Field("", alias="SP_EVAL_EXECUTION_BACKEND")
     docker_socket: str = Field("/var/run/docker.sock", alias="SP_EVAL_DOCKER_SOCKET")
     docker_network: str = Field("signalpilot_eval_runtime", alias="SP_EVAL_DOCKER_NETWORK")
@@ -73,7 +73,7 @@ class EvalRunSettings(_GatewaySettingsBase):
     # An empty bucket disables runs because each run requires durable evidence storage.
     s3_bucket: str = Field("", alias="SP_EVAL_S3_BUCKET")
     s3_endpoint: str = Field("", alias="SP_EVAL_S3_ENDPOINT")
-    # Optional GET-only proxy address embedded in URLs handed to eval pods.
+    # Optional GET-only proxy address embedded in URLs handed to eval sandboxes.
     # Gateway reads/writes continue to use s3_endpoint on the private network.
     s3_runner_endpoint: str = Field("", alias="SP_EVAL_S3_RUNNER_ENDPOINT")
     s3_region: str = Field("us-east-1", alias="SP_EVAL_S3_REGION")

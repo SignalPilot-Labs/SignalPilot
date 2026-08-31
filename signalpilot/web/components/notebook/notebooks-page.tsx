@@ -9,7 +9,6 @@ import {
   ExternalLink,
   Loader2,
   Share2,
-  Square,
 } from "lucide-react";
 import {
   createNotebookSession,
@@ -21,7 +20,6 @@ import {
   type AnalysisTrail,
   type NotebookSession,
 } from "~/lib/api";
-import { StatusDot } from "~/components/ui/data-viz";
 import { useToast } from "~/components/ui/toast";
 import {
   NotebookProvider,
@@ -82,13 +80,6 @@ type ResolvedTrail = Pick<AnalysisTrail, "project_id" | "branch" | "thread_id" |
 
 type RuntimeMode = "project" | "notion-trail" | "notebook";
 type RuntimeProduct = "projects" | "notebooks";
-
-const BOOT_PHASE_LABELS: Record<string, string> = {
-  health: "connecting to runtime...",
-  notion: "loading trail...",
-  editor: "loading editor...",
-  ready: "running",
-};
 
 function resolveRuntimeMode({
   project,
@@ -181,16 +172,14 @@ export default function NotebooksPage() {
     : Boolean(urlFile || urlSessionId);
 
   const [state, setState] = useState<AppState>("loading");
-  const [launchStatus, setLaunchStatus] = useState(hasDeepLink ? "connecting to your workspace..." : "");
+  const [launchStatus, setLaunchStatus] = useState(hasDeepLink ? "opening..." : "");
   const [notebookConfig, setNotebookConfig] = useState<NotebookConfig | null>(null);
   const [, setActiveNotebookSession] =
     useState<NotebookSession | null>(null);
   const [notionConnected, setNotionConnected] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [bootPhase, setBootPhase] = useState<string>("health");
   const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const handleBootPhase = useCallback((phase: string) => { setBootPhase(phase); }, []);
   const handleBootReady = useCallback(() => { setState("ready"); }, []);
 
   useEffect(() => {
@@ -541,23 +530,42 @@ export default function NotebooksPage() {
         }
       }
 
+      // Project mode is sessionless-first: the editor and file tree mount
+      // straight off the gateway workspace store with NO sandbox. The only
+      // reason to look for a session here is a warm kernel from a refresh —
+      // if one matches, attach to it so outputs replay; otherwise open
+      // instantly and let the first Run provision compute.
+      if (runtimeMode === "project") {
+        let warmSessionId: string | null = null;
+        try {
+          const session = (await getNotebookSession()) as any;
+          if (
+            session?.status === "running" &&
+            session.id &&
+            session.notebook_url &&
+            (session.project_id || "") === urlProject &&
+            (session.branch || "main") === activeBranch
+          ) {
+            warmSessionId = session.id;
+          }
+        } catch (err) {
+          console.warn("Failed to check existing session:", err);
+        }
+        if (cancelled) return;
+        const config = await buildConfig(warmSessionId ?? "", apiKey, "projects");
+        if (cancelled) return;
+        setNotebookConfig(config);
+        setState("booting");
+        if (warmSessionId) startPing(warmSessionId);
+        return;
+      }
+
       try {
         const session = await getNotebookSession() as any;
         if (!cancelled && session?.status === "running" && session.id && session.notebook_url) {
           const sessionProject = session.project_id || "";
           const sessionBranch = session.branch || "main";
-          if (runtimeMode === "project") {
-            if (sessionProject !== urlProject || sessionBranch !== activeBranch) {
-              console.log("[projects] Session project/branch mismatch — deleting stale session");
-              await deleteNotebookSession().catch(() => {});
-            } else {
-              const config = await buildConfig(session.id, apiKey, "projects");
-              setNotebookConfig(config);
-              setState("booting");
-              startPing(session.id);
-              return;
-            }
-          } else if (runtimeMode === "notion-trail") {
+          if (runtimeMode === "notion-trail") {
             const trail = await resolveTrailMetadata();
             if (
               trail &&
@@ -666,12 +674,16 @@ export default function NotebooksPage() {
     primeNotionTrailEditorState(kernelSessionId);
   }, [notebookConfig?.kernelSessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Legacy eager launch — only for Notion/Slack trails and the standalone
+  // (project-less) notebook surface, which still need a session up front.
+  // Project notebooks NEVER pass through here: they boot sessionless and
+  // provision compute lazily on first Run.
   async function launch(
     existingApiKey?: string,
     product: RuntimeProduct = runtimeMode === "project" ? "projects" : "notebooks",
   ) {
     setState("loading");
-    setLaunchStatus(product === "projects" ? "creating project workspace..." : "creating notebook runtime...");
+    setLaunchStatus("opening notebook...");
     try {
       let apiKey = existingApiKey;
       if (!apiKey && !IS_CLOUD_MODE) {
@@ -700,7 +712,6 @@ export default function NotebooksPage() {
         setState("no-session");
         return;
       }
-      setLaunchStatus("starting your workspace runtime...");
       const config = await buildConfig(session.id, apiKey, product, trail);
 
       setNotebookConfig(config);
@@ -710,18 +721,6 @@ export default function NotebooksPage() {
       toast(String(e), "error");
       setState("no-session");
     }
-  }
-
-  async function stop() {
-    try {
-      await deleteNotebookSession();
-    } catch (err) {
-      console.warn("Failed to delete session:", err);
-    }
-    setState("no-session");
-    setNotebookConfig(null);
-    setActiveNotebookSession(null);
-    if (pingRef.current) { clearInterval(pingRef.current); pingRef.current = null; }
   }
 
   function getEffectiveNotebookConfig(config: NotebookConfig): NotebookConfig {
@@ -852,32 +851,18 @@ export default function NotebooksPage() {
                   <ExternalLink className="w-3 h-3" /> full screen
                 </a>
               )}
-              <button
-                onClick={stop}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-muted-foreground border border-border hover:border-destructive hover:text-destructive transition-all tracking-wider uppercase"
-              >
-                <Square className="w-3 h-3" /> stop
-              </button>
             </>
           }
         >
-          {state === "booting" ? (
-            <>
-              <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
-              <span className="text-[11px] text-muted-foreground">
-                {BOOT_PHASE_LABELS[bootPhase] || bootPhase}
-              </span>
-            </>
-          ) : (
-            <>
-              <StatusDot status="healthy" size={4} pulse />
-              <span className="text-[11px] text-green-500">running</span>
-            </>
+          {/* No machine status here on purpose: there is no machine to
+              start or stop. Kernel state lives in the editor footer. */}
+          {state === "booting" && (
+            <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
           )}
         </IDEHeader>
         <div className="flex-1 min-h-0 overflow-hidden">
           <NotebookProvider key={bootKey} value={effectiveNotebookConfig}>
-            <NotebookBoot key={bootKey} onPhaseChange={handleBootPhase} onReady={handleBootReady} />
+            <NotebookBoot key={bootKey} onReady={handleBootReady} />
           </NotebookProvider>
         </div>
       </div>

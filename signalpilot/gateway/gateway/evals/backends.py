@@ -2,7 +2,7 @@
 
 One seam, two implementations. `runner.py` describes a short-lived container
 (image, command, env, limits, timeout) and gets back (exit_code, logs); it does
-not know whether that ran on a Docker daemon or as a Kubernetes pod.
+not know where that ran.
 
     local mode  -> DockerBackend  (host Docker Engine API over the unix socket)
     cloud mode  -> VercelBackend  (ephemeral Vercel sandbox VMs; SP_EVAL_EXECUTION_BACKEND=vercel)

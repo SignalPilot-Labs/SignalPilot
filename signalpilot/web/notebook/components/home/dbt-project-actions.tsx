@@ -299,39 +299,21 @@ const GitHubImportForm: React.FC<{
     setImporting(repo.full_name);
 
     try {
-      // Create project on gateway
-      const project = await request<{ id: string; default_branch?: string | null }>("/api/workspace-projects", {
+      // One-shot import: the gateway creates the project, links the repo, and
+      // mirrors it into workspace storage. Idempotent per repo.
+      const { project } = await request<{
+        project: { id: string; default_branch?: string | null };
+        link: unknown;
+        created: boolean;
+      }>("/api/github/import", {
         method: "POST",
         body: JSON.stringify({
-          name: repo.name,
-          display_name: repo.name,
-          description: repo.description || "",
-          source: "github",
-          tags: ["github"],
-        }),
-      });
-
-      // Link repo to project
-      await request<unknown>("/api/github/repo-links", {
-        method: "POST",
-        body: JSON.stringify({
-          project_id: project.id,
           installation_id: selectedInstall.id,
           repo_full_name: repo.full_name,
           repo_id: repo.id,
           default_branch: repo.default_branch,
         }),
       });
-
-      // Tell the gateway to mirror the GitHub repo into its bare git storage
-      toast({ title: "Syncing", description: "Mirroring repository from GitHub..." });
-      try {
-        await request<unknown>(`/api/github/sync/${project.id}`, {
-          method: "POST",
-        });
-      } catch (e) {
-        console.warn("[Import] Gateway GitHub sync failed:", e);
-      }
 
       // Sync the project locally before navigating
       if (!openProjectOnComplete) {

@@ -1,7 +1,6 @@
 import { NoKernelConnectedError } from "@/utils/errors";
 import { Logger } from "@/utils/Logger";
 import { Objects } from "@/utils/objects";
-import { memoizeLastValue } from "@/utils/once";
 import { waitForKernelToBeInstantiated } from "../kernel/state";
 import type { RuntimeManager } from "../runtime/runtime";
 import { store } from "../state/jotai";
@@ -38,6 +37,19 @@ type Action =
   | "startConnection"
   | "waitForConnectionOpen"
   | "waitForRuntime";
+
+// waitForRuntime keys that can be served by the gateway file plane directly
+// (see the waitForRuntime case below).
+const FILE_PLANE_KEYS = new Set<keyof AllRequests>([
+  "sendListFiles",
+  "sendSearchFiles",
+  "sendCreateFileOrFolder",
+  "sendDeleteFileOrFolder",
+  "sendCopyFileOrFolder",
+  "sendRenameFileOrFolder",
+  "sendUpdateFile",
+  "sendFileDetails",
+]);
 
 const ACTIONS: Record<keyof AllRequests, Action> = {
   // These will start a connection if not already connected and then wait until the connection is open
@@ -138,11 +150,31 @@ export function createLazyRequests(
   delegate: AllRequests,
   getRuntimeManager: () => RuntimeManager,
 ): AllRequests {
-  // Memoize the init call, just once per runtime manager
-  const initOnce = memoizeLastValue(async (runtimeManager: RuntimeManager) => {
-    store.set(connectionAtom, { state: WebSocketState.CONNECTING });
-    await runtimeManager.init();
-  });
+  // Init at most once per runtime manager — but forget a FAILED attempt so
+  // the next Run can retry (lazy provisioning may fail transiently; caching
+  // the rejection would permanently brick the Run button).
+  let inFlight: { rm: RuntimeManager; promise: Promise<void> } | null = null;
+  const initOnce = (runtimeManager: RuntimeManager): Promise<void> => {
+    if (!inFlight || inFlight.rm !== runtimeManager) {
+      const promise = (async () => {
+        // Never regress an already-open connection to CONNECTING: onOpen
+        // fired in the past and will not fire again, so waiters on OPEN
+        // would deadlock. Only announce CONNECTING from a cold state.
+        if (store.get(connectionAtom).state !== WebSocketState.OPEN) {
+          store.set(connectionAtom, { state: WebSocketState.CONNECTING });
+        }
+        await runtimeManager.init();
+      })().catch((error) => {
+        inFlight = null;
+        if (store.get(connectionAtom).state === WebSocketState.CONNECTING) {
+          store.set(connectionAtom, { state: WebSocketState.NOT_STARTED });
+        }
+        throw error;
+      });
+      inFlight = { rm: runtimeManager, promise };
+    }
+    return inFlight.promise;
+  };
 
   // oxlint-disable-next-line typescript/no-explicit-any
   function wrapRequest<T extends (...args: any[]) => Promise<any>>(
@@ -178,11 +210,21 @@ export function createLazyRequests(
           await waitForKernelToBeInstantiated();
           return request(...args);
 
-        case "waitForRuntime":
+        case "waitForRuntime": {
+          // File operations dispatch straight to the gateway workspace store
+          // when a project file plane is bound — no sandbox required, works
+          // before any runtime exists (sessionless boot).
+          if (FILE_PLANE_KEYS.has(key)) {
+            const { hasGatewayFilePlane } = await import("./gateway-file-api");
+            if (hasGatewayFilePlane()) {
+              return request(...args);
+            }
+          }
           // Wait for the runtime HTTP API to be healthy, but don't
           // touch connectionAtom or wait for WebSocket/kernel.
           await runtimeManager.waitForHealthy();
           return request(...args);
+        }
 
         case "startConnection":
           // Start connection and wait for it to be open

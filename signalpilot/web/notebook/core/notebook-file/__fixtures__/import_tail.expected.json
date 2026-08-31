@@ -1,0 +1,30 @@
+{
+  "cells": [
+    {
+      "code": "x = 1\nimport textwrap",
+      "code_hash": "3909c81af0759f3bb1bb22b30ff45216",
+      "config": {
+        "column": null,
+        "disabled": false,
+        "hide_code": false
+      },
+      "id": "Hbol",
+      "name": "_"
+    },
+    {
+      "code": "print(textwrap.dedent('  hi'), x)",
+      "code_hash": "3627ad26cebcbcea8c699847fad4e3bd",
+      "config": {
+        "column": null,
+        "disabled": false,
+        "hide_code": false
+      },
+      "id": "MJUe",
+      "name": "_"
+    }
+  ],
+  "metadata": {
+    "signalpilot_version": "0.1.0"
+  },
+  "version": "1"
+}

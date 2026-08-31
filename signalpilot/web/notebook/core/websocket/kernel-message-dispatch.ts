@@ -68,9 +68,12 @@ function getExistingCells(): CellData[] | undefined {
     console.log("[getExistingCells] switching notebook — returning undefined");
     return undefined;
   }
-  const cells = Object.values(getNotebook().cellData).filter(
-    (cell) => cell.id !== SCRATCH_CELL_ID,
-  );
+  // Document order matters: kernel-ready reconciliation maps existing cells
+  // to server cells positionally.
+  const notebook = getNotebook();
+  const cells = notebook.cellIds.inOrderIds
+    .map((id) => notebook.cellData[id])
+    .filter((cell) => cell && cell.id !== SCRATCH_CELL_ID);
   console.log("[getExistingCells] returning", cells.length, "existing cells");
   return cells;
 }

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import os
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -15,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.auth.notebook_jwt import mint_session_jwt
 from gateway.config.gateway import get_gateway_settings
+from gateway.config.notebooks import chat_force_oauth_token
 from gateway.db.models import (
     GatewayChatConversation,
     GatewayChatObjectDeletion,
@@ -27,11 +30,14 @@ from gateway.notebooks.session_service import (
     ensure_standalone_chat_notebook_session,
     runtime_for_session,
 )
+from gateway.standalone_chat.agent_sessions import agent_session_transfer
 from gateway.standalone_chat.config import enterprise_chat_feature_flags
 from gateway.standalone_chat.object_storage import chat_object_storage
 from gateway.store import notebook_sessions as notebook_session_store
 from gateway.store import org_secrets as org_secrets_store
 from gateway.store.standalone_chat import set_execution_session
+
+logger = logging.getLogger(__name__)
 
 
 def _join_base_path(base: str, path: str) -> str:
@@ -60,11 +66,25 @@ def _notebook_auth_headers(session_token: str | None = None) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _bearer_fingerprint(headers: dict[str, str]) -> str:
+    """Return a non-reversible request correlation value for auth diagnostics."""
+    authorization = headers.get("Authorization", "")
+    if not authorization.startswith("Bearer "):
+        return "missing"
+    token = authorization.removeprefix("Bearer ")
+    digest = hashlib.sha256(token.encode()).hexdigest()[:12]
+    return f"sha256:{digest}:len{len(token)}"
+
+
 @dataclass(frozen=True)
 class PreparedExecution:
     url: str
     headers: dict[str, str]
     payload: dict[str, Any]
+    # Gateway notebook session backing this execution. The worker forwards it
+    # on notebook_started events so the browser can attach the live notebook
+    # view through the notebook proxy.
+    session_id: str | None = None
 
 
 async def ensure_execution_runtime(
@@ -75,16 +95,18 @@ async def ensure_execution_runtime(
     branch: str,
     connection_name: str,
     commit_sha: str,
+    on_cold_boot: Callable[[str], Awaitable[None]] | None = None,
 ) -> NotebookRuntime:
     runtime = await ensure_standalone_chat_notebook_session(
         db,
         org_id=run.org_id,
         user_id=run.user_id,
-        run_id=run.id,
+        conversation_id=run.conversation_id,
         project_id=run.project_id,
         branch=branch,
         connection_name=connection_name,
         commit_sha=commit_sha,
+        on_cold_boot=on_cold_boot,
     )
     if not await set_execution_session(
         db,
@@ -107,7 +129,36 @@ async def prepare_execution(
     prompt: str,
     messages: list[dict[str, str]],
     warm_context: dict[str, Any],
+    on_cold_boot: Callable[[str], Awaitable[None]] | None = None,
 ) -> PreparedExecution:
+    conversation = await db.get(GatewayChatConversation, run.conversation_id)
+    is_improvement_run = bool(conversation and getattr(conversation, "origin", "user") == "improvement")
+    force_oauth = chat_force_oauth_token() and not is_improvement_run
+    runtime_auth: dict[str, str] | None = None
+    _local_oauth = os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or os.getenv("OAUTH_TOKEN")
+    if force_oauth:
+        if not _local_oauth:
+            raise RuntimeError(
+                "SP_CHAT_FORCE_OAUTH_TOKEN is enabled but no Claude OAuth token is configured"
+            )
+        runtime_auth = {"type": "oauth", "token": _local_oauth}
+    elif os.getenv("SP_RUNTIME_PREFER_OAUTH_TOKEN") and _local_oauth and not is_improvement_run:
+        # Local/staging testing override: bill agent runs to the OAuth token in
+        # the environment instead of the org's stored API key. Off in
+        # production (the flag lives only in the local container env), so the
+        # normal org-key-first resolution below is unchanged there.
+        runtime_auth = {"type": "oauth", "token": _local_oauth}
+    elif is_improvement_run and (improvement_key := os.getenv("SP_IMPROVEMENT_ANTHROPIC_KEY")):
+        # Automated improvement runs bill to a dedicated Claude Code OAuth
+        # token (sk-ant-oat...), never to the author's personal credential.
+        # OAuth only for now — no API-key path.
+        runtime_auth = {"type": "oauth", "token": improvement_key}
+    elif anthropic_api_key := await org_secrets_store.resolve_anthropic_key(db, run.org_id):
+        runtime_auth = {"type": "api_key", "token": anthropic_api_key}
+    elif oauth_token := (os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or os.getenv("OAUTH_TOKEN")):
+        runtime_auth = {"type": "oauth", "token": oauth_token}
+    elif server_api_key := os.getenv("ANTHROPIC_API_KEY"):
+        runtime_auth = {"type": "api_key", "token": server_api_key}
     runtime = await ensure_execution_runtime(
         db,
         run=run,
@@ -115,22 +166,8 @@ async def prepare_execution(
         branch=branch,
         connection_name=connection_name,
         commit_sha=commit_sha,
+        on_cold_boot=on_cold_boot,
     )
-    conversation = await db.get(GatewayChatConversation, run.conversation_id)
-    is_improvement_run = bool(conversation and getattr(conversation, "origin", "user") == "improvement")
-    anthropic_api_key = await org_secrets_store.resolve_anthropic_key(db, run.org_id)
-    runtime_auth: dict[str, str] | None = None
-    if is_improvement_run and (improvement_key := os.getenv("SP_IMPROVEMENT_ANTHROPIC_KEY")):
-        # Automated improvement runs bill to a dedicated Claude Code OAuth
-        # token (sk-ant-oat...), never to the author's personal credential.
-        # OAuth only for now — no API-key path.
-        runtime_auth = {"type": "oauth", "token": improvement_key}
-    elif anthropic_api_key:
-        runtime_auth = {"type": "api_key", "token": anthropic_api_key}
-    elif oauth_token := (os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or os.getenv("OAUTH_TOKEN")):
-        runtime_auth = {"type": "oauth", "token": oauth_token}
-    elif server_api_key := os.getenv("ANTHROPIC_API_KEY"):
-        runtime_auth = {"type": "api_key", "token": server_api_key}
     capabilities = [
         "artifact:publish",
         "dbt:read",
@@ -139,11 +176,13 @@ async def prepare_execution(
         "schema:read",
         "runtime:publish",
     ]
-    if is_improvement_run:
-        # Unlocks the sandbox VM MCP tools; ordinary chats never carry this.
-        capabilities.append("sandbox:execute")
+    # The standalone agent runs the same SignalPilot workflow as a regular MCP
+    # client. Tool implementations still enforce their own frozen-project,
+    # connection, SQL-governance, and dev-database boundaries.
+    capabilities.extend(["sandbox:execute", "dbt:execute"])
     payload = {
         "run_id": run.id,
+        "conversation_id": run.conversation_id,
         "project_id": run.project_id,
         "branch": branch,
         "connection_name": connection_name,
@@ -157,15 +196,25 @@ async def prepare_execution(
             connection_name=connection_name,
             commit_sha=commit_sha,
             capabilities=capabilities,
+            # MUST stay chat:{run_id}: the notebook /execute endpoint validates
+            # the JWT's execution_identity against exactly f"chat:{run_id}"
+            # (it only has run_id in scope). The dbt executor keys off this too,
+            # so it is per-run; the idle reaper still frees it after the warm
+            # window. (The notebook SESSION warm-reuse is keyed separately by
+            # conversation in session_service and is unaffected.)
             execution_identity=f"chat:{run.id}",
-            scopes=["read", "query", "execute"],
+            scopes=["read", "query", "execute", "write", "admin"],
             ttl=get_gateway_settings().sp_session_jwt_ttl_seconds,
         ),
         "prompt": prompt,
         "messages": messages,
         "warm_context": warm_context,
         "run_origin": "improvement" if is_improvement_run else "user",
+        # Optional model override. When SP_CHAT_AGENT_MODEL is set (local/staging)
+        # the notebook agent uses it; unset -> the notebook keeps its own default.
+        **({"model": _chat_model} if (_chat_model := os.getenv("SP_CHAT_AGENT_MODEL")) else {}),
         "features": {
+            "sandbox_runtime": enterprise_chat_feature_flags().sandbox_runtime,
             "size_router": enterprise_chat_feature_flags().size_router,
             "size_router_shadow": enterprise_chat_feature_flags().size_router_shadow,
             "notebook_analysis": enterprise_chat_feature_flags().notebook_analysis,
@@ -173,9 +222,13 @@ async def prepare_execution(
             "runtime_artifacts": enterprise_chat_feature_flags().runtime_artifacts,
             "dataset_refs": enterprise_chat_feature_flags().dataset_refs,
         },
-        # Standalone runs are reconstructed from gateway state. Never resume
-        # a Claude/runtime-local session, including retries of the same run.
-        "new_execution": True,
+        # Native Claude Agent SDK continuity. The sandbox restores this archive
+        # before a cold resume and saves it after every run. Database history
+        # remains the fallback when no valid SDK session exists.
+        "agent_session": await agent_session_transfer(
+            org_id=run.org_id,
+            conversation_id=run.conversation_id,
+        ),
     }
     if runtime_auth:
         # Direct-mode notebooks are shared and outlive individual requests.
@@ -194,6 +247,7 @@ async def prepare_execution(
         url=_join_base_path(runtime.internal_base_url, "/api/standalone-chat/execute"),
         headers=headers,
         payload=payload,
+        session_id=runtime.session_id,
     )
 
 
@@ -208,6 +262,19 @@ async def stream_execution(execution: PreparedExecution) -> AsyncGenerator[dict[
             json=execution.payload,
         ) as response,
     ):
+        if response.is_error:
+            # Error responses are small JSON/plain-text diagnostics from the
+            # notebook runtime. Read them before the streaming context closes;
+            # otherwise every 4xx collapses to an opaque HTTPStatusError and
+            # the real authorization/workspace failure is lost.
+            error_body = (await response.aread()).decode(errors="replace")[:500]
+            logger.warning(
+                "Notebook execute failed status=%s url=%s bearer=%s body=%r",
+                response.status_code,
+                execution.url,
+                _bearer_fingerprint(execution.headers),
+                error_body,
+            )
         response.raise_for_status()
         async for line in response.aiter_lines():
             if not line.strip():
@@ -215,6 +282,27 @@ async def stream_execution(execution: PreparedExecution) -> AsyncGenerator[dict[
             event = json.loads(line)
             if isinstance(event, dict):
                 yield event
+
+
+async def steer_execution(
+    execution: PreparedExecution,
+    *,
+    run_id: str,
+    steering_id: str,
+    message: str,
+) -> bool:
+    """Offer a durable queued message to the live notebook agent."""
+    url = execution.url.rsplit("/execute", 1)[0] + f"/steer/{run_id}"
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.post(
+            url,
+            headers=execution.headers,
+            json={"steering_id": steering_id, "message": message},
+        )
+    if response.status_code == 409:
+        return False
+    response.raise_for_status()
+    return True
 
 
 async def cancel_execution_session(db: AsyncSession, run: GatewayChatRun) -> bool:
@@ -243,13 +331,26 @@ async def cancel_execution_session(db: AsyncSession, run: GatewayChatRun) -> boo
 
 
 async def cleanup_finished_execution(db: AsyncSession, *, run_id: str) -> None:
-    """Release a synthetic notebook only after its durable run yields the lease."""
+    """Release the notebook session after a run finishes.
+
+    Interactive chat sessions stay WARM: they are conversation-keyed and reused
+    by the next message, and the idle lifecycle loop snapshots and reaps them.
+    Only one-shot improvement runs terminate their session at run end."""
     run = await db.get(GatewayChatRun, run_id)
     if (
         run is None
         or run.status not in {"waiting_for_user", "completed", "failed", "cancelled"}
         or not run.execution_session_id
     ):
+        return
+    conversation = await db.get(GatewayChatConversation, run.conversation_id)
+    is_improvement = bool(
+        conversation and getattr(conversation, "origin", "user") == "improvement"
+    )
+    if not is_improvement:
+        # Keep the interactive chat session warm for the next message. The idle
+        # lifecycle loop (main._notebook_lifecycle_loop) snapshots it after
+        # SP_NOTEBOOK_IDLE_SNAPSHOT_SECONDS and reaps it later.
         return
     session_info = await notebook_session_store.get_session_by_id(
         db,

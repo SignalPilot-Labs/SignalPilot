@@ -211,6 +211,7 @@ def _child_env(workdir: Path, database_url: str, port: int, publishable_key: str
         "SP_SESSION_JWT_SECRET": session_jwt_secret,
 
         # ── cloud hardening kill-switches (assert_cloud_hardening_intact) ─────
+        "SP_NOTEBOOK_IMAGE": "registry.invalid/notebook@sha256:0000000000000000000000000000000000000000000000000000000000000000",
         "SP_DISABLE_SANDBOX": "false",
         "SP_ALLOWED_ORIGINS": base_url,
 

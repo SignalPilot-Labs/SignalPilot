@@ -28,26 +28,22 @@ fi
 echo ""
 echo "Step 2: Plugin structure"
 
-if [ -f /workspace/plugin/.claude-plugin/plugin.json ]; then
+PLUGIN_DIR=/workspace/signalpilot-plugin
+
+if [ -f "$PLUGIN_DIR/.claude-plugin/plugin.json" ]; then
     pass "plugin.json exists"
 else
     fail "plugin.json missing"
 fi
 
-if [ -f /workspace/plugin/.mcp.json ]; then
-    pass ".mcp.json exists"
-else
-    fail ".mcp.json missing"
-fi
-
-SKILL_COUNT=$(find /workspace/plugin/skills -name "SKILL.md" 2>/dev/null | wc -l)
+SKILL_COUNT=$(find "$PLUGIN_DIR/skills" -name "SKILL.md" 2>/dev/null | wc -l)
 if [ "$SKILL_COUNT" -gt 0 ]; then
     pass "$SKILL_COUNT skills found"
 else
     fail "No skills found"
 fi
 
-AGENT_COUNT=$(find /workspace/plugin/agents -name "*.md" 2>/dev/null | wc -l)
+AGENT_COUNT=$(find "$PLUGIN_DIR/agents" -name "*.md" 2>/dev/null | wc -l)
 if [ "$AGENT_COUNT" -gt 0 ]; then
     pass "$AGENT_COUNT agents found"
 else

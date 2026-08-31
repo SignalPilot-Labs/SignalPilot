@@ -14,16 +14,19 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gateway.config.notebooks import chat_force_oauth_token
 from gateway.db.models import (
     GatewayChatConversation,
     GatewayChatStarterCache,
     GatewayChatUserPreference,
     GatewayConnection,
     GatewayCredential,
+    GatewayDbtManifest,
     GatewayWorkspaceProject,
 )
 from gateway.git.repos import _run_git, branch_head_sha, repo_path
 from gateway.store import org_secrets as org_secrets_store
+from gateway.workspace_store.dbt_detect import resolve_dbt_project_dir
 
 
 @dataclass(frozen=True)
@@ -104,13 +107,43 @@ def _has_dbt_metadata(project: GatewayWorkspaceProject, files: list[str]) -> boo
     settings = project.settings or {}
     if settings.get("dbt_metadata_checksum") or settings.get("manifest"):
         return True
-    has_project_file = "dbt_project.yml" in files
+    # The dbt project rarely sits at the repo root — most real repos nest it in
+    # a subfolder (e.g. `dumpsters_dbt/`). Resolve the project directory the same
+    # way dbt_map/runner and the dbt executor do (explicit setting, else the
+    # shallowest detected `<dir>/dbt_project.yml`) instead of assuming the root,
+    # otherwise readiness reports `metadata_unavailable` for a perfectly valid
+    # nested project.
+    project_dir = resolve_dbt_project_dir(settings, files)
+    if project_dir is None:
+        return False
+    prefix = f"{project_dir}/" if project_dir else ""
+    has_project_file = f"{prefix}dbt_project.yml" in files
+    resource_prefixes = tuple(
+        f"{prefix}{sub}/" for sub in ("models", "metrics", "semantic_models", "snapshots")
+    )
     has_resource = any(
-        file.startswith(("models/", "metrics/", "semantic_models/", "snapshots/"))
+        file.startswith(resource_prefixes)
         and file.endswith((".sql", ".yml", ".yaml", ".json"))
         for file in files
     )
     return has_project_file and has_resource
+
+
+async def _has_successful_compile(db: AsyncSession, project_id: str, branch: str) -> bool:
+    """A completed dbt-map compile is proof that dbt metadata exists — it is the
+    strongest signal we have and independent of how the repo is laid out. The
+    static tree check can miss projects (generated models, sparse mirrors); a
+    green manifest on this branch cannot lie."""
+    manifest = (
+        await db.execute(
+            select(GatewayDbtManifest.id).where(
+                GatewayDbtManifest.project_id == project_id,
+                GatewayDbtManifest.branch == branch,
+                GatewayDbtManifest.status == "success",
+            )
+        )
+    ).first()
+    return manifest is not None
 
 
 async def evaluate_project_readiness(
@@ -127,15 +160,32 @@ async def evaluate_project_readiness(
     branch = (branch_override or project.default_branch or "main").strip() or "main"
     files, head = _project_tree(project.id, branch)
     if not head:
+        # The bare git mirror lives on an ephemeral volume while the project and
+        # its GitHub link are durable in the DB, so the two can drift and leave a
+        # linked project with no mirror. Self-heal by re-cloning before giving
+        # up, so the project recovers on load instead of dead-ending.
+        from gateway.git.sync import ensure_repo_mirror
+
+        try:
+            if await ensure_repo_mirror(
+                db, org_id=org_id, project_id=project.id, default_branch=branch
+            ):
+                files, head = _project_tree(project.id, branch)
+        except Exception:
+            pass
+    if not head:
         return ProjectReadiness(
             False,
             "branch_unavailable",
-            "The production branch is not available yet.",
+            "The repository could not be synced. Re-sync the project, or reconnect "
+            "the GitHub app if it was removed.",
             None,
             project.connection_name,
             None,
         )
-    if not _has_dbt_metadata(project, files):
+    if not _has_dbt_metadata(project, files) and not await _has_successful_compile(
+        db, project.id, branch
+    ):
         return ProjectReadiness(
             False,
             "metadata_unavailable",
@@ -186,14 +236,17 @@ async def evaluate_project_readiness(
             None,
         )
 
+    oauth_token = os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or os.getenv("OAUTH_TOKEN")
     has_runtime_credentials = bool(
-        os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
-        or os.getenv("OAUTH_TOKEN")
-        or os.getenv("ANTHROPIC_API_KEY")
-        # The improvement-run billing key also satisfies the runtime
-        # requirement; execution.py picks the right credential per run.
-        or os.getenv("SP_IMPROVEMENT_ANTHROPIC_KEY")
-        or await org_secrets_store.resolve_anthropic_key(db, org_id)
+        oauth_token
+        if chat_force_oauth_token()
+        else (
+            os.getenv("ANTHROPIC_API_KEY")
+            # The improvement-run billing key also satisfies the runtime
+            # requirement; execution.py picks the right credential per run.
+            or os.getenv("SP_IMPROVEMENT_ANTHROPIC_KEY")
+            or await org_secrets_store.resolve_anthropic_key(db, org_id)
+        )
     )
     if not has_runtime_credentials:
         return ProjectReadiness(

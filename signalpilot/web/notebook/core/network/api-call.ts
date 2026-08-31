@@ -1,5 +1,17 @@
 import { Logger } from "@/utils/Logger";
 import { Strings } from "@/utils/strings";
+
+/**
+ * Thrown by runtime-backed API calls made before any sandbox session exists
+ * (sessionless boot). Callers that can degrade gracefully should catch this;
+ * the kernel path never sees it because provisioning happens on first Run.
+ */
+export class RuntimeNotProvisionedError extends Error {
+  constructor() {
+    super("Notebook runtime is not running yet — run a cell to start it.");
+    this.name = "RuntimeNotProvisionedError";
+  }
+}
 import { getRuntimeManager } from "../runtime/config";
 import {
   getGatewayBranchId,
@@ -19,10 +31,18 @@ async function getBaseUrlAndHeaders(): Promise<{
 }> {
   // Use NotebookConfig first — instant, no waiting, always available after boot.
   try {
-    const { getNotebookConfig } = await import(
+    const { getNotebookConfig, getActiveSessionId } = await import(
       "../../../components/notebook/notebook-context"
     );
     const config = getNotebookConfig();
+    // Sessionless boot: no sandbox exists yet. Fail fast so callers that
+    // genuinely need the runtime surface an error instead of hitting a
+    // malformed /notebook//api/... URL. (File-plane calls go straight to
+    // the gateway and never enter this path.)
+    const sessionId = getActiveSessionId(config);
+    if (!sessionId) {
+      throw new RuntimeNotProvisionedError();
+    }
     const token = await config.getToken();
     const base = config.notebookProxyUrl ?? config.gatewayUrl;
     const runtimeBase = base
@@ -31,13 +51,16 @@ async function getBaseUrlAndHeaders(): Promise<{
         ? ""
         : window.location.origin;
     return {
-      baseUrl: `${runtimeBase}/notebook/${config.sessionId}/`,
+      baseUrl: `${runtimeBase}/notebook/${sessionId}/`,
       headers: {
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof RuntimeNotProvisionedError) {
+      throw error;
+    }
     /* NotebookConfig not set — fall through to RuntimeManager */
   }
 

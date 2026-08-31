@@ -39,7 +39,11 @@ class WorkspaceObjectStorage:
             import boto3
             from botocore.config import Config
 
-            kwargs: dict[str, Any] = {"config": Config(signature_version="s3v4")}
+            # Pool must cover the store's upload concurrency (Semaphore(32) in
+            # WorkspaceStore) or bulk imports churn connections.
+            kwargs: dict[str, Any] = {
+                "config": Config(signature_version="s3v4", max_pool_connections=64)
+            }
             if self.endpoint:
                 kwargs["endpoint_url"] = self.endpoint
             if self.region:

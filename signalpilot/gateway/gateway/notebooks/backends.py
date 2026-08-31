@@ -34,7 +34,9 @@ NOTEBOOK_PORT = 2718
 NOTEBOOK_SANDBOX_TAG = {"sp-purpose": "notebook"}
 # This path exists only inside the isolated notebook sandbox.
 _TOKEN_FILE = "/tmp/sp-notebook-token"  # nosec B108
-_HEALTH_POLL_SECONDS = 2.0
+# Tight poll: the exec round trip itself takes ~300ms, and a cold server
+# boots in ~2s — a 2s sleep added up to 2s of pure wait to every launch.
+_HEALTH_POLL_SECONDS = 0.5
 
 
 class NotebookLaunchError(RuntimeError):
@@ -69,7 +71,7 @@ class NotebookBackend(Protocol):
 
     async def is_alive(self, runtime_handle: str) -> bool: ...
 
-    async def resume(self, runtime_handle: str) -> str:
+    async def resume(self, runtime_handle: str, request: LaunchRequest) -> str:
         """Resume a snapshotted session; returns the (possibly new) upstream URL."""
         ...
 
@@ -101,7 +103,7 @@ class DirectNotebookBackend:
     async def is_alive(self, runtime_handle: str) -> bool:
         return True
 
-    async def resume(self, runtime_handle: str) -> str:
+    async def resume(self, runtime_handle: str, request: LaunchRequest) -> str:
         return self._direct_url
 
     async def snapshot_and_stop(self, runtime_handle: str) -> str | None:
@@ -126,7 +128,7 @@ def _boot_command(request: LaunchRequest) -> str:
     """
     hydrate = ""
     if request.snapshot_url:
-        hydrate = f'curl -fsSL "$SP_SNAPSHOT_URL" | tar xz -C /workspace && '
+        hydrate = 'curl -fsSL "$SP_SNAPSHOT_URL" | tar xz -C /workspace && '
     return (
         "set -e; "
         # The custom notebook image runs as its unprivileged user with
@@ -135,6 +137,11 @@ def _boot_command(request: LaunchRequest) -> str:
         '{ mkdir -p /workspace && test -w /workspace ; } 2>/dev/null '
         '|| { sudo mkdir -p /workspace && sudo chown "$(id -u):$(id -g)" /workspace; }; '
         f"{hydrate}"
+        # Stage the auth token from the process env (the env is process-only,
+        # never the sandbox creation spec) — avoids a provider write_file
+        # round trip on the launch critical path.
+        f'printf %s "$SP_NOTEBOOK_TOKEN" > {shlex.quote(_TOKEN_FILE)}; '
+        "unset SP_NOTEBOOK_TOKEN; "
         f"chmod 0400 {shlex.quote(_TOKEN_FILE)}; "
         "exec sp edit --host 0.0.0.0 --port 2718 --headless "
         f"--token-password-file {shlex.quote(_TOKEN_FILE)} "
@@ -154,6 +161,31 @@ class VercelNotebookBackend:
     ) -> None:
         self._settings = settings or get_notebook_settings()
         self._runtime = runtime or get_sandbox_runtime()
+
+    @staticmethod
+    def _process_env(request: LaunchRequest) -> dict[str, str]:
+        from gateway.auth.jwt_secret import load_session_jwt_secret
+
+        process_env = {
+            **request.env,
+            "SP_NOTEBOOK_TOKEN": request.notebook_token,
+            "SP_SESSION_JWT": request.session_jwt,
+            "SP_SESSION_JWT_SECRET": load_session_jwt_secret(),
+            "SP_SESSION_ID": request.session_id,
+            "SP_ORG_ID": request.org_id,
+            "SP_USER_ID": request.user_id,
+            "SP_BRANCH": request.branch,
+            "SP_WORKSPACE_MODE": "s3",
+        }
+        if request.project_id:
+            process_env["SP_PROJECT_ID"] = request.project_id
+        if request.snapshot_url:
+            process_env["SP_SNAPSHOT_URL"] = request.snapshot_url
+        if request.base_revision is not None:
+            process_env["SP_WORKSPACE_BASE_REVISION"] = str(request.base_revision)
+        if request.read_only:
+            process_env["SP_PROJECT_READ_ONLY"] = "1"
+        return process_env
 
     async def launch(self, request: LaunchRequest) -> NotebookLaunch:
         settings = self._settings
@@ -177,32 +209,28 @@ class VercelNotebookBackend:
         )
         sandbox_id = await self._runtime.create(spec)
         try:
-            await self._runtime.write_file(
-                sandbox_id, _TOKEN_FILE, request.notebook_token.encode("utf-8")
+            process_env = self._process_env(request)
+            await self._attach_retry(
+                lambda: self._runtime.start_process(
+                    sandbox_id, _boot_command(request), env=process_env
+                )
             )
-            process_env = {
-                **request.env,
-                "SP_SESSION_JWT": request.session_jwt,
-                "SP_SESSION_ID": request.session_id,
-                "SP_ORG_ID": request.org_id,
-                "SP_USER_ID": request.user_id,
-                "SP_BRANCH": request.branch,
-                "SP_WORKSPACE_MODE": "s3",
-            }
-            if request.project_id:
-                process_env["SP_PROJECT_ID"] = request.project_id
-            if request.snapshot_url:
-                process_env["SP_SNAPSHOT_URL"] = request.snapshot_url
-            if request.base_revision is not None:
-                process_env["SP_WORKSPACE_BASE_REVISION"] = str(request.base_revision)
-            if request.read_only:
-                process_env["SP_PROJECT_READ_ONLY"] = "1"
-            await self._runtime.start_process(
-                sandbox_id, _boot_command(request), env=process_env
+            # The public route exists as soon as the sandbox does — resolve it
+            # concurrently with the health wait instead of after it.
+            routes_task = asyncio.ensure_future(
+                self._attach_retry(lambda: self._route_url(sandbox_id))
             )
-            await self._wait_healthy(sandbox_id)
-            upstream = await self._route_url(sandbox_id)
-        except Exception:
+            try:
+                await self._wait_healthy(sandbox_id, not_found_grace_seconds=30.0)
+                upstream = await routes_task
+            except BaseException:
+                routes_task.cancel()
+                raise
+        except BaseException:
+            # Includes cancellation from the orchestration-level launch
+            # deadline. Once a handle exists we must destroy it before the
+            # cancellation escapes, otherwise the UI can fail while compute
+            # continues running invisibly.
             await self._runtime.destroy(sandbox_id)
             raise
         return NotebookLaunch(runtime_handle=sandbox_id, upstream_url=upstream)
@@ -225,22 +253,73 @@ class VercelNotebookBackend:
         f"curl -s -o /dev/null --max-time 2 http://localhost:{NOTEBOOK_PORT}/"
     )
 
-    async def _wait_healthy(self, sandbox_id: str) -> None:
-        deadline = time.monotonic() + self._settings.start_timeout_seconds
+    @staticmethod
+    def _health_wait_script(wait_seconds: float) -> str:
+        """One exec that waits IN-SANDBOX until the server answers.
+
+        Each provider exec costs a full API round trip (~300-700ms), so
+        polling from the gateway paid (round trip + sleep) per probe. This
+        loops locally at 250ms granularity and returns once — the whole wait
+        is a single journey.
+        """
+        iterations = max(1, int(wait_seconds * 4))
+        return (
+            f"i=0; while [ $i -lt {iterations} ]; do "
+            f"curl -s -o /dev/null --max-time 2 http://localhost:{NOTEBOOK_PORT}/ && exit 0; "
+            "sleep 0.25; i=$((i+1)); done; exit 1"
+        )
+
+    async def _wait_healthy(
+        self,
+        sandbox_id: str,
+        *,
+        timeout_seconds: float | None = None,
+        not_found_grace_seconds: float = 0.0,
+    ) -> None:
+        """Poll in-sandbox /health until healthy or the deadline passes.
+
+        not_found_grace_seconds: how long a SandboxNotFound from the attach
+        is tolerated before propagating. Vercel's name lookup can lag sandbox
+        creation by a few seconds, so a fresh launch needs a grace window —
+        but past it (or on a resume) a 404 means the sandbox is GONE, and
+        failing fast beats burning the whole health window.
+        """
+        start = time.monotonic()
+        deadline = start + (timeout_seconds or self._settings.start_timeout_seconds)
         last_error = ""
         while time.monotonic() < deadline:
-            result = await self._runtime.exec(
-                sandbox_id,
-                self._HEALTH_PROBE,
-                timeout_seconds=10,
-            )
+            # One in-sandbox waiter per chunk: a single provider round trip
+            # covers up to 45s of 250ms-granularity local polling.
+            chunk = min(45.0, max(1.0, deadline - time.monotonic()))
+            try:
+                result = await self._runtime.exec(
+                    sandbox_id,
+                    self._health_wait_script(chunk),
+                    timeout_seconds=chunk + 15,
+                )
+            except SandboxNotFound:
+                if time.monotonic() - start < not_found_grace_seconds:
+                    await asyncio.sleep(_HEALTH_POLL_SECONDS)
+                    continue
+                raise
             if result.ok:
                 return
             last_error = (result.stderr or result.stdout or "").strip()[-500:]
-            await asyncio.sleep(_HEALTH_POLL_SECONDS)
         raise NotebookLaunchError(
             f"Notebook server in sandbox {sandbox_id} never became healthy: {last_error}"
         )
+
+    async def _attach_retry(self, op, *, grace_seconds: float = 30.0):
+        """Run `op`, retrying SandboxNotFound during the post-create window
+        where the provider's name lookup may not see the sandbox yet."""
+        start = time.monotonic()
+        while True:
+            try:
+                return await op()
+            except SandboxNotFound:
+                if time.monotonic() - start >= grace_seconds:
+                    raise
+                await asyncio.sleep(1.0)
 
     async def is_alive(self, runtime_handle: str) -> bool:
         try:
@@ -255,10 +334,26 @@ class VercelNotebookBackend:
             return False
         return result.ok
 
-    async def resume(self, runtime_handle: str) -> str:
+    async def resume(self, runtime_handle: str, request: LaunchRequest) -> str:
+        # Vercel persistence restores the filesystem into a new VM session;
+        # it does not restore process memory. Restart the notebook server with
+        # fresh credentials before waiting for its port.
         await self._runtime.resume(runtime_handle)
-        await self._wait_healthy(runtime_handle)
-        return await self._route_url(runtime_handle)
+        await self._runtime.start_process(
+            runtime_handle,
+            _boot_command(request),
+            env=self._process_env(request),
+        )
+        routes_task = asyncio.ensure_future(self._route_url(runtime_handle))
+        try:
+            await self._wait_healthy(
+                runtime_handle,
+                timeout_seconds=min(30.0, float(self._settings.start_timeout_seconds)),
+            )
+            return await routes_task
+        except BaseException:
+            routes_task.cancel()
+            raise
 
     async def snapshot_and_stop(self, runtime_handle: str) -> str | None:
         try:
@@ -271,7 +366,11 @@ class VercelNotebookBackend:
         except Exception:
             logger.warning("Snapshot failed for %s; destroying without one", runtime_handle)
             snapshot_id = None
-        await self._runtime.stop(runtime_handle)
+        # snapshot() stops the Vercel session. Only issue an explicit stop if
+        # snapshotting failed, otherwise a second lifecycle call can race the
+        # provider's snapshot finalization.
+        if snapshot_id is None:
+            await self._runtime.stop(runtime_handle)
         return snapshot_id
 
     async def extend(self, runtime_handle: str, seconds: int) -> None:

@@ -102,16 +102,23 @@ async def describe_table(connection_name: str, table_name: str) -> str:
 
 
 @audited_tool(mcp)
-async def list_tables(connection_name: str) -> str:
+async def list_tables(connection_name: str, database: str | None = None) -> str:
     """
-    List all tables in a database with compact schema overview.
+    List tables in a database with compact schema overview.
 
     Returns a one-line-per-table summary with column names, primary keys,
     foreign keys, and row counts. This is designed for schema linking —
     read this first, then use describe_table for details on relevant tables.
 
+    Some connections span many databases (a whole SQL Server or Trino cluster).
+    For those, call with no database first to get the list of databases and
+    their table counts, then call again with a database name to see that
+    database's tables. This keeps each result small.
+
     Args:
         connection_name: Name of a configured database connection
+        database: Optional. In a multi-database connection, list only this
+            database's tables. Omit to list databases to choose from.
 
     Returns:
         Compact table listing optimized for LLM context efficiency.
@@ -149,13 +156,52 @@ async def list_tables(connection_name: str) -> str:
                 return f"Error: Could not fetch schema: {sanitize_mcp_error(str(e))}"
             schema_cache.put(connection_name, schema)
 
+        # Multi-database connections (SQL Server, Trino, etc.) tag each table
+        # with its database. A whole-cluster listing can be ~1MB of text, which
+        # is unusable context and can overrun the tool-response transport. So:
+        # list the databases first, and only expand one database's tables when
+        # the caller names it.
+        databases: dict[str, int] = {}
+        for table in schema.values():
+            db_name = table.get("database")
+            if db_name:
+                databases[db_name] = databases.get(db_name, 0) + 1
+
+        if databases:
+            if database is None:
+                db_lines = [
+                    f"Connection: {connection_name} ({conn_info.db_type})",
+                    f"This connection has {len(databases)} databases and "
+                    f"{len(schema)} tables total.",
+                    "Call list_tables again with a database name to see its "
+                    "tables. Databases (table counts):",
+                    "",
+                ]
+                for db_name in sorted(databases):
+                    db_lines.append(f"  {db_name} ({databases[db_name]} tables)")
+                return "\n".join(db_lines)
+            if database not in databases:
+                available = ", ".join(sorted(databases))
+                return (
+                    f"Error: database '{database}' not found in connection "
+                    f"'{connection_name}'. Available databases: {available}"
+                )
+            # Keep only this database's tables. Multi-db keys are
+            # "database.schema.table"; each entry also carries a "database" tag.
+            schema = {k: t for k, t in schema.items() if t.get("database") == database}
+
         # Build FK lookup
         fk_map: dict[str, str] = {}
         for key, table in schema.items():
             for fk in table.get("foreign_keys", []):
                 fk_map[f"{key}.{fk['column']}"] = f"{fk.get('references_table', '')}.{fk.get('references_column', '')}"
 
-        lines = [f"Database: {connection_name} ({conn_info.db_type})", f"Tables: {len(schema)}", ""]
+        header = (
+            f"Database: {database} ({conn_info.db_type})"
+            if database
+            else f"Database: {connection_name} ({conn_info.db_type})"
+        )
+        lines = [header, f"Tables: {len(schema)}", ""]
         for key in sorted(schema.keys()):
             table = schema[key]
             row_count = table.get("row_count", 0)

@@ -1,0 +1,63 @@
+{
+  "cells": [
+    {
+      "code": "import math\nTAU = math.tau",
+      "code_hash": "f77137cf1d26aaf9f6979e2ba7733880",
+      "config": {
+        "column": null,
+        "disabled": false,
+        "hide_code": false
+      },
+      "id": "setup",
+      "name": "setup"
+    },
+    {
+      "code": "values = [TAU * i for i in range(10)]",
+      "code_hash": "2fd737c758bb08fd994659cc2bc749d4",
+      "config": {
+        "column": null,
+        "disabled": false,
+        "hide_code": true
+      },
+      "id": "Hbol",
+      "name": "make_values"
+    },
+    {
+      "code": "def helper(v):\n    return v * 2",
+      "code_hash": "82f7805eb7a25c1e921208031d19eeae",
+      "config": {
+        "column": null,
+        "disabled": false,
+        "hide_code": false
+      },
+      "id": "MJUe",
+      "name": "*helper"
+    },
+    {
+      "code": "total = sum(helper(v) for v in values)",
+      "code_hash": "8296cb978c5bccec09b19bc3ff6cc12b",
+      "config": {
+        "column": 2,
+        "disabled": false,
+        "hide_code": false
+      },
+      "id": "vblA",
+      "name": "_"
+    },
+    {
+      "code": "sp.md(f\"\"\"Total is {total}\"\"\")",
+      "code_hash": "ecc46ba2b66c2cd627cae3b0551abb3b",
+      "config": {
+        "column": null,
+        "disabled": false,
+        "hide_code": false
+      },
+      "id": "bkHC",
+      "name": "_"
+    }
+  ],
+  "metadata": {
+    "signalpilot_version": "0.1.0"
+  },
+  "version": "1"
+}

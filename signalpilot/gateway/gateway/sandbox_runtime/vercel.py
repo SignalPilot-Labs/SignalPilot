@@ -13,6 +13,7 @@ or destroy any sandbox.
 from __future__ import annotations
 
 import asyncio
+import logging
 import posixpath
 from typing import Any
 
@@ -24,6 +25,14 @@ from gateway.sandbox_runtime.base import (
     SandboxRuntimeError,
     SandboxSpec,
 )
+
+logger = logging.getLogger(__name__)
+_IMAGE_READY_RETRY_DELAYS_SECONDS = (5.0, 15.0)
+
+
+def _image_is_not_ready(exc: Exception) -> bool:
+    """VCR can acknowledge a push before Sandbox can launch its digest."""
+    return "image_not_ready" in str(exc).lower()
 
 
 def _sdk() -> Any:
@@ -235,7 +244,25 @@ class VercelSandboxRuntime:
     # -- SandboxRuntime ------------------------------------------------------
 
     async def create(self, spec: SandboxSpec) -> str:
-        return await asyncio.to_thread(self._create_sync, spec)
+        for attempt in range(len(_IMAGE_READY_RETRY_DELAYS_SECONDS) + 1):
+            try:
+                return await asyncio.to_thread(self._create_sync, spec)
+            except Exception as exc:
+                if (
+                    not _image_is_not_ready(exc)
+                    or attempt >= len(_IMAGE_READY_RETRY_DELAYS_SECONDS)
+                ):
+                    raise
+                delay = _IMAGE_READY_RETRY_DELAYS_SECONDS[attempt]
+                logger.warning(
+                    "Vercel sandbox image is not ready; retrying create in %.0fs "
+                    "(attempt %d/%d)",
+                    delay,
+                    attempt + 2,
+                    len(_IMAGE_READY_RETRY_DELAYS_SECONDS) + 1,
+                )
+                await asyncio.sleep(delay)
+        raise AssertionError("unreachable")
 
     async def exec(
         self,

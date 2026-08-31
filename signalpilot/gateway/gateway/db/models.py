@@ -1033,6 +1033,11 @@ class GatewayChatRun(GatewayBase):
     cancellation_requested_at: Mapped[datetime | None] = mapped_column(TZDateTime)
     public_error_code: Mapped[str | None] = mapped_column(String(100))
     public_error_message: Mapped[str | None] = mapped_column(Text)
+    # Operator-facing accounting from the agent SDK's result: total API cost
+    # and the aggregate token usage dict (input/output/cache tokens) for the
+    # turn. Never shown in the user UX.
+    cost_usd: Mapped[float | None] = mapped_column(Float)
+    usage_json: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
     started_at: Mapped[datetime | None] = mapped_column(TZDateTime)
     terminal_at: Mapped[datetime | None] = mapped_column(TZDateTime)
@@ -1613,9 +1618,13 @@ class GatewayChatRuntimeArchive(GatewayBase):
     source_object_key: Mapped[str] = mapped_column(Text, nullable=False)
     html_object_key: Mapped[str] = mapped_column(Text, nullable=False)
     manifest_object_key: Mapped[str] = mapped_column(Text, nullable=False)
+    # Structured outputs snapshot (NotebookSessionV1). Nullable: legacy
+    # archives and runs whose snapshot serialization failed have none.
+    session_object_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     html_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     manifest_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    session_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
 
     __table_args__ = (Index("ix_gw_chat_archive_owner", "org_id", "user_id", "run_id"),)
@@ -1936,6 +1945,43 @@ class GatewayGitHubRepoLink(GatewayBase):
         UniqueConstraint("org_id", "project_id", name="uq_gw_ghrepo_org_project"),
         Index("ix_gw_ghrepo_org_id", "org_id"),
         Index("ix_gw_ghrepo_installation", "installation_id"),
+    )
+
+
+class GatewayDbtManifest(GatewayBase):
+    """One dbt-map compile job per (project, branch, workspace revision).
+
+    The compiled artifacts (gzipped manifest.json + distilled lineage graph)
+    live in workspace S3 under the project prefix; this row is the index,
+    job-status record, and dedup claim. The unique constraint doubles as the
+    cross-process slot claim: exactly one compile per revision.
+    """
+
+    __tablename__ = "gateway_dbt_manifests"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    branch: Mapped[str] = mapped_column(String(200), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    commit_sha: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    trigger: Mapped[str] = mapped_column(String(20), nullable=False, default="manual")
+    error: Mapped[str | None] = mapped_column(Text)
+    dbt_version: Mapped[str | None] = mapped_column(String(40))
+    node_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    manifest_key: Mapped[str | None] = mapped_column(String(500))
+    graph_key: Mapped[str | None] = mapped_column(String(500))
+    manifest_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    # A live compile refreshes the lease; the reaper fails runs whose gateway
+    # process died mid-compile so the UI never shows an eternal "running".
+    lease_expires_at: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "branch", "revision", name="uq_gw_dbtmanifest_proj_branch_rev"),
+        Index("ix_gw_dbtmanifest_org_project", "org_id", "project_id"),
     )
 
 

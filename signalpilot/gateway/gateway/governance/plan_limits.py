@@ -146,15 +146,55 @@ def get_limits(tier: str) -> PlanLimits:
 
 # ── Org tier resolution ──────────────────────────────────────────────────────
 
+# Per-org tier cache. The tier is read on EVERY plan-gated request but only
+# changes on subscription events, so hitting the DB each time is pure
+# overhead (two sequential queries on a dedicated session — measured at
+# ~700ms against a cross-region database). Entries expire after TTL;
+# invalidate_org_tier() drops one eagerly when a subscription changes.
+_TIER_CACHE_TTL_SECONDS = 30 * 60
+_tier_cache: dict[str, tuple[str, float]] = {}
+
+
+def invalidate_org_tier(org_id: str | None = None) -> None:
+    """Drop the cached tier for one org (or all orgs when org_id is None).
+
+    Call after a subscription change so the new tier applies immediately
+    instead of after the TTL.
+    """
+    if org_id is None:
+        _tier_cache.clear()
+    else:
+        _tier_cache.pop(org_id, None)
+
 
 async def get_org_tier(org_id: str) -> str:
-    """Look up the org's plan tier from the DB.
+    """Look up the org's plan tier, cached for _TIER_CACHE_TTL_SECONDS.
 
     In cloud mode, reads from the backend's `subscriptions` table (Stripe
     source of truth). In local mode, reads from `gateway_orgs`.
     Auto-creates the gateway_orgs row on first access regardless of mode
     (needed for BYOK and other gateway-specific settings).
     """
+    import time
+
+    cached = _tier_cache.get(org_id)
+    if cached is not None and cached[1] > time.monotonic():
+        return cached[0]
+    try:
+        tier = await _load_org_tier(org_id)
+    except Exception:
+        # Transient lookup failure: fall back to free for THIS request only.
+        # Caching the fallback would paywall a paying org for the whole TTL.
+        logger.warning("Failed to resolve plan tier for org %s, defaulting to free", org_id)
+        return DEFAULT_TIER
+    _tier_cache[org_id] = (tier, time.monotonic() + _TIER_CACHE_TTL_SECONDS)
+    while len(_tier_cache) > 10_000:
+        _tier_cache.pop(next(iter(_tier_cache)))
+    return tier
+
+
+async def _load_org_tier(org_id: str) -> str:
+    """Uncached tier lookup — see get_org_tier."""
     import time
 
     from sqlalchemy import select, text
@@ -169,42 +209,40 @@ async def get_org_tier(org_id: str) -> str:
     if not org_id or org_id == "local":
         return DEFAULT_TIER
 
-    try:
-        factory = get_session_factory()
-        async with factory() as session:
-            # Ensure gateway_orgs row exists (needed for BYOK etc.)
-            gw_result = await session.execute(select(GatewayOrg.plan_tier).where(GatewayOrg.org_id == org_id))
-            gw_tier = gw_result.scalar_one_or_none()
+    # Lookup failures propagate to get_org_tier, which falls back to the
+    # free tier for the single request WITHOUT caching the fallback.
+    factory = get_session_factory()
+    async with factory() as session:
+        # Ensure gateway_orgs row exists (needed for BYOK etc.)
+        gw_result = await session.execute(select(GatewayOrg.plan_tier).where(GatewayOrg.org_id == org_id))
+        gw_tier = gw_result.scalar_one_or_none()
 
-            if gw_tier is None:
-                session.add(
-                    GatewayOrg(
-                        org_id=org_id,
-                        plan_tier=DEFAULT_TIER,
-                        byok_enabled=False,
-                        created_at=time.time(),
-                    )
+        if gw_tier is None:
+            session.add(
+                GatewayOrg(
+                    org_id=org_id,
+                    plan_tier=DEFAULT_TIER,
+                    byok_enabled=False,
+                    created_at=time.time(),
                 )
-                await session.commit()
-                logger.info("Auto-created gateway_orgs row for %s", org_id)
+            )
+            await session.commit()
+            logger.info("Auto-created gateway_orgs row for %s", org_id)
 
-            # In cloud mode, subscriptions table is the source of truth
-            if _is_cloud:
-                result = await session.execute(
-                    text("SELECT plan_tier FROM subscriptions WHERE org_id = :oid"),
-                    {"oid": org_id},
-                )
-                row = result.scalar_one_or_none()
-                if row:
-                    return row
-                # No subscription row yet — free tier
-                return DEFAULT_TIER
+        # In cloud mode, subscriptions table is the source of truth
+        if _is_cloud:
+            result = await session.execute(
+                text("SELECT plan_tier FROM subscriptions WHERE org_id = :oid"),
+                {"oid": org_id},
+            )
+            row = result.scalar_one_or_none()
+            if row:
+                return row
+            # No subscription row yet — free tier
+            return DEFAULT_TIER
 
-            # Local mode: use gateway_orgs
-            return gw_tier or DEFAULT_TIER
-    except Exception:
-        logger.warning("Failed to resolve plan tier for org %s, defaulting to free", org_id)
-        return DEFAULT_TIER
+        # Local mode: use gateway_orgs
+        return gw_tier or DEFAULT_TIER
 
 
 async def get_org_limits(org_id: str) -> PlanLimits:

@@ -16,6 +16,7 @@ import {
 import { ensureSignalpilotClientRegistries } from "./createSignalpilotClient";
 import { EmbedPortalProvider } from "./portal-container";
 import { SpEmbedConfigContext } from "./SpEmbedConfigContext";
+import { hydrateNotebookState } from "@/core/bootstrap/mount-store";
 import { initStoreOnce } from "./initStoreOnce";
 import type { SignalpilotClient } from "./types";
 
@@ -64,7 +65,10 @@ export function SpEmbedProviders({
 
   if (registries && !initDone.current) {
     initDone.current = true;
-    initStoreOnce(client.store, options);
+    const initResult = initStoreOnce(client.store, options);
+    // Kernel-free document render: hydrate cells (and replayed outputs) from
+    // the mount payload so the notebook is readable before any kernel exists.
+    void hydrateNotebookState(initResult.parsed, client.store);
   }
 
   // Cleanup: pop the bind stack when unmounting. On Strict Mode remount,

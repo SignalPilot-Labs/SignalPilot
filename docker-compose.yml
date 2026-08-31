@@ -68,7 +68,6 @@ services:
       # The proxy sends this value to the shared notebook container with each request.
       # The notebook writes the value during startup.
       SP_NOTEBOOK_TOKEN_FILE: /notebook-token/token
-      SP_NOTEBOOK_NETWORK_POLICY: "false"
       SP_PUBLIC_GATEWAY_URL: http://localhost:${SP_GATEWAY_PORT:-3300}
       SP_PUBLIC_GATEWAY_PORT: "${SP_GATEWAY_PORT:-3300}"
       SP_REPOS_DIR: /repos
@@ -94,11 +93,6 @@ services:
       # The following settings configure the sandbox.
       SP_SANDBOX_MANAGER_URL: http://sandbox:8080
       SP_SANDBOX_ENABLED: "true"
-      # Gateway startup requires this value. Local mode does not use it.
-      SP_K8S_HOST: ""
-      KUBECONFIG: ""
-      SP_GATEWAY_NAMESPACE: signalpilot
-      SP_GATEWAY_POD_SELECTOR: "app=signalpilot-gateway"
       # MinIO simulates S3 for local evaluation uploads.
       # Mailpit simulates local email delivery.
       SP_EVAL_UPLOADS_BUCKET: sp-eval-uploads
@@ -246,15 +240,10 @@ services:
       CHAT_WORKER_CONCURRENCY: "4"
       SP_NOTEBOOK_DIRECT_URL: http://notebook:2718
       SP_NOTEBOOK_TOKEN_FILE: /notebook-token/token
-      SP_NOTEBOOK_NETWORK_POLICY: "false"
       SP_PUBLIC_GATEWAY_URL: http://gateway:3300
       SP_PUBLIC_GATEWAY_PORT: "3300"
       SP_REPOS_DIR: /repos
       SP_WEB_URL: http://localhost:${SP_WEB_PORT:-3200}
-      SP_K8S_HOST: ""
-      KUBECONFIG: ""
-      SP_GATEWAY_NAMESPACE: signalpilot
-      SP_GATEWAY_POD_SELECTOR: "app=signalpilot-gateway"
     volumes:
       - signalpilot-data:/data
       - signalpilot-gateway-secrets:/gateway-secrets

@@ -32,7 +32,9 @@ from gateway.mcp.context import (
     mcp_eval_doc_ids_var,
     mcp_eval_run_var,
     mcp_eval_task_var,
+    mcp_branch_var,
     mcp_execution_identity_var,
+    mcp_project_id_var,
     mcp_org_id_var,
     mcp_raw_key_var,
     mcp_scopes_var,
@@ -80,6 +82,8 @@ from gateway.mcp.tools.schema import (
     schema_overview,
     schema_statistics,
 )
+from gateway.mcp.tools.dbt_execute import dbt_execute
+from gateway.mcp.tools.refresh_mart import refresh_mart
 from gateway.mcp.tools.sandbox_vm import (
     sandbox_exec,
     sandbox_read_file,
@@ -106,7 +110,9 @@ __all__ = [
     "mcp_eval_task_var",
     "mcp_allowed_connection_var",
     "mcp_capabilities_var",
+    "mcp_branch_var",
     "mcp_execution_identity_var",
+    "mcp_project_id_var",
     # Session helper
     "_store_session",
     # Validation helper used by tests

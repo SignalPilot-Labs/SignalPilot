@@ -40,7 +40,6 @@ from signalpilot._server.ai.standalone_chat_tools import (
     StandaloneArtifactCollector,
     StandaloneNotebookLifecycle,
     _render_chart_png,
-    _run_restricted_python,
     build_standalone_chat_mcp_server,
 )
 from signalpilot._server.api.endpoints.standalone_chat import (
@@ -49,29 +48,12 @@ from signalpilot._server.api.endpoints.standalone_chat import (
     STANDALONE_DISALLOWED_MCP_TOOLS,
     STANDALONE_SYSTEM_PROMPT,
     _allowed_tools_for_features,
-    _require_execution_scope,
     _runtime_auth_override,
-    _scoped_gateway_mcp_config,
     _system_prompt_for_features,
 )
-
-
-def test_restricted_python_allows_in_memory_analysis_only():
-    assert _run_restricted_python(
-        "result = {'total': sum(row['value'] for row in data)}",
-        [{"value": 2}, {"value": 3}],
-    ) == {"result": {"total": 5}}
-
-    for source in (
-        "import os\nresult = os.environ",
-        "result = open('/etc/passwd').read()",
-        "result = __import__('subprocess').run(['id'])",
-        "result = (1).__class__",
-        "while True:\n    pass\nresult = 1",
-        "result = [0] * 1000000",
-    ):
-        with pytest.raises(ValueError):
-            _run_restricted_python(source, None)
+from signalpilot._server.api.endpoints.standalone_chat_prompt import (
+    _execution_prompt_values,
+)
 
 
 def test_chat_runtime_notebook_outputs_are_redacted_and_preview_bounded():
@@ -495,7 +477,7 @@ async def test_report_update_requires_loaded_context_unless_the_report_is_attach
 
 
 @pytest.mark.asyncio
-async def test_analysis_notebook_start_is_plan_gated_and_uses_only_the_seeded_path(
+async def test_analysis_notebook_start_needs_no_plan_and_uses_only_the_seeded_path(
     tmp_path: Path,
 ) -> None:
     seeded = tmp_path / "analysis.py"
@@ -514,16 +496,11 @@ async def test_analysis_notebook_start_is_plan_gated_and_uses_only_the_seeded_pa
 
     runtime_session = SimpleNamespace()
 
-    async def check_plan(plan_id: str) -> dict[str, str]:
-        assert plan_id == "plan-a"
-        return {"route": "notebook_sdk"}
-
     lifecycle = StandaloneNotebookLifecycle()
     config = build_standalone_chat_mcp_server(
         StandaloneArtifactCollector(),
         notebook_mcp_app=object(),
         analysis_notebook_path=seeded,
-        plan_checker=check_plan,
         notebook_lifecycle=lifecycle,
         notebook_starter=start_notebook,
         notebook_session_resolver=lambda _session_id: runtime_session,
@@ -533,10 +510,7 @@ async def test_analysis_notebook_start_is_plan_gated_and_uses_only_the_seeded_pa
         CallToolRequest(
             params=CallToolRequestParams(
                 name="start_analysis_notebook",
-                arguments={
-                    "plan_id": "plan-a",
-                    "file_path": "/tmp/attacker.py",
-                },
+                arguments={},
             )
         )
     )
@@ -544,7 +518,6 @@ async def test_analysis_notebook_start_is_plan_gated_and_uses_only_the_seeded_pa
     assert response.root.isError is False
     assert calls == [{"file_path": str(seeded), "auto_run": True}]
     assert lifecycle.session_id == "session-a"
-    assert lifecycle.plan_id == "plan-a"
     assert runtime_session._signalpilot_chat_runtime is True
 
 
@@ -588,12 +561,34 @@ def test_runtime_auth_is_request_scoped_and_validated():
         {"type": "api_key", "token": "sk-ant-user"},
     )
     assert execution_env["ANTHROPIC_API_KEY"] == "sk-ant-user"
-    assert "CLAUDE_CODE_OAUTH_TOKEN" not in execution_env
-    assert "OAUTH_TOKEN" not in execution_env
+    assert execution_env["CLAUDE_CODE_OAUTH_TOKEN"] == ""
+    assert execution_env["OAUTH_TOKEN"] == ""
+    assert execution_env["ANTHROPIC_AUTH_TOKEN"] == ""
     assert process_env == {
         "CLAUDE_CODE_OAUTH_TOKEN": "old-oauth",
         "OAUTH_TOKEN": "old-alias",
     }
+
+    process_env = {
+        "ANTHROPIC_API_KEY": "depleted-org-key",
+        "ANTHROPIC_AUTH_TOKEN": "old-auth-token",
+    }
+    execution_env = dict(process_env)
+    _apply_auth_config(
+        execution_env,
+        {"type": "oauth", "token": "working-oauth"},
+    )
+    assert execution_env == {
+        "ANTHROPIC_API_KEY": "",
+        "ANTHROPIC_AUTH_TOKEN": "",
+        "OAUTH_TOKEN": "",
+        "CLAUDE_CODE_OAUTH_TOKEN": "working-oauth",
+    }
+    # This mirrors the Agent SDK's subprocess environment merge. Deleting the
+    # competing keys would preserve the inherited values; empty overrides do not.
+    merged = {**process_env, **execution_env}
+    assert merged["ANTHROPIC_API_KEY"] == ""
+    assert merged["ANTHROPIC_AUTH_TOKEN"] == ""
 
 
 def test_chart_renderer_produces_a_real_png():
@@ -731,156 +726,33 @@ def test_horizontal_bar_renderer_handles_long_categories_and_negative_values():
     assert image.size == (1_200, 750)
 
 
-def test_execution_scope_is_frozen_to_claimed_run(monkeypatch):
-    monkeypatch.setenv("SP_CHAT_RUN_ID", "run-12345678")
-    monkeypatch.setenv("SP_CHAT_PROJECT_ID", "project-a")
-    monkeypatch.setenv("SP_CHAT_BRANCH", "main")
-    monkeypatch.setenv("SP_CHAT_CONNECTION_NAME", "production")
-    monkeypatch.setenv("SP_CHAT_COMMIT_SHA", "a" * 40)
-
-    assert _require_execution_scope(
-        {
-            "run_id": "run-12345678",
-            "project_id": "project-a",
-            "branch": "main",
-            "connection_name": "production",
-            "commit_sha": "a" * 40,
-        }
-    ) == ("run-12345678", "project-a", "main", "production", "a" * 40)
-    with pytest.raises(HTTPException, match="Execution scope mismatch"):
-        _require_execution_scope(
-            {
-                "run_id": "run-12345678",
-                "project_id": "project-a",
-                "branch": "main",
-                "connection_name": "another-connection",
-                "commit_sha": "a" * 40,
-            }
-        )
-
-
-def test_gateway_mcp_uses_the_per_run_read_only_identity(monkeypatch):
-    claims = {
-        "execution_identity": "chat:run-12345678",
-        "project_id": "project-a",
-        "branch": "main",
-        "connection_name": "production",
-        "commit_sha": "a" * 40,
-        "scopes": ["read", "query", "execute"],
-    }
-    payload = (
-        base64.urlsafe_b64encode(json.dumps(claims).encode())
-        .decode()
-        .rstrip("=")
-    )
-    token = f"header.{payload}.signature"
-    monkeypatch.setenv("SP_GATEWAY_INTERNAL_URL", "http://gateway:3300")
-    config = _scoped_gateway_mcp_config(
-        {"gateway_session_token": token},
-        run_id="run-12345678",
-        project_id="project-a",
-        branch="main",
-        connection_name="production",
-        commit_sha="a" * 40,
-    )
-    server = config["mcpServers"]["signalpilot"]
-    assert server["url"] == "http://gateway:3300/mcp"
-    assert server["headers"]["Authorization"] == f"Bearer {token}"
-
-    claims["connection_name"] = "another-connection"
-    bad_payload = (
-        base64.urlsafe_b64encode(json.dumps(claims).encode())
-        .decode()
-        .rstrip("=")
-    )
-    with pytest.raises(
-        HTTPException, match="Scoped gateway identity mismatch"
-    ):
-        _scoped_gateway_mcp_config(
-            {"gateway_session_token": f"header.{bad_payload}.signature"},
-            run_id="run-12345678",
-            project_id="project-a",
-            branch="main",
-            connection_name="production",
-            commit_sha="a" * 40,
-        )
-
-
-def test_agent_contract_excludes_mutating_and_external_tools():
-    assert "English only" in STANDALONE_SYSTEM_PROMPT
-    assert "Never guess" in STANDALONE_SYSTEM_PROMPT
-    assert "chain-of-thought" in STANDALONE_SYSTEM_PROMPT
-    assert "sp.publish_result(dataframe" in STANDALONE_SYSTEM_PROMPT
-    assert "sp.publish_artifact(path" in STANDALONE_SYSTEM_PROMPT
-    assert (
-        "Do not catch or suppress publication exceptions"
-        in STANDALONE_SYSTEM_PROMPT
-    )
-    assert (
-        "Never edit, remove, or redefine the seeded"
-        in STANDALONE_SYSTEM_PROMPT
-    )
-    assert "sp.init()` returns None" in STANDALONE_SYSTEM_PROMPT
-    assert (
-        "marimo reactive notebook, not a Jupyter notebook"
-        in STANDALONE_SYSTEM_PROMPT
-    )
-    assert (
-        "State the complete deliverable in every plan_query purpose"
-        in STANDALONE_SYSTEM_PROMPT
-    )
-    assert (
-        "Never call start_analysis_notebook with a plan whose route is mcp"
-        in STANDALONE_SYSTEM_PROMPT
-    )
-    assert (
-        'coerce every numeric column with `pd.to_numeric(..., errors="coerce")`'
-        in STANDALONE_SYSTEM_PROMPT
-    )
-    assert "Verify every chart before publishing it" in STANDALONE_SYSTEM_PROMPT
-    assert "chart rendered empty" in STANDALONE_SYSTEM_PROMPT
-    assert 'Close every completed answer with the "so what"' in STANDALONE_SYSTEM_PROMPT
-    assert (
-        "top-level loop targets all define names" in STANDALONE_SYSTEM_PROMPT
-    )
-    assert (
-        "Prefix disposable cell-local names with one underscore"
-        in STANDALONE_SYSTEM_PROMPT
-    )
-    assert (
-        "must never be referenced from another cell"
-        in STANDALONE_SYSTEM_PROMPT
-    )
-    assert (
-        "If you change the SQL, call plan_query again"
-        in STANDALONE_SYSTEM_PROMPT
-    )
-    assert (
-        "including as a fallback during recovery" in STANDALONE_SYSTEM_PROMPT
-    )
-    assert "same unchanged notebook code hash" in STANDALONE_SYSTEM_PROMPT
-    assert "MultipleDefinitionError" in STANDALONE_SYSTEM_PROMPT
-    assert (
-        "scan every page from list_saved_report_catalog"
-        in STANDALONE_SYSTEM_PROMPT
-    )
-    assert "REQUIRED POST-PUBLICATION STEP" in STANDALONE_SYSTEM_PROMPT
-    assert "propose_report_action exactly once" in STANDALONE_SYSTEM_PROMPT
-    assert "no_suggestion with a concrete reason" in STANDALONE_SYSTEM_PROMPT
-    assert "newer dates or warehouse data" in STANDALONE_SYSTEM_PROMPT
-    assert (
-        "formatting, visualization changes, additional breakdowns"
-        in STANDALONE_SYSTEM_PROMPT
-    )
-    assert (
-        "changed metric definitions, entity or grain"
-        in STANDALONE_SYSTEM_PROMPT
-    )
-    assert "incompatible populations" in STANDALONE_SYSTEM_PROMPT
-    assert "Report creation or update always waits" in STANDALONE_SYSTEM_PROMPT
-    assert all(
-        "notion" not in tool.lower() for tool in STANDALONE_ALLOWED_TOOLS
-    )
+def test_agent_contract_includes_default_signalpilot_mcp_tools():
+    # The prompt file wraps lines; compare against whitespace-collapsed text.
+    _prompt_flat = " ".join(STANDALONE_SYSTEM_PROMPT.split())
+    assert "in English" in _prompt_flat
+    assert "Never guess" in _prompt_flat
+    assert "chain-of-thought" in _prompt_flat
+    assert "sp.publish_result(dataframe" in _prompt_flat
+    assert "sp.publish_artifact(path" in _prompt_flat
+    assert "Never catch or suppress publication exceptions" in _prompt_flat
+    assert "Never edit, remove, or redefine the seeded" in _prompt_flat
+    assert "sp.init()` returns None" in _prompt_flat
+    assert "marimo reactive notebook, not Jupyter" in _prompt_flat
+    assert "exactly ONE live cell" in _prompt_flat
+    assert "Prefix disposable cell-local names with one underscore" in _prompt_flat
+    assert "must never be referenced from another cell" in _prompt_flat
+    assert "Call `plan_query` again" in _prompt_flat
+    assert "as a fallback during recovery" in _prompt_flat
+    assert "same unchanged notebook code hash" in _prompt_flat
+    assert "MultipleDefinitionError" in _prompt_flat
+    assert {
+        "mcp__signalpilot__get_knowledge",
+        "mcp__signalpilot__propose_knowledge",
+        "mcp__signalpilot__notion_search",
+        "mcp__signalpilot__notion_create_page",
+        "mcp__signalpilot__sandbox_exec",
+        "mcp__signalpilot__dbt_execute",
+    } <= set(STANDALONE_ALLOWED_TOOLS)
     assert all(
         "github" not in tool.lower() for tool in STANDALONE_ALLOWED_TOOLS
     )
@@ -889,11 +761,27 @@ def test_agent_contract_excludes_mutating_and_external_tools():
         for forbidden in ("Bash", "Write", "Edit", "WebFetch", "WebSearch")
     )
     assert set(STANDALONE_DISALLOWED_MCP_TOOLS) == {
-        "mcp__signalpilot__analyze_project_db",
-        "mcp__signalpilot__get_dbt_profile",
-        "mcp__signalpilot__map_columns",
+        "mcp__signalpilot__schema_diff_branches",
+        "mcp__signalpilot__xata_branch_diff",
+        "mcp__signalpilot__xata_list_branches",
+        "mcp__signalpilot__create_xata_branch",
+        "mcp__signalpilot__delete_xata_branch",
     }
-    assert not set(IMPROVEMENT_EXTRA_TOOLS) & set(STANDALONE_ALLOWED_TOOLS)
+    assert set(IMPROVEMENT_EXTRA_TOOLS) <= set(STANDALONE_ALLOWED_TOOLS)
+
+
+@pytest.mark.asyncio
+async def test_scratch_python_tool_is_not_exposed():
+    server = build_standalone_chat_mcp_server(
+        StandaloneArtifactCollector(), notebook_mcp_app=None
+    )["instance"]
+    response = await server.request_handlers[ListToolsRequest](
+        ListToolsRequest()
+    )
+
+    assert "run_scratch_python" not in {
+        tool.name for tool in response.root.tools
+    }
 
 
 @pytest.mark.asyncio
@@ -917,6 +805,14 @@ async def test_disabled_notebook_feature_removes_tools_and_prompt_instructions()
     assert "start_analysis_notebook" not in {
         tool.name for tool in response.root.tools
     }
+    *_, execution_prompt = _execution_prompt_values(
+        {"prompt": "Summarize revenue", "features": {"notebook_analysis": False}},
+        project_id="project-a",
+        branch="main",
+        commit_sha="a" * 40,
+        connection_name="warehouse",
+    )
+    assert "marimo reactive notebook" not in execution_prompt
 
 
 def test_runtime_publication_sdk_is_exposed_from_top_level_package():

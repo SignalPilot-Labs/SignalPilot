@@ -13,6 +13,8 @@ import {
   notebookIsRunningAtom,
   useCellActions,
 } from "./cells/cells";
+import { viewerOnlyAtom } from "./mode";
+import { WebSocketState } from "./websocket/types";
 import type { AppConfig } from "./config/config-schema";
 import { RuntimeState } from "./kernel/RuntimeState";
 import { getSessionId } from "./kernel/session";
@@ -48,6 +50,15 @@ export const RunApp: React.FC<AppProps> = ({ appConfig }) => {
   // Skip the "Connecting..." gate when we already have cells to show — from
   // an embedded snapshot or a prior connection.
   const hasExistingCells = useAtomValue(hasCellsAtom);
+  // Pure viewer (chat live notebook panel): a closed websocket must render
+  // NOTHING — the hydrated document stands on its own; masking the closed
+  // state removes the disconnected banner, noise overlay, and washed-out
+  // cell styling wholesale.
+  const viewerOnly = useAtomValue(viewerOnlyAtom);
+  const displayConnection =
+    viewerOnly && connection.state === WebSocketState.CLOSED
+      ? { state: WebSocketState.OPEN }
+      : connection;
 
   const renderCells = () => {
     // If we are connecting for more than 2 seconds, show a spinner
@@ -80,12 +91,12 @@ export const RunApp: React.FC<AppProps> = ({ appConfig }) => {
 
   return (
     <AppContainer
-      connection={connection}
+      connection={displayConnection}
       isRunning={isRunning}
       width={appConfig.width}
       onReconnect={reconnect}
     >
-      <AppHeader connection={connection} onForceReconnect={forceReconnect} className="sm:pt-8">
+      <AppHeader connection={displayConnection} onForceReconnect={forceReconnect} className="sm:pt-8">
         {galleryHref && (
           <div className="flex items-center px-6 pt-4 sm:-mt-8">
             <a

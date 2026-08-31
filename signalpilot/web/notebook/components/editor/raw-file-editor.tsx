@@ -103,6 +103,15 @@ export function isRawFile(filename: string | null): boolean {
 
 
 async function fetchFileContents(path: string): Promise<string> {
+  // Gateway project set → read from the gateway workspace store directly
+  // (works with no notebook session/sandbox); otherwise the sandbox proxy.
+  const { hasGatewayFilePlane, gwFileDetails } = await import(
+    "@/core/network/gateway-file-api"
+  );
+  if (hasGatewayFilePlane()) {
+    const data = await gwFileDetails({ path });
+    return data.contents || "";
+  }
   const { apiCall } = await import("@/core/network/api-call");
   const data = await apiCall<{ contents?: string }>("/files/file_details", { path });
   return data.contents || "";
@@ -112,6 +121,13 @@ async function saveFileContents(
   path: string,
   contents: string,
 ): Promise<boolean> {
+  const { hasGatewayFilePlane, gwUpdateFile } = await import(
+    "@/core/network/gateway-file-api"
+  );
+  if (hasGatewayFilePlane()) {
+    const data = await gwUpdateFile({ path, contents });
+    return data.success;
+  }
   const { apiCall } = await import("@/core/network/api-call");
   const data = await apiCall<{ success: boolean }>("/files/update", { path, contents });
   return data.success;

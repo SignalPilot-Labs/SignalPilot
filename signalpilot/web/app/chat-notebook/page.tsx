@@ -15,10 +15,9 @@ const ChatNotebookEmbed = dynamic(
   },
 );
 
-// Live notebook view for the standalone chat page. Mounted in an iframe by
-// the chat's right-side panel; attaches the notebook editor to the chat
-// agent's running kernel session. Keep this route a tiny shell so /chats does
-// not compile the notebook runtime graph until the panel actually opens.
+// Full-page pop-out of a conversation's analysis notebook. Keep this route
+// a tiny shell so the notebook runtime graph compiles only when the page
+// opens.
 export default function ChatNotebookPage() {
   return <ChatNotebookEmbed />;
 }

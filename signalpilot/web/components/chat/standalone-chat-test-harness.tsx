@@ -15,13 +15,13 @@ import {
   type UiMessage,
 } from "~/components/chat/standalone-data-chat";
 import { LiveNotebookPanel } from "~/components/chat/live-notebook-panel";
-import { deriveLiveNotebookLink } from "~/lib/chat-live-notebook";
 import {
   FIXTURE_RUN_ID,
   FIXTURE_TOTAL_MS,
   FIXTURE_USER_PROMPT,
   fixtureArtifacts,
   fixtureAssembledText,
+  fixtureConversationNotebook,
   fixtureRunStatus,
   materializeFixtureEvents,
 } from "~/lib/chat-test-fixture";
@@ -73,38 +73,30 @@ export function StandaloneChatTestHarness() {
 
   const events = useMemo(() => materializeFixtureEvents(elapsed), [elapsed]);
 
-  // Live notebook panel: mirrors the chat page's auto-open-once-per-run
-  // behavior, with a stub iframe src because the harness has no gateway.
-  const liveNotebookLink = useMemo(
-    () => deriveLiveNotebookLink(events, FIXTURE_RUN_ID),
+  // Notebook panel: the harness has no gateway, so it simulates the
+  // conversation notebook resource from the replayed events. Auto-open
+  // mirrors the chat page: once per run when the notebook goes live.
+  const conversationNotebook = useMemo(
+    () => fixtureConversationNotebook(events),
     [events],
   );
   const [notebookPanelOpen, setNotebookPanelOpen] = useState(false);
   const notebookPanelAutoOpenedRunRef = useRef<string | null>(null);
   useEffect(() => {
     if (
-      liveNotebookLink?.live &&
-      notebookPanelAutoOpenedRunRef.current !== liveNotebookLink.runId
+      conversationNotebook?.status === "live" &&
+      notebookPanelAutoOpenedRunRef.current !== FIXTURE_RUN_ID
     ) {
-      notebookPanelAutoOpenedRunRef.current = liveNotebookLink.runId;
+      notebookPanelAutoOpenedRunRef.current = FIXTURE_RUN_ID;
       setNotebookPanelOpen(true);
     }
-    if (!liveNotebookLink) {
+    if (!conversationNotebook) {
       // Scrubbed back before notebook_started (or restarted): reset so the
       // panel auto-opens again when the notebook (re)starts.
       notebookPanelAutoOpenedRunRef.current = null;
       setNotebookPanelOpen(false);
     }
-  }, [liveNotebookLink?.live, liveNotebookLink?.runId, liveNotebookLink]);
-  const notebookArchiveAvailable = useMemo(
-    () =>
-      events.some(
-        (event) =>
-          event.run_id === FIXTURE_RUN_ID &&
-          event.type === "archive_completed",
-      ),
-    [events],
-  );
+  }, [conversationNotebook]);
   const artifacts = useMemo(
     () =>
       fixtureArtifacts
@@ -248,7 +240,7 @@ export function StandaloneChatTestHarness() {
             </div>
           </ChatUiContext.Provider>
         </div>
-        {liveNotebookLink && !notebookPanelOpen && (
+        {conversationNotebook && !notebookPanelOpen && (
           <button
             type="button"
             aria-label="Open the analysis notebook panel"
@@ -262,14 +254,8 @@ export function StandaloneChatTestHarness() {
         )}
         {notebookPanelOpen && (
           <LiveNotebookPanel
-            link={liveNotebookLink}
-            archiveRunId={
-              liveNotebookLink &&
-              !liveNotebookLink.live &&
-              notebookArchiveAvailable
-                ? liveNotebookLink.runId
-                : null
-            }
+            conversationId="conversation-fixture-1"
+            notebook={conversationNotebook}
             onClose={() => setNotebookPanelOpen(false)}
             liveViewOverride={
               <div
@@ -279,7 +265,6 @@ export function StandaloneChatTestHarness() {
                 Live notebook view stub
               </div>
             }
-            archiveHtmlOverride="<p data-testid='archive-stub'>Archived notebook stub</p>"
           />
         )}
       </div>

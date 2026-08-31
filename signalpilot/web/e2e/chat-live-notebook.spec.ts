@@ -1,17 +1,16 @@
 import { expect, test } from "@playwright/test";
 
 /**
- * Live notebook panel on the standalone chat surface, exercised through the
+ * Notebook panel on the standalone chat surface, exercised through the
  * fixture harness at /chats/test (no model, gateway, or warehouse needed).
  *
- * Fixture timeline (lib/chat-test-fixture.ts):
- * -  8 720ms  notebook_started with attach ids → panel auto-opens, live
- * - 20 800ms  archive_completed
- * - 20 900ms  kernel_stopped → link goes non-live, archive fallback
+ * The harness simulates the gateway's conversation notebook resource from
+ * the fixture events (lib/chat-test-fixture.ts):
+ * -  8 720ms  notebook_started → resource goes live, panel auto-opens
+ * - 20 900ms  kernel_stopped → resource ends with a saved document
  *
- * The harness stubs the live inline view and the archived HTML; the real
- * pop-out URL construction is covered by lib/chat-live-notebook.test.ts and
- * the pop-out route by the "chat notebook pop-out route" tests below.
+ * The harness stubs the inline notebook view; resource selection logic is
+ * covered by lib/chat-live-notebook.test.ts.
  */
 
 const BASE = process.env.SP_WEB_BASE_URL ?? "http://localhost:3200";
@@ -71,9 +70,8 @@ test.describe("live notebook panel (fixture harness)", () => {
     await waitForHydration(page);
     await expect(page.getByTestId("live-notebook-status-live")).toBeVisible();
     await page.getByTestId("chat-test-skip").click();
-    // kernel_stopped flips the link to non-live, but the already-rendered
-    // notebook view MUST stay — the agent's outputs are on screen; swapping
-    // in the static archive would discard them.
+    // kernel_stopped ends the resource, but the panel keeps rendering the
+    // notebook from its saved document. No HTML archive iframe, ever.
     const panel = page.getByTestId("live-notebook-panel");
     await expect(panel).toBeVisible();
     await expect(
@@ -124,7 +122,7 @@ test.describe("live notebook panel (fixture harness)", () => {
 });
 
 test.describe("chat notebook pop-out route", () => {
-  test("renders a clear message when attach params are missing", async ({
+  test("renders a clear message when the conversation param is missing", async ({
     page,
   }) => {
     await page.goto(`${BASE}/chat-notebook`);
@@ -133,23 +131,16 @@ test.describe("chat notebook pop-out route", () => {
     ).toBeVisible();
   });
 
-  test("mounts the notebook boot flow when attach params are present", async ({
+  test("fetches the notebook resource when a conversation is given", async ({
     page,
   }) => {
-    // No gateway is required for this assertion: the pop-out mounts and
-    // enters its boot (health) phase, proving the route wires
-    // NotebookProvider + NotebookBoot with URL-derived config.
-    await page.goto(
-      `${BASE}/chat-notebook?gw_session=gw-e2e-1&session_id=s_e2e001` +
-        `&file=${encodeURIComponent("/tmp/signalpilot-chat-runs/run-e2e/analysis.py")}`,
-    );
-    // Generous timeout: in dev the notebook runtime graph compiles on the
-    // first hit of this route.
-    await expect(page.getByTestId("chat-notebook-embed")).toBeVisible({
-      timeout: 30_000,
-    });
+    // No gateway runs in this suite, so the resource fetch cannot resolve.
+    // The route must still mount and wait on the resource instead of
+    // reporting a bad link. Generous timeout: in dev the route compiles on
+    // its first hit.
+    await page.goto(`${BASE}/chat-notebook?conversation=conv-e2e-1`);
     await expect(
       page.getByTestId("chat-notebook-missing-params"),
-    ).toHaveCount(0);
+    ).toHaveCount(0, { timeout: 30_000 });
   });
 });

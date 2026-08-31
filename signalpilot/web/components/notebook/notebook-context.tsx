@@ -27,18 +27,21 @@ export interface NotebookConfig {
   /** Whether this org has a non-disconnected Notion OAuth installation. */
   notionConnected?: boolean;
   /**
-   * Attach to the kernel as a KIOSK (viewer) connection. The kernel's active
-   * client — e.g. the chat agent's headless consumer — keeps its connection;
-   * this one receives the session replay and live broadcasts alongside it.
-   * Used by the chat live notebook panel. Boot is DOCUMENT-FIRST: no health
-   * gate, no kernel requirement — the websocket is a background enhancement.
+   * Mount as a KIOSK viewer (the chat notebook panel). The document renders
+   * first and stands on its own. The kernel's active client keeps its
+   * connection; a kiosk websocket only ever observes.
    */
   kioskAttach?: boolean;
   /**
-   * Fallback document loader for the kiosk view: returns the notebook source
-   * (and optional NotebookSessionV1 outputs snapshot) when the runtime can't
-   * serve the document — e.g. the archived document of a finished run whose
-   * sandbox is gone. Return null when unavailable.
+   * True when the gateway verified the kernel sandbox is alive. Only then
+   * does the kiosk boot attach its websocket. The gateway decides this; the
+   * client never probes.
+   */
+  kioskLive?: boolean;
+  /**
+   * Document loader for the kiosk view. Returns the notebook source and an
+   * optional NotebookSessionV1 outputs snapshot, or null when the
+   * conversation has no saved notebook yet.
    */
   loadDocument?: () => Promise<{
     source: string;

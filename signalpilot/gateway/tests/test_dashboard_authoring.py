@@ -447,7 +447,7 @@ def test_dashboard_authoring_uses_agent_sdk_for_oauth() -> None:
 
     assert isinstance(agent.model_client, ClaudeAgentSDKStructuredClient)
     assert agent.model_client.oauth_token == "oauth-token"
-    assert agent.model_client.timeout_seconds == 180
+    assert agent.model_client.timeout_seconds == 240
     assert agent.model_client.use_native_structured_output is False
 
 
@@ -667,6 +667,38 @@ async def test_agent_repairs_invalid_tool_contract_before_returning_the_draft() 
     assert len(client.requests) == 2
     repair_payload = json.loads(client.requests[1]["messages"][0]["content"])
     assert "either a complete definition or typed operations" in repair_payload["validation_feedback"]
+
+
+@pytest.mark.asyncio
+async def test_agent_repairs_refusal_shaped_creation_with_mode_specific_feedback() -> None:
+    repaired = _definition_with_filter()
+    client = _ModelClient(
+        [
+            {
+                "summary": "Cannot create customers because no exact customer metric is available.",
+                "definition": None,
+                "operations": [],
+            },
+            {
+                "summary": "Used governed account dimensions as the closest customer representation.",
+                "definition": repaired.model_dump(mode="json", by_alias=True),
+            },
+        ]
+    )
+    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
+
+    draft = await agent.draft(
+        prompt="Create an executive dashboard for revenue, margins and customers",
+        context=_context(),
+        base_definition=None,
+    )
+
+    assert draft.definition is not None
+    assert len(client.requests) == 2
+    repair_payload = json.loads(client.requests[1]["messages"][0]["content"])
+    assert "refusal or empty payload" in repair_payload["validation_feedback"]
+    assert "closest faithful dashboard" in repair_payload["validation_feedback"]
+    assert "omit only that unsupported element" in repair_payload["validation_feedback"]
 
 
 @pytest.mark.asyncio

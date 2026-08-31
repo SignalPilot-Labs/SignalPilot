@@ -21,7 +21,7 @@ from gateway.dashboard.operations import DashboardOperation, apply_dashboard_ope
 from gateway.models.dashboards import DashboardSemanticContext
 
 DEFAULT_DASHBOARD_AUTHORING_MODEL = "claude-sonnet-4-5-20250929"
-DASHBOARD_AUTHORING_TIMEOUT_SECONDS = 180
+DASHBOARD_AUTHORING_TIMEOUT_SECONDS = 240
 logger = logging.getLogger(__name__)
 
 FILTER_OPT_OUT_PATTERNS = (
@@ -159,6 +159,10 @@ class DashboardAuthoringAgent:
             "hierarchy only when the explore has no meaningful lower-grain dimension for that chart. "
             "Never emit renderer options, code, HTML, or SQL. For creation return a complete definition. "
             "For updates return typed operations using stable IDs and do not rewrite unrelated charts. "
+            "Never return a refusal-only summary, a null definition, or an empty operation list. When the request "
+            "names a business concept without an exact approved metric, use the closest faithful governed metric or "
+            "dimension when one is available, explain that substitution in the summary, and omit only the unsupported "
+            "element rather than refusing the entire dashboard. "
             "The server validates all output and the user must explicitly apply it."
         )
         payload = {
@@ -224,8 +228,31 @@ class DashboardAuthoringAgent:
                     validator(draft)
                 return draft
             except ValueError as exc:
-                last_error = exc
                 error_text = str(exc)[:6000]
+                empty_payload_feedback: str | None = None
+                if (
+                    isinstance(rejected_draft, dict)
+                    and rejected_draft.get("definition") is None
+                    and not rejected_draft.get("operations")
+                ):
+                    if mode == "create":
+                        empty_payload_feedback = (
+                            "The previous response was a refusal or empty payload. Dashboard creation must return a "
+                            "complete definition; do not return a limitation-only summary, null definition, or empty "
+                            "operations. Build the closest faithful dashboard supported by semantic_context. If a "
+                            "requested concept has no exact approved metric, use a faithful governed dimension or metric "
+                            "when available, explain the substitution in summary, and omit only that unsupported element."
+                        )
+                    else:
+                        empty_payload_feedback = (
+                            "The previous response was a refusal or empty payload. Dashboard updates must return at "
+                            "least one typed operation; do not return a limitation-only summary, null definition, or "
+                            "empty operations. Apply the closest faithful update supported by semantic_context and the "
+                            "base definition without inventing fields or metrics."
+                        )
+                last_error = ValueError(empty_payload_feedback) if empty_payload_feedback else exc
+                if empty_payload_feedback and empty_payload_feedback not in validation_errors:
+                    validation_errors.append(empty_payload_feedback)
                 if error_text not in validation_errors:
                     validation_errors.append(error_text)
                 logger.warning(

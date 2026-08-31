@@ -1,4 +1,6 @@
-@source "../../../node_modules/streamdown/dist/index.js";
+/* Tailwind's `@source` for streamdown lives in app/globals.css (the Tailwind
+   root). It cannot live here: Next processes this file as a standalone
+   stylesheet, where `@source` is not a recognised at-rule. */
 
 .mo-markdown-renderer {
   /* Make headers a bit smaller */

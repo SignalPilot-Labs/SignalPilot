@@ -692,6 +692,75 @@ async def test_create_authoring_session_canonicalizes_model_filter_targets(
 
 
 @pytest.mark.asyncio
+async def test_create_authoring_session_force_oauth_never_resolves_org_api_key(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_definition = _definition_with_filter()
+
+    class OAuthAuthoringAgent:
+        model = "test-model"
+
+        def __init__(self, *, oauth_token: str) -> None:
+            assert oauth_token == "oauth-token"
+
+        async def draft(self, **_kwargs) -> DashboardAgentDraft:
+            return DashboardAgentDraft(
+                summary="Created a dashboard using forced OAuth.",
+                definition=model_definition,
+            )
+
+    async def resolve_context(*_args, **_kwargs) -> DashboardSemanticContext:
+        return _orders_context()
+
+    async def reject_org_key(*_args, **_kwargs) -> str:
+        raise AssertionError("organization key must not be resolved")
+
+    monkeypatch.setenv("SP_CHAT_FORCE_OAUTH_TOKEN", "true")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-token")
+    monkeypatch.setattr(dashboard_api.resolver, "resolve", resolve_context)
+    monkeypatch.setattr(dashboard_api, "DashboardAuthoringAgent", OAuthAuthoringAgent)
+    monkeypatch.setattr(dashboard_api.org_secrets_store, "resolve_anthropic_key", reject_org_key)
+    store = SimpleNamespace(
+        session=db_session,
+        user_id="owner-a",
+        _require_org_id=lambda: "org-a",
+    )
+
+    session = await dashboard_api.create_dashboard_authoring_session(
+        DashboardAuthoringRequest(
+            prompt="Create an executive dashboard",
+            project_id=model_definition.signalPilot.projectId,
+            commit_sha=model_definition.signalPilot.commitSha,
+        ),
+        store,
+    )
+
+    assert session.summary == "Created a dashboard using forced OAuth."
+
+
+@pytest.mark.asyncio
+async def test_dashboard_authoring_force_oauth_fails_closed_when_token_is_missing(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def reject_org_key(*_args, **_kwargs) -> str:
+        raise AssertionError("organization key must not be resolved")
+
+    monkeypatch.setenv("SP_CHAT_FORCE_OAUTH_TOKEN", "true")
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.delenv("OAUTH_TOKEN", raising=False)
+    monkeypatch.setattr(dashboard_api.org_secrets_store, "resolve_anthropic_key", reject_org_key)
+    store = SimpleNamespace(session=db_session)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await dashboard_api._dashboard_authoring_agent(store, "org-a")
+
+    assert exc_info.value.status_code == 409
+    assert "no Claude OAuth token" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_create_authoring_session_returns_safe_provider_failure(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,

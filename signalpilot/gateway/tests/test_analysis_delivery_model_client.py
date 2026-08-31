@@ -42,3 +42,37 @@ async def test_anthropic_messages_error_preserves_safe_provider_diagnostics() ->
     assert error.request_id == "req-provider-1"
     assert error.request_body_chars > 0
     assert "secret-key" not in str(error)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_client_uses_oauth_bearer_headers() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer oauth-token"
+        assert request.headers["anthropic-beta"] == "oauth-2025-04-20"
+        assert "x-api-key" not in request.headers
+        return httpx.Response(200, json={"content": []})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        model_client = AnthropicMessagesClient(
+            oauth_token="oauth-token",
+            timeout_seconds=1,
+            http_client=client,
+        )
+        response = await model_client.create_message(
+            {
+                "model": "claude-test",
+                "max_tokens": 100,
+                "messages": [{"role": "user", "content": "hello"}],
+            }
+        )
+
+    assert response == {"content": []}
+
+
+def test_anthropic_messages_client_rejects_conflicting_credentials() -> None:
+    with pytest.raises(ValueError, match="only one Anthropic credential"):
+        AnthropicMessagesClient(
+            api_key="api-key",
+            oauth_token="oauth-token",
+            timeout_seconds=1,
+        )

@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -19,6 +20,7 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
 
 from gateway.analysis_delivery.model_client import AnthropicMessagesError
+from gateway.config.notebooks import chat_force_oauth_token
 from gateway.dashboard import store as dashboard_store
 from gateway.dashboard.authoring import DashboardAuthoringAgent, materialize_agent_draft
 from gateway.dashboard.cache import dashboard_query_cache_key
@@ -99,6 +101,9 @@ _AUTHORING_PROVIDER_REJECTED = (
 _AUTHORING_PROVIDER_AUTH_REJECTED = (
     "The organization Anthropic key was rejected. Ask an administrator to update it in Integrations."
 )
+_AUTHORING_PROVIDER_OAUTH_REJECTED = (
+    "The configured Claude OAuth token was rejected. Ask an operator to refresh it."
+)
 _AUTHORING_PROVIDER_UNAVAILABLE = "Dashboard authoring is temporarily unavailable. Please try again."
 
 
@@ -106,6 +111,7 @@ def _authoring_provider_http_exception(
     exc: AnthropicMessagesError,
     *,
     model: str,
+    uses_oauth: bool = False,
 ) -> HTTPException:
     logger.error(
         "Dashboard authoring Anthropic request failed status=%s type=%s request_id=%s "
@@ -119,7 +125,8 @@ def _authoring_provider_http_exception(
     )
     headers = {"Retry-After": exc.retry_after} if exc.retry_after else None
     if exc.status_code in {401, 403}:
-        return HTTPException(status_code=502, detail=_AUTHORING_PROVIDER_AUTH_REJECTED)
+        detail = _AUTHORING_PROVIDER_OAUTH_REJECTED if uses_oauth else _AUTHORING_PROVIDER_AUTH_REJECTED
+        return HTTPException(status_code=502, detail=detail)
     if exc.status_code == 429 or exc.status_code >= 500:
         return HTTPException(status_code=503, detail=_AUTHORING_PROVIDER_UNAVAILABLE, headers=headers)
     return HTTPException(status_code=502, detail=_AUTHORING_PROVIDER_REJECTED)
@@ -134,6 +141,23 @@ def _authoring_transport_http_exception(exc: httpx.RequestError, *, model: str) 
     return HTTPException(status_code=503, detail=_AUTHORING_PROVIDER_UNAVAILABLE)
 
 DashboardResultT = TypeVar("DashboardResultT")
+
+
+async def _dashboard_authoring_agent(store: StoreD, org_id: str) -> tuple[DashboardAuthoringAgent, bool]:
+    """Resolve authoring auth with the same fail-closed force-OAuth behavior as Data Chat."""
+    if chat_force_oauth_token():
+        oauth_token = os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or os.getenv("OAUTH_TOKEN")
+        if not oauth_token:
+            raise HTTPException(
+                status_code=409,
+                detail="SP_CHAT_FORCE_OAUTH_TOKEN is enabled but no Claude OAuth token is configured",
+            )
+        return DashboardAuthoringAgent(oauth_token=oauth_token), True
+
+    api_key = await org_secrets_store.resolve_anthropic_key(store.session, org_id)
+    if not api_key:
+        raise HTTPException(status_code=409, detail="Dashboard authoring requires the organization Anthropic key")
+    return DashboardAuthoringAgent(api_key=api_key), False
 
 
 def _visualization_type(chart) -> str:
@@ -712,10 +736,7 @@ async def create_dashboard_authoring_session(body: DashboardAuthoringRequest, st
         context = await resolver.resolve(store, project_id=project_id, commit_sha=commit_sha)
     except DashboardSemanticError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    api_key = await org_secrets_store.resolve_anthropic_key(store.session, org_id)
-    if not api_key:
-        raise HTTPException(status_code=409, detail="Dashboard authoring requires the organization Anthropic key")
-    agent = DashboardAuthoringAgent(api_key=api_key)
+    agent, uses_oauth = await _dashboard_authoring_agent(store, org_id)
     try:
         def validate_candidate(candidate):
             candidate_definition = materialize_agent_draft(candidate, base_definition=base_definition)
@@ -757,7 +778,7 @@ async def create_dashboard_authoring_session(body: DashboardAuthoringRequest, st
         validate_dashboard_semantics(definition, verified)
         validate_time_series_default_windows(definition, verified)
     except AnthropicMessagesError as exc:
-        raise _authoring_provider_http_exception(exc, model=agent.model) from exc
+        raise _authoring_provider_http_exception(exc, model=agent.model, uses_oauth=uses_oauth) from exc
     except httpx.RequestError as exc:
         raise _authoring_transport_http_exception(exc, model=agent.model) from exc
     except (DashboardCompileError, ValueError) as exc:
@@ -876,10 +897,7 @@ async def continue_dashboard_authoring_session(session_id: str, body: DashboardA
         base_version_id = row.base_version_id
     try:
         context = await _verified_context(store, current_definition)
-        api_key = await org_secrets_store.resolve_anthropic_key(store.session, org_id)
-        if not api_key:
-            raise HTTPException(status_code=409, detail="Dashboard authoring requires the organization Anthropic key")
-        agent = DashboardAuthoringAgent(api_key=api_key)
+        agent, uses_oauth = await _dashboard_authoring_agent(store, org_id)
         def validate_candidate(candidate):
             candidate_definition = materialize_agent_draft(candidate, base_definition=current_definition)
             candidate_definition = canonicalize_dashboard_explore_names(candidate_definition, context)
@@ -902,7 +920,7 @@ async def continue_dashboard_authoring_session(session_id: str, body: DashboardA
     except HTTPException:
         raise
     except AnthropicMessagesError as exc:
-        safe_error = _authoring_provider_http_exception(exc, model=agent.model)
+        safe_error = _authoring_provider_http_exception(exc, model=agent.model, uses_oauth=uses_oauth)
         await dashboard_store.record_authoring_failure(
             store.session,
             org_id=org_id,

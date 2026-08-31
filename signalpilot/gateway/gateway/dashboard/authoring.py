@@ -118,9 +118,19 @@ def charts_missing_usable_drills(
 
 
 class DashboardAuthoringAgent:
-    def __init__(self, *, api_key: str, model_client: MessagesModelClient | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        oauth_token: str | None = None,
+        model_client: MessagesModelClient | None = None,
+    ) -> None:
         self.model = os.getenv("SIGNALPILOT_DASHBOARD_AUTHORING_MODEL") or DEFAULT_DASHBOARD_AUTHORING_MODEL
-        self.model_client = model_client or AnthropicMessagesClient(api_key=api_key, timeout_seconds=90)
+        self.model_client = model_client or AnthropicMessagesClient(
+            api_key=api_key,
+            oauth_token=oauth_token,
+            timeout_seconds=90,
+        )
 
     async def draft(
         self,

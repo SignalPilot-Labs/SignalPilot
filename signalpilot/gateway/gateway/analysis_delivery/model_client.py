@@ -46,20 +46,28 @@ class AnthropicMessagesClient:
     def __init__(
         self,
         *,
-        api_key: str,
+        api_key: str | None = None,
+        oauth_token: str | None = None,
         timeout_seconds: float,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
+        if api_key and oauth_token:
+            raise ValueError("Configure only one Anthropic credential")
         self.api_key = api_key
+        self.oauth_token = oauth_token
         self.timeout_seconds = max(float(timeout_seconds), 0.1)
         self._http_client = http_client
 
     async def create_message(self, request_body: dict[str, Any]) -> dict[str, Any]:
         headers = {
-            "x-api-key": self.api_key,
             "anthropic-version": ANTHROPIC_VERSION,
             "content-type": "application/json",
         }
+        if self.oauth_token:
+            headers["authorization"] = f"Bearer {self.oauth_token}"
+            headers["anthropic-beta"] = "oauth-2025-04-20"
+        else:
+            headers["x-api-key"] = self.api_key or ""
         if self._http_client is not None:
             return await self._post(self._http_client, headers, request_body)
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:

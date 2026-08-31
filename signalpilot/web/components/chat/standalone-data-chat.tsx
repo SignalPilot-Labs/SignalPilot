@@ -23,12 +23,18 @@ import {
   type OptimisticUserMessage,
 } from "~/lib/standalone-chat-state";
 import { projectSettingsHref } from "~/lib/project-settings-route";
-import { LiveNotebookPanel } from "~/components/chat/live-notebook-panel";
+import { ArtifactsPanel } from "~/components/chat/artifacts-panel";
 import { useConversationNotebook } from "~/components/chat/use-conversation-notebook";
 import {
-  hasNotebookContent,
-  notebookRefreshRevision,
-} from "~/lib/chat-live-notebook";
+  useConversationFiles,
+  useConversationSqlTrace,
+} from "~/components/chat/use-conversation-files";
+import { notebookRefreshRevision } from "~/lib/chat-live-notebook";
+import {
+  filesRefreshRevision,
+  hasArtifactsContent,
+  sqlTraceRefreshRevision,
+} from "~/lib/chat-artifacts";
 import { ChatUiContext } from "~/components/chat/chat-ui-context";
 import { ChatMessage } from "~/components/chat/chat-message";
 import {
@@ -199,6 +205,21 @@ export function StandaloneDataChat({
   const conversationNotebook = useConversationNotebook(
     conversationId ?? null,
     notebookRefreshRev,
+  );
+  // File manifest and SQL trace for the artifacts panel. Same contract as
+  // the notebook: gateway resources, events only trigger refetches.
+  const filesRefreshRev = useMemo(() => filesRefreshRevision(events), [events]);
+  const sqlTraceRefreshRev = useMemo(
+    () => sqlTraceRefreshRevision(events),
+    [events],
+  );
+  const conversationFiles = useConversationFiles(
+    conversationId ?? null,
+    filesRefreshRev,
+  );
+  const sqlTraceExecutions = useConversationSqlTrace(
+    conversationId ?? null,
+    sqlTraceRefreshRev,
   );
   const [notebookPanelOpen, setNotebookPanelOpen] = useNotebookPanelState(
     conversationId,
@@ -538,12 +559,16 @@ export function StandaloneDataChat({
             )}
             </div>
             {conversationId &&
-              hasNotebookContent(conversationNotebook) &&
+              hasArtifactsContent(
+                conversationNotebook,
+                conversationFiles,
+                sqlTraceExecutions,
+              ) &&
               !notebookPanelOpen && (
               <button
                 type="button"
-                aria-label="Open the analysis notebook panel"
-                title="Open the analysis notebook panel"
+                aria-label="Open the artifacts panel"
+                title="Open the artifacts panel"
                 data-testid="live-notebook-toggle"
                 onClick={() => setNotebookPanelOpen(true)}
                 className="absolute right-16 top-4 z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-muted)] shadow-lg shadow-black/20 hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
@@ -553,9 +578,11 @@ export function StandaloneDataChat({
             )}
           </main>
           {conversationId && notebookPanelOpen && (
-            <LiveNotebookPanel
+            <ArtifactsPanel
               conversationId={conversationId}
               notebook={conversationNotebook}
+              files={conversationFiles}
+              executions={sqlTraceExecutions}
               onClose={() => setNotebookPanelOpen(false)}
             />
           )}

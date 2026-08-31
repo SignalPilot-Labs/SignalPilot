@@ -5,15 +5,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 import time
-import traceback
 from contextlib import suppress
 from typing import Any
 
 import httpx
 
 from gateway.db.engine import get_session_factory, init_db
+from gateway.standalone_chat import worker_files
 from gateway.standalone_chat.config import (
     lease_seconds,
     standalone_chat_enabled,
@@ -21,8 +20,6 @@ from gateway.standalone_chat.config import (
     worker_poll_seconds,
 )
 from gateway.standalone_chat.domain import (
-    redact_error_text,
-    redact_public_payload,
     select_context_for_summary,
 )
 from gateway.standalone_chat.execution import (
@@ -42,6 +39,18 @@ from gateway.standalone_chat.worker_context import (
 from gateway.standalone_chat.worker_context import (
     warm_context as _warm_context,
 )
+from gateway.standalone_chat.worker_errors import (
+    AnalysisRuntimeError as _AnalysisRuntimeError,
+)
+from gateway.standalone_chat.worker_errors import (
+    public_diagnostic_context as _public_diagnostic_context,
+)
+from gateway.standalone_chat.worker_errors import (
+    public_error_message as _public_error_message,
+)
+from gateway.standalone_chat.worker_errors import (
+    public_full_trace as _public_full_trace,
+)
 from gateway.standalone_chat.worker_events import (
     _cancellation_monitor,
     _lease_renewer,
@@ -55,88 +64,6 @@ from gateway.store import standalone_chat as chat_store
 
 logger = logging.getLogger(__name__)
 _CLARIFICATION_PREFIX = "CLARIFICATION_REQUESTED:"
-
-
-class _AnalysisRuntimeError(RuntimeError):
-    def __init__(
-        self,
-        message: str,
-        *,
-        full_trace: str = "",
-        diagnostic_context: Any = None,
-    ) -> None:
-        super().__init__(message)
-        self.full_trace = full_trace
-        self.diagnostic_context = diagnostic_context
-
-
-def _public_error_message(exc: Exception) -> str:
-    """Return the upstream error verbatim except for credential redaction."""
-    return redact_error_text(str(exc))
-
-
-def _public_full_trace(exc: Exception) -> str:
-    raw = str(getattr(exc, "full_trace", "") or "")
-    if not raw:
-        raw = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-    return redact_error_text(raw)
-
-
-def _public_diagnostic_context(exc: Exception) -> dict[str, Any]:
-    """Allowlist safe support metadata; never forward arbitrary env values."""
-    source = getattr(exc, "diagnostic_context", None)
-    if not isinstance(source, dict):
-        return {"error_type": type(exc).__name__}
-    allowed = {
-        "model",
-        "auth_mode",
-        "credential_present",
-        "resume_requested",
-        "notebook_analysis_enabled",
-        "max_turns",
-        "result_subtype",
-        "stop_reason",
-        "api_error_status",
-        "duration_ms",
-        "duration_api_ms",
-        "sdk_session_id",
-        "operation",
-        "http_status",
-    }
-    root = _public_error_message(exc)
-    root_type = re.match(r"^([A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception)):", root)
-    source_error_type = source.get("error_type")
-    result: dict[str, Any] = {
-        "error_type": (
-            redact_error_text(source_error_type)
-            if isinstance(source_error_type, str) and source_error_type
-            else root_type.group(1)
-            if root_type
-            else type(exc).__name__
-        )
-    }
-    for key in allowed:
-        value = source.get(key)
-        if isinstance(value, (str, bool, int, float)):
-            result[key] = redact_error_text(value) if isinstance(value, str) else value
-    environment = source.get("environment")
-    if isinstance(environment, dict):
-        result["environment"] = {
-            str(key): value
-            for key, value in environment.items()
-            if str(key)
-            in {
-                "CLAUDE_CONFIG_DIR",
-                "CLAUDE_CODE_OAUTH_TOKEN",
-                "ANTHROPIC_API_KEY",
-                "SP_GATEWAY_URL",
-            }
-            and value in {"configured", "cleared", "defaulted", "missing"}
-        }
-    rate_limit = source.get("rate_limit")
-    if isinstance(rate_limit, dict):
-        result["rate_limit"] = redact_public_payload(rate_limit)
-    return result
 
 
 async def _append(run_id: str, event_type: str, payload: dict[str, Any]) -> None:
@@ -194,6 +121,9 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
             run = await chat_store.get_worker_run(db, run_id=run_id, worker_id=worker_id)
             if run is None:
                 return
+            # Captured for the file mirror; avoids re-querying per event.
+            run_org_id, run_user_id = run.org_id, run.user_id
+            run_conversation_id = run.conversation_id
             recovering = run.execution_attempt > 1
             context = await chat_store.worker_context(db, run=run)
             project = context["project"]
@@ -364,6 +294,16 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                                 "tool_call_id": tool_call_id or None,
                                 **({"parent_tool_call_id": parent_tool_call_id} if parent_tool_call_id else {}),
                             },
+                        )
+                        # Mirror file writes with the raw tool input. Never raises.
+                        await worker_files.mirror_file_tool(
+                            run_id=run_id,
+                            org_id=run_org_id,
+                            user_id=run_user_id,
+                            conversation_id=run_conversation_id,
+                            tool_name=tool_name,
+                            tool_input=tool_input,
+                            secrets=worker_files.execution_secrets(execution),
                         )
                         # Side events (sql/source) attach to the latest OPEN
                         # top-level step in the UI — suppress them for

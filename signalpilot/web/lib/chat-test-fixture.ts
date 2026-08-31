@@ -1,5 +1,7 @@
 import type {
+  ConversationFileInfo,
   ConversationNotebook,
+  SqlTraceExecution,
   StandaloneChatArtifact,
   StandaloneChatEvent,
   StandaloneChatRunStatus,
@@ -8,7 +10,9 @@ import {
   FIXTURE_GATEWAY_SESSION_ID,
   FIXTURE_KERNEL_SESSION_ID,
   FIXTURE_NOTEBOOK_PATH,
+  FIXTURE_QUERY_TOOL_CALL_ID,
   FIXTURE_RUN_ID,
+  FIXTURE_WRITTEN_FILE_PATH,
   PYTHON_FILE,
   fixtureEvents,
 } from "./chat-test-fixture-data";
@@ -50,6 +54,93 @@ export function fixtureConversationNotebook(
     notebook_path: FIXTURE_NOTEBOOK_PATH,
     document: stopped ? { source: PYTHON_FILE, session: null } : null,
   };
+}
+
+/**
+ * Simulate the gateway's conversation file manifest from the replayed
+ * events. The fixture agent writes one Python file with the Write tool at
+ * ~9.2s; the Edit at ~14.3s bumps its hash and updated_at.
+ */
+export function fixtureConversationFiles(
+  events: StandaloneChatEvent[],
+): ConversationFileInfo[] {
+  const written = events.some(
+    (event) => event.type === "tool_started" && event.payload.tool === "Write",
+  );
+  if (!written) return [];
+  const edited = events.some(
+    (event) => event.type === "tool_started" && event.payload.tool === "Edit",
+  );
+  return [
+    {
+      id: "file-fixture-1",
+      path: FIXTURE_WRITTEN_FILE_PATH,
+      filename: FIXTURE_WRITTEN_FILE_PATH.split("/").pop() ?? "",
+      kind: "code",
+      mime_type: "text/x-python",
+      byte_size: PYTHON_FILE.length,
+      content_hash: edited ? "fixture-file-hash-2" : "fixture-file-hash-1",
+      origin_run_id: FIXTURE_RUN_ID,
+      origin: "mirror",
+      status: "active",
+      created_at: fixtureEventCreatedAt(9_200),
+      updated_at: fixtureEventCreatedAt(edited ? 14_300 : 9_200),
+    },
+  ];
+}
+
+/**
+ * Simulate the gateway's SQL trace from the replayed events. Only the
+ * governed query_database call produces an execution, and only once its
+ * completion event has landed; validate_sql never executes.
+ */
+export function fixtureSqlTrace(
+  events: StandaloneChatEvent[],
+): SqlTraceExecution[] {
+  let armed = false;
+  let sql: string | null = null;
+  for (const event of events) {
+    if (
+      event.type === "tool_started" &&
+      event.payload.tool === "mcp__signalpilot__query_database"
+    ) {
+      armed = true;
+    } else if (
+      armed &&
+      sql === null &&
+      event.type === "sql" &&
+      typeof event.payload.sql === "string"
+    ) {
+      sql = event.payload.sql;
+    }
+  }
+  const completed = events.some(
+    (event) =>
+      event.type === "tool_completed" &&
+      event.payload.tool_call_id === FIXTURE_QUERY_TOOL_CALL_ID,
+  );
+  if (sql === null || !completed) return [];
+  return [
+    {
+      execution_id: "exec-fixture-1",
+      run_id: FIXTURE_RUN_ID,
+      connection_name: "warehouse_prod",
+      sql,
+      sql_hash: "fixture-sql-hash-1",
+      status: "completed",
+      query_path: "governed",
+      estimated_cost_usd: 0.0031,
+      actual_cost_usd: 0.0028,
+      actual_scan_bytes: 52_428_800,
+      execution_ms: 2_650,
+      row_count: 3,
+      completeness: "complete",
+      public_error_code: null,
+      created_at: fixtureEventCreatedAt(4_720),
+      started_at: fixtureEventCreatedAt(4_750),
+      terminal_at: fixtureEventCreatedAt(7_400),
+    },
+  ];
 }
 
 export type FixtureArtifact = StandaloneChatArtifact & { at: number };

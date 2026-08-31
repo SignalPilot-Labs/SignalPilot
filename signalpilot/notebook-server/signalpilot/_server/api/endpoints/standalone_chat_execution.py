@@ -31,8 +31,8 @@ from signalpilot._server.api.endpoints.standalone_chat_gateway import (
     StandaloneGatewayClient,
 )
 from signalpilot._server.api.endpoints.standalone_chat_prompt import (
+    STANDALONE_ALLOWED_TOOLS,
     STANDALONE_DISALLOWED_MCP_TOOLS,
-    _allowed_tools_for_features,
     _execution_prompt_values,
 )
 from signalpilot._server.api.endpoints.standalone_chat_response import (
@@ -74,6 +74,13 @@ LOGGER = _loggers.sp_logger()
 MAX_ANALYSIS_AGENT_TURNS = 200
 
 
+def _notebook_edit_requires_successful_run(
+    *, notebook_cells_edited: bool, successful_run_cells: bool
+) -> bool:
+    """Require execution evidence only after the agent changed notebook cells."""
+    return notebook_cells_edited and not successful_run_cells
+
+
 @router.post("/execute")
 @requires("edit")
 async def execute(*, request: Request) -> StreamingResponse:
@@ -90,10 +97,10 @@ async def execute(*, request: Request) -> StreamingResponse:
     connection_name = scope.connection_name
     commit_sha = scope.commit_sha
     mcp_config = gateway_mcp_config(authorization)
+    runtime_app = request.scope.get("app")
     (
         prompt,
         history,
-        notebook_analysis_enabled,
         is_improvement_run,
         sandbox_runtime_enabled,
         system_prompt,
@@ -217,7 +224,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                         return
                     _ANALYSIS_SESSIONS_BY_RUN[run_id] = lifecycle.session_id
                     runtime_session = _analysis_session(
-                        request.app, lifecycle.session_id
+                        runtime_app, lifecycle.session_id
                     )
                     runtime_session._signalpilot_chat_run_id = run_id
                     runtime_session._signalpilot_chat_session_id = (
@@ -236,7 +243,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                     # panel (re)attaches for this run.
                     lifecycle.session_id = adopted_session_id
                     adopted_session = _analysis_session(
-                        request.app, adopted_session_id
+                        runtime_app, adopted_session_id
                     )
                     adopted_session._signalpilot_chat_runtime = True
                     adopted_session._signalpilot_chat_redactions = (
@@ -257,7 +264,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                 if recovery_failure is not None:
                     try:
                         lifecycle.session_id = _start_analysis_kernel(
-                            request.app, analysis_notebook_path
+                            runtime_app, analysis_notebook_path
                         )
                     except Exception as exc:
                         LOGGER.exception(
@@ -282,7 +289,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                         ).encode("utf-8")
                         return
                     clean_session = _analysis_session(
-                        request.app, lifecycle.session_id
+                        runtime_app, lifecycle.session_id
                     )
                     clean_session._signalpilot_chat_runtime = True
                     clean_session._signalpilot_chat_redactions = (
@@ -310,9 +317,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                     result_loader=load_result,
                     project_directory=project_directory,
                     scratch_directory=scratch,
-                    notebook_mcp_app=(
-                        request.app if notebook_analysis_enabled else None
-                    ),
+                    notebook_mcp_app=runtime_app,
                     analysis_notebook_path=analysis_notebook_path,
                     event_sink=lifecycle_event,
                     notebook_lifecycle=lifecycle,
@@ -362,6 +367,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                 agent_cost_usd: float | None = None
                 agent_usage: dict[str, Any] | None = None
                 successful_run_cells = False
+                notebook_cells_edited = False
                 agent_failed = False
                 async for event in run_notebook_agent(
                     attempt_prompt,
@@ -373,9 +379,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                     system_prompt_override=system_prompt,
                     mcp_config=mcp_config,
                     thread_id=f"standalone:{run_id}",
-                    notebook_mcp_app=(
-                        request.app if notebook_analysis_enabled else None
-                    ),
+                    notebook_mcp_app=runtime_app,
                     cwd=str(project_directory),
                     # Expose the normal SignalPilot workflow. Xata branch
                     # control stays denied because this run is already pinned
@@ -384,9 +388,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                     additional_disallowed_tools=(
                         STANDALONE_DISALLOWED_MCP_TOOLS
                     ),
-                    allowed_tools=_allowed_tools_for_features(
-                        notebook_analysis_enabled=notebook_analysis_enabled
-                    ),
+                    allowed_tools=list(STANDALONE_ALLOWED_TOOLS),
                     additional_mcp_servers={
                         "standalone-chat": artifact_server
                     },
@@ -499,7 +501,6 @@ async def execute(*, request: Request) -> StreamingResponse:
                                             )
                                         ),
                                         "resume_requested": resume_agent_session,
-                                        "notebook_analysis_enabled": notebook_analysis_enabled,
                                         "max_turns": MAX_ANALYSIS_AGENT_TURNS,
                                         # Report presence only. Values are never
                                         # included in an author-visible event.
@@ -554,6 +555,11 @@ async def execute(*, request: Request) -> StreamingResponse:
                             event.tool_call_id, ""
                         )
                         if (
+                            completed_tool.endswith("edit_notebook")
+                            and not event.is_error
+                        ):
+                            notebook_cells_edited = True
+                        if (
                             completed_tool.endswith("run_cells")
                             and not event.is_error
                         ):
@@ -599,7 +605,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                 notebook_failure: dict[str, Any] | None = None
                 if lifecycle.session_id:
                     notebook_failure = _notebook_failure(
-                        request.app, lifecycle.session_id
+                        runtime_app, lifecycle.session_id
                     )
                     if (
                         recovery_failure is not None
@@ -613,7 +619,10 @@ async def execute(*, request: Request) -> StreamingResponse:
                                 "cell_ids": [],
                             }
                         }
-                    elif not successful_run_cells:
+                    elif _notebook_edit_requires_successful_run(
+                        notebook_cells_edited=notebook_cells_edited,
+                        successful_run_cells=successful_run_cells,
+                    ):
                         notebook_failure = {
                             "error": {
                                 "type": "NotebookEvidenceNotValidatedError",
@@ -624,7 +633,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                     if notebook_failure is not None:
                         notebook_failure = _with_recorded_notebook_errors(
                             _analysis_session(
-                                request.app, lifecycle.session_id
+                                runtime_app, lifecycle.session_id
                             ),
                             notebook_failure,
                         )
@@ -648,7 +657,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                     if attempt == 1 and lifecycle.session_id:
                         previous_notebook_session_id = lifecycle.session_id
                         kernel_closed = _close_analysis_kernel(
-                            request.app, lifecycle.session_id
+                            runtime_app, lifecycle.session_id
                         )
                         _ANALYSIS_SESSIONS_BY_RUN.pop(run_id, None)
                         lifecycle.session_id = None
@@ -699,7 +708,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                 if lifecycle.session_id:
                     try:
                         archive_id = await _archive_analysis_notebook(
-                            app=request.app,
+                            app=runtime_app,
                             session_id=lifecycle.session_id,
                             run_id=run_id,
                             gateway_api_url=gateway_api_url,
@@ -818,7 +827,7 @@ async def execute(*, request: Request) -> StreamingResponse:
             if current_lifecycle and current_lifecycle.session_id:
                 try:
                     _close_analysis_kernel(
-                        request.app, current_lifecycle.session_id
+                        runtime_app, current_lifecycle.session_id
                     )
                 except Exception:
                     pass

@@ -227,7 +227,6 @@ async def prepare_execution(
             "sandbox_runtime": enterprise_chat_feature_flags().sandbox_runtime,
             "size_router": enterprise_chat_feature_flags().size_router,
             "size_router_shadow": enterprise_chat_feature_flags().size_router_shadow,
-            "notebook_analysis": enterprise_chat_feature_flags().notebook_analysis,
             "runtime_results": enterprise_chat_feature_flags().runtime_results,
             "runtime_artifacts": enterprise_chat_feature_flags().runtime_artifacts,
             "dataset_refs": enterprise_chat_feature_flags().dataset_refs,

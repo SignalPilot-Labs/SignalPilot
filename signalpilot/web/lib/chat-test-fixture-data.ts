@@ -15,6 +15,11 @@ export const FIXTURE_KERNEL_SESSION_ID = "s_fixt01";
 export const FIXTURE_NOTEBOOK_PATH =
   "/tmp/signalpilot-chat-runs/run-fixture-0001/analysis.py";
 
+// Artifacts panel wiring: the file the fixture agent writes and the
+// tool_call_id whose completion marks the governed query as executed.
+export const FIXTURE_WRITTEN_FILE_PATH = "analysis/q3_growth.py";
+export const FIXTURE_QUERY_TOOL_CALL_ID = "t4";
+
 export type FixtureEvent = Omit<StandaloneChatEvent, "created_at"> & {
   at: number;
 };
@@ -374,7 +379,7 @@ const RAW_EVENTS: FixtureEvent[] = [
     type: "tool_started",
     payload: {
       tool: "Write",
-      input: { file_path: "analysis/q3_growth.py", content: PYTHON_FILE },
+      input: { file_path: FIXTURE_WRITTEN_FILE_PATH, content: PYTHON_FILE },
     },
   },
   {
@@ -383,6 +388,15 @@ const RAW_EVENTS: FixtureEvent[] = [
     sequence: 18,
     type: "tool_completed",
     payload: { tool_call_id: "t6", summary: "The governed tool completed.", error: false },
+  },
+  // The gateway mirrors the Write to the conversation file store and
+  // announces it. Content-free: the client only refetches the manifest.
+  {
+    at: 10_520,
+    run_id: FIXTURE_RUN_ID,
+    sequence: 0,
+    type: "files_changed",
+    payload: { changed: [FIXTURE_WRITTEN_FILE_PATH], deleted: [] },
   },
   {
     at: 10_900,

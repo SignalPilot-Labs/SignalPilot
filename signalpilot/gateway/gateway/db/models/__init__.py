@@ -19,6 +19,7 @@ from .base import (
 from .chat import (
     GatewayChatArtifact,
     GatewayChatConversation,
+    GatewayChatFile,
     GatewayChatMessage,
     GatewayChatRun,
     GatewayChatRunEvent,
@@ -116,6 +117,7 @@ __all__ = [
     "GatewayBase",
     "GatewayChatArtifact",
     "GatewayChatConversation",
+    "GatewayChatFile",
     "GatewayChatMessage",
     "GatewayChatObjectDeletion",
     "GatewayChatRun",

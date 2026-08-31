@@ -31,7 +31,6 @@ class EnterpriseChatFeatureFlags:
     forking: bool
     size_router: bool
     size_router_shadow: bool
-    notebook_analysis: bool
     runtime_results: bool
     runtime_artifacts: bool
     dataset_refs: bool
@@ -47,7 +46,6 @@ def enterprise_chat_feature_flags() -> EnterpriseChatFeatureFlags:
         forking=_disabled_by_default_flag("SP_FEATURE_CHAT_FORKING"),
         size_router=size_router_value in {"1", "true", "yes", "on", "enforced"},
         size_router_shadow=size_router_value == "shadow",
-        notebook_analysis=_disabled_by_default_flag("SP_FEATURE_CHAT_NOTEBOOK_ANALYSIS"),
         runtime_results=_disabled_by_default_flag("SP_FEATURE_CHAT_RUNTIME_RESULTS"),
         runtime_artifacts=_disabled_by_default_flag("SP_FEATURE_CHAT_RUNTIME_ARTIFACTS"),
         dataset_refs=_disabled_by_default_flag("SP_FEATURE_CHAT_DATASET_REFS"),

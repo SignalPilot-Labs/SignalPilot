@@ -178,6 +178,9 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
 
     run = SimpleNamespace(
         id="run-a",
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id="conv-a",
         execution_attempt=1,
         cancellation_requested_at=None,
     )
@@ -309,6 +312,9 @@ async def test_terminal_notebook_validation_error_persists_no_answer_or_artifact
 
     run = SimpleNamespace(
         id="run-dirty",
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id="conv-a",
         execution_attempt=1,
         cancellation_requested_at=None,
     )

@@ -14,15 +14,18 @@ import {
   ChatUiContext,
   type UiMessage,
 } from "~/components/chat/standalone-data-chat";
-import { LiveNotebookPanel } from "~/components/chat/live-notebook-panel";
+import { ArtifactsPanel } from "~/components/chat/artifacts-panel";
+import { hasArtifactsContent } from "~/lib/chat-artifacts";
 import {
   FIXTURE_RUN_ID,
   FIXTURE_TOTAL_MS,
   FIXTURE_USER_PROMPT,
   fixtureArtifacts,
   fixtureAssembledText,
+  fixtureConversationFiles,
   fixtureConversationNotebook,
   fixtureRunStatus,
+  fixtureSqlTrace,
   materializeFixtureEvents,
 } from "~/lib/chat-test-fixture";
 import { NotebookPen } from "lucide-react";
@@ -80,6 +83,11 @@ export function StandaloneChatTestHarness() {
     () => fixtureConversationNotebook(events),
     [events],
   );
+  const conversationFiles = useMemo(
+    () => fixtureConversationFiles(events),
+    [events],
+  );
+  const sqlTraceExecutions = useMemo(() => fixtureSqlTrace(events), [events]);
   const [notebookPanelOpen, setNotebookPanelOpen] = useState(false);
   const notebookPanelAutoOpenedRunRef = useRef<string | null>(null);
   useEffect(() => {
@@ -240,11 +248,16 @@ export function StandaloneChatTestHarness() {
             </div>
           </ChatUiContext.Provider>
         </div>
-        {conversationNotebook && !notebookPanelOpen && (
+        {hasArtifactsContent(
+          conversationNotebook,
+          conversationFiles,
+          sqlTraceExecutions,
+        ) &&
+          !notebookPanelOpen && (
           <button
             type="button"
-            aria-label="Open the analysis notebook panel"
-            title="Open the analysis notebook panel"
+            aria-label="Open the artifacts panel"
+            title="Open the artifacts panel"
             data-testid="live-notebook-toggle"
             onClick={() => setNotebookPanelOpen(true)}
             className="absolute right-4 top-4 z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-muted)] shadow-lg shadow-black/20 hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
@@ -253,9 +266,11 @@ export function StandaloneChatTestHarness() {
           </button>
         )}
         {notebookPanelOpen && (
-          <LiveNotebookPanel
+          <ArtifactsPanel
             conversationId="conversation-fixture-1"
             notebook={conversationNotebook}
+            files={conversationFiles}
+            executions={sqlTraceExecutions}
             onClose={() => setNotebookPanelOpen(false)}
             liveViewOverride={
               <div
@@ -263,6 +278,14 @@ export function StandaloneChatTestHarness() {
                 className="flex h-full items-center justify-center text-xs text-[var(--color-text-dim)]"
               >
                 Live notebook view stub
+              </div>
+            }
+            fileViewOverride={
+              <div
+                data-testid="chat-file-stub"
+                className="flex h-full items-center justify-center text-xs text-[var(--color-text-dim)]"
+              >
+                File viewer stub
               </div>
             }
           />

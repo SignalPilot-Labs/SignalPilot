@@ -126,7 +126,9 @@ export type StandaloneChatEvent = {
     | "cell_executed"
     | "runtime_result_created"
     | "archive_completed"
-    | "kernel_stopped";
+    | "kernel_stopped"
+    | "files_changed"
+    | "files_archived";
   payload: Record<string, unknown>;
   created_at: string;
 };

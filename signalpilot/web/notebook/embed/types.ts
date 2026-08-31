@@ -107,6 +107,12 @@ export interface SignalpilotEditorProps {
    * chat live notebook panel attaching to the agent's kernel.
    */
   kernelSessionId?: string;
+  /**
+   * Read mode only: show each cell's code above its output (true, default)
+   * or render the traditional outputs-only app view (false). Reactive: the
+   * host can flip it on a mounted editor.
+   */
+  readShowCode?: boolean;
 }
 
 export interface SignalpilotHomeProps {

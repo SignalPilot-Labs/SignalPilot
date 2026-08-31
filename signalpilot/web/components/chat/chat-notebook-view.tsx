@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Code2, LayoutTemplate } from "lucide-react";
 import NotebookBoot from "~/components/notebook/notebook-boot";
 import {
   NotebookProvider,
@@ -45,13 +46,50 @@ export function ChatNotebookView({
         : null,
   }));
 
+  // Code view shows each cell's code above its output; app view is the
+  // traditional outputs-only marimo render. Both read the same document
+  // and the same live kernel stream.
+  const [showCode, setShowCode] = useState(true);
+
   return (
     <div
       data-testid="chat-notebook-view"
-      className="flex h-full min-h-0 w-full flex-col overflow-hidden"
+      className="relative flex h-full min-h-0 w-full flex-col overflow-hidden"
     >
+      <div className="absolute right-3 top-2 z-30 flex overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] shadow-sm">
+        <button
+          type="button"
+          data-testid="chat-notebook-mode-code"
+          title="Show code and outputs"
+          aria-pressed={showCode}
+          onClick={() => setShowCode(true)}
+          className={`flex items-center gap-1 px-2 py-1 text-[10px] font-medium uppercase tracking-wider transition-colors ${
+            showCode
+              ? "bg-[var(--color-bg-hover)] text-[var(--color-text)]"
+              : "text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
+          }`}
+        >
+          <Code2 className="h-3 w-3" />
+          Code
+        </button>
+        <button
+          type="button"
+          data-testid="chat-notebook-mode-app"
+          title="Show outputs only (app view)"
+          aria-pressed={!showCode}
+          onClick={() => setShowCode(false)}
+          className={`flex items-center gap-1 px-2 py-1 text-[10px] font-medium uppercase tracking-wider transition-colors ${
+            !showCode
+              ? "bg-[var(--color-bg-hover)] text-[var(--color-text)]"
+              : "text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
+          }`}
+        >
+          <LayoutTemplate className="h-3 w-3" />
+          App
+        </button>
+      </div>
       <NotebookProvider value={config}>
-        <NotebookBoot view="read" />
+        <NotebookBoot view="read" readShowCode={showCode} />
       </NotebookProvider>
     </div>
   );

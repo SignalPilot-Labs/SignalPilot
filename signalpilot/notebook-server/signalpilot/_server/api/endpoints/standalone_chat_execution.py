@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import shutil
+import traceback
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -258,7 +259,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                         lifecycle.session_id = _start_analysis_kernel(
                             request.app, analysis_notebook_path
                         )
-                    except Exception:
+                    except Exception as exc:
                         LOGGER.exception(
                             "Clean notebook kernel start failed run_id=%s attempt=%s",
                             run_id,
@@ -268,7 +269,12 @@ async def execute(*, request: Request) -> StreamingResponse:
                             json.dumps(
                                 {
                                     "type": "error",
-                                    "content": "The failed notebook kernel could not be restarted safely.",
+                                    "content": str(exc) if str(exc) else repr(exc),
+                                    "full_trace": traceback.format_exc(),
+                                    "diagnostic_context": {
+                                        "error_type": type(exc).__name__,
+                                        "operation": "start_recovery_notebook_kernel",
+                                    },
                                     "is_error": True,
                                 }
                             )
@@ -466,6 +472,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                         continue
                     if event.type == "error":
                         agent_failed = True
+                        sdk_diagnostics = dict(event.diagnostic_context or {})
                         yield (
                             json.dumps(
                                 {
@@ -475,10 +482,10 @@ async def execute(*, request: Request) -> StreamingResponse:
                                     # displaying it. Do not discard the SDK's root
                                     # cause here or every failure becomes impossible
                                     # for the user to diagnose.
-                                    "content": event.content.strip()
-                                    or "AgentError: empty error response",
-                                    "full_trace": event.content.strip(),
+                                    "content": event.content,
+                                    "full_trace": event.full_trace or event.content,
                                     "diagnostic_context": {
+                                        **sdk_diagnostics,
                                         "model": agent_model,
                                         "auth_mode": (
                                             auth_config_override.get("type")
@@ -711,7 +718,12 @@ async def execute(*, request: Request) -> StreamingResponse:
                             json.dumps(
                                 {
                                     "type": "error",
-                                    "content": "The validated notebook could not be archived; the answer was rejected.",
+                                    "content": str(exc) if str(exc) else repr(exc),
+                                    "full_trace": traceback.format_exc(),
+                                    "diagnostic_context": {
+                                        "error_type": type(exc).__name__,
+                                        "operation": "archive_analysis_notebook",
+                                    },
                                     "is_error": True,
                                 }
                             )

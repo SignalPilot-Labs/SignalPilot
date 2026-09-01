@@ -10,12 +10,19 @@ from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 
-from pydantic import Field, model_validator
+from pydantic import Field, ValidationError, model_validator
 
 from gateway.analysis_delivery.model_client import (
     AnthropicMessagesClient,
     ClaudeAgentSDKStructuredClient,
     MessagesModelClient,
+)
+from gateway.dashboard.authoring_intent import (
+    DashboardCreationIntent,
+    DashboardIntentIssue,
+    DashboardIntentRepairError,
+    DashboardIntentValidationError,
+    compile_dashboard_creation_intent,
 )
 from gateway.dashboard.domain import ContractModel, DashboardDefinition, SemanticChartQuery
 from gateway.dashboard.operations import DashboardOperation, apply_dashboard_operations
@@ -200,7 +207,15 @@ class DashboardAuthoringAgent:
         context: DashboardSemanticContext,
         base_definition: DashboardDefinition | None,
         validator: Callable[[DashboardAgentDraft], None] | None = None,
+        timezone: str = "UTC",
     ) -> DashboardAgentDraft:
+        if base_definition is None:
+            return await self._draft_creation_intent(
+                prompt=prompt,
+                context=context,
+                validator=validator,
+                timezone=timezone,
+            )
         mode = "update" if base_definition is not None else "create"
         contract = DashboardAgentDraft.model_json_schema(by_alias=True)
         system = (
@@ -360,6 +375,137 @@ class DashboardAuthoringAgent:
                     **request_body,
                     "messages": [{"role": "user", "content": json.dumps(repair_payload, default=str)}],
                 }
+        assert last_error is not None
+        raise last_error
+
+    async def _draft_creation_intent(
+        self,
+        *,
+        prompt: str,
+        context: DashboardSemanticContext,
+        validator: Callable[[DashboardAgentDraft], None] | None,
+        timezone: str,
+    ) -> DashboardAgentDraft:
+        contract = DashboardCreationIntent.model_json_schema(by_alias=True)
+        system = (
+            "You are SignalPilot's governed dashboard planner. Return only business copy and semantic choices using "
+            "the supplied explores, dimensions, and metrics. Copy exploreName and every field ID exactly from "
+            "semantic_context. Choose among KPI, table, bar, line, and area. KPI requires exactly one metric and no "
+            "dimensions. Bar, line, and area require exactly one dimension and at least one metric. Line and area "
+            "require a supplied date or timestamp dimension. Suggest useful governed filter dimensions, preferring a "
+            "date field plus a small number of business-relevant categorical fields unless the request opts out. The "
+            "server owns queries, encodings, formats, IDs, layout, filter defaults and targets, provenance, and project "
+            "metadata. Never emit SQL, renderer configuration, output bindings, placeholders, or fields absent from "
+            "semantic_context. When a requested concept has no exact approved metric, use the closest faithful "
+            "governed choice, explain the substitution in summary, and omit only the unsupported chart. Do not refuse "
+            "the whole dashboard when at least one faithful chart is possible."
+        )
+        payload = {
+            "mode": "create",
+            "request": prompt,
+            "semantic_context": compact_semantic_projection(context),
+            "filters_enabled": not explicitly_omits_filters(prompt),
+        }
+        request_body = {
+            "model": self.model,
+            "max_tokens": 8_000,
+            "system": system,
+            "messages": [{"role": "user", "content": json.dumps(payload, default=str)}],
+            "tools": [
+                {
+                    "name": "submit_dashboard_draft",
+                    "description": "Return a semantic dashboard creation intent. The server compiles all mechanics.",
+                    "input_schema": contract,
+                }
+            ],
+            "tool_choice": {"type": "tool", "name": "submit_dashboard_draft"},
+        }
+
+        async def request_tool_input(body: dict[str, Any]) -> Any:
+            response = await self.model_client.create_message(body)
+            content = response.get("content")
+            if not isinstance(content, list):
+                raise ValueError("Dashboard authoring model returned no tool result")
+            return next(
+                (
+                    block.get("input")
+                    for block in content
+                    if isinstance(block, dict)
+                    and block.get("type") == "tool_use"
+                    and block.get("name") == "submit_dashboard_draft"
+                ),
+                None,
+            )
+
+        feedback: list[dict[str, Any]] = []
+        rejected_fingerprints: set[str] = set()
+        last_error: ValueError | None = None
+        for attempt in range(MAX_DRAFT_ATTEMPTS):
+            rejected_intent = await request_tool_input(request_body)
+            fingerprint = json.dumps(rejected_intent, default=str, sort_keys=True, separators=(",", ":"))
+            repeated = fingerprint in rejected_fingerprints
+            rejected_fingerprints.add(fingerprint)
+            try:
+                intent = DashboardCreationIntent.model_validate(rejected_intent)
+                definition = compile_dashboard_creation_intent(
+                    intent,
+                    context,
+                    timezone=timezone,
+                    include_filters=not explicitly_omits_filters(prompt),
+                )
+                draft = DashboardAgentDraft(summary=intent.summary, definition=definition)
+                if validator is not None:
+                    validator(draft)
+                return draft
+            except DashboardIntentValidationError as exc:
+                issues = exc.as_payload()
+                last_error = exc
+            except ValidationError as exc:
+                issues = [
+                    DashboardIntentIssue(
+                        code="invalid_intent_contract",
+                        path=".".join(str(part) for part in error["loc"]) or "intent",
+                        message=error["msg"],
+                    ).model_dump(mode="json", by_alias=True, exclude_none=True)
+                    for error in exc.errors(include_url=False, include_input=False)
+                ]
+                last_error = ValueError("Dashboard creation intent did not match its contract")
+            except ValueError as exc:
+                issues = [
+                    DashboardIntentIssue(
+                        code="compiled_definition_invalid",
+                        path="intent",
+                        message=str(exc)[:1000],
+                    ).model_dump(mode="json", by_alias=True, exclude_none=True)
+                ]
+                last_error = exc
+            for issue in issues:
+                if issue not in feedback:
+                    feedback.append(issue)
+            logger.warning(
+                "Dashboard creation intent rejected attempt=%s/%s issue_codes=%s",
+                attempt + 1,
+                MAX_DRAFT_ATTEMPTS,
+                [issue["code"] for issue in issues],
+            )
+            if repeated:
+                raise DashboardIntentRepairError() from last_error
+            if attempt + 1 >= MAX_DRAFT_ATTEMPTS:
+                assert last_error is not None
+                raise DashboardIntentRepairError() from last_error
+            repair_payload = {
+                **payload,
+                "validation_feedback": feedback,
+                "repair_instruction": (
+                    "Correct every issue using only allowedValues and exact identifiers from semantic_context. "
+                    "Preserve all valid charts and previous corrections, then resubmit the complete semantic intent."
+                ),
+                "rejected_intent": rejected_intent,
+            }
+            request_body = {
+                **request_body,
+                "messages": [{"role": "user", "content": json.dumps(repair_payload, default=str)}],
+            }
         assert last_error is not None
         raise last_error
 

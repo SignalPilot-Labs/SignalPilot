@@ -23,6 +23,7 @@ from gateway.analysis_delivery.model_client import AnthropicMessagesError
 from gateway.config.notebooks import chat_force_oauth_token
 from gateway.dashboard import store as dashboard_store
 from gateway.dashboard.authoring import DashboardAuthoringAgent, materialize_agent_draft
+from gateway.dashboard.authoring_intent import DashboardIntentRepairError
 from gateway.dashboard.cache import dashboard_query_cache_key
 from gateway.dashboard.compiler import (
     DashboardCompileError,
@@ -752,6 +753,7 @@ async def create_dashboard_authoring_session(body: DashboardAuthoringRequest, st
             context=context,
             base_definition=base_definition,
             validator=validate_candidate,
+            timezone=body.timezone,
         )
         definition = materialize_agent_draft(draft, base_definition=base_definition)
         if base_definition is None:
@@ -801,7 +803,8 @@ async def create_dashboard_authoring_session(body: DashboardAuthoringRequest, st
                 ),
             },
         )
-        raise HTTPException(status_code=422, detail=f"Agent draft rejected: {exc}") from exc
+        detail = str(exc) if isinstance(exc, DashboardIntentRepairError) else f"Agent draft rejected: {exc}"
+        raise HTTPException(status_code=422, detail=detail) from exc
     custom_sql = has_custom_sql(definition)
     return await dashboard_store.create_authoring_session(
         store.session,
@@ -914,6 +917,7 @@ async def continue_dashboard_authoring_session(session_id: str, body: DashboardA
             context=context,
             base_definition=current_definition,
             validator=validate_candidate,
+            timezone=current_definition.signalPilot.timezone,
         )
         definition = materialize_agent_draft(draft, base_definition=current_definition)
         verified = await _verified_context(store, definition)

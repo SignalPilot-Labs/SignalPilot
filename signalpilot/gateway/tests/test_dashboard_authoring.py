@@ -18,6 +18,7 @@ from gateway.analysis_delivery.model_client import AnthropicMessagesError, Claud
 from gateway.api import dashboards as dashboard_api
 from gateway.dashboard import store as dashboard_store
 from gateway.dashboard.authoring import DashboardAgentDraft, DashboardAuthoringAgent, materialize_agent_draft
+from gateway.dashboard.authoring_intent import DashboardIntentRepairError
 from gateway.dashboard.cache import dashboard_query_cache_key
 from gateway.dashboard.domain import DashboardDefinition
 from gateway.dashboard.operations import (
@@ -394,6 +395,35 @@ class _ModelClient:
         }
 
 
+def _creation_intent_payload(
+    *,
+    summary: str = "Created the dashboard.",
+    explore_name: str = "orders",
+    metric: str = "orders.revenue",
+    visualization: str = "bar",
+) -> dict:
+    dimensions = [] if visualization == "kpi" else ["orders.month" if visualization in {"line", "area"} else "orders.region"]
+    return {
+        "summary": summary,
+        "name": "Executive revenue",
+        "description": "A governed executive revenue overview.",
+        "charts": [
+            {
+                "ref": "revenue",
+                "visualization": visualization,
+                "exploreName": explore_name,
+                "dimensions": dimensions,
+                "metrics": [metric],
+                "title": "Revenue",
+                "question": "How is revenue performing?",
+                "description": "Governed revenue performance.",
+                "drillDimensions": [],
+            }
+        ],
+        "filters": [],
+    }
+
+
 class _ProviderFailingAgent:
     model = "claude-provider-test"
 
@@ -452,38 +482,27 @@ def test_dashboard_authoring_uses_agent_sdk_for_oauth() -> None:
 
 
 @pytest.mark.asyncio
-async def test_agent_repairs_filterless_creation_before_returning_the_draft() -> None:
-    empty = _definition()
-    repaired = _definition_with_filter()
-    client = _ModelClient(
-        [
-            {"summary": "Created the dashboard.", "definition": empty.model_dump(mode="json", by_alias=True)},
-            {
-                "summary": "Created the dashboard with filters.",
-                "definition": repaired.model_dump(mode="json", by_alias=True),
-            },
-        ]
-    )
+async def test_agent_creation_uses_narrow_intent_schema_and_compiles_filters() -> None:
+    client = _ModelClient(_creation_intent_payload())
     agent = DashboardAuthoringAgent(api_key="test", model_client=client)
     draft = await agent.draft(
         prompt="Create an executive revenue dashboard",
-        context=_context(),
+        context=_orders_context(),
         base_definition=None,
     )
     assert draft.definition is not None
-    assert [rule.id for rule in draft.definition.filters.dimensions] == ["date-filter"]
-    assert len(client.requests) == 2
-    repair_payload = json.loads(client.requests[1]["messages"][0]["content"])
-    assert "validation_feedback" in repair_payload
-    assert "rejected_draft" in repair_payload
+    assert len(draft.definition.filters.dimensions) == 1
+    assert draft.definition.filters.dimensions[0].target.fieldId == "orders.month"
+    assert len(client.requests) == 1
+    schema = json.dumps(client.requests[0]["tools"][0]["input_schema"])
+    assert "DashboardDefinition" not in schema
+    assert "sqlTemplate" not in schema
+    assert "tileTargets" not in schema
 
 
 @pytest.mark.asyncio
 async def test_agent_allows_omitted_drills_without_a_declared_hierarchy() -> None:
-    missing = _single_bar_definition(drill_dimensions=None)
-    client = _ModelClient(
-        {"summary": "Created the dashboard.", "definition": missing.model_dump(mode="json", by_alias=True)}
-    )
+    client = _ModelClient(_creation_intent_payload())
     agent = DashboardAuthoringAgent(api_key="test", model_client=client)
 
     draft = await agent.draft(
@@ -532,30 +551,25 @@ async def test_agent_repairs_filterless_follow_up_with_typed_filter_operation() 
 
 @pytest.mark.asyncio
 async def test_explicit_filter_opt_out_allows_a_filterless_draft() -> None:
-    empty = _definition()
     client = _ModelClient(
-        {
-            "summary": "Created the dashboard without filters.",
-            "definition": empty.model_dump(mode="json", by_alias=True),
-        }
+        _creation_intent_payload(summary="Created the dashboard without filters.", visualization="line")
     )
     agent = DashboardAuthoringAgent(api_key="test", model_client=client)
     draft = await agent.draft(
         prompt="Create an executive revenue dashboard without filters",
-        context=_context(),
+        context=_orders_context(),
         base_definition=None,
     )
     assert draft.definition is not None
     assert draft.definition.filters.dimensions == []
+    assert draft.definition.charts[0].query.filters.dimensions is not None
+    validate_time_series_default_windows(draft.definition, _orders_context())
     assert len(client.requests) == 1
 
 
 @pytest.mark.asyncio
 async def test_agent_adds_a_governed_bounded_date_filter_without_an_extra_model_turn() -> None:
-    empty = _definition()
-    client = _ModelClient(
-        {"summary": "Created the dashboard.", "definition": empty.model_dump(mode="json", by_alias=True)}
-    )
+    client = _ModelClient(_creation_intent_payload(visualization="line"))
     agent = DashboardAuthoringAgent(api_key="test", model_client=client)
 
     draft = await agent.draft(
@@ -583,38 +597,27 @@ async def test_agent_adds_a_governed_bounded_date_filter_without_an_extra_model_
 
 @pytest.mark.asyncio
 async def test_agent_rejects_a_second_filterless_response() -> None:
-    empty = _definition()
-    client = _ModelClient(
-        {"summary": "Created the dashboard.", "definition": empty.model_dump(mode="json", by_alias=True)}
-    )
+    invalid = _creation_intent_payload(metric="orders.missing")
+    client = _ModelClient(invalid)
     agent = DashboardAuthoringAgent(api_key="test", model_client=client)
-    with pytest.raises(ValueError, match="requires at least one governed filter control"):
+    with pytest.raises(ValueError, match="after automatic repair"):
         await agent.draft(
             prompt="Create an executive revenue dashboard",
-            context=_context(),
+            context=_orders_context(),
             base_definition=None,
         )
-    assert len(client.requests) == 3
+    assert len(client.requests) == 2
+    repair_payload = json.loads(client.requests[1]["messages"][0]["content"])
+    assert repair_payload["validation_feedback"][0]["code"] == "unknown_metric"
+    assert repair_payload["validation_feedback"][0]["allowedValues"] == ["orders.revenue"]
 
 
 @pytest.mark.asyncio
 async def test_agent_repairs_semantic_validation_failures_before_returning_the_draft() -> None:
-    invalid_payload = _single_bar_definition(drill_dimensions=["orders.customer"]).model_dump(
-        mode="json", by_alias=True
-    )
-    invalid_payload["charts"][0]["query"]["exploreName"] = "sales"
-    repaired = _single_bar_definition(drill_dimensions=["orders.customer"])
+    invalid_payload = _creation_intent_payload(explore_name="sales")
+    repaired = _creation_intent_payload(summary="Created the dashboard with governed identifiers.")
     client = _ModelClient(
-        [
-            {
-                "summary": "Created the dashboard.",
-                "definition": invalid_payload,
-            },
-            {
-                "summary": "Created the dashboard with governed identifiers.",
-                "definition": repaired.model_dump(mode="json", by_alias=True),
-            },
-        ]
+        [invalid_payload, repaired]
     )
     agent = DashboardAuthoringAgent(api_key="test", model_client=client)
 
@@ -633,20 +636,19 @@ async def test_agent_repairs_semantic_validation_failures_before_returning_the_d
     assert draft.definition.charts[0].query.exploreName == "orders"
     assert len(client.requests) == 2
     repair_payload = json.loads(client.requests[1]["messages"][0]["content"])
-    assert "Unknown explore: sales" in repair_payload["validation_feedback"]
-    assert "Valid exploreName values: orders" in repair_payload["validation_feedback"]
-    assert "Never use <UNKNOWN>" in repair_payload["validation_feedback"]
-    assert repair_payload["rejected_draft"]["definition"]["charts"][0]["query"]["exploreName"] == "sales"
+    assert repair_payload["validation_feedback"][0]["code"] == "unknown_explore"
+    assert repair_payload["validation_feedback"][0]["allowedValues"] == ["orders"]
+    assert repair_payload["rejected_intent"]["charts"][0]["exploreName"] == "sales"
 
 
 @pytest.mark.asyncio
 async def test_agent_preserves_all_validation_failures_across_repair_attempts() -> None:
-    definition = _single_bar_definition(drill_dimensions=["orders.customer"])
-    response = {
-        "summary": "Created the dashboard.",
-        "definition": definition.model_dump(mode="json", by_alias=True),
-    }
-    client = _ModelClient([response, response, response])
+    responses = [
+        _creation_intent_payload(summary="Created attempt one."),
+        _creation_intent_payload(summary="Created attempt two."),
+        _creation_intent_payload(summary="Created attempt three."),
+    ]
+    client = _ModelClient(responses)
     agent = DashboardAuthoringAgent(api_key="test", model_client=client)
     validation_attempt = 0
 
@@ -666,86 +668,73 @@ async def test_agent_preserves_all_validation_failures_across_repair_attempts() 
     )
 
     final_repair_payload = json.loads(client.requests[2]["messages"][0]["content"])
-    assert "first governed validation failure" in final_repair_payload["validation_feedback"]
-    assert "second governed validation failure" in final_repair_payload["validation_feedback"]
+    messages = [issue["message"] for issue in final_repair_payload["validation_feedback"]]
+    assert "first governed validation failure" in messages
+    assert "second governed validation failure" in messages
 
 
 @pytest.mark.asyncio
 async def test_agent_repairs_invalid_tool_contract_before_returning_the_draft() -> None:
-    repaired = _definition_with_filter()
+    repaired = _creation_intent_payload(summary="Created one governed dashboard intent.")
     client = _ModelClient(
         [
             {
-                "summary": "Returned both payload types.",
-                "definition": repaired.model_dump(mode="json", by_alias=True),
-                "operations": [{"operation": "rename_dashboard", "name": "Wrong mode"}],
+                "summary": "Returned an incomplete intent.",
+                "name": "Executive revenue",
+                "charts": [],
             },
-            {
-                "summary": "Created one complete dashboard definition.",
-                "definition": repaired.model_dump(mode="json", by_alias=True),
-            },
+            repaired,
         ]
     )
     agent = DashboardAuthoringAgent(api_key="test", model_client=client)
 
     draft = await agent.draft(
         prompt="Create an executive revenue dashboard",
-        context=_context(),
+        context=_orders_context(),
         base_definition=None,
     )
 
     assert draft.definition is not None
     assert len(client.requests) == 2
     repair_payload = json.loads(client.requests[1]["messages"][0]["content"])
-    assert "either a complete definition or typed operations" in repair_payload["validation_feedback"]
+    assert repair_payload["validation_feedback"][0]["code"] == "invalid_intent_contract"
+    assert repair_payload["validation_feedback"][0]["path"] == "charts"
 
 
 @pytest.mark.asyncio
 async def test_agent_repairs_refusal_shaped_creation_with_mode_specific_feedback() -> None:
-    repaired = _definition_with_filter()
+    repaired = _creation_intent_payload(
+        summary="Used governed revenue as the closest supported executive measure."
+    )
     client = _ModelClient(
         [
             {
                 "summary": "Cannot create customers because no exact customer metric is available.",
-                "definition": None,
-                "operations": [],
             },
-            {
-                "summary": "Used governed account dimensions as the closest customer representation.",
-                "definition": repaired.model_dump(mode="json", by_alias=True),
-            },
+            repaired,
         ]
     )
     agent = DashboardAuthoringAgent(api_key="test", model_client=client)
 
     draft = await agent.draft(
         prompt="Create an executive dashboard for revenue, margins and customers",
-        context=_context(),
+        context=_orders_context(),
         base_definition=None,
     )
 
     assert draft.definition is not None
     assert len(client.requests) == 2
     repair_payload = json.loads(client.requests[1]["messages"][0]["content"])
-    assert "refusal or empty payload" in repair_payload["validation_feedback"]
-    assert "closest faithful dashboard" in repair_payload["validation_feedback"]
-    assert "omit only that unsupported element" in repair_payload["validation_feedback"]
+    assert {issue["path"] for issue in repair_payload["validation_feedback"]} >= {"name", "charts"}
+    assert "faithful" in client.requests[0]["system"]
 
 
 @pytest.mark.asyncio
-async def test_agent_canonicalizes_unambiguous_visualization_aliases_before_contract_validation() -> None:
-    payload = _definition_with_filter().model_dump(mode="json", by_alias=True)
-    kpi = next(chart for chart in payload["charts"] if chart["id"] == "chart-kpi")
-    kpi["visualization"]["config"] = {"field": "total_revenue", "format": "percent"}
-    line = next(chart for chart in payload["charts"] if chart["id"] == "chart-line")
-    line["visualization"]["config"]["layout"] = {
-        "xField": "month",
-        "yField": ["revenue"],
-    }
+async def test_agent_compiler_owns_visualization_encodings_and_metric_formats() -> None:
     context_payload = _orders_context().model_dump(mode="json")
     context_payload["explores"][0]["metrics"][0]["format"] = "currency:USD"
     context = DashboardSemanticContext.model_validate(context_payload)
-    client = _ModelClient({"summary": "Created executive dashboard.", "definition": payload})
+    client = _ModelClient(_creation_intent_payload(visualization="line"))
     agent = DashboardAuthoringAgent(api_key="test", model_client=client)
 
     draft = await agent.draft(
@@ -755,12 +744,10 @@ async def test_agent_canonicalizes_unambiguous_visualization_aliases_before_cont
     )
 
     assert draft.definition is not None
-    normalized_kpi = next(chart for chart in draft.definition.charts if chart.id == "chart-kpi")
-    assert normalized_kpi.visualization.config.field == "orders.revenue"
-    assert normalized_kpi.visualization.config.format == "currency:USD"
-    normalized_line = next(chart for chart in draft.definition.charts if chart.id == "chart-line")
-    assert normalized_line.visualization.config.layout.xField == "orders.month"
-    assert normalized_line.visualization.config.layout.yField == ["orders.revenue"]
+    line = draft.definition.charts[0]
+    assert line.visualization.config.layout.xField == "orders.month"
+    assert line.visualization.config.layout.yField == ["orders.revenue"]
+    assert "format" not in json.dumps(client.requests[0]["tools"][0]["input_schema"])
     assert len(client.requests) == 1
 
 
@@ -914,6 +901,50 @@ async def test_create_authoring_session_returns_safe_provider_failure(
     assert exc_info.value.status_code == 502
     assert exc_info.value.detail == dashboard_api._AUTHORING_PROVIDER_REJECTED
     assert "Input is too long" not in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_create_authoring_session_returns_safe_exhausted_intent_failure(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ExhaustedIntentAgent:
+        model = "test-model"
+
+        def __init__(self, *, api_key: str) -> None:
+            assert api_key == "test-key"
+
+        async def draft(self, **_kwargs) -> DashboardAgentDraft:
+            raise DashboardIntentRepairError()
+
+    async def resolve_context(*_args, **_kwargs) -> DashboardSemanticContext:
+        return _orders_context()
+
+    async def resolve_key(*_args, **_kwargs) -> str:
+        return "test-key"
+
+    monkeypatch.setattr(dashboard_api.resolver, "resolve", resolve_context)
+    monkeypatch.setattr(dashboard_api, "DashboardAuthoringAgent", ExhaustedIntentAgent)
+    monkeypatch.setattr(dashboard_api.org_secrets_store, "resolve_anthropic_key", resolve_key)
+    store = SimpleNamespace(
+        session=db_session,
+        user_id="owner-a",
+        _require_org_id=lambda: "org-a",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await dashboard_api.create_dashboard_authoring_session(
+            DashboardAuthoringRequest(
+                prompt="Create an executive dashboard",
+                project_id="project-1",
+                commit_sha="a" * 40,
+            ),
+            store,
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "after automatic repair" in str(exc_info.value.detail)
+    assert "Agent draft rejected" not in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio

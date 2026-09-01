@@ -14,7 +14,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from gateway.analysis_delivery.model_client import AnthropicMessagesError
+from gateway.analysis_delivery.model_client import AnthropicMessagesError, ClaudeAgentSDKStructuredClient
 from gateway.api import dashboards as dashboard_api
 from gateway.dashboard import store as dashboard_store
 from gateway.dashboard.authoring import DashboardAgentDraft, DashboardAuthoringAgent, materialize_agent_draft
@@ -26,6 +26,7 @@ from gateway.dashboard.operations import (
     apply_dashboard_operations,
     canonicalize_dashboard_explore_names,
     canonicalize_dashboard_filter_targets,
+    canonicalize_dashboard_time_series_defaults,
     validate_dashboard_semantics,
     validate_time_series_default_windows,
 )
@@ -156,9 +157,7 @@ async def _seed_apply_receipts(
     receipt_dashboard_id = dashboard_id or preview.dashboard_id or f"draft:{preview.id}"
     receipt_version_id = version_id or f"draft:{preview.id}"
     requested_filters = [
-        rule
-        for rule in definition.filters.dimensions
-        if rule.values or rule.operator in {"isNull", "notNull"}
+        rule for rule in definition.filters.dimensions if rule.values or rule.operator in {"isNull", "notNull"}
     ]
     rows = []
     for chart in definition.charts:
@@ -324,9 +323,7 @@ def test_unknown_explore_is_not_recovered_from_invented_fields() -> None:
 
 def test_time_series_authoring_rejects_an_empty_applicable_date_window() -> None:
     payload = _definition_with_filter().model_dump(mode="json", by_alias=True)
-    payload["filters"]["dimensions"][0].update(
-        {"operator": "inBetween", "values": []}
-    )
+    payload["filters"]["dimensions"][0].update({"operator": "inBetween", "values": []})
 
     with pytest.raises(
         DashboardTimeSeriesWindowError,
@@ -340,6 +337,23 @@ def test_time_series_authoring_rejects_an_empty_applicable_date_window() -> None
 
 def test_time_series_authoring_accepts_a_bounded_relative_date_window() -> None:
     validate_time_series_default_windows(_definition_with_filter(), _orders_context())
+
+
+def test_time_series_authoring_canonicalizes_an_unbounded_governed_date_filter() -> None:
+    payload = _definition_with_filter().model_dump(mode="json", by_alias=True)
+    payload["filters"]["dimensions"][0].update({"operator": "inBetween", "values": []})
+
+    canonical = canonicalize_dashboard_time_series_defaults(
+        DashboardDefinition.model_validate(payload),
+        _orders_context(),
+    )
+
+    rule = canonical.filters.dimensions[0]
+    assert rule.operator == "inThePast"
+    assert rule.values == [30]
+    assert rule.settings is not None
+    assert rule.settings.unitOfTime == "days"
+    validate_time_series_default_windows(canonical, _orders_context())
 
 
 @pytest.mark.parametrize(
@@ -428,6 +442,15 @@ async def test_agent_update_is_forced_through_typed_operations() -> None:
     assert "question" in chart_schema["properties"]
 
 
+def test_dashboard_authoring_uses_agent_sdk_for_oauth() -> None:
+    agent = DashboardAuthoringAgent(oauth_token="oauth-token")
+
+    assert isinstance(agent.model_client, ClaudeAgentSDKStructuredClient)
+    assert agent.model_client.oauth_token == "oauth-token"
+    assert agent.model_client.timeout_seconds == 240
+    assert agent.model_client.use_native_structured_output is False
+
+
 @pytest.mark.asyncio
 async def test_agent_repairs_filterless_creation_before_returning_the_draft() -> None:
     empty = _definition()
@@ -456,17 +479,10 @@ async def test_agent_repairs_filterless_creation_before_returning_the_draft() ->
 
 
 @pytest.mark.asyncio
-async def test_agent_repairs_creation_without_usable_drills() -> None:
+async def test_agent_allows_omitted_drills_without_a_declared_hierarchy() -> None:
     missing = _single_bar_definition(drill_dimensions=None)
-    repaired = _single_bar_definition(drill_dimensions=["orders.customer"])
     client = _ModelClient(
-        [
-            {"summary": "Created the dashboard.", "definition": missing.model_dump(mode="json", by_alias=True)},
-            {
-                "summary": "Created the dashboard with a region-to-customer drill.",
-                "definition": repaired.model_dump(mode="json", by_alias=True),
-            },
-        ]
+        {"summary": "Created the dashboard.", "definition": missing.model_dump(mode="json", by_alias=True)}
     )
     agent = DashboardAuthoringAgent(api_key="test", model_client=client)
 
@@ -477,29 +493,8 @@ async def test_agent_repairs_creation_without_usable_drills() -> None:
     )
 
     assert draft.definition is not None
-    assert draft.definition.charts[0].signalPilot.drillDimensions == ["orders.customer"]
-    assert len(client.requests) == 2
-    repair_payload = json.loads(client.requests[1]["messages"][0]["content"])
-    assert "chart-bar" in repair_payload["validation_feedback"]
-    assert "lower-grain drill hierarchy" in repair_payload["validation_feedback"]
-
-
-@pytest.mark.asyncio
-async def test_agent_rejects_a_second_creation_without_usable_drills() -> None:
-    missing = _single_bar_definition(drill_dimensions=None)
-    client = _ModelClient(
-        {"summary": "Created the dashboard.", "definition": missing.model_dump(mode="json", by_alias=True)}
-    )
-    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
-
-    with pytest.raises(ValueError, match="requires usable drill hierarchies for applicable charts"):
-        await agent.draft(
-            prompt="Create an executive revenue dashboard",
-            context=_orders_context(),
-            base_definition=None,
-        )
-
-    assert len(client.requests) == 3
+    assert draft.definition.charts[0].signalPilot.drillDimensions is None
+    assert len(client.requests) == 1
 
 
 @pytest.mark.asyncio
@@ -553,6 +548,37 @@ async def test_explicit_filter_opt_out_allows_a_filterless_draft() -> None:
     assert draft.definition is not None
     assert draft.definition.filters.dimensions == []
     assert len(client.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_adds_a_governed_bounded_date_filter_without_an_extra_model_turn() -> None:
+    empty = _definition()
+    client = _ModelClient(
+        {"summary": "Created the dashboard.", "definition": empty.model_dump(mode="json", by_alias=True)}
+    )
+    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
+
+    draft = await agent.draft(
+        prompt="Create an executive dashboard for revenue, margins and customers",
+        context=_orders_context(),
+        base_definition=None,
+    )
+
+    assert draft.definition is not None
+    assert len(client.requests) == 1
+    assert len(draft.definition.filters.dimensions) == 1
+    rule = draft.definition.filters.dimensions[0]
+    assert rule.target.tableName == "orders"
+    assert rule.target.fieldId == "orders.month"
+    assert rule.operator == "inThePast"
+    assert rule.values == [30]
+    assert rule.settings is not None
+    assert rule.settings.unitOfTime == "days"
+    assert rule.tileTargets is not None
+    assert set(rule.tileTargets) == {tile.uuid for tile in draft.definition.tiles}
+    assert all(target is not False for target in rule.tileTargets.values())
+    validate_dashboard_semantics(draft.definition, _orders_context())
+    validate_time_series_default_windows(draft.definition, _orders_context())
 
 
 @pytest.mark.asyncio
@@ -614,6 +640,37 @@ async def test_agent_repairs_semantic_validation_failures_before_returning_the_d
 
 
 @pytest.mark.asyncio
+async def test_agent_preserves_all_validation_failures_across_repair_attempts() -> None:
+    definition = _single_bar_definition(drill_dimensions=["orders.customer"])
+    response = {
+        "summary": "Created the dashboard.",
+        "definition": definition.model_dump(mode="json", by_alias=True),
+    }
+    client = _ModelClient([response, response, response])
+    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
+    validation_attempt = 0
+
+    def validate_candidate(_draft: DashboardAgentDraft) -> None:
+        nonlocal validation_attempt
+        validation_attempt += 1
+        if validation_attempt == 1:
+            raise ValueError("first governed validation failure")
+        if validation_attempt == 2:
+            raise ValueError("second governed validation failure")
+
+    await agent.draft(
+        prompt="Create an executive revenue dashboard",
+        context=_orders_context(),
+        base_definition=None,
+        validator=validate_candidate,
+    )
+
+    final_repair_payload = json.loads(client.requests[2]["messages"][0]["content"])
+    assert "first governed validation failure" in final_repair_payload["validation_feedback"]
+    assert "second governed validation failure" in final_repair_payload["validation_feedback"]
+
+
+@pytest.mark.asyncio
 async def test_agent_repairs_invalid_tool_contract_before_returning_the_draft() -> None:
     repaired = _definition_with_filter()
     client = _ModelClient(
@@ -641,6 +698,70 @@ async def test_agent_repairs_invalid_tool_contract_before_returning_the_draft() 
     assert len(client.requests) == 2
     repair_payload = json.loads(client.requests[1]["messages"][0]["content"])
     assert "either a complete definition or typed operations" in repair_payload["validation_feedback"]
+
+
+@pytest.mark.asyncio
+async def test_agent_repairs_refusal_shaped_creation_with_mode_specific_feedback() -> None:
+    repaired = _definition_with_filter()
+    client = _ModelClient(
+        [
+            {
+                "summary": "Cannot create customers because no exact customer metric is available.",
+                "definition": None,
+                "operations": [],
+            },
+            {
+                "summary": "Used governed account dimensions as the closest customer representation.",
+                "definition": repaired.model_dump(mode="json", by_alias=True),
+            },
+        ]
+    )
+    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
+
+    draft = await agent.draft(
+        prompt="Create an executive dashboard for revenue, margins and customers",
+        context=_context(),
+        base_definition=None,
+    )
+
+    assert draft.definition is not None
+    assert len(client.requests) == 2
+    repair_payload = json.loads(client.requests[1]["messages"][0]["content"])
+    assert "refusal or empty payload" in repair_payload["validation_feedback"]
+    assert "closest faithful dashboard" in repair_payload["validation_feedback"]
+    assert "omit only that unsupported element" in repair_payload["validation_feedback"]
+
+
+@pytest.mark.asyncio
+async def test_agent_canonicalizes_unambiguous_visualization_aliases_before_contract_validation() -> None:
+    payload = _definition_with_filter().model_dump(mode="json", by_alias=True)
+    kpi = next(chart for chart in payload["charts"] if chart["id"] == "chart-kpi")
+    kpi["visualization"]["config"] = {"field": "total_revenue", "format": "percent"}
+    line = next(chart for chart in payload["charts"] if chart["id"] == "chart-line")
+    line["visualization"]["config"]["layout"] = {
+        "xField": "month",
+        "yField": ["revenue"],
+    }
+    context_payload = _orders_context().model_dump(mode="json")
+    context_payload["explores"][0]["metrics"][0]["format"] = "currency:USD"
+    context = DashboardSemanticContext.model_validate(context_payload)
+    client = _ModelClient({"summary": "Created executive dashboard.", "definition": payload})
+    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
+
+    draft = await agent.draft(
+        prompt="Create an executive dashboard for revenue, margins and customers",
+        context=context,
+        base_definition=None,
+    )
+
+    assert draft.definition is not None
+    normalized_kpi = next(chart for chart in draft.definition.charts if chart.id == "chart-kpi")
+    assert normalized_kpi.visualization.config.field == "orders.revenue"
+    assert normalized_kpi.visualization.config.format == "currency:USD"
+    normalized_line = next(chart for chart in draft.definition.charts if chart.id == "chart-line")
+    assert normalized_line.visualization.config.layout.xField == "orders.month"
+    assert normalized_line.visualization.config.layout.yField == ["orders.revenue"]
+    assert len(client.requests) == 1
 
 
 @pytest.mark.asyncio
@@ -1029,12 +1150,14 @@ async def test_apply_reuses_complete_base_receipts_for_unchanged_charts(
     )
 
     all_results = (
-        await db_session.execute(
-            select(GatewayDashboardResult).where(
-                GatewayDashboardResult.dashboard_id == created.dashboard.id
+        (
+            await db_session.execute(
+                select(GatewayDashboardResult).where(GatewayDashboardResult.dashboard_id == created.dashboard.id)
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert {row.version_id for row in base_receipts} == {created.version.id}
     assert sum(row.version_id == applied.version.id for row in all_results) == len(definition.charts)
 
@@ -1164,12 +1287,14 @@ async def test_new_dashboard_apply_promotes_only_the_exact_complete_preview_resu
         visible_complete_result_ids=[result.id for result in results],
     )
     promoted = (
-        await db_session.execute(
-            select(GatewayDashboardResult).where(
-                GatewayDashboardResult.id.in_([result.id for result in results])
+        (
+            await db_session.execute(
+                select(GatewayDashboardResult).where(GatewayDashboardResult.id.in_([result.id for result in results]))
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert {row.dashboard_id for row in promoted} == {applied.dashboard.id}
     assert {row.version_id for row in promoted} == {applied.version.id}
     assert {row.chart_id for row in promoted} == {chart.id for chart in applied.version.definition.charts}

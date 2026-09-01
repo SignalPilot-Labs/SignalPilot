@@ -71,39 +71,38 @@ _EFFORT_LEVELS = {"low", "medium", "high", "xhigh", "max"}
 
 
 def _result_message_content(message: Any) -> str:
-    """Preserve the diagnostic fields carried by an SDK ResultMessage."""
-    subtype = str(getattr(message, "subtype", "") or "").strip()
-    if subtype == "error_max_turns":
-        return "The agent reached its turn limit before completing."
-
-    details: list[str] = []
-    result = str(getattr(message, "result", "") or "").strip()
-    if result:
-        details.append(result)
+    """Return the SDK's error text without replacing or paraphrasing it."""
+    result = getattr(message, "result", None)
+    if result is not None and str(result):
+        return str(result)
 
     errors = getattr(message, "errors", None)
     if isinstance(errors, (list, tuple)):
-        for error in errors:
-            text = str(error or "").strip()
-            if text and text not in details:
-                details.append(text)
+        details = [str(error) for error in errors if error is not None]
+        if details:
+            return "\n".join(details)
     elif errors:
-        text = str(errors).strip()
-        if text and text not in details:
-            details.append(text)
+        return str(errors)
 
-    stop_reason = str(getattr(message, "stop_reason", "") or "").strip()
-    metadata = []
-    if subtype:
-        metadata.append(f"subtype={subtype}")
-    if stop_reason:
-        metadata.append(f"stop_reason={stop_reason}")
-    if metadata:
-        details.append(f"Claude Agent SDK result: {', '.join(metadata)}")
+    # An SDK result with no textual error still has an exact structured
+    # representation. Surface it instead of inventing a human-friendly cause.
+    return repr(message)
 
-    if details:
-        return "\n".join(details)
-    return "Claude Agent SDK returned an error without diagnostic details."
+
+def _rate_limit_diagnostic(info: Any) -> dict[str, Any]:
+    """Copy the SDK rate-limit payload without interpreting its meaning."""
+    return {
+        "status": getattr(info, "status", None),
+        "resets_at": getattr(info, "resets_at", None),
+        "rate_limit_type": getattr(info, "rate_limit_type", None),
+        "utilization": getattr(info, "utilization", None),
+        "overage_status": getattr(info, "overage_status", None),
+        "overage_resets_at": getattr(info, "overage_resets_at", None),
+        "overage_disabled_reason": getattr(
+            info, "overage_disabled_reason", None
+        ),
+        "raw": getattr(info, "raw", None),
+    }
 
 
 def _agent_effort() -> str:
@@ -160,6 +159,7 @@ def _run_agent_in_thread(
     async def _run() -> None:
         agent_state.task = asyncio.current_task()
         turn_count = 0
+        latest_rate_limit_info: dict[str, Any] | None = None
 
         agent_env = dict(os.environ)
         _apply_auth_config(agent_env, auth_config)
@@ -359,6 +359,27 @@ def _run_agent_in_thread(
                                 num_turns=int(
                                     getattr(msg, "num_turns", turn_count) or 0
                                 ),
+                                diagnostic_context={
+                                    "result_subtype": subtype,
+                                    "stop_reason": str(
+                                        getattr(msg, "stop_reason", "") or ""
+                                    ),
+                                    "api_error_status": getattr(
+                                        msg, "api_error_status", None
+                                    ),
+                                    "duration_ms": getattr(msg, "duration_ms", None),
+                                    "duration_api_ms": getattr(
+                                        msg, "duration_api_ms", None
+                                    ),
+                                    "sdk_session_id": str(
+                                        getattr(msg, "session_id", "") or ""
+                                    ),
+                                    **(
+                                        {"rate_limit": latest_rate_limit_info}
+                                        if latest_rate_limit_info
+                                        else {}
+                                    ),
+                                },
                             )
                         )
                         # A ResultMessage terminates one SDK query, not
@@ -373,17 +394,13 @@ def _run_agent_in_thread(
                         break  # Session complete for this query
 
                     elif isinstance(msg, RateLimitEvent):
-                        info = msg.rate_limit_info
-                        status = getattr(info, "status", None)
-                        if status != "allowed":
-                            event_queue.put(
-                                AgentEvent(
-                                    type="error",
-                                    content="Rate limited. Try again shortly.",
-                                    is_error=True,
-                                    turn=turn_count,
-                                )
-                            )
+                        # This is state, not an error message. A rejected event
+                        # is followed by the SDK ResultMessage containing the
+                        # provider's actual text. Retain the raw state for the
+                        # diagnostic panel and do not pre-empt that result.
+                        latest_rate_limit_info = _rate_limit_diagnostic(
+                            msg.rate_limit_info
+                        )
 
                     elif isinstance(msg, StreamEvent):
                         event = msg.event
@@ -432,7 +449,9 @@ def _run_agent_in_thread(
             event_queue.put(
                 AgentEvent(
                     type="error",
-                    content=full_error,
+                    content=str(e) if str(e) else repr(e),
+                    full_trace=full_error,
+                    diagnostic_context={"error_type": type(e).__name__},
                     is_error=True,
                     turn=turn_count,
                 )
@@ -455,7 +474,9 @@ def _run_agent_in_thread(
         event_queue.put(
             AgentEvent(
                 type="error",
-                content=f"Thread error: {e}\n{tb}",
+                content=str(e) if str(e) else repr(e),
+                full_trace=tb,
+                diagnostic_context={"error_type": type(e).__name__},
                 is_error=True,
             )
         )

@@ -4,6 +4,7 @@ import {
   extractRuntimeBoot,
   foldRunBlocks,
   foldRunSteps,
+  formatErrorSupportBundle,
   formatStepDuration,
   normalizeToolName,
   shouldShowAgentThinking,
@@ -74,7 +75,7 @@ describe("foldRunSteps", () => {
     expect(foldRunSteps(allEvents, "other-run")).toEqual([]);
   });
 
-  it("keeps the redacted trace and safe diagnostics on run errors", () => {
+  it("keeps the exact upstream message, trace, and safe diagnostics", () => {
     const error = foldRunSteps(
       [
         {
@@ -82,11 +83,16 @@ describe("foldRunSteps", () => {
           sequence: 1,
           type: "error" as const,
           payload: {
-            message: "CLIConnectionError: authentication failed",
+            message: "You've hit your session limit · resets 2:50pm (America/Los_Angeles)",
             full_trace: "CLIConnectionError: authentication failed\n[traceback]",
             diagnostic_context: {
               auth_mode: "oauth",
               credential_present: true,
+              api_error_status: 429,
+              rate_limit: {
+                status: "rejected",
+                resets_at: 1788213000,
+              },
             },
           },
           created_at: "2026-08-31T00:00:00Z",
@@ -95,12 +101,28 @@ describe("foldRunSteps", () => {
       "failed-run",
     )[0];
 
-    expect(error.detail).toBe("CLIConnectionError: authentication failed");
+    expect(error.detail).toBe(
+      "You've hit your session limit · resets 2:50pm (America/Los_Angeles)",
+    );
     expect(error.fullTrace).toContain("[traceback]");
     expect(error.diagnostics).toEqual({
       auth_mode: "oauth",
       credential_present: true,
+      api_error_status: 429,
+      rate_limit: {
+        status: "rejected",
+        resets_at: 1788213000,
+      },
     });
+    expect(formatErrorSupportBundle(error)).toBe(
+      "Root cause: You've hit your session limit · resets 2:50pm (America/Los_Angeles)\n\n" +
+        "Diagnostics:\n" +
+        "auth_mode: oauth\n" +
+        "credential_present: true\n" +
+        "api_error_status: 429\n" +
+        'rate_limit: {"status":"rejected","resets_at":1788213000}\n\n' +
+        "Full trace:\nCLIConnectionError: authentication failed\n[traceback]",
+    );
   });
 
   it("leaves an unmatched tool start running", () => {

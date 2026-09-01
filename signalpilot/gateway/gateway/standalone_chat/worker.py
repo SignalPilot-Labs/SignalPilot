@@ -14,7 +14,6 @@ from typing import Any
 import httpx
 
 from gateway.db.engine import get_session_factory, init_db
-from gateway.errors.mcp import sanitize_mcp_error
 from gateway.standalone_chat.config import (
     lease_seconds,
     standalone_chat_enabled,
@@ -22,6 +21,7 @@ from gateway.standalone_chat.config import (
     worker_poll_seconds,
 )
 from gateway.standalone_chat.domain import (
+    redact_error_text,
     redact_public_payload,
     select_context_for_summary,
 )
@@ -55,14 +55,6 @@ from gateway.store import standalone_chat as chat_store
 
 logger = logging.getLogger(__name__)
 _CLARIFICATION_PREFIX = "CLARIFICATION_REQUESTED:"
-_SECRET_VALUE_RE = re.compile(
-    r"(?i)(authorization\s*[:=]\s*(?:bearer\s+)?|"
-    r"(?:api[_-]?key|token|secret|password)\s*[:=]\s*)[^\s,;]+"
-)
-_TOKEN_LITERAL_RE = re.compile(
-    r"(?i)\b(?:sk-ant-[A-Za-z0-9_-]+|xox[abprs]-[A-Za-z0-9-]+|"
-    r"gh[pousr]_[A-Za-z0-9_]+|sp_[A-Za-z0-9_-]{16,})\b"
-)
 
 
 class _AnalysisRuntimeError(RuntimeError):
@@ -78,31 +70,16 @@ class _AnalysisRuntimeError(RuntimeError):
         self.diagnostic_context = diagnostic_context
 
 
-def _sanitize_error_text(raw: str, *, cap: int) -> str:
-    redacted = str(redact_public_payload(raw))
-    redacted = _SECRET_VALUE_RE.sub(lambda match: f"{match.group(1)}[REDACTED]", redacted)
-    redacted = _TOKEN_LITERAL_RE.sub("[REDACTED]", redacted)
-    return sanitize_mcp_error(redacted, cap=cap).strip()
-
-
 def _public_error_message(exc: Exception) -> str:
-    """Return the real root cause without exposing a traceback or credentials."""
-    raw = str(exc).strip() or type(exc).__name__
-    # Agent errors include a useful exception/stderr header followed by a full
-    # Python traceback. The traceback is operator detail, not useful chat UI.
-    raw = re.split(r"\nTraceback \(most recent call last\):", raw, maxsplit=1)[0]
-    lines = [line.rstrip() for line in raw.splitlines()]
-    while lines and (not lines[-1].strip() or lines[-1].strip().lower() == "stderr:"):
-        lines.pop()
-    diagnostic = "\n".join(lines).strip() or type(exc).__name__
-    return _sanitize_error_text(diagnostic, cap=1000) or type(exc).__name__
+    """Return the upstream error verbatim except for credential redaction."""
+    return redact_error_text(str(exc))
 
 
 def _public_full_trace(exc: Exception) -> str:
-    raw = str(getattr(exc, "full_trace", "") or "").strip()
+    raw = str(getattr(exc, "full_trace", "") or "")
     if not raw:
         raw = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-    return _sanitize_error_text(raw, cap=12_000)
+    return redact_error_text(raw)
 
 
 def _public_diagnostic_context(exc: Exception) -> dict[str, Any]:
@@ -117,16 +94,31 @@ def _public_diagnostic_context(exc: Exception) -> dict[str, Any]:
         "resume_requested",
         "notebook_analysis_enabled",
         "max_turns",
+        "result_subtype",
+        "stop_reason",
+        "api_error_status",
+        "duration_ms",
+        "duration_api_ms",
+        "sdk_session_id",
+        "operation",
+        "http_status",
     }
     root = _public_error_message(exc)
     root_type = re.match(r"^([A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception)):", root)
+    source_error_type = source.get("error_type")
     result: dict[str, Any] = {
-        "error_type": root_type.group(1) if root_type else type(exc).__name__
+        "error_type": (
+            redact_error_text(source_error_type)
+            if isinstance(source_error_type, str) and source_error_type
+            else root_type.group(1)
+            if root_type
+            else type(exc).__name__
+        )
     }
     for key in allowed:
         value = source.get(key)
         if isinstance(value, (str, bool, int, float)):
-            result[key] = _sanitize_error_text(value, cap=200) if isinstance(value, str) else value
+            result[key] = redact_error_text(value) if isinstance(value, str) else value
     environment = source.get("environment")
     if isinstance(environment, dict):
         result["environment"] = {
@@ -141,6 +133,9 @@ def _public_diagnostic_context(exc: Exception) -> dict[str, Any]:
             }
             and value in {"configured", "cleared", "defaulted", "missing"}
         }
+    rate_limit = source.get("rate_limit")
+    if isinstance(rate_limit, dict):
+        result["rate_limit"] = redact_public_payload(rate_limit)
     return result
 
 
@@ -461,7 +456,7 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                         await _announce_notebook(run_id, recovery_payload)
                     elif event_type == "error":
                         raise _AnalysisRuntimeError(
-                            content or "Notebook analysis failed",
+                            content,
                             full_trace=str(event.get("full_trace") or content or ""),
                             diagnostic_context=event.get("diagnostic_context"),
                         )

@@ -20,7 +20,7 @@ from gateway.standalone_chat.domain import (
     RunStatus,
     assert_run_transition,
     fallback_conversation_title,
-    redact_public_payload,
+    redact_error_text,
 )
 from gateway.store.standalone_chat.helpers import (
     _append_status_message,
@@ -297,7 +297,7 @@ async def fail_run(
     assert_run_transition(run.status, target)
     run.status = target
     run.public_error_code = str(code)[:100]
-    run.public_error_message = str(redact_public_payload(message))[:1000]
+    run.public_error_message = redact_error_text(message)
     run.terminal_at = _now()
     run.lease_owner = None
     run.lease_expires_at = None
@@ -305,7 +305,7 @@ async def fail_run(
         db,
         run=run,
         status=target,
-        content=run.public_error_message or "The run could not be completed.",
+        content=run.public_error_message,
     )
     _stage_run_event(
         db,

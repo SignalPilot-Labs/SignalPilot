@@ -27,6 +27,7 @@ import { ChatCode, CopyButton, type ChatCodeLanguage } from "~/components/chat/c
 import { AgentThinkingIndicator } from "~/components/chat/agent-thinking-indicator";
 import {
   describeSubagentWork,
+  formatErrorSupportBundle,
   formatStepDuration,
   shouldShowAgentThinking,
   summarizeRunSteps,
@@ -226,13 +227,7 @@ function StepBody({ step }: { step: RunStep }) {
           `${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`,
         )
       : [];
-    const supportBundle = [
-      step.detail ? `Root cause: ${step.detail}` : "",
-      diagnostics.length ? `Diagnostics:\n${diagnostics.join("\n")}` : "",
-      step.fullTrace ? `Full trace:\n${step.fullTrace}` : "",
-    ]
-      .filter(Boolean)
-      .join("\n\n");
+    const supportBundle = formatErrorSupportBundle(step);
     return (
       <CardShell label="Full trace" copyText={supportBundle} accent="error">
         {diagnostics.length > 0 && (

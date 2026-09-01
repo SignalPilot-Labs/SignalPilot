@@ -11,7 +11,7 @@ import pytest
 from gateway.standalone_chat import worker, worker_context
 
 
-def test_public_error_message_preserves_root_cause_and_removes_traceback() -> None:
+def test_public_error_message_preserves_upstream_text_verbatim() -> None:
     error = RuntimeError(
         "CLIConnectionError: OAuth token expired\n"
         "stderr: authentication failed\n"
@@ -22,9 +22,7 @@ def test_public_error_message_preserves_root_cause_and_removes_traceback() -> No
 
     message = worker._public_error_message(error)
 
-    assert message == ("CLIConnectionError: OAuth token expired\nstderr: authentication failed")
-    assert "Traceback" not in message
-    assert "/opt/runtime" not in message
+    assert message == str(error)
 
 
 def test_public_error_message_redacts_credentials() -> None:
@@ -32,6 +30,12 @@ def test_public_error_message_redacts_credentials() -> None:
 
     assert message == "Database failed: [REDACTED_CONNECTION]"
     assert "hunter2" not in message
+
+
+def test_public_error_message_is_not_truncated_or_paraphrased() -> None:
+    upstream = "provider error: " + ("x" * 2_000)
+
+    assert worker._public_error_message(RuntimeError(upstream)) == upstream
 
 
 def test_public_full_trace_is_expandable_safe_diagnostic_content() -> None:
@@ -47,6 +51,12 @@ def test_public_full_trace_is_expandable_safe_diagnostic_content() -> None:
             "model": "claude-sonnet-test",
             "auth_mode": "oauth",
             "credential_present": True,
+            "api_error_status": 429,
+            "rate_limit": {
+                "status": "rejected",
+                "resets_at": 1788213000,
+                "raw": {"unknownFutureField": "preserved"},
+            },
             "environment": {
                 "CLAUDE_CONFIG_DIR": "configured",
                 "SECRET_TOKEN": "must-not-pass",
@@ -60,10 +70,16 @@ def test_public_full_trace_is_expandable_safe_diagnostic_content() -> None:
     assert "oauth-secret" not in trace
     assert "very-secret-token" not in trace
     assert "Authorization: Bearer [REDACTED]" in trace
-    assert "/opt/runtime" not in trace
+    assert '/opt/runtime/agent.py' in trace
     assert context["auth_mode"] == "oauth"
     assert context["error_type"] == "CLIConnectionError"
     assert context["credential_present"] is True
+    assert context["api_error_status"] == 429
+    assert context["rate_limit"] == {
+        "status": "rejected",
+        "resets_at": 1788213000,
+        "raw": {"unknownFutureField": "preserved"},
+    }
     assert context["environment"] == {"CLAUDE_CONFIG_DIR": "configured"}
 
 

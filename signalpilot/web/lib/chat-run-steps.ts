@@ -76,6 +76,22 @@ export type RunStepSummary = {
   running: boolean;
 };
 
+export function formatErrorSupportBundle(step: RunStep): string {
+  const diagnostics = step.diagnostics
+    ? Object.entries(step.diagnostics).map(
+        ([key, value]) =>
+          `${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`,
+      )
+    : [];
+  return [
+    step.detail ? `Root cause: ${step.detail}` : "",
+    diagnostics.length ? `Diagnostics:\n${diagnostics.join("\n")}` : "",
+    step.fullTrace ? `Full trace:\n${step.fullTrace}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 const SQL_TOOLS = new Set([
   "query_database",
   "explain_query",
@@ -553,7 +569,7 @@ export function foldRunSteps(
         code: null,
         file: null,
         sources: [],
-        detail: text(event.payload.message) ?? "The run hit an error.",
+        detail: text(event.payload.message),
         startedAt: event.created_at,
         endedAt: event.created_at,
         durationMs: null,

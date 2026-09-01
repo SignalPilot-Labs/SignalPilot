@@ -35,6 +35,7 @@ from gateway.dashboard.domain import DashboardDefinition, FieldTarget, FilterRul
 from gateway.dashboard.operations import (
     canonicalize_dashboard_explore_names,
     canonicalize_dashboard_filter_targets,
+    canonicalize_dashboard_time_series_defaults,
     has_custom_sql,
     validate_dashboard_semantics,
     validate_time_series_default_windows,
@@ -742,6 +743,7 @@ async def create_dashboard_authoring_session(body: DashboardAuthoringRequest, st
             candidate_definition = materialize_agent_draft(candidate, base_definition=base_definition)
             candidate_definition = canonicalize_dashboard_explore_names(candidate_definition, context)
             candidate_definition = canonicalize_dashboard_filter_targets(candidate_definition, context)
+            candidate_definition = canonicalize_dashboard_time_series_defaults(candidate_definition, context)
             validate_dashboard_semantics(candidate_definition, context)
             validate_time_series_default_windows(candidate_definition, context)
 
@@ -775,6 +777,7 @@ async def create_dashboard_authoring_session(body: DashboardAuthoringRequest, st
         verified = await _verified_context(store, definition)
         definition = canonicalize_dashboard_explore_names(definition, verified)
         definition = canonicalize_dashboard_filter_targets(definition, verified)
+        definition = canonicalize_dashboard_time_series_defaults(definition, verified)
         validate_dashboard_semantics(definition, verified)
         validate_time_series_default_windows(definition, verified)
     except AnthropicMessagesError as exc:
@@ -902,6 +905,7 @@ async def continue_dashboard_authoring_session(session_id: str, body: DashboardA
             candidate_definition = materialize_agent_draft(candidate, base_definition=current_definition)
             candidate_definition = canonicalize_dashboard_explore_names(candidate_definition, context)
             candidate_definition = canonicalize_dashboard_filter_targets(candidate_definition, context)
+            candidate_definition = canonicalize_dashboard_time_series_defaults(candidate_definition, context)
             validate_dashboard_semantics(candidate_definition, context)
             validate_time_series_default_windows(candidate_definition, context)
 
@@ -915,6 +919,7 @@ async def continue_dashboard_authoring_session(session_id: str, body: DashboardA
         verified = await _verified_context(store, definition)
         definition = canonicalize_dashboard_explore_names(definition, verified)
         definition = canonicalize_dashboard_filter_targets(definition, verified)
+        definition = canonicalize_dashboard_time_series_defaults(definition, verified)
         validate_dashboard_semantics(definition, verified)
         validate_time_series_default_windows(definition, verified)
     except HTTPException:

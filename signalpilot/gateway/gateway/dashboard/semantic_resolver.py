@@ -32,6 +32,7 @@ from gateway.workspace_store.objects import workspace_object_storage
 from .project_snapshot import hydrate_github_mirror, materialize_workspace_snapshot
 
 SUPPORTED_AGGREGATIONS = {"sum", "count", "count_distinct", "average", "min", "max"}
+SUPPORTED_METRIC_FORMATS = {"integer", "decimal", "compact", "percentage"}
 
 
 class DashboardSemanticError(ValueError):
@@ -71,13 +72,23 @@ def parse_approved_metrics(settings: dict | None) -> list[dict[str, Any]]:
         aggregation = str(raw["aggregation"]).lower()
         if aggregation not in SUPPORTED_AGGREGATIONS:
             raise DashboardSemanticError(f"Unsupported approved metric aggregation: {aggregation}")
+        metric_format = str(raw["format"]) if raw.get("format") else None
+        if metric_format == "number":
+            metric_format = "decimal"
+        if metric_format and metric_format not in SUPPORTED_METRIC_FORMATS:
+            if not (
+                metric_format.startswith("currency:")
+                and len(metric_format) == 12
+                and metric_format[9:].isupper()
+            ):
+                raise DashboardSemanticError(f"Unsupported approved metric format: {metric_format}")
         parsed.append(
             {
                 "model": str(raw["model"]),
                 "column": str(raw["column"]),
                 "aggregation": aggregation,
                 "label": str(raw["label"]),
-                "format": str(raw["format"]) if raw.get("format") else None,
+                "format": metric_format,
                 "field_id": str(raw.get("field_id") or f"{raw['model']}.{raw['column']}"),
                 "approval_source": str(raw.get("approval_source") or "project_settings"),
             }

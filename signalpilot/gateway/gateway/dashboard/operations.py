@@ -15,6 +15,7 @@ from gateway.dashboard.domain import (
     DashboardFieldTarget,
     DashboardFilterRule,
     DashboardTileDefinition,
+    FilterSettings,
     SemanticChartQuery,
 )
 from gateway.models.dashboards import DashboardSemanticContext
@@ -359,6 +360,37 @@ def _has_bounded_default(rule: DashboardFilterRule) -> bool:
         and rule.settings is not None
         and rule.settings.unitOfTime is not None
     )
+
+
+def canonicalize_dashboard_time_series_defaults(
+    definition: DashboardDefinition,
+    context: DashboardSemanticContext,
+) -> DashboardDefinition:
+    """Give an existing governed date filter a safe bounded default."""
+
+    logical_types = {
+        (explore.name, field.field_id): field.logical_type
+        for explore in context.explores
+        for field in explore.dimensions
+    }
+    changed = False
+    dimensions: list[DashboardFilterRule] = []
+    for rule in definition.filters.dimensions:
+        logical_type = logical_types.get((rule.target.tableName, rule.target.fieldId))
+        if logical_type in {"date", "timestamp"} and not _has_bounded_default(rule):
+            changed = True
+            rule = rule.model_copy(
+                update={
+                    "operator": "inThePast",
+                    "values": [30],
+                    "settings": FilterSettings(unitOfTime="days"),
+                }
+            )
+        dimensions.append(rule)
+    if not changed:
+        return definition
+    filters = definition.filters.model_copy(update={"dimensions": dimensions})
+    return definition.model_copy(update={"filters": filters})
 
 
 def validate_time_series_default_windows(

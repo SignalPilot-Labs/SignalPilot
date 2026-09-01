@@ -201,29 +201,38 @@ function messageDashboardPreview(
 
 function DashboardPreviewCard({ preview }: { preview: DashboardPreview }) {
   const { onOpenDashboardPreview } = useChatUi();
+  const chartLabel = `${preview.chart_count} chart${
+    preview.chart_count === 1 ? "" : "s"
+  }`;
   return (
-    <section className="mt-4 rounded-xl border border-[var(--color-success)]/25 bg-[var(--color-bg-card)] p-4">
-      <div className="flex items-start gap-3">
-        <LayoutDashboard className="mt-0.5 h-4 w-4 flex-none text-[var(--color-success)]" />
+    <section
+      data-testid="dashboard-artifact-card"
+      className="mt-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)] p-3"
+    >
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="flex h-14 w-14 flex-none items-center justify-center rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-input)]">
+          <LayoutDashboard className="h-5 w-5 text-[var(--color-text-muted)]" />
+        </div>
         <div className="min-w-0 flex-1">
-          <p className="text-sm text-[var(--color-text)]">
+          <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--color-text-dim)]">
+            Dashboard
+          </p>
+          <p className="mt-1 truncate text-sm font-medium text-[var(--color-text)]">
             {preview.dashboard_name}
           </p>
-          <p className="mt-1 text-xs leading-5 text-[var(--color-text-muted)]">
-            {preview.summary ||
-              `${preview.chart_count} chart${preview.chart_count === 1 ? "" : "s"} ready for review.`}
-          </p>
-          <button
-            type="button"
-            onClick={() => onOpenDashboardPreview(preview.authoring_session_id)}
-            className="mt-3 rounded-lg bg-[var(--color-text)] px-3 py-2 text-xs text-[var(--color-bg)]"
-          >
-            Open preview
-          </button>
-          <p className="mt-2 text-[11px] text-[var(--color-text-dim)]">
-            Nothing is saved until you review and Apply.
+          <p className="mt-1 truncate text-xs text-[var(--color-text-dim)]">
+            {chartLabel} · Draft ready for review
           </p>
         </div>
+        <button
+          type="button"
+          aria-label={`View ${preview.dashboard_name}`}
+          title={preview.summary || `View ${preview.dashboard_name}`}
+          onClick={() => onOpenDashboardPreview(preview.authoring_session_id)}
+          className="flex-none rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-input)] px-4 py-2 text-xs font-medium text-[var(--color-text)] hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)]"
+        >
+          View
+        </button>
       </div>
     </section>
   );

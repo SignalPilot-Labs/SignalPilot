@@ -362,6 +362,19 @@ def _has_bounded_default(rule: DashboardFilterRule) -> bool:
     )
 
 
+def _query_filter_rules(group) -> list:
+    if group is None:
+        return []
+    children = group.and_ if hasattr(group, "and_") else group.or_
+    rules = []
+    for child in children:
+        if hasattr(child, "target"):
+            rules.append(child)
+        else:
+            rules.extend(_query_filter_rules(child))
+    return rules
+
+
 def canonicalize_dashboard_time_series_defaults(
     definition: DashboardDefinition,
     context: DashboardSemanticContext,
@@ -414,6 +427,15 @@ def validate_time_series_default_windows(
         ):
             continue
         valid_window = False
+        if isinstance(chart.query, SemanticChartQuery):
+            query_field_types = explores.get(chart.query.exploreName, {})
+            valid_window = any(
+                query_field_types.get(rule.target.fieldId) in {"date", "timestamp"}
+                and _has_bounded_default(rule)
+                for rule in _query_filter_rules(chart.query.filters.dimensions)
+            )
+        if valid_window:
+            continue
         for tile in tiles_by_chart[chart.id]:
             for rule in definition.filters.dimensions:
                 explicit_target = (rule.tileTargets or {}).get(tile.uuid)

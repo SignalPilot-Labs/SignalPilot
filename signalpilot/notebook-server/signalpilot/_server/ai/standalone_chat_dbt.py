@@ -85,3 +85,115 @@ def _write_stub_dbt_profiles(dbt_project_dir: Path, scratch_directory: Path) -> 
         yaml.safe_dump(stub), encoding="utf-8"
     )
     return profiles_dir
+
+
+async def _run_dbt_command(argv: list[str], cwd: Path, label: str) -> bytes:
+    """Run one dbt subprocess with a bounded timeout; return its output."""
+    import asyncio
+
+    process = await asyncio.create_subprocess_exec(
+        *argv,
+        cwd=cwd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    try:
+        output, _ = await asyncio.wait_for(process.communicate(), timeout=120)
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+        raise ValueError(f"{label} timed out") from None
+    if process.returncode != 0:
+        raise ValueError(
+            f"{label} failed: " + output.decode(errors="replace")[-2_000:]
+        )
+    return output
+
+
+async def run_inspect_dbt(
+    *,
+    project_directory: Path,
+    scratch_directory: Path,
+    arguments: dict,
+) -> dict:
+    """Run a read-only dbt inspection command for the chat agent."""
+    # The checkout root is not always the dbt project. Some repos keep it
+    # nested (for example dumpsters_dbt/). Resolve the real project dir so
+    # dbt does not fail with "Missing dbt_project.yml".
+    dbt_project_dir = _resolve_dbt_project_dir(project_directory)
+    if dbt_project_dir is None:
+        raise ValueError(
+            "No dbt_project.yml was found in this project. "
+            "This project has no dbt project to inspect."
+        )
+    command = str(arguments.get("command") or "")
+    if command not in {"parse", "ls", "compile"}:
+        raise ValueError("Only dbt parse, ls, and compile are allowed")
+    target_path = scratch_directory / "dbt-target"
+    target_path.mkdir(parents=True, exist_ok=True)
+    # The agent has no warehouse credentials. Write a stub duckdb profile so
+    # read-only dbt commands can resolve the adapter without connecting.
+    # Without this dbt falls back to ~/.dbt and fails with
+    # "profiles-dir ... does not exist".
+    profiles_dir = _write_stub_dbt_profiles(dbt_project_dir, scratch_directory)
+    log_path = scratch_directory / "dbt-logs"
+    # The frozen checkout does not include dbt_packages (it is a build
+    # artifact). If the project declares packages, install them first, or
+    # dbt ls/parse/compile fail with
+    # "Run dbt deps to install package dependencies".
+    declares_packages = (dbt_project_dir / "packages.yml").is_file() or (
+        dbt_project_dir / "dependencies.yml"
+    ).is_file()
+    packages_installed = (dbt_project_dir / "dbt_packages").is_dir() and any(
+        (dbt_project_dir / "dbt_packages").iterdir()
+    )
+    if declares_packages and not packages_installed:
+        await _run_dbt_command(
+            [
+                "dbt",
+                "--no-use-colors",
+                "--log-path",
+                str(log_path),
+                "deps",
+                "--project-dir",
+                str(dbt_project_dir),
+                "--profiles-dir",
+                str(profiles_dir),
+            ],
+            dbt_project_dir,
+            "dbt deps",
+        )
+    argv = [
+        "dbt",
+        "--no-use-colors",
+        "--log-path",
+        str(log_path),
+        command,
+        "--project-dir",
+        str(dbt_project_dir),
+        "--profiles-dir",
+        str(profiles_dir),
+        "--target-path",
+        str(target_path),
+    ]
+    selection = str(arguments.get("select") or "").strip()
+    if selection:
+        argv.extend(["--select", selection])
+    import asyncio
+
+    process = await asyncio.create_subprocess_exec(
+        *argv,
+        cwd=project_directory,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    try:
+        output, _ = await asyncio.wait_for(process.communicate(), timeout=120)
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+        raise ValueError("dbt inspection timed out") from None
+    text_output = output.decode(errors="replace")[-50_000:]
+    if process.returncode != 0:
+        raise ValueError(f"dbt {command} failed: {text_output[-2_000:]}")
+    return {"command": command, "output": text_output}

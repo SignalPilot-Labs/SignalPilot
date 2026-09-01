@@ -97,7 +97,6 @@ def _policy_hash(*, db_type: str, blocked_tables: list[str]) -> str:
         "size_router": flags.size_router,
         "size_router_shadow": flags.size_router_shadow,
         "query_approval": flags.query_approval,
-        "notebook_analysis": flags.notebook_analysis,
         "dataset_refs": flags.dataset_refs,
         "dataset_connectors": sorted(_dataset_connectors()),
         "db_type": db_type,
@@ -128,13 +127,12 @@ def choose_query_route(
     connector_supports_datasets: bool,
     row_level_analysis_justified: bool,
     raw_export_requested: bool,
-    notebook_analysis_enabled: bool = True,
 ) -> tuple[QueryRoute, str, int | None]:
     """Return the locked route; scan volume deliberately does not participate."""
     if raw_export_requested:
         return "refuse", "Raw exports are not permitted by the chat runtime policy.", None
     if estimated_output_rows is None or estimated_output_bytes is None or estimate_quality == "unknown":
-        if execution_need == "python" and notebook_analysis_enabled:
+        if execution_need == "python":
             return (
                 "notebook_sdk",
                 "Output cardinality is unknown; the notebook SDK receives a bounded scouting result.",
@@ -149,8 +147,7 @@ def choose_query_route(
     oversized = estimated_output_rows > TRACK_A_MAX_ROWS or estimated_output_bytes > MAX_RESULT_BYTES
     if oversized:
         if (
-            notebook_analysis_enabled
-            and track_b_enabled
+            track_b_enabled
             and connector_supports_datasets
             and row_level_analysis_justified
         ):
@@ -165,12 +162,6 @@ def choose_query_route(
             None,
         )
     if execution_need == "python" or estimated_output_rows > MCP_MAX_ROWS:
-        if not notebook_analysis_enabled:
-            return (
-                "aggregate_required",
-                "Notebook analysis is disabled; rewrite the work as a bounded warehouse aggregate.",
-                None,
-            )
         return "notebook_sdk", "Bounded Python or more-than-10,000-row analysis requires the notebook SDK.", None
     return "mcp", "The complete predicted result fits the MCP row and byte limits.", None
 
@@ -316,7 +307,6 @@ async def create_query_plan(
             connector_supports_datasets=info.db_type in _dataset_connectors(),
             row_level_analysis_justified=row_level_analysis_justified,
             raw_export_requested=_raw_export_requested(sql, purpose),
-            notebook_analysis_enabled=flags.notebook_analysis,
         )
     approval_required = await _approval_required(store, context, max(0.0, estimate.estimated_usd))
     plan_id = str(uuid.uuid4())

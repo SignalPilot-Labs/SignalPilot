@@ -79,6 +79,30 @@ class GatewayChatConversation(GatewayBase):
     )
 
 
+class GatewayChatConversationNotebook(GatewayBase):
+    """One named notebook owned by a chat conversation.
+
+    "analysis" is the default notebook every conversation starts with. The
+    legacy pointer columns on the conversation row mirror the "analysis"
+    entry for older readers.
+    """
+
+    __tablename__ = "gateway_chat_conversation_notebooks"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    conversation_id: Mapped[str] = mapped_column(String, nullable=False)
+    name: Mapped[str] = mapped_column(String(50), nullable=False)
+    gateway_session_id: Mapped[str] = mapped_column(String, nullable=False)
+    kernel_session_id: Mapped[str] = mapped_column(String, nullable=False)
+    notebook_path: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "name", name="uq_gw_conv_notebook_name"),
+        Index("ix_gw_conv_notebooks", "conversation_id"),
+    )
+
+
 class GatewayChatMessage(GatewayBase):
     """Individual chat message within a conversation."""
 
@@ -216,6 +240,37 @@ class GatewayChatArtifact(GatewayBase):
         ),
         Index("ix_gw_chat_artifacts_owner", "org_id", "user_id", "conversation_id"),
         Index("ix_gw_chat_artifacts_run", "run_id", "created_at"),
+    )
+
+
+class GatewayChatFile(GatewayBase):
+    """Durable conversation-scoped file produced by the chat agent."""
+
+    __tablename__ = "gateway_chat_files"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    conversation_id: Mapped[str] = mapped_column(String, nullable=False)
+    # Scratch-relative path. Latest write wins; versions are a later phase.
+    path: Mapped[str] = mapped_column(Text, nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    mime_type: Mapped[str | None] = mapped_column(String(100))
+    byte_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    object_key: Mapped[str] = mapped_column(Text, nullable=False)
+    # Run that last wrote the file, when known.
+    origin_run_id: Mapped[str | None] = mapped_column(String)
+    # Capture layer: mirror, sweep, or backstop.
+    origin: Mapped[str] = mapped_column(String(20), nullable=False, default="mirror", server_default="mirror")
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="active", server_default="active")
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "path", name="uq_gw_chat_file_conv_path"),
+        Index("ix_gw_chat_file_owner", "org_id", "user_id", "conversation_id"),
     )
 
 

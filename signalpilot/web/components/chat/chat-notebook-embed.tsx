@@ -4,17 +4,19 @@ import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { ChatNotebookView } from "~/components/chat/chat-notebook-view";
-import { useConversationNotebook } from "~/components/chat/use-conversation-notebook";
+import { useConversationNotebooks } from "~/components/chat/use-conversation-notebook";
+import { pickDefaultNotebook } from "~/lib/chat-live-notebook";
 
 /**
- * Full-page pop-out of a conversation's analysis notebook.
+ * Full-page pop-out of one of a conversation's notebooks.
  *
- * Fetches the gateway's notebook resource for the conversation and mounts
- * the same ChatNotebookView the chat panel renders, sized to the viewport.
- * Reached from the panel's "open in a new tab" affordance.
+ * Fetches the gateway's notebook list for the conversation, selects one by
+ * name, and mounts the same ChatNotebookView the chat panel renders, sized
+ * to the viewport. Reached from the panel's "open in a new tab" affordance.
  *
  * Query params:
  * - conversation: chat conversation id
+ * - notebook: notebook name (optional; defaults to "analysis")
  */
 export default function ChatNotebookEmbed() {
   const searchParams = useSearchParams();
@@ -24,7 +26,16 @@ export default function ChatNotebookEmbed() {
   const [conversationId] = useState(
     () => searchParams.get("conversation") || "",
   );
-  const notebook = useConversationNotebook(conversationId || null, 0);
+  const [notebookName] = useState(() => searchParams.get("notebook") || "");
+  const { data: notebooks } = useConversationNotebooks(
+    conversationId || null,
+    0,
+  );
+  // Select by name; fall back to the default (analysis else first).
+  const notebook = notebookName
+    ? (notebooks.find((entry) => entry.name === notebookName) ??
+      pickDefaultNotebook(notebooks))
+    : pickDefaultNotebook(notebooks);
 
   if (!conversationId) {
     return (

@@ -454,12 +454,21 @@ async def set_conversation_notebook_for_run(
     gateway_session_id: str,
     kernel_session_id: str,
     notebook_path: str,
+    name: str = "analysis",
 ) -> None:
-    """Record where the run's conversation notebook lives.
+    """Record where one named notebook of the run's conversation lives.
 
     The conversation is the owner of the notebook. Later runs adopt the same
-    kernel and notebook, so the newest write always wins.
+    kernel and notebook, so the newest write always wins. The legacy pointer
+    columns mirror only the default "analysis" notebook.
+
+    The name comes from the sandbox stream. Persist only valid slugs; a
+    malformed name means a corrupted payload, never a real notebook.
     """
+    from gateway.store.standalone_chat.notebooks import NOTEBOOK_NAME_PATTERN
+
+    if not NOTEBOOK_NAME_PATTERN.fullmatch(name):
+        return
     conversation_id = (
         await db.execute(
             select(GatewayChatRun.conversation_id).where(GatewayChatRun.id == run_id)
@@ -467,16 +476,28 @@ async def set_conversation_notebook_for_run(
     ).scalar_one_or_none()
     if conversation_id is None:
         return
-    await db.execute(
-        update(GatewayChatConversation)
-        .where(GatewayChatConversation.id == conversation_id)
-        .values(
-            notebook_session_id=gateway_session_id,
-            notebook_kernel_session_id=kernel_session_id,
-            notebook_path=notebook_path,
+    if name == "analysis":
+        # Compat mirror: older readers use the conversation columns.
+        await db.execute(
+            update(GatewayChatConversation)
+            .where(GatewayChatConversation.id == conversation_id)
+            .values(
+                notebook_session_id=gateway_session_id,
+                notebook_kernel_session_id=kernel_session_id,
+                notebook_path=notebook_path,
+            )
         )
+        await db.commit()
+    from gateway.store.standalone_chat.notebooks import upsert_conversation_notebook
+
+    await upsert_conversation_notebook(
+        db,
+        conversation_id=conversation_id,
+        name=name,
+        gateway_session_id=gateway_session_id,
+        kernel_session_id=kernel_session_id,
+        notebook_path=notebook_path,
     )
-    await db.commit()
 
 
 async def list_run_events(

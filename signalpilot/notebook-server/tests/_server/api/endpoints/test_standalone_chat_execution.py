@@ -36,6 +36,28 @@ from signalpilot._utils.requests import RequestError
 _TEST_JWT_SECRET = "test-notebook-session-secret-at-least-32-bytes"
 
 
+@pytest.mark.parametrize(
+    ("notebook_cells_edited", "successful_run_cells", "expected"),
+    [
+        (False, False, False),
+        (True, False, True),
+        (True, True, False),
+    ],
+)
+def test_notebook_evidence_is_required_only_after_a_cell_edit(
+    notebook_cells_edited: bool,
+    successful_run_cells: bool,
+    expected: bool,
+) -> None:
+    assert (
+        standalone_chat._notebook_edit_requires_successful_run(
+            notebook_cells_edited=notebook_cells_edited,
+            successful_run_cells=successful_run_cells,
+        )
+        is expected
+    )
+
+
 @pytest.fixture(autouse=True)
 def _session_jwt_secret(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -985,7 +1007,6 @@ async def test_validated_retry_survives_offline_development_archive(
                 "commit_sha": commit_sha,
                 "gateway_session_token": token,
                 "prompt": "Analyze revenue",
-                "features": {"notebook_analysis": True},
             },
             app=app,
         )
@@ -1136,7 +1157,6 @@ async def test_two_dirty_attempts_emit_one_validation_error_and_no_final(
                 "commit_sha": commit_sha,
                 "gateway_session_token": token,
                 "prompt": "Analyze revenue",
-                "features": {"notebook_analysis": True},
             },
             app=SimpleNamespace(),
         )

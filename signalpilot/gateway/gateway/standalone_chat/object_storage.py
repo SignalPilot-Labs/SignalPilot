@@ -46,6 +46,20 @@ def runtime_object_key(
     )
 
 
+def conversation_file_key(
+    *,
+    org_id: str,
+    conversation_id: str,
+    file_id: str,
+    filename: str,
+) -> str:
+    """Key for one durable conversation file under the conversation prefix."""
+    return (
+        f"{conversation_prefix(org_id, conversation_id)}"
+        f"/files/{_key_part(file_id, fallback='file')}-{_key_part(filename, fallback='payload')}"
+    )
+
+
 @dataclass(frozen=True)
 class StoredObject:
     key: str

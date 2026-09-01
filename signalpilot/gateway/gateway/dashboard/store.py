@@ -18,11 +18,13 @@ from gateway.db.models import (
     GatewayDashboardAuthoringSession,
     GatewayDashboardResult,
     GatewayDashboardVersion,
+    GatewayStructuredQueryResult,
 )
 from gateway.models.dashboards import (
     DashboardAuthoringSessionInfo,
     DashboardDetail,
     DashboardListItem,
+    DashboardRuntimeFilter,
     DashboardVersionInfo,
 )
 
@@ -49,7 +51,12 @@ class _ApplyReceipt:
 
 def _default_dashboard_filters(definition: DashboardDefinition):
     return [
-        rule
+        DashboardRuntimeFilter(
+            id=rule.id,
+            operator=rule.operator,
+            values=rule.values,
+            settings=rule.settings,
+        )
         for rule in definition.filters.dimensions
         if rule.values or rule.operator in {"isNull", "notNull"}
     ]
@@ -68,6 +75,31 @@ def _receipt_cache_key(definition: DashboardDefinition, *, version_id: str, char
     )
 
 
+def _receipt_is_safe_to_apply(
+    *,
+    chart,
+    receipt: GatewayDashboardResult,
+    structured_result: GatewayStructuredQueryResult | None,
+) -> bool:
+    if receipt.completeness == "complete":
+        return True
+    if (
+        receipt.completeness != "truncated"
+        or chart.visualization.type != "table"
+        or chart.query.kind != "semantic"
+        or not chart.query.sorts
+        or structured_result is None
+    ):
+        return False
+    limit = chart.query.limit
+    return (
+        structured_result.org_id == receipt.org_id
+        and structured_result.saved_row_count == limit
+        and structured_result.result_completeness == "truncated"
+        and structured_result.truncation_reason == f"result exceeded the {limit}-row governed limit"
+    )
+
+
 async def _validate_apply_receipts(
     db: AsyncSession,
     *,
@@ -80,7 +112,7 @@ async def _validate_apply_receipts(
     if len(result_ids) != len(set(result_ids)):
         raise DashboardValidationError("Apply receipts must be unique")
     if len(result_ids) != len(chart_ids):
-        raise DashboardValidationError("Apply requires one exact complete preview receipt for every chart")
+        raise DashboardValidationError("Apply requires one exact visible preview receipt for every chart")
     rows = (
         await db.execute(
             select(GatewayDashboardResult).where(
@@ -92,6 +124,15 @@ async def _validate_apply_receipts(
     if len(rows) != len(result_ids):
         raise DashboardValidationError("Apply receipts must belong to this organization and authoring preview")
     by_id = {row.id: row for row in rows}
+    structured_rows = (
+        await db.execute(
+            select(GatewayStructuredQueryResult).where(
+                GatewayStructuredQueryResult.id.in_([row.structured_result_id for row in rows]),
+                GatewayStructuredQueryResult.org_id == org_id,
+            )
+        )
+    ).scalars().all()
+    structured_by_id = {row.id: row for row in structured_rows}
     draft_dashboard_id = session.dashboard_id or f"draft:{session.id}"
     draft_version_id = f"draft:{session.id}"
     base_definition = None
@@ -110,6 +151,7 @@ async def _validate_apply_receipts(
     accepted: list[_ApplyReceipt] = []
     used_ids: set[str] = set()
     for chart_id in chart_ids:
+        current_chart = next(item for item in definition.charts if item.id == chart_id)
         draft_key = _receipt_cache_key(definition, version_id=draft_version_id, chart_id=chart_id)
         match = next(
             (
@@ -120,13 +162,16 @@ async def _validate_apply_receipts(
                 and row.version_id == draft_version_id
                 and row.chart_id == chart_id
                 and row.cache_key == draft_key
-                and row.completeness == "complete"
+                and _receipt_is_safe_to_apply(
+                    chart=current_chart,
+                    receipt=row,
+                    structured_result=structured_by_id.get(row.structured_result_id),
+                )
             ),
             None,
         )
         source = "draft"
         if match is None and base_definition is not None:
-            current_chart = next(item for item in definition.charts if item.id == chart_id)
             base_chart = next((item for item in base_definition.charts if item.id == chart_id), None)
             current_tile = next(item for item in definition.tiles if item.chartId == chart_id)
             base_tile = next((item for item in base_definition.tiles if item.chartId == chart_id), None)
@@ -150,7 +195,11 @@ async def _validate_apply_receipts(
                         and row.version_id == session.base_version_id
                         and row.chart_id == chart_id
                         and row.cache_key == base_key
-                        and row.completeness == "complete"
+                        and _receipt_is_safe_to_apply(
+                            chart=current_chart,
+                            receipt=row,
+                            structured_result=structured_by_id.get(row.structured_result_id),
+                        )
                     ),
                     None,
                 )
@@ -221,8 +270,10 @@ def _authoring_info(row: GatewayDashboardAuthoringSession) -> DashboardAuthoring
     return DashboardAuthoringSessionInfo(
         id=row.id,
         thread_id=row.thread_id,
+        conversation_id=row.conversation_id,
         dashboard_id=row.dashboard_id,
         base_version_id=row.base_version_id,
+        applied_version_id=row.applied_version_id,
         definition=definition,
         operations=list(row.operations_json or []),
         summary=row.summary,
@@ -581,6 +632,7 @@ async def create_authoring_session(
     requires_custom_sql_confirmation: bool,
     custom_sql_confirmed: bool,
     thread_id: str | None = None,
+    conversation_id: str | None = None,
     prior_events: list[dict] | None = None,
     pending_custom_sql_chart_ids: list[str] | None = None,
 ) -> DashboardAuthoringSessionInfo:
@@ -608,6 +660,7 @@ async def create_authoring_session(
     row = GatewayDashboardAuthoringSession(
         id=str(uuid.uuid4()),
         thread_id=thread_id or str(uuid.uuid4()),
+        conversation_id=conversation_id,
         dashboard_id=dashboard_id,
         base_version_id=base_version_id,
         org_id=org_id,

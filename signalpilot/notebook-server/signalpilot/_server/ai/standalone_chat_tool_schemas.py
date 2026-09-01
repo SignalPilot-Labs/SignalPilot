@@ -45,6 +45,36 @@ def standalone_chat_tools(*, notebook_enabled: bool) -> list[Tool]:
             },
         ),
         Tool(
+            name="create_dashboard_preview",
+            description=(
+                "Create a private governed SignalPilot dashboard preview from the user's complete dashboard request. "
+                "The project, branch, connection, and commit are fixed by the chat run. The user must review and "
+                "explicitly Apply the returned preview; this tool never saves a dashboard automatically."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "request": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 50_000,
+                    },
+                    "timezone": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100,
+                        "default": "UTC",
+                    },
+                    "authoring_session_id": {
+                        "type": ["string", "null"],
+                        "description": "The active dashboard_authoring session from warm context when refining an existing preview.",
+                    },
+                },
+                "required": ["request"],
+                "additionalProperties": False,
+            },
+        ),
+        Tool(
             name="publish_table",
             description="Publish an immutable table snapshot attached to the answer.",
             inputSchema={

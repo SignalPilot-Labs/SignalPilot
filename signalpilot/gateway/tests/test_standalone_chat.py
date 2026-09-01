@@ -1091,6 +1091,38 @@ async def test_execution_uses_org_anthropic_key_as_request_scoped_auth(
     resolve_org_key.assert_awaited_once_with(db_session, "org-a")
 
 
+def test_direct_chat_runtime_uses_shared_notebook_token(
+    monkeypatch,
+    tmp_path,
+):
+    token_file = tmp_path / "notebook-token"
+    token_file.write_text("shared-direct-token")
+    monkeypatch.setenv("SP_NOTEBOOK_DIRECT_URL", "http://notebook:2718")
+    monkeypatch.setenv("SP_NOTEBOOK_TOKEN_FILE", str(token_file))
+
+    headers = chat_execution._runtime_auth_headers(
+        SimpleNamespace(
+            internal_base_url="http://notebook:2718",
+            access_token="logical-session-token",
+        )
+    )
+
+    assert headers == {"Authorization": "Bearer shared-direct-token"}
+
+
+def test_sandbox_chat_runtime_uses_isolated_session_token(monkeypatch):
+    monkeypatch.setenv("SP_NOTEBOOK_DIRECT_URL", "http://notebook:2718")
+
+    headers = chat_execution._runtime_auth_headers(
+        SimpleNamespace(
+            internal_base_url="https://sandbox.example/notebook/session-a",
+            access_token="isolated-session-token",
+        )
+    )
+
+    assert headers == {"Authorization": "Bearer isolated-session-token"}
+
+
 @pytest.mark.asyncio
 async def test_execution_force_oauth_never_resolves_org_api_key(
     db_session,
@@ -1361,6 +1393,14 @@ async def test_claim_completion_and_final_message_are_idempotent(db_session):
             "catalog_revision": "must-not-be-exposed",
             "loaded_report_ids": ["must-not-be-exposed"],
         },
+        dashboard_preview={
+            "authoring_session_id": "authoring-session-1",
+            "preview_url": "https://attacker.invalid/session",
+            "dashboard_name": "Executive Revenue",
+            "summary": "A governed executive dashboard.",
+            "chart_count": 4,
+            "chart_titles": ["must-not-be-exposed"],
+        },
     )
     second = await chat_store.complete_run(
         db_session,
@@ -1376,6 +1416,15 @@ async def test_claim_completion_and_final_message_are_idempotent(db_session):
         "reason": "One-off diagnostic.",
         "source": "agent",
         "catalog_scan_complete": True,
+    }
+    assert first.metadata_json["dashboard_preview"] == {
+        "authoring_session_id": "authoring-session-1",
+        "preview_url": "/dashboards/new?authoring=authoring-session-1",
+        "dashboard_name": "Executive Revenue",
+        "summary": "A governed executive dashboard.",
+        "chart_count": 4,
+        "requires_review": True,
+        "apply_required": True,
     }
     assert second is None
     count = await db_session.scalar(

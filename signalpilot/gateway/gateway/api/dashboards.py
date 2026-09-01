@@ -44,6 +44,7 @@ from gateway.dashboard.project_snapshot import ensure_branch_snapshot
 from gateway.dashboard.semantic_resolver import DashboardSemanticError, DashboardSemanticResolver
 from gateway.dashboard.telemetry import DashboardTelemetryEvent, record_dashboard_event
 from gateway.db.models import (
+    GatewayChatRun,
     GatewayDashboard,
     GatewayDashboardResult,
     GatewayDashboardVersion,
@@ -56,6 +57,7 @@ from gateway.governance.query_executor import (
     GovernedQueryError,
     governed_query_executor,
 )
+from gateway.mcp.context import mcp_execution_identity_var
 from gateway.models.dashboards import (
     CreateDashboardRequest,
     CreateDashboardVersionRequest,
@@ -93,6 +95,27 @@ from .deps import StoreD
 
 router = APIRouter(prefix="/api")
 resolver = DashboardSemanticResolver()
+
+
+async def _request_chat_run(store: StoreD) -> GatewayChatRun | None:
+    """Resolve the active Data Chat run from a scoped notebook-session JWT."""
+    identity = mcp_execution_identity_var.get(None)
+    if not isinstance(identity, str) or not identity.startswith("chat:"):
+        return None
+    run_id = identity.removeprefix("chat:")
+    return (
+        await store.session.execute(
+            select(GatewayChatRun).where(
+                GatewayChatRun.id == run_id,
+                GatewayChatRun.org_id == store._require_org_id(),
+                GatewayChatRun.user_id == _user_id(store),
+                GatewayChatRun.status == "running",
+                GatewayChatRun.cancellation_requested_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+
+
 logger = logging.getLogger(__name__)
 
 _AUTHORING_PROVIDER_REJECTED = (
@@ -681,9 +704,15 @@ async def get_dashboard_semantic_context(project_id: str, commit_sha: str, store
     status_code=201,
     dependencies=[RequireScope("write")],
 )
-async def create_dashboard_authoring_session(body: DashboardAuthoringRequest, store: StoreD):
+async def create_dashboard_authoring_session(
+    body: DashboardAuthoringRequest,
+    store: StoreD,
+):
     org_id = store._require_org_id()
     user_id = _user_id(store)
+    chat_run = await _request_chat_run(store)
+    if chat_run and body.project_id and body.project_id != chat_run.project_id:
+        raise HTTPException(status_code=403, detail="Dashboard authoring project scope mismatch")
     base_definition: DashboardDefinition | None = None
     dashboard_id = body.dashboard_id
     base_version_id = body.base_version_id
@@ -817,6 +846,7 @@ async def create_dashboard_authoring_session(body: DashboardAuthoringRequest, st
         model=agent.model,
         requires_custom_sql_confirmation=custom_sql,
         custom_sql_confirmed=body.confirm_custom_sql,
+        conversation_id=chat_run.conversation_id if chat_run else None,
     )
 
 
@@ -861,11 +891,102 @@ async def get_active_dashboard_authoring_session(dashboard_id: str, store: Store
 
 
 @router.post(
+    "/dashboards/{dashboard_id}/authoring-chat",
+    dependencies=[RequireScope("write")],
+)
+async def open_dashboard_authoring_chat(dashboard_id: str, store: StoreD):
+    """Return a Data Chat thread and governed preview for editing a dashboard."""
+    org_id = store._require_org_id()
+    user_id = _user_id(store)
+    rows = await dashboard_store.get_private_dashboard_rows(
+        store.session,
+        org_id=org_id,
+        user_id=user_id,
+        dashboard_id=dashboard_id,
+    )
+    if rows is None:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    dashboard, version = rows
+    session = await dashboard_store.get_active_authoring_session(
+        store.session,
+        org_id=org_id,
+        user_id=user_id,
+        dashboard_id=dashboard_id,
+    )
+    conversation = None
+    if session and session.conversation_id:
+        conversation = await chat_store.get_owned_conversation(
+            store.session,
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=session.conversation_id,
+        )
+        session_matches_current = session.status == "preview" and session.base_version_id == version.id
+        if conversation is not None and session_matches_current:
+            return {
+                "conversation_id": conversation.id,
+                "authoring_session_id": session.id,
+            }
+
+    project = (
+        await store.session.execute(
+            select(GatewayWorkspaceProject).where(
+                GatewayWorkspaceProject.id == dashboard.project_id,
+                GatewayWorkspaceProject.org_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if project is None:
+        raise HTTPException(status_code=409, detail="Dashboard project is unavailable")
+    definition = DashboardDefinition.model_validate(version.definition_json)
+    if conversation is None:
+        conversation = await chat_store.create_empty_conversation(
+            store.session,
+            org_id=org_id,
+            user_id=user_id,
+            project=project,
+            branch=project.default_branch or "main",
+            commit_sha=version.commit_sha,
+            title=f"Edit {definition.name}",
+        )
+    if session and session.status == "preview" and session.base_version_id == version.id:
+        session.conversation_id = conversation.id
+        await store.session.commit()
+        session_id = session.id
+    else:
+        created = await dashboard_store.create_authoring_session(
+            store.session,
+            org_id=org_id,
+            user_id=user_id,
+            dashboard_id=dashboard_id,
+            base_version_id=version.id,
+            definition=definition,
+            operations=[],
+            prompt="Open this dashboard in Data Chat for editing.",
+            summary="The current saved dashboard is ready to refine in Data Chat.",
+            agent_run_id=str(uuid.uuid4()),
+            model="data-chat",
+            requires_custom_sql_confirmation=False,
+            custom_sql_confirmed=True,
+            conversation_id=conversation.id,
+        )
+        session_id = created.id
+    return {
+        "conversation_id": conversation.id,
+        "authoring_session_id": session_id,
+    }
+
+
+@router.post(
     "/dashboard-authoring/sessions/{session_id}/messages",
     response_model=DashboardAuthoringSessionInfo,
     dependencies=[RequireScope("write")],
 )
-async def continue_dashboard_authoring_session(session_id: str, body: DashboardAuthoringMessageRequest, store: StoreD):
+async def continue_dashboard_authoring_session(
+    session_id: str,
+    body: DashboardAuthoringMessageRequest,
+    store: StoreD,
+):
     org_id = store._require_org_id()
     user_id = _user_id(store)
     row = await dashboard_store.get_authoring_session(
@@ -873,6 +994,15 @@ async def continue_dashboard_authoring_session(session_id: str, body: DashboardA
     )
     if row is None:
         raise HTTPException(status_code=404, detail="Dashboard authoring conversation not found")
+    chat_run = await _request_chat_run(store)
+    if chat_run and (
+        row.project_id != chat_run.project_id
+        or row.conversation_id not in {None, chat_run.conversation_id}
+    ):
+        raise HTTPException(status_code=403, detail="Dashboard authoring conversation scope mismatch")
+    if chat_run and row.conversation_id is None:
+        row.conversation_id = chat_run.conversation_id
+        await store.session.commit()
     if row.status not in {"preview", "applied", "discarded"}:
         raise HTTPException(status_code=409, detail="Dashboard authoring conversation is no longer active")
     resuming_saved_thread = row.status in {"applied", "discarded"}
@@ -999,6 +1129,7 @@ async def continue_dashboard_authoring_session(session_id: str, body: DashboardA
             base_version_id=base_version_id,
             custom_sql_confirmed=False,
             thread_id=row.thread_id,
+            conversation_id=row.conversation_id,
             prior_events=list(row.events_json or []),
             pending_custom_sql_chart_ids=changed_custom_sql_chart_ids,
         )

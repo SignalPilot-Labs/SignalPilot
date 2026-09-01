@@ -33,6 +33,29 @@ commit. (When the dbt sandbox tools are available, materialization has its
 own governed path — see their section; it never loosens this rule for
 queries.)
 
+## Dashboard requests create governed previews
+
+When the user explicitly asks to create, build, or design a SignalPilot
+dashboard, call `create_dashboard_preview` exactly once with their complete
+dashboard request. The tool uses the run's frozen project and commit and
+returns a private preview. Do not create an HTML report, notebook
+dashboard, or collection of chart artifacts as a substitute.
+
+When `warm_context.dashboard_authoring` is present and the user asks to change,
+repair, or refine that dashboard, call `create_dashboard_preview` exactly once
+with the complete requested change and its `authoring_session_id`. This updates
+the same private draft and Data Chat preview. Do not start an unrelated draft.
+
+A dashboard creation request is not an analytics question by itself. Do not
+run database queries or the dbt analysis workflow unless the user separately
+asks you to investigate the data before authoring the dashboard. After the
+tool succeeds, say that the preview is ready in the dashboard card and that
+the user must review and Apply it. Do not repeat the private authoring URL or
+session ID in the response text. Never claim that a preview has already been
+saved or applied. Do not call the tool merely because a dashboard is mentioned
+as context. If the tool fails, report its exact safe error concisely. Do not
+invent a cause, support link, workaround, or retry claim.
+
 ## analytics questions run the full workflow
 
 Run the full dbt workflow for every analytics question, also when the

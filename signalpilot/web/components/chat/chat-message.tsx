@@ -7,6 +7,7 @@ import {
   ChevronRight,
   CircleStop,
   Copy,
+  LayoutDashboard,
   FileChartColumn,
   Loader2,
   Play,
@@ -165,6 +166,69 @@ function messageReportSuggestion(
   return suggestion as ChatReportSuggestion;
 }
 
+type DashboardPreview = {
+  authoring_session_id: string;
+  preview_url: string;
+  dashboard_name: string;
+  summary: string;
+  chart_count: number;
+};
+
+function messageDashboardPreview(
+  metadata: Record<string, unknown>,
+): DashboardPreview | null {
+  const value = metadata.dashboard_preview;
+  if (!value || typeof value !== "object") return null;
+  const preview = value as Record<string, unknown>;
+  if (
+    typeof preview.authoring_session_id !== "string" ||
+    !preview.authoring_session_id ||
+    typeof preview.preview_url !== "string" ||
+    !preview.preview_url.startsWith("/dashboards/new?authoring=") ||
+    typeof preview.dashboard_name !== "string"
+  ) {
+    return null;
+  }
+  return {
+    authoring_session_id: String(preview.authoring_session_id || ""),
+    preview_url: preview.preview_url,
+    dashboard_name: preview.dashboard_name,
+    summary: typeof preview.summary === "string" ? preview.summary : "",
+    chart_count:
+      typeof preview.chart_count === "number" ? preview.chart_count : 0,
+  };
+}
+
+function DashboardPreviewCard({ preview }: { preview: DashboardPreview }) {
+  const { onOpenDashboardPreview } = useChatUi();
+  return (
+    <section className="mt-4 rounded-xl border border-[var(--color-success)]/25 bg-[var(--color-bg-card)] p-4">
+      <div className="flex items-start gap-3">
+        <LayoutDashboard className="mt-0.5 h-4 w-4 flex-none text-[var(--color-success)]" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm text-[var(--color-text)]">
+            {preview.dashboard_name}
+          </p>
+          <p className="mt-1 text-xs leading-5 text-[var(--color-text-muted)]">
+            {preview.summary ||
+              `${preview.chart_count} chart${preview.chart_count === 1 ? "" : "s"} ready for review.`}
+          </p>
+          <button
+            type="button"
+            onClick={() => onOpenDashboardPreview(preview.authoring_session_id)}
+            className="mt-3 rounded-lg bg-[var(--color-text)] px-3 py-2 text-xs text-[var(--color-bg)]"
+          >
+            Open preview
+          </button>
+          <p className="mt-2 text-[11px] text-[var(--color-text-dim)]">
+            Nothing is saved until you review and Apply.
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function AssistantMessage({
   message,
   onReplay,
@@ -204,7 +268,8 @@ function AssistantMessage({
     [events, runId],
   );
   const steps = useMemo(
-    () => blocks.flatMap((block) => (block.kind === "steps" ? block.steps : [])),
+    () =>
+      blocks.flatMap((block) => (block.kind === "steps" ? block.steps : [])),
     [blocks],
   );
   const blocksHaveText = blocks.some((block) => block.kind === "text");
@@ -223,6 +288,9 @@ function AssistantMessage({
     message.metadata.runtime_archive_available === true;
   const reportSuggestion = successful
     ? messageReportSuggestion(message.metadata)
+    : null;
+  const dashboardPreview = successful
+    ? messageDashboardPreview(message.metadata)
     : null;
   return (
     <article
@@ -283,6 +351,9 @@ function AssistantMessage({
               messageId={message.id}
               suggestion={reportSuggestion}
             />
+          )}
+          {dashboardPreview && (
+            <DashboardPreviewCard preview={dashboardPreview} />
           )}
           {runStatus === "cancelled" && (
             <p className="mt-3 text-xs text-[var(--color-text-dim)]">
@@ -422,13 +493,8 @@ function AssistantMessageReplay({
   runId: string;
   onExit: () => void;
 }) {
-  const {
-    events,
-    artifacts,
-    onStop,
-    onRetry,
-    onApproveReportSuggestion,
-  } = useChatUi();
+  const { events, artifacts, onStop, onRetry, onApproveReportSuggestion } =
+    useChatUi();
   const replay = useChatReplay(events, artifacts, runId);
   // Runs that streamed text carry text_delta events, and the blocks rebuild
   // the message from the replayed deltas. Runs that only produced a final
@@ -444,11 +510,7 @@ function AssistantMessageReplay({
   const replayMessage = useMemo<UiMessage>(
     () => ({
       ...message,
-      content: runStreamedText
-        ? ""
-        : replay.finished
-          ? message.content
-          : "",
+      content: runStreamedText ? "" : replay.finished ? message.content : "",
       runId,
       runStatus: replay.finished
         ? (message.runStatus ?? "completed")
@@ -476,6 +538,7 @@ function AssistantMessageReplay({
           onStop,
           onRetry,
           onApproveReportSuggestion,
+          onOpenDashboardPreview: () => undefined,
         }}
       >
         <AssistantMessage message={replayMessage} replayMode />
@@ -490,9 +553,7 @@ function ReplayableAssistantMessage({ message }: { message: UiMessage }) {
   const runId = messageRunId(message);
   const canReplay =
     Boolean(runId) &&
-    events.some(
-      (event) => event.run_id === runId && event.type !== "status",
-    );
+    events.some((event) => event.run_id === runId && event.type !== "status");
   if (replaying && runId) {
     return (
       <AssistantMessageReplay

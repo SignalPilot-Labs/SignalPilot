@@ -4,9 +4,16 @@
 // previews, hooks, and rail parts live in sibling modules. This file
 // re-exports the moved names so existing importers do not change.
 
-import { Bot, NotebookPen, PanelLeft, Share2, Sparkles } from "lucide-react";
+import {
+  Bot,
+  LayoutDashboard,
+  NotebookPen,
+  PanelLeft,
+  Share2,
+  Sparkles,
+} from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import {
   getSavedChatReport,
@@ -24,6 +31,7 @@ import {
 } from "~/lib/standalone-chat-state";
 import { projectSettingsHref } from "~/lib/project-settings-route";
 import { LiveNotebookPanel } from "~/components/chat/live-notebook-panel";
+import { ChatDashboardPanel } from "~/components/chat/chat-dashboard-panel";
 import { useConversationNotebook } from "~/components/chat/use-conversation-notebook";
 import {
   hasNotebookContent,
@@ -110,6 +118,7 @@ export function StandaloneDataChat({
   );
   const requestedProject = searchParams.get("project");
   const requestedReportId = searchParams.get("report");
+  const requestedPrompt = searchParams.get("prompt");
   const [selectedReport, setSelectedReport] =
     useState<ChatReportMention | null>(null);
   const attachedReportReference = selectedReport
@@ -124,6 +133,7 @@ export function StandaloneDataChat({
   const [perQueryBudgetUsd, setPerQueryBudgetUsd] = useState(0.25);
   const [chatBudgetUsd, setChatBudgetUsd] = useState(1);
   const [draft, setDraft] = useChatDraft(conversationId);
+  const promptInitialized = useRef(false);
   const [isConversationRailOpen, setIsConversationRailOpen] =
     useState(!embedded);
   const [pendingSubmission, setPendingSubmission] =
@@ -133,6 +143,12 @@ export function StandaloneDataChat({
     string | null
   >(null);
   const selectedInitialized = useRef(false);
+
+  useEffect(() => {
+    if (!requestedPrompt || promptInitialized.current) return;
+    setDraft(requestedPrompt);
+    promptInitialized.current = true;
+  }, [requestedPrompt, setDraft]);
 
   useEffect(() => {
     if (!bootstrap || selectedInitialized.current) return;
@@ -205,6 +221,32 @@ export function StandaloneDataChat({
     conversationNotebook?.status,
     currentRun?.id,
   );
+  const [dashboardSessionId, setDashboardSessionId] = useState<string | null>(
+    searchParams.get("dashboard"),
+  );
+  const autoOpenedDashboard = useRef<string | null>(null);
+  const observedActiveRun = useRef(false);
+  useEffect(() => {
+    observedActiveRun.current = false;
+    autoOpenedDashboard.current = null;
+  }, [conversationId]);
+  const openDashboardPreview = useCallback(
+    (sessionId: string) => {
+      setDashboardSessionId(sessionId);
+      setNotebookPanelOpen(false);
+      const params = new URLSearchParams(searchParams.toString());
+      params.set("dashboard", sessionId);
+      router.replace(`${window.location.pathname}?${params.toString()}`);
+    },
+    [router, searchParams, setNotebookPanelOpen],
+  );
+  useEffect(() => {
+    const requestedSession = searchParams.get("dashboard");
+    if (requestedSession && requestedSession !== dashboardSessionId) {
+      setDashboardSessionId(requestedSession);
+      setNotebookPanelOpen(false);
+    }
+  }, [dashboardSessionId, searchParams, setNotebookPanelOpen]);
   const conversationLoading = Boolean(
     conversationId && !detail && !detailError && detailLoading,
   );
@@ -232,6 +274,30 @@ export function StandaloneDataChat({
     pendingSubmission,
     setPendingSubmission,
   });
+  const latestDashboardSessionId = useMemo(() => {
+    for (let index = uiMessages.length - 1; index >= 0; index -= 1) {
+      const preview = uiMessages[index]?.metadata?.dashboard_preview;
+      if (preview && typeof preview === "object") {
+        const sessionId = (preview as Record<string, unknown>)
+          .authoring_session_id;
+        if (typeof sessionId === "string" && sessionId) return sessionId;
+      }
+    }
+    return null;
+  }, [uiMessages]);
+  useEffect(() => {
+    if (currentRun?.status === "queued" || currentRun?.status === "running") {
+      observedActiveRun.current = true;
+    }
+    if (
+      latestDashboardSessionId &&
+      observedActiveRun.current &&
+      autoOpenedDashboard.current !== latestDashboardSessionId
+    ) {
+      autoOpenedDashboard.current = latestDashboardSessionId;
+      openDashboardPreview(latestDashboardSessionId);
+    }
+  }, [currentRun?.status, latestDashboardSessionId, openDashboardPreview]);
 
   const { viewportRef, shouldStickToBottomRef, onViewportScroll } =
     useChatAutoScroll(conversationId, uiMessages);
@@ -318,7 +384,9 @@ export function StandaloneDataChat({
     return <ChatUnavailableScreen />;
   }
   if (detailError) {
-    return <ConversationNotFoundScreen onNewChat={() => router.push("/chats")} />;
+    return (
+      <ConversationNotFoundScreen onNewChat={() => router.push("/chats")} />
+    );
   }
 
   const isEmptyNewChat = empty && !conversationId;
@@ -357,6 +425,7 @@ export function StandaloneDataChat({
         onStop,
         onRetry,
         onApproveReportSuggestion,
+        onOpenDashboardPreview: openDashboardPreview,
       }}
     >
       <div
@@ -364,7 +433,9 @@ export function StandaloneDataChat({
           embedded
             ? "h-full min-w-0 overflow-hidden"
             : `h-screen overflow-hidden p-4 ${
-                notebookPanelOpen ? "min-w-[1360px]" : "min-w-[960px]"
+                notebookPanelOpen || dashboardSessionId
+                  ? "min-w-[1360px]"
+                  : "min-w-[960px]"
               }`
         }
       >
@@ -490,7 +561,9 @@ export function StandaloneDataChat({
                     </p>
                   </div>
                   {/* The input is the focal point in the empty state. */}
-                  {!conversationId && <div className="-mx-6">{composerNode}</div>}
+                  {!conversationId && (
+                    <div className="-mx-6">{composerNode}</div>
+                  )}
                   {unreadyMessage ? (
                     <ReadinessNotice
                       message={unreadyMessage}
@@ -526,37 +599,67 @@ export function StandaloneDataChat({
                 </div>
               )}
               {!isEmptyNewChat && (
-              <div className="sticky bottom-0 bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)] to-transparent pt-3">
-                {approvalEvent && (
-                  <QueryApprovalCard
-                    event={approvalEvent}
-                    onDecision={onQueryDecision}
-                  />
-                )}
-                {composerNode}
-              </div>
-            )}
+                <div className="sticky bottom-0 bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)] to-transparent pt-3">
+                  {approvalEvent && (
+                    <QueryApprovalCard
+                      event={approvalEvent}
+                      onDecision={onQueryDecision}
+                    />
+                  )}
+                  {composerNode}
+                </div>
+              )}
             </div>
             {conversationId &&
               hasNotebookContent(conversationNotebook) &&
               !notebookPanelOpen && (
-              <button
-                type="button"
-                aria-label="Open the analysis notebook panel"
-                title="Open the analysis notebook panel"
-                data-testid="live-notebook-toggle"
-                onClick={() => setNotebookPanelOpen(true)}
-                className="absolute right-16 top-4 z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-muted)] shadow-lg shadow-black/20 hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
-              >
-                <NotebookPen className="h-4 w-4" />
-              </button>
-            )}
+                <button
+                  type="button"
+                  aria-label="Open the analysis notebook panel"
+                  title="Open the analysis notebook panel"
+                  data-testid="live-notebook-toggle"
+                  onClick={() => {
+                    setDashboardSessionId(null);
+                    setNotebookPanelOpen(true);
+                  }}
+                  className="absolute right-16 top-4 z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-muted)] shadow-lg shadow-black/20 hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+                >
+                  <NotebookPen className="h-4 w-4" />
+                </button>
+              )}
+            {conversationId &&
+              latestDashboardSessionId &&
+              !dashboardSessionId && (
+                <button
+                  type="button"
+                  aria-label="Open the dashboard preview"
+                  title="Open the dashboard preview"
+                  data-testid="chat-dashboard-toggle"
+                  onClick={() => openDashboardPreview(latestDashboardSessionId)}
+                  className="absolute right-28 top-4 z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-muted)] shadow-lg shadow-black/20 hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+                >
+                  <LayoutDashboard className="h-4 w-4" />
+                </button>
+              )}
           </main>
           {conversationId && notebookPanelOpen && (
             <LiveNotebookPanel
               conversationId={conversationId}
               notebook={conversationNotebook}
               onClose={() => setNotebookPanelOpen(false)}
+            />
+          )}
+          {conversationId && dashboardSessionId && (
+            <ChatDashboardPanel
+              sessionId={dashboardSessionId}
+              onClose={() => {
+                setDashboardSessionId(null);
+                const params = new URLSearchParams(searchParams.toString());
+                params.delete("dashboard");
+                router.replace(
+                  `${window.location.pathname}${params.size ? `?${params.toString()}` : ""}`,
+                );
+              }}
             />
           )}
         </div>

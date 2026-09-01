@@ -129,6 +129,7 @@ async def test_exported_legacy_git_sha_materializes_from_its_workspace_revision(
     )
     await db_session.commit()
 
+    assert project_snapshot._snapshot_revision(legacy_commit_sha) is None
     assert await materialize_workspace_snapshot(
         db_session,
         storage,

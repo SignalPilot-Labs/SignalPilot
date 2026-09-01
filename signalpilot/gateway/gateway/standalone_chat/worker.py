@@ -191,6 +191,7 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
     streamed_text = ""
     report_proposal: dict[str, Any] | None = None
     report_action_outcome: dict[str, Any] | None = None
+    dashboard_preview: dict[str, Any] | None = None
     starts_new_text_block = False
     tool_names_by_id: dict[str, str] = {}
     try:
@@ -487,6 +488,10 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                         report_action_outcome = (
                             raw_report_action_outcome if isinstance(raw_report_action_outcome, dict) else None
                         )
+                        raw_dashboard_preview = event.get("dashboard_preview")
+                        dashboard_preview = (
+                            raw_dashboard_preview if isinstance(raw_dashboard_preview, dict) else None
+                        )
                         await _persist_artifacts(
                             run_id=run_id,
                             worker_id=worker_id,
@@ -539,6 +544,7 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                 content=answer,
                 report_proposal=report_proposal,
                 report_action_outcome=report_action_outcome,
+                dashboard_preview=dashboard_preview,
             )
         if message is not None:
             await _update_summary(run_id)

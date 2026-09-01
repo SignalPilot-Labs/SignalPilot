@@ -44,8 +44,10 @@ def reset_debounce(run_id: str) -> None:
 
 
 def _scratch_root() -> str:
-    root = os.getenv("SP_CHAT_SCRATCH_ROOT", "/tmp/signalpilot-chat-runs").strip()
-    return (root or "/tmp/signalpilot-chat-runs").rstrip("/")
+    # nosec B108 - container-local scratch root, same default the sandbox uses
+    default = "/tmp/signalpilot-chat-runs"  # nosec B108
+    root = os.getenv("SP_CHAT_SCRATCH_ROOT", default).strip()
+    return (root or default).rstrip("/")
 
 
 def _relative_scratch_path(file_path: Any) -> str | None:

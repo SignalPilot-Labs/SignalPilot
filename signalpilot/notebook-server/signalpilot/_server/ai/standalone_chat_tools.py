@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
+import re
 from typing import TYPE_CHECKING, Any
 
 from signalpilot._server.ai.standalone_chat_artifacts import (
@@ -18,10 +18,7 @@ from signalpilot._server.ai.standalone_chat_chart_renderer import (
 from signalpilot._server.ai.standalone_chat_chart_theme import (
     prepare_signalpilot_chart,
 )
-from signalpilot._server.ai.standalone_chat_dbt import (
-    _resolve_dbt_project_dir,
-    _write_stub_dbt_profiles,
-)
+from signalpilot._server.ai.standalone_chat_dbt import run_inspect_dbt
 from signalpilot._server.ai.standalone_chat_tool_schemas import (
     standalone_chat_tools,
 )
@@ -29,6 +26,9 @@ from signalpilot._server.ai.standalone_chat_tool_schemas import (
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from pathlib import Path
+
+# Mirrors the start_analysis_notebook input schema pattern.
+_NOTEBOOK_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,40}$")
 
 
 def build_standalone_chat_mcp_server(
@@ -44,6 +44,7 @@ def build_standalone_chat_mcp_server(
     runtime_redactions: tuple[str, ...] = (),
     notebook_starter: Callable[[Any, dict[str, Any]], list[Any]] | None = None,
     notebook_session_resolver: Callable[[str], Any] | None = None,
+    notebook_seeder: Callable[[str], Path] | None = None,
     report_catalog_loader: Callable[[str | None], Awaitable[dict[str, Any]]]
     | None = None,
     report_context_loader: Callable[[str], Awaitable[dict[str, Any]]]
@@ -286,24 +287,44 @@ def build_standalone_chat_mcp_server(
                     raise ValueError(
                         "The run-bound analysis notebook is unavailable"
                     )
-                if (
-                    notebook_lifecycle is not None
-                    and notebook_lifecycle.session_id
-                ):
+                notebook_name = str(
+                    arguments.get("notebook") or "analysis"
+                )
+                if not _NOTEBOOK_NAME_RE.fullmatch(notebook_name):
+                    raise ValueError("Invalid notebook name")
+                if notebook_name == "analysis":
+                    target_path = analysis_notebook_path
+                else:
+                    target_path = (
+                        analysis_notebook_path.parent
+                        / f"{notebook_name}.py"
+                    )
+                running_session = (
+                    notebook_lifecycle.sessions.get(notebook_name)
+                    if notebook_lifecycle is not None
+                    else None
+                )
+                if running_session:
                     return [
                         TextContent(
                             type="text",
                             text=json.dumps(
                                 {
-                                    "session_id": notebook_lifecycle.session_id,
+                                    "session_id": running_session,
                                     "status": "already_running",
-                                    "notebook_path": str(
-                                        analysis_notebook_path
-                                    ),
+                                    "notebook_path": str(target_path),
+                                    "notebook": notebook_name,
                                 }
                             ),
                         )
                     ]
+                if notebook_name != "analysis" and not target_path.is_file():
+                    # Named notebooks seed lazily in the SAME scratch.
+                    if notebook_seeder is None:
+                        raise ValueError(
+                            "Named notebooks are unavailable in this run"
+                        )
+                    target_path = notebook_seeder(notebook_name)
                 if notebook_starter is None:
                     from signalpilot._server.ai.notebook_mcp import (
                         _handle_start_notebook_session,
@@ -313,7 +334,7 @@ def build_standalone_chat_mcp_server(
                     result = _handle_start_notebook_session(
                         ToolContext(app=notebook_mcp_app),
                         {
-                            "file_path": str(analysis_notebook_path),
+                            "file_path": str(target_path),
                             "auto_run": True,
                         },
                     )
@@ -321,7 +342,7 @@ def build_standalone_chat_mcp_server(
                     result = notebook_starter(
                         notebook_mcp_app,
                         {
-                            "file_path": str(analysis_notebook_path),
+                            "file_path": str(target_path),
                             "auto_run": True,
                         },
                     )
@@ -340,7 +361,7 @@ def build_standalone_chat_mcp_server(
                 ).startswith("error"):
                     raise ValueError("Notebook kernel did not start")
                 if notebook_lifecycle is not None:
-                    notebook_lifecycle.session_id = session_id
+                    notebook_lifecycle.sessions[notebook_name] = session_id
                 if notebook_session_resolver is not None:
                     runtime_session = notebook_session_resolver(session_id)
                 else:
@@ -354,7 +375,13 @@ def build_standalone_chat_mcp_server(
                     runtime_redactions
                 )
                 if event_sink is not None:
-                    await event_sink("notebook_started", {})
+                    await event_sink(
+                        "notebook_started",
+                        {
+                            "notebook": notebook_name,
+                            "session_id": session_id,
+                        },
+                    )
                 return [
                     TextContent(
                         type="text",
@@ -363,7 +390,8 @@ def build_standalone_chat_mcp_server(
                                 "session_id": session_id,
                                 "status": "started",
                                 "cell_ids": started.get("cell_ids") or [],
-                                "notebook_path": str(analysis_notebook_path),
+                                "notebook_path": str(target_path),
+                                "notebook": notebook_name,
                             }
                         ),
                     )
@@ -371,112 +399,13 @@ def build_standalone_chat_mcp_server(
             if name == "inspect_dbt":
                 if project_directory is None or scratch_directory is None:
                     raise ValueError("The frozen dbt project is unavailable")
-                # The checkout root is not always the dbt project. Some repos
-                # keep it nested (for example dumpsters_dbt/). Resolve the real
-                # project dir so dbt does not fail with "Missing dbt_project.yml".
-                dbt_project_dir = _resolve_dbt_project_dir(project_directory)
-                if dbt_project_dir is None:
-                    raise ValueError(
-                        "No dbt_project.yml was found in this project. "
-                        "This project has no dbt project to inspect."
-                    )
-                command = str(arguments.get("command") or "")
-                if command not in {"parse", "ls", "compile"}:
-                    raise ValueError(
-                        "Only dbt parse, ls, and compile are allowed"
-                    )
-                target_path = scratch_directory / "dbt-target"
-                target_path.mkdir(parents=True, exist_ok=True)
-                # The agent has no warehouse credentials. Write a stub duckdb
-                # profile so read-only dbt commands can resolve the adapter
-                # without connecting. Without this dbt falls back to ~/.dbt and
-                # fails with "profiles-dir ... does not exist".
-                profiles_dir = _write_stub_dbt_profiles(dbt_project_dir, scratch_directory)
-                log_path = scratch_directory / "dbt-logs"
-                # The frozen checkout does not include dbt_packages (it is a
-                # build artifact). If the project declares packages, install
-                # them first, or dbt ls/parse/compile fail with
-                # "Run dbt deps to install package dependencies".
-                declares_packages = (
-                    (dbt_project_dir / "packages.yml").is_file()
-                    or (dbt_project_dir / "dependencies.yml").is_file()
+                inspected = await run_inspect_dbt(
+                    project_directory=project_directory,
+                    scratch_directory=scratch_directory,
+                    arguments=arguments,
                 )
-                packages_installed = (dbt_project_dir / "dbt_packages").is_dir() and any(
-                    (dbt_project_dir / "dbt_packages").iterdir()
-                )
-                if declares_packages and not packages_installed:
-                    deps_argv = [
-                        "dbt",
-                        "--no-use-colors",
-                        "--log-path",
-                        str(log_path),
-                        "deps",
-                        "--project-dir",
-                        str(dbt_project_dir),
-                        "--profiles-dir",
-                        str(profiles_dir),
-                    ]
-                    deps_proc = await asyncio.create_subprocess_exec(
-                        *deps_argv,
-                        cwd=dbt_project_dir,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.STDOUT,
-                    )
-                    try:
-                        deps_out, _ = await asyncio.wait_for(
-                            deps_proc.communicate(), timeout=120
-                        )
-                    except TimeoutError:
-                        deps_proc.kill()
-                        await deps_proc.wait()
-                        raise ValueError("dbt deps timed out") from None
-                    if deps_proc.returncode != 0:
-                        raise ValueError(
-                            "dbt deps failed: "
-                            + deps_out.decode(errors="replace")[-2_000:]
-                        )
-                argv = [
-                    "dbt",
-                    "--no-use-colors",
-                    "--log-path",
-                    str(log_path),
-                    command,
-                    "--project-dir",
-                    str(dbt_project_dir),
-                    "--profiles-dir",
-                    str(profiles_dir),
-                    "--target-path",
-                    str(target_path),
-                ]
-                selection = str(arguments.get("select") or "").strip()
-                if selection:
-                    argv.extend(["--select", selection])
-                process = await asyncio.create_subprocess_exec(
-                    *argv,
-                    cwd=project_directory,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                )
-                try:
-                    output, _ = await asyncio.wait_for(
-                        process.communicate(), timeout=120
-                    )
-                except TimeoutError:
-                    process.kill()
-                    await process.wait()
-                    raise ValueError("dbt inspection timed out") from None
-                text_output = output.decode(errors="replace")[-50_000:]
-                if process.returncode != 0:
-                    raise ValueError(
-                        f"dbt {command} failed: {text_output[-2_000:]}"
-                    )
                 return [
-                    TextContent(
-                        type="text",
-                        text=json.dumps(
-                            {"command": command, "output": text_output}
-                        ),
-                    )
+                    TextContent(type="text", text=json.dumps(inspected))
                 ]
             metadata = _clean_metadata(arguments)
             loaded_result: dict[str, Any] | None = None

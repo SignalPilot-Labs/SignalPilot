@@ -40,7 +40,7 @@ def _worker_id() -> str:
 # The agent SDK forwards MCP tool results as str(content_blocks) — a Python
 # repr of a block list, not JSON. Extract the ids textually in that case.
 _TOOL_RESULT_ID_RE = re.compile(
-    r"[\"'](session_id|notebook_path)\\?[\"']\s*:\s*\\?[\"']([^\"'\\]+)"
+    r"[\"'](session_id|notebook_path|notebook)\\?[\"']\s*:\s*\\?[\"']([^\"'\\]+)"
 )
 
 
@@ -75,6 +75,8 @@ def _notebook_started_payload(
         payload["kernel_session_id"] = str(started["session_id"])
     if started.get("notebook_path"):
         payload["notebook_path"] = str(started["notebook_path"])
+    # The notebook name defaults to "analysis" for older sandboxes.
+    payload["notebook"] = str(started.get("notebook") or "analysis")
     return payload
 
 

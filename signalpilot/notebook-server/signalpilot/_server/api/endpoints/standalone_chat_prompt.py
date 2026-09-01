@@ -113,69 +113,6 @@ def _load_prompt(name: str) -> str:
 STANDALONE_SYSTEM_PROMPT = _load_prompt("standalone_chat_system.md")
 
 
-_NOTEBOOK_ONLY_RULE_PREFIXES = (
-    "- Start the analysis notebook whenever",
-    "Start the notebook at any time",
-    "Use `db.query_result(sql)`",
-    "- `notebook_sdk`",
-    "- `dataset_ref`",
-    "- The analysis notebook is a marimo reactive notebook",
-    "- Define shared imports and reusable DataFrames once",
-    "- If edit_notebook returns MultipleDefinitionError",
-    "- Never edit, remove, or redefine the seeded",
-    "- For `notebook_sdk`, execute with",
-    '- `source["rows"]` is JSON transport',
-    "- Never copy MCP previews into notebook DataFrames",
-    "- Keep complete bounded DataFrames inside the kernel",
-    "- Publish derived rows from the kernel",
-    "- Publish a runtime file with exactly",
-    "- Verify every chart before publishing it",
-    "- PublishedResult exposes only",
-    "- Do not catch or suppress publication exceptions",
-    "- Prefer governed SDK structured-result IDs",
-)
-
-
-def _system_prompt_for_features(*, notebook_analysis_enabled: bool) -> str:
-    if notebook_analysis_enabled:
-        return STANDALONE_SYSTEM_PROMPT
-    lines: list[str] = []
-    in_notebook_section = False
-    for line in STANDALONE_SYSTEM_PROMPT.splitlines():
-        if line.startswith("## The analysis notebook"):
-            in_notebook_section = True
-            continue
-        if in_notebook_section and line.startswith("## "):
-            in_notebook_section = False
-        if not in_notebook_section and not line.startswith(
-            _NOTEBOOK_ONLY_RULE_PREFIXES
-        ):
-            lines.append(line)
-    disabled_rule = (
-        "- Notebook analysis is disabled for this run. Do not call notebook "
-        "tools; use query_database or rewrite aggregate_required work as "
-        "bounded warehouse SQL."
-    )
-    anchor = "Use `query_database(sql)` for MCP-sized work."
-    insert_at = lines.index(anchor) + 1 if anchor in lines else len(lines)
-    lines.insert(insert_at, disabled_rule)
-    return "\n".join(lines)
-
-
-def _allowed_tools_for_features(
-    *,
-    notebook_analysis_enabled: bool,
-) -> list[str]:
-    if notebook_analysis_enabled:
-        return list(STANDALONE_ALLOWED_TOOLS)
-    return [
-        tool
-        for tool in STANDALONE_ALLOWED_TOOLS
-        if "signalpilot-notebook" not in tool
-        and not tool.endswith("start_analysis_notebook")
-    ]
-
-
 def _execution_prompt_values(
     body: dict[str, Any],
     *,
@@ -183,7 +120,7 @@ def _execution_prompt_values(
     branch: str,
     commit_sha: str,
     connection_name: str,
-) -> tuple[str, list[dict[str, str]], bool, bool, bool, str]:
+) -> tuple[str, list[dict[str, str]], bool, bool, str]:
     """Validate request text and build the bounded agent prompt context."""
     prompt = str(body.get("prompt") or "").strip()
     if not prompt or len(prompt) > 50_000:
@@ -198,14 +135,9 @@ def _execution_prompt_values(
     ]
     warm_context = json.dumps(body.get("warm_context") or {}, default=str)[:120_000]
     features = body.get("features") if isinstance(body.get("features"), dict) else {}
-    notebook_analysis_enabled = bool(features.get("notebook_analysis"))
     is_improvement_run = str(body.get("run_origin") or "user") == "improvement"
     sandbox_runtime_enabled = bool(features.get("sandbox_runtime")) and not is_improvement_run
-    prompt_parts = [
-        _system_prompt_for_features(
-            notebook_analysis_enabled=notebook_analysis_enabled
-        )
-    ]
+    prompt_parts = [STANDALONE_SYSTEM_PROMPT]
     if sandbox_runtime_enabled:
         prompt_parts.append(_load_prompt("sandbox_dbt_suffix.md"))
     if is_improvement_run:
@@ -220,7 +152,6 @@ def _execution_prompt_values(
     return (
         prompt,
         history,
-        notebook_analysis_enabled,
         is_improvement_run,
         sandbox_runtime_enabled,
         system_prompt,

@@ -47,9 +47,7 @@ from signalpilot._server.api.endpoints.standalone_chat import (
     STANDALONE_ALLOWED_TOOLS,
     STANDALONE_DISALLOWED_MCP_TOOLS,
     STANDALONE_SYSTEM_PROMPT,
-    _allowed_tools_for_features,
     _runtime_auth_override,
-    _system_prompt_for_features,
 )
 from signalpilot._server.api.endpoints.standalone_chat_prompt import (
     _execution_prompt_values,
@@ -803,23 +801,20 @@ def test_horizontal_bar_renderer_handles_long_categories_and_negative_values():
 def test_agent_contract_includes_default_signalpilot_mcp_tools():
     # The prompt file wraps lines; compare against whitespace-collapsed text.
     _prompt_flat = " ".join(STANDALONE_SYSTEM_PROMPT.split())
-    assert "in English" in _prompt_flat
-    assert "Never guess" in _prompt_flat
-    assert "chain-of-thought" in _prompt_flat
-    assert "sp.publish_result(dataframe" in _prompt_flat
-    assert "sp.publish_artifact(path" in _prompt_flat
-    assert "Never catch or suppress publication exceptions" in _prompt_flat
-    assert "Never edit, remove, or redefine the seeded" in _prompt_flat
-    assert "sp.init()` returns None" in _prompt_flat
-    assert "marimo reactive notebook, not Jupyter" in _prompt_flat
-    assert "exactly ONE live cell" in _prompt_flat
-    assert "Prefix disposable cell-local names with one underscore" in _prompt_flat
-    assert "must never be referenced from another cell" in _prompt_flat
-    assert "Planning is automatic and internal" in _prompt_flat
-    assert "Do not call `plan_query`" in _prompt_flat
-    assert "as a fallback during recovery" in _prompt_flat
-    assert "same unchanged notebook code hash" in _prompt_flat
-    assert "MultipleDefinitionError" in _prompt_flat
+    assert "Answer data questions with evidence" in _prompt_flat
+    assert "first tool call for any analytics request is the `Skill` tool" in _prompt_flat
+    assert "`signalpilot-dbt:dbt-workflow`" in _prompt_flat
+    assert "SP_CHAT_SCRATCH_DIRECTORY" in _prompt_flat
+    assert "analytics-steps.md" in _prompt_flat
+    assert "prebuild-state.md" in _prompt_flat
+    assert "list_saved_report_catalog" in _prompt_flat
+    assert "load_report_context" in _prompt_flat
+    assert "propose_report_action" in _prompt_flat
+    assert "publish_table" in _prompt_flat
+    assert "publish_chart" in _prompt_flat
+    assert "publish_report" in _prompt_flat
+    assert "GitHub Flavored Markdown" in _prompt_flat
+    assert "HTML tags such as `<details>` do not render" in _prompt_flat
     assert "call `create_dashboard_preview` exactly once" in _prompt_flat
     assert "user must review and Apply" in _prompt_flat
     assert {
@@ -862,35 +857,17 @@ async def test_scratch_python_tool_is_not_exposed():
     }
 
 
-@pytest.mark.asyncio
-async def test_disabled_notebook_feature_removes_tools_and_prompt_instructions():
-    allowed_tools = _allowed_tools_for_features(
-        notebook_analysis_enabled=False
-    )
-    prompt = _system_prompt_for_features(notebook_analysis_enabled=False)
-    server = build_standalone_chat_mcp_server(
-        StandaloneArtifactCollector(), notebook_mcp_app=None
-    )["instance"]
-    response = await server.request_handlers[ListToolsRequest](
-        ListToolsRequest()
-    )
-
-    assert "mcp__standalone-chat__start_analysis_notebook" not in allowed_tools
-    assert not any("signalpilot-notebook" in tool for tool in allowed_tools)
-    assert "Notebook analysis is disabled for this run" in prompt
-    assert "call start_analysis_notebook" not in prompt
-    assert "marimo reactive notebook" not in prompt
-    assert "start_analysis_notebook" not in {
-        tool.name for tool in response.root.tools
-    }
+def test_notebook_workflow_is_always_enabled():
     *_, execution_prompt = _execution_prompt_values(
-        {"prompt": "Summarize revenue", "features": {"notebook_analysis": False}},
+        {"prompt": "Summarize revenue"},
         project_id="project-a",
         branch="main",
         commit_sha="a" * 40,
         connection_name="warehouse",
     )
-    assert "marimo reactive notebook" not in execution_prompt
+    assert "`signalpilot-dbt:dbt-workflow`" in execution_prompt
+    assert "mcp__standalone-chat__start_analysis_notebook" in STANDALONE_ALLOWED_TOOLS
+    assert any("signalpilot-notebook" in tool for tool in STANDALONE_ALLOWED_TOOLS)
 
 
 def test_runtime_publication_sdk_is_exposed_from_top_level_package():

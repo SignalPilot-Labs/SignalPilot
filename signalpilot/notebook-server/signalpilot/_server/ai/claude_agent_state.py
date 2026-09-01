@@ -58,6 +58,8 @@ class AgentEvent:
     result_subtype: str = ""
     stop_reason: str = ""
     num_turns: int = 0
+    diagnostic_context: dict[str, Any] | None = None
+    full_trace: str = ""
 
 
 @dataclass

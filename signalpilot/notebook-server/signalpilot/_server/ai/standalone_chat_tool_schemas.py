@@ -19,11 +19,18 @@ def standalone_chat_tools(*, notebook_enabled: bool) -> list[Tool]:
             description=(
                 "Start the run-bound analysis notebook whenever notebook work is useful. "
                 "Starting a notebook does not execute a database query; each database query must still be planned separately. "
-                "The notebook path is fixed by the runtime and cannot be supplied by the caller."
+                "The notebook path is fixed by the runtime and cannot be supplied by the caller. "
+                "Pass the optional notebook name to start a separate scratch or report notebook; "
+                "the default is the analysis notebook."
             ),
             inputSchema={
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "notebook": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_-]{0,40}$",
+                    }
+                },
                 "additionalProperties": False,
             },
         ),

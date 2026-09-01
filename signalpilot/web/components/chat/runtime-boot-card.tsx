@@ -19,7 +19,7 @@ const PROVISION_FACTS = [
   "Creating an isolated sandbox dedicated to this conversation",
   "Your project files are mounted read-only inside the sandbox",
   "Warehouse credentials never enter the agent's runtime",
-  "Every query runs through SignalPilot's governed tools",
+  "Every query runs through SignalPilot's tools",
 ];
 
 const RESUME_FACTS = [

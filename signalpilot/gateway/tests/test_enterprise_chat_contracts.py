@@ -395,7 +395,6 @@ def test_enterprise_feature_boundaries_are_independent_and_disabled_by_default(m
         "SP_FEATURE_CHAT_ORG_SHARING",
         "SP_FEATURE_CHAT_FORKING",
         "SP_FEATURE_CHAT_SIZE_ROUTER",
-        "SP_FEATURE_CHAT_NOTEBOOK_ANALYSIS",
         "SP_FEATURE_CHAT_RUNTIME_RESULTS",
         "SP_FEATURE_CHAT_RUNTIME_ARTIFACTS",
         "SP_FEATURE_CHAT_DATASET_REFS",

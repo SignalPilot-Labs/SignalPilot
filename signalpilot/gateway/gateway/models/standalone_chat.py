@@ -51,6 +51,8 @@ ChatEventType = Literal[
     "runtime_result_created",
     "archive_completed",
     "kernel_stopped",
+    "files_changed",
+    "files_archived",
 ]
 ArtifactKind = Literal["table", "chart", "report"]
 

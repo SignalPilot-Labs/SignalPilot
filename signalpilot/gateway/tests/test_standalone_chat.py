@@ -1578,6 +1578,37 @@ async def test_cancelled_and_failed_runs_leave_inspectable_status_messages(
 
 
 @pytest.mark.asyncio
+async def test_fail_run_preserves_the_complete_upstream_error(db_session):
+    conversation_id, run = await _conversation_and_run(db_session)
+    await chat_store.claim_runs(
+        db_session,
+        worker_id="worker-a",
+        limit=1,
+        lease_seconds=45,
+    )
+    upstream = "provider error: " + ("x" * 2_000)
+
+    assert await chat_store.fail_run(
+        db_session,
+        run_id=run.id,
+        worker_id="worker-a",
+        code="analysis_failed",
+        message=upstream,
+    )
+    detail = await chat_store.get_conversation_detail(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation_id,
+    )
+
+    assert detail is not None
+    assert detail.current_run is not None
+    assert detail.current_run.public_error_message == upstream
+    assert detail.messages[-1].content == upstream
+
+
+@pytest.mark.asyncio
 async def test_running_cancellation_wins_over_a_late_final_answer(db_session):
     conversation_id, run = await _conversation_and_run(db_session)
     await chat_store.claim_runs(

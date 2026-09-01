@@ -40,6 +40,18 @@ from gateway.store.standalone_chat import set_execution_session
 logger = logging.getLogger(__name__)
 
 
+class NotebookExecutionHTTPError(RuntimeError):
+    """An HTTP failure whose message is the notebook runtime's raw body."""
+
+    def __init__(self, message: str, *, status_code: int) -> None:
+        super().__init__(message)
+        self.diagnostic_context = {
+            "error_type": type(self).__name__,
+            "operation": "execute_notebook_analysis",
+            "http_status": status_code,
+        }
+
+
 def _join_base_path(base: str, path: str) -> str:
     return f"{base.rstrip('/')}/{path.lstrip('/')}"
 
@@ -232,7 +244,6 @@ async def prepare_execution(
             "sandbox_runtime": enterprise_chat_feature_flags().sandbox_runtime,
             "size_router": enterprise_chat_feature_flags().size_router,
             "size_router_shadow": enterprise_chat_feature_flags().size_router_shadow,
-            "notebook_analysis": enterprise_chat_feature_flags().notebook_analysis,
             "runtime_results": enterprise_chat_feature_flags().runtime_results,
             "runtime_artifacts": enterprise_chat_feature_flags().runtime_artifacts,
             "dataset_refs": enterprise_chat_feature_flags().dataset_refs,
@@ -282,16 +293,19 @@ async def stream_execution(execution: PreparedExecution) -> AsyncGenerator[dict[
             # notebook runtime. Read them before the streaming context closes;
             # otherwise every 4xx collapses to an opaque HTTPStatusError and
             # the real authorization/workspace failure is lost.
-            error_body = (await response.aread()).decode(errors="replace")[:500]
+            error_body = (await response.aread()).decode(errors="replace")
             logger.warning(
-                "Notebook execute failed status=%s url=%s bearer=%s body=%r",
+                "Notebook execute failed status=%s url=%s bearer=%s body_bytes=%s",
                 response.status_code,
                 execution.url,
                 _bearer_fingerprint(execution.headers),
-                error_body,
+                len(error_body.encode("utf-8")),
             )
-            reason = error_body.strip() or response.reason_phrase
-            raise RuntimeError(f"Notebook runtime returned HTTP {response.status_code}: {reason}")
+            reason = error_body if error_body else response.reason_phrase
+            raise NotebookExecutionHTTPError(
+                reason,
+                status_code=response.status_code,
+            )
         async for line in response.aiter_lines():
             if not line.strip():
                 continue

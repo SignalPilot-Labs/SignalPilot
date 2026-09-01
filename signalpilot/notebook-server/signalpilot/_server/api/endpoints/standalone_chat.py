@@ -15,8 +15,6 @@ from signalpilot._server.api.endpoints.standalone_chat_prompt import (
     STANDALONE_ALLOWED_TOOLS,
     STANDALONE_DISALLOWED_MCP_TOOLS,
     STANDALONE_SYSTEM_PROMPT,
-    _allowed_tools_for_features,
-    _system_prompt_for_features,
 )
 from signalpilot._server.api.endpoints.standalone_chat_runtime import (
     _ANALYSIS_SESSIONS_BY_RUN,
@@ -40,14 +38,12 @@ __all__ = [
     "STANDALONE_DISALLOWED_MCP_TOOLS",
     "STANDALONE_SYSTEM_PROMPT",
     "_ANALYSIS_SESSIONS_BY_RUN",
-    "_allowed_tools_for_features",
     "_archive_analysis_notebook",
     "_notebook_failure",
     "_project_is_unchanged",
     "_recovery_context",
     "_runtime_auth_override",
     "_seed_analysis_notebook",
-    "_system_prompt_for_features",
     "_tree_digest",
     "cancel",
     "execute",

@@ -20,6 +20,9 @@ from gateway.security.scope_guard import RequireScope
 from gateway.standalone_chat.notebook_resource import (
     get_conversation_notebook as resolve_conversation_notebook,
 )
+from gateway.standalone_chat.notebook_resource import (
+    get_conversation_notebooks as resolve_conversation_notebooks,
+)
 from gateway.store import standalone_chat as chat_store
 
 from ..deps import StoreD
@@ -140,6 +143,29 @@ async def get_conversation_notebook(conversation_id: str, store: StoreD, request
         conversation=conversation,
         http_client=request.app.state.notebook_proxy_client,
     )
+
+
+@router.get(
+    "/conversations/{conversation_id}/notebooks",
+    dependencies=[RequireScope("read")],
+)
+async def get_conversation_notebooks(conversation_id: str, store: StoreD, request: Request):
+    """Return every notebook of the conversation, "analysis" first."""
+    _require_enabled()
+    conversation = await chat_store.get_owned_conversation(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=store.user_id or "local",
+        conversation_id=conversation_id,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    notebooks = await resolve_conversation_notebooks(
+        store.session,
+        conversation=conversation,
+        http_client=request.app.state.notebook_proxy_client,
+    )
+    return {"notebooks": notebooks}
 
 
 @router.patch(

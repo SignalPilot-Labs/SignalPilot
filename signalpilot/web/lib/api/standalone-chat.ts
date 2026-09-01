@@ -126,7 +126,9 @@ export type StandaloneChatEvent = {
     | "cell_executed"
     | "runtime_result_created"
     | "archive_completed"
-    | "kernel_stopped";
+    | "kernel_stopped"
+    | "files_changed"
+    | "files_archived";
   payload: Record<string, unknown>;
   created_at: string;
 };
@@ -454,6 +456,8 @@ export type ConversationNotebookDocument = {
  * truth: it verifies kernel liveness and selects the newest saved document.
  */
 export type ConversationNotebook = {
+  /** Notebook name; "analysis" is the default notebook. */
+  name: string;
   status: "live" | "ended" | "none";
   gateway_session_id: string | null;
   kernel_session_id: string | null;
@@ -464,6 +468,12 @@ export type ConversationNotebook = {
 export const getConversationNotebook = (conversationId: string) =>
   request<ConversationNotebook>(
     `/api/chat/conversations/${encodeURIComponent(conversationId)}/notebook`,
+  );
+
+/** All notebooks for a conversation; "analysis" is ordered first. */
+export const getConversationNotebooks = (conversationId: string) =>
+  request<{ notebooks: ConversationNotebook[] }>(
+    `/api/chat/conversations/${encodeURIComponent(conversationId)}/notebooks`,
   );
 
 export async function openStandaloneNotebookArchive(

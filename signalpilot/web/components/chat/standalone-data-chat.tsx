@@ -7,6 +7,7 @@
 import {
   Bot,
   LayoutDashboard,
+  Loader2,
   NotebookPen,
   PanelLeft,
   Share2,
@@ -30,13 +31,11 @@ import {
   type OptimisticUserMessage,
 } from "~/lib/standalone-chat-state";
 import { projectSettingsHref } from "~/lib/project-settings-route";
-import { LiveNotebookPanel } from "~/components/chat/live-notebook-panel";
 import { ChatDashboardPanel } from "~/components/chat/chat-dashboard-panel";
-import { useConversationNotebook } from "~/components/chat/use-conversation-notebook";
-import {
-  hasNotebookContent,
-  notebookRefreshRevision,
-} from "~/lib/chat-live-notebook";
+import { ArtifactsPanel } from "~/components/chat/artifacts-panel";
+import { useConversationArtifacts } from "~/components/chat/use-conversation-notebook";
+import { pickDefaultNotebook } from "~/lib/chat-live-notebook";
+import { hasArtifactsContent } from "~/lib/chat-artifacts";
 import { ChatUiContext } from "~/components/chat/chat-ui-context";
 import { ChatMessage } from "~/components/chat/chat-message";
 import {
@@ -207,19 +206,19 @@ export function StandaloneDataChat({
   const currentRun = detail?.current_run ?? null;
   const events = detail?.run_events ?? [];
 
-  // Notebook panel. The gateway's conversation notebook resource is the
-  // single source of truth; notebook-related events only trigger a refetch.
-  const notebookRefreshRev = useMemo(
-    () => notebookRefreshRevision(events),
-    [events],
-  );
-  const conversationNotebook = useConversationNotebook(
-    conversationId ?? null,
-    notebookRefreshRev,
-  );
+  // Artifacts panel resources. The gateway is the single source of truth;
+  // events only trigger refetches. `loading` drives the first-paint loader.
+  const {
+    notebooks: conversationNotebooks,
+    files: conversationFiles,
+    executions: sqlTraceExecutions,
+    loading: artifactsLoading,
+  } = useConversationArtifacts(conversationId ?? null, events);
+  // Panel-open and auto-open follow the DEFAULT (analysis) notebook.
+  const defaultNotebook = pickDefaultNotebook(conversationNotebooks);
   const [notebookPanelOpen, setNotebookPanelOpen] = useNotebookPanelState(
     conversationId,
-    conversationNotebook?.status,
+    defaultNotebook?.status,
     currentRun?.id,
   );
   const [dashboardSessionId, setDashboardSessionId] = useState<string | null>(
@@ -616,22 +615,39 @@ export function StandaloneDataChat({
               )}
             </div>
             {conversationId &&
-              hasNotebookContent(conversationNotebook) &&
+              (artifactsLoading ||
+                hasArtifactsContent(
+                  conversationNotebooks,
+                  conversationFiles,
+                  sqlTraceExecutions,
+                )) &&
               !notebookPanelOpen && (
-                <button
-                  type="button"
-                  aria-label="Open the analysis notebook panel"
-                  title="Open the analysis notebook panel"
-                  data-testid="live-notebook-toggle"
-                  onClick={() => {
-                    setDashboardSessionId(null);
-                    setNotebookPanelOpen(true);
-                  }}
-                  className="absolute right-16 top-4 z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-muted)] shadow-lg shadow-black/20 hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
-                >
+              <button
+                type="button"
+                aria-label="Open the artifacts panel"
+                title="Open the artifacts panel"
+                data-testid="live-notebook-toggle"
+                onClick={() => {
+                  setDashboardSessionId(null);
+                  const params = new URLSearchParams(searchParams.toString());
+                  params.delete("dashboard");
+                  router.replace(
+                    `${window.location.pathname}?${params.toString()}`,
+                  );
+                  setNotebookPanelOpen(true);
+                }}
+                className="absolute right-16 top-4 z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-muted)] shadow-lg shadow-black/20 hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+              >
+                {artifactsLoading ? (
+                  <Loader2
+                    data-testid="artifacts-toggle-loading"
+                    className="h-4 w-4 animate-spin"
+                  />
+                ) : (
                   <NotebookPen className="h-4 w-4" />
-                </button>
-              )}
+                )}
+              </button>
+            )}
             {conversationId &&
               latestDashboardSessionId &&
               !dashboardSessionId && (
@@ -648,9 +664,12 @@ export function StandaloneDataChat({
               )}
           </main>
           {conversationId && notebookPanelOpen && (
-            <LiveNotebookPanel
+            <ArtifactsPanel
               conversationId={conversationId}
-              notebook={conversationNotebook}
+              notebooks={conversationNotebooks}
+              files={conversationFiles}
+              executions={sqlTraceExecutions}
+              loading={artifactsLoading}
               onClose={() => setNotebookPanelOpen(false)}
             />
           )}
